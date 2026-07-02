@@ -1,15 +1,33 @@
+# macOS release — Slint binary (crates/ workspace).
+#
+# Rewritten 2026-07-02 for the Tauri -> Slint migration (v2.0). Builds the
+# qbz binary per target, assembles a minimal QBZ.app bundle (Info.plist +
+# icns + binary), ad-hoc signs it (same trust level as the unsigned Tauri
+# builds), and packs a dmg with hdiutil. No Tauri updater: the .app.tar.gz
+# + .sig updater assets are gone, dmg is the distribution.
+#
+# MEMORY NOTE: hosted macOS runners have ~7 GB RAM; the qbz_ui rustc peaks
+# ~30 GB on Linux. macOS swaps dynamically to SSD so the build may survive
+# (slowly) — if it proves unreliable, point runs-on at a self-hosted runner
+# on the M2 Mini instead. continue-on-error keeps a mac failure from
+# blocking the Linux release.
+
 name: release-macos
 
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Optional release tag to build (e.g. v1.2.1)"
+        description: "Optional release tag to build (e.g. v2.0.0). Empty = build HEAD with the Cargo.toml version, no Release publish."
         required: false
         type: string
   push:
     tags:
       - "v*"
+
+concurrency:
+  group: release-macos-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build-macos:
@@ -21,19 +39,18 @@ jobs:
             arch: aarch64
           - target: x86_64-apple-darwin
             artifact: qbz-macos-x86_64
-            arch: x86_64
+            # Historical dmg naming: intel assets ship as "x64".
+            arch: x64
     runs-on: macos-latest
+    timeout-minutes: 360
+    continue-on-error: true
     permissions:
       contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
         with:
-          node-version: 24
-          cache: npm
+          fetch-depth: 0
 
       - name: Resolve release version
         id: release
@@ -44,91 +61,155 @@ jobs:
           elif [[ -n "${{ inputs.tag }}" ]]; then
             VERSION="${{ inputs.tag }}"
             VERSION="${VERSION#v}"
+          else
+            VERSION="$(grep -m1 '^version = ' crates/Cargo.toml | sed 's/version = \"\(.*\)\"/\1/')"
+          fi
+          PRERELEASE=false
+          if [[ "$VERSION" =~ -(rc|beta|alpha|pre) ]]; then
+            PRERELEASE=true
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
 
-      - name: Sync version to build metadata
-        if: steps.release.outputs.version != ''
-        env:
-          QBZ_VERSION: ${{ steps.release.outputs.version }}
+      - name: Verify tag is on main
+        if: startsWith(github.ref, 'refs/tags/')
         run: |
-          python3 - <<'PY'
-          import json
-          import os
-          import pathlib
-          import re
+          git fetch origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::Tag ${GITHUB_REF#refs/tags/} is not on main. Releases are cut from main only."
+            exit 1
+          fi
 
-          version = os.environ["QBZ_VERSION"]
+      - name: Assert Cargo.toml version matches tag
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          CARGO_VERSION="$(grep -m1 '^version = ' crates/Cargo.toml | sed 's/version = \"\(.*\)\"/\1/')"
+          if [[ "$CARGO_VERSION" != "$VERSION" ]]; then
+            echo "::error::crates/Cargo.toml workspace version ($CARGO_VERSION) != tag version ($VERSION)."
+            exit 1
+          fi
 
-          def update_json(path, updater):
-              p = pathlib.Path(path)
-              data = json.loads(p.read_text(encoding="utf-8"))
-              updater(data)
-              p.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-
-          update_json("package.json", lambda d: d.__setitem__("version", version))
-
-          def update_lock(d):
-              d["version"] = version
-              packages = d.get("packages")
-              if isinstance(packages, dict) and "" in packages:
-                  packages[""]["version"] = version
-          update_json("package-lock.json", update_lock)
-
-          update_json("src-tauri/tauri.conf.json", lambda d: d.__setitem__("version", version))
-
-          cargo_path = pathlib.Path("src-tauri/Cargo.toml")
-          cargo_text = cargo_path.read_text(encoding="utf-8")
-          cargo_text = re.sub(r'(?m)^version = \"[^\"]+\"', f'version = \"{version}\"', cargo_text, count=1)
-          cargo_path.write_text(cargo_text, encoding="utf-8")
-          PY
-
+      # Same pinned nightly as the Linux builders (-Z threads support,
+      # consistent measured behavior). Bump all release workflows together.
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: nightly-2026-06-23
           targets: ${{ matrix.target }}
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri -> target
-          shared-key: macos-${{ matrix.target }}
+          workspaces: crates -> target
+          shared-key: slint-macos-${{ matrix.target }}
+          cache-on-failure: true
+          save-if: true
 
-      - name: Install JS dependencies
-        run: npm ci
-
-      - name: Build macOS bundles
+      # MIN memory tier — the 7 GB hosted runner relies on macOS dynamic
+      # swap for the qbz_ui rustc peak. Binary is stripped by the workspace
+      # profile (strip = "symbols"), which rustc applies correctly to Mach-O.
+      - name: Build (release, MIN memory tier)
         env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: npm run tauri build -- --target ${{ matrix.target }}
+          CARGO_INCREMENTAL: "0"
+          CARGO_BUILD_JOBS: "1"
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "256"
+          CARGO_PROFILE_RELEASE_OPT_LEVEL: "2"
+          RUSTFLAGS: "-Z threads=1"
+        run: |
+          cargo build --release --manifest-path crates/Cargo.toml \
+            -p qbz --target ${{ matrix.target }}
 
-      - name: Collect artifacts
+      - name: Assemble QBZ.app
         env:
-          BUNDLE_DIR: src-tauri/target/${{ matrix.target }}/release/bundle
-          ARCH: ${{ matrix.arch }}
+          VERSION: ${{ steps.release.outputs.version }}
         run: |
           set -euo pipefail
-          mkdir -p dist
-          # DMG for manual distribution (filename already includes arch).
-          cp -v "$BUNDLE_DIR"/dmg/*.dmg dist/
-          # .app.tar.gz + .sig for auto-updater. Rename with arch suffix so the
-          # two matrix jobs don't overwrite each other on the GitHub Release,
-          # and so release-updater-manifest.yml's regex picks them up
-          # ("aarch64.app.tar.gz$" / "(x64|x86_64).app.tar.gz$").
-          cp -v "$BUNDLE_DIR/macos/QBZ.app.tar.gz"     "dist/QBZ_${ARCH}.app.tar.gz"
-          cp -v "$BUNDLE_DIR/macos/QBZ.app.tar.gz.sig" "dist/QBZ_${ARCH}.app.tar.gz.sig"
+          APP="dist/QBZ.app"
+          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+          cp "crates/target/${{ matrix.target }}/release/qbz" "$APP/Contents/MacOS/qbz"
+          chmod +x "$APP/Contents/MacOS/qbz"
+          cp packaging/icons/icon.icns "$APP/Contents/Resources/icon.icns"
+          cat > "$APP/Contents/Info.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleIdentifier</key><string>com.blitzfc.qbz</string>
+            <key>CFBundleName</key><string>QBZ</string>
+            <key>CFBundleDisplayName</key><string>QBZ</string>
+            <key>CFBundleExecutable</key><string>qbz</string>
+            <key>CFBundleIconFile</key><string>icon</string>
+            <key>CFBundleShortVersionString</key><string>${VERSION}</string>
+            <key>CFBundleVersion</key><string>${VERSION}</string>
+            <key>LSMinimumSystemVersion</key><string>11.0</string>
+            <key>NSHighResolutionCapable</key><true/>
+            <key>LSApplicationCategoryType</key><string>public.app-category.music</string>
+            <key>NSSupportsAutomaticGraphicsSwitching</key><true/>
+            <key>CFBundleURLTypes</key>
+            <array>
+              <dict>
+                <key>CFBundleURLName</key><string>com.blitzfc.qbz</string>
+                <key>CFBundleURLSchemes</key>
+                <array><string>qbz</string><string>qobuzapp</string></array>
+              </dict>
+            </array>
+          </dict>
+          </plist>
+          PLIST
+          # Ad-hoc signature: required for arm64 Macs to launch at all;
+          # matches the trust level of the previous unsigned Tauri builds.
+          codesign --force --deep -s - "$APP"
+          codesign --verify --verbose "$APP"
+
+      - name: Build dmg
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          hdiutil create -volname "QBZ" -srcfolder dist/QBZ.app -ov \
+            -format UDZO "dist/QBZ_${VERSION}_${ARCH}.dmg"
+          ls -la dist
+
+      # Tauri-updater bridge: v1.2.x installs poll latest.json and verify
+      # with the Tauri minisign pubkey baked into the old binaries. The
+      # updater expects QBZ_${ARCH}.app.tar.gz — keep producing it, signed
+      # with the SAME key, so old installs update straight into the Slint
+      # .app. release-updater-manifest.yml collects the .sig files.
+      - name: Package .app.tar.gz + sign (Tauri-updater bridge)
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          ARCH: ${{ matrix.arch }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          tar -czf "dist/QBZ_${ARCH}.app.tar.gz" -C dist QBZ.app
+          npx --yes @tauri-apps/cli@^2 signer sign \
+            --private-key "$TAURI_SIGNING_PRIVATE_KEY" \
+            --password "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" \
+            "dist/QBZ_${ARCH}.app.tar.gz"
           ls -la dist
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: dist/*
+          path: |
+            dist/*.dmg
+            dist/*.app.tar.gz
+            dist/*.app.tar.gz.sig
 
+      # Attaches to the Release created by release-linux.yml; same
+      # prerelease logic (the old workflow hardcoded prerelease: true).
       - name: Publish GitHub Release Assets
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*
-          prerelease: true
+          files: |
+            dist/*.dmg
+            dist/*.app.tar.gz
+            dist/*.app.tar.gz.sig
+          prerelease: ${{ steps.release.outputs.prerelease }}
+          make_latest: ${{ steps.release.outputs.prerelease == 'true' && 'false' || 'true' }}

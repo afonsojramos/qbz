@@ -1,29 +1,47 @@
-name: Linux ARM64 (aarch64) Build
+# Linux aarch64 release — Slint binary (crates/ workspace).
+#
+# Rewritten 2026-07-02 for the Tauri -> Slint migration (v2.0). Same
+# build-once-package-many shape as release-linux.yml (read that file's
+# header); differences: native arm64 runner, no x86 target-features, its
+# own rust-cache key (this workflow is the only writer), and it ATTACHES
+# to the Release that release-linux.yml creates.
+#
+# CONTRACT: keeps publishing qbz_${VERSION}_aarch64.tar.gz,
+# QBZ_${VERSION}_arm64.deb, QBZ-${VERSION}-1.aarch64.rpm,
+# QBZ_${VERSION}_aarch64.AppImage — AUR/Gentoo/APT/website names.
+
+name: "Linux ARM64 (aarch64) Build"
 
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Optional release tag to build (e.g. v1.1.7)"
+        description: "Optional release tag to build (e.g. v2.0.0). Empty = build HEAD with the Cargo.toml version, no Release publish."
         required: false
         type: string
   push:
     tags:
       - "v*"
 
-jobs:
-  build-linux-aarch64:
-    name: Build Linux ARM64
-    runs-on: ubuntu-24.04-arm
-    continue-on-error: true
-    permissions:
-      contents: write
+concurrency:
+  group: release-linux-aarch64-${{ github.ref }}
+  cancel-in-progress: false
 
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 300
+    continue-on-error: true
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      prerelease: ${{ steps.release.outputs.prerelease }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Determine version
+      - name: Resolve release version
         id: release
         run: |
           VERSION=""
@@ -32,101 +50,190 @@ jobs:
           elif [[ -n "${{ inputs.tag }}" ]]; then
             VERSION="${{ inputs.tag }}"
             VERSION="${VERSION#v}"
+          else
+            VERSION="$(grep -m1 '^version = ' crates/Cargo.toml | sed 's/version = \"\(.*\)\"/\1/')"
+          fi
+          PRERELEASE=false
+          if [[ "$VERSION" =~ -(rc|beta|alpha|pre) ]]; then
+            PRERELEASE=true
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: npm
+      - name: Verify tag is on main
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          git fetch origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::Tag ${GITHUB_REF#refs/tags/} is not on main. Releases are cut from main only."
+            exit 1
+          fi
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Free disk space and add swap
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android \
+            /opt/hostedtoolcache /usr/local/share/boost /usr/share/swift \
+            /usr/local/lib/node_modules || true
+          sudo docker system prune -af || true
+          if sudo fallocate -l 18G /swap_extra; then
+            sudo chmod 600 /swap_extra
+            sudo mkswap /swap_extra
+            sudo swapon /swap_extra
+          else
+            echo "::warning::could not allocate extra swap; build may OOM"
+          fi
+          free -h
 
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          # Pin WebKitGTK to 2.44.0-2 to prevent EGL_BAD_PARAMETER crash in AppImage
-          # See: https://github.com/tauri-apps/tauri/issues/11994
           sudo apt-get install -y \
-            libwebkit2gtk-4.1-0=2.44.0-2 \
-            libwebkit2gtk-4.1-dev=2.44.0-2 \
-            libjavascriptcoregtk-4.1-0=2.44.0-2 \
-            libjavascriptcoregtk-4.1-dev=2.44.0-2 \
-            gir1.2-javascriptcoregtk-4.1=2.44.0-2 \
-            gir1.2-webkit2-4.1=2.44.0-2 \
-            libgtk-3-dev \
-            libappindicator3-dev \
-            librsvg2-dev \
-            libasound2-dev \
-            patchelf \
-            build-essential \
-            xdg-utils
+            mold nasm \
+            libasound2-dev libjack-jackd2-dev \
+            libfontconfig1-dev libfreetype-dev \
+            libxkbcommon-dev libwayland-dev libxcb1-dev \
+            libgl1-mesa-dev libegl1-mesa-dev \
+            libdbus-1-dev libssl-dev \
+            libharfbuzz-dev libjbig2dec0-dev libopenjp2-7-dev \
+            libjpeg-dev zlib1g-dev libgumbo-dev
 
-      - name: Install frontend deps
-        run: npm ci
+      # Pinned nightly: matches build-slint.yml / release-linux.yml.
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-06-23
 
-      - name: Build frontend
-        run: npm run build
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates -> target
+          shared-key: slint-linux-aarch64
+          cache-on-failure: true
+          # This workflow is the only aarch64 builder, so it owns its cache.
+          save-if: true
 
-      - name: Build Tauri (deb + rpm + appimage)
+      - name: Build (release, MIN memory tier)
+        env:
+          CARGO_INCREMENTAL: "0"
+          CARGO_BUILD_JOBS: "1"
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "256"
+          CARGO_PROFILE_RELEASE_OPT_LEVEL: "2"
+          CARGO_PROFILE_RELEASE_STRIP: "none"
+          # No x86 target-features here (aarch64 baseline has NEON).
+          RUSTFLAGS: "-C link-arg=-fuse-ld=mold -Z threads=1"
+        run: |
+          cargo build --release --manifest-path crates/Cargo.toml -p qbz
+          cp crates/target/release/qbz qbz-unstripped
+          strip -o qbz crates/target/release/qbz
+          ls -la qbz qbz-unstripped
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: qbz-linux-aarch64
+          path: qbz
+          if-no-files-found: error
+
+      - name: Upload unstripped binary (symbolication)
+        uses: actions/upload-artifact@v4
+        with:
+          name: qbz-linux-aarch64-unstripped
+          path: qbz-unstripped
+          retention-days: 90
+
+  package:
+    needs: build
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download binary
+        uses: actions/download-artifact@v4
+        with:
+          name: qbz-linux-aarch64
+
+      - name: Install nfpm
+        run: |
+          echo 'deb [trusted=yes] https://repo.goreleaser.com/apt/ /' | \
+            sudo tee /etc/apt/sources.list.d/goreleaser.list
+          sudo apt-get update
+          sudo apt-get install -y nfpm
+          nfpm --version
+
+      - name: Build deb + rpm (nfpm)
+        env:
+          QBZ_VERSION: ${{ env.VERSION }}
+          QBZ_ARCH: arm64
+          QBZ_BINARY: ./qbz
+        run: |
+          chmod +x qbz
+          mkdir -p dist
+          nfpm package -f packaging/nfpm/nfpm.yaml -p deb \
+            -t "dist/QBZ_${VERSION}_arm64.deb"
+          nfpm package -f packaging/nfpm/nfpm.yaml -p rpm \
+            -t "dist/QBZ-${VERSION}-1.aarch64.rpm"
+
+      - name: Build AppImage
+        run: |
+          APPDIR="QBZ.AppDir"
+          mkdir -p "$APPDIR/usr/bin"
+          cp qbz "$APPDIR/usr/bin/qbz"
+          cp packaging/linux/qbz.desktop "$APPDIR/qbz.desktop"
+          cp packaging/icons/256x256.png "$APPDIR/qbz.png"
+          cp packaging/icons/256x256.png "$APPDIR/.DirIcon"
+          ln -s usr/bin/qbz "$APPDIR/AppRun"
+
+          curl -fsSL -o appimagetool \
+            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-aarch64.AppImage
+          chmod +x appimagetool
+          ARCH=aarch64 ./appimagetool --appimage-extract-and-run "$APPDIR" \
+            "dist/QBZ_${VERSION}_aarch64.AppImage"
+
+      # Tauri-updater bridge — see release-linux.yml for the rationale.
+      - name: Sign AppImage (Tauri-updater bridge)
+        if: startsWith(github.ref, 'refs/tags/')
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: npm run tauri build -- --bundles deb,rpm,appimage
-
-      - name: Collect artifacts
-        env:
-          VERSION: ${{ steps.release.outputs.version }}
         run: |
-          mkdir -p dist
-          cp -v src-tauri/target/release/bundle/deb/*.deb dist/ || true
-          cp -v src-tauri/target/release/bundle/rpm/*.rpm dist/ || true
-          cp -v src-tauri/target/release/bundle/appimage/*.AppImage dist/ || true
-          cp -v src-tauri/target/release/bundle/appimage/*.AppImage.sig dist/ || true
+          npx --yes @tauri-apps/cli@^2 signer sign \
+            --private-key "$TAURI_SIGNING_PRIVATE_KEY" \
+            --password "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" \
+            "dist/QBZ_${VERSION}_aarch64.AppImage"
+          ls -la dist
 
-          # Create AUR tarball
-          ARCH=aarch64
-          TARBALL_DIR="qbz_${VERSION}_${ARCH}"
+      - name: Build AUR/Gentoo tarball
+        run: |
+          # CONTRACT: same name + internal layout as the Tauri-era tarball.
+          TARBALL_DIR="qbz_${VERSION}_aarch64"
           mkdir -p "tarball-staging/${TARBALL_DIR}/icons/hicolor"/{32x32,48x48,64x64,128x128,256x256}/apps
-
-          # Binary
-          cp src-tauri/target/release/qbz "tarball-staging/${TARBALL_DIR}/qbz"
-
-          # Icons
-          cp src-tauri/icons/32x32.png "tarball-staging/${TARBALL_DIR}/icons/hicolor/32x32/apps/qbz.png"
-          cp src-tauri/icons/128x128.png "tarball-staging/${TARBALL_DIR}/icons/hicolor/48x48/apps/qbz.png"
-          cp src-tauri/icons/128x128.png "tarball-staging/${TARBALL_DIR}/icons/hicolor/64x64/apps/qbz.png"
-          cp src-tauri/icons/128x128.png "tarball-staging/${TARBALL_DIR}/icons/hicolor/128x128/apps/qbz.png"
-          cp src-tauri/icons/128x128@2x.png "tarball-staging/${TARBALL_DIR}/icons/hicolor/256x256/apps/qbz.png"
-
-          # Desktop file
-          cat > "tarball-staging/${TARBALL_DIR}/qbz.desktop" << 'EOF'
-          [Desktop Entry]
-          Name=QBZ
-          Comment=Native Qobuz client with hi-res audio support
-          Exec=qbz
-          Icon=qbz
-          Terminal=false
-          Type=Application
-          Categories=AudioVideo;Audio;Music;Player;
-          Keywords=music;audio;qobuz;hifi;streaming;audiophile;
-          EOF
-
-          tar -czf "dist/qbz_${VERSION}_${ARCH}.tar.gz" -C tarball-staging "${TARBALL_DIR}"
+          cp qbz "tarball-staging/${TARBALL_DIR}/qbz"
+          chmod +x "tarball-staging/${TARBALL_DIR}/qbz"
+          cp packaging/icons/32x32.png   "tarball-staging/${TARBALL_DIR}/icons/hicolor/32x32/apps/qbz.png"
+          cp packaging/icons/48x48.png   "tarball-staging/${TARBALL_DIR}/icons/hicolor/48x48/apps/qbz.png"
+          cp packaging/icons/64x64.png   "tarball-staging/${TARBALL_DIR}/icons/hicolor/64x64/apps/qbz.png"
+          cp packaging/icons/128x128.png "tarball-staging/${TARBALL_DIR}/icons/hicolor/128x128/apps/qbz.png"
+          cp packaging/icons/256x256.png "tarball-staging/${TARBALL_DIR}/icons/hicolor/256x256/apps/qbz.png"
+          cp packaging/linux/qbz.desktop "tarball-staging/${TARBALL_DIR}/qbz.desktop"
+          tar -czvf "dist/qbz_${VERSION}_aarch64.tar.gz" -C tarball-staging "${TARBALL_DIR}"
           ls -la dist
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: qbz-linux-aarch64
+          name: qbz-linux-aarch64-packages
           path: dist/*
 
+      # Attaches to the Release created by release-linux.yml.
       - name: Publish GitHub Release Assets
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
-          prerelease: ${{ contains(steps.release.outputs.version, '-rc') }}
-          make_latest: ${{ contains(steps.release.outputs.version, '-rc') && 'false' || 'true' }}
+          prerelease: ${{ needs.build.outputs.prerelease }}
+          make_latest: ${{ needs.build.outputs.prerelease == 'true' && 'false' || 'true' }}
