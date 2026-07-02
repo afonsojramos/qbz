@@ -1200,6 +1200,9 @@ export global LocalLibraryActions {
     // Albums bulk bar action: select-all | clear | queue | play-next |
     // add-to-playlist | add-to-mixtape.
     callback albums-bulk-action(string /* action */);
+    // Windowed grid: the visible row band changed (item indices into
+    // albums-visible, prefetch margin included) — dispatch artwork for it.
+    callback albums-window-changed(int /* first */, int /* last */);
 
     // --- Tracks tab ---
     callback tracks-search(string /* query */);
@@ -3797,6 +3800,10 @@ export global ImmersiveState {
     // 0->1->2->3->0 with the 'g' key.
     in property <image> shader-texture;
     in-out property <int> shader-mode: 0;
+    // False on the femtovg-GL / software renderer tiers (no wgpu underlay →
+    // shader scenes would render black). Seeded from Rust at startup; gates
+    // the picker rows and the `g` cycle in ImmersiveView.
+    in-out property <bool> shader-scenes-available: true;
 
     // --- Immersive search cortinilla (parallel to SearchState.cortinilla-*) ---
     // Albums/Artists/Playlists only; selecting ACTS ON PLAYBACK (per the Settings

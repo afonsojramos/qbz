@@ -628,7 +628,10 @@ component ImmersiveViewMenuPopup inherits PopupWindow {
                     root.picked();
                 }
             }
-            ImmersiveMenuRow {
+            // Shader scenes need the wgpu underlay — on the femtovg-GL /
+            // software tiers they render black, so the whole group is hidden
+            // (ImmersiveState.shader-scenes-available is seeded from Rust).
+            if ImmersiveState.shader-scenes-available: ImmersiveMenuRow {
                 icon: @image-url("../assets/icons/chart-no-axes-column.svg");
                 label: @tr("Plasma");
                 active: root.is-focus && root.sh == 1;
@@ -637,7 +640,7 @@ component ImmersiveViewMenuPopup inherits PopupWindow {
                     root.picked();
                 }
             }
-            ImmersiveMenuRow {
+            if ImmersiveState.shader-scenes-available: ImmersiveMenuRow {
                 icon: @image-url("../assets/icons/disc-3.svg");
                 label: @tr("Tunnel");
                 active: root.is-focus && root.sh == 2;
@@ -646,7 +649,7 @@ component ImmersiveViewMenuPopup inherits PopupWindow {
                     root.picked();
                 }
             }
-            ImmersiveMenuRow {
+            if ImmersiveState.shader-scenes-available: ImmersiveMenuRow {
                 icon: @image-url("../assets/icons/audio-lines.svg");
                 label: @tr("Aurora");
                 active: root.is-focus && root.sh == 3;
@@ -655,7 +658,7 @@ component ImmersiveViewMenuPopup inherits PopupWindow {
                     root.picked();
                 }
             }
-            ImmersiveMenuRow {
+            if ImmersiveState.shader-scenes-available: ImmersiveMenuRow {
                 icon: @image-url("../assets/icons/chart-no-axes-column.svg");
                 label: @tr("Spectral Ribbon");
                 active: root.is-focus && root.sh == 4;
@@ -664,7 +667,7 @@ component ImmersiveViewMenuPopup inherits PopupWindow {
                     root.picked();
                 }
             }
-            ImmersiveMenuRow {
+            if ImmersiveState.shader-scenes-available: ImmersiveMenuRow {
                 icon: @image-url("../assets/icons/radio.svg");
                 label: @tr("Line Bed");
                 active: root.is-focus && root.sh == 5;
@@ -1191,9 +1194,12 @@ export component ImmersiveView inherits Rectangle {
             // Aurora -> Spectral Ribbon -> Line Bed -> Off). Liquid Spectrum (mode
             // 6) is a PARKED POC — to bring it back, change the Math.mod to 7 and
             // uncomment its picker row above. The header picker is the discoverable control.
+            // No-op on the GL/software tiers (no wgpu underlay = black scenes).
             if (event.text == "g" || event.text == "G") {
-                ImmersiveState.shader-mode = Math.mod(ImmersiveState.shader-mode + 1, 6);
-                root.wake();
+                if (ImmersiveState.shader-scenes-available) {
+                    ImmersiveState.shader-mode = Math.mod(ImmersiveState.shader-mode + 1, 6);
+                    root.wake();
+                }
                 return accept;
             }
             return reject;
