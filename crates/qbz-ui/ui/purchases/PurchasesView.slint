@@ -1477,19 +1477,17 @@ export component PurchasesView inherits Rectangle {
         // otherwise the popup shifts right by ~sidebar-width and down by the
         // top chrome.
         //
-        // VERIFICATION CAVEAT (Flickable double-count, untestable here — the
-        // download flow can't be functionally exercised): the anchor is read
-        // from `dl-slot.absolute-position`, and `dl-slot` lives in a row nested
-        // INSIDE the Flickable above (line ~1329). Per the documented Slint
-        // gotcha (memory `reference_slint_absolute_position_flickable`), an
-        // element's `absolute-position` inside a Flickable/ListView can
-        // DOUBLE-COUNT its own layout offset and does not subtract the scroll
-        // viewport offset. The `- root.absolute-position` here cancels only the
-        // window→view translation, NOT that double-count/scroll delta — so the
-        // picker may sit at the wrong Y and drift further as the list scrolls.
-        // If that manifests, compute the anchor as
-        // `dl-slot.absolute-position - <flickable>.absolute-position` (scroll-
-        // safe) at the call site (line ~600) rather than patching the math here.
+        // Scroll-safety VERIFIED (2026-07-02, standalone repro mirroring this
+        // exact structure: if-mounted view → Flickable → layout → component →
+        // if → component → for-row → nested slot): in Slint 1.16.1
+        // `absolute-position` here is exact window coordinates — own offsets
+        // counted once, viewport scroll included. The anchor captured at the
+        // call site (line ~590) plus the `- root.absolute-position` conversion
+        // below is correct at any scroll position. (The double-count gotcha in
+        // memory `reference_slint_absolute_position_flickable` is a ListView
+        // quirk; no ListView is in this chain.) Known cosmetic limit: the
+        // anchor is a snapshot, so the popup does not follow the row if the
+        // list scrolls while the picker is open.
         Rectangle {
             z: 3001;
             x: Math.max(8px, (PurchasesState.picker-anchor-x - root.absolute-position.x) - self.width);
