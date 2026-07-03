@@ -100,6 +100,7 @@ export component CreatePlaylistModal inherits Rectangle {
                         height: 80px;
                         wrap: word-wrap;
                         text <=> CreatePlaylistState.description;
+                        changed has-focus => { UiFocusState.text-input-focused = self.has-focus; }
                     }
                 }
 

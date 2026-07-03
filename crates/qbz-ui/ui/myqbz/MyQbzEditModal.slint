@@ -87,6 +87,7 @@ export component MyQbzEditModal inherits Rectangle {
                     height: 96px;
                     wrap: word-wrap;
                     text <=> MyQbzEditState.draft-description;
+                    changed has-focus => { UiFocusState.text-input-focused = self.has-focus; }
                 }
 
                 // --- Body: delete-confirm (prompt) -----------------------

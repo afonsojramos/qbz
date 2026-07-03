@@ -9,7 +9,7 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { QconnectDevState } from "../state.slint";
+import { QconnectDevState, UiFocusState } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { TextEdit } from "std-widgets.slint";
 
@@ -85,6 +85,9 @@ export component QconnectDevModal inherits Rectangle {
                         text: QconnectDevState.status == ""
                             ? "Not connected."
                             : QconnectDevState.status;
+                        // Read-only but still focusable (select/copy) — keep the
+                        // single-key hotkeys quiet while it holds focus.
+                        changed has-focus => { UiFocusState.text-input-focused = self.has-focus; }
                     }
                 }
 
@@ -132,6 +135,7 @@ export component QconnectDevModal inherits Rectangle {
                         wrap: word-wrap;
                         font-size: 11px;
                         text: QconnectDevState.log-text;
+                        changed has-focus => { UiFocusState.text-input-focused = self.has-focus; }
                     }
                 }
             }

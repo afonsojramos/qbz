@@ -430,6 +430,7 @@ export component LogViewerModal inherits Rectangle {
                                 font-size: 12px;
                                 vertical-alignment: center;
                                 text: LogViewerState.uploaded-url;
+                                changed has-focus => { UiFocusState.text-input-focused = self.has-focus; }
                             }
                         }
                         VerticalLayout {
