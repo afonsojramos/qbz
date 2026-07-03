@@ -396,6 +396,12 @@ impl MetadataExtractor {
     pub fn extract(file_path: &Path) -> Result<LocalTrack, LibraryError> {
         log::debug!("Extracting metadata from: {}", file_path.display());
 
+        // DSD containers aren't lofty-readable: qbz-dsd demuxes them (tech
+        // props + embedded ID3v2 for DSF; trailing ID3 for DFF when present).
+        if qbz_dsd::is_dsd_path(file_path) {
+            return Self::extract_dsd(file_path);
+        }
+
         // Probe the file
         let tagged_file = Probe::open(file_path)
             .map_err(|e| LibraryError::Metadata(format!("Failed to open file: {}", e)))?
@@ -535,8 +541,93 @@ impl MetadataExtractor {
         Ok(track)
     }
 
+    /// Build a LocalTrack from a DSF/DFF file via qbz-dsd. Tag-read failures
+    /// degrade to filename-derived metadata — a DSD file must still index.
+    fn extract_dsd(file_path: &Path) -> Result<LocalTrack, LibraryError> {
+        let demux = qbz_dsd::open_dsd(file_path)
+            .map_err(|e| LibraryError::Metadata(format!("Failed to read DSD file: {}", e)))?;
+        let info = demux.info().clone();
+        drop(demux);
+
+        let file_metadata = fs::metadata(file_path).map_err(LibraryError::Io)?;
+        let file_size_bytes = file_metadata.len();
+        let last_modified = file_metadata
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+
+        let filename = file_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("Unknown")
+            .to_string();
+        let (fallback_artist, fallback_album) = Self::infer_artist_album(file_path);
+        let inferred_disc = Self::infer_disc_number(file_path);
+
+        let tags = &info.tags;
+        let album_title = Self::normalize_field(tags.album.as_deref())
+            .or_else(|| fallback_album.clone())
+            .unwrap_or_else(|| "Unknown Album".to_string());
+        let (album_group_key, album_group_title) =
+            Self::album_group_info(file_path, Some(album_title.as_str()));
+
+        Ok(LocalTrack {
+            id: 0,
+            file_path: file_path.to_string_lossy().to_string(),
+            title: tags.title.clone().unwrap_or(filename),
+            artist: Self::normalize_field(tags.artist.as_deref())
+                .or_else(|| fallback_artist.clone())
+                .unwrap_or_else(|| "Unknown Artist".to_string()),
+            album: album_title,
+            album_artist: tags.album_artist.clone(),
+            album_group_key,
+            album_group_title,
+            track_number: tags
+                .track_number
+                .or_else(|| Self::infer_track_number_from_filename(file_path)),
+            disc_number: tags.disc_number.filter(|d| *d > 0).or(inferred_disc),
+            year: tags.year.and_then(|y| u32::try_from(y).ok()),
+            genre: tags.genre.clone(),
+            catalog_number: None,
+            duration_secs: info.duration_secs(),
+            format: AudioFormat::Dsd,
+            // 1-bit stream; sample_rate carries the DSD bit rate (2 822 400 =
+            // DSD64) — the badge layer derives "DSD64/128/256" from it.
+            bit_depth: Some(1),
+            sample_rate: info.dsd_rate as f64,
+            channels: info.channels as u8,
+            file_size_bytes,
+            cue_file_path: None,
+            cue_start_secs: None,
+            cue_end_secs: None,
+            artwork_path: None,
+            last_modified,
+            indexed_at: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0),
+            source: None,
+            qobuz_track_id: None,
+            is_network_mount: false,
+        })
+    }
+
     /// Extract audio properties without full metadata
     pub fn extract_properties(file_path: &Path) -> Result<AudioProperties, LibraryError> {
+        if qbz_dsd::is_dsd_path(file_path) {
+            let demux = qbz_dsd::open_dsd(file_path)
+                .map_err(|e| LibraryError::Metadata(format!("Failed to read DSD file: {}", e)))?;
+            let info = demux.info();
+            return Ok(AudioProperties {
+                duration_secs: info.duration_secs(),
+                bit_depth: Some(1),
+                sample_rate: info.dsd_rate as f64,
+                channels: info.channels as u8,
+            });
+        }
+
         let tagged_file = Probe::open(file_path)
             .map_err(|e| LibraryError::Metadata(format!("Failed to open file: {}", e)))?
             .read()
@@ -566,12 +657,26 @@ impl MetadataExtractor {
             Some("aiff") | Some("aif") => AudioFormat::Aiff,
             Some("ape") => AudioFormat::Ape,
             Some("mp3") => AudioFormat::Mp3,
+            Some("dsf") | Some("dff") => AudioFormat::Dsd,
             _ => AudioFormat::Unknown,
         }
     }
 
     /// Extract and save artwork as thumbnail to cache directory
     pub fn extract_artwork(file_path: &Path, _cache_dir: &Path) -> Option<String> {
+        if qbz_dsd::is_dsd_path(file_path) {
+            let demux = qbz_dsd::open_dsd(file_path).ok()?;
+            let art = demux.info().tags.artwork.clone()?;
+            let cache_key = file_path.to_string_lossy().to_string();
+            return match generate_thumbnail_from_bytes(&art, &cache_key) {
+                Ok(thumbnail_path) => Some(thumbnail_path.to_string_lossy().to_string()),
+                Err(e) => {
+                    log::warn!("Failed to generate DSD thumbnail for {:?}: {}", file_path, e);
+                    None
+                }
+            };
+        }
+
         let tagged_file = Probe::open(file_path).ok()?.read().ok()?;
         let tag = tagged_file
             .primary_tag()

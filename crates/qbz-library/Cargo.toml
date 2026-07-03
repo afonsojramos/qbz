@@ -25,6 +25,7 @@ dirs = "6"
 
 # Audio metadata
 lofty = "0.23"
+qbz-dsd = { path = "../qbz-dsd" }
 
 # Image processing (thumbnails)
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }

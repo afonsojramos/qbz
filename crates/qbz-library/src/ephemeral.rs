@@ -354,6 +354,31 @@ impl EphemeralLibraryState {
             }
         }
 
+        // Musical order (album, then disc/track/title — same as the DB-backed
+        // folder view): the extraction order above is readdir order, which is
+        // arbitrary. Ids must FOLLOW the display order because
+        // `tracks_snapshot` builds play queues by id — so this call's entries
+        // are re-keyed after sorting.
+        tracks_out.sort_by(|a, b| {
+            a.album_group_key
+                .cmp(&b.album_group_key)
+                .then_with(|| a.disc_number.unwrap_or(1).cmp(&b.disc_number.unwrap_or(1)))
+                .then_with(|| {
+                    a.track_number
+                        .unwrap_or(u32::MAX)
+                        .cmp(&b.track_number.unwrap_or(u32::MAX))
+                })
+                .then_with(|| a.title.cmp(&b.title))
+        });
+        for track in &tracks_out {
+            inner.tracks.remove(&track.id);
+        }
+        for track in &mut tracks_out {
+            track.id = inner.next_id;
+            inner.next_id += 1;
+            inner.tracks.insert(track.id, track.clone());
+        }
+
         let folder_path = path.display().to_string();
         inner.current_folder_path = Some(folder_path.clone());
 
