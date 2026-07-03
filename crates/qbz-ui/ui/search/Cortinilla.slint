@@ -201,6 +201,33 @@ export component Cortinilla inherits Rectangle {
     property <length> search-box-width:
         (root.width < 960px ? 179px : 256px) - (ShellState.nav-in-sidebar ? 0px : 60px);
 
+    // --- Idle auto-close ---------------------------------------------------
+    // Dismiss the dropdown after ~4.5 s of inactivity: no pointer over the
+    // panel and no search activity. `panel-hovered` mirrors the panel's
+    // wrapper TouchArea (the panel lives in an `if` subtree; a Timer in there
+    // cannot be restart()ed — 1.16 compiler panic — so the timer lives here).
+    property <bool> panel-hovered: false;
+    // The mirror can go stale when the panel unmounts while hovered (its
+    // `changed has-hover` never fires false) — reset it on every open/close.
+    changed visible => { root.panel-hovered = false; }
+    idle-close := Timer {
+        interval: 4500ms;
+        running: root.visible && !root.panel-hovered;
+        triggered => { root.dismiss(); }
+    }
+    // Activity probes — a keystroke (live query change) or an arrow-key
+    // selection move restarts the countdown. Guarded: while the panel is
+    // hovered the timer is paused by its `running` binding, and an imperative
+    // restart() would wrongly resume it.
+    property <string> idle-query-probe: SearchState.cortinilla-query;
+    changed idle-query-probe => {
+        if (root.visible && !root.panel-hovered) { idle-close.restart(); }
+    }
+    property <int> idle-sel-probe: SearchState.selected-index;
+    changed idle-sel-probe => {
+        if (root.visible && !root.panel-hovered) { idle-close.restart(); }
+    }
+
     // Click-outside scrims — ANY click outside the cortinilla panel dismisses
     // it. Three transparent TouchAreas tile the whole window EXCEPT (a) the
     // panel (declared later, so it renders on top and keeps its own clicks) and
@@ -268,174 +295,186 @@ export component Cortinilla inherits Rectangle {
         width: root.panel-width;
         height: panel-box.preferred-height;
 
-        panel-box := Rectangle {
-            background: Theme.surface-main;
-            border-radius: Radius.sm;
-            border-width: 1px;
-            border-color: Theme.border-muted;
-            drop-shadow-blur: 24px;
-            drop-shadow-color: Theme.card-shadow;
-            drop-shadow-offset-y: 6px;
-            // Keeps the pointer "inside" the panel so the scrim click does not
-            // fall through, and gives the rows a stable hover surface.
-            clip: true;
 
-            VerticalLayout {
-                padding-top: 6px;
-                padding-bottom: 6px;
+        // Hover surface for the idle-close pause (see the root-level Timer —
+        // it must live OUTSIDE this `if` subtree: `Timer.restart()` on a timer
+        // inside a conditional sub-component panics the 1.16 Slint compiler).
+        // `hover-ta` is an ANCESTOR of every row/button TouchArea, and Slint
+        // sets has-hover on ancestors too (input_event_filter_before_children),
+        // so hovering any child counts. Clicks on rows/buttons are handled by
+        // their own (descendant) TouchAreas first; wheel events pass through
+        // to the Flickable.
+        hover-ta := TouchArea {
+            changed has-hover => { root.panel-hovered = self.has-hover; }
+            panel-box := Rectangle {
+                background: Theme.surface-main;
+                border-radius: Radius.sm;
+                border-width: 1px;
+                border-color: Theme.border-muted;
+                drop-shadow-blur: 24px;
+                drop-shadow-color: Theme.card-shadow;
+                drop-shadow-offset-y: 6px;
+                // Keeps the pointer "inside" the panel so the scrim click does not
+                // fall through, and gives the rows a stable hover surface.
+                clip: true;
 
-                // No pinned "Full results" row here — the Enter affordance lives
-                // in the header search box (right edge, opposite the magnifier)
-                // while the cortinilla is open. The result body is the whole panel.
+                VerticalLayout {
+                    padding-top: 6px;
+                    padding-bottom: 6px;
 
-                // --- Scrolling result body ------------------------------------
-                // Skeleton (while loading) / no-results / top-result / sections,
-                // all inside a Flickable so a tall set stays reachable. The body
-                // height is its content height clamped to `scroll-cap`. A short
-                // body collapses; a tall body scrolls. viewport-height feeds the
-                // sibling scrollbar.
-                Rectangle {
-                    height: Math.min(scroll-content.preferred-height, panel.scroll-cap);
+                    // No pinned "Full results" row here — the Enter affordance lives
+                    // in the header search box (right edge, opposite the magnifier)
+                    // while the cortinilla is open. The result body is the whole panel.
 
-                    body-flick := Flickable {
-                        width: 100%;
-                        height: 100%;
-                        viewport-width: self.width;
-                        viewport-height: scroll-content.preferred-height;
+                    // --- Scrolling result body ------------------------------------
+                    // Skeleton (while loading) / no-results / top-result / sections,
+                    // all inside a Flickable so a tall set stays reachable. The body
+                    // height is its content height clamped to `scroll-cap`. A short
+                    // body collapses; a tall body scrolls. viewport-height feeds the
+                    // sibling scrollbar.
+                    Rectangle {
+                        height: Math.min(scroll-content.preferred-height, panel.scroll-cap);
 
-                        scroll-content := VerticalLayout {
-                            width: parent.width;
-                            alignment: start;
+                        body-flick := Flickable {
+                            width: 100%;
+                            height: 100%;
+                            viewport-width: self.width;
+                            viewport-height: scroll-content.preferred-height;
 
-                            // --- Loading skeleton -------------------------------
-                            // Placeholder rows while the live load is in flight.
-                            // No cached instant-paint, so the results never jump
-                            // from a cached to a fresh state — one clean paint.
-                            if SearchState.cortinilla-loading: VerticalLayout {
-                                padding-top: 4px;
-                                CortinillaSkeletonRow { }
-                                CortinillaSkeletonRow { }
-                                CortinillaSkeletonRow { }
-                                CortinillaSkeletonRow { }
-                                CortinillaSkeletonRow { }
-                            }
-
-                            // --- Loaded content ---------------------------------
-                            if !SearchState.cortinilla-loading: VerticalLayout {
+                            scroll-content := VerticalLayout {
+                                width: parent.width;
                                 alignment: start;
 
-                                // No results: explicit empty-state line.
-                                if SearchState.top-result.id == ""
-                                    && SearchState.sections.length == 0: Rectangle {
-                                    height: 28px;
-                                    HorizontalLayout {
-                                        padding-left: 14px;
-                                        padding-right: 14px;
-                                        Text {
-                                            text: @tr("No results for") + " “" + SearchState.cortinilla-query + "”";
-                                            color: Theme.text-muted;
-                                            font-size: 12px;
-                                            vertical-alignment: center;
-                                            horizontal-stretch: 1;
-                                        }
-                                    }
+                                // --- Loading skeleton -------------------------------
+                                // Placeholder rows while the live load is in flight.
+                                // No cached instant-paint, so the results never jump
+                                // from a cached to a fresh state — one clean paint.
+                                if SearchState.cortinilla-loading: VerticalLayout {
+                                    padding-top: 4px;
+                                    CortinillaSkeletonRow { }
+                                    CortinillaSkeletonRow { }
+                                    CortinillaSkeletonRow { }
+                                    CortinillaSkeletonRow { }
+                                    CortinillaSkeletonRow { }
                                 }
 
-                                // Top result (flat-index 0).
-                                if SearchState.top-result.id != "": VerticalLayout {
-                                    padding-left: 6px;
-                                    padding-right: 6px;
-                                    padding-top: 4px;
-                                    Text {
-                                        text: @tr("Top result");
-                                        color: Theme.text-muted;
-                                        font-size: 11px;
-                                        font-weight: Typography.semibold;
-                                        height: 22px;
-                                        vertical-alignment: center;
-                                        x: 10px;
-                                    }
-                                    CortinillaResultRow {
-                                        item: SearchState.top-result;
-                                        selected-index: SearchState.selected-index;
-                                        clicked(fi) => {
-                                            root.row-clicked(fi);
+                                // --- Loaded content ---------------------------------
+                                if !SearchState.cortinilla-loading: VerticalLayout {
+                                    alignment: start;
+
+                                    // No results: explicit empty-state line.
+                                    if SearchState.top-result.id == ""
+                                        && SearchState.sections.length == 0: Rectangle {
+                                        height: 28px;
+                                        HorizontalLayout {
+                                            padding-left: 14px;
+                                            padding-right: 14px;
+                                            Text {
+                                                text: @tr("No results for") + " “" + SearchState.cortinilla-query + "”";
+                                                color: Theme.text-muted;
+                                                font-size: 12px;
+                                                vertical-alignment: center;
+                                                horizontal-stretch: 1;
+                                            }
                                         }
-                                        // Hover is purely visual (the row's own
-                                        // has-hover highlight). It deliberately
-                                        // does NOT write selected-index, so moving
-                                        // the mouse never hijacks the keyboard
-                                        // selection that Enter activates.
                                     }
-                                }
 
-                                // Result sections.
-                                for section[si] in SearchState.sections: VerticalLayout {
-                                    padding-left: 6px;
-                                    padding-right: 6px;
-                                    padding-top: 4px;
-
-                                    // Section header row.
-                                    HorizontalLayout {
-                                        padding-left: 10px;
-                                        padding-right: 10px;
-                                        height: 24px;
+                                    // Top result (flat-index 0).
+                                    if SearchState.top-result.id != "": VerticalLayout {
+                                        padding-left: 6px;
+                                        padding-right: 6px;
+                                        padding-top: 4px;
                                         Text {
-                                            text: section.title;
+                                            text: @tr("Top result");
                                             color: Theme.text-muted;
                                             font-size: 11px;
                                             font-weight: Typography.semibold;
+                                            height: 22px;
                                             vertical-alignment: center;
-                                            horizontal-stretch: 1;
+                                            x: 10px;
                                         }
-                                        if section.has-more: Rectangle {
-                                            width: vm-text.preferred-width + 8px;
-                                            vm-text := Text {
-                                                text: @tr("View more");
-                                                color: vm-ta.has-hover ? Theme.text-primary : Theme.accent;
-                                                font-size: 11px;
-                                                font-weight: Typography.medium;
-                                                vertical-alignment: center;
-                                                horizontal-alignment: right;
+                                        CortinillaResultRow {
+                                            item: SearchState.top-result;
+                                            selected-index: SearchState.selected-index;
+                                            clicked(fi) => {
+                                                root.row-clicked(fi);
                                             }
-                                            vm-ta := TouchArea {
-                                                mouse-cursor: pointer;
-                                                clicked => {
-                                                    root.view-more(section.kind);
-                                                }
-                                            }
+                                            // Hover is purely visual (the row's own
+                                            // has-hover highlight). It deliberately
+                                            // does NOT write selected-index, so moving
+                                            // the mouse never hijacks the keyboard
+                                            // selection that Enter activates.
                                         }
                                     }
 
-                                    // Section rows.
-                                    for entry[ri] in section.rows: CortinillaResultRow {
-                                        item: entry;
-                                        selected-index: SearchState.selected-index;
-                                        clicked(fi) => {
-                                            root.row-clicked(fi);
+                                    // Result sections.
+                                    for section[si] in SearchState.sections: VerticalLayout {
+                                        padding-left: 6px;
+                                        padding-right: 6px;
+                                        padding-top: 4px;
+
+                                        // Section header row.
+                                        HorizontalLayout {
+                                            padding-left: 10px;
+                                            padding-right: 10px;
+                                            height: 24px;
+                                            Text {
+                                                text: section.title;
+                                                color: Theme.text-muted;
+                                                font-size: 11px;
+                                                font-weight: Typography.semibold;
+                                                vertical-alignment: center;
+                                                horizontal-stretch: 1;
+                                            }
+                                            if section.has-more: Rectangle {
+                                                width: vm-text.preferred-width + 8px;
+                                                vm-text := Text {
+                                                    text: @tr("View more");
+                                                    color: vm-ta.has-hover ? Theme.text-primary : Theme.accent;
+                                                    font-size: 11px;
+                                                    font-weight: Typography.medium;
+                                                    vertical-alignment: center;
+                                                    horizontal-alignment: right;
+                                                }
+                                                vm-ta := TouchArea {
+                                                    mouse-cursor: pointer;
+                                                    clicked => {
+                                                        root.view-more(section.kind);
+                                                    }
+                                                }
+                                            }
                                         }
-                                        // Hover is purely visual (the row's own
-                                        // has-hover highlight). It deliberately
-                                        // does NOT write selected-index, so moving
-                                        // the mouse never hijacks the keyboard
-                                        // selection that Enter activates.
+
+                                        // Section rows.
+                                        for entry[ri] in section.rows: CortinillaResultRow {
+                                            item: entry;
+                                            selected-index: SearchState.selected-index;
+                                            clicked(fi) => {
+                                                root.row-clicked(fi);
+                                            }
+                                            // Hover is purely visual (the row's own
+                                            // has-hover highlight). It deliberately
+                                            // does NOT write selected-index, so moving
+                                            // the mouse never hijacks the keyboard
+                                            // selection that Enter activates.
+                                        }
                                     }
                                 }
                             }
                         }
-                    }
 
-                    // Auto-hiding scrollbar in its own gutter, shown only when
-                    // the body overflows (ListScrollbar self-hides at
-                    // max-scroll <= 0). Matches the app's Flickable idiom.
-                    ListScrollbar {
-                        x: parent.width - self.width;
-                        width: 10px;
-                        height: 100%;
-                        auto-hide: true;
-                        viewport-height: body-flick.viewport-height;
-                        visible-height: body-flick.height;
-                        viewport-y <=> body-flick.viewport-y;
+                        // Auto-hiding scrollbar in its own gutter, shown only when
+                        // the body overflows (ListScrollbar self-hides at
+                        // max-scroll <= 0). Matches the app's Flickable idiom.
+                        ListScrollbar {
+                            x: parent.width - self.width;
+                            width: 10px;
+                            height: 100%;
+                            auto-hide: true;
+                            viewport-height: body-flick.viewport-height;
+                            visible-height: body-flick.height;
+                            viewport-y <=> body-flick.viewport-y;
+                        }
                     }
                 }
             }
