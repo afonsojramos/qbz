@@ -112,3 +112,11 @@ strip = "symbols"
 # window-attributes hook): only the miniplayer pays the compositor-blend cost,
 # the main window keeps an Opaque swapchain.
 i-slint-renderer-femtovg = { path = "vendor/i-slint-renderer-femtovg-1.16.1" }
+# On modern macOS, fontique's CoreText per-script fallback can fail to resolve
+# a Han-script family (the suggested PingFang is not always in the scanned
+# family map), so Japanese kanji rendered blank while kana worked. The patch
+# pre-registers the known system CJK families (Hiragino/PingFang/Apple SD
+# Gothic Neo/Arial Unicode MS, Japanese-biased default) in the fallback map at
+# collection creation, which takes priority over the CoreText query. macOS-only
+# (#[cfg]); Linux keeps its working fontconfig fallback.
+i-slint-common = { path = "vendor/i-slint-common-1.16.1" }

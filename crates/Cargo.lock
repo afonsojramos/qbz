@@ -2930,8 +2930,6 @@ dependencies = [
 [[package]]
 name = "i-slint-common"
 version = "1.16.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "40cae5cd0a81ce044029ac303256e025f98a4c59495b5189fc22b588da094e01"
 dependencies = [
  "derive_more",
  "fontique",
