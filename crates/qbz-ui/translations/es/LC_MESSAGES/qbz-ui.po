@@ -2289,7 +2289,7 @@ msgid "Configure frame rate per animation. Lower values save CPU. Requires re-en
 msgstr "Configura la tasa de cuadros por animacion. Valores bajos ahorran CPU. Requiere volver a entrar al modo inmersivo."
 
 msgid "PLAYLISTS"
-msgstr "LISTAS DE REPRODUCCIÓN"
+msgstr "PLAYLISTS"
 
 msgid "No playlists yet."
 msgstr "Aún no hay listas de reproducción."
