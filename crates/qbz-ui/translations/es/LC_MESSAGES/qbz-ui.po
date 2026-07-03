@@ -2544,7 +2544,7 @@ msgid "Mixtapes"
 msgstr "Mixtapes"
 
 msgid "Collections"
-msgstr "Collections"
+msgstr "Colecciones"
 
 msgid "Search playlists"
 msgstr "Buscar playlists"
@@ -2673,7 +2673,7 @@ msgid "All kinds"
 msgstr "Todos los tipos"
 
 msgid "Artist Collections"
-msgstr "Artist Collections"
+msgstr "Colecciones de artistas"
 
 msgid "Remove from collection"
 msgstr "Quitar de la colección"
@@ -4265,3 +4265,84 @@ msgstr "Iniciando tu sesión…"
 
 msgid "Sign-in failed"
 msgstr "No se pudo iniciar sesión"
+
+msgid "About QBZ"
+msgstr "Acerca de QBZ"
+
+msgid "Already used by"
+msgstr "Ya lo usa"
+
+msgid "Auto (recommended)"
+msgstr "Auto (recomendado)"
+
+msgid "Auto picks the best renderer for your graphics hardware. Only change this if the app feels slow or renders incorrectly (requires restart)"
+msgstr "Auto elige el mejor renderizador para tu hardware gráfico. Cámbialo solo si la app se siente lenta o se ve mal (requiere reiniciar)"
+
+msgid "Customize Shortcuts"
+msgstr "Personalizar atajos"
+
+msgid "GPU"
+msgstr "GPU"
+
+msgid "GPU (compatibility)"
+msgstr "GPU (compatibilidad)"
+
+msgid "Go"
+msgstr "Ir"
+
+msgid "Line Bed"
+msgstr "Line Bed"
+
+msgid "Open Music Link"
+msgstr "Abrir enlace de música"
+
+msgid "Open Playlist Importer"
+msgstr "Abrir importador de playlists"
+
+msgid "Open Qobuz Link"
+msgstr "Abrir enlace de Qobuz"
+
+msgid "Paste a Qobuz, Spotify, Apple Music, Tidal, Deezer or song.link URL"
+msgstr "Pega una URL de Qobuz, Spotify, Apple Music, Tidal, Deezer o song.link"
+
+msgid "Place the Purchases entry in the custom title bar instead of the sidebar"
+msgstr "Coloca la entrada de Compras en la barra de título personalizada en lugar de la barra lateral"
+
+msgid "Press keys…"
+msgstr "Presiona teclas…"
+
+msgid "Purchases"
+msgstr "Compras"
+
+msgid "Purchases in title bar"
+msgstr "Compras en la barra de título"
+
+msgid "RENDERER"
+msgstr "RENDERIZADOR"
+
+msgid "Rendering backend"
+msgstr "Backend de renderizado"
+
+msgid "Reset All to Defaults"
+msgstr "Restablecer todo"
+
+msgid "Resolving…"
+msgstr "Resolviendo…"
+
+msgid "Software"
+msgstr "Software"
+
+msgid "Spectral Ribbon"
+msgstr "Spectral Ribbon"
+
+msgid "This looks like a playlist."
+msgstr "Esto parece una playlist."
+
+msgid "Wave Bed"
+msgstr "Wave Bed"
+
+msgid "What's New"
+msgstr "Novedades"
+
+msgid "modified"
+msgstr "modificado"

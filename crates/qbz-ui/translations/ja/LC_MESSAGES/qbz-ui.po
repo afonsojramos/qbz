@@ -4155,3 +4155,153 @@ msgstr "サインインしています…"
 
 msgid "Sign-in failed"
 msgstr "サインインに失敗しました"
+
+msgid "About QBZ"
+msgstr "QBZについて"
+
+msgid "Already used by"
+msgstr "すでに使用中:"
+
+msgid "Auto (recommended)"
+msgstr "自動（推奨）"
+
+msgid "Auto picks the best renderer for your graphics hardware. Only change this if the app feels slow or renders incorrectly (requires restart)"
+msgstr "自動はグラフィックハードウェアに最適なレンダラーを選択します。動作が遅い、または表示が乱れる場合のみ変更してください（再起動が必要）"
+
+msgid "Customize Shortcuts"
+msgstr "ショートカットをカスタマイズ"
+
+msgid "GPU"
+msgstr "GPU"
+
+msgid "GPU (compatibility)"
+msgstr "GPU（互換）"
+
+msgid "Go"
+msgstr "移動"
+
+msgid "Line Bed"
+msgstr "Line Bed"
+
+msgid "Open Music Link"
+msgstr "音楽リンクを開く"
+
+msgid "Open Playlist Importer"
+msgstr "プレイリストインポーターを開く"
+
+msgid "Open Qobuz Link"
+msgstr "Qobuzリンクを開く"
+
+msgid "Paste a Qobuz, Spotify, Apple Music, Tidal, Deezer or song.link URL"
+msgstr "Qobuz、Spotify、Apple Music、Tidal、Deezer、song.linkのURLを貼り付けてください"
+
+msgid "Place the Purchases entry in the custom title bar instead of the sidebar"
+msgstr "購入をサイドバーではなくカスタムタイトルバーに表示します"
+
+msgid "Press keys…"
+msgstr "キーを押してください…"
+
+msgid "Purchases"
+msgstr "購入"
+
+msgid "Purchases in title bar"
+msgstr "タイトルバーに購入を表示"
+
+msgid "RENDERER"
+msgstr "レンダラー"
+
+msgid "Rendering backend"
+msgstr "レンダリングバックエンド"
+
+msgid "Reset All to Defaults"
+msgstr "すべてリセット"
+
+msgid "Resolving…"
+msgstr "解決中…"
+
+msgid "Software"
+msgstr "ソフトウェア"
+
+msgid "Spectral Ribbon"
+msgstr "Spectral Ribbon"
+
+msgid "This looks like a playlist."
+msgstr "これはプレイリストのようです。"
+
+msgid "Wave Bed"
+msgstr "Wave Bed"
+
+msgid "What's New"
+msgstr "新着情報"
+
+msgid "modified"
+msgstr "変更済み"
+
+msgid "Block this album"
+msgstr "このアルバムをブロック"
+
+msgid "Blocked albums are hidden from search, discovery, and listings — even when their artist is allowed."
+msgstr "ブロックしたアルバムは、アーティストが許可されていても、検索・ディスカバー・一覧に表示されません。"
+
+msgid "No blocked albums"
+msgstr "ブロック中のアルバムはありません"
+
+msgid "This will remove all {} blocked albums. This cannot be undone."
+msgstr "{}件のブロック中アルバムをすべて解除します。この操作は元に戻せません。"
+
+msgid "To block an album, open its menu and choose Block this album."
+msgstr "アルバムをブロックするには、メニューから「このアルバムをブロック」を選択してください。"
+
+msgid "Unblock album"
+msgstr "アルバムのブロックを解除"
+
+msgid "{} albums"
+msgstr "{}枚のアルバム"
+
+msgid "{} artists, {} albums blocked"
+msgstr "{}人のアーティスト、{}枚のアルバムをブロック中"
+
+msgid "{} artists, {} albums blocked (disabled)"
+msgstr "{}人のアーティスト、{}枚のアルバムをブロック中（無効）"
+
+msgid "A personalized Discover tab built from your listening. For the best results connect Last.fm and ListenBrainz below — MusicBrainz is used automatically to match releases."
+msgstr "リスニング履歴から作られるパーソナライズされた「見つける」タブ。最良の結果を得るには、下のLast.fmとListenBrainzを接続してください。リリースの照合にはMusicBrainzが自動的に使用されます。"
+
+msgid "Based on what you've been into lately"
+msgstr "最近よく聴いているものから"
+
+msgid "Built with Rust and Slint, and powered by Rodio and Symphonia. With thanks to Qobuz, MusicBrainz, Song.link/Odesli, LRCLIB, lyrics.ovh, and Lucide."
+msgstr "RustとSlintで開発され、RodioとSymphoniaを利用しています。Qobuz、MusicBrainz、Song.link/Odesli、LRCLIB、lyrics.ovh、Lucideに感謝します。"
+
+msgid "Connect Last.fm or ListenBrainz in Settings, or play more music, to get personalized recommendations."
+msgstr "設定でLast.fmまたはListenBrainzを接続するか、もっと音楽を再生すると、パーソナライズされたおすすめが表示されます。"
+
+msgid "JACK is not bit-perfect"
+msgstr "JACKはビットパーフェクトではありません"
+
+msgid "More like the artists you love"
+msgstr "好きなアーティストに似たもの"
+
+msgid "No recommendations yet"
+msgstr "おすすめはまだありません"
+
+msgid "Popular artists on Qobuz"
+msgstr "Qobuzで人気のアーティスト"
+
+msgid "RECOMMENDATIONS"
+msgstr "おすすめ"
+
+msgid "Recommendations"
+msgstr "おすすめ"
+
+msgid "Show Recommendations in Discover"
+msgstr "「見つける」におすすめを表示"
+
+msgid "The JACK backend routes audio through the JACK graph, which resamples to the graph's sample rate. For bit-perfect playback use ALSA (direct) or PipeWire with passthrough."
+msgstr "JACKバックエンドはオーディオをJACKグラフ経由でルーティングするため、グラフのサンプルレートにリサンプリングされます。ビットパーフェクト再生にはALSA（ダイレクト）またはパススルー対応のPipeWireを使用してください。"
+
+msgid "Weekly Exploration"
+msgstr "今週の発見"
+
+msgid "Weekly Jams"
+msgstr "今週のお気に入り"

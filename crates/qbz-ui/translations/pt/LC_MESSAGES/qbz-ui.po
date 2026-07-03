@@ -4208,3 +4208,111 @@ msgstr "Entrando…"
 
 msgid "Sign-in failed"
 msgstr "Falha ao entrar"
+
+msgid "About QBZ"
+msgstr "Sobre o QBZ"
+
+msgid "Already used by"
+msgstr "Já usado por"
+
+msgid "Auto (recommended)"
+msgstr "Auto (recomendado)"
+
+msgid "Auto picks the best renderer for your graphics hardware. Only change this if the app feels slow or renders incorrectly (requires restart)"
+msgstr "Auto escolhe o melhor renderizador para o seu hardware gráfico. Só mude se o app estiver lento ou renderizando incorretamente (requer reiniciar)"
+
+msgid "Customize Shortcuts"
+msgstr "Personalizar atalhos"
+
+msgid "GPU"
+msgstr "GPU"
+
+msgid "GPU (compatibility)"
+msgstr "GPU (compatibilidade)"
+
+msgid "Go"
+msgstr "Ir"
+
+msgid "Line Bed"
+msgstr "Line Bed"
+
+msgid "Open Music Link"
+msgstr "Abrir link de música"
+
+msgid "Open Playlist Importer"
+msgstr "Abrir importador de playlists"
+
+msgid "Open Qobuz Link"
+msgstr "Abrir link do Qobuz"
+
+msgid "Paste a Qobuz, Spotify, Apple Music, Tidal, Deezer or song.link URL"
+msgstr "Cole uma URL do Qobuz, Spotify, Apple Music, Tidal, Deezer ou song.link"
+
+msgid "Place the Purchases entry in the custom title bar instead of the sidebar"
+msgstr "Coloca a entrada Compras na barra de título personalizada em vez da barra lateral"
+
+msgid "Press keys…"
+msgstr "Pressione as teclas…"
+
+msgid "Purchases"
+msgstr "Compras"
+
+msgid "Purchases in title bar"
+msgstr "Compras na barra de título"
+
+msgid "RENDERER"
+msgstr "RENDERIZADOR"
+
+msgid "Rendering backend"
+msgstr "Backend de renderização"
+
+msgid "Reset All to Defaults"
+msgstr "Redefinir tudo"
+
+msgid "Resolving…"
+msgstr "Resolvendo…"
+
+msgid "Software"
+msgstr "Software"
+
+msgid "Spectral Ribbon"
+msgstr "Spectral Ribbon"
+
+msgid "This looks like a playlist."
+msgstr "Isto parece ser uma playlist."
+
+msgid "Wave Bed"
+msgstr "Wave Bed"
+
+msgid "What's New"
+msgstr "Novidades"
+
+msgid "modified"
+msgstr "modificado"
+
+msgid "Block this album"
+msgstr "Bloquear este álbum"
+
+msgid "Blocked albums are hidden from search, discovery, and listings — even when their artist is allowed."
+msgstr "Álbuns bloqueados ficam ocultos da busca, da descoberta e das listagens — mesmo quando o artista é permitido."
+
+msgid "No blocked albums"
+msgstr "Nenhum álbum bloqueado"
+
+msgid "This will remove all {} blocked albums. This cannot be undone."
+msgstr "Isto removerá todos os {} álbuns bloqueados. Isso não pode ser desfeito."
+
+msgid "To block an album, open its menu and choose Block this album."
+msgstr "Para bloquear um álbum, abra o menu dele e escolha Bloquear este álbum."
+
+msgid "Unblock album"
+msgstr "Desbloquear álbum"
+
+msgid "{} albums"
+msgstr "{} álbuns"
+
+msgid "{} artists, {} albums blocked"
+msgstr "{} artistas, {} álbuns bloqueados"
+
+msgid "{} artists, {} albums blocked (disabled)"
+msgstr "{} artistas, {} álbuns bloqueados (desativado)"

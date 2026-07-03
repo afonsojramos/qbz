@@ -4179,3 +4179,153 @@ msgstr "Выполняется вход…"
 
 msgid "Sign-in failed"
 msgstr "Не удалось войти"
+
+msgid "About QBZ"
+msgstr "О QBZ"
+
+msgid "Already used by"
+msgstr "Уже используется:"
+
+msgid "Auto (recommended)"
+msgstr "Авто (рекомендуется)"
+
+msgid "Auto picks the best renderer for your graphics hardware. Only change this if the app feels slow or renders incorrectly (requires restart)"
+msgstr "Авто выбирает лучший рендерер для вашей видеокарты. Меняйте только если приложение работает медленно или отображается неправильно (требуется перезапуск)"
+
+msgid "Customize Shortcuts"
+msgstr "Настроить сочетания"
+
+msgid "GPU"
+msgstr "GPU"
+
+msgid "GPU (compatibility)"
+msgstr "GPU (совместимость)"
+
+msgid "Go"
+msgstr "Перейти"
+
+msgid "Line Bed"
+msgstr "Line Bed"
+
+msgid "Open Music Link"
+msgstr "Открыть музыкальную ссылку"
+
+msgid "Open Playlist Importer"
+msgstr "Открыть импорт плейлистов"
+
+msgid "Open Qobuz Link"
+msgstr "Открыть ссылку Qobuz"
+
+msgid "Paste a Qobuz, Spotify, Apple Music, Tidal, Deezer or song.link URL"
+msgstr "Вставьте ссылку Qobuz, Spotify, Apple Music, Tidal, Deezer или song.link"
+
+msgid "Place the Purchases entry in the custom title bar instead of the sidebar"
+msgstr "Размещает раздел «Покупки» в собственной строке заголовка вместо боковой панели"
+
+msgid "Press keys…"
+msgstr "Нажмите клавиши…"
+
+msgid "Purchases"
+msgstr "Покупки"
+
+msgid "Purchases in title bar"
+msgstr "Покупки в строке заголовка"
+
+msgid "RENDERER"
+msgstr "РЕНДЕРЕР"
+
+msgid "Rendering backend"
+msgstr "Бэкенд рендеринга"
+
+msgid "Reset All to Defaults"
+msgstr "Сбросить всё"
+
+msgid "Resolving…"
+msgstr "Обработка…"
+
+msgid "Software"
+msgstr "Программный"
+
+msgid "Spectral Ribbon"
+msgstr "Spectral Ribbon"
+
+msgid "This looks like a playlist."
+msgstr "Похоже, это плейлист."
+
+msgid "Wave Bed"
+msgstr "Wave Bed"
+
+msgid "What's New"
+msgstr "Что нового"
+
+msgid "modified"
+msgstr "изменено"
+
+msgid "Block this album"
+msgstr "Заблокировать этот альбом"
+
+msgid "Blocked albums are hidden from search, discovery, and listings — even when their artist is allowed."
+msgstr "Заблокированные альбомы скрываются из поиска, рекомендаций и списков — даже если их исполнитель разрешён."
+
+msgid "No blocked albums"
+msgstr "Нет заблокированных альбомов"
+
+msgid "This will remove all {} blocked albums. This cannot be undone."
+msgstr "Будут удалены все заблокированные альбомы ({}). Это действие нельзя отменить."
+
+msgid "To block an album, open its menu and choose Block this album."
+msgstr "Чтобы заблокировать альбом, откройте его меню и выберите «Заблокировать этот альбом»."
+
+msgid "Unblock album"
+msgstr "Разблокировать альбом"
+
+msgid "{} albums"
+msgstr "{} альбомов"
+
+msgid "{} artists, {} albums blocked"
+msgstr "Заблокировано: {} исполнителей, {} альбомов"
+
+msgid "{} artists, {} albums blocked (disabled)"
+msgstr "Заблокировано: {} исполнителей, {} альбомов (отключено)"
+
+msgid "A personalized Discover tab built from your listening. For the best results connect Last.fm and ListenBrainz below — MusicBrainz is used automatically to match releases."
+msgstr "Персональная вкладка «Обзор» на основе вашего прослушивания. Для лучших результатов подключите Last.fm и ListenBrainz ниже — MusicBrainz используется автоматически для сопоставления релизов."
+
+msgid "Based on what you've been into lately"
+msgstr "На основе того, что вы слушали в последнее время"
+
+msgid "Built with Rust and Slint, and powered by Rodio and Symphonia. With thanks to Qobuz, MusicBrainz, Song.link/Odesli, LRCLIB, lyrics.ovh, and Lucide."
+msgstr "Создано на Rust и Slint, работает на Rodio и Symphonia. Благодарим Qobuz, MusicBrainz, Song.link/Odesli, LRCLIB, lyrics.ovh и Lucide."
+
+msgid "Connect Last.fm or ListenBrainz in Settings, or play more music, to get personalized recommendations."
+msgstr "Подключите Last.fm или ListenBrainz в настройках или слушайте больше музыки, чтобы получить персональные рекомендации."
+
+msgid "JACK is not bit-perfect"
+msgstr "JACK не является bit-perfect"
+
+msgid "More like the artists you love"
+msgstr "Похожее на любимых исполнителей"
+
+msgid "No recommendations yet"
+msgstr "Рекомендаций пока нет"
+
+msgid "Popular artists on Qobuz"
+msgstr "Популярные исполнители на Qobuz"
+
+msgid "RECOMMENDATIONS"
+msgstr "РЕКОМЕНДАЦИИ"
+
+msgid "Recommendations"
+msgstr "Рекомендации"
+
+msgid "Show Recommendations in Discover"
+msgstr "Показывать рекомендации в «Обзоре»"
+
+msgid "The JACK backend routes audio through the JACK graph, which resamples to the graph's sample rate. For bit-perfect playback use ALSA (direct) or PipeWire with passthrough."
+msgstr "Бэкенд JACK направляет звук через граф JACK, который передискретизирует его в частоту графа. Для bit-perfect воспроизведения используйте ALSA (напрямую) или PipeWire с passthrough."
+
+msgid "Weekly Exploration"
+msgstr "Открытия недели"
+
+msgid "Weekly Jams"
+msgstr "Любимое за неделю"
