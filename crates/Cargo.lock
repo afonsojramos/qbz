@@ -3272,6 +3272,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d3067d79b975e8844ca9eb072e16b31c3c1c36928edf9c6789548c524d0d954"
 
 [[package]]
+name = "id3"
+version = "1.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "70d6d9f23a28c6feab60d7b4a339e004809019ec9d5fd964b3f4c655ff9bc141"
+dependencies = [
+ "bitflags 2.11.0",
+ "byteorder",
+ "flate2",
+]
+
+[[package]]
 name = "idna"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5419,6 +5430,7 @@ dependencies = [
  "qbz-core",
  "qbz-credentials",
  "qbz-dac-wizard",
+ "qbz-dsd",
  "qbz-external-reco",
  "qbz-i18n",
  "qbz-integrations",
@@ -5598,6 +5610,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "qbz-dsd"
+version = "1.2.15"
+dependencies = [
+ "id3",
+ "log",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "qbz-external-reco"
 version = "1.2.15"
 dependencies = [
@@ -5641,6 +5662,7 @@ dependencies = [
  "image",
  "lofty",
  "log",
+ "qbz-dsd",
  "rusqlite",
  "serde",
  "serde_json",
@@ -5775,6 +5797,7 @@ dependencies = [
  "qbz-audio",
  "qbz-cache",
  "qbz-cmaf",
+ "qbz-dsd",
  "qbz-models",
  "qbz-qobuz",
  "rand 0.9.3",
