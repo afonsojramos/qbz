@@ -158,6 +158,12 @@ fn local_quality(bit_depth: Option<u32>, sample_rate_hz: f64) -> (String, String
     let Some(bd) = bit_depth else {
         return (String::new(), String::new());
     };
+    // DSD tracks store bit_depth = 1 and the DSD bit rate as sample_rate.
+    if bd == 1 {
+        let label = crate::quality::dsd_multiple_label(Some(sample_rate_hz));
+        let tooltip = qbz_i18n::t_args("DSD: {}", &[&label]);
+        return (label, tooltip);
+    }
     let khz = if sample_rate_hz >= 1000.0 {
         sample_rate_hz / 1000.0
     } else {

@@ -635,6 +635,42 @@ async fn play_local_file_audible(
         clear_loading(weak, row_id);
         return;
     };
+    // DSD (.dsf/.dff): converted to PCM on the fly by the player (qbz-dsd
+    // Phase 1) — streamed from disk, never slurped through play_data. Errors
+    // here are expected user-facing cases (DST-compressed DFF, >2ch) → toast
+    // + stop, the queue stays usable.
+    if qbz_dsd::is_dsd_path(std::path::Path::new(&path)) {
+        let exists_path = path.clone();
+        let exists = tokio::task::spawn_blocking(move || {
+            std::path::Path::new(&exists_path).exists()
+        })
+        .await
+        .unwrap_or(false);
+        if !exists {
+            log::error!("[qbz-slint] local play: DSD file not available at {path}");
+            crate::toast::show_weak(
+                weak,
+                qbz_i18n::t("File not available — is the drive mounted?"),
+                crate::ToastKind::Warning,
+            );
+            clear_loading(weak, row_id);
+            return;
+        }
+        if let Err(e) = runtime
+            .core()
+            .player()
+            .play_dsd_file(std::path::PathBuf::from(&path), row_id)
+        {
+            log::error!("[qbz-slint] local play: play_dsd_file {row_id} failed: {e}");
+            crate::toast::show_weak(
+                weak,
+                format!("{}: {e}", qbz_i18n::t("Cannot play DSD file")),
+                crate::ToastKind::Warning,
+            );
+            clear_loading(weak, row_id);
+        }
+        return;
+    }
     // PLAYBACK LOCK (owner verdict 2026-06-10): the library never hides
     // network-folder content, so an unmounted drive surfaces HERE — one cheap
     // `Path::exists()` stat before the read, with friendly feedback instead
@@ -1543,7 +1579,10 @@ pub(crate) async fn refresh_now_playing_meta(runtime: &Runtime, weak: &slint::We
     let preview_artwork = track.artwork_ref_with_plex(&plex.base_url, &plex.token, Some(1000));
     // Quality badge: tier from bit depth (24-bit+ = Hi-Res), exact detail line
     // reused from the shared formatter so it matches the track-row badges.
+    // bit_depth == 1 marks DSD (1-bit stream, sample_rate = DSD bit rate) —
+    // the generic detail would read "1-bit / 2.8224 kHz".
     let quality_tier = match track.bit_depth {
+        Some(1) => "hires",
         Some(d) if d >= 24 => "hires",
         Some(_) => "cd",
         None if track.hires => "hires",
@@ -1551,6 +1590,8 @@ pub(crate) async fn refresh_now_playing_meta(runtime: &Runtime, weak: &slint::We
     };
     let quality_detail = if quality_tier.is_empty() {
         String::new()
+    } else if track.bit_depth == Some(1) {
+        crate::quality::dsd_multiple_label(track.sample_rate)
     } else {
         crate::quality::detail(track.bit_depth, track.sample_rate)
     };
@@ -4086,6 +4127,59 @@ pub fn start_poll_loop(
                                         "[qbz-slint] [GAPLESS] queued track {next_id} for gapless"
                                     );
                                 }
+                            }
+                        });
+                    } else if next.id != track_id && next.is_local {
+                        // LOCAL gapless (DSD plan Phase 2): resolve the file
+                        // path and hand it to the engine's gapless queue —
+                        // DSD goes through play_next_dsd (DoP append when a
+                        // DoP stream is live, else an in-memory converted
+                        // WAV); other local formats feed their raw bytes to
+                        // the normal play_next. CUE virtual tracks are
+                        // skipped (they share one album image file).
+                        gapless_requested_for = track_id;
+                        let runtime = runtime.clone();
+                        let next_id = next.id;
+                        tokio::spawn(async move {
+                            let info = if crate::ephemeral::is_ephemeral_id(next_id as i64) {
+                                crate::ephemeral::get_track(next_id as i64)
+                                    .map(|t| (t.file_path, t.cue_start_secs))
+                            } else {
+                                tokio::task::spawn_blocking(move || {
+                                    crate::library_db::with_db(|db| db.get_track(next_id as i64))
+                                })
+                                .await
+                                .ok()
+                                .flatten()
+                                .flatten()
+                                .map(|t| (t.file_path, t.cue_start_secs))
+                            };
+                            let Some((path, cue)) = info else { return };
+                            if cue.is_some() {
+                                return;
+                            }
+                            let rt2 = runtime.clone();
+                            let res = tokio::task::spawn_blocking(move || {
+                                let p = std::path::PathBuf::from(&path);
+                                let player = rt2.core().player();
+                                if qbz_dsd::is_dsd_path(&p) {
+                                    player.play_next_dsd(p, next_id)
+                                } else {
+                                    let bytes = std::fs::read(&p).map_err(|e| e.to_string())?;
+                                    player.play_next(bytes, next_id)
+                                }
+                            })
+                            .await;
+                            match res {
+                                Ok(Ok(())) => log::info!(
+                                    "[qbz-slint] [GAPLESS] queued local track {next_id} for gapless"
+                                ),
+                                Ok(Err(e)) => log::info!(
+                                    "[qbz-slint] [GAPLESS] local pre-queue {next_id} skipped: {e}"
+                                ),
+                                Err(e) => log::warn!(
+                                    "[qbz-slint] [GAPLESS] local pre-queue task failed: {e}"
+                                ),
                             }
                         });
                     }

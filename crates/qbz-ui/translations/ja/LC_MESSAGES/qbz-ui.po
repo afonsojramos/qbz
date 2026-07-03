@@ -4328,3 +4328,19 @@ msgstr "DSD: {}"
 
 msgid "Cannot play DSD file"
 msgstr "DSDファイルを再生できません"
+
+# DSD Phases 2-3: delivery mode (2026-07-03)
+msgid "DSD playback"
+msgstr "DSD再生"
+
+msgid "How DSD tracks reach the DAC. WARNING: choose DoP or Native only if your DAC supports it — on any other DAC they play as loud noise. Volume is fixed and seeking is disabled in DoP/Native mode. Native additionally needs kernel support for the DAC."
+msgstr "DSDトラックをDACへ送る方法。警告：DACが対応している場合のみDoPまたはネイティブを選択してください。対応していないDACでは大きなノイズとして再生されます。DoP/ネイティブモード中は音量が固定され、シークは無効になります。ネイティブはさらにDAC用のカーネルサポートが必要です。"
+
+msgid "Convert to PCM (works everywhere)"
+msgstr "PCMに変換（すべての環境で動作）"
+
+msgid "DoP — DSD over PCM (bit-perfect)"
+msgstr "DoP — PCM上のDSD（ビットパーフェクト）"
+
+msgid "Native DSD (kernel support required)"
+msgstr "ネイティブDSD（カーネルサポートが必要）"

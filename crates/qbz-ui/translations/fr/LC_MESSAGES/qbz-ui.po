@@ -4339,3 +4339,19 @@ msgstr "DSD: {}"
 
 msgid "Cannot play DSD file"
 msgstr "Impossible de lire le fichier DSD"
+
+# DSD Phases 2-3: delivery mode (2026-07-03)
+msgid "DSD playback"
+msgstr "Lecture DSD"
+
+msgid "How DSD tracks reach the DAC. WARNING: choose DoP or Native only if your DAC supports it — on any other DAC they play as loud noise. Volume is fixed and seeking is disabled in DoP/Native mode. Native additionally needs kernel support for the DAC."
+msgstr "Comment les pistes DSD atteignent le DAC. ATTENTION : ne choisissez DoP ou Natif que si votre DAC le prend en charge — sur tout autre DAC, cela produit un bruit fort. Le volume est fixe et la recherche est désactivée en mode DoP/Natif. Le mode Natif nécessite en plus la prise en charge du noyau pour le DAC."
+
+msgid "Convert to PCM (works everywhere)"
+msgstr "Convertir en PCM (fonctionne partout)"
+
+msgid "DoP — DSD over PCM (bit-perfect)"
+msgstr "DoP — DSD sur PCM (bit-perfect)"
+
+msgid "Native DSD (kernel support required)"
+msgstr "DSD natif (prise en charge du noyau requise)"

@@ -180,6 +180,23 @@ export component AudioSettings inherits VerticalLayout {
             }
         }
     }
+    // DSD delivery (DSD plan Phases 2-3). DoP/native support is NOT
+    // detectable up front, so the warning lives permanently in the row copy;
+    // the default (Convert) works on every DAC. ALSA-direct only — any
+    // mixing/resampling path would corrupt the DSD stream.
+    if SettingsState.backend-is-alsa: SettingRow {
+        label: @tr("DSD playback");
+        description: @tr("How DSD tracks reach the DAC. WARNING: choose DoP or Native only if your DAC supports it — on any other DAC they play as loud noise. Volume is fixed and seeking is disabled in DoP/Native mode. Native additionally needs kernel support for the DAC.");
+        QbzSelect {
+            menu-width: 280px;
+            options: SettingsState.dsd-modes;
+            current-index: SettingsState.dsd-mode-index;
+            selected(i) => {
+                SettingsState.dsd-mode-index = i;
+                root.settings-select("dsd-mode", i);
+            }
+        }
+    }
 
     Rectangle { height: 12px; }
     Divider { }

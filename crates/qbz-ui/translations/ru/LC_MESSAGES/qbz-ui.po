@@ -4352,3 +4352,19 @@ msgstr "DSD: {}"
 
 msgid "Cannot play DSD file"
 msgstr "Не удаётся воспроизвести файл DSD"
+
+# DSD Phases 2-3: delivery mode (2026-07-03)
+msgid "DSD playback"
+msgstr "Воспроизведение DSD"
+
+msgid "How DSD tracks reach the DAC. WARNING: choose DoP or Native only if your DAC supports it — on any other DAC they play as loud noise. Volume is fixed and seeking is disabled in DoP/Native mode. Native additionally needs kernel support for the DAC."
+msgstr "Как DSD-треки попадают на ЦАП. ВНИМАНИЕ: выбирайте DoP или Native только если ваш ЦАП это поддерживает — на любом другом ЦАПе это воспроизводится как громкий шум. Громкость фиксирована, перемотка отключена в режиме DoP/Native. Native дополнительно требует поддержки ядра для ЦАПа."
+
+msgid "Convert to PCM (works everywhere)"
+msgstr "Конвертировать в PCM (работает везде)"
+
+msgid "DoP — DSD over PCM (bit-perfect)"
+msgstr "DoP — DSD поверх PCM (бит-перфект)"
+
+msgid "Native DSD (kernel support required)"
+msgstr "Нативный DSD (требуется поддержка ядра)"

@@ -47,6 +47,14 @@ const MAX_SAMPLE_RATES: &[(&str, Option<u32>)] = &[
 ];
 
 /// ALSA-plugin dropdown options.
+/// DSD delivery modes (DSD plan Phases 2-3). Value strings are the
+/// AudioSettings.dsd_mode contract ("convert" | "dop" | "native").
+const DSD_MODES: &[(&str, &str)] = &[
+    (qbz_i18n::mark("Convert to PCM (works everywhere)"), "convert"),
+    (qbz_i18n::mark("DoP — DSD over PCM (bit-perfect)"), "dop"),
+    (qbz_i18n::mark("Native DSD (kernel support required)"), "native"),
+];
+
 const ALSA_PLUGINS: &[(&str, AlsaPlugin)] = &[
     (qbz_i18n::mark("hw (Direct Hardware)"), AlsaPlugin::Hw),
     (qbz_i18n::mark("plughw (Auto-convert)"), AlsaPlugin::PlugHw),
@@ -137,6 +145,8 @@ pub struct SettingsSnapshot {
     // Audio — toggles.
     limit_quality_to_device: bool,
     alsa_hardware_volume: bool,
+    dsd_modes: Vec<String>,
+    dsd_mode_index: i32,
     exclusive_mode: bool,
     reserve_dac: bool,
     dac_passthrough: bool,
@@ -518,6 +528,11 @@ fn build_snapshot(
         alsa_plugin_index: alsa_plugin_index as i32,
         limit_quality_to_device: audio.limit_quality_to_device,
         alsa_hardware_volume: audio.alsa_hardware_volume,
+        dsd_modes: DSD_MODES.iter().map(|(l, _)| qbz_i18n::t(l)).collect(),
+        dsd_mode_index: DSD_MODES
+            .iter()
+            .position(|(_, v)| *v == audio.dsd_mode)
+            .unwrap_or(0) as i32,
         exclusive_mode: audio.exclusive_mode,
         reserve_dac: audio.reserve_dac_while_running,
         dac_passthrough: audio.dac_passthrough,
@@ -589,6 +604,8 @@ pub fn apply_snapshot(window: &AppWindow, snap: SettingsSnapshot) {
     // Audio — toggles.
     st.set_limit_quality_to_device(snap.limit_quality_to_device);
     st.set_alsa_hardware_volume(snap.alsa_hardware_volume);
+    st.set_dsd_modes(string_model(snap.dsd_modes));
+    st.set_dsd_mode_index(snap.dsd_mode_index);
     st.set_exclusive_mode(snap.exclusive_mode);
     st.set_reserve_dac(snap.reserve_dac);
     st.set_dac_passthrough(snap.dac_passthrough);
@@ -1136,6 +1153,16 @@ pub async fn handle_select(
             let device_opt = if id.is_empty() { None } else { Some(id.as_str()) };
             if let Err(e) = with_audio(&ctx.audio, |s| s.set_output_device(device_opt)) {
                 log::error!("[qbz-slint] persist device failed: {e}");
+                return;
+            }
+            apply_audio(&ctx, &runtime, Apply::Reinit);
+        }
+        "dsd-mode" => {
+            let Some((_, mode)) = DSD_MODES.get(index) else {
+                return;
+            };
+            if let Err(e) = with_audio(&ctx.audio, |s| s.set_dsd_mode(mode)) {
+                log::error!("[qbz-slint] persist DSD mode failed: {e}");
                 return;
             }
             apply_audio(&ctx, &runtime, Apply::Reinit);

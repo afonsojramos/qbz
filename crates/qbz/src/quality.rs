@@ -36,9 +36,28 @@ pub fn is_lossless_format(format: &str) -> bool {
     )
 }
 
+/// DSD container/format names.
+pub fn is_dsd_format(format: &str) -> bool {
+    matches!(
+        format.trim().to_ascii_lowercase().as_str(),
+        "dsd" | "dsf" | "dff"
+    )
+}
+
+/// "DSD64" / "DSD128" / … from the DSD bit rate. Accepts Hz (2 822 400) or
+/// kHz (2 822.4) — some surfaces normalize the stored rate to kHz upstream.
+pub fn dsd_multiple_label(sample_rate: Option<f64>) -> String {
+    let hz = match sample_rate {
+        Some(r) if r >= 1_000_000.0 => r,
+        Some(r) if r >= 1_000.0 => r * 1000.0,
+        _ => return "DSD".to_string(),
+    };
+    format!("DSD{}", ((hz / 2_822_400.0).round() as u32).saturating_mul(64))
+}
+
 /// Badge tier from a container/codec + (possibly-unknown) max bit depth:
 /// - `"mp3"`      lossy
-/// - `"hires"`    >= 24-bit
+/// - `"hires"`    >= 24-bit (and DSD, whose nominal depth is 1 bit)
 /// - `"cd"`       known bit depth < 24
 /// - `"lossless"` bit depth UNKNOWN but the container IS lossless (un-hydrated
 ///   Plex FLAC etc.) — show the filetype; better than no badge at all
@@ -46,6 +65,9 @@ pub fn is_lossless_format(format: &str) -> bool {
 pub fn tier(format: &str, bit_depth: Option<u32>) -> &'static str {
     if format.trim().eq_ignore_ascii_case("mp3") {
         return "mp3";
+    }
+    if is_dsd_format(format) {
+        return "hires";
     }
     match bit_depth {
         Some(b) if b >= 24 => "hires",
@@ -69,6 +91,16 @@ pub fn badge(
     bit_depth: Option<u32>,
     sample_rate: Option<f64>,
 ) -> (&'static str, String, String) {
+    // DSD first: nominal depth is 1 bit and sample_rate is the DSD bit rate,
+    // so the generic detail would read "1-bit / 2822.4 kHz".
+    if is_dsd_format(format) {
+        let label = dsd_multiple_label(sample_rate);
+        return (
+            "hires",
+            label.clone(),
+            qbz_i18n::t_args("DSD: {}", &[&label]),
+        );
+    }
     let t = tier(format, bit_depth);
     match t {
         "" | "mp3" => (t, String::new(), String::new()),

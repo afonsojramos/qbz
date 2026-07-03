@@ -2801,6 +2801,10 @@ export global SettingsState {
     // Audio — toggles.
     in-out property <bool> limit-quality-to-device: false;
     in-out property <bool> alsa-hardware-volume: false;
+    // DSD delivery mode (DSD plan Phases 2-3): Convert to PCM / DoP /
+    // Native DSD. Only meaningful on the ALSA direct backend.
+    in-out property <[string]> dsd-modes: [];
+    in-out property <int> dsd-mode-index: 0;
     in-out property <bool> exclusive-mode: false;
     in-out property <bool> reserve-dac: false;
     in-out property <bool> dac-passthrough: false;
