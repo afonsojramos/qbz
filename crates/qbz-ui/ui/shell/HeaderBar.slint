@@ -560,6 +560,20 @@ export component HeaderBar inherits Rectangle {
     // The section nav now lives inside the left-controls cluster (after the
     // three sacred nav buttons), so it can never overlap them.
 
+    // Defensive hotkey-guard hygiene on every page change: release the search
+    // field's keyboard focus (a TouchArea click that navigates does NOT steal
+    // focus from a TextInput, so single-key hotkeys stayed dead after a search
+    // until the user clicked into another focusable) and drop the typing guard
+    // in case the previously focused input was unmounted with the old view
+    // (an unmounted input's `changed has-focus` never fires false, leaving the
+    // flag stuck true).
+    property <ContentView> nav-view-probe: NavState.view;
+    changed nav-view-probe => {
+        search-input.clear-focus();
+        search-scope.clear-focus();
+        UiFocusState.text-input-focused = false;
+    }
+
     // --- Search (absolutely centered on the window) ------------------------
     // The search box is wrapped in a FocusScope so the cortinilla (the live
     // dropdown) can be driven by the keyboard WITHOUT stealing focus from the
@@ -688,11 +702,14 @@ export component HeaderBar inherits Rectangle {
                         // events; `forward-focus: search-input` immediately hands
                         // the cursor back to this input, so typing is unaffected.
                         search-scope.focus();
-                        // Re-open the cortinilla when focus returns with a usable
-                        // query. live() re-runs the >= 2-chars + module-on gate
-                        // and the SWR instant-paint, so the dropdown comes back
-                        // with its last results.
-                        if (self.text != "") {
+                        // Refresh the cortinilla when focus returns with a usable
+                        // query — but ONLY while it is already open. Focus can
+                        // land here without user intent (Slint reassigns focus
+                        // when the focused element unmounts on a page change, and
+                        // on window re-activation); an ungated live() here
+                        // resurrected the dropdown out of nowhere on navigation.
+                        // Typing still opens it through `edited` above.
+                        if (self.text != "" && SearchState.cortinilla-open) {
                             SearchActions.live(self.text);
                         }
                     }

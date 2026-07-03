@@ -898,7 +898,12 @@ component ImmersiveSearchPlaceholder inherits Rectangle {
                 UiFocusState.text-input-focused = self.has-focus;
                 if (self.has-focus) {
                     search-scope.focus();
-                    if (self.text != "") {
+                    // Refresh only while the results panel is already open —
+                    // focus can land here without user intent (window
+                    // re-activation / focus reassignment on unmount), and an
+                    // ungated live() resurrected the panel out of nowhere.
+                    // Typing still opens it through `edited` above.
+                    if (self.text != "" && ImmersiveState.search-open) {
                         ImmersiveSearchActions.live(self.text);
                     }
                 }
