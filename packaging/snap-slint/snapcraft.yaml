@@ -48,6 +48,17 @@ platforms:
   amd64:
     # arm64 is a separate job (needs an arm64 binary + runner); add later.
 
+# ALSA config/plugin binds: without these the snap's alsa-lib cannot find the
+# host's ALSA configuration and plugin set, and the direct hw: (bit-perfect)
+# path breaks. Restored from the 1.2.x recipe (review fix 2026-07-03).
+layout:
+  /usr/share/alsa:
+    bind: $SNAP/usr/share/alsa
+  /etc/alsa:
+    bind: $SNAP/etc/alsa
+  /usr/lib/x86_64-linux-gnu/alsa-lib:
+    bind: $SNAP/usr/lib/x86_64-linux-gnu/alsa-lib
+
 apps:
   qbz:
     command: bin/qbz

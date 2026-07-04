@@ -97,7 +97,7 @@ jobs:
           workspaces: crates -> target
           shared-key: slint-linux
           cache-on-failure: true
-          save-if: ${{ github.ref == 'refs/heads/slint-mvp' }}
+          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/slint-mvp' }}
 
       - name: Build qbz-slint (memory-tuned, MIN tier)
         env:

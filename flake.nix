@@ -28,6 +28,11 @@
           libxkbcommon
           libglvnd
           vulkan-loader
+          # X11 session support: winit dlopens these when not on Wayland
+          # (review fix — without them the app is Wayland-only on Nix).
+          xorg.libX11
+          xorg.libXcursor
+          xorg.libXi
         ];
       in
       {

@@ -31,8 +31,10 @@ contents:
     dst: /usr/bin/qbz
     file_info:
       mode: 0755
+  # Installed as com.blitzfc.qbz.desktop so the AppStream metainfo's
+  # <launchable> and the MPRIS DesktopEntry both resolve (review fix).
   - src: packaging/linux/qbz.desktop
-    dst: /usr/share/applications/qbz.desktop
+    dst: /usr/share/applications/com.blitzfc.qbz.desktop
   - src: packaging/flatpak/com.blitzfc.qbz.metainfo.xml
     dst: /usr/share/metainfo/com.blitzfc.qbz.metainfo.xml
   - src: packaging/icons/32x32.png

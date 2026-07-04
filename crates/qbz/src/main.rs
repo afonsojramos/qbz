@@ -6509,6 +6509,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     return;
                 }
                 login_state.set_error("".into());
+                // A new sign-in supersedes any stale boot-restore error —
+                // without this both error boxes can show at once (review fix).
+                w.global::<OfflineState>().set_login_error("".into());
                 login_state.set_phase(1);
             }
             let runtime = runtime.clone();
