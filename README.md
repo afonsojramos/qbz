@@ -127,7 +127,25 @@ Download from [Releases](https://github.com/vicrodh/qbz/releases): `chmod +x QBZ
 
 **QBZ is Linux-first, but as of 2.0 macOS is out of its experimental phase and is a stable, fully supported platform** — a proper player for Linux and Mac. PipeWire, ALSA, and JACK are Linux-specific backends; macOS plays through its own CoreAudio backend, including a Core Audio Direct passthrough path for bit-perfect output. Casting (Chromecast/DLNA) and Qobuz Connect work on macOS as well.
 
-Download the DMG (Apple Silicon or Intel) from [Releases](https://github.com/vicrodh/qbz/releases). It is ad-hoc signed, not notarized, so you may need to allow it in System Settings > Privacy & Security after first launch.
+Download the DMG (Apple Silicon or Intel) from [Releases](https://github.com/vicrodh/qbz/releases) and drag QBZ into Applications.
+
+**First launch:** QBZ is ad-hoc signed but NOT notarized (no Apple Developer
+subscription), so Gatekeeper will block the first run — and on recent macOS
+(Sequoia / 15 and later) the old right-click → Open trick no longer works for
+un-notarized apps. Two ways to unlock it, pick one:
+
+- **Settings route:** try to open QBZ once (it gets blocked), then go to
+  **System Settings → Privacy & Security**, scroll down to the message that
+  QBZ was blocked, and click **Open Anyway**.
+- **Terminal route** (what the settings toggle does, minus the clicking):
+
+  ```bash
+  xattr -dr com.apple.quarantine /Applications/QBZ.app
+  ```
+
+  This removes the quarantine attribute macOS stamps on downloaded files —
+  it's a one-time unlock for this copy of the app; updates installed through
+  QBZ's own updater don't need it again.
 
 ## Features
 
