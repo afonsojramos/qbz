@@ -27,7 +27,11 @@ homepage: https://github.com/vicrodh/qbz
 license: MIT
 
 contents:
-  - src: ${QBZ_BINARY}
+  # LITERAL path (pre-flight 2026-07-04 caught this: nfpm does NOT expand
+  # env vars in contents[].src — it printed the literal ${QBZ_BINARY} and
+  # failed the glob). The workflow places the stripped binary at ./qbz
+  # before invoking nfpm; keep both sides in sync.
+  - src: ./qbz
     dst: /usr/bin/qbz
     file_info:
       mode: 0755
