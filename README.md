@@ -82,10 +82,18 @@ Download from [Releases](https://github.com/vicrodh/qbz/releases): `sudo dnf ins
 ```bash
 eselect repository add qbz-overlay git https://github.com/vicrodh/qbz-overlay.git
 emerge --sync qbz-overlay
-emerge media-sound/qbz-bin    # prebuilt binary
+emerge media-sound/qbz-bin    # prebuilt binary (recommended)
 # or
 emerge media-sound/qbz        # build from source
 ```
+
+> **Source-build warning (yes, even by Gentoo standards):** QBZ's UI compiles
+> into one giant generated Rust module — the release build peaks at 20–30 GB
+> of RAM and takes a long while (see
+> [The memory wall](#-the-memory-wall-read-this-before-your-first-build)).
+> Every version bump recompiles it. `qbz-bin` spares you all of that; the
+> source ebuild is there for those who enjoy the smell of rustc in the
+> morning.
 
 ### NixOS / Nix
 
