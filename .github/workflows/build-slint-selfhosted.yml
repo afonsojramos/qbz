@@ -42,7 +42,7 @@ jobs:
       # threads=1 + opt-2 under the cgroup cap pages to swap gracefully and
       # was proven end-to-end under an 8G/10G cap with the desktop open.
       # Slower, but it finishes regardless of what the box is doing.
-      - name: Build qbz-slint (desktop-proof: capped, threads=1, opt-2)
+      - name: Build qbz-slint (desktop-proof — capped, threads=1, opt-2)
         run: NORUN=1 CAPPED=1 THREADS=1 OPT=2 ./scripts/slint-run.sh
 
       - name: Strip + report size
