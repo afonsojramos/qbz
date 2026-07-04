@@ -107,7 +107,11 @@ jobs:
   snap:
     needs: build-binary
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # 30 min was too tight: the v2.0.0 tag run got axed mid-snapcraft (LXD
+    # setup + platform snaps + pack ran past it). The job does no compilation,
+    # but snapcraft's container bootstrap alone is highly variable on public
+    # runners — give it real headroom.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
