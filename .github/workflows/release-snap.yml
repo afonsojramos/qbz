@@ -134,6 +134,12 @@ jobs:
           mkdir -p snap
           cp packaging/snap-slint/snapcraft.yaml snap/snapcraft.yaml
           sed -i "s/^version:.*/version: '${VER}'/" snap/snapcraft.yaml
+          # The repo ROOT also carries snapcraft.yaml (the SOURCE-build recipe
+          # for Snap Store remote builders) and snapcraft resolves it over
+          # snap/snapcraft.yaml — the v2.0.0 run recompiled the whole
+          # workspace inside LXD and OOM'd the container. Remove the root
+          # recipes from the CI working copy so only the dump recipe exists.
+          rm -f snapcraft.yaml .snapcraft.yaml
           echo "Built snap version: ${VER}"
           cat snap/snapcraft.yaml | head -20
 
