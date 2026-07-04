@@ -69,13 +69,13 @@ echo "deb [signed-by=/usr/share/keyrings/qbz-archive-keyring.gpg arch=$(dpkg --p
 sudo apt update && sudo apt install qbz
 ```
 
-> Requires glibc 2.38+ (Ubuntu 24.04+, Debian 13+). For older releases use Flatpak, Snap, or AppImage.
+> Requires glibc 2.39+ (Ubuntu 24.04+, Debian 13+). For older releases use Flatpak, Snap, or AppImage.
 
 ### RPM (Fedora/openSUSE)
 
 Download from [Releases](https://github.com/vicrodh/qbz/releases): `sudo dnf install ./qbz-*.rpm`
 
-> Requires glibc 2.38+ (Fedora 39+, openSUSE Tumbleweed).
+> Requires glibc 2.39+ (Fedora 40+, openSUSE Tumbleweed).
 
 ### Gentoo
 
