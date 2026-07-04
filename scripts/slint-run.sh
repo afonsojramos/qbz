@@ -61,11 +61,15 @@ export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"   # one rustc at a time (memory
 echo "[slint-run] tier=${TIER} avail=${avail_mb}MB → threads=${THREADS} codegen-units=${CODEGEN_UNITS} opt-level=${OPT} capped=${CAPPED}"
 
 if [[ "${CAPPED}" == 1 ]] && command -v cargo-capped >/dev/null 2>&1; then
-  # Cap the cgroup just under what's free so a runaway is OOM-killed inside the
-  # cgroup (build dies, box lives) — leave ~3.5 GB for earlyoom's floor + desktop.
-  cap=$(( avail_mb - 3500 )); (( cap > 26000 )) && cap=26000; (( cap < 10000 )) && cap=10000
-  export BUILD_MEM_MAX="${cap}M"
-  export BUILD_MEM_HIGH="$(( cap - 2000 ))M"
+  # Cap the cgroup so the GLOBAL MemAvailable floor never reaches earlyoom's
+  # 10% trigger (~3.2 GB on this box). Empirically (2026-07-04, ftrace-caught):
+  # a 3.5 GB margin is NOT enough — the desktop grows a few GB during an
+  # hour-long build, avail cratered to 3.1 GB and earlyoom SIGTERM'd rustc
+  # while the cgroup sat comfortably under its cap. memory.high is the anchor
+  # (throttle-to-swap early); leave ~9 GB of global headroom above the trigger.
+  high=$(( avail_mb - 9000 )); (( high > 24000 )) && high=24000; (( high < 8000 )) && high=8000
+  export BUILD_MEM_HIGH="${high}M"
+  export BUILD_MEM_MAX="$(( high + 2000 ))M"
   echo "[slint-run] cgroup cap: high=${BUILD_MEM_HIGH} max=${BUILD_MEM_MAX}"
   cargo-capped cargo +nightly build --release --manifest-path crates/Cargo.toml -p qbz
 else
