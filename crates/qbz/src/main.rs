@@ -5961,6 +5961,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     install_browser_mouse_nav(&window);
     wire_window_controls(&window);
+    // Immersive-exit fullscreen guard: the fullscreen toggle only exists in
+    // the immersive header cluster, so leaving immersive while the window is
+    // fullscreen strands the user with no UI way out (Tauri always dropped
+    // fullscreen on immersive exit). Immersive closes from several .slint
+    // sites (Esc / close button / hotkey) with no Rust callback, so a light
+    // UI-thread timer edge-detects the open→closed transition and drops
+    // fullscreen — reading the REAL window state, which also covers
+    // fullscreen entered via the WM. Property reads only (no repaint cost);
+    // the binding lives in main's scope like _renderer_sentinel_timer.
+    let _immersive_fullscreen_guard = slint::Timer::default();
+    {
+        let weak = window.as_weak();
+        let was_open = std::cell::Cell::new(false);
+        _immersive_fullscreen_guard.start(
+            slint::TimerMode::Repeated,
+            std::time::Duration::from_millis(150),
+            move || {
+                let Some(w) = weak.upgrade() else { return };
+                let open = w.global::<ImmersiveState>().get_open();
+                if was_open.get() && !open && w.window().is_fullscreen() {
+                    // Same route as wire_window_controls: slint's Window API,
+                    // never a direct winit call (the adapter reconciliation
+                    // would undo it on the next frame).
+                    w.window().set_fullscreen(false);
+                    w.global::<WindowControlActions>().set_is_fullscreen(false);
+                    log::info!(
+                        "[qbz-slint] immersive closed while fullscreen — dropping fullscreen"
+                    );
+                }
+                was_open.set(open);
+            },
+        );
+    }
     // FONT TEST (slint-mvp): render with bundled Inter 18pt. Inter is a
     // clean, screen-tuned UI face; combined with the femtovg #5177/#11335
     // text fixes this is the candidate for the final look. Flip
