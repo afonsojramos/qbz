@@ -48,6 +48,22 @@ pub trait WindowSurface<R: femtovg::Renderer> {
     fn render_output(&self) -> impl Into<R::RenderOutput>;
 }
 
+/// QBZ vendor patch (issue #540): sentinel error a graphics backend returns
+/// from `begin_surface_rendering` when the current frame should be silently
+/// skipped (e.g. a transient wgpu surface-acquire timeout while the
+/// compositor is parked by VRR). The renderer treats it as "nothing to
+/// render" instead of a fatal platform error.
+#[derive(Debug)]
+pub struct FrameSkipped;
+
+impl core::fmt::Display for FrameSkipped {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("frame skipped: surface temporarily unavailable")
+    }
+}
+
+impl std::error::Error for FrameSkipped {}
+
 pub trait GraphicsBackend {
     type Renderer: femtovg::Renderer + TextureImporter;
     type WindowSurface: WindowSurface<Self::Renderer>;
@@ -125,7 +141,13 @@ impl<B: GraphicsBackend> FemtoVGRenderer<B> {
         surface_size: i_slint_core::api::PhysicalSize,
         post_render_cb: Option<&dyn Fn(&mut dyn ItemRenderer)>,
     ) -> Result<(), i_slint_core::platform::PlatformError> {
-        let surface = self.graphics_backend.begin_surface_rendering()?;
+        // QBZ vendor patch (issue #540): a FrameSkipped from the backend is
+        // "nothing to render this frame", not a fatal error — the next
+        // redraw request will try again once the compositor resumes.
+        let surface = match self.graphics_backend.begin_surface_rendering() {
+            Err(e) if e.is::<FrameSkipped>() => return Ok(()),
+            other => other?,
+        };
 
         if self.rendering_first_time.take() {
             *self.rendering_metrics_collector.borrow_mut() = RenderingMetricsCollector::new(

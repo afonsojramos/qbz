@@ -65,6 +65,14 @@ pub struct WGPUBackend {
     /// construction — this backend's window keeps the same alpha preference
     /// across every surface re-creation.
     prefers_transparent: bool,
+    /// QBZ vendor patch (issue #540): when the compositor stops delivering
+    /// frames (Hyprland VFR with a static screen / hidden workspace), every
+    /// `get_current_texture()` BLOCKS the UI thread until it times out.
+    /// After a timeout we skip frames without touching the surface until
+    /// this deadline, doubling the cooldown up to ~2 s while the compositor
+    /// stays parked. Reset on the first successful acquire.
+    acquire_skip_until: std::cell::Cell<Option<std::time::Instant>>,
+    acquire_backoff_ms: std::cell::Cell<u64>,
 }
 
 pub struct WGPUWindowSurface {
@@ -91,6 +99,8 @@ impl GraphicsBackend for WGPUBackend {
             surface: Default::default(),
             prefers_transparent: SURFACE_PREFERS_TRANSPARENT
                 .load(core::sync::atomic::Ordering::Relaxed),
+            acquire_skip_until: Default::default(),
+            acquire_backoff_ms: Default::default(),
         }
     }
 
@@ -104,11 +114,42 @@ impl GraphicsBackend for WGPUBackend {
     fn begin_surface_rendering(
         &self,
     ) -> Result<Self::WindowSurface, Box<dyn std::error::Error + Send + Sync>> {
+        // QBZ vendor patch (issue #540): during a timeout cooldown, skip the
+        // frame WITHOUT touching the surface — each blocked acquire wedges
+        // the UI thread for seconds while the compositor is parked.
+        if let Some(until) = self.acquire_skip_until.get() {
+            if std::time::Instant::now() < until {
+                return Err(Box::new(crate::FrameSkipped));
+            }
+        }
         let surface = self.surface.borrow();
         let surface = surface.as_ref().unwrap();
         let frame = match surface.get_current_texture() {
             Ok(texture) => texture,
-            Err(wgpu::SurfaceError::Timeout) => surface.get_current_texture()?,
+            // QBZ vendor patch (issue #540): a surface-acquire timeout is
+            // TRANSIENT (Hyprland VFR parks the display when nothing moves;
+            // no frame callback will arrive until it resumes). Upstream
+            // retried once and propagated the second failure, which killed
+            // the event loop and the whole app. Skip the frame instead and
+            // back off exponentially (250 ms → 2 s) so repeated redraw
+            // requests don't keep blocking the UI thread. First successful
+            // acquire resets the cooldown.
+            Err(wgpu::SurfaceError::Timeout) => {
+                let backoff = (self.acquire_backoff_ms.get().max(125) * 2).min(2000);
+                self.acquire_backoff_ms.set(backoff);
+                self.acquire_skip_until.set(Some(
+                    std::time::Instant::now() + std::time::Duration::from_millis(backoff),
+                ));
+                static WARNED: std::sync::atomic::AtomicBool =
+                    std::sync::atomic::AtomicBool::new(false);
+                if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    eprintln!(
+                        "qbz(femtovg-wgpu): surface acquire timed out — compositor is not \
+                         delivering frames (VRR/hidden surface?); skipping frames until it resumes"
+                    );
+                }
+                return Err(Box::new(crate::FrameSkipped));
+            }
             // Outdated or lost: re-configure and try again
             Err(_) => {
                 let mut device = self.device.borrow_mut();
@@ -118,6 +159,8 @@ impl GraphicsBackend for WGPUBackend {
                 surface.get_current_texture()?
             }
         };
+        self.acquire_backoff_ms.set(0);
+        self.acquire_skip_until.set(None);
         Ok(WGPUWindowSurface { surface_texture: frame })
     }
 
