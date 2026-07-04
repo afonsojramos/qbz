@@ -17,6 +17,10 @@ SRC_URI="
 LICENSE="MIT"
 SLOT="0"
 KEYWORDS="~amd64 ~arm64"
+# mirror: GitHub-only distfiles — without this Portage 404s through every
+# official Gentoo mirror before reaching SRC_URI. strip: prebuilt binary,
+# already stripped at build time; keep Portage's stripper off it.
+RESTRICT="mirror strip"
 
 # v2.0+ (Slint/winit binary): no webkit/gtk/appindicator — the measured
 # runtime link set plus the wayland/x11/GL/dbus stack dlopen'd by winit/wgpu.
