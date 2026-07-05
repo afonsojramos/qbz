@@ -4364,3 +4364,9 @@ msgstr "Réglage du moteur de rendu revenu sur Automatique — le démarrage pr�
 
 msgid "Renderer switched to GPU (compatibility) — the GPU renderer failed to start"
 msgstr "Moteur de rendu basculé sur GPU (compatibilité) — le rendu GPU n'a pas pu démarrer"
+
+msgid "Audio output error"
+msgstr "Erreur de sortie audio"
+
+msgid "Direct ALSA device access is blocked inside Flatpak/Snap — switch the audio backend to PipeWire or System Default"
+msgstr "L'accès direct aux périphériques ALSA est bloqué dans Flatpak/Snap — passez le backend audio sur PipeWire ou la sortie système"

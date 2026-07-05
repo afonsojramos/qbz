@@ -103,3 +103,9 @@ msgstr "Renderer setting reverted to Auto — the previous start didn't finish"
 
 msgid "Renderer switched to GPU (compatibility) — the GPU renderer failed to start"
 msgstr "Renderer switched to GPU (compatibility) — the GPU renderer failed to start"
+
+msgid "Audio output error"
+msgstr "Audio output error"
+
+msgid "Direct ALSA device access is blocked inside Flatpak/Snap — switch the audio backend to PipeWire or System Default"
+msgstr "Direct ALSA device access is blocked inside Flatpak/Snap — switch the audio backend to PipeWire or System Default"
