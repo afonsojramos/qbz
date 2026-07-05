@@ -181,7 +181,7 @@ pub fn label_for(id: DiscoverySectionId) -> &'static str {
         EditorPicks => qbz_i18n::mark("Albums of the Week"), // home.editorPicks
         Qobuzissimes => qbz_i18n::mark("Qobuzissimes"), // home.qobuzissimes
         TopArtists => qbz_i18n::mark("Your Top Artists"), // home.yourTopArtists
-        FavoriteAlbums => qbz_i18n::mark("Favorite Albums"), // home.favoriteAlbums
+        FavoriteAlbums => qbz_i18n::mark("Library Albums"), // home.favoriteAlbums
         QobuzMixes => qbz_i18n::mark("Qobuz Mixes"), // home.qobuzMixes
         RadioStations => qbz_i18n::mark("Radio Stations"), // home.radioStations
         SimilarAlbums => qbz_i18n::mark("More From Your Library"), // discovery.similarAlbums

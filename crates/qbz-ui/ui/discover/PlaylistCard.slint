@@ -163,7 +163,7 @@ export component PlaylistCard inherits Rectangle {
                     }
                     ContextMenuItem {
                         icon: @image-url("../assets/icons/heart.svg");
-                        label: @tr("Add to favorites");
+                        label: @tr("Add to Library");
                         clicked => {
                             root.media-action("playlist", root.playlist.id, "favorite");
                         }

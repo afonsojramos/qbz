@@ -206,8 +206,8 @@ msgstr "Tout sélectionner"
 msgid "Add to playlist"
 msgstr "Ajouter à la playlist"
 
-msgid "Add to favorites"
-msgstr "Ajouter aux favoris"
+msgid "Add to Library"
+msgstr "Ajouter à la bibliothèque"
 
 msgid "Make available offline"
 msgstr "Rendre disponible hors ligne"
@@ -593,26 +593,26 @@ msgstr "Titre Z-A"
 msgid "Artist A-Z"
 msgstr "Artiste A-Z"
 
-msgid "Couldn't load favorites."
-msgstr "Impossible de charger les favoris."
+msgid "Couldn't load your Library."
+msgstr "Impossible de charger votre bibliothèque."
 
-msgid "Remove from favorites"
-msgstr "Retirer des favoris"
+msgid "Remove from Library"
+msgstr "Retirer de la bibliothèque"
 
-msgid "No favorite tracks yet."
-msgstr "Aucun titre favori pour l'instant."
+msgid "No tracks in your Library yet."
+msgstr "Aucun titre dans votre bibliothèque pour l'instant."
 
 msgid "No tracks match your search."
 msgstr "Aucun titre ne correspond à votre recherche."
 
-msgid "No favorite albums yet."
-msgstr "Aucun album favori pour l'instant."
+msgid "No albums in your Library yet."
+msgstr "Aucun album dans votre bibliothèque pour l'instant."
 
 msgid "No albums match your search."
 msgstr "Aucun album ne correspond à votre recherche."
 
-msgid "No favorite artists yet."
-msgstr "Aucun artiste favori pour l'instant."
+msgid "No artists in your Library yet."
+msgstr "Aucun artiste dans votre bibliothèque pour l'instant."
 
 msgid "No artists match your search."
 msgstr "Aucun artiste ne correspond à votre recherche."
@@ -623,11 +623,11 @@ msgstr "Aucune playlist ne correspond à votre recherche."
 msgid "No followed playlists yet."
 msgstr "Aucune playlist suivie pour l'instant."
 
-msgid "No favorite playlists yet."
-msgstr "Aucune playlist favorite pour l'instant."
+msgid "No playlists in your Library yet."
+msgstr "Aucune playlist dans votre bibliothèque pour l'instant."
 
-msgid "No favorite labels yet."
-msgstr "Aucun label favori pour l'instant."
+msgid "No labels in your Library yet."
+msgstr "Aucun label dans votre bibliothèque pour l'instant."
 
 msgid "No labels match your search."
 msgstr "Aucun label ne correspond à votre recherche."
@@ -3229,8 +3229,8 @@ msgstr "Échec du téléversement de la pochette"
 msgid "Failed to write booklet: {}"
 msgstr "Échec de l'écriture du livret : {}"
 
-msgid "Favorite Albums"
-msgstr "Albums favoris"
+msgid "Library Albums"
+msgstr "Albums de votre bibliothèque"
 
 msgid "February"
 msgstr "Février"

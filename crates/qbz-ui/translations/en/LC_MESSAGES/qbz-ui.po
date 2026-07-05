@@ -109,3 +109,30 @@ msgstr "Audio output error"
 
 msgid "Direct ALSA device access is blocked inside Flatpak/Snap — switch the audio backend to PipeWire or System Default"
 msgstr "Direct ALSA device access is blocked inside Flatpak/Snap — switch the audio backend to PipeWire or System Default"
+
+msgid "Add to Library"
+msgstr "Add to Library"
+
+msgid "Remove from Library"
+msgstr "Remove from Library"
+
+msgid "Couldn't load your Library."
+msgstr "Couldn't load your Library."
+
+msgid "No tracks in your Library yet."
+msgstr "No tracks in your Library yet."
+
+msgid "No albums in your Library yet."
+msgstr "No albums in your Library yet."
+
+msgid "No artists in your Library yet."
+msgstr "No artists in your Library yet."
+
+msgid "No playlists in your Library yet."
+msgstr "No playlists in your Library yet."
+
+msgid "No labels in your Library yet."
+msgstr "No labels in your Library yet."
+
+msgid "Library Albums"
+msgstr "Library Albums"

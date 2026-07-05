@@ -206,8 +206,8 @@ msgstr "Seleccionar todos"
 msgid "Add to playlist"
 msgstr "Agregar a la lista"
 
-msgid "Add to favorites"
-msgstr "Agregar a favoritos"
+msgid "Add to Library"
+msgstr "Agregar a la biblioteca"
 
 msgid "Make available offline"
 msgstr "Disponible offline"
@@ -593,26 +593,26 @@ msgstr "Titulo Z-A"
 msgid "Artist A-Z"
 msgstr "Artista A-Z"
 
-msgid "Couldn't load favorites."
-msgstr "No se pudieron cargar los favoritos."
+msgid "Couldn't load your Library."
+msgstr "No se pudo cargar tu biblioteca."
 
-msgid "Remove from favorites"
-msgstr "Quitar de favoritos"
+msgid "Remove from Library"
+msgstr "Quitar de la biblioteca"
 
-msgid "No favorite tracks yet."
-msgstr "Aún no hay pistas favoritas."
+msgid "No tracks in your Library yet."
+msgstr "Aún no hay pistas en tu biblioteca."
 
 msgid "No tracks match your search."
 msgstr "Ninguna pista coincide con la búsqueda."
 
-msgid "No favorite albums yet."
-msgstr "Aún no hay álbumes favoritos."
+msgid "No albums in your Library yet."
+msgstr "Aún no hay álbumes en tu biblioteca."
 
 msgid "No albums match your search."
 msgstr "Ningún álbum coincide con tu búsqueda."
 
-msgid "No favorite artists yet."
-msgstr "Aún no hay artistas favoritos."
+msgid "No artists in your Library yet."
+msgstr "Aún no hay artistas en tu biblioteca."
 
 msgid "No artists match your search."
 msgstr "Ningún artista coincide con tu búsqueda."
@@ -623,11 +623,11 @@ msgstr "Ninguna lista de reproducción coincide con tu búsqueda."
 msgid "No followed playlists yet."
 msgstr "Aún no sigues ninguna lista de reproducción."
 
-msgid "No favorite playlists yet."
-msgstr "Aún no hay listas de reproducción favoritas."
+msgid "No playlists in your Library yet."
+msgstr "Aún no hay playlists en tu biblioteca."
 
-msgid "No favorite labels yet."
-msgstr "Aún no hay sellos favoritos."
+msgid "No labels in your Library yet."
+msgstr "Aún no hay sellos en tu biblioteca."
 
 msgid "No labels match your search."
 msgstr "Ningún sello coincide con tu búsqueda."
@@ -3229,8 +3229,8 @@ msgstr "No se pudo subir la portada"
 msgid "Failed to write booklet: {}"
 msgstr "No se pudo escribir el folleto: {}"
 
-msgid "Favorite Albums"
-msgstr "Álbumes favoritos"
+msgid "Library Albums"
+msgstr "Álbumes de tu biblioteca"
 
 msgid "February"
 msgstr "Febrero"
