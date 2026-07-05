@@ -121,3 +121,12 @@ i-slint-renderer-femtovg = { path = "vendor/i-slint-renderer-femtovg-1.16.1" }
 # collection creation, which takes priority over the CoreText query. macOS-only
 # (#[cfg]); Linux keeps its working fontconfig fallback.
 i-slint-common = { path = "vendor/i-slint-common-1.16.1" }
+# Slint compiles femtovg with the swash raster path. Swash fails to scale
+# some variable fonts at a non-default variation instance (the CFF2-based
+# CJK system fonts on modern macOS), and femtovg cached those glyphs as
+# permanently missing — so CJK text at any non-regular weight rendered
+# blank (#543; regular weight = empty coords = renders fine). The patch
+# retries the glyph at the font's DEFAULT instance before giving up: worst
+# case the glyph draws at regular weight instead of not at all. No effect
+# on fonts/instances that already render.
+femtovg = { path = "vendor/femtovg-0.23.2" }
