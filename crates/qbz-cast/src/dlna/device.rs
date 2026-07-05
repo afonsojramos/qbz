@@ -1,7 +1,6 @@
 //! DLNA device connection and playback via AVTransport SOAP
 
 use rupnp::http::Uri;
-use rupnp::ssdp::URN;
 use rupnp::{Device, Service};
 use serde::{Deserialize, Serialize};
 
@@ -45,6 +44,16 @@ pub struct DlnaConnection {
     rendering_control_service: Option<Service>,
     // Current media URI
     current_uri: Option<String>,
+    // Last SetAVTransportURI payload (URI + DIDL). Kept so `play()` can
+    // re-assert the content on a 702 "no contents" fault — HQPlayer6 clears
+    // CurrentURI when a track ends, which would otherwise make a bare Play
+    // (the manual play button, or a late auto-advance) fail permanently.
+    last_set_uri_payload: Option<String>,
+    // Set by `load_media`, cleared by `play`. When true the URI was just set, so
+    // `play` skips its idle pre-check (the content is already current) and avoids
+    // a redundant SetAVTransportURI. A bare play (manual button / resume) leaves
+    // it false so the pre-check runs.
+    uri_freshly_set: bool,
     is_playing: bool,
 }
 
@@ -63,10 +72,9 @@ impl DlnaConnection {
             DlnaError::Connection(format!("Failed to load device description: {}", e))
         })?;
 
-        let av_transport_service = parsed_device.find_service(&av_transport_urn()).cloned();
-        let rendering_control_service = parsed_device
-            .find_service(&rendering_control_urn())
-            .cloned();
+        let av_transport_service = find_service_any_version(&parsed_device, "AVTransport");
+        let rendering_control_service =
+            find_service_any_version(&parsed_device, "RenderingControl");
 
         log::info!(
             "DLNA: Connected to {} (AVT: {:?}, RC: {:?})",
@@ -82,6 +90,8 @@ impl DlnaConnection {
             av_transport_service,
             rendering_control_service,
             current_uri: None,
+            last_set_uri_payload: None,
+            uri_freshly_set: false,
             is_playing: false,
         })
     }
@@ -155,6 +165,10 @@ impl DlnaConnection {
 
         log::info!("DLNA: SetAVTransportURI response: {:?}", response);
         self.current_uri = Some(uri.to_string());
+        // Remember the exact payload so play() can re-assert it if the renderer
+        // later reports 702 "no contents" (see the retry loop in `play`).
+        self.last_set_uri_payload = Some(payload);
+        self.uri_freshly_set = true;
         log::info!("DLNA: Set URI to {}", uri);
 
         Ok(())
@@ -191,33 +205,146 @@ impl DlnaConnection {
             return Err(DlnaError::NotConnected);
         }
 
+        // Clone the service handle so the retry loop below doesn't hold an
+        // immutable `&self` borrow across the `&mut self` write of
+        // `self.is_playing` on success. `rupnp::Service` is `Clone`.
         let av_service = self
             .av_transport_service
             .as_ref()
-            .ok_or_else(|| DlnaError::Playback("Device has no AVTransport service".to_string()))?;
+            .ok_or_else(|| DlnaError::Playback("Device has no AVTransport service".to_string()))?
+            .clone();
 
-        let response = tokio::time::timeout(
-            std::time::Duration::from_secs(10),
-            av_service.action(
-                &self.device_url,
-                "Play",
-                "<InstanceID>0</InstanceID><Speed>1</Speed>",
-            ),
+        // Snapshot the last SetAVTransportURI payload up front so we can (re-)assert
+        // it without holding a `&self` borrow across the loop below.
+        let set_uri_payload = self.last_set_uri_payload.clone();
+
+        // PRE-CHECK — the core of the strict-renderer fix. When a track reaches its
+        // natural end HQPlayer6 finalises/clears the transport, so a *bare* Play at
+        // that point (the manual play button, or a resume after a stop) either
+        // faults 702 "No contents" or 200-OKs into a silent no-op (the "it just
+        // stops, no error, won't play" symptom). Both are cured the way the manual
+        // recovery works: re-assert the current URI so Play acts on fresh content
+        // (SetAVTransportURI + Play — the sequence that reliably starts a track).
+        // Only do this when the URI was NOT just set (skip the redundant SetURI on
+        // the auto-advance path, whose settle-race 702 the retry net below still
+        // covers) and the transport is idle (STOPPED / NO_MEDIA_PRESENT); a PAUSED
+        // transport is left untouched so pause→resume keeps its position.
+        let uri_freshly_set = std::mem::replace(&mut self.uri_freshly_set, false);
+        if !uri_freshly_set {
+            if let Some(payload) = set_uri_payload.as_deref() {
+                if Self::transport_is_idle(&av_service, &self.device_url).await {
+                    log::info!("DLNA: transport idle before Play; re-asserting SetAVTransportURI");
+                    let _ = tokio::time::timeout(
+                        std::time::Duration::from_secs(10),
+                        av_service.action(&self.device_url, "SetAVTransportURI", payload),
+                    )
+                    .await;
+                }
+            }
+        }
+
+        // Retry net for the residual settle race. AVTransport faults at a boundary:
+        //   701 "Transition not available" — pure settle race; wait and retry Play.
+        //   702 "No contents" — empty transport; re-assert the URI, then retry.
+        // HQPlayer6 returns these as a raw HTTP status line (e.g. "702"), which
+        // rupnp surfaces as `HttpErrorCode`. NOTE: rupnp 3.0 converts ANY
+        // non-200 response into `HttpErrorCode` BEFORE parsing the SOAP body,
+        // so a spec-compliant renderer wrapping its fault in HTTP 500 reaches
+        // the `_` arm below (no retry) — the `UPnPError` arm only fires on the
+        // non-standard fault-inside-200 shape. For standard renderers the idle
+        // PRE-CHECK above is the actual self-heal; this net covers the
+        // raw-status family. A renderer that accepts Play immediately sees a
+        // single attempt.
+        const PLAY_SETTLE_CODE: u16 = 701;
+        const PLAY_NO_CONTENT_CODE: u16 = 702;
+        const PLAY_MAX_ATTEMPTS: u32 = 6;
+
+        for attempt in 1..=PLAY_MAX_ATTEMPTS {
+            let result = tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                av_service.action(
+                    &self.device_url,
+                    "Play",
+                    "<InstanceID>0</InstanceID><Speed>1</Speed>",
+                ),
+            )
+            .await
+            .map_err(|_| {
+                log::error!("DLNA: Play action timed out after 10s");
+                DlnaError::Playback("Play action timed out".to_string())
+            })?;
+
+            let e = match result {
+                Ok(response) => {
+                    log::info!("DLNA: Play response: {:?}", response);
+                    self.is_playing = true;
+                    log::info!("DLNA: Play started successfully");
+                    return Ok(());
+                }
+                Err(e) => e,
+            };
+
+            let code = match &e {
+                rupnp::Error::UPnPError(u) => Some(u.err_code()),
+                rupnp::Error::HttpErrorCode(c) => Some(c.as_u16()),
+                _ => None,
+            };
+            let reassert_uri = match code {
+                Some(PLAY_NO_CONTENT_CODE) => true,
+                Some(PLAY_SETTLE_CODE) => false,
+                _ => {
+                    log::error!("DLNA: Play action failed: {}", e);
+                    return Err(DlnaError::Playback(e.to_string()));
+                }
+            };
+
+            if attempt == PLAY_MAX_ATTEMPTS {
+                log::error!("DLNA: Play still faulting after {PLAY_MAX_ATTEMPTS} attempts: {e}");
+                return Err(DlnaError::Playback(e.to_string()));
+            }
+
+            if reassert_uri {
+                if let Some(payload) = set_uri_payload.as_deref() {
+                    let _ = tokio::time::timeout(
+                        std::time::Duration::from_secs(10),
+                        av_service.action(&self.device_url, "SetAVTransportURI", payload),
+                    )
+                    .await;
+                }
+            }
+
+            // Linear backoff: ~300 ms * attempt, so playback typically recovers
+            // within ~1–2 s and gives up after ~4.5 s worst case.
+            let backoff = std::time::Duration::from_millis(300 * attempt as u64);
+            log::warn!(
+                "DLNA: Play returned transient UPnP fault ({e}); \
+                 retry {attempt}/{PLAY_MAX_ATTEMPTS} after {backoff:?}"
+            );
+            tokio::time::sleep(backoff).await;
+        }
+
+        // Unreachable: the loop returns on success or on the final attempt.
+        unreachable!("play retry loop exited without returning")
+    }
+
+    /// True only if the renderer's transport is idle (STOPPED / NO_MEDIA_PRESENT).
+    /// On any query error/timeout returns `false` — "not known to be idle" — so we
+    /// never re-assert the URI under uncertainty and disturb a paused resume.
+    async fn transport_is_idle(av_service: &Service, device_url: &Uri) -> bool {
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            av_service.action(device_url, "GetTransportInfo", "<InstanceID>0</InstanceID>"),
         )
         .await
-        .map_err(|_| {
-            log::error!("DLNA: Play action timed out after 10s");
-            DlnaError::Playback("Play action timed out".to_string())
-        })?
-        .map_err(|e| {
-            log::error!("DLNA: Play action failed: {}", e);
-            DlnaError::Playback(e.to_string())
-        })?;
-
-        log::info!("DLNA: Play response: {:?}", response);
-        self.is_playing = true;
-        log::info!("DLNA: Play started successfully");
-        Ok(())
+        {
+            Ok(Ok(resp)) => matches!(
+                resp.get("CurrentTransportState")
+                    .map(|s| s.trim().to_ascii_uppercase())
+                    .as_deref(),
+                Some("STOPPED") | Some("NO_MEDIA_PRESENT")
+            ),
+            _ => false,
+        }
     }
 
     /// Pause playback
@@ -477,8 +604,15 @@ fn build_didl_metadata(uri: &str, metadata: &DlnaMetadata, content_type: &str) -
         .unwrap_or_default();
 
     // Use actual content type for protocolInfo - critical for DLNA compatibility
-    // Many devices reject content if protocolInfo doesn't match actual MIME type
-    let protocol_info = format!("http-get:*:{}:*", content_type);
+    // Many devices reject content if protocolInfo doesn't match actual MIME type.
+    // The 4th field advertises the same DLNA content features the media server
+    // sends on GET/HEAD (see `media_server::DLNA_CONTENT_FEATURES`); strict
+    // renderers cross-check these against the response headers.
+    let protocol_info = format!(
+        "http-get:*:{}:{}",
+        content_type,
+        crate::media_server::DLNA_CONTENT_FEATURES
+    );
 
     format!(
         r#"<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/">
@@ -512,10 +646,45 @@ fn xml_escape(s: &str) -> String {
         .replace('\'', "&apos;")
 }
 
-fn av_transport_urn() -> URN {
-    URN::Service("schemas-upnp-org".into(), "AVTransport".into(), 1)
+/// Version-agnostic service-type match: `true` when `service_type` names
+/// `service` at any UPnP version. Shared by [`find_service_any_version`] so the
+/// rule can be unit-tested without constructing a real rupnp `Device`.
+fn service_type_matches(service_type: &str, service: &str) -> bool {
+    service_type.contains(&format!(":service:{}:", service))
 }
 
-fn rendering_control_urn() -> URN {
-    URN::Service("schemas-upnp-org".into(), "RenderingControl".into(), 1)
+/// Find a service by name regardless of its UPnP version (`:1`/`:2`/`:3`),
+/// matching discovery's substring logic so a `:2`/`:3`-only renderer connects.
+fn find_service_any_version(device: &Device, service: &str) -> Option<Service> {
+    device
+        .services_iter()
+        .find(|s| service_type_matches(&s.service_type().to_string(), service))
+        .cloned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::service_type_matches;
+
+    #[test]
+    fn matches_any_upnp_version() {
+        for st in [
+            "urn:schemas-upnp-org:service:AVTransport:1",
+            "urn:schemas-upnp-org:service:AVTransport:2",
+            "urn:schemas-upnp-org:service:AVTransport:3",
+        ] {
+            assert!(
+                service_type_matches(st, "AVTransport"),
+                "expected {st} to match AVTransport"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_unrelated_service() {
+        assert!(!service_type_matches(
+            "urn:schemas-upnp-org:service:ConnectionManager:1",
+            "AVTransport"
+        ));
+    }
 }
