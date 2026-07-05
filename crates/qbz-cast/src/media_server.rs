@@ -48,7 +48,10 @@ struct MediaEntry {
 
 #[derive(Clone)]
 enum MediaSource {
-    Data(Vec<u8>),
+    // Arc so cloning an entry out of the map for an in-flight request never
+    // copies the whole track, and so eviction can't invalidate a response
+    // that is still being served (#550).
+    Data(std::sync::Arc<Vec<u8>>),
     File(PathBuf),
 }
 
@@ -150,6 +153,14 @@ impl MediaServer {
     }
 
     /// Get base URL (e.g., "http://192.168.1.100:8080")
+    /// Drop every registered entry (releases the full-track buffers). Called
+    /// on cast stop/disconnect so track bytes don't outlive the session (#550).
+    pub fn clear_entries(&self) {
+        if let Ok(mut entries) = self.entries.lock() {
+            entries.clear();
+        }
+    }
+
     pub fn base_url(&self) -> String {
         self.base_url.clone()
     }
@@ -164,10 +175,16 @@ impl MediaServer {
         let entry = MediaEntry {
             content_type: content_type.to_string(),
             size: data.len() as u64,
-            source: MediaSource::Data(data),
+            source: MediaSource::Data(std::sync::Arc::new(data)),
         };
 
         if let Ok(mut entries) = self.entries.lock() {
+            // Only the track being cast is servable — evict everything else.
+            // Entries held full track bytes and NOTHING ever removed them, so
+            // a DLNA session grew by one full track per auto-advance until app
+            // exit (#550: 50 MB -> 4.5 GB). An in-flight response keeps its
+            // own Arc, so eviction never truncates an ongoing range request.
+            entries.retain(|k, _| *k == id);
             entries.insert(id, entry);
         }
 
@@ -209,6 +226,9 @@ impl MediaServer {
         };
 
         if let Ok(mut entries) = self.entries.lock() {
+            // Same eviction rule as register_audio (#550): switching to a
+            // local file must also release the previous track's bytes.
+            entries.retain(|k, _| *k == id);
             entries.insert(id, entry);
         }
 

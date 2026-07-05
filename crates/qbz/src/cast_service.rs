@@ -355,6 +355,11 @@ impl SlintCastService {
             inner.protocol = None;
             inner.connected_device_ip = None;
             inner.connected_device_name = None;
+            // Release the served track buffers with the session (#550); the
+            // server itself stays up for the next connect.
+            if let Some(server) = inner.media_server.as_ref() {
+                server.clear_entries();
+            }
             inner.current_track_id = None;
             inner.is_playing = false;
             inner.track_end_detected = false;
@@ -592,7 +597,15 @@ impl SlintCastService {
             return Ok(false);
         }
         self.stop_renderer().await?;
-        self.inner.lock().await.is_playing = false;
+        {
+            let mut inner = self.inner.lock().await;
+            inner.is_playing = false;
+            // Stop = the user is done with this track; release its bytes
+            // instead of holding them until the next cast/app exit (#550).
+            if let Some(server) = inner.media_server.as_ref() {
+                server.clear_entries();
+            }
+        }
         self.push_connection_state().await;
         Ok(true)
     }
