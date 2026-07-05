@@ -4377,3 +4377,9 @@ msgstr "Настройка рендерера возвращена на «Авт
 
 msgid "Renderer switched to GPU (compatibility) — the GPU renderer failed to start"
 msgstr "Рендерер переключён на GPU (совместимость) — GPU-рендерер не смог запуститься"
+
+msgid "Audio output error"
+msgstr "Ошибка аудиовывода"
+
+msgid "Direct ALSA device access is blocked inside Flatpak/Snap — switch the audio backend to PipeWire or System Default"
+msgstr "Прямой доступ к устройствам ALSA заблокирован в Flatpak/Snap — переключите аудиобэкенд на PipeWire или системный вывод"
