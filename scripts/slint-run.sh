@@ -51,9 +51,10 @@ else
   echo "[slint-run] WARNING: only ${avail_mb} MB free — lowest-memory tier (slow). Close apps / drop to a TTY for a faster build." >&2
 fi
 
-# RUSTFLAGS OVERRIDES (does not merge) the .cargo/config.toml rustflags, so the
-# AES-NI/SSSE3 features must be re-listed (keep in sync with slint-dev.sh).
-export RUSTFLAGS="-C target-feature=+aes,+ssse3 -C link-arg=-fuse-ld=mold -Z threads=${THREADS}"
+# No x86 target-features here or in .cargo/config.toml (#549): the aes crate
+# runtime-dispatches to AES-NI at identical speed, and compile-time features
+# SIGILL older CPUs.
+export RUSTFLAGS="-C link-arg=-fuse-ld=mold -Z threads=${THREADS}"
 export CARGO_PROFILE_RELEASE_CODEGEN_UNITS="${CODEGEN_UNITS}"
 export CARGO_PROFILE_RELEASE_OPT_LEVEL="${OPT}"
 export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"   # one rustc at a time (memory)
