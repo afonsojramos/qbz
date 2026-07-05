@@ -15,12 +15,9 @@
 # DO NOT use this to judge performance — the binary is unoptimised. Always do a
 # final pass with ./slint-dev.sh (release) before trusting runtime behaviour.
 #
-# RUSTFLAGS overrides .cargo/config.toml, so the AES-NI/SSSE3 features are
-# re-listed here (keep in sync with slint-dev.sh / .cargo/config.toml).
-#
 # Usage: ./scripts/slint-dev-fast.sh [extra cargo args]
 #        THREADS=22 ./scripts/slint-dev-fast.sh   # override frontend threads
 set -euo pipefail
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/.."
-export RUSTFLAGS="-C target-feature=+aes,+ssse3 -C link-arg=-fuse-ld=mold -C debuginfo=0 -Z threads=${THREADS:-16}"
+export RUSTFLAGS="-C link-arg=-fuse-ld=mold -C debuginfo=0 -Z threads=${THREADS:-16}"
 exec cargo +nightly run --manifest-path crates/Cargo.toml -p qbz "$@"

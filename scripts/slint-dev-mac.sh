@@ -11,11 +11,10 @@
 #      link (libc's build script) fails. Apple's default linker (ld-prime) is
 #      already fast, so we simply don't override the linker.
 #
-#   2. AES-NI/SSSE3 features are applied ONLY on x86_64. On Intel Macs they keep
-#      the offline CMAF decrypt fast (matches .cargo/config.toml); on aarch64
-#      they are meaningless (rustc warns "not a recognized feature" and ignores
-#      them — AES there comes from the armv8 crypto extensions automatically),
-#      so we omit them to keep the build output clean.
+#   2. NO x86 target-features anywhere (#549): the aes crate runtime-dispatches
+#      to AES-NI at identical speed, and compile-time features SIGILL CPUs
+#      without them (pre-2010 Intel Macs). aarch64 gets its AES from the armv8
+#      crypto extensions automatically.
 #
 #   3. The nightly parallel frontend (`-Z threads`) is kept — it works on macOS
 #      and only cuts COMPILE time; the produced binary is identical to a plain
@@ -41,19 +40,13 @@ if [[ "${1:-}" == "--fast" ]]; then
   shift
 fi
 
-# Re-list AES-NI/SSSE3 ONLY on x86_64. Setting RUSTFLAGS *overrides* (does not
-# merge) .cargo/config.toml's [target.'cfg(target_arch = "x86_64")'] rustflags,
-# so on an Intel Mac we must restate them here to keep the AES-NI decrypt path.
-AES_FLAGS=""
-if [[ "$(uname -m)" == "x86_64" ]]; then
-  AES_FLAGS="-C target-feature=+aes,+ssse3"
-fi
-
 # Parallel rustc frontend across cores. Defaults to the machine's logical CPU
 # count; override with THREADS=N. This only speeds compilation.
 THREADS="${THREADS:-$(sysctl -n hw.ncpu)}"
 
-export RUSTFLAGS="${AES_FLAGS} -Z threads=${THREADS}"
+# No x86 target-features (#549): the aes crate runtime-dispatches to AES-NI
+# at identical speed, and compile-time features SIGILL pre-2010 Intel Macs.
+export RUSTFLAGS="-Z threads=${THREADS}"
 
 if [[ "$FAST" == true ]]; then
   # DEBUG: opt-level 0 skips the heavy LLVM passes; -C debuginfo=0 means less to
