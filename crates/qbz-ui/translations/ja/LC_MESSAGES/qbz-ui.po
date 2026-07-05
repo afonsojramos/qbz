@@ -205,8 +205,8 @@ msgstr "すべて選択"
 msgid "Add to playlist"
 msgstr "プレイリストに追加"
 
-msgid "Add to favorites"
-msgstr "お気に入りに追加"
+msgid "Add to Library"
+msgstr "ライブラリに追加"
 
 msgid "Make available offline"
 msgstr "オフラインで利用可能にする"
@@ -592,26 +592,26 @@ msgstr "タイトルZ-A"
 msgid "Artist A-Z"
 msgstr "アーティストA-Z"
 
-msgid "Couldn't load favorites."
-msgstr "お気に入りを読み込めませんでした。"
+msgid "Couldn't load your Library."
+msgstr "ライブラリを読み込めませんでした。"
 
-msgid "Remove from favorites"
-msgstr "お気に入りから削除"
+msgid "Remove from Library"
+msgstr "ライブラリから削除"
 
-msgid "No favorite tracks yet."
-msgstr "お気に入りのトラックはまだありません。"
+msgid "No tracks in your Library yet."
+msgstr "ライブラリにはまだトラックがありません。"
 
 msgid "No tracks match your search."
 msgstr "検索に一致するトラックはありません。"
 
-msgid "No favorite albums yet."
-msgstr "お気に入りのアルバムはまだありません。"
+msgid "No albums in your Library yet."
+msgstr "ライブラリにはまだアルバムがありません。"
 
 msgid "No albums match your search."
 msgstr "検索に一致するアルバムはありません。"
 
-msgid "No favorite artists yet."
-msgstr "お気に入りのアーティストはまだありません。"
+msgid "No artists in your Library yet."
+msgstr "ライブラリにはまだアーティストがありません。"
 
 msgid "No artists match your search."
 msgstr "検索に一致するアーティストはありません。"
@@ -622,11 +622,11 @@ msgstr "検索に一致するプレイリストはありません。"
 msgid "No followed playlists yet."
 msgstr "フォロー中のプレイリストはまだありません。"
 
-msgid "No favorite playlists yet."
-msgstr "お気に入りのプレイリストはまだありません。"
+msgid "No playlists in your Library yet."
+msgstr "ライブラリにはまだプレイリストがありません。"
 
-msgid "No favorite labels yet."
-msgstr "お気に入りのレーベルはまだありません。"
+msgid "No labels in your Library yet."
+msgstr "ライブラリにはまだレーベルがありません。"
 
 msgid "No labels match your search."
 msgstr "検索に一致するレーベルはありません。"
@@ -3087,8 +3087,8 @@ msgstr "カバーのアップロードに失敗しました"
 msgid "Failed to write booklet: {}"
 msgstr "ブックレットの書き込みに失敗しました：{}"
 
-msgid "Favorite Albums"
-msgstr "お気に入りのアルバム"
+msgid "Library Albums"
+msgstr "ライブラリのアルバム"
 
 msgid "February"
 msgstr "2月"

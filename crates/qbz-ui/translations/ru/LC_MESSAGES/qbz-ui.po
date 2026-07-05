@@ -205,8 +205,8 @@ msgstr "Выбрать все"
 msgid "Add to playlist"
 msgstr "Добавить в плейлист"
 
-msgid "Add to favorites"
-msgstr "Добавить в избранное"
+msgid "Add to Library"
+msgstr "Добавить в библиотеку"
 
 msgid "Make available offline"
 msgstr "Сделать доступным офлайн"
@@ -592,26 +592,26 @@ msgstr "Название Я–А"
 msgid "Artist A-Z"
 msgstr "Исполнитель А–Я"
 
-msgid "Couldn't load favorites."
-msgstr "Не удалось загрузить избранное."
+msgid "Couldn't load your Library."
+msgstr "Не удалось загрузить библиотеку."
 
-msgid "Remove from favorites"
-msgstr "Удалить из избранного"
+msgid "Remove from Library"
+msgstr "Удалить из библиотеки"
 
-msgid "No favorite tracks yet."
-msgstr "Пока нет избранных треков."
+msgid "No tracks in your Library yet."
+msgstr "В библиотеке пока нет треков."
 
 msgid "No tracks match your search."
 msgstr "Нет треков по вашему запросу."
 
-msgid "No favorite albums yet."
-msgstr "Пока нет избранных альбомов."
+msgid "No albums in your Library yet."
+msgstr "В библиотеке пока нет альбомов."
 
 msgid "No albums match your search."
 msgstr "Нет альбомов по вашему запросу."
 
-msgid "No favorite artists yet."
-msgstr "Пока нет избранных исполнителей."
+msgid "No artists in your Library yet."
+msgstr "В библиотеке пока нет исполнителей."
 
 msgid "No artists match your search."
 msgstr "Нет исполнителей по вашему запросу."
@@ -622,11 +622,11 @@ msgstr "Нет плейлистов по вашему запросу."
 msgid "No followed playlists yet."
 msgstr "Пока нет отслеживаемых плейлистов."
 
-msgid "No favorite playlists yet."
-msgstr "Пока нет избранных плейлистов."
+msgid "No playlists in your Library yet."
+msgstr "В библиотеке пока нет плейлистов."
 
-msgid "No favorite labels yet."
-msgstr "Пока нет избранных лейблов."
+msgid "No labels in your Library yet."
+msgstr "В библиотеке пока нет лейблов."
 
 msgid "No labels match your search."
 msgstr "Нет лейблов по вашему запросу."
@@ -3109,8 +3109,8 @@ msgstr "Не удалось загрузить обложку"
 msgid "Failed to write booklet: {}"
 msgstr "Не удалось записать буклет: {}"
 
-msgid "Favorite Albums"
-msgstr "Избранные альбомы"
+msgid "Library Albums"
+msgstr "Альбомы из вашей библиотеки"
 
 msgid "February"
 msgstr "Февраль"

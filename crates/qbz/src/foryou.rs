@@ -727,7 +727,7 @@ fn apply_favorite_albums(weak: &slint::Weak<AppWindow>, cache: &ImageCache, card
     let w = weak.clone();
     let _ = w.upgrade_in_event_loop(move |w| {
         w.global::<ForYouState>()
-            .set_favorite_albums(section(&qbz_i18n::t("Favorite Albums"), &cards));
+            .set_favorite_albums(section(&qbz_i18n::t("Library Albums"), &cards));
     });
     crate::artwork::spawn_loads(jobs, weak.clone(), cache.clone());
 }

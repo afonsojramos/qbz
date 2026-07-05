@@ -206,8 +206,8 @@ msgstr "Alle auswählen"
 msgid "Add to playlist"
 msgstr "Zur Playlist hinzufügen"
 
-msgid "Add to favorites"
-msgstr "Zu Favoriten hinzufügen"
+msgid "Add to Library"
+msgstr "Zur Bibliothek hinzufügen"
 
 msgid "Make available offline"
 msgstr "Für offline verfügbar machen"
@@ -593,26 +593,26 @@ msgstr "Titel Z-A"
 msgid "Artist A-Z"
 msgstr "Kunstler A-Z"
 
-msgid "Couldn't load favorites."
-msgstr "Favoriten konnten nicht geladen werden."
+msgid "Couldn't load your Library."
+msgstr "Bibliothek konnte nicht geladen werden."
 
-msgid "Remove from favorites"
-msgstr "Aus Favoriten entfernen"
+msgid "Remove from Library"
+msgstr "Aus der Bibliothek entfernen"
 
-msgid "No favorite tracks yet."
-msgstr "Noch keine Lieblingstitel."
+msgid "No tracks in your Library yet."
+msgstr "Noch keine Titel in deiner Bibliothek."
 
 msgid "No tracks match your search."
 msgstr "Keine Titel entsprechen deiner Suche."
 
-msgid "No favorite albums yet."
-msgstr "Noch keine Lieblingsalben."
+msgid "No albums in your Library yet."
+msgstr "Noch keine Alben in deiner Bibliothek."
 
 msgid "No albums match your search."
 msgstr "Keine Alben entsprechen Ihrer Suche."
 
-msgid "No favorite artists yet."
-msgstr "Noch keine Lieblingskünstler."
+msgid "No artists in your Library yet."
+msgstr "Noch keine Künstler in deiner Bibliothek."
 
 msgid "No artists match your search."
 msgstr "Keine Künstler entsprechen Ihrer Suche."
@@ -623,11 +623,11 @@ msgstr "Keine Wiedergabelisten entsprechen Ihrer Suche."
 msgid "No followed playlists yet."
 msgstr "Noch keine abonnierten Wiedergabelisten."
 
-msgid "No favorite playlists yet."
-msgstr "Noch keine Lieblingswiedergabelisten."
+msgid "No playlists in your Library yet."
+msgstr "Noch keine Playlists in deiner Bibliothek."
 
-msgid "No favorite labels yet."
-msgstr "Noch keine Lieblingslabels."
+msgid "No labels in your Library yet."
+msgstr "Noch keine Labels in deiner Bibliothek."
 
 msgid "No labels match your search."
 msgstr "Keine Labels entsprechen Ihrer Suche."
@@ -3229,8 +3229,8 @@ msgstr "Cover konnte nicht hochgeladen werden"
 msgid "Failed to write booklet: {}"
 msgstr "Booklet konnte nicht geschrieben werden: {}"
 
-msgid "Favorite Albums"
-msgstr "Lieblingsalben"
+msgid "Library Albums"
+msgstr "Alben aus deiner Bibliothek"
 
 msgid "February"
 msgstr "Februar"
