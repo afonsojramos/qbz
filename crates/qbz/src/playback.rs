@@ -3842,7 +3842,7 @@ pub fn start_poll_loop(
             // Flatpak/Snap sandbox direct hw: access is blocked by design —
             // when the failure looks ALSA-shaped, say that instead of the raw
             // error.
-            if let Some(msg) = runtime.core().player().take_stream_error_message() {
+            if let Some(msg) = runtime.core().player().state.take_stream_error_message() {
                 let sandboxed = !matches!(
                     qbz_audio::health::detect_sandbox(),
                     qbz_audio::health::Sandbox::None
