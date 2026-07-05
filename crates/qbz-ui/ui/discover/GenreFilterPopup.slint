@@ -19,7 +19,7 @@ component GenreTreeRowItem inherits Rectangle {
 
     height: 34px;
     border-radius: 6px;
-    background: ta.has-hover ? Theme.surface-hover : transparent;
+    background: ta.has-hover || arrow-ta.has-hover ? Theme.surface-hover : transparent;
 
     // Row click (outside the arrow) toggles selection. Declared FIRST so it
     // sits BELOW the arrow's TouchArea in z-order (later siblings are on top
@@ -52,6 +52,10 @@ component GenreTreeRowItem inherits Rectangle {
                 }
             }
             arrow-ta := TouchArea {
+                // Disabled on leaf rows so the click falls through to the
+                // row TouchArea (an enabled TouchArea consumes it even with
+                // a no-op handler — 20px selection dead-zone otherwise).
+                enabled: root.node.has-children;
                 mouse-cursor: root.node.has-children ? pointer : default;
                 clicked => {
                     if (root.node.has-children) {
