@@ -47,23 +47,61 @@ component AlbumGrid inherits Rectangle {
         ? self.rows * root.card-height + Math.max(0, self.rows - 1) * root.card-gap
         : 0px;
 
-    // Row band = visible rows ± one full viewport. Row-granular ints, so the
-    // `changed` handlers only fire when a row boundary is crossed (~every
+    // Target band = visible rows ± one full viewport. Row-granular ints, so
+    // the `changed` handlers only fire when a row boundary is crossed (~every
     // 270px of scroll), not per scrolled pixel.
     property <length> row-stride: root.card-height + root.card-gap;
     property <length> local-top: root.visible-top - root.content-offset;
-    property <int> first-window-row: root.windowed
+    property <int> target-first-row: root.windowed
         ? Math.max(0, Math.floor((root.local-top - root.visible-height) / root.row-stride))
         : 0;
-    property <int> last-window-row: root.windowed
+    property <int> target-last-row: root.windowed
         ? Math.max(0, Math.floor((root.local-top + 2 * root.visible-height) / root.row-stride))
         : 0;
-    changed first-window-row => { root.notify-window(); }
-    changed last-window-row => { root.notify-window(); }
+    // Mounted band = target band + contract hysteresis. Expansion follows the
+    // target immediately (a card must be mounted before it can reach the
+    // visible area); contraction lags by `hysteresis-rows`, so a few-px
+    // oscillation across a row boundary cannot mount/unmount a whole row of
+    // cards on every direction change.
+    property <int> hysteresis-rows: 1;
+    property <int> first-window-row: 0;
+    property <int> last-window-row: 0;
+    pure function desired-first-row() -> int {
+        if (root.target-first-row < root.first-window-row) {
+            return root.target-first-row;
+        }
+        if (root.target-first-row > root.first-window-row + root.hysteresis-rows) {
+            return root.target-first-row - root.hysteresis-rows;
+        }
+        return root.first-window-row;
+    }
+    pure function desired-last-row() -> int {
+        if (root.target-last-row > root.last-window-row) {
+            return root.target-last-row;
+        }
+        if (root.target-last-row < root.last-window-row - root.hysteresis-rows) {
+            return root.target-last-row + root.hysteresis-rows;
+        }
+        return root.last-window-row;
+    }
+    function apply-window() {
+        if (root.desired-first-row() != root.first-window-row
+            || root.desired-last-row() != root.last-window-row) {
+            root.first-window-row = root.desired-first-row();
+            root.last-window-row = root.desired-last-row();
+            root.notify-window();
+        }
+    }
+    changed target-first-row => { root.apply-window(); }
+    changed target-last-row => { root.apply-window(); }
     // Column count changes on first layout and on window resize — the band's
     // ITEM indices depend on it, so re-notify.
     changed columns => { root.notify-window(); }
-    init => { root.notify-window(); }
+    init => {
+        root.first-window-row = root.target-first-row;
+        root.last-window-row = root.target-last-row;
+        root.notify-window();
+    }
     function notify-window() {
         if (root.windowed) {
             root.window-changed(
