@@ -4383,3 +4383,6 @@ msgstr "Ошибка аудиовывода"
 
 msgid "Direct ALSA device access is blocked inside Flatpak/Snap — switch the audio backend to PipeWire or System Default"
 msgstr "Прямой доступ к устройствам ALSA заблокирован в Flatpak/Snap — переключите аудиобэкенд на PipeWire или системный вывод"
+
+msgid "Auto theme generation failed"
+msgstr "Не удалось сгенерировать автоматическую тему"

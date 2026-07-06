@@ -136,3 +136,6 @@ msgstr "No labels in your Library yet."
 
 msgid "Library Albums"
 msgstr "Library Albums"
+
+msgid "Auto theme generation failed"
+msgstr "Auto theme generation failed"
