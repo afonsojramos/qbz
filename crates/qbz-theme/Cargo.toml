@@ -18,3 +18,6 @@ serde = { workspace = true }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "bmp", "tiff"] }
 
 [dev-dependencies]
+# JSON round-trip test for the custom-theme base (the bin persists it to
+# custom_theme.json via serde_json; the crate itself only needs serde derive).
+serde_json = { workspace = true }
