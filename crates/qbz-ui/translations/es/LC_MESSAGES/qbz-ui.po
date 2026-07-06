@@ -4403,3 +4403,24 @@ msgstr "El acceso directo a dispositivos ALSA está bloqueado dentro de Flatpak/
 
 msgid "Auto theme generation failed"
 msgstr "Error al generar el tema automático"
+
+msgid "Play all tracks"
+msgstr "Reproducir todas las pistas"
+
+msgid "Shuffle all tracks"
+msgstr "Aleatorio: todas las pistas"
+
+msgid "Select multiple tracks"
+msgstr "Seleccionar varias pistas"
+
+msgid "Play a random album"
+msgstr "Reproducir un álbum al azar"
+
+msgid "Open a random artist"
+msgstr "Abrir un artista al azar"
+
+msgid "Play a random playlist"
+msgstr "Reproducir una playlist al azar"
+
+msgid "Open a random label"
+msgstr "Abrir un sello al azar"

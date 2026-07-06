@@ -139,3 +139,24 @@ msgstr "Library Albums"
 
 msgid "Auto theme generation failed"
 msgstr "Auto theme generation failed"
+
+msgid "Play all tracks"
+msgstr "Play all tracks"
+
+msgid "Shuffle all tracks"
+msgstr "Shuffle all tracks"
+
+msgid "Select multiple tracks"
+msgstr "Select multiple tracks"
+
+msgid "Play a random album"
+msgstr "Play a random album"
+
+msgid "Open a random artist"
+msgstr "Open a random artist"
+
+msgid "Play a random playlist"
+msgstr "Play a random playlist"
+
+msgid "Open a random label"
+msgstr "Open a random label"

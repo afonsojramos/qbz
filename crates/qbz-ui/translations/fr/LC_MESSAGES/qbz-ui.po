@@ -4373,3 +4373,24 @@ msgstr "L'accès direct aux périphériques ALSA est bloqué dans Flatpak/Snap �
 
 msgid "Auto theme generation failed"
 msgstr "Échec de la génération du thème automatique"
+
+msgid "Play all tracks"
+msgstr "Lire tous les titres"
+
+msgid "Shuffle all tracks"
+msgstr "Lecture aléatoire de tous les titres"
+
+msgid "Select multiple tracks"
+msgstr "Sélectionner plusieurs titres"
+
+msgid "Play a random album"
+msgstr "Lire un album au hasard"
+
+msgid "Open a random artist"
+msgstr "Ouvrir un artiste au hasard"
+
+msgid "Play a random playlist"
+msgstr "Lire une playlist au hasard"
+
+msgid "Open a random label"
+msgstr "Ouvrir un label au hasard"
