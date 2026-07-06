@@ -12,7 +12,7 @@ msgid "System Colors"
 msgstr "Colores del Sistema"
 
 msgid "Wallpaper Sync"
-msgstr "Wallpaper Sync"
+msgstr "Sincronizar con el fondo"
 
 msgid "Custom Image"
 msgstr "Imagen Personalizada"
@@ -4400,3 +4400,6 @@ msgstr "Error de salida de audio"
 
 msgid "Direct ALSA device access is blocked inside Flatpak/Snap — switch the audio backend to PipeWire or System Default"
 msgstr "El acceso directo a dispositivos ALSA está bloqueado dentro de Flatpak/Snap — cambia el backend de audio a PipeWire o al predeterminado del sistema"
+
+msgid "Auto theme generation failed"
+msgstr "Error al generar el tema automático"

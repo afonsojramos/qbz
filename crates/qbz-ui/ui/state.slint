@@ -2898,9 +2898,11 @@ export global AppearanceState {
 
     in-out property <bool> album-header-gradient: true;
 
-    // Auto-Theme (shown when the "System" theme is selected). Source:
-    // 0 = System Colors, 1 = Wallpaper Sync, 2 = Custom Image.
+    // True while the "System" theme is selected (native OS-palette follow).
     in-out property <bool> theme-is-system: false;
+    // Auto-Theme (shown when the appended "Auto (dynamic)" theme is selected).
+    // Source: 0 = System Colors, 1 = Wallpaper Sync, 2 = Custom Image.
+    in-out property <bool> theme-is-auto: false;
     in-out property <[string]> auto-theme-sources: [@tr("System Colors"), @tr("Wallpaper Sync"), @tr("Custom Image")];
     in-out property <int> auto-theme-source-index: 0;
     in-out property <string> auto-theme-custom-path: "";

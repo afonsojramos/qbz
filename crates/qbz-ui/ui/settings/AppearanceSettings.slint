@@ -199,9 +199,8 @@ export component AppearanceSettings inherits VerticalLayout {
         }
     }
 
-    // Auto-Theme controls — only when the "System" theme is selected.
-    if AppearanceState.theme-is-system: SettingRow {
-        unsupported: true;
+    // Auto-Theme controls — only when the "Auto (dynamic)" theme is selected.
+    if AppearanceState.theme-is-auto: SettingRow {
         label: @tr("Source");
         description: @tr("Generate a color theme from your system wallpaper or a custom image");
         QbzSelect {
@@ -214,8 +213,7 @@ export component AppearanceSettings inherits VerticalLayout {
             }
         }
     }
-    if AppearanceState.theme-is-system && AppearanceState.auto-theme-source-index == 2: SettingRow {
-        unsupported: true;
+    if AppearanceState.theme-is-auto && AppearanceState.auto-theme-source-index == 2: SettingRow {
         label: AppearanceState.auto-theme-custom-path != ""
             ? AppearanceState.auto-theme-custom-path
             : @tr("Select Image...");
@@ -226,12 +224,11 @@ export component AppearanceSettings inherits VerticalLayout {
             }
         }
     }
-    if AppearanceState.theme-is-system && AppearanceState.auto-theme-detected-de != "": SettingRow {
+    if AppearanceState.theme-is-auto && AppearanceState.auto-theme-detected-de != "": SettingRow {
         label: @tr("Detected: ") + AppearanceState.auto-theme-detected-de;
         description: @tr("Experimental: theme may not match your system exactly.");
     }
-    if AppearanceState.theme-is-system: SettingRow {
-        unsupported: true;
+    if AppearanceState.theme-is-auto: SettingRow {
         label: @tr("Regenerate");
         SecondaryButton {
             label: @tr("Regenerate");
