@@ -4373,3 +4373,24 @@ msgstr "Direkter ALSA-Gerätezugriff ist in Flatpak/Snap blockiert — Audio-Bac
 
 msgid "Auto theme generation failed"
 msgstr "Automatische Themenerstellung fehlgeschlagen"
+
+msgid "Play all tracks"
+msgstr "Alle Titel abspielen"
+
+msgid "Shuffle all tracks"
+msgstr "Alle Titel zufällig abspielen"
+
+msgid "Select multiple tracks"
+msgstr "Mehrere Titel auswählen"
+
+msgid "Play a random album"
+msgstr "Zufälliges Album abspielen"
+
+msgid "Open a random artist"
+msgstr "Zufälligen Künstler öffnen"
+
+msgid "Play a random playlist"
+msgstr "Zufällige Playlist abspielen"
+
+msgid "Open a random label"
+msgstr "Zufälliges Label öffnen"
