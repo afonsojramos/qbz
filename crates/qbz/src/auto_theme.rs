@@ -75,10 +75,13 @@ pub fn apply_startup(window: &AppWindow) {
 /// Regenerate the auto theme off-thread and push the result on the event loop.
 /// Toggles `auto-theme-generating` around the work and toasts on failure.
 pub fn regenerate(weak: slint::Weak<AppWindow>, handle: tokio::runtime::Handle) {
-    if let Some(w) = weak.upgrade() {
-        w.global::<AppearanceState>()
-            .set_auto_theme_generating(true);
-    }
+    // Through the event loop, NOT a direct upgrade: regenerate() is also
+    // called from tokio contexts (select_image), where a plain upgrade()
+    // returns None and the generating indicator would silently be skipped.
+    let weak_flag = weak.clone();
+    let _ = weak_flag.upgrade_in_event_loop(move |w| {
+        w.global::<AppearanceState>().set_auto_theme_generating(true);
+    });
     handle.spawn(async move {
         let prefs = crate::ui_prefs::load();
         let source = source_from_prefs(&prefs);

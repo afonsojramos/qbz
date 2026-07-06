@@ -13,7 +13,19 @@ pub fn extract_palette(image_path: &str) -> Result<ThemePalette, String> {
         return Err(format!("Image not found: {}", image_path));
     }
 
-    let img = image::open(path).map_err(|e| format!("Failed to open image: {}", e))?;
+    // Bounded decode: a decompression-bomb PNG (65k x 65k) would otherwise
+    // expand to tens of GB before the 100x100 downsample. 12k x 12k / 512 MB
+    // covers any real wallpaper while keeping the worst case survivable.
+    let mut reader = image::ImageReader::open(path)
+        .map_err(|e| format!("Failed to open image: {}", e))?
+        .with_guessed_format()
+        .map_err(|e| format!("Failed to read image: {}", e))?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(12_000);
+    limits.max_image_height = Some(12_000);
+    limits.max_alloc = Some(512 * 1024 * 1024);
+    reader.limits(limits);
+    let img = reader.decode().map_err(|e| format!("Failed to decode image: {}", e))?;
 
     // Downsample to 100x100 for fast processing.
     let thumb = img.resize_exact(100, 100, image::imageops::FilterType::Lanczos3);
