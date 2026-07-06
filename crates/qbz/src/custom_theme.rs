@@ -151,6 +151,11 @@ pub fn save(base: &CustomThemeBase) {
 
 /// Load the persisted base, or seed + persist the OLED default when no file
 /// exists yet (the first time the user selects the "Custom" theme).
+/// True when a persisted custom base exists on disk (first-selection check).
+pub fn exists() -> bool {
+    custom_theme_path().map(|p| p.exists()).unwrap_or(false)
+}
+
 pub fn load_or_seed() -> CustomThemeBase {
     let exists = custom_theme_path().map(|p| p.exists()).unwrap_or(false);
     if exists {

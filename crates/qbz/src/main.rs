@@ -8810,8 +8810,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         st.set_theme_is_auto(false);
                         st.set_theme_is_custom(true);
                         st.set_theme_is_system(false);
-                        crate::custom_theme::seed_state(&w);
-                        crate::custom_theme::apply_startup(&w);
+                        if crate::custom_theme::exists() {
+                            crate::custom_theme::seed_state(&w);
+                            crate::custom_theme::apply_startup(&w);
+                        } else {
+                            // First-ever selection: seed from the palette the
+                            // user is looking at RIGHT NOW (the previously
+                            // applied theme), not from a hardcoded default —
+                            // "customize what I see" is the whole point.
+                            crate::custom_theme::seed_from_current(&w);
+                        }
                     }
                 } else {
                     let id = crate::theme::id_for_index(index);
