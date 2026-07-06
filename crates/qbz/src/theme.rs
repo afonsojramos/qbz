@@ -89,16 +89,60 @@ fn to_slint(c: &qbz_theme::ThemeColors) -> SlintThemeColors {
     }
 }
 
+/// Push a fully-materialized registry `ThemeColors` into the running window's
+/// `Theme` global. Shared by [`apply_theme`] (static themes) and the auto-theme
+/// path (`crate::auto_theme`), so both go through the exact same conversion +
+/// global-set sequence.
+pub fn push_colors(
+    window: &AppWindow,
+    colors: &qbz_theme::ThemeColors,
+    is_system: bool,
+    is_high_contrast: bool,
+) {
+    let theme = window.global::<SlintTheme>();
+    theme.set_c(to_slint(colors));
+    theme.set_is_system(is_system);
+    theme.set_is_high_contrast(is_high_contrast);
+}
+
 /// Push the palette for `id` into the running window's `Theme` global. Sets
 /// `is-system` so the System theme follows the OS (the struct is still pushed as
 /// a sane fallback for any non-System-overridden tokens).
 pub fn apply_theme(window: &AppWindow, id: ThemeId) {
     let colors = qbz_theme::palette(id);
-    let theme = window.global::<SlintTheme>();
-    theme.set_c(to_slint(&colors));
-    theme.set_is_system(id == ThemeId::System);
-    theme.set_is_high_contrast(qbz_theme::is_high_contrast(id));
+    push_colors(window, &colors, id == ThemeId::System, qbz_theme::is_high_contrast(id));
     log::info!("[qbz-slint] applied theme '{}'", id.slug());
+}
+
+/// Stable slug persisted for the dynamic "Auto" theme option. Distinct from the
+/// registry slugs (it has no static `ThemeId`): the dropdown appends it after
+/// the registry rows and `crate::auto_theme` generates the palette at runtime.
+pub const AUTO_SLUG: &str = "auto";
+
+/// Display label for the appended "Auto (dynamic)" dropdown entry. Like the
+/// registry display names (`"System"`, `"Nord"`, …) this is proper-noun-style
+/// UI data pushed from Rust, not a `@tr` catalog string.
+pub const AUTO_LABEL: &str = "Auto (dynamic)";
+
+/// Dropdown index of the appended "Auto (dynamic)" entry (last position, right
+/// after every registry theme).
+pub fn auto_index() -> i32 {
+    dropdown_themes().len() as i32
+}
+
+/// Whether a dropdown index refers to the appended "Auto (dynamic)" entry.
+pub fn is_auto_index(index: i32) -> bool {
+    index == auto_index()
+}
+
+/// The dropdown index for a persisted theme slug, auto-aware: `"auto"` maps to
+/// the appended entry, everything else maps through the registry.
+pub fn selected_index_for_slug(slug: &str) -> i32 {
+    if slug == AUTO_SLUG {
+        auto_index()
+    } else {
+        index_for_id(id_for_slug(slug))
+    }
 }
 
 /// The themes shown in the Settings dropdown, in display order. P1 exposes only
@@ -110,12 +154,15 @@ pub fn dropdown_themes() -> Vec<ThemeId> {
         .collect()
 }
 
-/// Display names for the dropdown, matching [`dropdown_themes`] order.
+/// Display names for the dropdown, matching [`dropdown_themes`] order, with the
+/// dynamic "Auto (dynamic)" entry appended last (index == [`auto_index`]).
 pub fn dropdown_labels() -> Vec<String> {
-    dropdown_themes()
+    let mut labels: Vec<String> = dropdown_themes()
         .into_iter()
         .map(|id| id.display_name().to_string())
-        .collect()
+        .collect();
+    labels.push(AUTO_LABEL.to_string());
+    labels
 }
 
 /// Map a persisted slug to a `ThemeId`, falling back to the default (OLED) when

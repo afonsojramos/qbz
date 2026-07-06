@@ -75,6 +75,31 @@ pub fn language_index(key: &str) -> i32 {
     }
 }
 
+/// Default auto-theme source key (`"system"`: DE color scheme with a wallpaper
+/// fallback). The other keys are `"wallpaper"` and `"image"`.
+pub const DEFAULT_AUTO_THEME_SOURCE: &str = "system";
+
+/// Map an auto-theme-source select index to its persisted key. On-screen order
+/// is System Colors / Wallpaper Sync / Custom Image (0-2); unknown indices fall
+/// back to the default (`"system"`).
+pub fn auto_theme_source_for_index(index: i32) -> &'static str {
+    match index {
+        1 => "wallpaper",
+        2 => "image",
+        _ => "system",
+    }
+}
+
+/// Inverse of [`auto_theme_source_for_index`]: the select index for a persisted
+/// key, falling back to the default's index (0 = "system").
+pub fn auto_theme_source_index(key: &str) -> i32 {
+    match key {
+        "wallpaper" => 1,
+        "image" => 2,
+        _ => 0,
+    }
+}
+
 /// Default album/artist header backdrop setting.
 pub const DEFAULT_ALBUM_HEADER_GRADIENT: bool = true;
 
@@ -438,6 +463,16 @@ pub struct UiPrefs {
     /// order-independent and stable across releases. Owner default: OLED Dark.
     #[serde(default = "default_theme")]
     pub theme: String,
+    /// Auto-theme source (only meaningful when `theme == "auto"`): `"system"`
+    /// (DE color scheme → wallpaper fallback) | `"wallpaper"` | `"image"`.
+    /// Persisted so the dynamic theme regenerates from the same source across
+    /// restarts. See [`DEFAULT_AUTO_THEME_SOURCE`].
+    #[serde(default = "default_auto_theme_source")]
+    pub auto_theme_source: String,
+    /// Absolute path to the user's custom image for the `"image"` auto-theme
+    /// source. Empty until the user picks one. Ignored for other sources.
+    #[serde(default)]
+    pub auto_theme_image_path: String,
 
     // ---- Keyboard shortcuts (hotkeys) ----------------------------------
     /// User keybinding overrides: action id → shortcut string. Only actions
@@ -610,6 +645,10 @@ fn default_theme() -> String {
     qbz_theme::default_slug().to_string()
 }
 
+fn default_auto_theme_source() -> String {
+    DEFAULT_AUTO_THEME_SOURCE.to_string()
+}
+
 impl Default for UiPrefs {
     fn default() -> Self {
         Self {
@@ -652,6 +691,8 @@ impl Default for UiPrefs {
             immersive_last_mode: 0,
             immersive_last_split_panel: 0,
             theme: default_theme(),
+            auto_theme_source: default_auto_theme_source(),
+            auto_theme_image_path: String::new(),
             keybindings: BTreeMap::new(),
             mini_surface: default_mini_surface(),
             mini_width: default_mini_width(),

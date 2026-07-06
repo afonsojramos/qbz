@@ -26,6 +26,7 @@ mod artist_prefs;
 mod artist_releases;
 mod artwork;
 mod auth;
+mod auto_theme;
 mod award;
 mod blacklist_manager;
 mod booklet;
@@ -6388,15 +6389,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .collect();
         appearance.set_themes(slint::ModelRc::new(slint::VecModel::from(labels)));
 
-        let id = crate::theme::id_for_slug(&crate::ui_prefs::load().theme);
-        appearance.set_theme_index(crate::theme::index_for_id(id));
-        appearance.set_theme_is_system(id == qbz_theme::ThemeId::System);
+        let slug = crate::ui_prefs::load().theme;
+        let is_auto = slug == crate::theme::AUTO_SLUG;
+        let selected_index = crate::theme::selected_index_for_slug(&slug);
+        appearance.set_theme_index(selected_index);
+        appearance.set_theme_is_auto(is_auto);
+        // Auto-theme controls read from the persisted source; seed them so they
+        // reflect the saved choice when Settings opens.
+        crate::auto_theme::seed_state(&window);
+        if is_auto {
+            appearance.set_theme_is_system(false);
+            // Generate + apply the dynamic palette (falls back to OLED on error).
+            crate::auto_theme::apply_startup(&window);
+        } else {
+            let id = crate::theme::id_for_slug(&slug);
+            appearance.set_theme_is_system(id == qbz_theme::ThemeId::System);
+            crate::theme::apply_theme(&window, id);
+        }
         // Keep the legacy ThemeState.mode in sync with the dropdown index for
-        // any residual reads; the palette itself is driven by apply_theme.
-        window
-            .global::<ThemeState>()
-            .set_mode(crate::theme::index_for_id(id));
-        crate::theme::apply_theme(&window, id);
+        // any residual reads; the palette itself is driven above.
+        window.global::<ThemeState>().set_mode(selected_index);
     }
 
     // Tell the tray settings UI which platform it's on so it can show the
@@ -8662,6 +8674,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             other => log::debug!("[qbz-slint] unhandled appearance-bool '{other}'"),
         });
         let theme_weak = window.as_weak();
+        let theme_handle = tokio::runtime::Handle::current();
         appearance.on_appearance_select(move |key, index| match key.as_str() {
             "tray-icon-theme" => {
                 tray_settings::set_icon_theme_index(index);
@@ -8761,15 +8774,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             "theme" => {
-                // Slug is the source of truth: map the dropdown index -> stable
-                // id, persist the slug, then hot-switch the live palette.
-                let id = crate::theme::id_for_index(index);
+                // Slug is the source of truth. The appended "Auto (dynamic)"
+                // entry (index == theme::auto_index) persists the "auto" slug and
+                // generates the palette off-thread; every other index maps to a
+                // stable registry id and hot-switches the static palette.
                 let mut prefs = crate::ui_prefs::load();
-                prefs.theme = id.slug().to_string();
-                crate::ui_prefs::save(&prefs);
-                if let Some(w) = theme_weak.upgrade() {
-                    crate::theme::apply_theme(&w, id);
+                if crate::theme::is_auto_index(index) {
+                    prefs.theme = crate::theme::AUTO_SLUG.to_string();
+                    crate::ui_prefs::save(&prefs);
+                    if let Some(w) = theme_weak.upgrade() {
+                        let st = w.global::<AppearanceState>();
+                        st.set_theme_is_auto(true);
+                        st.set_theme_is_system(false);
+                    }
+                    crate::auto_theme::regenerate(theme_weak.clone(), theme_handle.clone());
+                } else {
+                    let id = crate::theme::id_for_index(index);
+                    prefs.theme = id.slug().to_string();
+                    crate::ui_prefs::save(&prefs);
+                    if let Some(w) = theme_weak.upgrade() {
+                        let st = w.global::<AppearanceState>();
+                        st.set_theme_is_auto(false);
+                        st.set_theme_is_system(id == qbz_theme::ThemeId::System);
+                        crate::theme::apply_theme(&w, id);
+                    }
                 }
+            }
+            "auto-theme-source" => {
+                // Auto-theme source dropdown (System / Wallpaper / Custom Image):
+                // persist the key and regenerate from the new source.
+                crate::auto_theme::set_source(index, theme_weak.clone(), theme_handle.clone());
             }
             "theme-filter" => {
                 // Theme-list filter cycle (0 = All, 1 = Dark, 2 = Light). Cosmetic,
@@ -8779,6 +8813,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 crate::ui_prefs::save(&prefs);
             }
             other => log::debug!("[qbz-slint] unhandled appearance-select '{other}'"),
+        });
+
+        // Auto-theme actions: image picker + explicit Regenerate button. Both run
+        // generation off the event loop and push the palette back on it.
+        let action_weak = window.as_weak();
+        let action_handle = tokio::runtime::Handle::current();
+        appearance.on_appearance_action(move |key| match key.as_str() {
+            "auto-theme-select-image" => {
+                crate::auto_theme::select_image(action_weak.clone(), action_handle.clone());
+            }
+            "auto-theme-regenerate" => {
+                crate::auto_theme::regenerate(action_weak.clone(), action_handle.clone());
+            }
+            other => log::debug!("[qbz-slint] unhandled appearance-action '{other}'"),
         });
     }
 
