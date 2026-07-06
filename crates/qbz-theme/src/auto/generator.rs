@@ -29,8 +29,10 @@ fn opaque(c: PaletteColor) -> Rgba {
 }
 
 /// Straight-alpha overlay of an opaque hue at `frac` opacity (0.0..=1.0).
-/// Mirrors `registry::with_alpha` / Tauri's `rgba(hue, frac)` tint.
-fn tint(c: Rgba, frac: f32) -> Rgba {
+/// Mirrors `registry::with_alpha` / Tauri's `rgba(hue, frac)` tint. Shared with
+/// the custom-theme builder (`crate::custom`) so the status-family tint shape is
+/// defined once.
+pub(crate) fn tint(c: Rgba, frac: f32) -> Rgba {
     let a = (frac * 255.0 + 0.5) as u8;
     Rgba::rgba(c.r, c.g, c.b, a)
 }
@@ -316,7 +318,8 @@ pub fn theme_from_scheme(scheme: &SystemColorScheme) -> ThemeColors {
 
 /// Pick the best foreground for text on the accent triplet (base, hover, active),
 /// considering the worst case across all three so `:hover`/`:active` stay legible.
-fn pick_btn_text_for_accent_set(
+/// Shared with the custom-theme builder so `accent_text` is derived identically.
+pub(crate) fn pick_btn_text_for_accent_set(
     accent: &PaletteColor,
     accent_hover: &PaletteColor,
     accent_active: &PaletteColor,
@@ -349,7 +352,8 @@ fn ensure_text_contrast(text: PaletteColor, bg: &PaletteColor, is_dark: bool) ->
 
 /// Ensure text meets `target` contrast against `bg`, shifting lightness toward
 /// white (dark) / black (light) up to 20 steps, then clamping to pure white/black.
-fn ensure_text_contrast_target(
+/// Shared with the custom-theme builder for its derived muted/secondary tiers.
+pub(crate) fn ensure_text_contrast_target(
     text: PaletteColor,
     bg: &PaletteColor,
     is_dark: bool,

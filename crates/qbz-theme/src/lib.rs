@@ -15,12 +15,14 @@
 pub mod auto;
 mod color;
 mod colors;
+pub mod custom;
 mod id;
 mod registry;
 
 pub use auto::{generate as generate_auto_theme, AutoSource};
 pub use color::{apca_lc, contrast_ratio, relative_luminance, Rgba};
 pub use colors::{alpha_byte, alpha_index, alpha_ramp, ThemeColors, ALPHA_COUNT, ALPHA_PERCENTS};
+pub use custom::{base_from_theme, theme_from_base, CustomThemeBase};
 pub use id::{default_slug, ThemeCategory, ThemeId, ALL};
 pub use registry::palette;
 
