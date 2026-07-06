@@ -3062,8 +3062,6 @@ dependencies = [
 [[package]]
 name = "i-slint-renderer-skia"
 version = "1.16.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d4030ff9eeb1b99fdf9b47472f3a7a582f3bcb57207c9bc07505dc6998abdcbc"
 dependencies = [
  "ash",
  "bytemuck",
