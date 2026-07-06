@@ -12,11 +12,13 @@
 //! Phase 1 materializes only the four existing themes; [`ThemeId::is_implemented`]
 //! reports which rows are ready so the Settings list can expose only those.
 
+pub mod auto;
 mod color;
 mod colors;
 mod id;
 mod registry;
 
+pub use auto::{generate as generate_auto_theme, AutoSource};
 pub use color::{apca_lc, contrast_ratio, relative_luminance, Rgba};
 pub use colors::{alpha_byte, alpha_index, alpha_ramp, ThemeColors, ALPHA_COUNT, ALPHA_PERCENTS};
 pub use id::{default_slug, ThemeCategory, ThemeId, ALL};
