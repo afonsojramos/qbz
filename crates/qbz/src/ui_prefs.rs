@@ -45,8 +45,8 @@ pub const DEFAULT_LANGUAGE: &str = "auto";
 
 /// Map a language select index to its persisted key. The on-screen order in
 /// `AppearanceState.languages` is Auto / English / Español / Français / Deutsch
-/// / Português / Русский / 日本語 (0-7); any unknown index falls back to the
-/// default (`"auto"`).
+/// / Português / Русский / 日本語 / Nederlands (0-8); any unknown index falls
+/// back to the default (`"auto"`).
 pub fn language_for_index(index: i32) -> &'static str {
     match index {
         1 => "en",
@@ -56,6 +56,7 @@ pub fn language_for_index(index: i32) -> &'static str {
         5 => "pt",
         6 => "ru",
         7 => "ja",
+        8 => "nl",
         _ => DEFAULT_LANGUAGE,
     }
 }
@@ -71,6 +72,7 @@ pub fn language_index(key: &str) -> i32 {
         "pt" => 5,
         "ru" => 6,
         "ja" => 7,
+        "nl" => 8,
         _ => 0,
     }
 }

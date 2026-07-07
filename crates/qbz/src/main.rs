@@ -3495,6 +3495,7 @@ fn reseed_i18n_labels(window: &AppWindow) {
         "Português".into(),
         "Русский".into(),
         "日本語".into(),
+        "Nederlands".into(),
     ])));
     state.set_immersive_search_actions(ModelRc::new(VecModel::from(vec![
         t("Disabled"),
@@ -8986,9 +8987,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             "language" => {
                 // 0 = Auto, 1 = English, 2 = Español, 3 = Français, 4 = Deutsch,
-                // 5 = Português, 6 = Русский, 7 = 日本語. Persist the RAW user
-                // choice ("auto" stays "auto"), but resolve "auto" to a concrete
-                // language before switching the live translations.
+                // 5 = Português, 6 = Русский, 7 = 日本語, 8 = Nederlands.
+                // Persist the RAW user choice ("auto" stays "auto"), but resolve
+                // "auto" to a concrete language before switching the live
+                // translations.
                 let chosen = crate::ui_prefs::language_for_index(index);
                 let mut prefs = crate::ui_prefs::load();
                 prefs.language = chosen.to_string();
