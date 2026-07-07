@@ -186,6 +186,20 @@ component AlbumGrid inherits Rectangle {
     property <length> card-w: 200px;
     property <length> card-h: 246px;
     property <length> gap: 24px;
+    // --- Viewport windowing (opt-in; default OFF = identical to before) ---
+    // ELEMENT windowing only: with `windowed` on, cards within ~one viewport
+    // of the visible band mount a real AlbumCard; the rest are same-footprint
+    // placeholders, so the height formula (the scroll geometry) never
+    // changes. No window-changed callback here — search artwork is
+    // dispatched per loaded page, index-keyed onto the directly-rendered
+    // model, so covers are already present when a card mounts.
+    // `visible-top`/`visible-height` arrive in the surrounding Flickable's
+    // CONTENT coordinates; `content-offset` is this grid's approximate y
+    // inside that content — small errors are absorbed by the margin.
+    in property <bool> windowed: false;
+    in property <length> visible-top: 0px;
+    in property <length> visible-height: 0px;
+    in property <length> content-offset: 0px;
     property <int> columns:
         Math.max(1, Math.floor((self.width + root.gap) / (root.card-w + root.gap)));
     property <int> row-count: Math.ceil(root.albums.length / root.columns);
@@ -194,15 +208,76 @@ component AlbumGrid inherits Rectangle {
         ? root.row-count * root.card-h + (root.row-count - 1) * root.gap
         : 0px;
 
-    for album[i] in root.albums: AlbumCard {
+    // Target band = visible rows ± one full viewport. Row-granular ints, so
+    // the `changed` handlers only fire when a row boundary is crossed, not
+    // per scrolled pixel.
+    property <length> row-stride: root.card-h + root.gap;
+    property <length> local-top: root.visible-top - root.content-offset;
+    property <int> target-first-row: root.windowed
+        ? Math.max(0, Math.floor((root.local-top - root.visible-height) / root.row-stride))
+        : 0;
+    property <int> target-last-row: root.windowed
+        ? Math.max(0, Math.floor((root.local-top + 2 * root.visible-height) / root.row-stride))
+        : 0;
+    // Mounted band = target band + contract hysteresis. Expansion follows the
+    // target immediately (a card must be mounted before it can reach the
+    // visible area); contraction lags by `hysteresis-rows`, so a few-px
+    // oscillation across a row boundary cannot mount/unmount a whole row of
+    // cards on every direction change.
+    property <int> hysteresis-rows: 1;
+    property <int> first-window-row: 0;
+    property <int> last-window-row: 0;
+    pure function desired-first-row() -> int {
+        if (root.target-first-row < root.first-window-row) {
+            return root.target-first-row;
+        }
+        if (root.target-first-row > root.first-window-row + root.hysteresis-rows) {
+            return root.target-first-row - root.hysteresis-rows;
+        }
+        return root.first-window-row;
+    }
+    pure function desired-last-row() -> int {
+        if (root.target-last-row > root.last-window-row) {
+            return root.target-last-row;
+        }
+        if (root.target-last-row < root.last-window-row - root.hysteresis-rows) {
+            return root.target-last-row + root.hysteresis-rows;
+        }
+        return root.last-window-row;
+    }
+    function apply-window() {
+        if (root.desired-first-row() != root.first-window-row
+            || root.desired-last-row() != root.last-window-row) {
+            root.first-window-row = root.desired-first-row();
+            root.last-window-row = root.desired-last-row();
+        }
+    }
+    changed target-first-row => { root.apply-window(); }
+    changed target-last-row => { root.apply-window(); }
+    init => {
+        root.first-window-row = root.target-first-row;
+        root.last-window-row = root.target-last-row;
+    }
+
+    for album[i] in root.albums: card-slot := Rectangle {
         x: Math.mod(i, root.columns) * (root.card-w + root.gap);
         y: Math.floor(i / root.columns) * (root.card-h + root.gap);
-        album: album;
-        clicked(id) => {
-            root.open(id);
-        }
-        media-action(k, ii, a) => {
-            root.media-action(k, ii, a);
+        width: root.card-w;
+        height: root.card-h;
+        property <bool> in-window: !root.windowed
+            || (Math.floor(i / root.columns) >= root.first-window-row
+                && Math.floor(i / root.columns) <= root.last-window-row);
+        // Placeholder tile while the real card is unmounted (fast scroll).
+        border-radius: 8px;
+        background: card-slot.in-window ? transparent : Theme.surface-elevated;
+        if card-slot.in-window: AlbumCard {
+            album: album;
+            clicked(id) => {
+                root.open(id);
+            }
+            media-action(k, ii, a) => {
+                root.media-action(k, ii, a);
+            }
         }
     }
 }
@@ -555,6 +630,17 @@ export component SearchResultsView inherits Rectangle {
                 }
                 if SearchState.tab == 1: AlbumGrid {
                     albums: SearchState.albums;
+                    // Element windowing: on the Albums tab the grid is the
+                    // first thing in the scroll content (the nav row and tab
+                    // strip sit ABOVE the Flickable; body has no top
+                    // padding), so its content offset is ~0. LL-style
+                    // approximation — the ±one-viewport margin absorbs about
+                    // a row of drift either way. Applies to tab 1 only; the
+                    // other tabs' sections are unaffected.
+                    windowed: true;
+                    visible-top: -flick.viewport-y;
+                    visible-height: flick.height;
+                    content-offset: 0px;
                     open(id) => { root.open-album(id); }
                     media-action(k, i, a) => { root.media-action(k, i, a); }
                 }
