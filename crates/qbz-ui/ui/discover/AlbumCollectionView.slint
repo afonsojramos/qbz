@@ -97,10 +97,24 @@ component AlbumGrid inherits Rectangle {
     // Column count changes on first layout and on window resize — the band's
     // ITEM indices depend on it, so re-notify.
     changed columns => { root.notify-window(); }
-    init => {
-        root.first-window-row = root.target-first-row;
-        root.last-window-row = root.target-last-row;
-        root.notify-window();
+    // Post-layout seed. Reading the target bindings from `init` would pull
+    // `absolute-position` (a grouped section's content-offset) while layout
+    // is still evaluating — the documented "Recursion detected" panic. A
+    // one-shot Timer a tick after mount is the sanctioned probe (same
+    // pattern as the modal focus timers); until it fires, the default [0,0]
+    // band keeps at most the first row mounted for one frame. The `changed`
+    // handlers run from the post-layout change queue, so they stay direct.
+    property <bool> seeded: false;
+    Timer {
+        interval: 16ms;
+        running: root.windowed && !root.seeded;
+        triggered => {
+            self.running = false;
+            root.seeded = true;
+            root.first-window-row = root.target-first-row;
+            root.last-window-row = root.target-last-row;
+            root.notify-window();
+        }
     }
     function notify-window() {
         if (root.windowed) {
@@ -161,9 +175,12 @@ export component AlbumCollectionView inherits VerticalLayout {
     in property <length> card-height: 246px;
     in property <length> card-gap: 24px;
     in property <length> list-row-gap: 4px;
-    // Viewport windowing — forwarded to the FLAT grid only (grouped sections
-    // keep full mounts; their per-section offsets are unknown here). OFF by
-    // default so Discover Browse / Labels / Favorites are untouched.
+    // Viewport windowing — forwarded to the flat grid AND to each grouped
+    // section grid (each section derives its own offset from an
+    // absolute-position delta at the instance). Grouped sections window their
+    // MOUNTS only; grouped-mode artwork stays full-dispatch (consumers send
+    // the whole set id-keyed), so `window-changed` fires from the flat grid
+    // alone. OFF by default so untouched consumers keep full mounts.
     in property <bool> windowed: false;
     in property <length> visible-top: 0px;
     in property <length> visible-height: 0px;
@@ -211,7 +228,18 @@ export component AlbumCollectionView inherits VerticalLayout {
                     }
                 }
             }
-            // Grid view: a card grid for this section.
+            // Grid view: a card grid for this section — windowed like the
+            // flat grid. The section's offset inside the scroll content is
+            // root.content-offset (the ACV's own y there, supplied by the
+            // surface) plus this grid's y inside the ACV, measured as the
+            // absolute-position DELTA: self and root live in the same
+            // Flickable content, so the delta is scroll-invariant (both move
+            // together), and absolute-position is EXACT in plain
+            // Flickable/if/for chains (the double-count bug is
+            // ListView-only). `window-changed` stays UNBOUND here: grouped
+            // artwork is dispatched in full, id-keyed, by every consumer, so
+            // per-section banding callbacks would be meaningless — sections
+            // window their element mounts only.
             if root.view-mode != "list": AlbumGrid {
                 albums: section.albums;
                 show-favorite: root.show-favorite;
@@ -220,6 +248,11 @@ export component AlbumCollectionView inherits VerticalLayout {
                 card-width: root.card-width;
                 card-height: root.card-height;
                 card-gap: root.card-gap;
+                windowed: root.windowed;
+                visible-top: root.visible-top;
+                visible-height: root.visible-height;
+                content-offset: root.content-offset
+                    + self.absolute-position.y - root.absolute-position.y;
                 open-album(id) => {
                     root.open-album(id);
                 }
