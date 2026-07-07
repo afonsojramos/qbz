@@ -79,8 +79,11 @@ export component LogViewerModal inherits Rectangle {
     height: 100%;
     visible: LogViewerState.open;
     // Advanced controls (level/search/refresh/auto-tail + bundle/upload/open/clear)
-    // hide behind a discreet [+] so the default view is just the log + Copy all.
-    private property <bool> advanced-open: false;
+    // open EXPANDED: the viewer's whole point — especially reached through
+    // Settings > Share logs — is the Upload/bundle actions, and hiding them
+    // behind [+] meant users never found the uploader. The [−] still
+    // collapses to the compact list + Copy all.
+    private property <bool> advanced-open: true;
 
     if LogViewerState.open: Rectangle {
         background: #000000bf;
