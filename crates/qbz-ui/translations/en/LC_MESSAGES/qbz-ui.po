@@ -223,3 +223,7 @@ msgstr "Border"
 
 msgid "Favorite"
 msgstr "Favorite"
+
+# Renderer degradation ladder toast (generic: GL or software rung)
+msgid "Renderer switched automatically — the previous renderer failed to start"
+msgstr "Renderer switched automatically — the previous renderer failed to start"

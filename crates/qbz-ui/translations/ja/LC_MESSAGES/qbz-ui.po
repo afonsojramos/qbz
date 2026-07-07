@@ -4440,3 +4440,7 @@ msgstr "その他"
 
 msgid "Border"
 msgstr "境界線"
+
+# Renderer degradation ladder toast (generic: GL or software rung)
+msgid "Renderer switched automatically — the previous renderer failed to start"
+msgstr "レンダラーを自動的に切り替えました — 前のレンダラーは起動できませんでした"

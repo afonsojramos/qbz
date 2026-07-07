@@ -4481,3 +4481,7 @@ msgstr "OTROS"
 
 msgid "Border"
 msgstr "Borde"
+
+# Renderer degradation ladder toast (generic: GL or software rung)
+msgid "Renderer switched automatically — the previous renderer failed to start"
+msgstr "El renderizador cambió automáticamente — el anterior no pudo iniciar"
