@@ -616,14 +616,20 @@ async fn play_audible(runtime: &Runtime, weak: &slint::Weak<AppWindow>, track_id
 /// Advance past a track whose play failed with a terminal "unavailable"
 /// error, mirroring the Tauri frontend's `autoSkipToNext`: toast, honor
 /// stop-after, bounded consecutive counter, then reuse the real advance
-/// machinery. `after_track_change` re-enters `play_audible`, so the async
-/// recursion is broken with `Box::pin` and bounded by
-/// `MAX_UNAVAILABLE_SKIPS` (counter reset in the poll loop on real audio).
-async fn auto_skip_unavailable(
-    runtime: &Runtime,
-    weak: &slint::Weak<AppWindow>,
+/// machinery. `after_track_change` re-enters `play_audible`, so this is an
+/// async recursion — bounded by `MAX_UNAVAILABLE_SKIPS` (counter reset in
+/// the poll loop on real audio). The signature RETURNS a boxed `dyn Future
+/// + Send` instead of being an `async fn`: the recursion makes the future's
+/// Send-ness self-referential, and with an inferred (`impl Future`) type the
+/// compiler hits a query cycle ("cannot satisfy ...: Send"). Declaring the
+/// concrete boxed type in the signature is what cuts the cycle — the same
+/// shape the `async_recursion` macro expands to.
+fn auto_skip_unavailable<'a>(
+    runtime: &'a Runtime,
+    weak: &'a slint::Weak<AppWindow>,
     failed_track_id: u64,
-) {
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+    Box::pin(async move {
     crate::toast::show_weak(
         weak,
         qbz_i18n::t("This track is no longer available"),
@@ -658,17 +664,10 @@ async fn auto_skip_unavailable(
     }
     if let Some(track) = advance_to_playable(runtime, weak, true).await {
         let next_id = track.id;
-        // Type-erased box: `after_track_change` awaits `play_audible`, which
-        // awaits this function — the `dyn` cut is what makes the async
-        // recursion representable (E0720). `+ Send` is load-bearing: the
-        // trait object only carries the auto traits it names, and
-        // `after_track_change` futures are `tokio::spawn`ed elsewhere — a
-        // `!Send` local held across `.await` would poison every spawn site.
-        let advance: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> =
-            Box::pin(after_track_change(runtime, weak, next_id));
-        advance.await;
+        after_track_change(runtime, weak, next_id).await;
         refresh_sidebar(true);
     }
+    })
 }
 
 /// Audible step for a LOCAL user file: read it off-thread and hand the bytes
