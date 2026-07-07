@@ -1079,6 +1079,10 @@ export global LocalLibraryState {
     in property <bool> tracks-load-failed: false;
     in-out property <int> tracks-next-offset: 0;
     in-out property <string> tracks-search: "";
+    // SQL-side sort (defines the pagination order): "default" | "artist-asc"
+    //   | "artist-desc" | "title-asc" | "title-desc" | "year-desc"
+    //   | "year-asc" | "added-desc"
+    in-out property <string> tracks-sort: "default";
     // Group-by + multi-select (this slice). `tracks-visible` is the
     // group-ordered + search-filtered render model (the list renders THIS).
     in property <[TrackItem]> tracks-visible: [];
@@ -1212,6 +1216,8 @@ export global LocalLibraryActions {
     callback track-action(string /* track id */, string /* action */);
     // Group-by mode (off|album|artist|name), persisted.
     callback tracks-set-group(string /* mode */);
+    // SQL sort key (default|artist-asc|...|added-desc), persisted; page-1 re-query.
+    callback tracks-set-sort(string /* key */);
     // Toggle the multi-select checkbox column.
     callback tracks-toggle-multi-select();
     // Bulk bar action: select-all | clear | queue | play-next | add-to-playlist.

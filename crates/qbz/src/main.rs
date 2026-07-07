@@ -15850,7 +15850,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
     }
 
-    // ---- Tracks tab: group-by + multi-select + bulk ----
+    // ---- Tracks tab: sort + group-by + multi-select + bulk ----
     {
         let weak = window.as_weak();
         window
@@ -15858,6 +15858,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .on_tracks_set_group(move |mode| {
                 if let Some(w) = weak.upgrade() {
                     local_library::set_tracks_group(&w, mode.as_str());
+                }
+            });
+    }
+    {
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<LocalLibraryActions>()
+            .on_tracks_set_sort(move |key| {
+                if let Some(w) = weak.upgrade() {
+                    local_library::set_tracks_sort(&w, key.as_str(), handle.clone());
                 }
             });
     }

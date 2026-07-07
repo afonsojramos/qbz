@@ -1,6 +1,6 @@
-//! Persistence for the LocalLibrary toolbar choices (Tracks group mode) across
-//! restarts. A small json under `<data-dir>/qbz/locallibrary_ui.json`, mirroring
-//! `favorites_prefs.rs`. Search queries are transient, not persisted.
+//! Persistence for the LocalLibrary toolbar choices (Tracks group mode + sort)
+//! across restarts. A small json under `<data-dir>/qbz/locallibrary_ui.json`,
+//! mirroring `favorites_prefs.rs`. Search queries are transient, not persisted.
 
 use std::path::PathBuf;
 
@@ -13,6 +13,8 @@ use crate::{AppWindow, LocalLibraryState};
 struct Prefs {
     #[serde(default = "d_off")]
     tracks_group: String,
+    #[serde(default = "d_default")]
+    tracks_sort: String,
     // Path of the last-opened ephemeral folder, re-scanned on startup. None when
     // no ephemeral session is active.
     #[serde(default)]
@@ -23,6 +25,7 @@ impl Default for Prefs {
     fn default() -> Self {
         Self {
             tracks_group: d_off(),
+            tracks_sort: d_default(),
             ephemeral_folder: None,
         }
     }
@@ -30,6 +33,10 @@ impl Default for Prefs {
 
 fn d_off() -> String {
     "off".to_string()
+}
+
+fn d_default() -> String {
+    "default".to_string()
 }
 
 fn store_path() -> Option<PathBuf> {
@@ -49,9 +56,9 @@ fn read() -> Prefs {
 /// Apply persisted toolbar choices to LocalLibraryState. UI thread.
 pub fn load(window: &AppWindow) {
     let p = read();
-    window
-        .global::<LocalLibraryState>()
-        .set_tracks_group_mode(p.tracks_group.into());
+    let s = window.global::<LocalLibraryState>();
+    s.set_tracks_group_mode(p.tracks_group.into());
+    s.set_tracks_sort(p.tracks_sort.into());
 }
 
 fn write(p: &Prefs) {
@@ -70,10 +77,9 @@ fn write(p: &Prefs) {
 /// the ephemeral-folder path (read-modify-write).
 pub fn save(window: &AppWindow) {
     let mut p = read();
-    p.tracks_group = window
-        .global::<LocalLibraryState>()
-        .get_tracks_group_mode()
-        .into();
+    let s = window.global::<LocalLibraryState>();
+    p.tracks_group = s.get_tracks_group_mode().into();
+    p.tracks_sort = s.get_tracks_sort().into();
     write(&p);
 }
 
