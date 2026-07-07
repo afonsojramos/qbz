@@ -219,6 +219,26 @@ fn clear_loading(weak: &slint::Weak<AppWindow>, track_id: u64) {
 /// before giving up (Tauri #467 parity: `MAX_OFFLINE_SKIPS = 5`).
 const MAX_OFFLINE_SKIPS: usize = 5;
 
+/// Consecutive auto-skips over tracks whose play failed with a TERMINAL
+/// "unavailable" error (Tauri #467 parity: the Svelte playbackService kept
+/// `consecutiveSkips` capped at `MAX_CONSECUTIVE_SKIPS = 5`). Reset by the
+/// poll loop the moment any track actually starts producing audio.
+static UNAVAILABLE_SKIPS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+const MAX_UNAVAILABLE_SKIPS: u32 = 5;
+
+/// True when a stringified play error means the track cannot play now or
+/// ever at any quality — as opposed to a transient network/server failure
+/// (those are already retried with backoff inside the client and must NOT
+/// cost the user a good track). The `ApiError` Display texts survive the
+/// `Result<(), String>` flattening in `Player::play_track` ("Failed to get
+/// stream URL: {ApiError}"), so a substring match is the same pragmatic
+/// contract the Tauri frontend used (`errorStr.includes(...)`).
+fn is_terminal_unavailable(e: &str) -> bool {
+    e.contains("no longer available") // ApiError::TrackUnavailable
+        || e.contains("not streamable") // ApiError::NonStreamable
+        || e.contains("No valid quality available") // ApiError::NoQualityAvailable
+}
+
 /// Offline playability verdict for one queue track (offline-MODE slice 3d).
 #[derive(PartialEq)]
 enum OfflinePlayability {
@@ -575,9 +595,79 @@ async fn play_audible(runtime: &Runtime, weak: &slint::Weak<AppWindow>, track_id
         .await
     {
         log::error!("[qbz-slint] playback: play_track {track_id} failed: {e}");
+        // Superseded fetch: the user already started another play while this
+        // one was resolving — that newer play owns the cursor; do NOT skip.
+        let still_current = PENDING_PLAY_ID.load(std::sync::atomic::Ordering::Relaxed)
+            == track_id;
         // The fetch failed: no audio will advance, so the poll loop would never
         // clear the spinner. Drop it now (only if this play is still current).
         clear_loading(weak, track_id);
+        // Tauri-parity regression fix: an unavailable track used to be
+        // auto-skipped by the frontend (playbackService `autoSkipToNext`,
+        // bounded, issue #467). Without this the queue cursor parks on the
+        // dead track and playback stops. Terminal errors only — transient
+        // failures were already retried by the client and should not skip.
+        if still_current && is_terminal_unavailable(&e) {
+            auto_skip_unavailable(runtime, weak, track_id).await;
+        }
+    }
+}
+
+/// Advance past a track whose play failed with a terminal "unavailable"
+/// error, mirroring the Tauri frontend's `autoSkipToNext`: toast, honor
+/// stop-after, bounded consecutive counter, then reuse the real advance
+/// machinery. `after_track_change` re-enters `play_audible`, so the async
+/// recursion is broken with `Box::pin` and bounded by
+/// `MAX_UNAVAILABLE_SKIPS` (counter reset in the poll loop on real audio).
+async fn auto_skip_unavailable(
+    runtime: &Runtime,
+    weak: &slint::Weak<AppWindow>,
+    failed_track_id: u64,
+) {
+    crate::toast::show_weak(
+        weak,
+        qbz_i18n::t("This track is no longer available"),
+        crate::ToastKind::Warning,
+    );
+    // Stop-after-this-song on the failed track: halt exactly like the
+    // natural end-of-track arm would (no advance, queue intact); the
+    // marker is one-shot and must be consumed here or it would leak onto
+    // a track it was never armed for.
+    if failed_track_id != 0
+        && runtime.core().consume_stop_after_if(failed_track_id).await
+    {
+        let _ = weak.upgrade_in_event_loop(|w| {
+            w.global::<NowPlayingState>().set_playing(false);
+        });
+        return;
+    }
+    let skips = UNAVAILABLE_SKIPS.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+    if skips > MAX_UNAVAILABLE_SKIPS {
+        log::warn!(
+            "[qbz-slint] playback: {MAX_UNAVAILABLE_SKIPS} consecutive unavailable tracks — stopping the skip walk"
+        );
+        crate::toast::show_weak(
+            weak,
+            qbz_i18n::t("No available tracks to play"),
+            crate::ToastKind::Warning,
+        );
+        let _ = weak.upgrade_in_event_loop(|w| {
+            w.global::<NowPlayingState>().set_playing(false);
+        });
+        return;
+    }
+    if let Some(track) = advance_to_playable(runtime, weak, true).await {
+        let next_id = track.id;
+        // Type-erased box: `after_track_change` awaits `play_audible`, which
+        // awaits this function — the `dyn` cut is what makes the async
+        // recursion representable (E0720). `+ Send` is load-bearing: the
+        // trait object only carries the auto traits it names, and
+        // `after_track_change` futures are `tokio::spawn`ed elsewhere — a
+        // `!Send` local held across `.await` would poison every spawn site.
+        let advance: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> =
+            Box::pin(after_track_change(runtime, weak, next_id));
+        advance.await;
+        refresh_sidebar(true);
     }
 }
 
@@ -4290,6 +4380,9 @@ pub fn start_poll_loop(
             // current audio is a different (already-cleared) id.
             if track_id != 0 && is_playing && position > 0 {
                 clear_loading(&weak, track_id);
+                // Real audio ends any unavailable-skip streak (Tauri parity:
+                // `consecutiveSkips = 0` on successful play).
+                UNAVAILABLE_SKIPS.store(0, std::sync::atomic::Ordering::SeqCst);
             } else {
                 // Watchdog: a play the engine accepted but that never advances
                 // (undecodable-but-valid-looking file, zero-frame stream) would

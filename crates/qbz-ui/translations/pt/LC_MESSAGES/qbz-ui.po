@@ -4451,3 +4451,7 @@ msgstr "OUTROS"
 
 msgid "Border"
 msgstr "Borda"
+
+# Unavailable-track auto-skip (Tauri #467 parity)
+msgid "No available tracks to play"
+msgstr "Nenhuma faixa disponível para reprodução"

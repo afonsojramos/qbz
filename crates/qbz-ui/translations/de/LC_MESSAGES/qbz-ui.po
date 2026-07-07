@@ -4451,3 +4451,7 @@ msgstr "SONSTIGES"
 
 msgid "Border"
 msgstr "Rand"
+
+# Unavailable-track auto-skip (Tauri #467 parity)
+msgid "No available tracks to play"
+msgstr "Keine verfügbaren Titel zum Abspielen"
