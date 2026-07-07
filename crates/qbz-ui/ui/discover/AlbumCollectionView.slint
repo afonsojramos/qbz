@@ -175,12 +175,11 @@ export component AlbumCollectionView inherits VerticalLayout {
     in property <length> card-height: 246px;
     in property <length> card-gap: 24px;
     in property <length> list-row-gap: 4px;
-    // Viewport windowing — forwarded to the flat grid AND to each grouped
-    // section grid (each section derives its own offset from an
-    // absolute-position delta at the instance). Grouped sections window their
-    // MOUNTS only; grouped-mode artwork stays full-dispatch (consumers send
-    // the whole set id-keyed), so `window-changed` fires from the flat grid
-    // alone. OFF by default so untouched consumers keep full mounts.
+    // Viewport windowing — forwarded to the FLAT grid only. Grouped sections
+    // keep FULL mounts: deriving a section's offset from an absolute-position
+    // binding re-enters the layout solver ("Recursion detected" panic,
+    // field-hit 2026-07-07 — see the comment at the section grid below).
+    // OFF by default so untouched consumers keep full mounts.
     in property <bool> windowed: false;
     in property <length> visible-top: 0px;
     in property <length> visible-height: 0px;
@@ -228,18 +227,15 @@ export component AlbumCollectionView inherits VerticalLayout {
                     }
                 }
             }
-            // Grid view: a card grid for this section — windowed like the
-            // flat grid. The section's offset inside the scroll content is
-            // root.content-offset (the ACV's own y there, supplied by the
-            // surface) plus this grid's y inside the ACV, measured as the
-            // absolute-position DELTA: self and root live in the same
-            // Flickable content, so the delta is scroll-invariant (both move
-            // together), and absolute-position is EXACT in plain
-            // Flickable/if/for chains (the double-count bug is
-            // ListView-only). `window-changed` stays UNBOUND here: grouped
-            // artwork is dispatched in full, id-keyed, by every consumer, so
-            // per-section banding callbacks would be meaningless — sections
-            // window their element mounts only.
+            // Grid view: a card grid for this section — FULL mounts, NOT
+            // windowed. Windowing a section needs its y inside the scroll
+            // content, and measuring that with an absolute-position BINDING
+            // is a proven runtime panic ("Recursion detected", field-hit on
+            // LL Albums grouped 2026-07-07): evaluating the target-row chain
+            // through absolute-position can re-enter the parent layout
+            // solver mid-pass (the grid's own height/columns read back
+            // self.width). A safe grouped windowing needs Rust-computed
+            // per-section offsets — backlog; sections are the smaller win.
             if root.view-mode != "list": AlbumGrid {
                 albums: section.albums;
                 show-favorite: root.show-favorite;
@@ -248,11 +244,6 @@ export component AlbumCollectionView inherits VerticalLayout {
                 card-width: root.card-width;
                 card-height: root.card-height;
                 card-gap: root.card-gap;
-                windowed: root.windowed;
-                visible-top: root.visible-top;
-                visible-height: root.visible-height;
-                content-offset: root.content-offset
-                    + self.absolute-position.y - root.absolute-position.y;
                 open-album(id) => {
                     root.open-album(id);
                 }
