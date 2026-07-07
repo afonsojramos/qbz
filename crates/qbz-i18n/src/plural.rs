@@ -1,7 +1,7 @@
 //! Minimal gettext `Plural-Forms` evaluator.
 //!
 //! We support the expressions our locales actually use:
-//!   - `nplurals=2; plural=(n != 1);`  (en, es, de, pt)
+//!   - `nplurals=2; plural=(n != 1);`  (en, es, de, pt, nl)
 //!   - `nplurals=2; plural=(n > 1);`   (fr)
 //!   - `nplurals=1; plural=0;`         (ja — no plural distinction)
 //!   - `nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 &&

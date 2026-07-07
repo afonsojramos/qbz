@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::OnceLock;
 
 /// Supported language codes, indexed by the value stored in [`CURRENT`].
-const LANGS: [&str; 7] = ["en", "es", "de", "fr", "pt", "ru", "ja"];
+const LANGS: [&str; 8] = ["en", "es", "de", "fr", "pt", "ru", "ja", "nl"];
 
 /// Embedded `.po` sources. Path is relative to this file
 /// (`crates/qbz-i18n/src/lib.rs`): `../` = `qbz-i18n/`, `../../` = `crates/`.
@@ -25,12 +25,14 @@ const PO_FR: &str = include_str!("../../qbz-ui/translations/fr/LC_MESSAGES/qbz-u
 const PO_PT: &str = include_str!("../../qbz-ui/translations/pt/LC_MESSAGES/qbz-ui.po");
 const PO_RU: &str = include_str!("../../qbz-ui/translations/ru/LC_MESSAGES/qbz-ui.po");
 const PO_JA: &str = include_str!("../../qbz-ui/translations/ja/LC_MESSAGES/qbz-ui.po");
+const PO_NL: &str = include_str!("../../qbz-ui/translations/nl/LC_MESSAGES/qbz-ui.po");
 
-/// Current language index (0=en, 1=es, 2=de, 3=fr, 4=pt, 5=ru, 6=ja). Defaults to en.
+/// Current language index (0=en, 1=es, 2=de, 3=fr, 4=pt, 5=ru, 6=ja, 7=nl). Defaults to en.
 static CURRENT: AtomicU8 = AtomicU8::new(0);
 
 /// Lazily-parsed catalogs, one slot per language.
-static CATALOGS: [OnceLock<Catalog>; 7] = [
+static CATALOGS: [OnceLock<Catalog>; 8] = [
+    OnceLock::new(),
     OnceLock::new(),
     OnceLock::new(),
     OnceLock::new(),
@@ -57,6 +59,7 @@ fn catalog(idx: u8) -> &'static Catalog {
             4 => PO_PT,
             5 => PO_RU,
             6 => PO_JA,
+            7 => PO_NL,
             _ => PO_EN,
         };
         Catalog::parse(LANGS[idx], src)
@@ -68,7 +71,7 @@ fn current_catalog() -> &'static Catalog {
     catalog(CURRENT.load(Ordering::Relaxed))
 }
 
-/// Set the active language. Accepts `"en"|"es"|"de"|"fr"|"pt"`.
+/// Set the active language. Accepts `"en"|"es"|"de"|"fr"|"pt"|"ru"|"ja"|"nl"`.
 /// Unknown codes leave the current language unchanged.
 pub fn set_language(lang: &str) {
     if let Some(idx) = lang_index(lang) {
@@ -256,6 +259,8 @@ mod tests {
         assert_eq!(resolve_auto(), "fr");
         std::env::set_var("LANG", "xx_XX");
         assert_eq!(resolve_auto(), "en");
+        std::env::set_var("LANG", "nl_NL.UTF-8");
+        assert_eq!(resolve_auto(), "nl");
         std::env::set_var("LC_MESSAGES", "de_DE.UTF-8");
         assert_eq!(resolve_auto(), "de");
         std::env::remove_var("LC_MESSAGES");
