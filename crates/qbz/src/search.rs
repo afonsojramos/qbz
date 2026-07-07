@@ -967,7 +967,9 @@ pub async fn load_cortinilla_local(
     let q_log = q.clone();
     let rows: Vec<qbz_library::LocalTrack> = tokio::task::spawn_blocking(move || {
         let mut rows = crate::library_db::with_db(|db| {
-            db.search_with_filter_page(q.trim(), 0, limit, true, exclude_network)
+            // "default" sort: the cortinilla has no sort control; keep the
+            // historical album-grouped order.
+            db.search_with_filter_page(q.trim(), 0, limit, true, exclude_network, "default")
         })
         .unwrap_or_default();
         if plex_enabled {
