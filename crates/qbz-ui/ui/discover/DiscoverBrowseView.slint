@@ -312,6 +312,19 @@ export component DiscoverBrowseView inherits Rectangle {
                     card-height: root.album-h;
                     card-gap: root.gap;
                     list-row-gap: root.list-row-gap;
+                    // Viewport windowing (Phase 1): only cards near the
+                    // visible band mount. The offset is the page's
+                    // padding-top (8px) — the spinner / empty branches are
+                    // mutually exclusive with the grid, so nothing else
+                    // sits above it; the grid's one-viewport margin absorbs
+                    // any small error.
+                    windowed: true;
+                    visible-top: -flick.viewport-y;
+                    visible-height: flick.height;
+                    content-offset: 8px;
+                    // Element windowing only; artwork stays per-page —
+                    // pages arrive index-keyed with covers already on the
+                    // model (id-keyed banding is a future migration).
                     open-album(id) => { root.open-album(id); }
                     open-artist(id) => { root.open-artist(id); }
                     media-action(kind, id, action) => {
