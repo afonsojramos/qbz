@@ -70,6 +70,7 @@
             alsa-lib
             fontconfig
             freetype
+            libjack2
           ];
 
           # The qbz_ui rustc alone peaks ~30 GB; running the test profile on
