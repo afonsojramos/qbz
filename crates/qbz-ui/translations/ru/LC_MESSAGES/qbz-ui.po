@@ -4464,3 +4464,7 @@ msgstr "ДРУГОЕ"
 
 msgid "Border"
 msgstr "Граница"
+
+# Unavailable-track auto-skip (Tauri #467 parity)
+msgid "No available tracks to play"
+msgstr "Нет доступных треков для воспроизведения"

@@ -4481,3 +4481,7 @@ msgstr "OTROS"
 
 msgid "Border"
 msgstr "Borde"
+
+# Unavailable-track auto-skip (Tauri #467 parity)
+msgid "No available tracks to play"
+msgstr "No hay pistas disponibles para reproducir"
