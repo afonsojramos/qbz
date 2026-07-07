@@ -4679,6 +4679,9 @@ export global FavoritesActions {
     callback albums-set-sort(string /* sort key */);
     callback albums-set-group(string /* off | alpha | artist */);
     callback albums-shuffle();
+    // Windowed grid: the visible row band changed (item indices into
+    // albums-visible, prefetch margin included) — dispatch artwork for it.
+    callback albums-window-changed(int /* first */, int /* last */);
     callback unfavorite-track(string /* track id */);
     callback unfavorite-album(string /* album id */);
     callback retry-load();

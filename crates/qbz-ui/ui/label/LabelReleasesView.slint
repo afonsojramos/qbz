@@ -268,6 +268,19 @@ export component LabelReleasesView inherits Rectangle {
                 view-mode: LabelState.view-mode;
                 show-source: false;
                 list-row-gap: root.list-row-gap;
+                // Viewport windowing (Phase 1): only cards near the
+                // visible band mount. The offset approximates the static
+                // content above the grid: 11px padding-top + 22px spacer
+                // + 180px label header + 24px spacer + ~42px toolbar +
+                // 24px spacer ≈ 303px; the grid's one-viewport margin
+                // absorbs the small error.
+                windowed: true;
+                visible-top: -flick.viewport-y;
+                visible-height: flick.height;
+                content-offset: 303px;
+                // Element windowing only; artwork stays per-page — pages
+                // arrive index-keyed with covers already on the model
+                // (id-keyed banding is a future migration).
                 open-album(id) => {
                     root.open-album(id);
                 }

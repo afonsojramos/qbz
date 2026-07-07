@@ -1115,6 +1115,18 @@ export component FavoritesView inherits Rectangle {
                                 view-mode: FavoritesState.albums-view-mode;
                                 is-grouped: FavoritesState.albums-group-mode != "off";
                                 show-source: false;
+                                // Viewport windowing (Phase 1): only cards near the
+                                // visible band mount + get artwork dispatched. The
+                                // offset is the page's padding-top (16px); the grid's
+                                // one-viewport margin absorbs the small extras
+                                // (empty-state texts) above the grid.
+                                windowed: true;
+                                visible-top: -other-flick.viewport-y;
+                                visible-height: other-flick.height;
+                                content-offset: 16px;
+                                window-changed(first, last) => {
+                                    FavoritesActions.albums-window-changed(first, last);
+                                }
                                 open-album(id) => {
                                     root.open-album(id);
                                 }

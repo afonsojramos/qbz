@@ -136,8 +136,12 @@ pub enum ArtworkTarget {
     LocationArtist { index: usize },
     /// A row in FavoritesState.tracks[index].
     FavoriteTrack { index: usize },
-    /// A card in FavoritesState.albums[index].
-    FavoriteAlbum { index: usize },
+    /// A Favorites album cover, addressed BY ID (windowed dispatch over
+    /// `albums-visible` — id-keyed delivery is immune to derive re-sorts
+    /// between dispatch and apply). `gen` is the favorites-albums generation
+    /// at fetch time; a stale cover (the model was replaced by a reload) is
+    /// dropped.
+    FavoriteAlbumById { id: String, gen: u64 },
     /// A card in DiscoverBrowseState.albums[index].
     DiscoverBrowseAlbum { index: usize },
     /// A Local Library album cover, addressed BY ID (windowed dispatch over
@@ -386,8 +390,17 @@ pub fn spawn_loads(jobs: Vec<ArtworkJob>, window: slint::Weak<AppWindow>, cache:
         tokio::spawn(async move {
             let _permit = semaphore.acquire().await.ok()?;
             let decode_size = job.target.decode_size();
-            let (pixels, width, height) =
-                fetch_and_decode(&job.url, &cache, decode_size).await?;
+            let Some((pixels, width, height)) =
+                fetch_and_decode(&job.url, &cache, decode_size).await
+            else {
+                // Failed fetch/decode never reaches apply_artwork — free the
+                // windowed-dispatch dedupe slot here so a later band pass can
+                // retry this cover instead of skipping it for the session.
+                if let ArtworkTarget::FavoriteAlbumById { id, .. } = &job.target {
+                    crate::favorites::album_artwork_job_done(id);
+                }
+                return None;
+            };
             let target = job.target;
             let url = job.url;
             let _ = window.upgrade_in_event_loop(move |w| {
@@ -1217,16 +1230,16 @@ fn apply_artwork(
                 crate::favorites::set_track_artwork(window, &id, image);
             }
         }
-        ArtworkTarget::FavoriteAlbum { index } => {
-            let model = window.global::<crate::FavoritesState>().get_albums();
-            if let Some(mut item) = model.row_data(index) {
-                item.artwork = image.clone();
-                let id = item.id.to_string();
-                model.set_row_data(index, item);
-                // Also reach the rendered visible/grouped model (clones when
-                // a sort/group is active — they don't share `albums`).
-                crate::favorites::set_album_artwork(window, &id, image);
+        ArtworkTarget::FavoriteAlbumById { id, gen } => {
+            // The job is done either way — free its in-flight slot so the
+            // window dispatcher can re-request it after an eviction.
+            crate::favorites::album_artwork_job_done(&id);
+            // Drop the cover if a reload superseded the set it belongs to.
+            if !crate::favorites::albums_gen_current(gen) {
+                return;
             }
+            // Set by id onto the full set + visible + grouped sections.
+            crate::favorites::set_album_artwork(window, &id, image);
         }
         ArtworkTarget::DiscoverBrowseAlbum { index } => {
             let model = window.global::<crate::DiscoverBrowseState>().get_albums();

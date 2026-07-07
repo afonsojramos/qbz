@@ -130,6 +130,7 @@ pub use qbz_slint_common::toast;
 mod tray;
 mod tray_settings;
 mod ui_prefs;
+mod viewport;
 mod whats_new;
 
 use std::sync::Arc;
@@ -2886,7 +2887,17 @@ fn navigate_favorites(
         match favorites::load_favorites(&runtime, tab).await {
             Ok(data) => {
                 let jobs = favorites::artwork_jobs(&data);
+                // WINDOWED artwork for the Albums tab (was: a job for every
+                // favorite album). Reset the pipeline BEFORE apply — apply's
+                // `derive_albums` dispatches the covers itself (flat grid =
+                // viewport band; list/grouped = full set). Other tabs keep
+                // the all-at-once `jobs` dispatch.
+                let is_albums = matches!(&data, favorites::FavData::Albums { .. });
+                let image_cache_for_ui = image_cache.clone();
                 let _ = weak.upgrade_in_event_loop(move |w| {
+                    if is_albums {
+                        favorites::begin_albums_artwork(image_cache_for_ui);
+                    }
                     favorites::apply_favorites(&w, data);
                 });
                 artwork::spawn_loads(jobs, weak.clone(), image_cache.clone());
@@ -18799,7 +18810,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .on_albums_set_view(move |v| {
                 if let Some(w) = weak.upgrade() {
                     w.global::<FavoritesState>().set_albums_view_mode(v);
+                    // Switching to the (non-windowed) list view needs covers
+                    // the grid's window may have evicted.
+                    favorites::albums_view_mode_changed(&w);
                     favorites_prefs::save(&w);
+                }
+            });
+    }
+    {
+        // Windowed albums grid: dispatch covers for the reported row band
+        // and evict the ones far outside it.
+        let weak = window.as_weak();
+        window
+            .global::<FavoritesActions>()
+            .on_albums_window_changed(move |first, last| {
+                if let Some(w) = weak.upgrade() {
+                    favorites::albums_window_changed(&w, first, last);
                 }
             });
     }
