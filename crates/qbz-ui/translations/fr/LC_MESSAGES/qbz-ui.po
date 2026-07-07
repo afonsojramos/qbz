@@ -4458,3 +4458,6 @@ msgstr "Aucune piste disponible à lire"
 # Always-visible log uploader entry (settings sub-nav footer)
 msgid "Share logs"
 msgstr "Partager les journaux"
+# Guest local-only mode disclaimer line (login screen, #553)
+msgid "QBZ can be used as an offline player without a Qobuz™ account (no access to the Qobuz™ library)."
+msgstr "QBZ peut être utilisé comme lecteur hors ligne sans compte Qobuz™ (pas d'accès à la bibliothèque Qobuz™)."

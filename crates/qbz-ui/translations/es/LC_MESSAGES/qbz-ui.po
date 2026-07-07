@@ -4488,3 +4488,6 @@ msgstr "No hay pistas disponibles para reproducir"
 # Always-visible log uploader entry (settings sub-nav footer)
 msgid "Share logs"
 msgstr "Compartir registros"
+# Guest local-only mode disclaimer line (login screen, #553)
+msgid "QBZ can be used as an offline player without a Qobuz™ account (no access to the Qobuz™ library)."
+msgstr "QBZ puede usarse como reproductor sin conexión sin una cuenta de Qobuz™ (sin acceso a la biblioteca de Qobuz™)."
