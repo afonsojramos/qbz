@@ -78,12 +78,11 @@ export component LogViewerModal inherits Rectangle {
     width: 100%;
     height: 100%;
     visible: LogViewerState.open;
-    // Advanced controls (level/search/refresh/auto-tail + bundle/upload/open/clear)
-    // open EXPANDED: the viewer's whole point — especially reached through
-    // Settings > Share logs — is the Upload/bundle actions, and hiding them
-    // behind [+] meant users never found the uploader. The [−] still
-    // collapses to the compact list + Copy all.
-    private property <bool> advanced-open: true;
+    // Advanced controls (level/search/refresh/auto-tail + bundle/open/clear)
+    // hide behind a discreet [+]: the default view must serve FAST — the log
+    // list plus exactly TWO buttons, Copy all and Upload (the whole point of
+    // reaching this through Settings > Share logs).
+    private property <bool> advanced-open: false;
 
     if LogViewerState.open: Rectangle {
         background: #000000bf;
@@ -401,8 +400,10 @@ export component LogViewerModal inherits Rectangle {
                     }
                 }
 
-                // ---- Uploaded URL (advanced) — shown after upload, with a copy button.
-                if root.advanced-open && LogViewerState.uploaded-url != "": Rectangle {
+                // ---- Uploaded URL — shown after upload, with a copy button.
+                // NOT gated on advanced: Upload lives in the footer now, so
+                // the resulting link must show in the compact view too.
+                if LogViewerState.uploaded-url != "": Rectangle {
                     height: 32px;
                     border-radius: Radius.sm;
                     border-width: 1px;
@@ -458,7 +459,7 @@ export component LogViewerModal inherits Rectangle {
                     }
                 }
 
-                // ---- Advanced actions (behind [+]): bundle / upload / open file / clear.
+                // ---- Advanced actions (behind [+]): bundle / open file / clear.
                 if root.advanced-open: HorizontalLayout {
                     spacing: 10px;
                     IconTextButton {
@@ -466,14 +467,6 @@ export component LogViewerModal inherits Rectangle {
                         icon: @image-url("../assets/icons/copy.svg");
                         clicked => {
                             LogViewerState.copy-bundle();
-                        }
-                    }
-                    IconTextButton {
-                        label: LogViewerState.uploading ? @tr("Uploading…") : @tr("Upload (public)");
-                        icon: @image-url("../assets/icons/cloud-upload.svg");
-                        enabled: !LogViewerState.uploading;
-                        clicked => {
-                            LogViewerState.upload();
                         }
                     }
                     Rectangle { horizontal-stretch: 1; }
@@ -494,7 +487,8 @@ export component LogViewerModal inherits Rectangle {
                     }
                 }
 
-                // ---- Footer: Copy all — the only always-visible button.
+                // ---- Footer, always visible: Copy all + Upload — the two
+                // actions the modal exists for (share a log, fast).
                 HorizontalLayout {
                     spacing: 10px;
                     IconTextButton {
@@ -504,6 +498,14 @@ export component LogViewerModal inherits Rectangle {
                             : @image-url("../assets/icons/copy.svg");
                         clicked => {
                             LogViewerState.copy-all();
+                        }
+                    }
+                    IconTextButton {
+                        label: LogViewerState.uploading ? @tr("Uploading…") : @tr("Upload (public)");
+                        icon: @image-url("../assets/icons/cloud-upload.svg");
+                        enabled: !LogViewerState.uploading;
+                        clicked => {
+                            LogViewerState.upload();
                         }
                     }
                     Rectangle { horizontal-stretch: 1; }
