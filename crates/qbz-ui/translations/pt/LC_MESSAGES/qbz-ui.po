@@ -4451,3 +4451,7 @@ msgstr "OUTROS"
 
 msgid "Border"
 msgstr "Borda"
+
+# Always-visible log uploader entry (settings sub-nav footer)
+msgid "Share logs"
+msgstr "Compartilhar registros"

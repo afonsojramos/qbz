@@ -4440,3 +4440,7 @@ msgstr "その他"
 
 msgid "Border"
 msgstr "境界線"
+
+# Always-visible log uploader entry (settings sub-nav footer)
+msgid "Share logs"
+msgstr "ログを共有"

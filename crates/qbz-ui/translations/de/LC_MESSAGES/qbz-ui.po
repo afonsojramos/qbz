@@ -4451,3 +4451,7 @@ msgstr "SONSTIGES"
 
 msgid "Border"
 msgstr "Rand"
+
+# Always-visible log uploader entry (settings sub-nav footer)
+msgid "Share logs"
+msgstr "Protokolle teilen"

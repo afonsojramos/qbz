@@ -4464,3 +4464,7 @@ msgstr "ДРУГОЕ"
 
 msgid "Border"
 msgstr "Граница"
+
+# Always-visible log uploader entry (settings sub-nav footer)
+msgid "Share logs"
+msgstr "Поделиться журналами"
