@@ -600,6 +600,10 @@ export component SearchResultsView inherits Rectangle {
                     if SearchState.artists-carousel.length > 0: ArtistCarousel {
                         horizontal-stretch: 1;
                         title: @tr("Artists");
+                        // Search cards fill the subtitle slot ("N albums") +
+                        // Follow chip — same stack Recommendations sizes at
+                        // 256px; the 220px default clips the chip.
+                        card-height: 256px;
                         artists: SearchState.artists-carousel;
                         show-view-all: true;
                         artist-clicked(id) => { root.open-artist(id); }
@@ -610,6 +614,7 @@ export component SearchResultsView inherits Rectangle {
                 // Artists carousel when there is no most-popular hero.
                 if SearchState.tab == 0 && SearchState.most-popular-kind == "" && SearchState.artists.length > 0: ArtistCarousel {
                     title: @tr("Artists");
+                    card-height: 256px;
                     artists: SearchState.artists;
                     show-view-all: true;
                     artist-clicked(id) => { root.open-artist(id); }
