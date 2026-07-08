@@ -195,6 +195,12 @@ pub fn classify_release_type(track_count: Option<u32>) -> &'static str {
 /// (single-source Qobuz context — hide the column with `show-source: false`).
 pub fn to_item(card: AlbumCard) -> AlbumCardItem {
     AlbumCardItem {
+        // Favorite heart state from the login-seeded cache, so every card
+        // surface fed by this funnel (album suggestions, label, awards, …)
+        // renders the filled heart in sync with the album-detail header.
+        // Local Library ids never match a Qobuz favorite id (and LL hides
+        // the heart), so the lookup is harmless there.
+        is_favorite: crate::fav_cache::is_album_favorite(&card.id),
         id: card.id.into(),
         title: card.title.into(),
         artist: card.artist.into(),

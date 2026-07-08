@@ -527,6 +527,9 @@ fn album_items(cards: &[AlbumCard]) -> Vec<AlbumCardItem> {
     cards
         .iter()
         .map(|c| AlbumCardItem {
+            // Favorite heart state from the login-seeded cache (kept live by
+            // main::set_album_row_favorite when a favorite toggles anywhere).
+            is_favorite: crate::fav_cache::is_album_favorite(&c.id),
             id: c.id.clone().into(),
             title: c.title.clone().into(),
             artist: c.artist.clone().into(),

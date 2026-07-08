@@ -592,6 +592,9 @@ fn format_rate(rate: f64) -> String {
 /// Convert one `CardData` into the Slint `AlbumCardItem`.
 pub(crate) fn card_to_item(card: CardData) -> AlbumCardItem {
     AlbumCardItem {
+        // Favorite heart state from the login-seeded cache (kept live by
+        // main::set_album_row_favorite when a favorite toggles anywhere).
+        is_favorite: crate::fav_cache::is_album_favorite(&card.id),
         id: card.id.into(),
         title: card.title.into(),
         artist: card.artist.into(),
@@ -609,7 +612,6 @@ pub(crate) fn card_to_item(card: CardData) -> AlbumCardItem {
         quality_detail: card.quality_detail.into(),
         track_count: card.track_count.into(),
         plain_year: card.plain_year.into(),
-        is_favorite: false,
         removing: false,
         selected: false,
     }

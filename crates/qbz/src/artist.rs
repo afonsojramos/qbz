@@ -595,6 +595,9 @@ pub(crate) fn card_to_item(card: CardData) -> AlbumCardItem {
     // so re-route year through that field instead of changing the
     // shared card primitive.
     AlbumCardItem {
+        // Favorite heart state from the login-seeded cache (kept live by
+        // main::set_album_row_favorite when a favorite toggles anywhere).
+        is_favorite: crate::fav_cache::is_album_favorite(&card.id),
         id: card.id.into(),
         title: card.title.into(),
         artist: card.year.clone().into(),
@@ -946,6 +949,44 @@ pub fn filter_artist(window: &AppWindow, query: &str) {
     state.set_top_tracks(ModelRc::new(VecModel::from(filtered_tracks)));
     state.set_appears_on(ModelRc::new(VecModel::from(filtered_appears)));
     state.set_release_sections(ModelRc::new(VecModel::from(filtered_sections)));
+}
+
+/// Flip the favorite heart on every discography card matching `album_id`:
+/// the visible release sections, the last-release highlight card, and the
+/// FULL section cache the in-page search rebuilds from (without the cache
+/// pass, clearing a search filter would restore a stale heart). Called by
+/// `main::set_album_row_favorite` whenever an album favorite toggles.
+pub fn set_release_card_favorite(window: &AppWindow, album_id: &str, favorite: bool) {
+    let flip = |model: &ModelRc<AlbumCardItem>| {
+        for i in 0..model.row_count() {
+            if let Some(mut item) = model.row_data(i) {
+                if item.id == album_id && item.is_favorite != favorite {
+                    item.is_favorite = favorite;
+                    model.set_row_data(i, item);
+                }
+            }
+        }
+    };
+    let state = window.global::<ArtistState>();
+    let sections = state.get_release_sections();
+    for s in 0..sections.row_count() {
+        if let Some(section) = sections.row_data(s) {
+            flip(&section.albums);
+        }
+    }
+    let mut last = state.get_last_release();
+    if last.id == album_id && last.is_favorite != favorite {
+        last.is_favorite = favorite;
+        state.set_last_release(last);
+    }
+    // The FULL cache shares the visible sections' ModelRc while no filter is
+    // active (the `!= favorite` guard makes the second pass a no-op then);
+    // under a filter it is a separate copy that must be flipped too.
+    FULL_RELEASE_SECTIONS.with(|cell| {
+        for section in cell.borrow().iter() {
+            flip(&section.albums);
+        }
+    });
 }
 
 /// Clear artist state before loading a new artist.
