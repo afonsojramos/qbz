@@ -201,6 +201,18 @@ export global HomeActions {
     callback toggle-playlist-tag(string);
     // Clear all selected category tags (back to showing every playlist).
     callback clear-playlist-tags();
+    // "View all" on the Recently Played Albums rail -> the full-page listing
+    // (RecentAlbumsView), fed from the local play-history store.
+    callback open-recent-albums();
+}
+
+// RecentAlbumsView — the full "Recently Played Albums" page opened from the
+// Home rail's "View all". Fed from the LOCAL play-history store (capped at
+// 24, see crate::recently), so it needs no paging/search state; the loader
+// repopulates `albums` on every navigation.
+export global RecentAlbumsState {
+    in property <[AlbumCardItem]> albums: [];
+    in property <bool> loading: false;
 }
 
 // ---------------------------------------------------------------------------
@@ -967,7 +979,7 @@ export global DragActions {
 }
 
 // Which content view the shell shows.
-export enum ContentView { home, album, artist, artist-releases, settings, search, musician, label, label-releases, award, award-albums, location, favorites, mix, playlist, discover-browse, playlist-manager, offline-manager, blacklist-manager, local-library, local-album, mixtapes, collections, mixtape-detail, discography-builder, purchases, purchase-album }
+export enum ContentView { home, album, artist, artist-releases, settings, search, musician, label, label-releases, award, award-albums, location, favorites, mix, playlist, discover-browse, recent-albums, playlist-manager, offline-manager, blacklist-manager, local-library, local-album, mixtapes, collections, mixtape-detail, discography-builder, purchases, purchase-album }
 
 // In-app toast (transient notification). Mirrors Tauri's toastStore:
 // a single toast at a time (a new one replaces the current), auto-hidden

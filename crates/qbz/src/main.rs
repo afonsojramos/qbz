@@ -2338,6 +2338,7 @@ fn scope_for(entry: &nav::NavEntry) -> String {
         nav::NavEntry::Favorites { tab } => format!("fav:{tab}"),
         nav::NavEntry::LocalLibrary { tab } => format!("ll:{tab}"),
         nav::NavEntry::DiscoverBrowse { .. } => "discover-browse".into(),
+        nav::NavEntry::RecentAlbums => "recent-albums".into(),
         nav::NavEntry::Mix { .. } => "mix".into(),
         nav::NavEntry::Playlist(_) => "playlist".into(),
         nav::NavEntry::PlaylistManager => "playlist-manager".into(),
@@ -2518,6 +2519,9 @@ fn apply_entry(
                 title,
                 current_genre_filter(),
             );
+        }
+        nav::NavEntry::RecentAlbums => {
+            navigate_recent_albums(weak.clone(), handle, image_cache.clone());
         }
         nav::NavEntry::Mix { kind } => {
             navigate_mix(runtime.clone(), weak.clone(), handle, image_cache.clone(), kind);
@@ -2866,6 +2870,71 @@ fn navigate_award_albums(
                     s.set_load_error(true);
                 });
             }
+        }
+    });
+}
+
+/// Open the full "Recently Played Albums" page (the Home rail's "View all").
+/// LOCAL data: the play-history album store (crate::recently) mapped through
+/// the same card funnel as the rail (`home::recent_album_cards` — blacklist
+/// filter + date localization; `home::card_to_item` — is-favorite seeding),
+/// so no runtime and no error branch (missing store = empty list). Artwork
+/// splits Qobuz covers (plain loader) from Plex/local covers (source-aware
+/// funnel), mirroring the rail's dispatch in `reload_home`.
+fn navigate_recent_albums(
+    weak: slint::Weak<AppWindow>,
+    handle: &tokio::runtime::Handle,
+    image_cache: artwork::ImageCache,
+) {
+    handle.spawn(async move {
+        let _ = weak.upgrade_in_event_loop(|w| {
+            let s = w.global::<RecentAlbumsState>();
+            s.set_loading(true);
+            s.set_albums(slint::ModelRc::new(slint::VecModel::from(
+                Vec::<AlbumCardItem>::new(),
+            )));
+            w.global::<NavState>().set_view(ContentView::RecentAlbums);
+        });
+        // Local file read + blacklist filter — cheap, but keep it off the UI
+        // thread like the sibling loaders.
+        let cards = home::recent_album_cards();
+        let mut jobs: Vec<artwork::ArtworkJob> = Vec::new();
+        let mut plex_jobs: Vec<artwork::ArtworkJob> = Vec::new();
+        for (idx, card) in cards.iter().enumerate() {
+            if card.artwork_url.is_empty() {
+                continue;
+            }
+            let job = artwork::ArtworkJob {
+                target: artwork::ArtworkTarget::RecentAlbumsPage { idx },
+                url: card.artwork_url.clone(),
+            };
+            if card.source == "plex" || card.source == "local" {
+                plex_jobs.push(job);
+            } else {
+                jobs.push(job);
+            }
+        }
+        let weak_for_plex = weak.clone();
+        let image_cache_plex = image_cache.clone();
+        let _ = weak.clone().upgrade_in_event_loop(move |w| {
+            // card_to_item seeds is-favorite from the login cache — UI thread,
+            // same as apply_home.
+            let items: Vec<AlbumCardItem> =
+                cards.into_iter().map(home::card_to_item).collect();
+            let s = w.global::<RecentAlbumsState>();
+            s.set_albums(slint::ModelRc::new(slint::VecModel::from(items)));
+            s.set_loading(false);
+        });
+        artwork::spawn_loads(jobs, weak, image_cache);
+        if !plex_jobs.is_empty() {
+            let plex = crate::plex_settings::get();
+            artwork::spawn_local_or_plex_loads(
+                plex_jobs,
+                plex.base_url,
+                plex.token,
+                weak_for_plex,
+                image_cache_plex,
+            );
         }
     });
 }
@@ -14910,6 +14979,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if tab.as_str() == "recommendations" {
                         external_reco::ensure_loaded(&runtime, &weak, &handle, &image_cache);
                     }
+                }
+            });
+    }
+
+    // Home "Recently Played Albums" rail "View all" -> the full page listing
+    // the local play-history albums (mirrors AwardActions.open-albums: record
+    // history, navigate, refresh the nav flags).
+    {
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
+        window
+            .global::<HomeActions>()
+            .on_open_recent_albums(move || {
+                nav::record(nav::NavEntry::RecentAlbums);
+                navigate_recent_albums(weak.clone(), &handle, image_cache.clone());
+                if let Some(w) = weak.upgrade() {
+                    update_nav_flags(&w);
                 }
             });
     }
