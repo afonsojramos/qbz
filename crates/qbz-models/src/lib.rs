@@ -31,6 +31,7 @@
 
 pub mod error;
 pub mod events;
+pub mod lenient;
 pub mod mixtape;
 pub mod playback;
 pub mod purchase_serde;
@@ -41,6 +42,7 @@ pub mod types;
 // Re-export commonly used types at crate root
 pub use error::{QbzError, QbzResult};
 pub use events::CoreEvent;
+pub use lenient::{parse_items_array, parse_items_lenient};
 pub use playback::{PlaybackState, PlaybackStatus, QueueState, QueueTrack, RepeatMode};
 pub use source::{plex_thumb_url, ArtworkRef, PlaybackSource, TrackOriginTag};
 pub use traits::{FrontendAdapter, LoggingAdapter, NoOpAdapter};
