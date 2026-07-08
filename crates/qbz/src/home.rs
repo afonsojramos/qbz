@@ -37,6 +37,21 @@ pub struct HomeData {
     /// Category tags for the Qobuz Playlists multi-select filter: (slug,
     /// localized name). Empty when the index carries no `playlists_tags`.
     pub playlist_tags: Vec<(String, String)>,
+    /// "Library Albums" rail (#566) — the user's favorite albums from the
+    /// SAME pipeline For You uses (`foryou::favorite_album_cards`), fetched
+    /// concurrently with the discover index. Feeds
+    /// `HomeState.favorite-albums`; the view arm self-hides while empty.
+    pub favorite_albums: Vec<crate::foryou::AlbumCard>,
+    /// "Release Watch" rail (#566) — same pipeline as For You
+    /// (`foryou::fetch_release_watch`, blacklist-filtered), fetched
+    /// concurrently. Feeds `HomeState.release-watch`; self-hides while empty.
+    pub release_watch: Vec<crate::foryou::AlbumCard>,
+    /// "Your Top Artists" rail (#566) — same pipeline as For You
+    /// (`foryou::top_artist_cards`), fetched concurrently. Feeds
+    /// `HomeState.top-artists`; self-hides while empty. (qobuzMixes, the
+    /// fourth ported Tauri-Home section, is static navigation tiles — no
+    /// data field needed.)
+    pub top_artists: Vec<crate::foryou::ArtistSlim>,
 }
 
 thread_local! {
@@ -147,11 +162,18 @@ pub async fn load_home<A>(
 where
     A: FrontendAdapter + Send + Sync + 'static,
 {
-    let response = runtime
-        .core()
-        .get_discover_index(genre_ids)
-        .await
-        .map_err(|e| e.to_string())?;
+    // The personalized Home rails (#566: Library Albums / Release Watch /
+    // Your Top Artists) resolve CONCURRENTLY with the index so they add no
+    // latency to the home load. Fetched unconditionally (like the
+    // Qobuzissimes cache-pool precedent below): the configurator re-render
+    // is cache-only, so enabling a section must find its data populated.
+    let (response, favorite_albums, release_watch, top_artists) = futures_util::join!(
+        runtime.core().get_discover_index(genre_ids),
+        crate::foryou::favorite_album_cards(runtime),
+        crate::foryou::fetch_release_watch(runtime),
+        crate::foryou::top_artist_cards(runtime),
+    );
+    let response = response.map_err(|e| e.to_string())?;
     let mut containers = response.containers;
 
     // T8: drop blacklisted DiscoverAlbums (ANY of artists[], featured-aware)
@@ -335,6 +357,9 @@ where
         playlists,
         editor_playlists,
         playlist_tags,
+        favorite_albums,
+        release_watch,
+        top_artists,
     })
 }
 
@@ -688,12 +713,40 @@ fn descriptor_section(data: &SectionData) -> DiscoverSection {
     }
 }
 
+/// SINGLE SOURCE OF TRUTH for what the Home / Editor's Picks repeater can
+/// actually render (#566): the section ids `HomeView.slint`'s delegate
+/// if-chain has arms for. `descriptors_for` drops any enabled id NOT in this
+/// set, so a stale persisted pref (e.g. qobuzMixes / releaseWatch / topArtists,
+/// removed from the Home defaults 2026-07) can never emit an armless
+/// descriptor again — an enabled section that renders nothing. Belt and
+/// suspenders with `reconcile_list` (qbz-app), which already scrubs ids
+/// absent from the tab defaults at load time. Extend this list IN THE SAME
+/// CHANGE that adds a new arm to HomeView.slint.
+const HOME_RENDERABLE: &[DiscoverySectionId] = &[
+    DiscoverySectionId::NewReleases,
+    DiscoverySectionId::PressAwards,
+    DiscoverySectionId::IdealDiscography,
+    DiscoverySectionId::EditorPicks,
+    DiscoverySectionId::Qobuzissimes,
+    DiscoverySectionId::MostStreamed,
+    DiscoverySectionId::QobuzPlaylists,
+    DiscoverySectionId::RecentlyPlayedAlbums,
+    DiscoverySectionId::ContinueListening,
+    DiscoverySectionId::FavoriteAlbums,
+    DiscoverySectionId::QobuzMixes,
+    DiscoverySectionId::ReleaseWatch,
+    DiscoverySectionId::TopArtists,
+];
+
 /// Build one tab's ordered ENABLED descriptor list from `prefs` + the cached
 /// section data. Album-carousel ids embed their `DiscoverSection` (Home/Editor
 /// share the Carousel component but have no per-id HomeState field). The
 /// fixed-data ids (qobuzPlaylists / continueListening / mostStreamed-slim) and
 /// the always-present-with-placeholder ids (recentlyPlayedAlbums on Home) bind
-/// HomeState fields in the view; they carry an empty `section`.
+/// HomeState fields in the view; they carry an empty `section` — as do the
+/// #566 ported rails: favoriteAlbums / releaseWatch / topArtists bind their
+/// HomeState fields and self-hide while empty; qobuzMixes is static
+/// navigation tiles, always rendered when enabled (Tauri parity).
 ///
 /// **Empty-section policy (b):** an album-carousel id with no cached data is
 /// DROPPED (no backing `SectionData` → nothing to render, and these have no
@@ -706,6 +759,11 @@ fn descriptors_for(prefs: &DiscoverPrefs, tab: DiscoveryTab, cached: &[SectionDa
     let editor = tab == DiscoveryTab::EditorPicks;
     let mut out = Vec::new();
     for id in prefs.enabled_ordered(tab) {
+        // #566 structural guard: skip ids the HomeView repeater has no arm
+        // for (stale persisted prefs) instead of emitting an invisible row.
+        if !HOME_RENDERABLE.contains(&id) {
+            continue;
+        }
         // mostStreamed renders as an album carousel on Editor's Picks, a slim
         // grid on Home — encode that in `kind` so the delegate dispatches it
         // without reading active-tab.
@@ -992,6 +1050,21 @@ pub fn apply_home(window: &AppWindow, data: HomeData) {
     state.set_popular(ModelRc::new(VecModel::from(popular)));
     state.set_recent(ModelRc::new(VecModel::from(recent)));
     state.set_recent_albums(ModelRc::new(VecModel::from(recent_albums)));
+    // The #566 ported rails — same section builders + title msgids as their
+    // For You twins (foryou::apply_favorite_albums / apply_release_watch /
+    // apply_top_artists), separate lifecycles. Top Artists' title lives in
+    // the HomeView arm (@tr, like ForYouView's) — its model is a bare list.
+    state.set_favorite_albums(crate::foryou::section(
+        &qbz_i18n::t("Library Albums"),
+        &data.favorite_albums,
+    ));
+    state.set_release_watch(crate::foryou::section(
+        &qbz_i18n::t("Release Watch"),
+        &data.release_watch,
+    ));
+    state.set_top_artists(ModelRc::new(VecModel::from(crate::foryou::artist_items(
+        &data.top_artists,
+    ))));
     state.set_playlists(ModelRc::new(VecModel::from(home_playlists)));
     state.set_playlist_tags(ModelRc::new(VecModel::from(tag_items)));
     state.set_playlist_tag_count(0);

@@ -136,7 +136,10 @@ fn map_artist(artist: Artist, following: bool) -> ArtistSlim {
 // orchestrator can fire its apply the moment the call resolves.
 // ---------------------------------------------------------------------------
 
-async fn fetch_release_watch<A>(runtime: &Arc<AppRuntime<A>>) -> Vec<AlbumCard>
+/// `pub(crate)` since #566: Home's Release Watch rail (`home::load_home`)
+/// fetches through this SAME pipeline (blacklist filter included) so both
+/// tabs render identical data.
+pub(crate) async fn fetch_release_watch<A>(runtime: &Arc<AppRuntime<A>>) -> Vec<AlbumCard>
 where
     A: FrontendAdapter + Send + Sync + 'static,
 {
@@ -421,6 +424,17 @@ fn top_artist_slims(fav_artists: &[Artist]) -> Vec<ArtistSlim> {
         .collect()
 }
 
+/// The full "Your Top Artists" data pipeline (favorite artists -> cap 18,
+/// following=true) as one call. Shared with Home (#566), mirroring
+/// [`favorite_album_cards`]: For You's own `artists_branch` keeps the pieces
+/// because it also needs the raw `Vec<Artist>` for To-Follow / Spotlight.
+pub(crate) async fn top_artist_cards<A>(runtime: &Arc<AppRuntime<A>>) -> Vec<ArtistSlim>
+where
+    A: FrontendAdapter + Send + Sync + 'static,
+{
+    top_artist_slims(&fetch_fav_artists(runtime).await)
+}
+
 /// Rediscover — favorite albums the user hasn't returned to lately. Prefers the
 /// reco store's "forgotten favorites" (favorited, not played in 30d, from the
 /// Tauri-shared events.db) when warm; falls back to "not in the local recents
@@ -460,6 +474,22 @@ fn order_by_score(mut albums: Vec<Album>, scored: Option<&[String]>) -> Vec<Albu
 
 fn build_favorite_albums(fav_albums: &[Album]) -> Vec<AlbumCard> {
     fav_albums.iter().take(18).cloned().map(map_album).collect()
+}
+
+/// The full "Library Albums" data pipeline (fetch -> taste-order -> cap 18)
+/// as one call. Shared with Home (#566): `home::load_home` populates
+/// `HomeState.favorite-albums` from this SAME pipeline, so the Home rail and
+/// the For You rail render identical data. For You's own `albums_branch`
+/// keeps calling the pieces directly because it also needs the un-capped
+/// `Vec<Album>` for Rediscover / Radio / the genre backfill.
+pub(crate) async fn favorite_album_cards<A>(runtime: &Arc<AppRuntime<A>>) -> Vec<AlbumCard>
+where
+    A: FrontendAdapter + Send + Sync + 'static,
+{
+    let fav_albums = fetch_fav_albums(runtime).await;
+    let scored = crate::reco::scored_favorite_album_ids(80);
+    let fav_albums = order_by_score(fav_albums, scored.as_deref());
+    build_favorite_albums(&fav_albums)
 }
 
 /// Radio Stations — album-seeded tiles from recent + favorite albums,
@@ -533,7 +563,9 @@ fn album_items(cards: &[AlbumCard]) -> Vec<AlbumCardItem> {
         .collect()
 }
 
-fn artist_items(artists: &[ArtistSlim]) -> Vec<SlimItem> {
+/// `pub(crate)` since #566: `home::apply_home` reuses it for the Home
+/// "Your Top Artists" rail so both tabs map artists -> items identically.
+pub(crate) fn artist_items(artists: &[ArtistSlim]) -> Vec<SlimItem> {
     artists
         .iter()
         .map(|a| SlimItem {
@@ -548,7 +580,10 @@ fn artist_items(artists: &[ArtistSlim]) -> Vec<SlimItem> {
         .collect()
 }
 
-fn section(title: &str, cards: &[AlbumCard]) -> DiscoverSection {
+/// Build a `DiscoverSection` from album cards. `pub(crate)` since #566:
+/// `home::apply_home` reuses it for the Home "Library Albums" rail so both
+/// tabs map cards -> items identically (incl. the fav-cache heart state).
+pub(crate) fn section(title: &str, cards: &[AlbumCard]) -> DiscoverSection {
     DiscoverSection {
         title: title.into(),
         // For You sections have no Discover full-list page.

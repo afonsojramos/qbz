@@ -721,6 +721,32 @@ async fn reload_home(
                 }
             }
 
+            // #566 ported-rail covers — Library Albums / Release Watch are
+            // Qobuz catalog albums and Top Artists are Qobuz artist images,
+            // so the plain loader applies (same as their For You twins).
+            // Prefetched regardless of the pref state, like the slim grids
+            // above: the models are populated either way and the configurator
+            // re-render is cache-only, so enabling a section must find its
+            // covers ready. (qobuzMixes is static tiles — no artwork.)
+            jobs.extend(data.favorite_albums.iter().enumerate().filter_map(|(idx, card)| {
+                (!card.artwork_url.is_empty()).then(|| artwork::ArtworkJob {
+                    target: artwork::ArtworkTarget::HomeFavoriteAlbum { idx },
+                    url: card.artwork_url.clone(),
+                })
+            }));
+            jobs.extend(data.release_watch.iter().enumerate().filter_map(|(idx, card)| {
+                (!card.artwork_url.is_empty()).then(|| artwork::ArtworkJob {
+                    target: artwork::ArtworkTarget::HomeReleaseWatchAlbum { idx },
+                    url: card.artwork_url.clone(),
+                })
+            }));
+            jobs.extend(data.top_artists.iter().enumerate().filter_map(|(idx, artist)| {
+                (!artist.artwork_url.is_empty()).then(|| artwork::ArtworkJob {
+                    target: artwork::ArtworkTarget::HomeTopArtist { idx },
+                    url: artist.artwork_url.clone(),
+                })
+            }));
+
             // Qobuz Playlists row covers for the active tab (single-cover,
             // Qobuz CDN URLs → the plain loader, never the local/Plex funnel).
             let empty_playlists: Vec<home::PlaylistCardData> = Vec::new();
