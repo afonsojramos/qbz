@@ -11,6 +11,8 @@ import { Typography } from "../foundation/typography.slint";
 import { HomeState, HomeActions, DiscoverState, DiscoverActions, GenreFilterState, GenreFilterActions, NavState, ContentView, ShellState, SettingsState } from "../state.slint";
 import { Carousel } from "Carousel.slint";
 import { SlimCarousel } from "SlimCarousel.slint";
+import { ArtistCarousel } from "ArtistCarousel.slint";
+import { QobuzMixesRow } from "QobuzMixesRow.slint";
 import { PlaylistCarousel } from "PlaylistCarousel.slint";
 import { PlaylistTagFilter } from "PlaylistTagFilter.slint";
 import { HomeSkeleton } from "HomeSkeleton.slint";
@@ -419,6 +421,61 @@ export component HomeView inherits Rectangle {
                         items: HomeState.popular;
                         item-clicked(id) => {
                             root.album-clicked(id);
+                        }
+                    }
+
+                    // Library Albums (#566) — the user's favorite albums,
+                    // mirroring the For You favoriteAlbums carousel. Data +
+                    // localized title are pushed by Rust into
+                    // HomeState.favorite-albums; self-hides while empty
+                    // (no placeholder, 1:1 with the For You arm).
+                    if desc.id == "favoriteAlbums"
+                        && HomeState.favorite-albums.albums.length > 0: Carousel {
+                        section: HomeState.favorite-albums;
+                        album-clicked(id) => {
+                            root.album-clicked(id);
+                        }
+                        media-action(kind, id, action) => {
+                            root.media-action(kind, id, action);
+                        }
+                    }
+
+                    // Qobuz Mixes (#566) — static navigation tiles, ALWAYS
+                    // rendered when enabled (no data gate; 1:1 with the For
+                    // You arm and Tauri Home).
+                    if desc.id == "qobuzMixes": QobuzMixesRow {
+                        open-mix(which) => {
+                            root.media-action("mix", which, "open");
+                        }
+                    }
+
+                    // Release Watch (#566) — album carousel, mirroring the
+                    // For You releaseWatch arm; data + localized title pushed
+                    // by Rust into HomeState.release-watch. Self-hides while
+                    // empty.
+                    if desc.id == "releaseWatch"
+                        && HomeState.release-watch.albums.length > 0: Carousel {
+                        section: HomeState.release-watch;
+                        album-clicked(id) => {
+                            root.album-clicked(id);
+                        }
+                        media-action(kind, id, action) => {
+                            root.media-action(kind, id, action);
+                        }
+                    }
+
+                    // Your Top Artists (#566) — artist carousel, mirroring
+                    // the For You topArtists arm (title @tr'd here, like For
+                    // You's). Self-hides while empty.
+                    if desc.id == "topArtists"
+                        && HomeState.top-artists.length > 0: ArtistCarousel {
+                        title: @tr("Your Top Artists");
+                        artists: HomeState.top-artists;
+                        artist-clicked(id) => {
+                            root.open-artist(id);
+                        }
+                        media-action(kind, id, action) => {
+                            root.media-action(kind, id, action);
                         }
                     }
                 }

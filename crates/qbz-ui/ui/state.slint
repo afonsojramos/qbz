@@ -168,6 +168,15 @@ export global HomeState {
     in property <[SlimItem]> popular: [];
     in property <[SlimItem]> recent: [];
     in property <[AlbumCardItem]> recent-albums: [];
+    // The #566 ported rails — same data pipelines as their ForYouState twins
+    // but separate lifecycles (Home loads them eagerly with the discover
+    // index; For You lazily on first open). The HomeView arms self-hide
+    // while empty. Titles: favorite-albums / release-watch are set by Rust;
+    // top-artists' title is @tr in the view arm (bare list, like For You).
+    // (qobuzMixes, the fourth ported section, is static tiles — no state.)
+    in property <DiscoverSection> favorite-albums;
+    in property <DiscoverSection> release-watch;
+    in property <[SlimItem]> top-artists: [];
     // Qobuz Playlists row (Home + Editor's Picks). Single-cover cards; the
     // active tab's set is swapped in by crate::home::select_tab.
     in property <[SearchPlaylistItem]> playlists: [];

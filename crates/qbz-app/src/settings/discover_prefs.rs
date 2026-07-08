@@ -169,7 +169,10 @@ pub struct DiscoverPrefs {
 pub fn default_prefs() -> DiscoverPrefs {
     use DiscoverySectionId::*;
     DiscoverPrefs {
-        // home: first 7 ON, last 6 OFF.
+        // home: first 7 ON, last 6 OFF (1:1 with Tauri sectionPrefs.ts:63-77).
+        // All 13 ids render on Home since #566 completed the port: qobuzMixes
+        // / releaseWatch / topArtists / favoriteAlbums were genuine Tauri-Home
+        // sections whose Slint render arms + data pipelines were missing.
         home: vec![
             pref(NewReleases, true),
             pref(PressAwards, true),
@@ -503,7 +506,7 @@ mod tests {
     #[test]
     fn defaults_match_spec_exactly() {
         let d = default_prefs();
-        // home: 13 entries, first 7 ON.
+        // home: 13 entries, first 7 ON (1:1 Tauri sectionPrefs.ts).
         assert_eq!(
             ids(&d.home),
             vec![

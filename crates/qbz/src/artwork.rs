@@ -65,6 +65,16 @@ pub enum ArtworkTarget {
     Recent { idx: usize },
     /// A card in `HomeState.recent-albums[idx]`.
     RecentAlbum { idx: usize },
+    /// A card in `HomeState.favorite-albums.albums[idx]` — the Home tab's
+    /// "Library Albums" rail (#566). Separate from `ForYouFavoriteAlbum`:
+    /// the two rails share the data pipeline but not the model lifecycle.
+    HomeFavoriteAlbum { idx: usize },
+    /// A card in `HomeState.release-watch.albums[idx]` — the Home tab's
+    /// "Release Watch" rail (#566; ForYouReleaseWatch's Home twin).
+    HomeReleaseWatchAlbum { idx: usize },
+    /// A tile in `HomeState.top-artists[idx]` — the Home tab's "Your Top
+    /// Artists" rail (#566; ForYouTopArtist's Home twin).
+    HomeTopArtist { idx: usize },
     /// A single playlist cover of `HomeState.playlists[idx]` (single cover →
     /// slot 0, unlike the 4-slot SearchPlaylistCover/FavPlaylistCover).
     HomePlaylistCover { idx: usize },
@@ -917,6 +927,30 @@ fn apply_artwork(
             };
             item.artwork = image;
             albums.set_row_data(idx, item);
+        }
+        ArtworkTarget::HomeFavoriteAlbum { idx } => {
+            let section = home.get_favorite_albums();
+            let Some(mut item) = section.albums.row_data(idx) else {
+                return;
+            };
+            item.artwork = image;
+            section.albums.set_row_data(idx, item);
+        }
+        ArtworkTarget::HomeReleaseWatchAlbum { idx } => {
+            let section = home.get_release_watch();
+            let Some(mut item) = section.albums.row_data(idx) else {
+                return;
+            };
+            item.artwork = image;
+            section.albums.set_row_data(idx, item);
+        }
+        ArtworkTarget::HomeTopArtist { idx } => {
+            let model = home.get_top_artists();
+            let Some(mut item) = model.row_data(idx) else {
+                return;
+            };
+            item.artwork = image;
+            model.set_row_data(idx, item);
         }
         ArtworkTarget::HomePlaylistCover { idx } => {
             let model = home.get_playlists();
