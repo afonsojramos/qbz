@@ -1020,12 +1020,11 @@ impl QobuzClient {
             )));
         }
         let response: Value = http_response.json().await?;
-        let items = response
-            .get("tracks")
-            .and_then(|t| t.get("items"))
-            .cloned()
-            .unwrap_or(Value::Null);
-        Ok(serde_json::from_value(items).unwrap_or_default())
+        Ok(qbz_models::lenient::parse_items_array(
+            &response,
+            "tracks",
+            "dynamic-suggest track",
+        ))
     }
 
     /// Qobuz radio for an artist (`/radio/artist`) — a generated track

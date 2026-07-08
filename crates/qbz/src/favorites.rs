@@ -15,6 +15,7 @@ use std::sync::{Arc, LazyLock, Mutex};
 
 use qbz_app::shell::AppRuntime;
 use qbz_core::FrontendAdapter;
+use qbz_models::lenient::parse_items_lenient as parse_items;
 use qbz_models::{Album, Artist, Playlist, Track};
 use serde::Deserialize;
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
@@ -327,43 +328,6 @@ where
         }
         FavTab::Playlists => unreachable!("handled above"),
     })
-}
-
-/// Deserialize each favorites item individually, skipping (and logging) the
-/// ones that don't fit the model instead of nuking the whole tab. The old
-/// `from_value::<Vec<T>>(...).unwrap_or_default()` was all-or-nothing: ONE
-/// delisted/odd-shaped favorite among thousands blanked the entire list
-/// while the count badge (parsed separately from `total`) stayed correct —
-/// "Tracks 6125" over "No favorite tracks yet" (#556).
-fn parse_items<T: serde::de::DeserializeOwned>(
-    items: Vec<serde_json::Value>,
-    what: &str,
-) -> Vec<T> {
-    let total = items.len();
-    let mut out = Vec::with_capacity(total);
-    let mut dropped = 0usize;
-    for item in items {
-        // Grab the id for the log before the value is consumed.
-        let id_hint = item
-            .get("id")
-            .map(|v| v.to_string())
-            .unwrap_or_else(|| "?".into());
-        match serde_json::from_value::<T>(item) {
-            Ok(t) => out.push(t),
-            Err(e) => {
-                dropped += 1;
-                log::warn!(
-                    "[qbz-slint] favorites: skipping malformed {what} item (id {id_hint}): {e}"
-                );
-            }
-        }
-    }
-    if dropped > 0 {
-        log::warn!(
-            "[qbz-slint] favorites: skipped {dropped}/{total} {what} items (model mismatch — see warnings above)"
-        );
-    }
-    out
 }
 
 /// All five favorites tab counts, seeded up front so the tab badges are

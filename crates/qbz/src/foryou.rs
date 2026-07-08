@@ -171,14 +171,7 @@ where
     A: FrontendAdapter + Send + Sync + 'static,
 {
     match runtime.core().get_favorites("artists", 50, 0).await {
-        Ok(value) => {
-            let items = value
-                .get("artists")
-                .and_then(|b| b.get("items"))
-                .cloned()
-                .unwrap_or(serde_json::Value::Null);
-            serde_json::from_value(items).unwrap_or_default()
-        }
+        Ok(value) => qbz_models::lenient::parse_items_array(&value, "artists", "for-you artist"),
         Err(_) => Vec::new(),
     }
 }
@@ -188,14 +181,7 @@ where
     A: FrontendAdapter + Send + Sync + 'static,
 {
     match runtime.core().get_favorites("albums", 100, 0).await {
-        Ok(value) => {
-            let items = value
-                .get("albums")
-                .and_then(|b| b.get("items"))
-                .cloned()
-                .unwrap_or(serde_json::Value::Null);
-            serde_json::from_value(items).unwrap_or_default()
-        }
+        Ok(value) => qbz_models::lenient::parse_items_array(&value, "albums", "for-you album"),
         Err(_) => Vec::new(),
     }
 }
