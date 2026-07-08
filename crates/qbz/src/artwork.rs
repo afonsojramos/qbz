@@ -65,6 +65,11 @@ pub enum ArtworkTarget {
     Recent { idx: usize },
     /// A card in `HomeState.recent-albums[idx]`.
     RecentAlbum { idx: usize },
+    /// A card in `RecentAlbumsState.albums[idx]` — the full "Recently Played
+    /// Albums" page (the Home rail's "View all"). Own target because the page
+    /// model has its own lifecycle, separate from the rail's (same split as
+    /// HomeFavoriteAlbum vs ForYouFavoriteAlbum).
+    RecentAlbumsPage { idx: usize },
     /// A card in `HomeState.favorite-albums.albums[idx]` — the Home tab's
     /// "Library Albums" rail (#566). Separate from `ForYouFavoriteAlbum`:
     /// the two rails share the data pipeline but not the model lifecycle.
@@ -922,6 +927,14 @@ fn apply_artwork(
         }
         ArtworkTarget::RecentAlbum { idx } => {
             let albums = home.get_recent_albums();
+            let Some(mut item) = albums.row_data(idx) else {
+                return;
+            };
+            item.artwork = image;
+            albums.set_row_data(idx, item);
+        }
+        ArtworkTarget::RecentAlbumsPage { idx } => {
+            let albums = window.global::<crate::RecentAlbumsState>().get_albums();
             let Some(mut item) = albums.row_data(idx) else {
                 return;
             };

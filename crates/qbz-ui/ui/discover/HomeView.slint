@@ -386,11 +386,18 @@ export component HomeView inherits Rectangle {
                             title: @tr("Recently Played Albums"),
                             albums: HomeState.recent-albums,
                         };
+                        // "View all" -> the full RecentAlbumsView page (local
+                        // play-history, not a /discover endpoint — so it goes
+                        // through its own action, not discover-view-all).
+                        show-view-all: true;
                         album-clicked(id) => {
                             root.album-clicked(id);
                         }
                         media-action(kind, id, action) => {
                             root.media-action(kind, id, action);
+                        }
+                        view-all-clicked => {
+                            HomeActions.open-recent-albums();
                         }
                     }
                     if desc.id == "recentlyPlayedAlbums" && HomeState.recent-albums.length == 0 && !HomeState.loading: RecentPlaceholder {

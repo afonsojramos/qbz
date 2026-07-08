@@ -50,6 +50,11 @@ pub enum NavEntry {
         endpoint: String,
         title: String,
     },
+    /// RecentAlbumsView — the full "Recently Played Albums" listing reached
+    /// from the Home rail's "View all". Renders the LOCAL play-history album
+    /// store (crate::recently), reloaded on every navigation, so the entry
+    /// carries no payload.
+    RecentAlbums,
     /// A Qobuz mix detail page ("daily" | "weekly" | "fav" | "top").
     Mix {
         kind: String,
