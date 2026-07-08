@@ -185,9 +185,15 @@ fn map_story(item: ArtistStoryItem) -> StoryData {
         .unwrap_or_default();
     StoryData {
         url: format!("https://play.qobuz.com/magazine/story/{}", item.id),
-        title: item.title,
+        // Magazine content comes from a CMS: titles carry entities
+        // (&amp; …), excerpts may additionally carry markup.
+        title: crate::strip_html::decode_html_entities(&item.title),
         author,
-        excerpt: item.description_short.unwrap_or_default(),
+        excerpt: item
+            .description_short
+            .as_deref()
+            .map(crate::strip_html::strip_html)
+            .unwrap_or_default(),
         image_url,
     }
 }
@@ -253,9 +259,11 @@ fn map_artist(page: PageArtistResponse) -> ArtistData {
                 .content
                 .map(|c| crate::strip_html::strip_html(&c))
                 .unwrap_or_default();
+            // Entity-decode (no tags expected in a source name, but the
+            // same CMS that emits `&copy` in bodies feeds this field).
             let source = biography
                 .source
-                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                .and_then(|v| v.as_str().map(crate::strip_html::decode_html_entities))
                 .unwrap_or_default();
             (content, source)
         }
@@ -578,15 +586,10 @@ fn mmss(secs: u32) -> String {
     format!("{}:{:02}", secs / 60, secs % 60)
 }
 
-/// Crude HTML strip for Qobuz biographies (tags + a few entities). The
-/// entity set is intentionally small — only the ones the Qobuz API
-/// regularly emits in biography bodies, with the © family explicitly
-/// covered because TiVo-sourced bios often close with a `&copy; TiVo`
-/// credit line.
-// strip_html now lives in `crate::strip_html` so both album and
-// artist views use the same paragraph-preserving conversion. The
-// previous artist-local helper produced one long paragraph for
-// multi-paragraph biographies — gone with this refactor.
+// strip_html now lives in `crate::strip_html` (qbz-text-utils) so both
+// album and artist views use the same paragraph-preserving conversion,
+// with full entity decoding (named + numeric + the malformed
+// no-semicolon `&copy` TiVo emits in biography credit lines).
 
 pub(crate) fn card_to_item(card: CardData) -> AlbumCardItem {
     // On the artist page the card subtitle slot should show the
