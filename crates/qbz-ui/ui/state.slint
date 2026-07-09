@@ -4418,6 +4418,12 @@ export global QueueState {
     callback play-history(int);
     // Remove the upcoming entry at `index` within the current page slice.
     callback remove-upcoming(int);
+    // Remove every upcoming entry after the page-local `index` (that row is
+    // kept). The Rust controller resolves it to a queue-wide upcoming index.
+    callback remove-all-after(int);
+    // Open the Add-to-Playlist picker seeded with the upcoming row at the
+    // page-local `index`.
+    callback add-to-playlist(int);
     // Reorder the upcoming list: move the page-local row `from` to the insertion
     // slot `to` (0 = before the first upcoming row, N = after the last). The Rust
     // controller resolves the page-local indices to queue-wide upcoming indices
