@@ -10,16 +10,18 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 
 use qbz_app::shell::AppRuntime;
 use qbz_core::FrontendAdapter;
+use qbz_models::lenient::parse_items_lenient as parse_items;
 use qbz_models::{Album, Artist, Playlist, Track};
 use serde::Deserialize;
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use crate::album_map::{self, map_album, to_item, AlbumCard};
-use crate::artwork::{ArtworkJob, ArtworkTarget};
+use crate::artwork::{ArtworkJob, ArtworkTarget, ImageCache};
 use crate::search::{self, PlaylistRow};
 use crate::{
     AlbumCardItem, AlphaJump, AppWindow, DiscoverSection, FavArtistSection, FavoriteArtistItem,
@@ -279,11 +281,9 @@ where
             break;
         }
     }
-    let items = serde_json::Value::Array(all_items);
-
     Ok(match tab {
         FavTab::Tracks => {
-            let tracks: Vec<Track> = serde_json::from_value(items).unwrap_or_default();
+            let tracks: Vec<Track> = parse_items(all_items, "track");
             let play = tracks.clone();
             FavData::Tracks {
                 items: tracks.into_iter().map(map_track).collect(),
@@ -292,7 +292,7 @@ where
             }
         }
         FavTab::Albums => {
-            let albums: Vec<Album> = serde_json::from_value(items).unwrap_or_default();
+            let albums: Vec<Album> = parse_items(all_items, "album");
             // Drop blocked albums at the SOURCE so the model + the artwork jobs
             // (both derived from `items`) stay index-aligned.
             let (bl, abl) = if crate::artist_blacklist::is_enabled() {
@@ -313,14 +313,14 @@ where
             }
         }
         FavTab::Artists => {
-            let artists: Vec<Artist> = serde_json::from_value(items).unwrap_or_default();
+            let artists: Vec<Artist> = parse_items(all_items, "artist");
             FavData::Artists {
                 items: artists.into_iter().map(map_artist).collect(),
                 total,
             }
         }
         FavTab::Labels => {
-            let labels: Vec<FavLabel> = serde_json::from_value(items).unwrap_or_default();
+            let labels: Vec<FavLabel> = parse_items(all_items, "label");
             FavData::Labels {
                 items: labels.into_iter().map(map_label).collect(),
                 total,
@@ -535,8 +535,8 @@ pub fn apply_favorites(window: &AppWindow, data: FavData) {
         }
         FavData::Albums { items, total } => {
             // Everything in the Albums tab is a favorite -> filled heart.
-            // (Blocked albums are already dropped at the FavData source so the
-            // model + artwork jobs stay index-aligned.)
+            // (Blocked albums are already dropped at the FavData source;
+            // artwork delivery is id-keyed, so no index alignment to keep.)
             let cards: Vec<AlbumCardItem> = items
                 .into_iter()
                 .map(|c| {
@@ -869,6 +869,229 @@ pub fn shuffled_tracks() -> Vec<Track> {
     tracks
 }
 
+// ---- Windowed albums artwork (mirrors local_library's albums grid) ------
+
+/// Generation guard, bumped on every Albums-tab (re)load. A stale in-flight
+/// cover fetch (an older load's job) is discarded on apply so it can't land
+/// on the replacement set.
+static FAV_ALBUMS_GEN: AtomicU64 = AtomicU64::new(0);
+
+/// True if `gen` is still the current favorites-albums generation. The
+/// artwork pipeline calls this before applying a decoded cover so an
+/// in-flight job from a superseded load doesn't paint the new model.
+pub fn albums_gen_current(gen: u64) -> bool {
+    FAV_ALBUMS_GEN.load(Ordering::SeqCst) == gen
+}
+
+/// Last row band reported by the windowed albums grid (item indices into
+/// `albums-visible`, prefetch margin already included by the grid). Kept so
+/// model rebuilds (load/derive) can re-dispatch — the grid only fires its
+/// callback when the band CHANGES, not when the rows under it change.
+static FAV_ALBUMS_WINDOW: std::sync::Mutex<(usize, usize)> = std::sync::Mutex::new((0, 59));
+
+/// Cover ids currently in the artwork pipeline for the albums window
+/// (dedupe during fast scroll). Freed on apply; cleared on reloads.
+fn fav_albums_inflight() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    static S: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::OnceLock::new();
+    S.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
+}
+
+/// Image-cache handle captured at load time so the window dispatcher can
+/// spawn artwork jobs outside the load path. Favorite covers are Qobuz CDN
+/// URLs (plain `spawn_loads`), so no Plex params ride along here.
+fn fav_albums_dispatch_ctx() -> &'static std::sync::Mutex<Option<ImageCache>> {
+    static S: std::sync::OnceLock<std::sync::Mutex<Option<ImageCache>>> =
+        std::sync::OnceLock::new();
+    S.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+/// A windowed artwork job finished (applied or dropped) — free its slot so
+/// the dispatcher can request the id again after an eviction.
+pub fn album_artwork_job_done(id: &str) {
+    fav_albums_inflight().lock().unwrap().remove(id);
+}
+
+/// Reset the windowed-albums artwork pipeline for a fresh Albums-tab load:
+/// bump the generation (orphans every in-flight job — dropped on apply),
+/// free their dedupe slots and stash the image-cache handle the dispatchers
+/// spawn jobs with. Runs on the UI thread BEFORE `apply_favorites`, whose
+/// `derive_albums` dispatches the covers against the new generation.
+pub fn begin_albums_artwork(image_cache: ImageCache) {
+    FAV_ALBUMS_GEN.fetch_add(1, Ordering::SeqCst);
+    fav_albums_inflight().lock().unwrap().clear();
+    *fav_albums_dispatch_ctx().lock().unwrap() = Some(image_cache);
+}
+
+/// Dispatch throttle for the grid's band reports (leading + trailing edge,
+/// UI thread). During a fling the grid crosses a row boundary every ~270px
+/// and each crossing used to spawn artwork jobs for rows flying straight
+/// past the viewport; coalescing to one dispatch per interval keeps the
+/// decode pipeline on rows the user can actually see.
+const FAV_ALBUMS_DISPATCH_THROTTLE_MS: u64 = 180;
+thread_local! {
+    static FAV_ALBUMS_BAND: crate::viewport::BandDispatcher =
+        crate::viewport::BandDispatcher::new(FAV_ALBUMS_DISPATCH_THROTTLE_MS);
+}
+
+/// The windowed grid reported a new visible row band. The band is stored
+/// immediately (model rebuilds re-read it); the artwork dispatch is
+/// throttled, and gen-guarded so a pass scheduled before a reload cannot
+/// dispatch/evict against the replacement model — the reload's own
+/// `derive_albums` dispatch is authoritative for the new generation.
+pub fn albums_window_changed(window: &AppWindow, first: i32, last: i32) {
+    let first = first.max(0) as usize;
+    let last = last.max(first as i32) as usize;
+    *FAV_ALBUMS_WINDOW.lock().unwrap() = (first, last);
+    let gen = FAV_ALBUMS_GEN.load(Ordering::SeqCst);
+    let weak = window.as_weak();
+    FAV_ALBUMS_BAND.with(|d| {
+        d.report(Box::new(move || {
+            if !albums_gen_current(gen) {
+                return;
+            }
+            if let Some(w) = weak.upgrade() {
+                dispatch_fav_albums_window(&w);
+            }
+        }));
+    });
+}
+
+/// Dispatch covers for the current albums window (over `albums-visible`) and
+/// evict decoded covers far outside it back to the placeholder, so cover RAM
+/// scales with the viewport instead of the library. Delivery is id-keyed
+/// (`FavoriteAlbumById`), so a derive re-sort between dispatch and apply
+/// cannot land a cover on the wrong card; a tab reload bumps
+/// `FAV_ALBUMS_GEN` and the apply arm drops the stale image.
+pub fn dispatch_fav_albums_window(window: &AppWindow) {
+    let (first, last) = *FAV_ALBUMS_WINDOW.lock().unwrap();
+    let Some(image_cache) = fav_albums_dispatch_ctx().lock().unwrap().clone() else {
+        return;
+    };
+    let gen = FAV_ALBUMS_GEN.load(Ordering::SeqCst);
+    let state = window.global::<FavoritesState>();
+    let visible = state.get_albums_visible();
+    let len = visible.row_count();
+    if len == 0 {
+        return;
+    }
+    let last = last.min(len - 1);
+    if first > last {
+        return;
+    }
+    // Retention = the window plus one window-span on each side. Beyond it,
+    // covers return to the placeholder; re-entry is cheap (byte-budgeted
+    // decoded cache, else a bounded re-decode through the disk cache).
+    let span = last - first + 1;
+    let keep_lo = first.saturating_sub(span);
+    let keep_hi = (last + span).min(len - 1);
+    let mut jobs = Vec::new();
+    {
+        let mut inflight = fav_albums_inflight().lock().unwrap();
+        for vi in first..=last {
+            let Some(item) = visible.row_data(vi) else { continue };
+            if item.artwork.size().width > 0 || item.artwork_url.is_empty() {
+                continue;
+            }
+            let id = item.id.to_string();
+            if inflight.insert(id.clone()) {
+                jobs.push(ArtworkJob {
+                    target: ArtworkTarget::FavoriteAlbumById { id, gen },
+                    url: item.artwork_url.to_string(),
+                });
+            }
+        }
+    }
+    for vi in (0..keep_lo).chain(keep_hi + 1..len) {
+        let Some(item) = visible.row_data(vi) else { continue };
+        if item.artwork.size().width > 0 {
+            set_album_artwork(window, item.id.as_str(), slint::Image::default());
+        }
+    }
+    if !jobs.is_empty() {
+        crate::artwork::spawn_loads(jobs, window.as_weak(), image_cache);
+    }
+}
+
+/// Flat LIST-view artwork: same `albums-visible` model as the grid, but the
+/// list is not windowed (only `AlbumGrid` fires `window-changed`) — dispatch
+/// every missing cover, no eviction. Phase 1 limit.
+fn dispatch_fav_albums_all_visible(window: &AppWindow) {
+    let Some(image_cache) = fav_albums_dispatch_ctx().lock().unwrap().clone() else {
+        return;
+    };
+    let gen = FAV_ALBUMS_GEN.load(Ordering::SeqCst);
+    let state = window.global::<FavoritesState>();
+    let visible = state.get_albums_visible();
+    let mut jobs = Vec::new();
+    {
+        let mut inflight = fav_albums_inflight().lock().unwrap();
+        for vi in 0..visible.row_count() {
+            let Some(item) = visible.row_data(vi) else { continue };
+            if item.artwork.size().width > 0 || item.artwork_url.is_empty() {
+                continue;
+            }
+            let id = item.id.to_string();
+            if inflight.insert(id.clone()) {
+                jobs.push(ArtworkJob {
+                    target: ArtworkTarget::FavoriteAlbumById { id, gen },
+                    url: item.artwork_url.to_string(),
+                });
+            }
+        }
+    }
+    if !jobs.is_empty() {
+        crate::artwork::spawn_loads(jobs, window.as_weak(), image_cache);
+    }
+}
+
+/// The Albums grid/list view-mode toggled. Switching TO the list needs a full
+/// dispatch (the list is not windowed and the grid's window may have evicted
+/// covers the list now shows); switching to the grid is handled by AlbumGrid's
+/// own post-layout seed Timer on mount (it re-fires `window-changed`).
+pub fn albums_view_mode_changed(window: &AppWindow) {
+    let state = window.global::<FavoritesState>();
+    if state.get_albums_group_mode() == "off" && state.get_albums_view_mode() == "list" {
+        dispatch_fav_albums_all_visible(window);
+    }
+}
+
+/// Grouped-mode artwork: `albums-visible` is EMPTY there (the sections render
+/// from `albums-grouped`), so the viewport window doesn't apply — keep the
+/// pre-windowing behavior and dispatch every missing cover. Phase 1 limit;
+/// per-section windowing needs the sections' content offsets.
+fn dispatch_fav_albums_all_grouped(window: &AppWindow) {
+    let Some(image_cache) = fav_albums_dispatch_ctx().lock().unwrap().clone() else {
+        return;
+    };
+    let gen = FAV_ALBUMS_GEN.load(Ordering::SeqCst);
+    let state = window.global::<FavoritesState>();
+    let grouped = state.get_albums_grouped();
+    let mut jobs = Vec::new();
+    {
+        let mut inflight = fav_albums_inflight().lock().unwrap();
+        for gi in 0..grouped.row_count() {
+            let Some(sec) = grouped.row_data(gi) else { continue };
+            for i in 0..sec.albums.row_count() {
+                let Some(item) = sec.albums.row_data(i) else { continue };
+                if item.artwork.size().width > 0 || item.artwork_url.is_empty() {
+                    continue;
+                }
+                let id = item.id.to_string();
+                if inflight.insert(id.clone()) {
+                    jobs.push(ArtworkJob {
+                        target: ArtworkTarget::FavoriteAlbumById { id, gen },
+                        url: item.artwork_url.to_string(),
+                    });
+                }
+            }
+        }
+    }
+    if !jobs.is_empty() {
+        crate::artwork::spawn_loads(jobs, window.as_weak(), image_cache);
+    }
+}
+
 /// Re-derive the rendered Albums list (`albums-visible`) from the full
 /// `albums` set + the search query and sort key. Empty query + default
 /// order shares the full model so artwork stays live; otherwise forks a
@@ -890,6 +1113,17 @@ pub fn derive_albums(window: &AppWindow) {
         state.set_albums_visible(all);
         state.set_albums_grouped(empty_sections());
         state.set_albums_shown(n);
+        if state.get_albums_view_mode() == "list" {
+            // The LIST view renders the same albums-visible model but is NOT
+            // windowed (only AlbumGrid fires window-changed) — dispatch every
+            // missing cover and do no eviction, like pre-windowing.
+            dispatch_fav_albums_all_visible(window);
+        } else {
+            // The rows under the window band changed (fresh load / cleared
+            // filter) but the band itself didn't — the grid won't re-fire,
+            // so re-dispatch.
+            dispatch_fav_albums_window(window);
+        }
         return;
     }
 
@@ -908,6 +1142,14 @@ pub fn derive_albums(window: &AppWindow) {
     if group == "off" {
         state.set_albums_visible(ModelRc::new(VecModel::from(filtered)));
         state.set_albums_grouped(empty_sections());
+        if state.get_albums_view_mode() == "list" {
+            // Non-windowed list — full dispatch, no eviction (see above).
+            dispatch_fav_albums_all_visible(window);
+        } else {
+            // The rows under the window band changed (search/sort/filter) but
+            // the band itself didn't — the grid won't re-fire, so re-dispatch.
+            dispatch_fav_albums_window(window);
+        }
         return;
     }
 
@@ -959,6 +1201,7 @@ pub fn derive_albums(window: &AppWindow) {
         .collect();
     state.set_albums_grouped(ModelRc::new(VecModel::from(sections)));
     state.set_albums_visible(ModelRc::new(VecModel::from(Vec::<AlbumCardItem>::new())));
+    dispatch_fav_albums_all_grouped(window);
 }
 
 /// First-letter bucket key for alpha grouping (# for non-alphabetic).
@@ -1160,10 +1403,12 @@ fn set_artwork_in_albums(model: &ModelRc<AlbumCardItem>, id: &str, image: &slint
     }
 }
 
-/// Set a freshly-decoded album cover (by id) on the rendered favorites
-/// album models (flat `albums-visible` + every `albums-grouped` section).
+/// Set a freshly-decoded album cover (by id) on every favorites album model:
+/// the full `albums` set + the flat `albums-visible` + every `albums-grouped`
+/// section (mirrors `local_library::set_local_album_artwork`).
 pub fn set_album_artwork(window: &AppWindow, id: &str, image: slint::Image) {
     let st = window.global::<FavoritesState>();
+    set_artwork_in_albums(&st.get_albums(), id, &image);
     set_artwork_in_albums(&st.get_albums_visible(), id, &image);
     let grouped = st.get_albums_grouped();
     for s in 0..grouped.row_count() {
@@ -1345,15 +1590,10 @@ pub fn artwork_jobs(data: &FavData) -> Vec<ArtworkJob> {
                 target: ArtworkTarget::FavoriteTrack { index: i },
             })
             .collect(),
-        FavData::Albums { items, .. } => items
-            .iter()
-            .enumerate()
-            .filter(|(_, a)| !a.artwork_url.is_empty())
-            .map(|(i, a)| ArtworkJob {
-                url: a.artwork_url.clone(),
-                target: ArtworkTarget::FavoriteAlbum { index: i },
-            })
-            .collect(),
+        // WINDOWED (mirrors the Local Library albums grid): no all-at-once
+        // jobs for the full set — covers are dispatched by the viewport-band
+        // dispatchers after apply/derive (see `begin_albums_artwork`).
+        FavData::Albums { .. } => Vec::new(),
         FavData::Artists { items, .. } => items
             .iter()
             .enumerate()

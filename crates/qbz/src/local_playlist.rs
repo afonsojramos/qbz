@@ -1334,8 +1334,16 @@ pub fn navigate_qobuz_offline(
             });
         }
 
-        let plex_allowed = crate::offline_mode::engine().status().mode
-            == qbz_app::offline_mode::OfflineMode::InducedOffline;
+        // E13 availability rule, keyed on RAW CONNECTIVITY, not the mode:
+        // "can the Plex server be reached" doesn't depend on WHY we're
+        // offline. Induced offline and logged-out sessions (offline_session,
+        // mode=RealOffline with connectivity Up — the #553 guest/start-
+        // offline case) both keep network access; only genuinely-dead
+        // connectivity hides the Plex sidecar rows. Field-hit: a mixed
+        // Plex+Qobuz playlist rendered EMPTY logged-out because this gated
+        // on InducedOffline while the Qobuz block was snapshot-bound.
+        let plex_allowed = crate::offline_mode::engine().status().connectivity
+            == qbz_app::offline_mode::Connectivity::Up;
         let (sidecar_rows, custom_artwork_path, playable_ids, snapshot_name) =
             tokio::task::spawn_blocking(move || {
                 // Healing base: the best offline guess at the Qobuz block

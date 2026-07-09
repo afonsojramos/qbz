@@ -307,12 +307,38 @@ pub fn album_artwork_job_done(id: &str) {
     albums_inflight().lock().unwrap().remove(id);
 }
 
-/// The windowed grid reported a new visible row band.
+/// Dispatch throttle for the grid's band reports (leading + trailing edge,
+/// UI thread). During a fling the grid crosses a row boundary every ~270px
+/// and each crossing used to spawn artwork jobs for rows flying straight
+/// past the viewport; coalescing to one dispatch per interval keeps the
+/// decode pipeline on rows the user can actually see.
+const ALBUMS_DISPATCH_THROTTLE_MS: u64 = 180;
+thread_local! {
+    static ALBUMS_BAND: crate::viewport::BandDispatcher =
+        crate::viewport::BandDispatcher::new(ALBUMS_DISPATCH_THROTTLE_MS);
+}
+
+/// The windowed grid reported a new visible row band. The band is stored
+/// immediately (model rebuilds re-read it); the artwork dispatch is
+/// throttled, and gen-guarded so a pass scheduled before a reload cannot
+/// dispatch/evict against the replacement model — the reload's own
+/// `derive_albums` dispatch is authoritative for the new generation.
 pub fn albums_window_changed(window: &AppWindow, first: i32, last: i32) {
     let first = first.max(0) as usize;
     let last = last.max(first as i32) as usize;
     *ALBUMS_WINDOW.lock().unwrap() = (first, last);
-    dispatch_albums_window(window);
+    let gen = ALBUMS_GEN.load(Ordering::SeqCst);
+    let weak = window.as_weak();
+    ALBUMS_BAND.with(|d| {
+        d.report(Box::new(move || {
+            if !albums_gen_current(gen) {
+                return;
+            }
+            if let Some(w) = weak.upgrade() {
+                dispatch_albums_window(&w);
+            }
+        }));
+    });
 }
 
 /// Dispatch covers for the current albums window (over `albums-visible`) and
@@ -1010,12 +1036,13 @@ fn fetch_tracks_page(
     query: String,
     offset: u64,
     plex: bool,
+    sort: String,
 ) -> Option<(Vec<qbz_library::LocalTrack>, bool)> {
     // exclude_network_folders: connectivity-keyed — see the NETWORK-FOLDER
     // VISIBILITY note.
     let exclude_network = exclude_network_folders_now();
     let mut rows = crate::library_db::with_db(|db| {
-        db.search_with_filter_page(query.trim(), offset, TRACKS_PAGE, true, exclude_network)
+        db.search_with_filter_page(query.trim(), offset, TRACKS_PAGE, true, exclude_network, &sort)
     })?;
     let has_more = rows.len() as u64 == TRACKS_PAGE;
     if plex && offset == 0 {
@@ -1029,10 +1056,62 @@ fn fetch_tracks_page(
             // group mode is active.
             let mut merged: Vec<qbz_library::LocalTrack> = mapped.collect();
             merged.append(&mut rows);
+            // Plex rows live OUTSIDE `local_tracks` (no ATTACH/union) and are
+            // prepended ONCE on page 1 — the pre-existing shape. When an
+            // explicit sort is active, re-sort the merged page client-side
+            // with the SQL semantics so page 1 reads coherently; later pages
+            // are pure-local and already come back in SQL order.
+            if sort != "default" {
+                sort_tracks_like_sql(&mut merged, &sort);
+            }
             rows = merged;
         }
     }
     Some((rows, has_more))
+}
+
+/// Client-side comparator mirroring `search_with_filter_page`'s ORDER BY
+/// allowlist over `LocalTrack` fields — only used to re-sort the Plex-merged
+/// page 1 (see `fetch_tracks_page`). Case-insensitive where SQL uses
+/// `COLLATE NOCASE`; NULL years sort last in both directions (SQL's
+/// `year IS NULL` prefix); `Option` disc/track order (None first) matches
+/// SQLite's ASC NULLs-first. `sort_by` is stable, like SQLite pagination
+/// over the same ORDER BY.
+fn sort_tracks_like_sql(rows: &mut [qbz_library::LocalTrack], sort: &str) {
+    let lc = |s: &str| s.to_lowercase();
+    let artist_key =
+        |t: &qbz_library::LocalTrack| lc(t.album_artist.as_deref().unwrap_or(&t.artist));
+    // Shared tie-breaker tail: album NOCASE, disc_number, track_number.
+    let album_tail = |a: &qbz_library::LocalTrack, b: &qbz_library::LocalTrack| {
+        lc(&a.album)
+            .cmp(&lc(&b.album))
+            .then(a.disc_number.cmp(&b.disc_number))
+            .then(a.track_number.cmp(&b.track_number))
+    };
+    // year: None always sorts last; direction only flips the Some/Some arm.
+    let year_cmp = |a: &qbz_library::LocalTrack, b: &qbz_library::LocalTrack, desc: bool| {
+        match (a.year, b.year) {
+            (None, None) => std::cmp::Ordering::Equal,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (Some(ya), Some(yb)) => if desc { yb.cmp(&ya) } else { ya.cmp(&yb) },
+        }
+    };
+    match sort {
+        "title-asc" => rows.sort_by(|a, b| {
+            lc(&a.title).cmp(&lc(&b.title)).then(lc(&a.artist).cmp(&lc(&b.artist)))
+        }),
+        "title-desc" => rows.sort_by(|a, b| {
+            lc(&b.title).cmp(&lc(&a.title)).then(lc(&a.artist).cmp(&lc(&b.artist)))
+        }),
+        "artist-asc" => rows.sort_by(|a, b| artist_key(a).cmp(&artist_key(b)).then(album_tail(a, b))),
+        "artist-desc" => rows.sort_by(|a, b| artist_key(b).cmp(&artist_key(a)).then(album_tail(a, b))),
+        "year-desc" => rows.sort_by(|a, b| year_cmp(a, b, true).then(album_tail(a, b))),
+        "year-asc" => rows.sort_by(|a, b| year_cmp(a, b, false).then(album_tail(a, b))),
+        "added-desc" => rows.sort_by(|a, b| b.indexed_at.cmp(&a.indexed_at).then(album_tail(a, b))),
+        // "default" never reaches here (guarded at the call site).
+        _ => {}
+    }
 }
 
 fn apply_tracks(window: &AppWindow, rows: Vec<qbz_library::LocalTrack>, has_more: bool) {
@@ -1130,6 +1209,15 @@ pub fn set_tracks_group(window: &AppWindow, mode: &str) {
     window.global::<LocalLibraryState>().set_tracks_group_mode(mode.into());
     crate::locallibrary_prefs::save(window);
     derive_tracks(window);
+}
+
+/// Set the SQL sort key, persist it, re-query page 1. Sort is server-side
+/// (it defines the pagination order), so unlike group-by this is a
+/// gen-bumping page-1 reload, not a client-side re-derive.
+pub fn set_tracks_sort(window: &AppWindow, key: &str, handle: tokio::runtime::Handle) {
+    window.global::<LocalLibraryState>().set_tracks_sort(key.into());
+    crate::locallibrary_prefs::save(window);
+    reload_tracks(window.as_weak(), handle);
 }
 
 /// Enter/leave multi-select; leaving clears the selection.
@@ -1449,12 +1537,13 @@ pub fn selected_albums_tracks_blocking(album_keys: &[String]) -> Vec<qbz_library
 fn spawn_tracks_page_load(window: &AppWindow, handle: tokio::runtime::Handle, gen: u64) {
     let s = window.global::<LocalLibraryState>();
     let query = s.get_tracks_search().to_string();
+    let sort = s.get_tracks_sort().to_string();
     // Snapshot the Plex gate on the UI thread (the setting read is cheap but we
     // never want to read it off the event loop). Page 1 only merges Plex.
     let plex = crate::plex_settings::get().enabled;
     let weak = window.as_weak();
     handle.spawn(async move {
-        let result = tokio::task::spawn_blocking(move || fetch_tracks_page(query, 0, plex))
+        let result = tokio::task::spawn_blocking(move || fetch_tracks_page(query, 0, plex, sort))
             .await
             .ok()
             .flatten();
@@ -1507,16 +1596,18 @@ pub fn load_more_tracks(weak: slint::Weak<AppWindow>, handle: tokio::runtime::Ha
         }
         let offset = s.get_tracks_next_offset().max(0) as u64;
         let query = s.get_tracks_search().to_string();
+        let sort = s.get_tracks_sort().to_string();
         let gen = TRACKS_GEN.load(Ordering::SeqCst);
         s.set_tracks_loading_more(true);
         let weak2 = w.as_weak();
         handle.spawn(async move {
             // Plex rows are merged once on page 1; later pages stay pure-local so
             // the local LIMIT/OFFSET stays aligned (no duplicate Plex rows).
-            let result = tokio::task::spawn_blocking(move || fetch_tracks_page(query, offset, false))
-                .await
-                .ok()
-                .flatten();
+            let result =
+                tokio::task::spawn_blocking(move || fetch_tracks_page(query, offset, false, sort))
+                    .await
+                    .ok()
+                    .flatten();
             let _ = weak2.upgrade_in_event_loop(move |w| {
                 let s = w.global::<LocalLibraryState>();
                 if TRACKS_GEN.load(Ordering::SeqCst) != gen {

@@ -205,8 +205,8 @@ msgstr "すべて選択"
 msgid "Add to playlist"
 msgstr "プレイリストに追加"
 
-msgid "Add to favorites"
-msgstr "お気に入りに追加"
+msgid "Add to Library"
+msgstr "ライブラリに追加"
 
 msgid "Make available offline"
 msgstr "オフラインで利用可能にする"
@@ -592,26 +592,26 @@ msgstr "タイトルZ-A"
 msgid "Artist A-Z"
 msgstr "アーティストA-Z"
 
-msgid "Couldn't load favorites."
-msgstr "お気に入りを読み込めませんでした。"
+msgid "Couldn't load your Library."
+msgstr "ライブラリを読み込めませんでした。"
 
-msgid "Remove from favorites"
-msgstr "お気に入りから削除"
+msgid "Remove from Library"
+msgstr "ライブラリから削除"
 
-msgid "No favorite tracks yet."
-msgstr "お気に入りのトラックはまだありません。"
+msgid "No tracks in your Library yet."
+msgstr "ライブラリにはまだトラックがありません。"
 
 msgid "No tracks match your search."
 msgstr "検索に一致するトラックはありません。"
 
-msgid "No favorite albums yet."
-msgstr "お気に入りのアルバムはまだありません。"
+msgid "No albums in your Library yet."
+msgstr "ライブラリにはまだアルバムがありません。"
 
 msgid "No albums match your search."
 msgstr "検索に一致するアルバムはありません。"
 
-msgid "No favorite artists yet."
-msgstr "お気に入りのアーティストはまだありません。"
+msgid "No artists in your Library yet."
+msgstr "ライブラリにはまだアーティストがありません。"
 
 msgid "No artists match your search."
 msgstr "検索に一致するアーティストはありません。"
@@ -622,11 +622,11 @@ msgstr "検索に一致するプレイリストはありません。"
 msgid "No followed playlists yet."
 msgstr "フォロー中のプレイリストはまだありません。"
 
-msgid "No favorite playlists yet."
-msgstr "お気に入りのプレイリストはまだありません。"
+msgid "No playlists in your Library yet."
+msgstr "ライブラリにはまだプレイリストがありません。"
 
-msgid "No favorite labels yet."
-msgstr "お気に入りのレーベルはまだありません。"
+msgid "No labels in your Library yet."
+msgstr "ライブラリにはまだレーベルがありません。"
 
 msgid "No labels match your search."
 msgstr "検索に一致するレーベルはありません。"
@@ -2285,6 +2285,9 @@ msgstr "追加先…"
 msgid "Add album to collection"
 msgstr "アルバムをコレクションに追加"
 
+msgid "Remove album from collection"
+msgstr "アルバムをコレクションから削除"
+
 msgid "Remove from library"
 msgstr "ライブラリから削除"
 
@@ -3087,8 +3090,8 @@ msgstr "カバーのアップロードに失敗しました"
 msgid "Failed to write booklet: {}"
 msgstr "ブックレットの書き込みに失敗しました：{}"
 
-msgid "Favorite Albums"
-msgstr "お気に入りのアルバム"
+msgid "Library Albums"
+msgstr "ライブラリのアルバム"
 
 msgid "February"
 msgstr "2月"
@@ -4344,3 +4347,134 @@ msgstr "DoP — PCM上のDSD（ビットパーフェクト）"
 
 msgid "Native DSD (kernel support required)"
 msgstr "ネイティブDSD（カーネルサポートが必要）"
+
+msgid "Date added"
+msgstr "追加日"
+
+msgid "Renderer setting reverted to Auto — the previous start didn't finish"
+msgstr "レンダラー設定を自動に戻しました — 前回の起動が完了しませんでした"
+
+msgid "Renderer switched to GPU (compatibility) — the GPU renderer failed to start"
+msgstr "レンダラーをGPU（互換）に切り替えました — GPUレンダラーを起動できませんでした"
+
+msgid "Audio output error"
+msgstr "オーディオ出力エラー"
+
+msgid "Direct ALSA device access is blocked inside Flatpak/Snap — switch the audio backend to PipeWire or System Default"
+msgstr "Flatpak/Snap 内では ALSA デバイスへの直接アクセスがブロックされます — オーディオバックエンドを PipeWire またはシステム既定に切り替えてください"
+
+msgid "Auto theme generation failed"
+msgstr "自動テーマの生成に失敗しました"
+
+msgid "Play all tracks"
+msgstr "すべてのトラックを再生"
+
+msgid "Shuffle all tracks"
+msgstr "すべてのトラックをシャッフル"
+
+msgid "Select multiple tracks"
+msgstr "複数のトラックを選択"
+
+msgid "Play a random album"
+msgstr "ランダムなアルバムを再生"
+
+msgid "Open a random artist"
+msgstr "ランダムなアーティストを開く"
+
+msgid "Play a random playlist"
+msgstr "ランダムなプレイリストを再生"
+
+msgid "Open a random label"
+msgstr "ランダムなレーベルを開く"
+
+msgid "Start from current theme"
+msgstr "現在のテーマから開始"
+
+msgid "Copy the colors of the currently applied theme into the editor as a starting point."
+msgstr "現在適用中のテーマの色を出発点としてエディターにコピーします。"
+
+msgid "Use current colors"
+msgstr "現在の色を使用"
+
+msgid "Dark theme"
+msgstr "ダークテーマ"
+
+msgid "Set the overall light or dark polarity. Affects derived shades, borders and overlays."
+msgstr "全体の明暗の極性を設定します。派生する陰影、境界線、オーバーレイに影響します。"
+
+msgid "SURFACES"
+msgstr "サーフェス"
+
+msgid "Background"
+msgstr "背景"
+
+msgid "Surface"
+msgstr "サーフェス"
+
+msgid "Elevated"
+msgstr "浮き出し"
+
+msgid "TEXT"
+msgstr "テキスト"
+
+msgid "Text"
+msgstr "テキスト"
+
+msgid "Secondary text"
+msgstr "セカンダリテキスト"
+
+msgid "ACCENT"
+msgstr "アクセント"
+
+msgid "Accent"
+msgstr "アクセント"
+
+msgid "Danger"
+msgstr "危険"
+
+msgid "Warning"
+msgstr "警告"
+
+msgid "Success"
+msgstr "成功"
+
+msgid "OTHER"
+msgstr "その他"
+
+msgid "Border"
+msgstr "境界線"
+
+# Unavailable-track auto-skip (Tauri #467 parity)
+msgid "No available tracks to play"
+msgstr "再生できるトラックがありません"
+# Always-visible log uploader entry (settings sub-nav footer)
+msgid "Share logs"
+msgstr "ログを共有"
+# Guest local-only mode disclaimer line (login screen, #553)
+msgid "QBZ can be used as an offline player without a Qobuz™ account (no access to the Qobuz™ library)."
+msgstr "QBZはQobuz™アカウントなしでオフラインプレーヤーとして使用できます（Qobuz™ライブラリにはアクセスできません）。"
+# Renderer degradation ladder toast (generic: GL or software rung)
+msgid "Renderer switched automatically — the previous renderer failed to start"
+msgstr "レンダラーを自動的に切り替えました — 前のレンダラーは起動できませんでした"
+
+# QConnect startup behavior (Settings > Playback, ported from Tauri)
+msgid "Auto-connect Qobuz Connect on startup"
+msgstr "起動時にQobuz Connectを自動接続"
+msgid "Choose whether Qobuz Connect activates automatically when QBZ launches."
+msgstr "QBZの起動時にQobuz Connectを自動的に有効にするかを選択します。"
+msgid "Remember state"
+msgstr "状態を記憶"
+msgid "On by default"
+msgstr "デフォルトでオン"
+msgid "Off by default"
+msgstr "デフォルトでオフ"
+
+msgid "QBZ recovered from repeated startup crashes — some restored state was reset"
+msgstr "QBZ は起動時の連続クラッシュから復旧しました — 復元された状態の一部がリセットされました"
+
+# QConnect device name (Settings > Playback, ported from Tauri)
+msgid "Qobuz Connect device name"
+msgstr "Qobuz Connectのデバイス名"
+
+msgid "The name other Qobuz Connect apps see for this device. Applies on the next connection."
+msgstr "他のQobuz Connectアプリに表示されるこのデバイスの名前です。次回の接続時に適用されます。"

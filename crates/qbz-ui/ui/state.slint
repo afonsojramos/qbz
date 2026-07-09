@@ -168,6 +168,15 @@ export global HomeState {
     in property <[SlimItem]> popular: [];
     in property <[SlimItem]> recent: [];
     in property <[AlbumCardItem]> recent-albums: [];
+    // The #566 ported rails — same data pipelines as their ForYouState twins
+    // but separate lifecycles (Home loads them eagerly with the discover
+    // index; For You lazily on first open). The HomeView arms self-hide
+    // while empty. Titles: favorite-albums / release-watch are set by Rust;
+    // top-artists' title is @tr in the view arm (bare list, like For You).
+    // (qobuzMixes, the fourth ported section, is static tiles — no state.)
+    in property <DiscoverSection> favorite-albums;
+    in property <DiscoverSection> release-watch;
+    in property <[SlimItem]> top-artists: [];
     // Qobuz Playlists row (Home + Editor's Picks). Single-cover cards; the
     // active tab's set is swapped in by crate::home::select_tab.
     in property <[SearchPlaylistItem]> playlists: [];
@@ -192,6 +201,18 @@ export global HomeActions {
     callback toggle-playlist-tag(string);
     // Clear all selected category tags (back to showing every playlist).
     callback clear-playlist-tags();
+    // "View all" on the Recently Played Albums rail -> the full-page listing
+    // (RecentAlbumsView), fed from the local play-history store.
+    callback open-recent-albums();
+}
+
+// RecentAlbumsView — the full "Recently Played Albums" page opened from the
+// Home rail's "View all". Fed from the LOCAL play-history store (capped at
+// 24, see crate::recently), so it needs no paging/search state; the loader
+// repopulates `albums` on every navigation.
+export global RecentAlbumsState {
+    in property <[AlbumCardItem]> albums: [];
+    in property <bool> loading: false;
 }
 
 // ---------------------------------------------------------------------------
@@ -958,7 +979,7 @@ export global DragActions {
 }
 
 // Which content view the shell shows.
-export enum ContentView { home, album, artist, artist-releases, settings, search, musician, label, label-releases, award, award-albums, location, favorites, mix, playlist, discover-browse, playlist-manager, offline-manager, blacklist-manager, local-library, local-album, mixtapes, collections, mixtape-detail, discography-builder, purchases, purchase-album }
+export enum ContentView { home, album, artist, artist-releases, settings, search, musician, label, label-releases, award, award-albums, location, favorites, mix, playlist, discover-browse, recent-albums, playlist-manager, offline-manager, blacklist-manager, local-library, local-album, mixtapes, collections, mixtape-detail, discography-builder, purchases, purchase-album }
 
 // In-app toast (transient notification). Mirrors Tauri's toastStore:
 // a single toast at a time (a new one replaces the current), auto-hidden
@@ -1079,6 +1100,10 @@ export global LocalLibraryState {
     in property <bool> tracks-load-failed: false;
     in-out property <int> tracks-next-offset: 0;
     in-out property <string> tracks-search: "";
+    // SQL-side sort (defines the pagination order): "default" | "artist-asc"
+    //   | "artist-desc" | "title-asc" | "title-desc" | "year-desc"
+    //   | "year-asc" | "added-desc"
+    in-out property <string> tracks-sort: "default";
     // Group-by + multi-select (this slice). `tracks-visible` is the
     // group-ordered + search-filtered render model (the list renders THIS).
     in property <[TrackItem]> tracks-visible: [];
@@ -1212,6 +1237,8 @@ export global LocalLibraryActions {
     callback track-action(string /* track id */, string /* action */);
     // Group-by mode (off|album|artist|name), persisted.
     callback tracks-set-group(string /* mode */);
+    // SQL sort key (default|artist-asc|...|added-desc), persisted; page-1 re-query.
+    callback tracks-set-sort(string /* key */);
     // Toggle the multi-select checkbox column.
     callback tracks-toggle-multi-select();
     // Bulk bar action: select-all | clear | queue | play-next | add-to-playlist.
@@ -2859,6 +2886,18 @@ export global SettingsState {
     in-out property <[string]> retry-behaviors: [];
     in-out property <int> retry-behavior-index: 0;
 
+    // Playback — "Auto-connect Qobuz Connect on startup" dropdown
+    // (remember-last / on / off). Backed by the QConnect settings DB via the
+    // Rust controller, which owns the index -> mode mapping.
+    in-out property <[string]> qconnect-startup-modes: [];
+    in-out property <int> qconnect-startup-index: 0;
+    // Playback — Qobuz Connect device name. The persisted custom override
+    // ("" = unset) plus the effective default name shown as the input
+    // placeholder ("Qbz - {hostname}"). Backed by the QConnect settings DB
+    // via the settings-string callback; applies on the next connect.
+    in-out property <string> qconnect-device-name: "";
+    in-out property <string> qconnect-device-name-default: "";
+
     // --- OFFLINE MODE --------------------------------------------------------
 
     // Settings > Offline, MODE group (the app operating without Qobuz — NOT
@@ -2898,21 +2937,53 @@ export global AppearanceState {
 
     in-out property <bool> album-header-gradient: true;
 
-    // Auto-Theme (shown when the "System" theme is selected). Source:
-    // 0 = System Colors, 1 = Wallpaper Sync, 2 = Custom Image.
+    // True while the "System" theme is selected (native OS-palette follow).
     in-out property <bool> theme-is-system: false;
+    // Auto-Theme (shown when the appended "Auto (dynamic)" theme is selected).
+    // Source: 0 = System Colors, 1 = Wallpaper Sync, 2 = Custom Image.
+    in-out property <bool> theme-is-auto: false;
     in-out property <[string]> auto-theme-sources: [@tr("System Colors"), @tr("Wallpaper Sync"), @tr("Custom Image")];
     in-out property <int> auto-theme-source-index: 0;
     in-out property <string> auto-theme-custom-path: "";
     in-out property <bool> auto-theme-generating: false;
     in-out property <string> auto-theme-detected-de: "";
 
+    // --- Custom theme editor (shown when the appended "Custom" theme is
+    // selected). The editable base is 12 semantic tokens; Rust seeds these
+    // swatch colors from the persisted custom_theme.json and re-derives the
+    // whole palette live on every edit. `custom-open-token` holds the key of the
+    // single token whose inline ColorPicker is expanded ("" = none).
+    in-out property <bool> theme-is-custom: false;
+    // Swatch colors for each editable base token, seeded from Rust.
+    in-out property <color> custom-surface-main: #000000;
+    in-out property <color> custom-surface-card: #0a0a0a;
+    in-out property <color> custom-surface-elevated: #1a1a1a;
+    in-out property <color> custom-text-primary: #ffffff;
+    in-out property <color> custom-text-secondary: #cccccc;
+    in-out property <color> custom-accent: #4285f4;
+    in-out property <color> custom-danger: #ef4444;
+    in-out property <color> custom-warning: #fbbf24;
+    in-out property <color> custom-success: #3fae6a;
+    in-out property <color> custom-border: #2a2a2a;
+    in-out property <color> custom-favorite: #ef4444;
+    in-out property <bool> custom-is-dark: true;
+    // Key of the token whose inline picker is open ("" = all collapsed).
+    in-out property <string> custom-open-token: "";
+    // A single token's color changed (drag-live). key = token id, color = value.
+    callback custom-set-token(string /* key */, color /* value */);
+    // A single token committed from the HEX field. key = token id, hex = #rrggbb.
+    callback custom-set-token-hex(string /* key */, string /* hex */);
+    // Re-seed the base from the currently active theme ("Start from current").
+    callback custom-seed-from-current();
+    // Flip the custom theme polarity (dark/light) and re-derive.
+    callback custom-toggle-dark(bool /* is-dark */);
+
     // --- TYPOGRAPHY / SCALE / LANGUAGE -------------------------------------
     // NOTE: the old Tauri-style percentage `ui-scales` placeholder properties
     // that lived here were superseded by the working interface-size presets
     // (`ui-scale-options` / `ui-scale-index` in the INTERFACE SIZE block
     // further down, wired to SLINT_SCALE_FACTOR in main.rs).
-    in-out property <[string]> languages: [@tr("Auto"), "English", "Español", "Français", "Deutsch", "Português", "Русский", "日本語"];
+    in-out property <[string]> languages: [@tr("Auto"), "English", "Español", "Français", "Deutsch", "Português", "Русский", "日本語", "Nederlands"];
     in-out property <int> language-index: 0;
     in-out property <[string]> fonts: ["LINE Seed JP", "Montserrat", "Noto Sans", "Source Sans 3", "System"];
     in-out property <int> font-index: 0;
@@ -2958,6 +3029,14 @@ export global AppearanceState {
     // macOS = overlay (native traffic lights over the header). The .slint
     // default is the safe Linux one.
     in-out property <bool> use-system-title-bar: true;
+    // APPLIED chrome state (what the window was actually created with, vs the
+    // persisted pref above which the settings toggle edits). All chrome
+    // bindings (no-frame, header drag/inset/controls, Purchases placement)
+    // read THIS one. Rust decides per platform how the pref propagates:
+    // Linux mirrors the pref here live (hot apply, today's behavior); macOS
+    // leaves it at the startup value (the overlay attributes are fixed at
+    // window creation — restart to apply).
+    in-out property <bool> system-title-bar-active: true;
     // Tiling-WM variant: frameless without drawn controls / header drag.
     in-out property <bool> hide-title-bar: false;
     // Phase 2 (deferred): rounded corners matching the desktop decoration.
@@ -3907,6 +3986,12 @@ export global NowPlayingState {
     in property <string> artist;
     in property <string> album;
     in property <string> album-id;
+    // Whether the playing track's ALBUM is a library favorite. Seeded from
+    // fav_cache in refresh_now_playing_meta (playback.rs) on every track-meta
+    // push, and flipped live by set_album_row_favorite (main.rs) when a
+    // favorite toggle from ANY surface matches album-id. Drives the "+"
+    // flyout's add/remove-album-to-collection entry (TransportControls).
+    in property <bool> album-favorite: false;
     in property <string> artist-id;
     in property <image> artwork;
     // Higher-res cover (~300px) for the hover preview that floats above the
@@ -4333,6 +4418,12 @@ export global QueueState {
     callback play-history(int);
     // Remove the upcoming entry at `index` within the current page slice.
     callback remove-upcoming(int);
+    // Remove every upcoming entry after the page-local `index` (that row is
+    // kept). The Rust controller resolves it to a queue-wide upcoming index.
+    callback remove-all-after(int);
+    // Open the Add-to-Playlist picker seeded with the upcoming row at the
+    // page-local `index`.
+    callback add-to-playlist(int);
     // Reorder the upcoming list: move the page-local row `from` to the insertion
     // slot `to` (0 = before the first upcoming row, N = after the last). The Rust
     // controller resolves the page-local indices to queue-wide upcoming indices
@@ -4647,6 +4738,9 @@ export global FavoritesActions {
     callback albums-set-sort(string /* sort key */);
     callback albums-set-group(string /* off | alpha | artist */);
     callback albums-shuffle();
+    // Windowed grid: the visible row band changed (item indices into
+    // albums-visible, prefetch margin included) — dispatch artwork for it.
+    callback albums-window-changed(int /* first */, int /* last */);
     callback unfavorite-track(string /* track id */);
     callback unfavorite-album(string /* album id */);
     callback retry-load();

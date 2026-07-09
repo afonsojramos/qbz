@@ -30,10 +30,14 @@ urlencoding = "2"
 [target.'cfg(target_os = "linux")'.dependencies]
 mpris-server = "0.8"
 async-channel = "2"
-# XDG notification portal (goes over D-Bus). Same crate + tokio runtime the
-# secret portal already pulls in (qbz-credentials uses ashpd 0.13/tokio).
+# XDG notification portal (goes over D-Bus). async-io, NOT tokio: zbus 5's
+# "tokio" feature unifies graph-wide and its executor then requires a tokio
+# reactor on EVERY thread that opens a zbus connection — accesskit_unix/atspi
+# (Slint accessibility) and ksni run theirs on plain threads and panicked at
+# startup ("there is no reactor running"). async-io futures still await fine
+# inside our tokio runtime. Keep in sync with qbz-credentials/Cargo.toml.
 ashpd = { version = "0.13", default-features = false, features = [
-    "tokio",
+    "async-io",
     "notification",
 ] }
 

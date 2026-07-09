@@ -8,7 +8,7 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { NavState, ContentView, SettingsState } from "../state.slint";
+import { NavState, ContentView, SettingsState, LogViewerState } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { NavButtons } from "../shell/NavButtons.slint";
 import { AudioSettings } from "AudioSettings.slint";
@@ -67,6 +67,7 @@ export component SettingsView inherits Rectangle {
     callback settings-bool(string, bool);
     callback settings-select(string, int);
     callback settings-slider(string, int);
+    callback settings-string(string, string);
     callback settings-reset();
     callback settings-release-device();
 
@@ -110,8 +111,8 @@ export component SettingsView inherits Rectangle {
                     padding-left: 24px;
                     padding-right: 12px;
                     padding-top: 4px;
+                    padding-bottom: 16px;
                     spacing: 4px;
-                    alignment: start;
                     SubNavItem {
                         icon: @image-url("../assets/icons/volume-2.svg");
                         label: @tr("Audio");
@@ -178,6 +179,20 @@ export component SettingsView inherits Rectangle {
                             SettingsState.section = 5;
                         }
                     }
+                    // Absorbs the leftover height so the log affordance below
+                    // pins to the bottom of the sub-nav column.
+                    Rectangle { }
+                    // Always-visible log uploader entry (any Settings section):
+                    // people filing issues could not find the uploader buried
+                    // under Developer > Open log viewer, so logs never arrived
+                    // with bug reports. Opens the same viewer (copy + upload).
+                    SubNavItem {
+                        icon: @image-url("../assets/icons/cloud-upload.svg");
+                        label: @tr("Share logs");
+                        clicked => {
+                            LogViewerState.open = true;
+                        }
+                    }
                 }
             }
 
@@ -233,6 +248,9 @@ export component SettingsView inherits Rectangle {
                         }
                         settings-slider(k, v) => {
                             root.settings-slider(k, v);
+                        }
+                        settings-string(k, s) => {
+                            root.settings-string(k, s);
                         }
                     }
                     // Appearance — a structural replica; rows bind to

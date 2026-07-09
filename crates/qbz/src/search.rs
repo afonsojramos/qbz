@@ -967,7 +967,9 @@ pub async fn load_cortinilla_local(
     let q_log = q.clone();
     let rows: Vec<qbz_library::LocalTrack> = tokio::task::spawn_blocking(move || {
         let mut rows = crate::library_db::with_db(|db| {
-            db.search_with_filter_page(q.trim(), 0, limit, true, exclude_network)
+            // "default" sort: the cortinilla has no sort control; keep the
+            // historical album-grouped order.
+            db.search_with_filter_page(q.trim(), 0, limit, true, exclude_network, "default")
         })
         .unwrap_or_default();
         if plex_enabled {
@@ -1175,6 +1177,9 @@ where
 
 fn album_item(row: AlbumRow) -> AlbumCardItem {
     AlbumCardItem {
+        // Favorite heart state from the login-seeded cache (kept live by
+        // main::set_album_row_favorite when a favorite toggles anywhere).
+        is_favorite: crate::fav_cache::is_album_favorite(&row.id),
         id: row.id.into(),
         title: row.title.into(),
         artist: row.artist.into(),

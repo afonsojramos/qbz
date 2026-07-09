@@ -26,11 +26,13 @@ mod artist_prefs;
 mod artist_releases;
 mod artwork;
 mod auth;
+mod auto_theme;
 mod award;
 mod blacklist_manager;
 mod booklet;
 mod commands;
 mod custom_artwork;
+mod custom_theme;
 mod diagnostics;
 #[cfg(target_os = "linux")]
 mod glibc_compat;
@@ -117,6 +119,7 @@ mod search;
 mod selection;
 mod session_persist;
 mod search_service;
+mod single_instance;
 // WGPU UNDERLAY SPIKE: GPU fragment-shader background for ImmersiveView.
 mod shader_underlay;
 mod settings;
@@ -128,6 +131,8 @@ pub use qbz_slint_common::toast;
 mod tray;
 mod tray_settings;
 mod ui_prefs;
+mod viewport;
+mod ui_watchdog;
 mod whats_new;
 
 use std::sync::Arc;
@@ -415,6 +420,13 @@ async fn enter_shell(
     // background — store reads and device enumeration are blocking.
     spawn_settings_snapshot_load(runtime.clone(), weak.clone(), settings_ctx.clone());
 
+    // Qobuz Connect startup auto-connect (Settings > Playback): "On by
+    // default", or "Remember state" + last session ended connected, drives the
+    // SAME connect path as the bar toggle. Online shell entries only — the
+    // offline entry (`enter_shell_offline`) never auto-connects, and connect()
+    // itself refuses offline / uninitialized sessions. Fires once per process.
+    qconnect_service::spawn_startup_auto_connect(&tokio::runtime::Handle::current());
+
     // Load the genre-filter parents + persisted selection, then seed
     // the popup state. Done before the discover load so the first
     // fetch honors a remembered genre selection.
@@ -431,7 +443,12 @@ async fn enter_shell(
     // refresh its metadata explicitly. No audio is loaded — playback stays
     // stopped until the user hits play (Phase B then seeks to the saved
     // position when `resume_playback_position` is on).
-    if session_persist::restore(&runtime).await {
+    if crash_chain_level() >= 3 {
+        // Crash-chain level >=3: two consecutive starts died even after the
+        // view-restore reset — bypass the queue restore for THIS boot only
+        // (the persisted queue stays on disk; a healthy boot restores it).
+        log::warn!("[crash-chain] session-persist queue restore bypassed this boot");
+    } else if session_persist::restore(&runtime).await {
         playback::refresh_now_playing_meta(&runtime, &weak).await;
         // Repaint the queue sidebar/list — set_queue_with_order emits
         // QueueUpdated, but the queue UI repaints from explicit refreshes.
@@ -467,7 +484,21 @@ async fn enter_shell(
     // — which loads the view's data, NOT a blank set_view (the Tauri precedent).
     {
         let prefs = crate::ui_prefs::load();
-        if prefs.startup_page == "remember" {
+        // Crash-chain gate: at level >=2 the persisted view restore was
+        // already reset by `arm_startup_probe` (last_nav "{}" / last_view
+        // "home"), so there is nothing valid to restore — skip the block
+        // explicitly, tell the user what happened, and stay on Home.
+        if crash_chain_level() >= 2 {
+            log::warn!("[crash-chain] persisted view restore skipped (recovery)");
+            let _ = weak.upgrade_in_event_loop(|w| {
+                crate::toast::info(
+                    &w,
+                    qbz_i18n::t(
+                        "QBZ recovered from repeated startup crashes — some restored state was reset",
+                    ),
+                );
+            });
+        } else if prefs.startup_page == "remember" {
             // Legacy top-level fallback (id-free surfaces) — the only thing that
             // can be restored offline (these load from local/offline data).
             let legacy = |key: &str| match key {
@@ -535,12 +566,19 @@ async fn enter_shell_offline(
     image_cache: artwork::ImageCache,
     settings_ctx: Arc<settings::SettingsCtx>,
 ) -> Result<(), String> {
-    // Never open the empty user-0 profile: offline mode needs a previous
-    // session's data (Tauri falls back to user 0; the port refuses — the
-    // login UI hides the link in that case, this is the backstop).
-    let Some(user_id) = qbz_app::user_data::UserDataPaths::load_last_user_id() else {
-        return Err("no previous session — offline mode requires a prior login".to_string());
-    };
+    // No previous session → the GUEST profile, user 0 (#553; restores the
+    // Tauri fallback this port used to refuse). The guest builds a real
+    // per-user store set (local library, mixtapes, prefs) under users/0;
+    // the first successful login ADOPTS it (AppRuntime::activate renames
+    // users/0 to the real id when that account has no profile here yet).
+    // `activate_offline` below resolves the same id — 0 is never persisted
+    // as the last-user marker, so it never masquerades as a real session.
+    let user_id = qbz_app::user_data::UserDataPaths::load_last_user_id().unwrap_or(0);
+    if user_id == 0 {
+        log::info!(
+            "[qbz-slint] offline shell: no previous session — entering the guest profile (user 0)"
+        );
+    }
 
     // Session scaffolding at the last user (session store, runtime state).
     runtime.activate_offline().await?;
@@ -701,6 +739,32 @@ async fn reload_home(
                     jobs.push(job);
                 }
             }
+
+            // #566 ported-rail covers — Library Albums / Release Watch are
+            // Qobuz catalog albums and Top Artists are Qobuz artist images,
+            // so the plain loader applies (same as their For You twins).
+            // Prefetched regardless of the pref state, like the slim grids
+            // above: the models are populated either way and the configurator
+            // re-render is cache-only, so enabling a section must find its
+            // covers ready. (qobuzMixes is static tiles — no artwork.)
+            jobs.extend(data.favorite_albums.iter().enumerate().filter_map(|(idx, card)| {
+                (!card.artwork_url.is_empty()).then(|| artwork::ArtworkJob {
+                    target: artwork::ArtworkTarget::HomeFavoriteAlbum { idx },
+                    url: card.artwork_url.clone(),
+                })
+            }));
+            jobs.extend(data.release_watch.iter().enumerate().filter_map(|(idx, card)| {
+                (!card.artwork_url.is_empty()).then(|| artwork::ArtworkJob {
+                    target: artwork::ArtworkTarget::HomeReleaseWatchAlbum { idx },
+                    url: card.artwork_url.clone(),
+                })
+            }));
+            jobs.extend(data.top_artists.iter().enumerate().filter_map(|(idx, artist)| {
+                (!artist.artwork_url.is_empty()).then(|| artwork::ArtworkJob {
+                    target: artwork::ArtworkTarget::HomeTopArtist { idx },
+                    url: artist.artwork_url.clone(),
+                })
+            }));
 
             // Qobuz Playlists row covers for the active tab (single-cover,
             // Qobuz CDN URLs → the plain loader, never the local/Plex funnel).
@@ -993,11 +1057,21 @@ fn install_browser_mouse_nav(window: &AppWindow) {
                 }
                 return EventResult::Propagate;
             }
+            // A deliberate close is also liveness (a crash never emits one) —
+            // without this, a launch-then-close-from-the-taskbar inside the
+            // fallback window would falsely degrade the renderer next start.
+            WindowEvent::CloseRequested => {
+                disarm_renderer_sentinel_on_liveness("close request");
+                return EventResult::Propagate;
+            }
             WindowEvent::MouseInput {
                 state: ElementState::Pressed,
                 button,
                 ..
             } => {
+                // A real click = the app reached a usable state; the startup
+                // renderer sentinel can stand down (see its doc).
+                disarm_renderer_sentinel_on_liveness("mouse input");
                 let Some(window) = weak.upgrade() else {
                     return EventResult::Propagate;
                 };
@@ -1036,6 +1110,8 @@ fn install_browser_mouse_nav(window: &AppWindow) {
             WindowEvent::KeyboardInput { event: key_event, .. }
                 if key_event.state == ElementState::Pressed =>
             {
+                // Key press = usable app; stand the startup sentinel down.
+                disarm_renderer_sentinel_on_liveness("key input");
                 let Some(window) = weak.upgrade() else {
                     return EventResult::Propagate;
                 };
@@ -1049,6 +1125,49 @@ fn install_browser_mouse_nav(window: &AppWindow) {
                         recording.as_str(),
                         &key_event.logical_key,
                     );
+                }
+
+                // (A2) Dead-key compose commits (e.g. us(alt-intl): ' is
+                // dead_acute; ' + space = "'", ' + ' = "´", ' + e = "é").
+                // winit composes via xkb and delivers the COMMITTED text in
+                // `event.text`, but Slint's winit backend maps `logical_key`
+                // first and only falls back to `event.text` — so when the
+                // second key of the sequence is a named key (Space) or a dead
+                // key, the composed character is discarded and an apostrophe
+                // can never be typed into any text field. Detect the cases
+                // where the composed text differs from what Slint would
+                // synthesize and dispatch it ourselves as a synthetic key
+                // event, swallowing the raw one. Gated on a focused text
+                // input so hotkey behavior outside fields is untouched.
+                if window.global::<UiFocusState>().get_text_input_focused() {
+                    if let Some(txt) = &key_event.text {
+                        let composed_differs = match &key_event.logical_key {
+                            // Second key was a printable: winit already folds
+                            // the compose result into Key::Character, equal
+                            // text means no compose was involved.
+                            Key::Character(s) => s.as_str() != txt.as_str(),
+                            // ' + space commits the non-combining glyph, but
+                            // logical_key stays Named(Space) -> Slint would
+                            // insert a plain space.
+                            Key::Named(NamedKey::Space) => txt.as_str() != " ",
+                            // ' + ' commits the non-combining accent while
+                            // logical_key stays Key::Dead -> Slint's fallback
+                            // DOES read event.text here, but route it through
+                            // the same synthetic path for consistency.
+                            Key::Dead(_) => true,
+                            _ => false,
+                        };
+                        if composed_differs && !txt.chars().any(|c| c.is_control()) {
+                            let shared: slint::SharedString = txt.as_str().into();
+                            window.window().dispatch_event(
+                                slint::platform::WindowEvent::KeyPressed { text: shared.clone() },
+                            );
+                            window.window().dispatch_event(
+                                slint::platform::WindowEvent::KeyReleased { text: shared },
+                            );
+                            return EventResult::PreventDefault;
+                        }
+                    }
                 }
 
                 // (B) Steal Up/Down ONLY while a search dropdown is open, BEFORE
@@ -1320,6 +1439,122 @@ fn set_row_favorite(window: &AppWindow, track_id: &str, favorite: bool) {
     if hero.id == track_id && hero.is_favorite != favorite {
         hero.is_favorite = favorite;
         search.set_most_popular_track(hero);
+    }
+}
+
+/// Album counterpart of [`set_row_favorite`]: flip the `is-favorite` heart on
+/// every visible album CARD matching `album_id`, across all card surfaces
+/// (artist discography, album-detail carousels, home/discover/for-you rows,
+/// search, label/award grids, favorites). Cards read `fav_cache` when they are
+/// (re)built; this keeps the ones already on screen in sync the instant a
+/// favorite is added or removed anywhere (album header heart, card heart,
+/// favorites-view unfavorite).
+fn set_album_row_favorite(window: &AppWindow, album_id: &str, favorite: bool) {
+    let flip = |model: &slint::ModelRc<AlbumCardItem>| {
+        for i in 0..model.row_count() {
+            if let Some(mut item) = model.row_data(i) {
+                if item.id == album_id && item.is_favorite != favorite {
+                    item.is_favorite = favorite;
+                    model.set_row_data(i, item);
+                }
+            }
+        }
+    };
+    let flip_section = |section: &DiscoverSection| flip(&section.albums);
+    let flip_sections = |model: &slint::ModelRc<DiscoverSection>| {
+        for s in 0..model.row_count() {
+            if let Some(section) = model.row_data(s) {
+                flip(&section.albums);
+            }
+        }
+    };
+
+    // Artist page — release sections + last-release + the in-page-search
+    // FULL cache (owned by artist.rs).
+    artist::set_release_card_favorite(window, album_id, favorite);
+    // Dedicated discography page (View all).
+    flip(&window.global::<ArtistReleasesState>().get_albums());
+    // Album detail carousels — From the same artist / Listening suggestions.
+    let album = window.global::<AlbumState>();
+    flip_section(&album.get_more_from_artist());
+    flip_section(&album.get_suggestions_section());
+    flip_section(&album.get_lastfm_suggestions_section());
+    // Search results + the most-popular album hero.
+    let search = window.global::<SearchState>();
+    flip(&search.get_albums());
+    let mut hero = search.get_most_popular_album();
+    if hero.id == album_id && hero.is_favorite != favorite {
+        hero.is_favorite = favorite;
+        search.set_most_popular_album(hero);
+    }
+    // Home / Editor's Picks — the descriptor-driven carousels render the
+    // page; HomeState.sections + recent-albums back the fixed-data arms.
+    let home = window.global::<HomeState>();
+    flip_sections(&home.get_sections());
+    flip(&home.get_recent_albums());
+    let discover = window.global::<DiscoverState>();
+    for model in [
+        discover.get_home_sections(),
+        discover.get_editor_sections(),
+        discover.get_foryou_sections(),
+    ] {
+        for s in 0..model.row_count() {
+            if let Some(desc) = model.row_data(s) {
+                flip(&desc.section.albums);
+            }
+        }
+    }
+    // Discover "View all" page.
+    let browse = window.global::<DiscoverBrowseState>();
+    flip(&browse.get_albums());
+    flip(&browse.get_visible());
+    // For You.
+    let foryou = window.global::<ForYouState>();
+    flip_section(&foryou.get_release_watch());
+    flip_section(&foryou.get_recent_albums());
+    flip_section(&foryou.get_favorite_albums());
+    flip_section(&foryou.get_more_from_library());
+    flip_section(&foryou.get_rediscover());
+    flip(&foryou.get_spotlight_albums());
+    // Recommendations (external reco).
+    let reco = window.global::<ExternalRecoState>();
+    flip_section(&reco.get_rec_albums());
+    flip_section(&reco.get_fresh_releases());
+    flip_section(&reco.get_deep_cut_albums());
+    flip_section(&reco.get_top_albums());
+    // Label pages (landing carousels + releases grid).
+    let label = window.global::<LabelState>();
+    flip(&label.get_albums());
+    flip(&label.get_visible());
+    flip_sections(&label.get_grouped());
+    flip_section(&label.get_releases_section());
+    flip_section(&label.get_critics_section());
+    // Awards listing.
+    let award = window.global::<AwardState>();
+    flip(&award.get_albums());
+    flip(&award.get_visible());
+    // Favorites — albums tab (flat + grouped) and the artists sidepanel.
+    let favs = window.global::<FavoritesState>();
+    flip(&favs.get_albums());
+    flip(&favs.get_albums_visible());
+    flip_sections(&favs.get_albums_grouped());
+    flip_sections(&favs.get_selected_artist_sections());
+    // Now-playing bar "+" flyout — its add/remove-album-to-collection entry
+    // reads NowPlayingState.album-favorite; flip it when the toggled album is
+    // the one playing so the label stays honest without a track change.
+    // (Seeded per-track from fav_cache in playback::refresh_now_playing_meta.)
+    let np = window.global::<NowPlayingState>();
+    if np.get_album_id() == album_id {
+        np.set_album_favorite(favorite);
+    }
+    // Album-detail HEADER heart: without this, a toggle from any other
+    // surface (cards, NPB flyout) leaves the open album page's heart stale
+    // and its next click silently UNDOES the user's action (the toggle
+    // reads the already-flipped cache). Redundant-but-harmless when the
+    // header arm itself called us — same value.
+    let album_state = window.global::<AlbumState>();
+    if album_state.get_id() == album_id {
+        album_state.set_is_favorite(favorite);
     }
 }
 
@@ -2103,6 +2338,7 @@ fn scope_for(entry: &nav::NavEntry) -> String {
         nav::NavEntry::Favorites { tab } => format!("fav:{tab}"),
         nav::NavEntry::LocalLibrary { tab } => format!("ll:{tab}"),
         nav::NavEntry::DiscoverBrowse { .. } => "discover-browse".into(),
+        nav::NavEntry::RecentAlbums => "recent-albums".into(),
         nav::NavEntry::Mix { .. } => "mix".into(),
         nav::NavEntry::Playlist(_) => "playlist".into(),
         nav::NavEntry::PlaylistManager => "playlist-manager".into(),
@@ -2283,6 +2519,9 @@ fn apply_entry(
                 title,
                 current_genre_filter(),
             );
+        }
+        nav::NavEntry::RecentAlbums => {
+            navigate_recent_albums(weak.clone(), handle, image_cache.clone());
         }
         nav::NavEntry::Mix { kind } => {
             navigate_mix(runtime.clone(), weak.clone(), handle, image_cache.clone(), kind);
@@ -2635,6 +2874,71 @@ fn navigate_award_albums(
     });
 }
 
+/// Open the full "Recently Played Albums" page (the Home rail's "View all").
+/// LOCAL data: the play-history album store (crate::recently) mapped through
+/// the same card funnel as the rail (`home::recent_album_cards` — blacklist
+/// filter + date localization; `home::card_to_item` — is-favorite seeding),
+/// so no runtime and no error branch (missing store = empty list). Artwork
+/// splits Qobuz covers (plain loader) from Plex/local covers (source-aware
+/// funnel), mirroring the rail's dispatch in `reload_home`.
+fn navigate_recent_albums(
+    weak: slint::Weak<AppWindow>,
+    handle: &tokio::runtime::Handle,
+    image_cache: artwork::ImageCache,
+) {
+    handle.spawn(async move {
+        let _ = weak.upgrade_in_event_loop(|w| {
+            let s = w.global::<RecentAlbumsState>();
+            s.set_loading(true);
+            s.set_albums(slint::ModelRc::new(slint::VecModel::from(
+                Vec::<AlbumCardItem>::new(),
+            )));
+            w.global::<NavState>().set_view(ContentView::RecentAlbums);
+        });
+        // Local file read + blacklist filter — cheap, but keep it off the UI
+        // thread like the sibling loaders.
+        let cards = home::recent_album_cards();
+        let mut jobs: Vec<artwork::ArtworkJob> = Vec::new();
+        let mut plex_jobs: Vec<artwork::ArtworkJob> = Vec::new();
+        for (idx, card) in cards.iter().enumerate() {
+            if card.artwork_url.is_empty() {
+                continue;
+            }
+            let job = artwork::ArtworkJob {
+                target: artwork::ArtworkTarget::RecentAlbumsPage { idx },
+                url: card.artwork_url.clone(),
+            };
+            if card.source == "plex" || card.source == "local" {
+                plex_jobs.push(job);
+            } else {
+                jobs.push(job);
+            }
+        }
+        let weak_for_plex = weak.clone();
+        let image_cache_plex = image_cache.clone();
+        let _ = weak.clone().upgrade_in_event_loop(move |w| {
+            // card_to_item seeds is-favorite from the login cache — UI thread,
+            // same as apply_home.
+            let items: Vec<AlbumCardItem> =
+                cards.into_iter().map(home::card_to_item).collect();
+            let s = w.global::<RecentAlbumsState>();
+            s.set_albums(slint::ModelRc::new(slint::VecModel::from(items)));
+            s.set_loading(false);
+        });
+        artwork::spawn_loads(jobs, weak, image_cache);
+        if !plex_jobs.is_empty() {
+            let plex = crate::plex_settings::get();
+            artwork::spawn_local_or_plex_loads(
+                plex_jobs,
+                plex.base_url,
+                plex.token,
+                weak_for_plex,
+                image_cache_plex,
+            );
+        }
+    });
+}
+
 /// Open the My-Purchases surface and lazy-load the active tab. Mirrors
 /// `navigate_favorites`: the view mounts immediately (spinner), then the active
 /// tab's data + the metadata (dlIds + per-type totals) load and project onto
@@ -2841,7 +3145,17 @@ fn navigate_favorites(
         match favorites::load_favorites(&runtime, tab).await {
             Ok(data) => {
                 let jobs = favorites::artwork_jobs(&data);
+                // WINDOWED artwork for the Albums tab (was: a job for every
+                // favorite album). Reset the pipeline BEFORE apply — apply's
+                // `derive_albums` dispatches the covers itself (flat grid =
+                // viewport band; list/grouped = full set). Other tabs keep
+                // the all-at-once `jobs` dispatch.
+                let is_albums = matches!(&data, favorites::FavData::Albums { .. });
+                let image_cache_for_ui = image_cache.clone();
                 let _ = weak.upgrade_in_event_loop(move |w| {
+                    if is_albums {
+                        favorites::begin_albums_artwork(image_cache_for_ui);
+                    }
                     favorites::apply_favorites(&w, data);
                 });
                 artwork::spawn_loads(jobs, weak.clone(), image_cache.clone());
@@ -3418,6 +3732,7 @@ fn reseed_i18n_labels(window: &AppWindow) {
         "Português".into(),
         "Русский".into(),
         "日本語".into(),
+        "Nederlands".into(),
     ])));
     state.set_immersive_search_actions(ModelRc::new(VecModel::from(vec![
         t("Disabled"),
@@ -5439,6 +5754,10 @@ static RENDERER_ADAPTERS: std::sync::OnceLock<String> = std::sync::OnceLock::new
 /// previous start died before its first paint; read once the UI is up to show
 /// the explanatory toast.
 static RENDERER_REVERTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Set when the AUTO-DETECTED wgpu tier crashed pre-paint on the previous
+/// start and the setting was degraded to "gl" (#542); read once the UI is up
+/// to show the explanatory toast.
+static RENDERER_DEGRADED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// One-line diagnostics summary of the active renderer + adapters.
 pub fn renderer_decision_summary() -> (String, String) {
@@ -5480,6 +5799,228 @@ fn renderer_sentinel_armed() -> bool {
     renderer_sentinel_path().map(|p| p.exists()).unwrap_or(false)
 }
 
+/// Startup crash-chain watchdog — the renderer-sentinel pattern generalized
+/// to the whole startup path (incident 2026-07-08: a "Recursion detected"
+/// render panic inside the RESTORED view fired before first input, so every
+/// start re-restored the crashing view and died — a crash-loop the renderer
+/// ladder could not see). A counter file is incremented at every launch
+/// BEFORE risky init and cleared by the same liveness proof that disarms
+/// the renderer sentinel; the value it had already reached at launch is the
+/// number of consecutive starts that died before liveness.
+///
+/// Recovery ladder (surgical: state is reset or bypassed, never deleted):
+/// - level 2 (one prior start died): reset the persisted view restore —
+///   `last_nav` -> "{}", `last_view` -> "home" — so this and future boots
+///   start on Home.
+/// - level >=3: additionally BYPASS the session-persist queue restore for
+///   this boot only (the persisted queue file is kept untouched).
+fn startup_probe_path() -> Option<std::path::PathBuf> {
+    Some(dirs::data_dir()?.join("qbz").join("startup_probe"))
+}
+
+/// This boot's crash-chain level (1 = clean previous shutdown/liveness).
+static CRASH_CHAIN_LEVEL: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+fn crash_chain_level() -> u8 {
+    CRASH_CHAIN_LEVEL.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+fn arm_startup_probe() {
+    let Some(path) = startup_probe_path() else { return };
+    let prev: u8 = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(0);
+    let level = prev.saturating_add(1);
+    CRASH_CHAIN_LEVEL.store(level, std::sync::atomic::Ordering::Relaxed);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Err(e) = std::fs::write(&path, level.to_string()) {
+        log::warn!("[crash-chain] could not arm the startup probe: {e}");
+    }
+    if level < 2 {
+        return;
+    }
+    log::warn!(
+        "[crash-chain] {} consecutive start(s) died before liveness — recovery level {level}",
+        level - 1
+    );
+    // Level 2: the persisted view restore is the prime suspect — reset it so
+    // the app starts on Home. This edits exactly last_nav/last_view; nothing
+    // else in ui_prefs is touched.
+    let mut prefs = crate::ui_prefs::load();
+    if prefs.last_nav.as_deref() != Some("{}") || prefs.last_view != "home" {
+        prefs.last_nav = Some("{}".to_string());
+        prefs.last_view = "home".to_string();
+        crate::ui_prefs::save(&prefs);
+        log::warn!(
+            "[crash-chain] reset persisted view restore: last_nav -> {{}}, last_view -> home"
+        );
+    }
+    if level >= 3 {
+        log::warn!(
+            "[crash-chain] level {level} — the session-persist queue restore will be \
+             bypassed this boot (queue data kept on disk)"
+        );
+    }
+}
+
+fn clear_startup_probe() {
+    if let Some(path) = startup_probe_path() {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+/// Disarm the sentinel on proof of LIVENESS: the first real user input (or
+/// a close request — a crash never emits one), with a 30s timer as the
+/// no-touch fallback. Once-guarded so the hot input path costs one relaxed
+/// swap after the first call.
+fn disarm_renderer_sentinel_on_liveness(signal: &str) {
+    static DISARMED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !DISARMED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        log::info!("[renderer] startup sentinel disarmed ({signal})");
+        clear_renderer_sentinel();
+        // Same liveness proof clears the startup crash-chain probe.
+        clear_startup_probe();
+        log::info!("[crash-chain] startup probe cleared ({signal})");
+        // The surviving rung must OUTLIVE the process: when this session ran
+        // on the ALTERNATE wgpu adapter, version-stamp that success so the
+        // next start arms the alt rung directly — otherwise the rung-2 win
+        // dies with the process and the machine crash-cycles every other
+        // launch (rung 1 default adapter, crash, rung 2, work, repeat).
+        if WGPU_ALT_ADAPTER.load(std::sync::atomic::Ordering::Relaxed) {
+            let mut prefs = crate::ui_prefs::load();
+            if prefs.renderer_wgpu_alt != env!("CARGO_PKG_VERSION") {
+                prefs.renderer_wgpu_alt = env!("CARGO_PKG_VERSION").to_string();
+                crate::ui_prefs::save(&prefs);
+                log::info!(
+                    "[renderer] alternate wgpu adapter survived — persisted for this build"
+                );
+            }
+        }
+    }
+}
+
+/// Arm the sentinel for a freshly auto-detected tier. Wgpu goes straight to
+/// the ALT-adapter rung when this build already proved the default adapter
+/// dead (`renderer_wgpu_alt` stamped at disarm time on an alt-rung run).
+/// Software is the unarmored floor. macOS stays out of the ladder.
+fn arm_auto_tier(tier: RendererTier, prefs: &crate::ui_prefs::UiPrefs) {
+    if cfg!(target_os = "macos") {
+        return;
+    }
+    match tier {
+        RendererTier::Wgpu => {
+            if prefs.renderer_wgpu_alt == env!("CARGO_PKG_VERSION") {
+                log::info!(
+                    "[renderer] default wgpu adapter is known-bad on this build -> \
+                     alternate adapter directly"
+                );
+                WGPU_ALT_ADAPTER.store(true, std::sync::atomic::Ordering::Relaxed);
+                arm_renderer_sentinel("auto-wgpu-alt");
+            } else {
+                arm_renderer_sentinel("auto-wgpu");
+            }
+        }
+        RendererTier::FemtovgGl => arm_renderer_sentinel("auto-gl"),
+        RendererTier::Software => {}
+    }
+}
+
+/// What the armed sentinel was protecting ("wgpu"/"gl"/"software" for a
+/// Settings override, "auto-wgpu"/"auto-wgpu-alt"/"auto-gl" for the auto
+/// ladder rungs).
+fn renderer_sentinel_value() -> Option<String> {
+    std::fs::read_to_string(renderer_sentinel_path()?).ok()
+}
+
+/// GPU topology seen during adapter enumeration: whether a discrete and an
+/// integrated GPU are BOTH present (hybrid machine). Set by
+/// `detect_hardware_gpu`; probed on demand for the forced-wgpu paths.
+#[derive(Clone, Copy, Default)]
+struct GpuTopology {
+    discrete: bool,
+    integrated: bool,
+}
+static GPU_TOPOLOGY: std::sync::OnceLock<GpuTopology> = std::sync::OnceLock::new();
+
+/// Ladder rung 2 (see `renderer_tier_from_prefs`): retry wgpu with the
+/// OPPOSITE PowerPreference after the default adapter failed a start —
+/// the #542 family is an adapter mixup, not a wgpu failure.
+static WGPU_ALT_ADAPTER: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Minimal adapter probe for the paths that skip `detect_hardware_gpu`
+/// (QBZ_RENDERER / Settings forcing the wgpu tier).
+fn probe_gpu_topology() -> GpuTopology {
+    use slint::wgpu_28::wgpu;
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        backends: wgpu::Backends::all(),
+        ..Default::default()
+    });
+    let adapters =
+        poll_ready(instance.enumerate_adapters(wgpu::Backends::all())).unwrap_or_default();
+    let mut topo = GpuTopology::default();
+    for adapter in &adapters {
+        match adapter.get_info().device_type {
+            wgpu::DeviceType::DiscreteGpu => topo.discrete = true,
+            wgpu::DeviceType::IntegratedGpu => topo.integrated = true,
+            _ => {}
+        }
+    }
+    topo
+}
+
+/// True when /sys/class/power_supply exposes a SYSTEM battery. Peripheral
+/// batteries (wireless mice etc.) report `scope=Device` — exclude them, or
+/// every desktop with a wireless mouse would classify as a laptop.
+fn linux_has_system_battery() -> bool {
+    let Ok(entries) = std::fs::read_dir("/sys/class/power_supply") else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let is_battery = std::fs::read_to_string(path.join("type"))
+            .map(|t| t.trim() == "Battery")
+            .unwrap_or(false);
+        if !is_battery {
+            continue;
+        }
+        let device_scope = std::fs::read_to_string(path.join("scope"))
+            .map(|s| s.trim().eq_ignore_ascii_case("device"))
+            .unwrap_or(false);
+        if !device_scope {
+            return true;
+        }
+    }
+    false
+}
+
+/// Default wgpu power preference (WGPU_POWER_PREF always wins, in the caller).
+/// LowPower keeps hybrid LAPTOPS on their integrated GPU: the panel is wired
+/// to it and this mostly-idle UI doesn't need the discrete card. On a hybrid
+/// DESKTOP the monitor usually hangs off the discrete card and the display-less
+/// iGPU cannot present the window surface — wgpu still picks it under LowPower
+/// and `Surface::configure` panics with "Invalid surface" (#542). So a hybrid
+/// machine WITHOUT a system battery (= desktop) defaults to HighPerformance.
+fn default_wgpu_power_preference() -> slint::wgpu_28::wgpu::PowerPreference {
+    use slint::wgpu_28::wgpu::PowerPreference;
+    if cfg!(target_os = "macos") {
+        return PowerPreference::LowPower;
+    }
+    let topo = GPU_TOPOLOGY.get_or_init(probe_gpu_topology);
+    if topo.discrete && topo.integrated && !linux_has_system_battery() {
+        log::info!(
+            "[renderer] hybrid discrete+integrated GPUs with no system battery (desktop) \
+             -> HighPerformance adapter default"
+        );
+        PowerPreference::HighPerformance
+    } else {
+        PowerPreference::LowPower
+    }
+}
+
 /// Decide + activate the Slint backend, returning whether the GPU (wgpu) renderer was
 /// selected. `false` => femtovg-GL or the pure software renderer is active and the caller
 /// must skip the wgpu shader underlay (neither exposes a WGPU28 GraphicsAPI). See the big
@@ -5503,6 +6044,24 @@ fn select_slint_backend() -> Result<bool, slint::PlatformError> {
     let attributes_hook = |attributes: i_slint_backend_winit::winit::window::WindowAttributes| {
         let creating_mini = crate::miniplayer::is_creating_mini();
         log::info!("[mini] window-attributes hook: creating_mini={creating_mini}");
+        // Wayland app_id / X11 WM_CLASS: without an explicit name winit sends
+        // no xdg_toplevel.set_app_id at all (and derives WM_CLASS from the
+        // binary name), so the compositor cannot match the window to
+        // com.blitzfc.qbz.desktop — blank dock icon, no running indicator,
+        // and clicking the pin spawns a second instance (#544). Set on BOTH
+        // windows so the miniplayer groups under the same icon.
+        #[cfg(all(unix, not(target_os = "macos")))]
+        let attributes = {
+            use i_slint_backend_winit::winit::platform::wayland::WindowAttributesExtWayland;
+            use i_slint_backend_winit::winit::platform::x11::WindowAttributesExtX11;
+            // Both traits expose `with_name`; UFCS picks each apart.
+            let attributes = WindowAttributesExtWayland::with_name(
+                attributes,
+                "com.blitzfc.qbz",
+                "com.blitzfc.qbz",
+            );
+            WindowAttributesExtX11::with_name(attributes, "com.blitzfc.qbz", "com.blitzfc.qbz")
+        };
         // Per-window swapchain alpha (vendored femtovg-wgpu patch): this hook runs
         // on the event loop thread right before the window ADAPTER — and therefore
         // its renderer backend — is created, and the backend CAPTURES the flag at
@@ -5540,11 +6099,27 @@ fn select_slint_backend() -> Result<bool, slint::PlatformError> {
         RendererTier::Wgpu => {
             // Explicit configuration instead of `default()`: default leaves the
             // adapter PowerPreference at None. Prefer the low-power (integrated)
-            // adapter — this UI is mostly idle and doesn't need a discrete GPU.
-            // WGPU_POWER_PREF still wins if set (same as WGPUSettings::default()).
+            // adapter — this UI is mostly idle — EXCEPT on hybrid desktops,
+            // where the iGPU can't present the surface (#542, see
+            // default_wgpu_power_preference). WGPU_POWER_PREF still wins if
+            // set (same as WGPUSettings::default()).
             let mut wgpu_settings = slint::wgpu_28::WGPUSettings::default();
             wgpu_settings.power_preference = slint::wgpu_28::wgpu::PowerPreference::from_env()
-                .unwrap_or(slint::wgpu_28::wgpu::PowerPreference::LowPower);
+                .unwrap_or_else(default_wgpu_power_preference);
+            // Alternate-adapter rung: the previous start died on the adapter
+            // this preference picks, so flip it (even over WGPU_POWER_PREF —
+            // anyone setting that env is debugging and reads the log line).
+            if WGPU_ALT_ADAPTER.load(std::sync::atomic::Ordering::Relaxed) {
+                use slint::wgpu_28::wgpu::PowerPreference;
+                wgpu_settings.power_preference = match wgpu_settings.power_preference {
+                    PowerPreference::HighPerformance => PowerPreference::LowPower,
+                    _ => PowerPreference::HighPerformance,
+                };
+                log::warn!(
+                    "[renderer] alternate-adapter rung: flipped power preference to {:?}",
+                    wgpu_settings.power_preference
+                );
+            }
             log::info!(
                 "[renderer] selecting wgpu (GPU) renderer (power_preference={:?})",
                 wgpu_settings.power_preference
@@ -5619,29 +6194,144 @@ fn requested_renderer_tier() -> (RendererTier, String) {
 
 /// Resolve the persisted Settings>Appearance renderer key ("auto" | "wgpu" |
 /// "gl" | "software"). A non-auto override is wrapped in the startup sentinel:
-/// armed here (before the risky backend/window init), disarmed shortly after
-/// the main window is up. If we find it still armed from the PREVIOUS run,
-/// that run never reached first paint with this override — revert to "auto"
-/// and auto-detect, so users can't lock themselves out with a bad choice.
+/// armed here (before the risky backend/window init), disarmed on the first
+/// real user input (or a fallback timer). If we find it still armed from the
+/// PREVIOUS run, that run never reached a usable state with this override —
+/// revert to "auto" and auto-detect, so users can't lock themselves out.
+///
+/// AUTO runs a degradation LADDER instead of a single fallback: each failed
+/// start moves one rung down, and the first rung that survives wins.
+///
+///   wgpu (default adapter)  -> wgpu (opposite PowerPreference) -> GL -> software
+///
+/// The alternate-adapter rung exists because the #542 family is an ADAPTER
+/// mixup, not a wgpu failure: on hybrid machines (mux laptops, desktops with
+/// the monitor on the discrete card) the heuristically-preferred adapter may
+/// be unable to present while the other one works perfectly — surrendering
+/// the whole GPU tier over that would be wrong. macOS stays out of the
+/// ladder by design (no GL tier there; it degrades back to wgpu).
 fn renderer_tier_from_prefs() -> (RendererTier, String) {
     let mut prefs = crate::ui_prefs::load();
-    let key = prefs.renderer.clone();
+    let mut key = prefs.renderer.clone();
+    // A persisted AUTO-degradation is version-keyed: a new build re-probes
+    // "auto" once (vendored renderer fixes / driver updates are likely since
+    // the rung was recorded); the ladder re-degrades within one start if the
+    // stack is still broken. User-chosen overrides carry no version marker
+    // and are never re-probed.
+    if key != "auto"
+        && !prefs.renderer_auto_degraded.is_empty()
+        && prefs.renderer_auto_degraded != env!("CARGO_PKG_VERSION")
+    {
+        log::info!(
+            "[renderer] '{key}' was auto-degraded by version {} — re-probing auto once on {}",
+            prefs.renderer_auto_degraded,
+            env!("CARGO_PKG_VERSION")
+        );
+        prefs.renderer = "auto".to_string();
+        prefs.renderer_auto_degraded.clear();
+        crate::ui_prefs::save(&prefs);
+        key = "auto".to_string();
+    }
     if key == "auto" {
-        return (detect_hardware_gpu(), "auto-detect".to_string());
+        if renderer_sentinel_armed() {
+            let attempted = renderer_sentinel_value();
+            clear_renderer_sentinel();
+            if !cfg!(target_os = "macos") {
+                match attempted.as_deref() {
+                    // Rung 2: the default-preference adapter died before the
+                    // app became usable. Retry wgpu on the OPPOSITE
+                    // PowerPreference before surrendering the GPU tier.
+                    Some("auto-wgpu") => {
+                        log::warn!(
+                            "[renderer] auto wgpu (default adapter) never reached a usable \
+                             state -> retrying wgpu on the alternate adapter"
+                        );
+                        WGPU_ALT_ADAPTER.store(true, std::sync::atomic::Ordering::Relaxed);
+                        arm_renderer_sentinel("auto-wgpu-alt");
+                        return (
+                            RendererTier::Wgpu,
+                            "auto-detect (alternate wgpu adapter after a failed start)"
+                                .to_string(),
+                        );
+                    }
+                    // Rung 3: both wgpu adapters failed -> persist GL
+                    // (compatibility), version-stamped for the re-probe.
+                    Some("auto-wgpu-alt") => {
+                        log::warn!(
+                            "[renderer] both wgpu adapters failed to start -> persisting \
+                             the GL (compatibility) renderer"
+                        );
+                        prefs.renderer = "gl".to_string();
+                        prefs.renderer_auto_degraded = env!("CARGO_PKG_VERSION").to_string();
+                        crate::ui_prefs::save(&prefs);
+                        RENDERER_DEGRADED.store(true, std::sync::atomic::Ordering::Relaxed);
+                        arm_renderer_sentinel("auto-gl");
+                        return (
+                            RendererTier::FemtovgGl,
+                            "Settings (gl — both wgpu adapters failed to start)".to_string(),
+                        );
+                    }
+                    // Rung 4: even GL died (broken EGL stacks exist) ->
+                    // software, the floor that cannot fail.
+                    Some("auto-gl") => {
+                        log::warn!(
+                            "[renderer] the GL renderer also failed to start -> persisting \
+                             the software renderer"
+                        );
+                        prefs.renderer = "software".to_string();
+                        prefs.renderer_auto_degraded = env!("CARGO_PKG_VERSION").to_string();
+                        crate::ui_prefs::save(&prefs);
+                        RENDERER_DEGRADED.store(true, std::sync::atomic::Ordering::Relaxed);
+                        return (
+                            RendererTier::Software,
+                            "Settings (software — wgpu and GL failed to start)".to_string(),
+                        );
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let tier = detect_hardware_gpu();
+        // Every fallible auto rung is sentinel-armed (GL stacks can be as
+        // broken as wgpu ones); a known-bad default adapter goes straight
+        // to the alt rung.
+        arm_auto_tier(tier, &prefs);
+        return (tier, "auto-detect".to_string());
     }
     if renderer_sentinel_armed() {
+        let attempted = renderer_sentinel_value();
+        clear_renderer_sentinel();
+        // Ladder continuation (rung 4 via the persisted-"gl" route): rung 3
+        // wrote prefs.renderer="gl" and armed "auto-gl", so its failure
+        // surfaces HERE, not in the auto branch. A USER-picked gl arms the
+        // literal "gl", never "auto-gl" — no ambiguity.
+        if attempted.as_deref() == Some("auto-gl") && !cfg!(target_os = "macos") {
+            log::warn!(
+                "[renderer] the ladder-persisted GL renderer also failed to start -> \
+                 persisting the software renderer"
+            );
+            prefs.renderer = "software".to_string();
+            prefs.renderer_auto_degraded = env!("CARGO_PKG_VERSION").to_string();
+            crate::ui_prefs::save(&prefs);
+            RENDERER_DEGRADED.store(true, std::sync::atomic::Ordering::Relaxed);
+            return (
+                RendererTier::Software,
+                "Settings (software — wgpu and GL failed to start)".to_string(),
+            );
+        }
         log::warn!(
-            "[renderer] previous start with renderer='{key}' never reached first paint \
+            "[renderer] previous start with renderer='{key}' never reached a usable state \
              -> reverting the setting to auto"
         );
-        clear_renderer_sentinel();
         prefs.renderer = "auto".to_string();
+        prefs.renderer_auto_degraded.clear();
         crate::ui_prefs::save(&prefs);
         RENDERER_REVERTED.store(true, std::sync::atomic::Ordering::Relaxed);
-        return (
-            detect_hardware_gpu(),
-            format!("auto-detect (reverted: '{key}' failed to start)"),
-        );
+        let tier = detect_hardware_gpu();
+        // Arm the re-detected tier too — if IT also fails, the next start
+        // continues down the ladder instead of looping.
+        arm_auto_tier(tier, &prefs);
+        return (tier, format!("auto-detect (reverted: '{key}' failed to start)"));
     }
     let tier = match key.as_str() {
         "wgpu" => RendererTier::Wgpu,
@@ -5652,8 +6342,14 @@ fn renderer_tier_from_prefs() -> (RendererTier, String) {
             return (detect_hardware_gpu(), "auto-detect".to_string());
         }
     };
-    log::info!("[renderer] Settings renderer override '{key}' (sentinel armed)");
-    arm_renderer_sentinel(&key);
+    // Software cannot fail to start — arming it would only invite false
+    // reverts from no-input quick sessions.
+    if tier != RendererTier::Software {
+        log::info!("[renderer] Settings renderer override '{key}' (sentinel armed)");
+        arm_renderer_sentinel(&key);
+    } else {
+        log::info!("[renderer] Settings renderer override 'software'");
+    }
     (tier, format!("Settings ({key})"))
 }
 
@@ -5694,8 +6390,14 @@ fn detect_hardware_gpu() -> RendererTier {
         ["v3dv", "hasvk", "panfrost", "panvk", "lima", "mali", "videocore", "llvmpipe"];
     let mut best = RendererTier::Software;
     let mut adapter_summary: Vec<String> = Vec::new();
+    let mut topo = GpuTopology::default();
     for adapter in &adapters {
         let info = adapter.get_info();
+        match info.device_type {
+            wgpu::DeviceType::DiscreteGpu => topo.discrete = true,
+            wgpu::DeviceType::IntegratedGpu => topo.integrated = true,
+            _ => {}
+        }
         if info.device_type == wgpu::DeviceType::Cpu {
             log::info!(
                 "[renderer] wgpu adapter: '{}' backend={:?} type={:?} class=cpu",
@@ -5748,6 +6450,7 @@ fn detect_hardware_gpu() -> RendererTier {
         }
     }
     let _ = RENDERER_ADAPTERS.set(adapter_summary.join("; "));
+    let _ = GPU_TOPOLOGY.set(topo);
     match best {
         RendererTier::Wgpu => log::info!("[renderer] real GPU adapter found -> wgpu renderer"),
         RendererTier::FemtovgGl => log::info!(
@@ -5840,6 +6543,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tokio_rt = tokio::runtime::Runtime::new()?;
     let _enter = tokio_rt.enter();
 
+    // Single-instance guard (issue #559, Tauri parity): a second launch asks
+    // the running instance to raise its window (MPRIS Raise → the tray raise
+    // path) and exits instead of starting a duplicate player. Any D-Bus
+    // problem falls through as primary — the guard never blocks startup.
+    #[cfg(target_os = "linux")]
+    if !single_instance::acquire_or_raise() {
+        log::info!("[qbz-slint] another instance owns the session bus name — raised it, exiting");
+        return Ok(());
+    }
+
+    // STARTUP CRASH-CHAIN WATCHDOG — armed after the single-instance guard
+    // (a raise-and-exit must not count as a crash) and BEFORE any risky init
+    // (renderer probing, window creation, view restore). Cleared by the same
+    // liveness proof that disarms the renderer sentinel. See
+    // `arm_startup_probe` for the recovery ladder.
+    arm_startup_probe();
+
     // RENDERER SELECTION — pick wgpu (GPU) vs femtovg GL vs Slint's software
     // renderer BEFORE the first window is created. All three use the winit backend,
     // so the tray/miniplayer WinitWindowAccessor stays valid either way.
@@ -5887,22 +6607,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let window = AppWindow::new()?;
-    // Renderer auto-revert sentinel: disarm it once the window has been alive
-    // for a few seconds (renderer/driver init crashes happen at or shortly
-    // after realization; surviving this long counts as a working renderer).
-    // Single-shot timer — the binding must outlive this scope's run loop.
-    // Piggybacked: persist the REAL compositor DPR as `last_dpr` (the surface
-    // is mapped by now, so winit reports the true value — unlike right after
+    // Renderer auto-revert sentinel: disarmed on the FIRST real user input
+    // (or window close request) via the winit event filter — proof the app
+    // reached a usable state — with a 30s fallback for no-touch sessions.
+    // The old fixed 5s disarm lost the race against late startup crashes
+    // (#558: the swapchain error lands seconds after first paint, the timer
+    // had already disarmed, and the crash looped forever).
+    let _renderer_sentinel_timer = slint::Timer::default();
+    _renderer_sentinel_timer.start(
+        slint::TimerMode::SingleShot,
+        std::time::Duration::from_secs(30),
+        || {
+            disarm_renderer_sentinel_on_liveness("30s fallback");
+        },
+    );
+    // Event-loop responsiveness watchdog (#555): background probe thread,
+    // read by the Diagnostics panel. Detection only — never switches tiers.
+    ui_watchdog::spawn();
+    // Persist the REAL compositor DPR as `last_dpr` once the surface is
+    // mapped (winit reports the true value there — unlike right after
     // creation on Wayland). Read from the WINIT window, not the Slint one:
     // SLINT_SCALE_FACTOR overrides Slint's factor but winit still sees the
     // compositor's. The next scaled launch bakes this into the env value.
-    let _renderer_sentinel_timer = slint::Timer::default();
+    let _dpr_probe_timer = slint::Timer::default();
     let sentinel_weak = window.as_weak();
-    _renderer_sentinel_timer.start(
+    _dpr_probe_timer.start(
         slint::TimerMode::SingleShot,
         std::time::Duration::from_secs(5),
         move || {
-            clear_renderer_sentinel();
             if let Some(w) = sentinel_weak.upgrade() {
                 w.window().with_winit_window(|win| {
                     let real_dpr = win.scale_factor() as f32;
@@ -5957,6 +6689,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         crate::toast::warning(
             &window,
             qbz_i18n::t("Renderer setting reverted to Auto — the previous start didn't finish"),
+        );
+    }
+    // Same idea for the auto-detect path (#542): wgpu crashed pre-paint last
+    // time, this start persisted the GL fallback instead.
+    if RENDERER_DEGRADED.load(std::sync::atomic::Ordering::Relaxed) {
+        // Generic on purpose: the ladder can land on GL or software.
+        crate::toast::warning(
+            &window,
+            qbz_i18n::t(
+                "Renderer switched automatically — the previous renderer failed to start",
+            ),
         );
     }
     install_browser_mouse_nav(&window);
@@ -6129,6 +6872,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // creation (decorations negotiate then on Wayland), and the macOS
         // attributes hook reads the same pref straight from ui_prefs.
         appearance.set_use_system_title_bar(prefs.use_system_title_bar);
+        // Applied chrome state — what this window is actually created with.
+        // The chrome bindings (no-frame, header drag/inset, Purchases
+        // placement) read THIS; the settings toggle edits the pref above.
+        // On Linux the appearance-bool handler mirrors pref -> active live;
+        // on macOS it does not (overlay attributes are fixed at creation),
+        // so this seed is the value for the whole session there.
+        appearance.set_system_title_bar_active(prefs.use_system_title_bar);
         appearance.set_hide_title_bar(prefs.hide_title_bar);
         appearance.set_show_window_controls(prefs.show_window_controls);
         appearance.set_wc_position_index(if prefs.wc_position == "left" { 0 } else { 1 });
@@ -6191,15 +6941,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .collect();
         appearance.set_themes(slint::ModelRc::new(slint::VecModel::from(labels)));
 
-        let id = crate::theme::id_for_slug(&crate::ui_prefs::load().theme);
-        appearance.set_theme_index(crate::theme::index_for_id(id));
-        appearance.set_theme_is_system(id == qbz_theme::ThemeId::System);
+        let slug = crate::ui_prefs::load().theme;
+        let is_auto = slug == crate::theme::AUTO_SLUG;
+        let is_custom = slug == crate::theme::CUSTOM_SLUG;
+        let selected_index = crate::theme::selected_index_for_slug(&slug);
+        appearance.set_theme_index(selected_index);
+        appearance.set_theme_is_auto(is_auto);
+        appearance.set_theme_is_custom(is_custom);
+        // Auto-theme controls read from the persisted source; seed them so they
+        // reflect the saved choice when Settings opens.
+        crate::auto_theme::seed_state(&window);
+        // Custom-theme editor swatches read from custom_theme.json; seed them so
+        // the editor reflects the saved base when Settings opens.
+        crate::custom_theme::seed_state(&window);
+        if is_auto {
+            appearance.set_theme_is_system(false);
+            // Generate + apply the dynamic palette (falls back to OLED on error).
+            crate::auto_theme::apply_startup(&window);
+        } else if is_custom {
+            appearance.set_theme_is_system(false);
+            // Derive + apply the persisted custom palette (seeds OLED if absent).
+            crate::custom_theme::apply_startup(&window);
+        } else {
+            let id = crate::theme::id_for_slug(&slug);
+            appearance.set_theme_is_system(id == qbz_theme::ThemeId::System);
+            crate::theme::apply_theme(&window, id);
+        }
         // Keep the legacy ThemeState.mode in sync with the dropdown index for
-        // any residual reads; the palette itself is driven by apply_theme.
-        window
-            .global::<ThemeState>()
-            .set_mode(crate::theme::index_for_id(id));
-        crate::theme::apply_theme(&window, id);
+        // any residual reads; the palette itself is driven above.
+        window.global::<ThemeState>().set_mode(selected_index);
     }
 
     // Tell the tray settings UI which platform it's on so it can show the
@@ -8259,6 +9029,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
+    // Settings — a text input committed (QConnect device name): persist it
+    // and refresh the live QConnect service cache; the new name is announced
+    // on the next connect.
+    {
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window.on_settings_string(move |key, value| {
+            let weak = weak.clone();
+            let key = key.to_string();
+            let value = value.to_string();
+            handle.spawn(async move {
+                settings::handle_string(weak, key, value).await;
+            });
+        });
+    }
+
     // Settings — Reset: restore Audio + Playback defaults, rebuild the
     // snapshot, and re-apply the audio settings to the player.
     {
@@ -8372,12 +9158,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let chrome_weak = window.as_weak();
         appearance.on_appearance_bool(move |key, value| match key.as_str() {
             "use-system-title-bar" => {
-                // Startup-time choice: `AppWindow.no-frame` / the macOS overlay
-                // attributes are fixed at surface creation (Wayland negotiates
-                // decorations then), so this applies on the next launch.
+                // The toggle only edits the PREF (`use-system-title-bar`);
+                // whether it reaches the applied chrome state
+                // (`system-title-bar-active`, which no-frame / the header
+                // drag+inset / Purchases placement read) is decided HERE,
+                // per platform.
                 let mut prefs = crate::ui_prefs::load();
                 prefs.use_system_title_bar = value;
                 crate::ui_prefs::save(&prefs);
+                // Linux: mirror live (today's hot path — no-frame drives
+                // winit set_decorations on the next properties update, and
+                // the drawn controls/drag follow).
+                #[cfg(not(target_os = "macos"))]
+                if let Some(w) = chrome_weak.upgrade() {
+                    w.global::<AppearanceState>()
+                        .set_system_title_bar_active(value);
+                }
+                // macOS: persist-only, restart to apply. The overlay
+                // attributes (titlebar_transparent / fullsize_content_view)
+                // are fixed at window creation; flipping the header bindings
+                // live desyncs them from the real chrome (traffic lights
+                // overlapped by content, or system bar + overlay inset at
+                // once), so `system-title-bar-active` keeps its startup
+                // value there.
                 crate::toast::info_weak(
                     &chrome_weak,
                     qbz_i18n::t("Title bar mode changed — restart QBZ to apply"),
@@ -8465,6 +9268,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             other => log::debug!("[qbz-slint] unhandled appearance-bool '{other}'"),
         });
         let theme_weak = window.as_weak();
+        let theme_handle = tokio::runtime::Handle::current();
         appearance.on_appearance_select(move |key, index| match key.as_str() {
             "tray-icon-theme" => {
                 tray_settings::set_icon_theme_index(index);
@@ -8517,6 +9321,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // sentinel there).
                 let mut prefs = crate::ui_prefs::load();
                 prefs.renderer = crate::ui_prefs::renderer_for_index(index).to_string();
+                // A manual pick is the USER's choice — drop the auto-degrade
+                // and alt-adapter markers so the ladder starts clean if they
+                // ever return to "auto".
+                prefs.renderer_auto_degraded.clear();
+                prefs.renderer_wgpu_alt.clear();
                 crate::ui_prefs::save(&prefs);
                 crate::toast::info_weak(
                     &theme_weak,
@@ -8538,9 +9347,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             "language" => {
                 // 0 = Auto, 1 = English, 2 = Español, 3 = Français, 4 = Deutsch,
-                // 5 = Português, 6 = Русский, 7 = 日本語. Persist the RAW user
-                // choice ("auto" stays "auto"), but resolve "auto" to a concrete
-                // language before switching the live translations.
+                // 5 = Português, 6 = Русский, 7 = 日本語, 8 = Nederlands.
+                // Persist the RAW user choice ("auto" stays "auto"), but resolve
+                // "auto" to a concrete language before switching the live
+                // translations.
                 let chosen = crate::ui_prefs::language_for_index(index);
                 let mut prefs = crate::ui_prefs::load();
                 prefs.language = chosen.to_string();
@@ -8564,15 +9374,60 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             "theme" => {
-                // Slug is the source of truth: map the dropdown index -> stable
-                // id, persist the slug, then hot-switch the live palette.
-                let id = crate::theme::id_for_index(index);
+                // Slug is the source of truth. The appended "Auto (dynamic)"
+                // entry (index == theme::auto_index) persists the "auto" slug and
+                // generates the palette off-thread; every other index maps to a
+                // stable registry id and hot-switches the static palette.
                 let mut prefs = crate::ui_prefs::load();
-                prefs.theme = id.slug().to_string();
-                crate::ui_prefs::save(&prefs);
-                if let Some(w) = theme_weak.upgrade() {
-                    crate::theme::apply_theme(&w, id);
+                if crate::theme::is_auto_index(index) {
+                    prefs.theme = crate::theme::AUTO_SLUG.to_string();
+                    crate::ui_prefs::save(&prefs);
+                    if let Some(w) = theme_weak.upgrade() {
+                        let st = w.global::<AppearanceState>();
+                        st.set_theme_is_auto(true);
+                        st.set_theme_is_custom(false);
+                        st.set_theme_is_system(false);
+                    }
+                    crate::auto_theme::regenerate(theme_weak.clone(), theme_handle.clone());
+                } else if crate::theme::is_custom_index(index) {
+                    // "Custom": persist the slug, derive from the persisted (or
+                    // freshly seeded) custom base, and apply live. The editor
+                    // swatches are seeded from the same base.
+                    prefs.theme = crate::theme::CUSTOM_SLUG.to_string();
+                    crate::ui_prefs::save(&prefs);
+                    if let Some(w) = theme_weak.upgrade() {
+                        let st = w.global::<AppearanceState>();
+                        st.set_theme_is_auto(false);
+                        st.set_theme_is_custom(true);
+                        st.set_theme_is_system(false);
+                        if crate::custom_theme::exists() {
+                            crate::custom_theme::seed_state(&w);
+                            crate::custom_theme::apply_startup(&w);
+                        } else {
+                            // First-ever selection: seed from the palette the
+                            // user is looking at RIGHT NOW (the previously
+                            // applied theme), not from a hardcoded default —
+                            // "customize what I see" is the whole point.
+                            crate::custom_theme::seed_from_current(&w);
+                        }
+                    }
+                } else {
+                    let id = crate::theme::id_for_index(index);
+                    prefs.theme = id.slug().to_string();
+                    crate::ui_prefs::save(&prefs);
+                    if let Some(w) = theme_weak.upgrade() {
+                        let st = w.global::<AppearanceState>();
+                        st.set_theme_is_auto(false);
+                        st.set_theme_is_custom(false);
+                        st.set_theme_is_system(id == qbz_theme::ThemeId::System);
+                        crate::theme::apply_theme(&w, id);
+                    }
                 }
+            }
+            "auto-theme-source" => {
+                // Auto-theme source dropdown (System / Wallpaper / Custom Image):
+                // persist the key and regenerate from the new source.
+                crate::auto_theme::set_source(index, theme_weak.clone(), theme_handle.clone());
             }
             "theme-filter" => {
                 // Theme-list filter cycle (0 = All, 1 = Dark, 2 = Light). Cosmetic,
@@ -8582,6 +9437,48 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 crate::ui_prefs::save(&prefs);
             }
             other => log::debug!("[qbz-slint] unhandled appearance-select '{other}'"),
+        });
+
+        // Auto-theme actions: image picker + explicit Regenerate button. Both run
+        // generation off the event loop and push the palette back on it.
+        let action_weak = window.as_weak();
+        let action_handle = tokio::runtime::Handle::current();
+        appearance.on_appearance_action(move |key| match key.as_str() {
+            "auto-theme-select-image" => {
+                crate::auto_theme::select_image(action_weak.clone(), action_handle.clone());
+            }
+            "auto-theme-regenerate" => {
+                crate::auto_theme::regenerate(action_weak.clone(), action_handle.clone());
+            }
+            other => log::debug!("[qbz-slint] unhandled appearance-action '{other}'"),
+        });
+
+        // Custom-theme editor callbacks: per-token live edits (drag + hex),
+        // polarity toggle, and "start from current theme". Each re-derives the
+        // whole palette in Rust and pushes it live (derivation is cheap).
+        let ct_weak = window.as_weak();
+        appearance.on_custom_set_token(move |key, color| {
+            if let Some(w) = ct_weak.upgrade() {
+                crate::custom_theme::set_token(&w, key.as_str(), color);
+            }
+        });
+        let ct_hex_weak = window.as_weak();
+        appearance.on_custom_set_token_hex(move |key, hex| {
+            if let Some(w) = ct_hex_weak.upgrade() {
+                crate::custom_theme::set_token_hex(&w, key.as_str(), hex.as_str());
+            }
+        });
+        let ct_dark_weak = window.as_weak();
+        appearance.on_custom_toggle_dark(move |is_dark| {
+            if let Some(w) = ct_dark_weak.upgrade() {
+                crate::custom_theme::toggle_dark(&w, is_dark);
+            }
+        });
+        let ct_seed_weak = window.as_weak();
+        appearance.on_custom_seed_from_current(move || {
+            if let Some(w) = ct_seed_weak.upgrade() {
+                crate::custom_theme::seed_from_current(&w);
+            }
         });
     }
 
@@ -8666,8 +9563,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             //   - track play              -> Play
             //   - album play              -> Play (an album-card play is still a
             //                                play interaction with the entity)
-            //   - album favorite (add)    -> Favorite (the grid/menu heart arm is
-            //                                add-only)
+            //   - album favorite (toggle) -> Favorite ONLY when transitioning to
+            //                                favorited (the card heart arm is a
+            //                                toggle since 2026-07; Favorite
+            //                                weight must only ADD)
             //   - artist follow (add)     -> Favorite (search artist cards show
             //                                "Follow" only when NOT following, so
             //                                this action is always an add)
@@ -8680,8 +9579,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ("track", "play") | ("album", "play") => {
                         record_search_interaction(&w, &kind, &id, InteractionAction::Play);
                     }
-                    ("album", "favorite") | ("artist", "follow") => {
-                        // Both are add-only paths on a search card.
+                    ("album", "favorite") => {
+                        // Toggle: record ONLY when this click ADDS the favorite
+                        // (mirrors the track arm below; the album card arm flips
+                        // off the same `fav_cache::is_album_favorite`).
+                        if !crate::fav_cache::is_album_favorite(&id) {
+                            record_search_interaction(&w, &kind, &id, InteractionAction::Favorite);
+                        }
+                    }
+                    ("artist", "follow") => {
+                        // Add-only on a search card ("Follow" shows only when
+                        // NOT following).
                         record_search_interaction(&w, &kind, &id, InteractionAction::Favorite);
                     }
                     ("track", "favorite") => {
@@ -9004,37 +9912,73 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     id.clone(),
                 ),
                 ("album", "favorite") => {
-                    // Add the album to the user's favorites. The album cards
-                    // (grid hover heart + the "…" menu) all bubble this; the
-                    // shared component means one handler covers the app.
+                    // Album-card heart + "…" menu entry: a TRUE TOGGLE keyed
+                    // off the favorite-album cache (filled heart → remove,
+                    // empty → add), mirroring the header "favorite-toggle"
+                    // arm below. Was add-only while the cards couldn't show
+                    // favorite state; now that they do, re-adding from a
+                    // filled heart would lie. Optimistic: flip the heart on
+                    // every visible card right away (mirrors the track
+                    // rows); rolled back on failure. NOTE: the Favorites
+                    // albums tab never reaches this arm — FavoritesView
+                    // intercepts "favorite" to unfavorite-album (fade-out +
+                    // row removal).
+                    let was_fav = crate::fav_cache::is_album_favorite(&id);
+                    let new_state = !was_fav;
+                    if let Some(w) = weak.upgrade() {
+                        set_album_row_favorite(&w, &id, new_state);
+                    }
                     let runtime = runtime.clone();
                     let weak = weak.clone();
                     let album_id = id.clone();
                     handle.spawn(async move {
-                        match runtime.core().add_favorite("album", &album_id).await {
+                        let res = if new_state {
+                            runtime.core().add_favorite("album", &album_id).await
+                        } else {
+                            runtime.core().remove_favorite("album", &album_id).await
+                        };
+                        match res {
                             Ok(()) => {
                                 // Keep the favorite-album cache in sync so the
-                                // album-header heart reflects a grid favorite.
-                                crate::fav_cache::set_album(&album_id, true);
-                                crate::toast::success_weak(&weak, "Added to favorites");
-                                // reco: log the album favorite (add-only arm).
-                                let aid = album_id.clone();
-                                tokio::task::spawn_blocking(move || {
-                                    crate::reco::log_favorite_album(aid, None)
-                                });
+                                // album-header heart reflects a card toggle.
+                                crate::fav_cache::set_album(&album_id, new_state);
+                                crate::toast::success_weak(
+                                    &weak,
+                                    if new_state {
+                                        "Added to favorites"
+                                    } else {
+                                        "Removed from favorites"
+                                    },
+                                );
+                                // reco: log the album favorite ADD on success
+                                // only — Capa B scores adds, never removals.
+                                if new_state {
+                                    let aid = album_id.clone();
+                                    tokio::task::spawn_blocking(move || {
+                                        crate::reco::log_favorite_album(aid, None)
+                                    });
+                                }
                             }
                             Err(e) => {
-                                log::error!("[qbz-slint] favorite album failed: {e}");
-                                crate::toast::error_weak(&weak, "Couldn't add to favorites");
+                                log::error!(
+                                    "[qbz-slint] toggle favorite album {album_id} failed: {e}"
+                                );
+                                crate::toast::error_weak(&weak, "Couldn't update favorites");
+                                // Roll the optimistic hearts back to the
+                                // pre-click state.
+                                let _ = weak.upgrade_in_event_loop(move |w| {
+                                    set_album_row_favorite(&w, &album_id, was_fav);
+                                });
                             }
                         }
                     });
                 }
                 ("album", "favorite-toggle") => {
                     // The album-header heart: a TRUE toggle that reflects the
-                    // favorite-album cache (the grid "favorite" arm above stays
-                    // add-only). Optimistic on the open header, reconciled on
-                    // the server result.
+                    // favorite-album cache (the card "favorite" arm above is
+                    // the same toggle, minus the AlbumState header sync).
+                    // Optimistic on the open header, reconciled on the server
+                    // result.
                     let Some(w) = weak.upgrade() else {
                         return;
                     };
@@ -9046,6 +9990,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         st.set_is_favorite(new_state);
                         st.set_favorite_loading(true);
                     }
+                    // Optimistic on every visible album card too (artist
+                    // discography, carousels, search, favorites) — reconciled
+                    // with the server result below, like the header heart.
+                    set_album_row_favorite(&w, &id, new_state);
                     let runtime = runtime.clone();
                     let weak = weak.clone();
                     let album_id = id.clone();
@@ -9091,6 +10039,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     st.set_favorite_loading(false);
                                     st.set_is_favorite(was_fav);
                                 }
+                                // Roll the optimistic card hearts back too.
+                                set_album_row_favorite(&w, &album_id, was_fav);
                                 crate::toast::error(&w, "Couldn't update favorites");
                             }
                         });
@@ -10728,20 +11678,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 };
                 let weak = weak.clone();
                 handle.spawn(async move {
-                    let connected = if svc.is_running().await {
+                    // `record`: the "Remember state" write-through value — Some
+                    // only when the operation SUCCEEDED (Tauri v2_qconnect_connect
+                    // / _disconnect wrote nothing on failure, so a failed manual
+                    // connect never downgrades a remembered "connected").
+                    let (connected, record) = if svc.is_running().await {
                         if let Err(err) = svc.disconnect().await {
                             log::warn!("[QConnect] disconnect failed: {err}");
                         }
-                        false
+                        (false, Some(false))
                     } else {
                         match svc.connect().await {
-                            Ok(()) => true,
+                            Ok(()) => (true, Some(true)),
                             Err(err) => {
                                 log::warn!("[QConnect] connect failed: {err}");
-                                false
+                                (false, None)
                             }
                         }
                     };
+                    // Record the USER-chosen on/off here — the authoritative
+                    // intent point (the bar toggle, the only manual path) — so a
+                    // crash can't lose it and internal teardowns (offline
+                    // force-disconnect, bootstrap cleanup) never overwrite it.
+                    // Only while mode == RememberLast, mirroring Tauri.
+                    if let Some(state) = record {
+                        let _ = tokio::task::spawn_blocking(move || {
+                            if qconnect_transport::load_startup_mode()
+                                == qconnect_app::QconnectStartupMode::RememberLast
+                            {
+                                qconnect_transport::save_last_known_state(state);
+                            }
+                        })
+                        .await;
+                    }
                     let _ = weak.upgrade_in_event_loop(move |w| {
                         w.global::<NowPlayingState>()
                             .set_qconnect_connected(connected);
@@ -11199,6 +12168,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         {
             let c = controller.clone();
             qs.on_remove_upcoming(move |index| c.remove_upcoming(index.max(0) as usize));
+        }
+        {
+            let c = controller.clone();
+            qs.on_remove_all_after(move |index| c.remove_all_after(index.max(0) as usize));
+        }
+        {
+            let c = controller.clone();
+            qs.on_add_to_playlist(move |index| c.add_to_playlist(index.max(0) as usize));
         }
         {
             let c = controller.clone();
@@ -14030,6 +15007,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
     }
 
+    // Home "Recently Played Albums" rail "View all" -> the full page listing
+    // the local play-history albums (mirrors AwardActions.open-albums: record
+    // history, navigate, refresh the nav flags).
+    {
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
+        window
+            .global::<HomeActions>()
+            .on_open_recent_albums(move || {
+                nav::record(nav::NavEntry::RecentAlbums);
+                navigate_recent_albums(weak.clone(), &handle, image_cache.clone());
+                if let Some(w) = weak.upgrade() {
+                    update_nav_flags(&w);
+                }
+            });
+    }
+
     // Qobuz Playlists category filter (multi-select, client-side). Toggling /
     // clearing a tag re-filters the cached playlists row and re-fires the
     // artwork for the new (filtered) positions — no re-fetch.
@@ -15543,7 +16538,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
     }
 
-    // ---- Tracks tab: group-by + multi-select + bulk ----
+    // ---- Tracks tab: sort + group-by + multi-select + bulk ----
     {
         let weak = window.as_weak();
         window
@@ -15551,6 +16546,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .on_tracks_set_group(move |mode| {
                 if let Some(w) = weak.upgrade() {
                     local_library::set_tracks_group(&w, mode.as_str());
+                }
+            });
+    }
+    {
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<LocalLibraryActions>()
+            .on_tracks_set_sort(move |key| {
+                if let Some(w) = weak.upgrade() {
+                    local_library::set_tracks_sort(&w, key.as_str(), handle.clone());
                 }
             });
     }
@@ -18492,7 +19498,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .on_albums_set_view(move |v| {
                 if let Some(w) = weak.upgrade() {
                     w.global::<FavoritesState>().set_albums_view_mode(v);
+                    // Switching to the (non-windowed) list view needs covers
+                    // the grid's window may have evicted.
+                    favorites::albums_view_mode_changed(&w);
                     favorites_prefs::save(&w);
+                }
+            });
+    }
+    {
+        // Windowed albums grid: dispatch covers for the reported row band
+        // and evict the ones far outside it.
+        let weak = window.as_weak();
+        window
+            .global::<FavoritesActions>()
+            .on_albums_window_changed(move |first, last| {
+                if let Some(w) = weak.upgrade() {
+                    favorites::albums_window_changed(&w, first, last);
                 }
             });
     }
@@ -18574,6 +19595,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Keep the favorite-album cache in sync so the album-header
                 // heart reflects an unfavorite done from the Favorites view.
                 crate::fav_cache::set_album(&id, false);
+                // Empty the heart on any other surface currently showing this
+                // album (artist discography, carousels, search) — the
+                // favorites rows themselves fade out and are removed below.
+                set_album_row_favorite(&w, &id, false);
                 let id_srv = id.to_string();
                 let runtime = runtime.clone();
                 handle.spawn(async move {
@@ -19019,5 +20044,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // tray Quit), so hide-to-tray works.
     window.show()?;
     slint::run_event_loop_until_quit()?;
+    // Reaching here = a CLEAN exit (tray Quit calls quit_event_loop directly,
+    // with no window input event) — without this, launch-then-quit-from-tray
+    // inside the 30s fallback would leave the sentinel armed and falsely
+    // walk the renderer ladder on the next start.
+    disarm_renderer_sentinel_on_liveness("clean exit");
+    // Single choke point for ALL quit paths (custom-titlebar close, WM close,
+    // tray Quit): release anything QBZ parked on the audio graph before the
+    // process exits. Quitting mid-playback never runs the audio thread's Stop
+    // handler, so a forced PipeWire clock (DAC passthrough) outlived the app
+    // and pinned every other program to the last track's sample rate until
+    // PipeWire restarted (#521). Both calls are self-gating no-ops when QBZ
+    // didn't set anything — same pair the Stop/ReleaseDevice handlers use.
+    #[cfg(target_os = "linux")]
+    {
+        qbz_audio::alsa_backend::resume_suspended_sink();
+        qbz_audio::pipewire_backend::PipeWireBackend::reset_pipewire_clock();
+    }
     Ok(())
 }

@@ -45,15 +45,24 @@ fn parse_page<T: serde::de::DeserializeOwned>(
     value: &serde_json::Value,
     key: &str,
 ) -> SearchResultsPage<T> {
-    value
-        .get(key)
-        .and_then(|v| serde_json::from_value(v.clone()).ok())
-        .unwrap_or(SearchResultsPage {
-            items: Vec::new(),
-            total: 0,
-            offset: 0,
-            limit: 0,
-        })
+    // Scalars keep the old fallback semantics (missing/odd-shaped → 0, per
+    // the serde defaults on SearchResultsPage), but the items array is parsed
+    // PER ITEM: the previous whole-page `from_value(...).ok()` was
+    // all-or-nothing, so one malformed entry blanked the entire search tab
+    // (same class as favorites #556).
+    let scalar = |name: &str| {
+        value
+            .get(key)
+            .and_then(|p| p.get(name))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as u32
+    };
+    SearchResultsPage {
+        items: qbz_models::lenient::parse_items_array(value, key, key),
+        total: scalar("total"),
+        offset: scalar("offset"),
+        limit: scalar("limit"),
+    }
 }
 
 /// Pick the first `most_popular` entry that survives the blacklist.
@@ -622,6 +631,21 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
             state: queue.get_state(),
         })
         .await;
+        removed
+    }
+
+    /// Remove every upcoming track after `upcoming_index` in the current play
+    /// order; the track at `upcoming_index` is kept. Shuffle-aware. Emits a
+    /// single `QueueUpdated` when anything was removed. Returns the count.
+    pub async fn remove_upcoming_after(&self, upcoming_index: usize) -> usize {
+        let queue = self.queue.write().await;
+        let removed = queue.remove_upcoming_after(upcoming_index);
+        if removed > 0 {
+            self.emit(CoreEvent::QueueUpdated {
+                state: queue.get_state(),
+            })
+            .await;
+        }
         removed
     }
 
@@ -2802,6 +2826,28 @@ mod tests {
         assert!(out.most_popular.is_none());
     }
 
+    #[test]
+    fn parse_page_skips_poisoned_item_keeps_rest() {
+        // One malformed entry (id is a string where Artist.id: u64) must NOT
+        // blank the page — the old whole-page from_value did exactly that.
+        let json = serde_json::json!({
+            "artists": {
+                "items": [
+                    { "id": 1, "name": "Keep" },
+                    { "id": "poisoned", "name": "Bad" },
+                    { "id": 2, "name": "AlsoKeep" }
+                ],
+                "total": 3, "offset": 0, "limit": 30
+            }
+        });
+        let page = parse_page::<Artist>(&json, "artists");
+        assert_eq!(page.items.len(), 2);
+        assert_eq!(page.items[0].name, "Keep");
+        assert_eq!(page.items[1].name, "AlsoKeep");
+        assert_eq!(page.total, 3);
+        assert_eq!(page.limit, 30);
+    }
+
     // --- D-FEAT featured-aware blacklist helpers ---
 
     use qbz_models::types::{AlbumArtist, AlbumSummary};
@@ -2858,6 +2904,8 @@ mod tests {
             awards: None,
             parental_warning: None,
             artists: Some(artists),
+            composer: None,
+            version: None,
         }
     }
 

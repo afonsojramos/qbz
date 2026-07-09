@@ -19,4 +19,10 @@ dirs = "6"
 keyring = { version = "3", features = ["async-secret-service", "crypto-rust"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-ashpd = { version = "0.13", default-features = false, features = ["tokio", "secret"] }
+# async-io, NOT tokio: zbus features unify across the whole dependency graph
+# and its "tokio" feature wins over "async-io" — enabling it here flipped the
+# zbus 5 executor to tokio for accesskit_unix/atspi/ksni too, whose D-Bus
+# connections live on plain threads => startup panic "there is no reactor
+# running" and dead AT-SPI accessibility. async-io futures are runtime-
+# agnostic, so our portal call still awaits fine inside tokio.
+ashpd = { version = "0.13", default-features = false, features = ["async-io", "secret"] }

@@ -219,6 +219,26 @@ fn clear_loading(weak: &slint::Weak<AppWindow>, track_id: u64) {
 /// before giving up (Tauri #467 parity: `MAX_OFFLINE_SKIPS = 5`).
 const MAX_OFFLINE_SKIPS: usize = 5;
 
+/// Consecutive auto-skips over tracks whose play failed with a TERMINAL
+/// "unavailable" error (Tauri #467 parity: the Svelte playbackService kept
+/// `consecutiveSkips` capped at `MAX_CONSECUTIVE_SKIPS = 5`). Reset by the
+/// poll loop the moment any track actually starts producing audio.
+static UNAVAILABLE_SKIPS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+const MAX_UNAVAILABLE_SKIPS: u32 = 5;
+
+/// True when a stringified play error means the track cannot play now or
+/// ever at any quality — as opposed to a transient network/server failure
+/// (those are already retried with backoff inside the client and must NOT
+/// cost the user a good track). The `ApiError` Display texts survive the
+/// `Result<(), String>` flattening in `Player::play_track` ("Failed to get
+/// stream URL: {ApiError}"), so a substring match is the same pragmatic
+/// contract the Tauri frontend used (`errorStr.includes(...)`).
+fn is_terminal_unavailable(e: &str) -> bool {
+    e.contains("no longer available") // ApiError::TrackUnavailable
+        || e.contains("not streamable") // ApiError::NonStreamable
+        || e.contains("No valid quality available") // ApiError::NoQualityAvailable
+}
+
 /// Offline playability verdict for one queue track (offline-MODE slice 3d).
 #[derive(PartialEq)]
 enum OfflinePlayability {
@@ -575,10 +595,81 @@ async fn play_audible(runtime: &Runtime, weak: &slint::Weak<AppWindow>, track_id
         .await
     {
         log::error!("[qbz-slint] playback: play_track {track_id} failed: {e}");
+        // Superseded fetch: the user already started another play while this
+        // one was resolving — that newer play owns the cursor; do NOT skip.
+        let still_current = PENDING_PLAY_ID.load(std::sync::atomic::Ordering::Relaxed)
+            == track_id;
         // The fetch failed: no audio will advance, so the poll loop would never
         // clear the spinner. Drop it now (only if this play is still current).
         clear_loading(weak, track_id);
+        // Tauri-parity regression fix: an unavailable track used to be
+        // auto-skipped by the frontend (playbackService `autoSkipToNext`,
+        // bounded, issue #467). Without this the queue cursor parks on the
+        // dead track and playback stops. Terminal errors only — transient
+        // failures were already retried by the client and should not skip.
+        if still_current && is_terminal_unavailable(&e) {
+            auto_skip_unavailable(runtime, weak, track_id).await;
+        }
     }
+}
+
+/// Advance past a track whose play failed with a terminal "unavailable"
+/// error, mirroring the Tauri frontend's `autoSkipToNext`: toast, honor
+/// stop-after, bounded consecutive counter, then reuse the real advance
+/// machinery. `after_track_change` re-enters `play_audible`, so this is an
+/// async recursion — bounded by `MAX_UNAVAILABLE_SKIPS` (counter reset in
+/// the poll loop on real audio). The signature RETURNS a boxed `dyn Future
+/// + Send` instead of being an `async fn`: the recursion makes the future's
+/// Send-ness self-referential, and with an inferred (`impl Future`) type the
+/// compiler hits a query cycle ("cannot satisfy ...: Send"). Declaring the
+/// concrete boxed type in the signature is what cuts the cycle — the same
+/// shape the `async_recursion` macro expands to.
+fn auto_skip_unavailable<'a>(
+    runtime: &'a Runtime,
+    weak: &'a slint::Weak<AppWindow>,
+    failed_track_id: u64,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+    Box::pin(async move {
+    crate::toast::show_weak(
+        weak,
+        qbz_i18n::t("This track is no longer available"),
+        crate::ToastKind::Warning,
+    );
+    // Stop-after-this-song on the failed track: halt exactly like the
+    // natural end-of-track arm would (no advance, queue intact); the
+    // marker is one-shot and must be consumed here or it would leak onto
+    // a track it was never armed for.
+    if failed_track_id != 0
+        && runtime.core().consume_stop_after_if(failed_track_id).await
+    {
+        set_viz_paused(runtime, true);
+        let _ = weak.upgrade_in_event_loop(|w| {
+            w.global::<NowPlayingState>().set_playing(false);
+        });
+        return;
+    }
+    let skips = UNAVAILABLE_SKIPS.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+    if skips > MAX_UNAVAILABLE_SKIPS {
+        log::warn!(
+            "[qbz-slint] playback: {MAX_UNAVAILABLE_SKIPS} consecutive unavailable tracks — stopping the skip walk"
+        );
+        crate::toast::show_weak(
+            weak,
+            qbz_i18n::t("No available tracks to play"),
+            crate::ToastKind::Warning,
+        );
+        set_viz_paused(runtime, true);
+        let _ = weak.upgrade_in_event_loop(|w| {
+            w.global::<NowPlayingState>().set_playing(false);
+        });
+        return;
+    }
+    if let Some(track) = advance_to_playable(runtime, weak, true).await {
+        let next_id = track.id;
+        after_track_change(runtime, weak, next_id).await;
+        refresh_sidebar(true);
+    }
+    })
 }
 
 /// Audible step for a LOCAL user file: read it off-thread and hand the bytes
@@ -1405,6 +1496,19 @@ fn load_now_playing_artwork_large(weak: slint::Weak<AppWindow>, art: qbz_models:
     });
 }
 
+/// Mirror the playing/paused state onto the visualizer tap so the FFT producer
+/// parks while nothing plays (paused/stopped it would otherwise re-FFT the
+/// stale ring buffer at 30fps — the NPB Large dock idled at ~2.5% CPU). Called
+/// next to every `NowPlayingState.set_playing` flip so the producer stays
+/// consistent with the UI-thread drain gate (visualizer.rs), which keys off the
+/// same flag. Atomic store — safe from any thread, never blocks; a paused park
+/// self-wakes within 200ms after resume (no unpark required).
+fn set_viz_paused(runtime: &Runtime, paused: bool) {
+    if let Some(tap) = runtime.visualizer_tap() {
+        tap.set_paused(paused);
+    }
+}
+
 /// Wall-clock now in milliseconds. Used by the poll loop to extrapolate the
 /// peer renderer's position (`position_ms + (now - updated_at_ms)`) while
 /// QBZ is CONTROLLING a peer (the local player is stopped, so the seek bar
@@ -1718,6 +1822,15 @@ pub(crate) async fn refresh_now_playing_meta(runtime: &Runtime, weak: &slint::We
         });
     }
 
+    // Seed the "+" flyout's album-collection entry from the favorite-album
+    // cache — the SAME source the card/header toggles flip — so the entry
+    // renders add vs remove honestly for the new track. Kept live between
+    // track changes by set_album_row_favorite (main.rs).
+    let album_favorite = crate::fav_cache::is_album_favorite(&album_id);
+    // The bar is seeded playing=true below — wake the visualizer producer with
+    // it (stored BEFORE the UI post so the drain gate never opens while the
+    // producer is still marked paused).
+    set_viz_paused(runtime, false);
     let _ = weak.upgrade_in_event_loop(move |w| {
         let np = w.global::<NowPlayingState>();
         np.set_has_track(true);
@@ -1725,6 +1838,7 @@ pub(crate) async fn refresh_now_playing_meta(runtime: &Runtime, weak: &slint::We
         np.set_artist(artist.into());
         np.set_album(album_display.into());
         np.set_album_id(album_id.into());
+        np.set_album_favorite(album_favorite);
         np.set_artist_id(artist_id.into());
         np.set_track_id(track_id.into());
         // Mirror the active track + playing flag onto the Purchases globals so a
@@ -3563,6 +3677,10 @@ pub fn toggle_play_pause(
         if runtime.core().get_playback_state().is_playing {
             if let Err(e) = runtime.core().pause() {
                 log::error!("[qbz-slint] playback: pause failed: {e}");
+            } else {
+                // Park the visualizer producer on the edge, ahead of the
+                // 450ms poll tick that mirrors the flag onto the bar.
+                set_viz_paused(&runtime, true);
             }
             // Persist the paused position so a restart resumes near where the
             // user stopped (no-op unless `persist_session` is on).
@@ -3574,6 +3692,9 @@ pub fn toggle_play_pause(
         if runtime.core().player().has_loaded_audio() {
             if let Err(e) = runtime.core().resume() {
                 log::error!("[qbz-slint] playback: resume failed: {e}");
+            } else {
+                // Wake the producer on the edge — resume must feel instant.
+                set_viz_paused(&runtime, false);
             }
             return;
         }
@@ -3833,6 +3954,31 @@ pub fn start_poll_loop(
                 last_remote_ui_push = None;
             }
 
+            // Surface audio-stream failures as a toast (#508/#534/#500): the
+            // player records a user-readable message when a stream fails to
+            // open, but the drain lived in Tauri's polling loop and was never
+            // ported — ALSA Direct failures left the bar frozen at 0:00 with
+            // no explanation. take_stream_error_message() drains exactly once
+            // per recorded error, so each failed attempt toasts once. Inside a
+            // Flatpak/Snap sandbox direct hw: access is blocked by design —
+            // when the failure looks ALSA-shaped, say that instead of the raw
+            // error.
+            if let Some(msg) = runtime.core().player().state.take_stream_error_message() {
+                let sandboxed = !matches!(
+                    qbz_audio::health::detect_sandbox(),
+                    qbz_audio::health::Sandbox::None
+                );
+                let lower = msg.to_lowercase();
+                let text = if sandboxed && (lower.contains("alsa") || lower.contains("hw:")) {
+                    qbz_i18n::t(
+                        "Direct ALSA device access is blocked inside Flatpak/Snap — switch the audio backend to PipeWire or System Default",
+                    )
+                } else {
+                    format!("{}: {}", qbz_i18n::t("Audio output error"), msg)
+                };
+                crate::toast::error_weak(&weak, text);
+            }
+
             // --- QConnect CONTROLLER mode: peer-state reflection ----------
             // When QBZ is CONTROLLING a peer renderer, the event sink stops the
             // LOCAL player, so `get_playback_event()` reports track_id == 0 / not
@@ -3921,6 +4067,11 @@ pub fn start_poll_loop(
                 );
                 if last_remote_ui_push != Some(remote_snapshot) {
                     last_remote_ui_push = Some(remote_snapshot);
+                    // Keep the visualizer producer in step with the same flag
+                    // the drain gate reads (a paused PEER parks it too; while
+                    // the peer plays, the local buffer is stale — historical
+                    // behavior, the bars simply freeze).
+                    set_viz_paused(&runtime, !playing);
                     let elapsed = fmt_elapsed(position_secs);
                     let remaining = fmt_remaining(position_secs, duration_secs);
                     let _ = weak.upgrade_in_event_loop(move |w| {
@@ -4217,6 +4368,13 @@ pub fn start_poll_loop(
             );
             if last_ui_push != Some(ui_snapshot) {
                 last_ui_push = Some(ui_snapshot);
+                // Mirror engine truth onto the visualizer tap alongside the
+                // set_playing push below. This is the catch-all: EVERY local
+                // transition (pause/resume from any surface — MPRIS, tray,
+                // hotkey, QConnect renderer command — plus stop, track end,
+                // seek-while-paused snapshots) lands here within one 450ms
+                // tick; the direct edge sites above only shave latency.
+                set_viz_paused(&runtime, !is_playing);
                 let progress = if duration > 0 {
                     (position as f32 / duration as f32).clamp(0.0, 1.0)
                 } else {
@@ -4265,6 +4423,9 @@ pub fn start_poll_loop(
             // current audio is a different (already-cleared) id.
             if track_id != 0 && is_playing && position > 0 {
                 clear_loading(&weak, track_id);
+                // Real audio ends any unavailable-skip streak (Tauri parity:
+                // `consecutiveSkips = 0` on successful play).
+                UNAVAILABLE_SKIPS.store(0, std::sync::atomic::Ordering::SeqCst);
             } else {
                 // Watchdog: a play the engine accepted but that never advances
                 // (undecodable-but-valid-looking file, zero-frame stream) would
@@ -4369,6 +4530,8 @@ pub fn start_poll_loop(
                     if let Err(e) = runtime.core().pause() {
                         log::warn!("[qbz-slint] stop-after: pause failed: {e}");
                     }
+                    // Stop counts as paused for the visualizer tap.
+                    set_viz_paused(&runtime, true);
                     last_track_id = 0;
                     was_playing = false;
                     seen_position = 0;
@@ -4393,8 +4556,10 @@ pub fn start_poll_loop(
                     // replaced the queue and refreshes the sidebar itself).
                 } else {
                     log::info!("[qbz-slint] playback: queue finished");
-                    // Nothing more will play — force-clear any lingering spinner.
+                    // Nothing more will play — force-clear any lingering spinner
+                    // and park the visualizer producer (stop counts as paused).
                     clear_loading(&weak, 0);
+                    set_viz_paused(&runtime, true);
                     let _ = weak.upgrade_in_event_loop(|w| {
                         let np = w.global::<NowPlayingState>();
                         np.set_playing(false);

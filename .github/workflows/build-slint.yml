@@ -101,7 +101,7 @@ jobs:
           CARGO_BUILD_JOBS: '1'
           CARGO_PROFILE_RELEASE_CODEGEN_UNITS: '256'
           CARGO_PROFILE_RELEASE_OPT_LEVEL: '2'
-          RUSTFLAGS: '-C target-feature=+aes,+ssse3 -C link-arg=-fuse-ld=mold -Z threads=1'
+          RUSTFLAGS: '-C link-arg=-fuse-ld=mold -Z threads=1'
         run: |
           cargo build --release --manifest-path crates/Cargo.toml -p qbz
           echo "::group::result"; ls -lh crates/target/release/qbz; df -h /; free -h; echo "::endgroup::"

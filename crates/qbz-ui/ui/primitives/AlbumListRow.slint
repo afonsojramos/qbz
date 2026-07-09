@@ -418,8 +418,8 @@ export component AlbumListRow inherits Rectangle {
                                 ? @image-url("../assets/icons/heart-filled.svg")
                                 : @image-url("../assets/icons/heart.svg");
                             label: root.album.is-favorite
-                                ? @tr("Remove from favorites")
-                                : @tr("Add to favorites");
+                                ? @tr("Remove from Library")
+                                : @tr("Add to Library");
                             clicked => {
                                 root.media-action("album", root.album.id, "favorite");
                             }

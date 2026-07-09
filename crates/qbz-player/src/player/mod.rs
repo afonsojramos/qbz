@@ -3030,7 +3030,11 @@ impl Player {
                             if let Some(ref engine) = *current_engine {
                                 apply_engine_volume(&stream_opt, &engine, volume);
                             }
-                            log::info!("Audio thread: volume set to {}", volume);
+                            // debug: a slider drag delivers dozens of these per
+                            // second — at info they dominated a field log (#555,
+                            // 758 of 1025 lines) and each one is a formatted
+                            // write from the AUDIO thread.
+                            log::debug!("Audio thread: volume set to {}", volume);
                         }
                         AudioCommand::Seek(position_secs) => {
                             if current_engine.as_ref().map(|e| e.is_dop()).unwrap_or(false) {

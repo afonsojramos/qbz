@@ -58,6 +58,14 @@ impl Rgba {
             _ => None,
         }
     }
+
+    /// Format as `#rrggbb` (lowercase, alpha dropped). The custom-theme base
+    /// tokens are all opaque, so the alpha channel is intentionally not
+    /// serialized — the picker HEX field and the on-disk `custom_theme.json`
+    /// both round-trip through this 6-digit form.
+    pub fn to_hex(self) -> String {
+        format!("#{:02x}{:02x}{:02x}", self.r, self.g, self.b)
+    }
 }
 
 /// sRGB 0..=255 channel -> linear-light 0.0..=1.0 (WCAG 2.x transfer function).

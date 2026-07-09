@@ -8,7 +8,7 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Layout } from "../foundation/layout.slint";
 import { Radius } from "../foundation/radius.slint";
-import { NavState, ContentView, ShellState, OfflineState, PlaylistState, ImmersiveState, SearchActions, VisualizerState, PurchaseDetailState } from "../state.slint";
+import { NavState, ContentView, ShellState, OfflineState, PlaylistState, ImmersiveState, SearchActions, VisualizerState, PurchaseDetailState, NowPlayingState } from "../state.slint";
 import { Sidebar } from "Sidebar.slint";
 import { SidebarNowPlayingDock } from "SidebarNowPlayingDock.slint";
 import { HeaderBar } from "HeaderBar.slint";
@@ -54,6 +54,7 @@ import { QueueSidebar } from "QueueSidebar.slint";
 import { LyricsSidebar } from "LyricsSidebar.slint";
 import { HomeView } from "../discover/HomeView.slint";
 import { DiscoverBrowseView } from "../discover/DiscoverBrowseView.slint";
+import { RecentAlbumsView } from "../discover/RecentAlbumsView.slint";
 import { AlbumPageView } from "../album/AlbumPageView.slint";
 import { LocalAlbumView } from "../album/LocalAlbumView.slint";
 import { ArtistPageView } from "../artist/ArtistPageView.slint";
@@ -93,6 +94,7 @@ export component AppShell inherits Rectangle {
     callback settings-bool(string, bool);
     callback settings-select(string, int);
     callback settings-slider(string, int);
+    callback settings-string(string, string);
     callback settings-reset();
     callback settings-release-device();
     callback logout();
@@ -167,9 +169,16 @@ export component AppShell inherits Rectangle {
     // animation-tick() — every step is a full-window femtovg repaint, so 60→8fps
     // cuts the transient CPU of spinners/skeletons on weak GPUs by ~7x. Wraps
     // daily to keep the int well away from overflow.
+    //
+    // ALSO ticks while audio plays on the strong (wgpu) tier: the equalizer
+    // bars on the current row now animate from this clock on EVERY tier — at
+    // display rate they forced a full-window repaint per frame, which sat at
+    // ~4.5% CPU with a playlist view open on a 165 Hz monitor. When the
+    // playing row is not on screen nothing reads the property, so the tick
+    // dirties no binding and costs nothing.
     Timer {
         interval: 125ms;
-        running: ShellState.reduce-motion;
+        running: ShellState.reduce-motion || NowPlayingState.playing;
         triggered => {
             ShellState.coarse-tick-ms = Math.mod(ShellState.coarse-tick-ms + 125, 86400000);
         }
@@ -294,6 +303,20 @@ export component AppShell inherits Rectangle {
                     }
                 }
                 if NavState.view == ContentView.discover-browse && !OfflineState.offline: DiscoverBrowseView {
+                    open-album(id) => {
+                        root.open-album(id);
+                    }
+                    open-artist(id) => {
+                        root.open-artist(id);
+                    }
+                    media-action(kind, id, action) => {
+                        root.media-action(kind, id, action);
+                    }
+                }
+                // Recently Played Albums full page — LOCAL play-history data,
+                // so it mounts offline too (like local-album below); opening a
+                // Qobuz card from it offline hits the album view's own gate.
+                if NavState.view == ContentView.recent-albums: RecentAlbumsView {
                     open-album(id) => {
                         root.open-album(id);
                     }
@@ -479,6 +502,9 @@ export component AppShell inherits Rectangle {
                     }
                     settings-slider(k, v) => {
                         root.settings-slider(k, v);
+                    }
+                    settings-string(k, s) => {
+                        root.settings-string(k, s);
                     }
                     settings-reset => {
                         root.settings-reset();

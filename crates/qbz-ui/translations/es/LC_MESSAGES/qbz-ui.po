@@ -12,7 +12,7 @@ msgid "System Colors"
 msgstr "Colores del Sistema"
 
 msgid "Wallpaper Sync"
-msgstr "Wallpaper Sync"
+msgstr "Sincronizar con el fondo"
 
 msgid "Custom Image"
 msgstr "Imagen Personalizada"
@@ -206,8 +206,8 @@ msgstr "Seleccionar todos"
 msgid "Add to playlist"
 msgstr "Agregar a la lista"
 
-msgid "Add to favorites"
-msgstr "Agregar a favoritos"
+msgid "Add to Library"
+msgstr "Agregar a la biblioteca"
 
 msgid "Make available offline"
 msgstr "Disponible offline"
@@ -593,26 +593,26 @@ msgstr "Titulo Z-A"
 msgid "Artist A-Z"
 msgstr "Artista A-Z"
 
-msgid "Couldn't load favorites."
-msgstr "No se pudieron cargar los favoritos."
+msgid "Couldn't load your Library."
+msgstr "No se pudo cargar tu biblioteca."
 
-msgid "Remove from favorites"
-msgstr "Quitar de favoritos"
+msgid "Remove from Library"
+msgstr "Quitar de la biblioteca"
 
-msgid "No favorite tracks yet."
-msgstr "Aún no hay pistas favoritas."
+msgid "No tracks in your Library yet."
+msgstr "Aún no hay pistas en tu biblioteca."
 
 msgid "No tracks match your search."
 msgstr "Ninguna pista coincide con la búsqueda."
 
-msgid "No favorite albums yet."
-msgstr "Aún no hay álbumes favoritos."
+msgid "No albums in your Library yet."
+msgstr "Aún no hay álbumes en tu biblioteca."
 
 msgid "No albums match your search."
 msgstr "Ningún álbum coincide con tu búsqueda."
 
-msgid "No favorite artists yet."
-msgstr "Aún no hay artistas favoritos."
+msgid "No artists in your Library yet."
+msgstr "Aún no hay artistas en tu biblioteca."
 
 msgid "No artists match your search."
 msgstr "Ningún artista coincide con tu búsqueda."
@@ -623,11 +623,11 @@ msgstr "Ninguna lista de reproducción coincide con tu búsqueda."
 msgid "No followed playlists yet."
 msgstr "Aún no sigues ninguna lista de reproducción."
 
-msgid "No favorite playlists yet."
-msgstr "Aún no hay listas de reproducción favoritas."
+msgid "No playlists in your Library yet."
+msgstr "Aún no hay playlists en tu biblioteca."
 
-msgid "No favorite labels yet."
-msgstr "Aún no hay sellos favoritos."
+msgid "No labels in your Library yet."
+msgstr "Aún no hay sellos en tu biblioteca."
 
 msgid "No labels match your search."
 msgstr "Ningún sello coincide con tu búsqueda."
@@ -2408,6 +2408,9 @@ msgstr "Agregar a…"
 msgid "Add album to collection"
 msgstr "Agregar álbum a la colección"
 
+msgid "Remove album from collection"
+msgstr "Quitar álbum de la colección"
+
 msgid "Remove from library"
 msgstr "Quitar de la biblioteca"
 
@@ -3229,8 +3232,8 @@ msgstr "No se pudo subir la portada"
 msgid "Failed to write booklet: {}"
 msgstr "No se pudo escribir el folleto: {}"
 
-msgid "Favorite Albums"
-msgstr "Álbumes favoritos"
+msgid "Library Albums"
+msgstr "Álbumes de tu biblioteca"
 
 msgid "February"
 msgstr "Febrero"
@@ -4385,3 +4388,134 @@ msgstr "DoP — DSD sobre PCM (bit-perfect)"
 
 msgid "Native DSD (kernel support required)"
 msgstr "DSD nativo (requiere soporte del kernel)"
+
+msgid "Date added"
+msgstr "Fecha de agregado"
+
+msgid "Renderer setting reverted to Auto — the previous start didn't finish"
+msgstr "El ajuste de renderizador volvió a Automático — el arranque anterior no terminó"
+
+msgid "Renderer switched to GPU (compatibility) — the GPU renderer failed to start"
+msgstr "El renderizador cambió a GPU (compatibilidad) — el renderizador GPU no pudo iniciar"
+
+msgid "Audio output error"
+msgstr "Error de salida de audio"
+
+msgid "Direct ALSA device access is blocked inside Flatpak/Snap — switch the audio backend to PipeWire or System Default"
+msgstr "El acceso directo a dispositivos ALSA está bloqueado dentro de Flatpak/Snap — cambia el backend de audio a PipeWire o al predeterminado del sistema"
+
+msgid "Auto theme generation failed"
+msgstr "Error al generar el tema automático"
+
+msgid "Play all tracks"
+msgstr "Reproducir todas las pistas"
+
+msgid "Shuffle all tracks"
+msgstr "Aleatorio: todas las pistas"
+
+msgid "Select multiple tracks"
+msgstr "Seleccionar varias pistas"
+
+msgid "Play a random album"
+msgstr "Reproducir un álbum al azar"
+
+msgid "Open a random artist"
+msgstr "Abrir un artista al azar"
+
+msgid "Play a random playlist"
+msgstr "Reproducir una playlist al azar"
+
+msgid "Open a random label"
+msgstr "Abrir un sello al azar"
+
+msgid "Start from current theme"
+msgstr "Partir del tema actual"
+
+msgid "Copy the colors of the currently applied theme into the editor as a starting point."
+msgstr "Copia los colores del tema aplicado actualmente al editor como punto de partida."
+
+msgid "Use current colors"
+msgstr "Usar colores actuales"
+
+msgid "Dark theme"
+msgstr "Tema oscuro"
+
+msgid "Set the overall light or dark polarity. Affects derived shades, borders and overlays."
+msgstr "Define la polaridad general clara u oscura. Afecta los tonos derivados, los bordes y las superposiciones."
+
+msgid "SURFACES"
+msgstr "SUPERFICIES"
+
+msgid "Background"
+msgstr "Fondo"
+
+msgid "Surface"
+msgstr "Superficie"
+
+msgid "Elevated"
+msgstr "Elevado"
+
+msgid "TEXT"
+msgstr "TEXTO"
+
+msgid "Text"
+msgstr "Texto"
+
+msgid "Secondary text"
+msgstr "Texto secundario"
+
+msgid "ACCENT"
+msgstr "ACENTO"
+
+msgid "Accent"
+msgstr "Acento"
+
+msgid "Danger"
+msgstr "Peligro"
+
+msgid "Warning"
+msgstr "Advertencia"
+
+msgid "Success"
+msgstr "Éxito"
+
+msgid "OTHER"
+msgstr "OTROS"
+
+msgid "Border"
+msgstr "Borde"
+
+# Unavailable-track auto-skip (Tauri #467 parity)
+msgid "No available tracks to play"
+msgstr "No hay pistas disponibles para reproducir"
+# Always-visible log uploader entry (settings sub-nav footer)
+msgid "Share logs"
+msgstr "Compartir registros"
+# Guest local-only mode disclaimer line (login screen, #553)
+msgid "QBZ can be used as an offline player without a Qobuz™ account (no access to the Qobuz™ library)."
+msgstr "QBZ puede usarse como reproductor sin conexión sin una cuenta de Qobuz™ (sin acceso a la biblioteca de Qobuz™)."
+# Renderer degradation ladder toast (generic: GL or software rung)
+msgid "Renderer switched automatically — the previous renderer failed to start"
+msgstr "El renderizador cambió automáticamente — el anterior no pudo iniciar"
+
+# QConnect startup behavior (Settings > Playback, ported from Tauri)
+msgid "Auto-connect Qobuz Connect on startup"
+msgstr "Conectar Qobuz Connect automáticamente al iniciar"
+msgid "Choose whether Qobuz Connect activates automatically when QBZ launches."
+msgstr "Elige si Qobuz Connect se activa automáticamente cuando QBZ inicia."
+msgid "Remember state"
+msgstr "Recordar estado"
+msgid "On by default"
+msgstr "Activado de forma predeterminada"
+msgid "Off by default"
+msgstr "Desactivado de forma predeterminada"
+
+msgid "QBZ recovered from repeated startup crashes — some restored state was reset"
+msgstr "QBZ se recuperó de fallos repetidos al iniciar — se restableció parte del estado guardado"
+
+# QConnect device name (Settings > Playback, ported from Tauri)
+msgid "Qobuz Connect device name"
+msgstr "Nombre del dispositivo en Qobuz Connect"
+
+msgid "The name other Qobuz Connect apps see for this device. Applies on the next connection."
+msgstr "El nombre que otras apps de Qobuz Connect ven para este dispositivo. Se aplica en la próxima conexión."

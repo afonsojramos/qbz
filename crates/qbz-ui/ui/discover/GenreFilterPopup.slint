@@ -1,8 +1,7 @@
 // Filter-by-genre popup — ported from Tauri's GenreFilterPopup.
-// Simple grid view (parent genres as selectable chips). The selection
-// is shared across the three Discover tabs and re-fetches the discover
-// index. The Advanced view (search + 3-level tree + counts) is a
-// later increment; its toggle is present but its body is a stub.
+// Simple grid view (parent genres as selectable chips) plus the Advanced
+// view (search + 3-level tree + counts). The selection is shared across
+// the three Discover tabs and re-fetches the discover index.
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
@@ -20,7 +19,18 @@ component GenreTreeRowItem inherits Rectangle {
 
     height: 34px;
     border-radius: 6px;
-    background: ta.has-hover ? Theme.surface-hover : transparent;
+    background: ta.has-hover || arrow-ta.has-hover ? Theme.surface-hover : transparent;
+
+    // Row click (outside the arrow) toggles selection. Declared FIRST so it
+    // sits BELOW the arrow's TouchArea in z-order (later siblings are on top
+    // in Slint) — otherwise it swallows the chevron click and sub-genres
+    // never expand (#545).
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.toggle(root.node.id);
+        }
+    }
 
     HorizontalLayout {
         padding-left: 6px + root.node.level * 18px;
@@ -42,6 +52,10 @@ component GenreTreeRowItem inherits Rectangle {
                 }
             }
             arrow-ta := TouchArea {
+                // Disabled on leaf rows so the click falls through to the
+                // row TouchArea (an enabled TouchArea consumes it even with
+                // a no-op handler — 20px selection dead-zone otherwise).
+                enabled: root.node.has-children;
                 mouse-cursor: root.node.has-children ? pointer : default;
                 clicked => {
                     if (root.node.has-children) {
@@ -90,14 +104,6 @@ component GenreTreeRowItem inherits Rectangle {
         }
     }
 
-    // Row click (outside the arrow) toggles selection.
-    ta := TouchArea {
-        mouse-cursor: pointer;
-        // Sits below the arrow's TouchArea, so arrow clicks win.
-        clicked => {
-            root.toggle(root.node.id);
-        }
-    }
 }
 
 component GenreCard inherits Rectangle {

@@ -140,3 +140,6 @@ default-features = false
 level = "warn"
 priority = 0
 check-cfg = ["cfg(slint_nightly_test)"]
+
+# Standalone when checked directly; the app consumes it via [patch.crates-io].
+[workspace]

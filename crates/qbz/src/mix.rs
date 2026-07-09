@@ -213,14 +213,7 @@ where
     A: FrontendAdapter + Send + Sync + 'static,
 {
     match runtime.core().get_favorites("tracks", 200, 0).await {
-        Ok(value) => {
-            let items = value
-                .get("tracks")
-                .and_then(|b| b.get("items"))
-                .cloned()
-                .unwrap_or(serde_json::Value::Null);
-            serde_json::from_value(items).unwrap_or_default()
-        }
+        Ok(value) => qbz_models::lenient::parse_items_array(&value, "tracks", "mix favorite track"),
         Err(_) => Vec::new(),
     }
 }

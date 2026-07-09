@@ -94,3 +94,167 @@ msgstr "Signing you in…"
 
 msgid "Sign-in failed"
 msgstr "Sign-in failed"
+
+msgid "Date added"
+msgstr "Date added"
+
+msgid "Renderer setting reverted to Auto — the previous start didn't finish"
+msgstr "Renderer setting reverted to Auto — the previous start didn't finish"
+
+msgid "Renderer switched to GPU (compatibility) — the GPU renderer failed to start"
+msgstr "Renderer switched to GPU (compatibility) — the GPU renderer failed to start"
+
+msgid "Audio output error"
+msgstr "Audio output error"
+
+msgid "Direct ALSA device access is blocked inside Flatpak/Snap — switch the audio backend to PipeWire or System Default"
+msgstr "Direct ALSA device access is blocked inside Flatpak/Snap — switch the audio backend to PipeWire or System Default"
+
+msgid "Add to Library"
+msgstr "Add to Library"
+
+msgid "Remove from Library"
+msgstr "Remove from Library"
+
+msgid "Couldn't load your Library."
+msgstr "Couldn't load your Library."
+
+msgid "No tracks in your Library yet."
+msgstr "No tracks in your Library yet."
+
+msgid "No albums in your Library yet."
+msgstr "No albums in your Library yet."
+
+msgid "No artists in your Library yet."
+msgstr "No artists in your Library yet."
+
+msgid "No playlists in your Library yet."
+msgstr "No playlists in your Library yet."
+
+msgid "No labels in your Library yet."
+msgstr "No labels in your Library yet."
+
+msgid "Library Albums"
+msgstr "Library Albums"
+
+msgid "Auto theme generation failed"
+msgstr "Auto theme generation failed"
+
+msgid "Play all tracks"
+msgstr "Play all tracks"
+
+msgid "Shuffle all tracks"
+msgstr "Shuffle all tracks"
+
+msgid "Select multiple tracks"
+msgstr "Select multiple tracks"
+
+msgid "Play a random album"
+msgstr "Play a random album"
+
+msgid "Open a random artist"
+msgstr "Open a random artist"
+
+msgid "Play a random playlist"
+msgstr "Play a random playlist"
+
+msgid "Open a random label"
+msgstr "Open a random label"
+
+msgid "Start from current theme"
+msgstr "Start from current theme"
+
+msgid "Copy the colors of the currently applied theme into the editor as a starting point."
+msgstr "Copy the colors of the currently applied theme into the editor as a starting point."
+
+msgid "Use current colors"
+msgstr "Use current colors"
+
+msgid "Dark theme"
+msgstr "Dark theme"
+
+msgid "Set the overall light or dark polarity. Affects derived shades, borders and overlays."
+msgstr "Set the overall light or dark polarity. Affects derived shades, borders and overlays."
+
+msgid "SURFACES"
+msgstr "SURFACES"
+
+msgid "Background"
+msgstr "Background"
+
+msgid "Surface"
+msgstr "Surface"
+
+msgid "Elevated"
+msgstr "Elevated"
+
+msgid "TEXT"
+msgstr "TEXT"
+
+msgid "Text"
+msgstr "Text"
+
+msgid "Secondary text"
+msgstr "Secondary text"
+
+msgid "ACCENT"
+msgstr "ACCENT"
+
+msgid "Accent"
+msgstr "Accent"
+
+msgid "STATUS"
+msgstr "STATUS"
+
+msgid "Danger"
+msgstr "Danger"
+
+msgid "Warning"
+msgstr "Warning"
+
+msgid "Success"
+msgstr "Success"
+
+msgid "OTHER"
+msgstr "OTHER"
+
+msgid "Border"
+msgstr "Border"
+
+msgid "Favorite"
+msgstr "Favorite"
+
+# Always-visible log uploader entry (settings sub-nav footer)
+msgid "Share logs"
+msgstr "Share logs"
+# Guest local-only mode disclaimer line (login screen, #553)
+msgid "QBZ can be used as an offline player without a Qobuz™ account (no access to the Qobuz™ library)."
+msgstr "QBZ can be used as an offline player without a Qobuz™ account (no access to the Qobuz™ library)."
+# Renderer degradation ladder toast (generic: GL or software rung)
+msgid "Renderer switched automatically — the previous renderer failed to start"
+msgstr "Renderer switched automatically — the previous renderer failed to start"
+
+# QConnect startup behavior (Settings > Playback, ported from Tauri)
+msgid "Auto-connect Qobuz Connect on startup"
+msgstr "Auto-connect Qobuz Connect on startup"
+msgid "Choose whether Qobuz Connect activates automatically when QBZ launches."
+msgstr "Choose whether Qobuz Connect activates automatically when QBZ launches."
+msgid "Remember state"
+msgstr "Remember state"
+msgid "On by default"
+msgstr "On by default"
+msgid "Off by default"
+msgstr "Off by default"
+
+msgid "Remove album from collection"
+msgstr "Remove album from collection"
+
+msgid "QBZ recovered from repeated startup crashes — some restored state was reset"
+msgstr "QBZ recovered from repeated startup crashes — some restored state was reset"
+
+# QConnect device name (Settings > Playback, ported from Tauri)
+msgid "Qobuz Connect device name"
+msgstr "Qobuz Connect device name"
+
+msgid "The name other Qobuz Connect apps see for this device. Applies on the next connection."
+msgstr "The name other Qobuz Connect apps see for this device. Applies on the next connection."

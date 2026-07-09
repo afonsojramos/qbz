@@ -864,7 +864,7 @@ export component LocalLibraryView inherits Rectangle {
                 }
             }
 
-            // Tracks toolbar — multi-select toggle + search + group-by.
+            // Tracks toolbar — multi-select toggle + search + sort + group-by.
             if LocalLibraryState.active-tab == "tracks"
                 && (LocalLibraryState.tracks.length > 0
                     || LocalLibraryState.tracks-search != ""): HorizontalLayout {
@@ -886,6 +886,43 @@ export component LocalLibraryView inherits Rectangle {
                         query <=> LocalLibraryState.tracks-search;
                         edited(q) => {
                             LocalLibraryActions.tracks-search(q);
+                        }
+                    }
+                }
+                // SQL-side sort (pagination order; page-1 re-query on change).
+                VerticalLayout {
+                    alignment: center;
+                    QbzSelect {
+                        menu-width: 180px;
+                        sm: true;
+                        options: [
+                            @tr("Default"),
+                            @tr("Artist A-Z"),
+                            @tr("Artist Z-A"),
+                            @tr("Title A-Z"),
+                            @tr("Title Z-A"),
+                            @tr("Year (newest)"),
+                            @tr("Year (oldest)"),
+                            @tr("Date added"),
+                        ];
+                        current-index: LocalLibraryState.tracks-sort == "artist-asc" ? 1
+                            : LocalLibraryState.tracks-sort == "artist-desc" ? 2
+                            : LocalLibraryState.tracks-sort == "title-asc" ? 3
+                            : LocalLibraryState.tracks-sort == "title-desc" ? 4
+                            : LocalLibraryState.tracks-sort == "year-desc" ? 5
+                            : LocalLibraryState.tracks-sort == "year-asc" ? 6
+                            : LocalLibraryState.tracks-sort == "added-desc" ? 7
+                            : 0;
+                        selected(i) => {
+                            LocalLibraryActions.tracks-set-sort(
+                                i == 1 ? "artist-asc"
+                                : i == 2 ? "artist-desc"
+                                : i == 3 ? "title-asc"
+                                : i == 4 ? "title-desc"
+                                : i == 5 ? "year-desc"
+                                : i == 6 ? "year-asc"
+                                : i == 7 ? "added-desc"
+                                : "default");
                         }
                     }
                 }

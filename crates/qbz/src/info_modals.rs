@@ -227,7 +227,11 @@ fn map_track_info(track: Track) -> TrackInfoData {
         isrc: track.isrc.unwrap_or_default(),
         label,
         label_id,
-        copyright: track.copyright.unwrap_or_default(),
+        copyright: track
+            .copyright
+            .as_deref()
+            .map(crate::strip_html::decode_html_entities)
+            .unwrap_or_default(),
         credits,
     }
 }
@@ -284,7 +288,11 @@ fn map_album_credits(album: Album) -> AlbumCreditsData {
                 name: p.name,
             })
             .collect();
-            let copyright = t.copyright.unwrap_or_default();
+            let copyright = t
+                .copyright
+                .as_deref()
+                .map(crate::strip_html::decode_html_entities)
+                .unwrap_or_default();
             let number = if t.track_number > 0 {
                 t.track_number.to_string()
             } else {

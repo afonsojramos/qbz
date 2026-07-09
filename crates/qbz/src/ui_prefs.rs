@@ -45,8 +45,8 @@ pub const DEFAULT_LANGUAGE: &str = "auto";
 
 /// Map a language select index to its persisted key. The on-screen order in
 /// `AppearanceState.languages` is Auto / English / Español / Français / Deutsch
-/// / Português / Русский / 日本語 (0-7); any unknown index falls back to the
-/// default (`"auto"`).
+/// / Português / Русский / 日本語 / Nederlands (0-8); any unknown index falls
+/// back to the default (`"auto"`).
 pub fn language_for_index(index: i32) -> &'static str {
     match index {
         1 => "en",
@@ -56,6 +56,7 @@ pub fn language_for_index(index: i32) -> &'static str {
         5 => "pt",
         6 => "ru",
         7 => "ja",
+        8 => "nl",
         _ => DEFAULT_LANGUAGE,
     }
 }
@@ -71,6 +72,32 @@ pub fn language_index(key: &str) -> i32 {
         "pt" => 5,
         "ru" => 6,
         "ja" => 7,
+        "nl" => 8,
+        _ => 0,
+    }
+}
+
+/// Default auto-theme source key (`"system"`: DE color scheme with a wallpaper
+/// fallback). The other keys are `"wallpaper"` and `"image"`.
+pub const DEFAULT_AUTO_THEME_SOURCE: &str = "system";
+
+/// Map an auto-theme-source select index to its persisted key. On-screen order
+/// is System Colors / Wallpaper Sync / Custom Image (0-2); unknown indices fall
+/// back to the default (`"system"`).
+pub fn auto_theme_source_for_index(index: i32) -> &'static str {
+    match index {
+        1 => "wallpaper",
+        2 => "image",
+        _ => "system",
+    }
+}
+
+/// Inverse of [`auto_theme_source_for_index`]: the select index for a persisted
+/// key, falling back to the default's index (0 = "system").
+pub fn auto_theme_source_index(key: &str) -> i32 {
+    match key {
+        "wallpaper" => 1,
+        "image" => 2,
         _ => 0,
     }
 }
@@ -438,6 +465,16 @@ pub struct UiPrefs {
     /// order-independent and stable across releases. Owner default: OLED Dark.
     #[serde(default = "default_theme")]
     pub theme: String,
+    /// Auto-theme source (only meaningful when `theme == "auto"`): `"system"`
+    /// (DE color scheme → wallpaper fallback) | `"wallpaper"` | `"image"`.
+    /// Persisted so the dynamic theme regenerates from the same source across
+    /// restarts. See [`DEFAULT_AUTO_THEME_SOURCE`].
+    #[serde(default = "default_auto_theme_source")]
+    pub auto_theme_source: String,
+    /// Absolute path to the user's custom image for the `"image"` auto-theme
+    /// source. Empty until the user picks one. Ignored for other sources.
+    #[serde(default)]
+    pub auto_theme_image_path: String,
 
     // ---- Keyboard shortcuts (hotkeys) ----------------------------------
     /// User keybinding overrides: action id → shortcut string. Only actions
@@ -485,6 +522,22 @@ pub struct UiPrefs {
     /// window comes up, the next start reverts this to "auto".
     #[serde(default = "default_renderer")]
     pub renderer: String,
+    /// App version that AUTO-degraded `renderer` (the ladder persisted "gl"
+    /// or "software" after failed starts). Empty = `renderer` is the user's
+    /// own choice. A NEW build re-probes "auto" once (vendored renderer
+    /// fixes / driver updates are likely) — the ladder re-degrades within
+    /// one start if the stack is still broken. Cleared when the user picks
+    /// a renderer manually in Settings.
+    #[serde(default)]
+    pub renderer_auto_degraded: String,
+    /// App version whose ALT-adapter wgpu rung SURVIVED a session (stamped
+    /// at sentinel-disarm time). While it matches the running build, fresh
+    /// auto-detects arm the alternate adapter directly — without this the
+    /// rung-2 success dies with the process and a #542-family machine would
+    /// crash every other launch forever. Version-keyed like
+    /// `renderer_auto_degraded`; cleared on a manual renderer pick.
+    #[serde(default)]
+    pub renderer_wgpu_alt: String,
     /// Interface-size preset: `"default"` | `"small"` | `"large"` | `"xl"`.
     /// Read at the very top of main() (before ANY thread exists) to set
     /// SLINT_SCALE_FACTOR, so changes apply on restart.
@@ -610,6 +663,10 @@ fn default_theme() -> String {
     qbz_theme::default_slug().to_string()
 }
 
+fn default_auto_theme_source() -> String {
+    DEFAULT_AUTO_THEME_SOURCE.to_string()
+}
+
 impl Default for UiPrefs {
     fn default() -> Self {
         Self {
@@ -652,6 +709,8 @@ impl Default for UiPrefs {
             immersive_last_mode: 0,
             immersive_last_split_panel: 0,
             theme: default_theme(),
+            auto_theme_source: default_auto_theme_source(),
+            auto_theme_image_path: String::new(),
             keybindings: BTreeMap::new(),
             mini_surface: default_mini_surface(),
             mini_width: default_mini_width(),
@@ -663,6 +722,8 @@ impl Default for UiPrefs {
             window_x: default_window_pos(),
             window_y: default_window_pos(),
             renderer: default_renderer(),
+            renderer_auto_degraded: String::new(),
+            renderer_wgpu_alt: String::new(),
             ui_scale: default_ui_scale(),
             last_dpr: default_last_dpr(),
         }

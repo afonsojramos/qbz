@@ -205,8 +205,8 @@ msgstr "Выбрать все"
 msgid "Add to playlist"
 msgstr "Добавить в плейлист"
 
-msgid "Add to favorites"
-msgstr "Добавить в избранное"
+msgid "Add to Library"
+msgstr "Добавить в библиотеку"
 
 msgid "Make available offline"
 msgstr "Сделать доступным офлайн"
@@ -592,26 +592,26 @@ msgstr "Название Я–А"
 msgid "Artist A-Z"
 msgstr "Исполнитель А–Я"
 
-msgid "Couldn't load favorites."
-msgstr "Не удалось загрузить избранное."
+msgid "Couldn't load your Library."
+msgstr "Не удалось загрузить библиотеку."
 
-msgid "Remove from favorites"
-msgstr "Удалить из избранного"
+msgid "Remove from Library"
+msgstr "Удалить из библиотеки"
 
-msgid "No favorite tracks yet."
-msgstr "Пока нет избранных треков."
+msgid "No tracks in your Library yet."
+msgstr "В библиотеке пока нет треков."
 
 msgid "No tracks match your search."
 msgstr "Нет треков по вашему запросу."
 
-msgid "No favorite albums yet."
-msgstr "Пока нет избранных альбомов."
+msgid "No albums in your Library yet."
+msgstr "В библиотеке пока нет альбомов."
 
 msgid "No albums match your search."
 msgstr "Нет альбомов по вашему запросу."
 
-msgid "No favorite artists yet."
-msgstr "Пока нет избранных исполнителей."
+msgid "No artists in your Library yet."
+msgstr "В библиотеке пока нет исполнителей."
 
 msgid "No artists match your search."
 msgstr "Нет исполнителей по вашему запросу."
@@ -622,11 +622,11 @@ msgstr "Нет плейлистов по вашему запросу."
 msgid "No followed playlists yet."
 msgstr "Пока нет отслеживаемых плейлистов."
 
-msgid "No favorite playlists yet."
-msgstr "Пока нет избранных плейлистов."
+msgid "No playlists in your Library yet."
+msgstr "В библиотеке пока нет плейлистов."
 
-msgid "No favorite labels yet."
-msgstr "Пока нет избранных лейблов."
+msgid "No labels in your Library yet."
+msgstr "В библиотеке пока нет лейблов."
 
 msgid "No labels match your search."
 msgstr "Нет лейблов по вашему запросу."
@@ -2287,6 +2287,9 @@ msgstr "Добавить в…"
 msgid "Add album to collection"
 msgstr "Добавить альбом в коллекцию"
 
+msgid "Remove album from collection"
+msgstr "Удалить альбом из коллекции"
+
 msgid "Remove from library"
 msgstr "Удалить из библиотеки"
 
@@ -3109,8 +3112,8 @@ msgstr "Не удалось загрузить обложку"
 msgid "Failed to write booklet: {}"
 msgstr "Не удалось записать буклет: {}"
 
-msgid "Favorite Albums"
-msgstr "Избранные альбомы"
+msgid "Library Albums"
+msgstr "Альбомы из вашей библиотеки"
 
 msgid "February"
 msgstr "Февраль"
@@ -4368,3 +4371,134 @@ msgstr "DoP — DSD поверх PCM (бит-перфект)"
 
 msgid "Native DSD (kernel support required)"
 msgstr "Нативный DSD (требуется поддержка ядра)"
+
+msgid "Date added"
+msgstr "Дата добавления"
+
+msgid "Renderer setting reverted to Auto — the previous start didn't finish"
+msgstr "Настройка рендерера возвращена на «Авто» — предыдущий запуск не завершился"
+
+msgid "Renderer switched to GPU (compatibility) — the GPU renderer failed to start"
+msgstr "Рендерер переключён на GPU (совместимость) — GPU-рендерер не смог запуститься"
+
+msgid "Audio output error"
+msgstr "Ошибка аудиовывода"
+
+msgid "Direct ALSA device access is blocked inside Flatpak/Snap — switch the audio backend to PipeWire or System Default"
+msgstr "Прямой доступ к устройствам ALSA заблокирован в Flatpak/Snap — переключите аудиобэкенд на PipeWire или системный вывод"
+
+msgid "Auto theme generation failed"
+msgstr "Не удалось сгенерировать автоматическую тему"
+
+msgid "Play all tracks"
+msgstr "Воспроизвести все треки"
+
+msgid "Shuffle all tracks"
+msgstr "Перемешать все треки"
+
+msgid "Select multiple tracks"
+msgstr "Выбрать несколько треков"
+
+msgid "Play a random album"
+msgstr "Воспроизвести случайный альбом"
+
+msgid "Open a random artist"
+msgstr "Открыть случайного исполнителя"
+
+msgid "Play a random playlist"
+msgstr "Воспроизвести случайный плейлист"
+
+msgid "Open a random label"
+msgstr "Открыть случайный лейбл"
+
+msgid "Start from current theme"
+msgstr "Начать с текущей темы"
+
+msgid "Copy the colors of the currently applied theme into the editor as a starting point."
+msgstr "Копирует цвета текущей темы в редактор как отправную точку."
+
+msgid "Use current colors"
+msgstr "Использовать текущие цвета"
+
+msgid "Dark theme"
+msgstr "Тёмная тема"
+
+msgid "Set the overall light or dark polarity. Affects derived shades, borders and overlays."
+msgstr "Задаёт общую светлую или тёмную полярность. Влияет на производные оттенки, границы и наложения."
+
+msgid "SURFACES"
+msgstr "ПОВЕРХНОСТИ"
+
+msgid "Background"
+msgstr "Фон"
+
+msgid "Surface"
+msgstr "Поверхность"
+
+msgid "Elevated"
+msgstr "Приподнятый"
+
+msgid "TEXT"
+msgstr "ТЕКСТ"
+
+msgid "Text"
+msgstr "Текст"
+
+msgid "Secondary text"
+msgstr "Вторичный текст"
+
+msgid "ACCENT"
+msgstr "АКЦЕНТ"
+
+msgid "Accent"
+msgstr "Акцент"
+
+msgid "Danger"
+msgstr "Опасность"
+
+msgid "Warning"
+msgstr "Предупреждение"
+
+msgid "Success"
+msgstr "Успех"
+
+msgid "OTHER"
+msgstr "ДРУГОЕ"
+
+msgid "Border"
+msgstr "Граница"
+
+# Unavailable-track auto-skip (Tauri #467 parity)
+msgid "No available tracks to play"
+msgstr "Нет доступных треков для воспроизведения"
+# Always-visible log uploader entry (settings sub-nav footer)
+msgid "Share logs"
+msgstr "Поделиться журналами"
+# Guest local-only mode disclaimer line (login screen, #553)
+msgid "QBZ can be used as an offline player without a Qobuz™ account (no access to the Qobuz™ library)."
+msgstr "QBZ можно использовать как офлайн-плеер без учётной записи Qobuz™ (без доступа к библиотеке Qobuz™)."
+# Renderer degradation ladder toast (generic: GL or software rung)
+msgid "Renderer switched automatically — the previous renderer failed to start"
+msgstr "Рендерер переключён автоматически — предыдущий не смог запуститься"
+
+# QConnect startup behavior (Settings > Playback, ported from Tauri)
+msgid "Auto-connect Qobuz Connect on startup"
+msgstr "Автоматически подключать Qobuz Connect при запуске"
+msgid "Choose whether Qobuz Connect activates automatically when QBZ launches."
+msgstr "Выберите, включается ли Qobuz Connect автоматически при запуске QBZ."
+msgid "Remember state"
+msgstr "Запоминать состояние"
+msgid "On by default"
+msgstr "Включено по умолчанию"
+msgid "Off by default"
+msgstr "Выключено по умолчанию"
+
+msgid "QBZ recovered from repeated startup crashes — some restored state was reset"
+msgstr "QBZ восстановился после повторных сбоев при запуске — часть восстановленного состояния была сброшена"
+
+# QConnect device name (Settings > Playback, ported from Tauri)
+msgid "Qobuz Connect device name"
+msgstr "Имя устройства в Qobuz Connect"
+
+msgid "The name other Qobuz Connect apps see for this device. Applies on the next connection."
+msgstr "Имя, под которым это устройство видят другие приложения Qobuz Connect. Применяется при следующем подключении."

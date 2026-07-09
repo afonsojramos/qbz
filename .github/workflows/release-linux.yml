@@ -150,7 +150,7 @@ jobs:
           # Keep symbols in this build: the unstripped binary is archived for
           # crash symbolication, then stripped for every shipped artifact.
           CARGO_PROFILE_RELEASE_STRIP: "none"
-          RUSTFLAGS: "-C target-feature=+aes,+ssse3 -C link-arg=-fuse-ld=mold -Z threads=1"
+          RUSTFLAGS: "-C link-arg=-fuse-ld=mold -Z threads=1"
         run: |
           cargo build --release --manifest-path crates/Cargo.toml -p qbz
           cp crates/target/release/qbz qbz-unstripped

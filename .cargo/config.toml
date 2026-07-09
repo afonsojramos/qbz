@@ -1,42 +1,25 @@
-# Enable CPU intrinsics for AES-NI + SSSE3 on x86_64 targets only.
+# NO global x86_64 target-feature flags — baseline x86-64 on purpose.
 #
-# The qbz-cmaf crate does AES-128-CTR decrypt on every offline-cached
-# audio frame. Without AES-NI the decrypt falls back to a software
-# implementation that hits ~10 MB/s on a modern CPU; with AES-NI it
-# clears 400+ MB/s. For HiRes (200 MB+ tracks) this is the difference
-# between a 20-second gap and a sub-second one.
+# History (#353 -> #343 -> #549): the binary once shipped with
+# `target-cpu=x86-64-v3`, which SIGILLed every pre-Haswell CPU at launch.
+# That was reduced to `target-feature=+aes,+ssse3` on the belief that the
+# `aes` crate's cpufeatures runtime check would keep CPUs without AES-NI on
+# the software path. That belief was WRONG: enabling a target feature at
+# COMPILE time makes cpufeatures compile its check to a constant `true`, so
+# the AES-NI intrinsics run unconditionally — every CPU without AES-NI
+# (Nehalem/Lynnfield i7-860, pre-2010 Intel Macs, AMD pre-Bulldozer) died
+# with SIGILL the moment AES ran (at LAUNCH: qbz-credentials decrypts with
+# AES-GCM during startup). `+ssse3` additionally let LLVM autovectorize
+# SSSE3 anywhere in the binary, killing AMD Phenom II (no SSSE3 until
+# Bulldozer, 2011). That is issue #549.
 #
-# What we need is ONLY the AES-NI instruction set compiled in. The
-# `aes` crate uses `cpufeatures::new!` to do a runtime CPUID check
-# before dispatching to the hardware path, so as long as the AES-NI
-# code is present in the binary, CPUs without AES-NI fall back to the
-# software implementation gracefully — no crash, just slower decrypt.
+# The flags buy NOTHING on capable CPUs: with no compile-time forcing, the
+# `aes` crate does per-function `#[target_feature]` dispatch after a runtime
+# CPUID check. Measured on the qbz-cmaf hot path (ctr::Ctr128BE<Aes128>
+# apply_keystream, 256 MB, release): 2145 MB/s compiled-in vs 2162 MB/s
+# runtime-dispatched — identical. Old CPUs get the software fallback
+# (slower offline-cache decrypt) instead of a crash.
 #
-# `target-feature=+aes,+ssse3` is what enables that compile-in.
-# SSSE3 has been in every x86_64 CPU since 2006 (Core 2).
-#
-# We deliberately do NOT set `target-cpu=x86-64-v3` (Haswell baseline,
-# 2013). v3 includes AVX2/BMI2/FMA/LZCNT/MOVBE and LLVM will freely
-# emit those instructions anywhere in the binary — including the
-# startup path, long before CMAF runs. On pre-Haswell CPUs (Sandy
-# Bridge 2011, Ivy Bridge 2012, AMD Bulldozer/Piledriver) the process
-# dies with SIGILL at launch. See issue #353 (Linux, Sandy Bridge) and
-# discussion #343 (macOS, 2012 MacBookPro9,1 / Ivy Bridge). Raising
-# the baseline gave no CMAF speedup — the perf win came entirely from
-# `+aes` — so we keep the AES-NI path and drop the incompatible
-# baseline.
-#
-# If a future hot loop ever warrants AVX2/BMI2, the correct pattern is
-# per-function `#[target_feature]` with runtime dispatch (as the `aes`
-# crate already does via `cpufeatures`), NOT a global microarch bump
-# that silently breaks older hardware.
-#
-# IMPORTANT: these flags MUST be scoped to x86_64 targets. Using
-# `[build] rustflags = ...` applies them to every target, which on
-# aarch64-apple-darwin (and any other ARM target) corrupts the CPU
-# feature inference inside the `ring` crate and fails the build with
-# `assertion failed: CAPS_STATIC == MIN_STATIC_FEATURES`. ARM targets
-# get their own AES/crypto extensions automatically via `aes` crate's
-# armv8 path — we don't need to force anything there.
-[target.'cfg(target_arch = "x86_64")']
-rustflags = ["-C", "target-feature=+aes,+ssse3"]
+# If a future hot loop ever warrants AVX2/BMI2/etc., use per-function
+# `#[target_feature]` + `is_x86_feature_detected!` dispatch — never a
+# global feature/microarch bump.
