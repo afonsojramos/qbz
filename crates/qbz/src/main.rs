@@ -12171,6 +12171,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         {
             let c = controller.clone();
+            qs.on_remove_all_after(move |index| c.remove_all_after(index.max(0) as usize));
+        }
+        {
+            let c = controller.clone();
+            qs.on_add_to_playlist(move |index| c.add_to_playlist(index.max(0) as usize));
+        }
+        {
+            let c = controller.clone();
             qs.on_reorder(move |from, to| {
                 c.reorder(from.max(0) as usize, to.max(0) as usize);
             });

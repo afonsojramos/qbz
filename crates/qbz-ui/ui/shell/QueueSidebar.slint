@@ -124,6 +124,8 @@ component QueueRow inherits Rectangle {
     in property <bool> removable: false;
     callback clicked();
     callback remove();
+    callback remove-all-after();
+    callback add-to-playlist();
 
     // Drag-reorder (UP NEXT only). `page-local-index` is the 0-based row within
     // the visible page (NOT the page-global display `index`). The parent owns the
@@ -305,7 +307,7 @@ component QueueRow inherits Rectangle {
     }
 
     // Per-track context menu — 1:1 with the Tauri queue track menu.
-    // Only "Remove from queue" is wired; the rest are placeholders.
+    // "Track info" is the only remaining placeholder (no app-wide panel yet).
     track-menu := PopupWindow {
         x: root.width - 200px;
         y: 44px;
@@ -333,10 +335,18 @@ component QueueRow inherits Rectangle {
             ContextMenuItem {
                 icon: @image-url("../assets/icons/list-x.svg");
                 label: @tr("Remove all after");
+                clicked => {
+                    root.remove-all-after();
+                    track-menu.close();
+                }
             }
             if !root.item.is-ephemeral: ContextMenuItem {
                 icon: @image-url("../assets/icons/list-plus.svg");
                 label: @tr("Add to playlist");
+                clicked => {
+                    root.add-to-playlist();
+                    track-menu.close();
+                }
             }
             if !root.item.is-ephemeral: ContextMenuItem {
                 icon: @image-url("../assets/icons/info.svg");
@@ -607,6 +617,12 @@ export component QueueSidebar inherits Rectangle {
                                     }
                                     remove => {
                                         QueueState.remove-upcoming(idx);
+                                    }
+                                    remove-all-after => {
+                                        QueueState.remove-all-after(idx);
+                                    }
+                                    add-to-playlist => {
+                                        QueueState.add-to-playlist(idx);
                                     }
                                     drag-begin(local-idx, row-top) => {
                                         root.reorder-active = true;
