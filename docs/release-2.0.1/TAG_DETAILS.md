@@ -1,8 +1,4 @@
-# 2.0.1 — __CODENAME__ (__SUBTITLE__)
-
-<!-- OWNER: replace __CODENAME__ and __SUBTITLE__ before tagging (G3). 2.0.0 was
-     "Rebuild 破 (You Can (Not) Advance)". Also set the About-modal literal in
-     crates/qbz-ui/ui/shell/AboutModal.slint:371. Only piece left blank on purpose. -->
+# 2.0.1 — Rebuild 破 (You Can (Not) Advance)
 
 The first maintenance release on top of the 2.0 rebuild: lighter scrolling, self-recovery from bad states, more faithful text across languages, and a few features that missed the 2.0 cutoff. The full 2.0 story is kept below.
 
