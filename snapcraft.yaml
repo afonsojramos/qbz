@@ -1,36 +1,34 @@
-# QBZ Snap package configuration
-# NOTE: Keep this file in sync with packaging/snap/snapcraft.yaml.
+# QBZ Snap recipe — SOURCE build of the Slint app (crates/ workspace).
+#
+# Rewritten 2026-07-02 for the Tauri -> Slint migration (v2.0). This root
+# file is what `snapcraft` picks up when building from the repo (local
+# builds / any builder pointed at the repo root). packaging/snap/snapcraft.yaml
+# is a symlink to THIS file — keep it that way.
+#
+# NOTE: the CI release path (release-snap.yml) does NOT use this file — it
+# builds the binary on a swap-equipped 16 GB runner and wraps it with the
+# dump-plugin recipe in packaging/snap-slint/snapcraft.yaml. Reason: the
+# qbz_ui rustc peaks ~30 GB (RSS+swap); small remote builders (e.g.
+# Launchpad) will OOM building this recipe from source. Keep the runtime
+# sections (apps/plugs/stage-packages) in sync with packaging/snap-slint/.
 
-name: qbz-player
+name: qbz-player            # keep the existing registered Snap Store name
 title: "QBZ — Native Qobuz Client for Linux"
-version: '1.2.10'
+version: git
 summary: Native Qobuz player for Linux with bit-perfect audio and DAC control
 description: |
-  QBZ is a native Linux desktop client for Qobuz™, designed for high-fidelity playback.
+  QBZ is a native Linux desktop client for Qobuz(TM), built for high-fidelity
+  playback with a native audio pipeline (direct ALSA and PipeWire), bit-perfect
+  output, exclusive device access, and per-track sample-rate switching for
+  external DACs — up to 24-bit / 192 kHz.
 
-  Unlike browser-based players or web wrappers, QBZ uses a native audio pipeline with direct ALSA and PipeWire integration, allowing bit-perfect playback, exclusive device access, and proper per-track sample-rate switching for external DACs.
+  This is the native (Slint) build: a single self-contained binary, no web
+  runtime. Features: native Qobuz(TM) streaming, bit-perfect ALSA exclusive
+  mode, DAC passthrough, Hi-Res FLAC, queue/playlists/favorites/offline cache,
+  local library, Chromecast and DLNA, MPRIS media keys and desktop integration.
 
-  Browsers are limited by system mixers and WebAudio, often resampling audio to 48 kHz. QBZ bypasses these limitations to deliver true high-resolution audio up to 24-bit / 192 kHz on Linux.
-
-  Features:
-  - Native Qobuz™ streaming client (not a web wrapper)
-  - Bit-perfect playback with ALSA exclusive mode
-  - DAC passthrough and per-track sample-rate switching
-  - Hi-Res FLAC playback
-  - Queue, playlists, favorites, and offline cache
-  - Local library integration
-  - Chromecast and DLNA support
-  - MPRIS media keys and desktop integration
-  - Open source (MIT license)
-
-  QBZ is built for Linux users and audiophiles who care about how audio actually reaches their hardware.
-
-  Note: When using ALSA exclusive mode or DAC passthrough, QBZ may block other
-  applications from recording or playing sound while audio is active. This is
-  expected behavior for bit-perfect playback and can be disabled in settings.
-
-  Legal:
-  QBZ uses the Qobuz™ API but is not affiliated with, endorsed by, or certified by Qobuz.
+  QBZ uses the Qobuz(TM) API but is not affiliated with, endorsed by, or
+  certified by Qobuz.
 
 license: MIT
 contact: https://github.com/vicrodh/qbz/discussions
@@ -40,51 +38,44 @@ issues: https://github.com/vicrodh/qbz/issues
 
 grade: stable
 confinement: strict
-base: core22
+base: core24
 icon: packaging/snap/snap/gui/qbz.png
-passthrough:
-  layout:
-    /usr/lib/x86_64-linux-gnu/webkit2gtk-4.1:
-      bind: $SNAP/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1
-    /usr/share/alsa:
-      bind: $SNAP/usr/share/alsa
-    /etc/alsa:
-      bind: $SNAP/etc/alsa
-    /usr/lib/x86_64-linux-gnu/alsa-lib:
-      bind: $SNAP/usr/lib/x86_64-linux-gnu/alsa-lib
 
-architectures:
-  - build-on: [amd64]
-    build-for: [amd64]
-  - build-on: [arm64]
-    build-for: [arm64]
+platforms:
+  amd64:
+  arm64:
+
+# ALSA config/plugin binds: without these the snap's alsa-lib cannot find the
+# host's ALSA configuration and plugin set, and the direct hw: (bit-perfect)
+# path breaks. Restored from the 1.2.x recipe (review fix 2026-07-03).
+layout:
+  /usr/share/alsa:
+    bind: $SNAP/usr/share/alsa
+  /etc/alsa:
+    bind: $SNAP/etc/alsa
+  /usr/lib/x86_64-linux-gnu/alsa-lib:
+    bind: $SNAP/usr/lib/x86_64-linux-gnu/alsa-lib
+  /usr/lib/aarch64-linux-gnu/alsa-lib:
+    bind: $SNAP/usr/lib/aarch64-linux-gnu/alsa-lib
 
 apps:
   qbz:
     command: bin/qbz
-    desktop: packaging/snap/snap/gui/qbz.desktop
+    desktop: usr/share/applications/qbz.desktop
+    # The gnome extension provides the graphics/font platform (Mesa GL, EGL,
+    # fontconfig, wayland) that a femtovg-wgpu + winit app needs — it is NOT
+    # about GTK here, just the runtime platform. It wires desktop/wayland/x11/
+    # gsettings plugs automatically.
     extensions: [gnome]
-    environment:
-      # Prefer GNOME platform GL libs to avoid Mesa/driver mismatches on NVIDIA.
-      LD_LIBRARY_PATH: $SNAP/gnome-platform/usr/lib/x86_64-linux-gnu:$SNAP/gnome-platform/lib/x86_64-linux-gnu:$SNAP/gnome-platform/usr/lib/aarch64-linux-gnu:$SNAP/gnome-platform/lib/aarch64-linux-gnu:$SNAP/gnome-platform/usr/lib:$SNAP/gnome-platform/lib:$LD_LIBRARY_PATH
-      WEBKIT_EXEC_PATH: $SNAP/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1
-      GTK_USE_PORTAL: "0"
-      GIO_USE_PORTAL: "0"
-      PIPEWIRE_RUNTIME_DIR: $XDG_RUNTIME_DIR/..
     plugs:
       - network
       - network-status
       - audio-playback
       - home
       - removable-media
-      - desktop
-      - desktop-legacy
-      - wayland
-      - x11
-      - unity7
-      - gsettings
       - alsa
       - pipewire
+      - opengl
     slots:
       - mpris
 
@@ -95,84 +86,76 @@ slots:
 
 parts:
   qbz:
-    plugin: rust
-    source: https://github.com/vicrodh/qbz.git
-    source-tag: v1.2.10
+    plugin: nil
+    source: .
     build-packages:
-      - libwebkit2gtk-4.1-dev
-      - libgtk-3-dev
-      - libayatana-appindicator3-dev
-      - librsvg2-dev
-      - patchelf
-      - libssl-dev
-      - libasound2-dev
-      - pkg-config
       - curl
-      # alsa-utils for aplay command (device enumeration)
-      - alsa-utils
-      # unzip needed by mupdf-sys build (ODT template extraction)
-      - unzip
-      # libclang needed by bindgen (mupdf-sys 0.6 generates bindings at build time)
-      - libclang-dev
-    stage-packages:
-      - libwebkit2gtk-4.1-0
-      - libgtk-3-0
-      - libayatana-appindicator3-1
-      - libasound2
-      - libasound2-data
-      - libasound2-plugins
-      - libssl3
-      - pipewire-bin
-      - pulseaudio-utils
-      # Include alsa-utils in the snap for aplay -L command
-      - alsa-utils
+      - pkg-config
+      - clang
+      - nasm
+      - mold
+      - libasound2-dev
+      - libjack-jackd2-dev
+      - libfontconfig1-dev
+      - libfreetype-dev
+      - libxkbcommon-dev
+      - libwayland-dev
+      - libxcb1-dev
+      - libgl1-mesa-dev
+      - libegl1-mesa-dev
+      - libdbus-1-dev
+      - libssl-dev
+      - libharfbuzz-dev
+      - libjbig2dec0-dev
+      - libopenjp2-7-dev
+      - libjpeg-dev
+      - zlib1g-dev
+      - libgumbo-dev
     override-build: |
-      export CARGO_HOME="$SNAPCRAFT_PART_BUILD/.cargo"
+      # Rust via rustup (the archive's rustc is too old for Slint).
       export RUSTUP_HOME="$SNAPCRAFT_PART_BUILD/.rustup"
-      export PATH="$CARGO_HOME/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-      export PKG_CONFIG_PATH="/usr/lib/$SNAPCRAFT_ARCH_TRIPLET/pkgconfig:/usr/share/pkgconfig:/snap/gnome-42-2204-sdk/current/usr/lib/$SNAPCRAFT_ARCH_TRIPLET/pkgconfig:/snap/gnome-42-2204-sdk/current/usr/share/pkgconfig"
-      export LIBRARY_PATH="/usr/lib/$SNAPCRAFT_ARCH_TRIPLET:/snap/gnome-42-2204-sdk/current/usr/lib/$SNAPCRAFT_ARCH_TRIPLET"
-      export LD_LIBRARY_PATH="/usr/lib/$SNAPCRAFT_ARCH_TRIPLET:/snap/gnome-42-2204-sdk/current/usr/lib/$SNAPCRAFT_ARCH_TRIPLET"
-      # Core22 ships SQLite 3.37 which lacks sqlite3_error_offset (added 3.38).
-      # libsqlite3-dev is pulled in transitively by webkit2gtk-dev, and the
-      # RUSTFLAGS -L puts /usr/lib before the bundled sqlite output dir,
-      # so the linker finds the old system libsqlite3.a first.
-      # Fix: replace system sqlite with a version >= 3.38.
-      SQLITE_VER=3460100
-      curl -sSf "https://www.sqlite.org/2024/sqlite-autoconf-${SQLITE_VER}.tar.gz" | tar xz
-      pushd "sqlite-autoconf-${SQLITE_VER}"
-      ./configure --quiet --prefix=/usr --libdir="/usr/lib/$SNAPCRAFT_ARCH_TRIPLET"
-      make -j"$(nproc)" && make install
-      popd
+      export CARGO_HOME="$SNAPCRAFT_PART_BUILD/.cargo"
+      curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+        sh -s -- -y --profile minimal --default-toolchain stable
+      export PATH="$CARGO_HOME/bin:$PATH"
 
-      export RUSTFLAGS="-L native=/usr/lib/$SNAPCRAFT_ARCH_TRIPLET -L native=/snap/gnome-42-2204-sdk/current/usr/lib/$SNAPCRAFT_ARCH_TRIPLET -L native=/snap/gnome-42-2204-sdk/current/usr/lib -C link-arg=-Wl,-rpath-link,/usr/lib/$SNAPCRAFT_ARCH_TRIPLET -C link-arg=-Wl,-rpath-link,/snap/gnome-42-2204-sdk/current/usr/lib/$SNAPCRAFT_ARCH_TRIPLET -C link-arg=-Wl,-rpath-link,/snap/gnome-42-2204-sdk/current/usr/lib"
-      export LDFLAGS="-L/usr/lib/$SNAPCRAFT_ARCH_TRIPLET -L/snap/gnome-42-2204-sdk/current/usr/lib/$SNAPCRAFT_ARCH_TRIPLET -L/snap/gnome-42-2204-sdk/current/usr/lib -Wl,-rpath-link,/usr/lib/$SNAPCRAFT_ARCH_TRIPLET -Wl,-rpath-link,/snap/gnome-42-2204-sdk/current/usr/lib/$SNAPCRAFT_ARCH_TRIPLET -Wl,-rpath-link,/snap/gnome-42-2204-sdk/current/usr/lib"
+      # MIN memory tier: the qbz_ui rustc peaks ~30 GB. Symbols are stripped
+      # by the workspace [profile.release].
+      export CARGO_INCREMENTAL=0
+      export CARGO_BUILD_JOBS=1
+      export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=256
+      export CARGO_PROFILE_RELEASE_OPT_LEVEL=2
+      export RUSTFLAGS="-C link-arg=-fuse-ld=mold"
+      cargo build --release --manifest-path crates/Cargo.toml -p qbz
 
-      if ! command -v cargo >/dev/null 2>&1; then
-        curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
-      fi
-
-      # Allow sandboxed builds to override GTK_USE_PORTAL.
-      perl -0pi -e 'if ($_ !~ /var_os\\(\"GTK_USE_PORTAL\"\\)/) { s/std::env::set_var\\(\"GTK_USE_PORTAL\", \"1\"\\);/if std::env::var_os\\(\"GTK_USE_PORTAL\"\\).is_none() {\\n        std::env::set_var(\"GTK_USE_PORTAL\", \"1\");\\n    }/ }' src-tauri/src/main.rs
-
-      # Install Node.js for frontend build
-      curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-      apt-get install -y nodejs
-
-      # Build frontend
-      npm ci
-      # Snap Store policy prohibits competing auto-updaters; disable
-      # the `updater` Cargo feature so tauri-plugin-updater is not linked.
-      npm run tauri build -- --no-bundle -- --no-default-features
-
-      # Install binary, desktop file, and icon
-      mkdir -p $SNAPCRAFT_PART_INSTALL/bin
-      cp src-tauri/target/release/qbz $SNAPCRAFT_PART_INSTALL/bin/qbz
-      mkdir -p $SNAPCRAFT_PART_INSTALL/packaging/snap/snap/gui
-      cp packaging/snap/snap/gui/qbz.desktop $SNAPCRAFT_PART_INSTALL/packaging/snap/snap/gui/
-      cp packaging/snap/snap/gui/qbz.png $SNAPCRAFT_PART_INSTALL/packaging/snap/snap/gui/
-    override-prime: |
-      snapcraftctl prime
-      if [ -d "$SNAPCRAFT_PRIME/usr/lib/aarch64-linux-gnu" ] && [ ! -e "$SNAPCRAFT_PRIME/usr/lib/x86_64-linux-gnu" ]; then
-        ln -s aarch64-linux-gnu "$SNAPCRAFT_PRIME/usr/lib/x86_64-linux-gnu"
-      fi
+      install -Dm755 crates/target/release/qbz "$SNAPCRAFT_PART_INSTALL/bin/qbz"
+      install -Dm644 packaging/linux/qbz.desktop \
+        "$SNAPCRAFT_PART_INSTALL/usr/share/applications/qbz.desktop"
+      install -Dm644 packaging/icons/256x256.png \
+        "$SNAPCRAFT_PART_INSTALL/usr/share/icons/hicolor/256x256/apps/qbz.png"
+    stage-packages:
+      # Audio (the bit-perfect path)
+      - libasound2t64
+      - libasound2-plugins
+      - libpipewire-0.3-0
+      - libjack-jackd2-0
+      # GPU stack for femtovg-wgpu (Vulkan first, GL fallback)
+      - libvulkan1
+      - mesa-vulkan-drivers
+      - libegl1
+      - libgl1
+      # winit windowing (Wayland + X11)
+      - libwayland-client0
+      - libwayland-cursor0
+      - libwayland-egl1
+      - libxkbcommon0
+      - libxcb1
+      - libx11-6
+      - libxcursor1
+      - libxi6
+      - libxrandr2
+      # Fonts / text shaping (femtovg)
+      - libfontconfig1
+      - libfreetype6
+      # Tray (ksni) + portals + media controls over D-Bus
+      - libdbus-1-3

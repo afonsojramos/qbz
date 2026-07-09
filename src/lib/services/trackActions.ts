@@ -34,6 +34,25 @@ import {
   type QconnectQueueSnapshot,
   type QconnectRendererSnapshot
 } from '$lib/services/qconnectRemoteQueue';
+import { isQconnectSyncEligibleTrack } from '$lib/services/queuePlaybackService';
+
+/**
+ * Partition a backend-shaped track list into those that can be cast to a
+ * Qobuz Connect renderer (Qobuz catalog + offline-cache, whose id is the real
+ * Qobuz track id) and those that cannot (local files, Plex). The shared
+ * predicate lives in queuePlaybackService so every cast path agrees.
+ */
+export function partitionQconnectLoadableTracks(
+  tracks: BackendQueueTrack[]
+): { loadableIds: number[]; blockedIds: number[]; hasBlocked: boolean } {
+  const loadableIds: number[] = [];
+  const blockedIds: number[] = [];
+  for (const track of tracks) {
+    if (isQconnectSyncEligibleTrack(track)) loadableIds.push(track.id);
+    else blockedIds.push(track.id);
+  }
+  return { loadableIds, blockedIds, hasBlocked: blockedIds.length > 0 };
+}
 
 // ============ Toast Integration ============
 
@@ -58,7 +77,13 @@ type QconnectAdmissionResult = {
   handoff_intent: 'continue_locally' | 'send_to_connect';
 };
 
-type QconnectQueueCommandType = 'queue_add_tracks' | 'queue_insert_tracks' | 'queue_load_tracks';
+type QconnectQueueCommandType =
+  | 'queue_add_tracks'
+  | 'queue_insert_tracks'
+  | 'queue_load_tracks'
+  | 'queue_reorder_tracks'
+  | 'queue_remove_tracks'
+  | 'clear_queue';
 type QueueTrackActionOptions = {
   silent?: boolean;
 };
@@ -183,12 +208,14 @@ async function resolveQconnectPlayNextInsertAfterFromSnapshots(): Promise<Qconne
 async function sendQconnectQueueCommandWithAdmission(
   commandType: QconnectQueueCommandType,
   origin: QconnectTrackOrigin,
-  payload: Record<string, unknown>
+  payload: Record<string, unknown>,
+  trackOrigins: QconnectTrackOrigin[] = []
 ): Promise<void> {
   await invoke('v2_qconnect_send_command_with_admission', {
     request: {
       command_type: commandType,
       origin,
+      track_origins: trackOrigins,
       payload
     }
   });
@@ -520,9 +547,28 @@ export async function queueTrackLater(
 export async function loadQconnectQueue(
   trackIds: number[],
   startIndex: number = 0,
-  shuffleMode: boolean = false
+  shuffleMode: boolean = false,
+  tracks?: BackendQueueTrack[]
 ): Promise<boolean> {
   console.log('[QConnect/LoadQueue] called: trackCount=%d startIndex=%d', trackIds.length, startIndex);
+
+  // Source-aware guard: when backend-shaped tracks are supplied, refuse the
+  // whole load if ANY track is non-Qobuz (local/Plex). A Qobuz Connect
+  // renderer can only play Qobuz catalog ids; shipping a local/Plex row id
+  // either errors or streams an unrelated track that shares the numeric id.
+  if (tracks && tracks.length > 0) {
+    const { blockedIds, hasBlocked } = partitionQconnectLoadableTracks(tracks);
+    if (hasBlocked) {
+      console.warn('[QConnect/LoadQueue] refused: queue contains non-Qobuz tracks %o', blockedIds);
+      await emitQconnectDiagnostic('qconnect:queue_load_rejected', 'warn', {
+        reason: 'queue_contains_non_qobuz_tracks',
+        blocked_track_ids: blockedIds,
+        track_count: trackIds.length
+      });
+      return false;
+    }
+  }
+
   const qconnectConnected = await isQconnectConnected();
   if (!qconnectConnected) {
     console.warn('[QConnect/LoadQueue] skipped: transport not connected');
@@ -572,8 +618,15 @@ export async function loadQconnectQueue(
       preview_track_ids: trackIds.slice(0, 8),
       payload
     });
+    // Per-track origins for the Rust backstop (fix #3): when backend-shaped
+    // tracks are supplied, ship each track's resolved origin so the server gate
+    // can re-validate every id, not just the command-level origin. Bare id-only
+    // callers send none and stay gated by the command-level origin alone.
+    const trackOrigins = tracks
+      ? tracks.map((tr) => resolveQconnectTrackOrigin(tr, tr.is_local ?? false))
+      : [];
     console.log('[QConnect/LoadQueue] sending queue_load_tracks');
-    await sendQconnectQueueCommandWithAdmission('queue_load_tracks', origin, payload);
+    await sendQconnectQueueCommandWithAdmission('queue_load_tracks', origin, payload, trackOrigins);
     console.log('[QConnect/LoadQueue] SUCCESS');
 
     // Sync local autoplay preference to QConnect server after queue load
@@ -602,6 +655,70 @@ export async function loadQconnectQueue(
       error: String(err)
     });
     return false;
+  }
+}
+
+// ============ Remote Queue Mutation Routing (P1-4) ============
+//
+// When a peer renderer owns playback, reorder/remove/clear must mutate the
+// REMOTE queue instead of the local store. Each function returns true when the
+// remote queue handled it (caller must NOT also mutate the local store), and
+// false when the caller should fall back to the local store. The targets
+// (queue_reorder_tracks / queue_remove_tracks / clear_queue) do not require
+// admission; origin 'qobuz_online' is ignored for non-admission commands.
+
+export async function reorderQconnectQueueIfRemote(orderedQueueItemIds: number[]): Promise<boolean> {
+  if (!(await isQconnectConnected())) return false;
+  try {
+    await sendQconnectQueueCommandWithAdmission('queue_reorder_tracks', 'qobuz_online', {
+      queue_item_ids: orderedQueueItemIds
+    });
+    await emitQconnectDiagnostic('qconnect:queue_reorder_sent', 'info', {
+      count: orderedQueueItemIds.length,
+      preview: orderedQueueItemIds.slice(0, 8)
+    });
+    showToast(translate('qconnect.remoteQueueReordered'), 'success');
+    return true;
+  } catch (err) {
+    console.error('[QConnect/Reorder] FAILED:', err);
+    await emitQconnectDiagnostic('qconnect:queue_reorder_failed', 'error', { error: String(err) });
+    showToast(translate('qconnect.remoteQueueFailed'), 'error');
+    return true; // handled (and reported) — do NOT silently fall back and double-mutate
+  }
+}
+
+export async function removeQconnectQueueItemsIfRemote(queueItemIds: number[]): Promise<boolean> {
+  if (!(await isQconnectConnected())) return false;
+  try {
+    await sendQconnectQueueCommandWithAdmission('queue_remove_tracks', 'qobuz_online', {
+      queue_item_ids: queueItemIds
+    });
+    await emitQconnectDiagnostic('qconnect:queue_remove_sent', 'info', {
+      count: queueItemIds.length,
+      preview: queueItemIds.slice(0, 8)
+    });
+    showToast(translate('qconnect.remoteQueueRemoved'), 'success');
+    return true;
+  } catch (err) {
+    console.error('[QConnect/Remove] FAILED:', err);
+    await emitQconnectDiagnostic('qconnect:queue_remove_failed', 'error', { error: String(err) });
+    showToast(translate('qconnect.remoteQueueFailed'), 'error');
+    return true;
+  }
+}
+
+export async function clearQconnectQueueIfRemote(): Promise<boolean> {
+  if (!(await isQconnectConnected())) return false;
+  try {
+    await sendQconnectQueueCommandWithAdmission('clear_queue', 'qobuz_online', {});
+    await emitQconnectDiagnostic('qconnect:queue_clear_sent', 'info', {});
+    showToast(translate('qconnect.remoteQueueCleared'), 'success');
+    return true;
+  } catch (err) {
+    console.error('[QConnect/Clear] FAILED:', err);
+    await emitQconnectDiagnostic('qconnect:queue_clear_failed', 'error', { error: String(err) });
+    showToast(translate('qconnect.remoteQueueFailed'), 'error');
+    return true;
   }
 }
 

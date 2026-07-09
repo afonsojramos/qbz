@@ -75,6 +75,9 @@ impl ChromecastHandle {
 
     /// Connect to a Chromecast device
     pub fn connect(&self, ip: String, port: u16) -> Result<(), CastError> {
+        // rust_cast opens a rustls TLS channel; make sure a CryptoProvider is
+        // installed first (the worker thread would otherwise panic).
+        crate::ensure_crypto_provider();
         let (reply_tx, reply_rx) = mpsc::channel();
         self.sender
             .send(CastCommand::Connect {
@@ -216,7 +219,12 @@ impl Drop for ChromecastHandle {
     }
 }
 
-const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(25);
+// Google Cast drops a control connection that goes roughly 10s without a
+// heartbeat PING. Ping every 5s — the cadence the protocol expects — so a
+// cast connection left idle between connect and load (e.g. while a track
+// downloads) is not closed by the receiver. A 25s interval left idle
+// connections dead, surfacing as EPIPE on the next LOAD (issue #439).
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 
 /// Main loop for the Chromecast thread
 fn chromecast_thread_main(receiver: Receiver<CastCommand>) {

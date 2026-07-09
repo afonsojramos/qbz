@@ -3,7 +3,7 @@
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::Path;
 
-use crate::{AudioFormat, LibraryError, LocalAlbum, LocalArtist, LocalTrack};
+use crate::{AudioFormat, FolderTreeEntry, LibraryError, LocalAlbum, LocalArtist, LocalTrack};
 
 #[derive(Debug, Clone)]
 pub struct AlbumTrackUpdate {
@@ -48,6 +48,14 @@ impl LibraryDatabase {
         let db = Self { conn };
         db.init_schema()?;
         db.run_migrations()?;
+        // First-class LOCAL playlists (offline-mode D7) — separate module,
+        // same database file. Idempotent CREATE IF NOT EXISTS.
+        crate::local_playlists::init_schema(&db.conn)
+            .map_err(|e| LibraryError::Database(format!("local_playlists schema: {}", e)))?;
+        // Qobuz playlist snapshot (offline-mode B7/B8) — names + membership
+        // captured opportunistically while online. Idempotent.
+        crate::qobuz_playlist_snapshot::init_schema(&db.conn)
+            .map_err(|e| LibraryError::Database(format!("qobuz_playlist_snapshot schema: {}", e)))?;
         Ok(db)
     }
 
@@ -97,6 +105,8 @@ impl LibraryDatabase {
             CREATE INDEX IF NOT EXISTS idx_tracks_album_artist ON local_tracks(album_artist);
             CREATE INDEX IF NOT EXISTS idx_tracks_file_path ON local_tracks(file_path);
             CREATE INDEX IF NOT EXISTS idx_tracks_title ON local_tracks(title);
+            CREATE INDEX IF NOT EXISTS idx_local_tracks_album_lookup
+                ON local_tracks(album, album_artist, artist);
 
             -- Playlist folders (local organization for Qobuz playlists)
             CREATE TABLE IF NOT EXISTS playlist_folders (
@@ -140,6 +150,14 @@ impl LibraryDatabase {
                 last_played_at INTEGER,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
+            );
+
+            -- Qobuz playlists the user has COPIED into their library (mirrors
+            -- Tauri's user-scoped `qbz_copied_playlists`): stores the SOURCE
+            -- playlist id so its detail view hides the Copy button on reopen.
+            CREATE TABLE IF NOT EXISTS copied_playlists (
+                qobuz_playlist_id INTEGER PRIMARY KEY,
+                copied_at INTEGER NOT NULL
             );
 
             -- Local tracks added to playlists (mixed with remote Qobuz tracks)
@@ -230,10 +248,40 @@ impl LibraryDatabase {
 
             CREATE INDEX IF NOT EXISTS idx_downloaded_purchases_album
                 ON downloaded_purchases(album_id);
+
+            CREATE TABLE IF NOT EXISTS library_kv (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
         "#,
             )
             .map_err(|e| LibraryError::Database(format!("Failed to create schema: {}", e)))?;
 
+        Ok(())
+    }
+
+    /// Read a small key-value setting (frontend-agnostic; e.g. the tag-editor
+    /// direct-write acknowledgement flag). Returns None when the key is absent.
+    pub fn get_kv(&self, key: &str) -> Result<Option<String>, LibraryError> {
+        self.conn
+            .query_row(
+                "SELECT value FROM library_kv WHERE key = ?",
+                params![key],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|e| LibraryError::Database(e.to_string()))
+    }
+
+    /// Write a small key-value setting (upsert).
+    pub fn set_kv(&self, key: &str, value: &str) -> Result<(), LibraryError> {
+        self.conn
+            .execute(
+                "INSERT INTO library_kv (key, value) VALUES (?, ?)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                params![key, value],
+            )
+            .map_err(|e| LibraryError::Database(e.to_string()))?;
         Ok(())
     }
 
@@ -1166,6 +1214,54 @@ impl LibraryDatabase {
         Ok(count)
     }
 
+    /// Delete all tracks under a folder, matching a path prefix terminated by
+    /// the separator so a sibling like `/music/jazz2` is NOT removed when
+    /// deleting `/music/jazz`. Use this for folder removal — the older
+    /// `delete_tracks_in_folder` (kept for backward behavior compatibility with
+    /// the Tauri command) has a prefix-collision bug (`{}%`, no separator).
+    pub fn delete_tracks_in_folder_prefixed(&self, folder: &str) -> Result<usize, LibraryError> {
+        let pattern = format!("{}/%", folder.trim_end_matches('/'));
+        let count = self
+            .conn
+            .execute(
+                "DELETE FROM local_tracks WHERE file_path LIKE ?",
+                params![pattern],
+            )
+            .map_err(|e| LibraryError::Database(e.to_string()))?;
+        Ok(count)
+    }
+
+    /// Distinct `album_group_key`s of the indexed tracks under `folder` — the
+    /// same keys used as the playback/Recently-Played album id. Call BEFORE
+    /// deleting the folder so the frontend can prune those albums from the
+    /// recently-played store.
+    pub fn album_keys_in_folder(&self, folder: &str) -> Result<Vec<String>, LibraryError> {
+        let pattern = format!("{}/%", folder.trim_end_matches('/'));
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT DISTINCT album_group_key FROM local_tracks
+                 WHERE file_path LIKE ? AND album_group_key IS NOT NULL AND album_group_key != ''",
+            )
+            .map_err(|e| LibraryError::Database(e.to_string()))?;
+        let rows = stmt
+            .query_map(params![pattern], |row| row.get::<_, String>(0))
+            .map_err(|e| LibraryError::Database(e.to_string()))?;
+        let mut keys = Vec::new();
+        for k in rows {
+            keys.push(k.map_err(|e| LibraryError::Database(e.to_string()))?);
+        }
+        Ok(keys)
+    }
+
+    /// Remove a folder and its indexed tracks (separator-safe cascade). Mirrors
+    /// the Tauri remove-folder command order: drop the folder row, then the
+    /// tracks under it. Returns the number of tracks removed.
+    pub fn remove_folder_with_tracks(&self, path: &str) -> Result<usize, LibraryError> {
+        self.remove_folder(path)?;
+        self.delete_tracks_in_folder_prefixed(path)
+    }
+
     /// Clear all LOCAL library tracks (preserves Qobuz downloads)
     pub fn clear_all_tracks(&self) -> Result<(), LibraryError> {
         self.conn
@@ -1388,6 +1484,7 @@ impl LibraryDatabase {
                     directory_path: row
                         .get::<_, Option<String>>(12)?
                         .unwrap_or_else(|| group_key.clone()),
+                    source_folders: None,
                     source: row
                         .get::<_, Option<String>>(13)?
                         .unwrap_or_else(|| "user".to_string()),
@@ -1417,6 +1514,995 @@ impl LibraryDatabase {
 
         let rows = stmt
             .query_map(params![group_key], |row| Self::row_to_track(row))
+            .map_err(|e| LibraryError::Database(e.to_string()))?;
+
+        let mut tracks = Vec::new();
+        for track in rows {
+            tracks.push(track.map_err(|e| LibraryError::Database(e.to_string()))?);
+        }
+        Ok(tracks)
+    }
+
+    /// List the immediate children of a folder in the local-library
+    /// filesystem hierarchy.
+    ///
+    /// Walks `local_tracks.file_path` and computes one row per direct
+    /// child. Returns folders first (alphabetical, case-insensitive),
+    /// then tracks (alphabetical, case-insensitive).
+    ///
+    /// Filters `COALESCE(source, 'user') = 'user'` so Qobuz offline
+    /// downloads are excluded; Plex rows already live outside
+    /// `local_tracks`.
+    ///
+    /// `parent_path` is the absolute path of the folder whose children
+    /// to enumerate. The `_` and `%` characters are escaped before
+    /// binding to defend against pattern-injection on paths that
+    /// contain SQL LIKE metacharacters.
+    pub fn list_folder_children(
+        &self,
+        parent_path: &str,
+        exclude_network_folders: bool,
+    ) -> Result<Vec<FolderTreeEntry>, LibraryError> {
+        let escaped_prefix = escape_like_pattern(parent_path);
+
+        // Network folder filter: exclude tracks whose file_path starts
+        // with any registered network-mount folder path. Mirrors the
+        // mechanism used by `get_albums_with_full_filter` so tree rail
+        // visibility matches flat-mode + recursive playback.
+        let network_filter = if exclude_network_folders {
+            "AND NOT EXISTS ( \
+                SELECT 1 FROM library_folders nf \
+                WHERE nf.is_network = 1 \
+                AND local_tracks.file_path LIKE nf.path || '%' \
+            )"
+        } else {
+            ""
+        };
+
+        // SQL strategy (CTE form for readability; SQLite uses
+        // idx_tracks_file_path on the LIKE prefix in the candidates step):
+        //   suffix        = file_path with the parent prefix + '/' stripped
+        //   child_segment = leading path component of suffix
+        //   kind          = 'folder' if suffix contains a '/', else 'track'
+        // Group by (child_segment, kind) so folders aggregate over all
+        // descendant tracks; track rows are 1:1 with their file. Include
+        // MIN(file_path) so we can recover the absolute path for tracks
+        // (folders ignore it and reconstruct path from parent + segment).
+        let sql = format!(
+            "WITH candidates AS ( \
+                SELECT \
+                    substr(file_path, length(?1) + 2) AS suffix, \
+                    file_path, \
+                    artwork_path \
+                FROM local_tracks \
+                WHERE file_path LIKE ?2 || '/%' ESCAPE '\\' \
+                  AND COALESCE(source, 'user') = 'user' \
+                  {network_filter} \
+             ), \
+             classified AS ( \
+                SELECT \
+                    CASE WHEN instr(suffix, '/') > 0 \
+                         THEN substr(suffix, 1, instr(suffix, '/') - 1) \
+                         ELSE suffix \
+                    END AS child_segment, \
+                    CASE WHEN instr(suffix, '/') > 0 \
+                         THEN 'folder' ELSE 'track' \
+                    END AS kind, \
+                    file_path, \
+                    artwork_path \
+                FROM candidates \
+             ) \
+             SELECT \
+                child_segment, \
+                kind, \
+                COUNT(*) AS track_count_under, \
+                MAX(artwork_path) AS artwork, \
+                MIN(file_path) AS one_file_path \
+             FROM classified \
+             GROUP BY child_segment, kind",
+            network_filter = network_filter,
+        );
+
+        let mut stmt = self
+            .conn
+            .prepare(&sql)
+            .map_err(|e| LibraryError::Database(e.to_string()))?;
+
+        // ?1 bound with the unescaped path (used in length() arithmetic
+        // on the row's stored file_path; that storage is unescaped).
+        // ?2 bound with the LIKE-escaped pattern prefix.
+        let rows = stmt
+            .query_map(params![parent_path, escaped_prefix], |row| {
+                let segment: String = row.get(0)?;
+                let kind: String = row.get(1)?;
+                let count: u32 = row.get(2)?;
+                let artwork: Option<String> = row.get(3)?;
+                let one_file_path: Option<String> = row.get(4)?;
+                Ok((segment, kind, count, artwork, one_file_path))
+            })
+            .map_err(|e| LibraryError::Database(e.to_string()))?;
+
+        let mut entries: Vec<FolderTreeEntry> = Vec::new();
+        for row in rows {
+            let (segment, kind, count, artwork, one_file_path) =
+                row.map_err(|e| LibraryError::Database(e.to_string()))?;
+            match kind.as_str() {
+                "folder" => {
+                    let path = format!("{}/{}", parent_path, segment);
+                    entries.push(FolderTreeEntry::Folder {
+                        path,
+                        segment,
+                        track_count_under: count,
+                        artwork,
+                    });
+                }
+                "track" => {
+                    // Use the actual file_path so paths with edge-case
+                    // characters round-trip exactly as stored.
+                    let path = one_file_path
+                        .unwrap_or_else(|| format!("{}/{}", parent_path, segment));
+                    entries.push(FolderTreeEntry::Track { path, segment });
+                }
+                _ => {
+                    // Unknown kind — skip defensively.
+                }
+            }
+        }
+
+        // Sort: folders first, then tracks; alphabetical (case-insensitive)
+        // within each group. Done in Rust because we already have all rows
+        // in memory after the GROUP BY, and Rust's case-insensitive compare
+        // is more obvious than COLLATE NOCASE on a CASE-derived column.
+        entries.sort_by(|a, b| {
+            let kind_rank = |e: &FolderTreeEntry| match e {
+                FolderTreeEntry::Folder { .. } => 0,
+                FolderTreeEntry::Track { .. } => 1,
+            };
+            let segment = |e: &FolderTreeEntry| match e {
+                FolderTreeEntry::Folder { segment, .. } => segment.clone(),
+                FolderTreeEntry::Track { segment, .. } => segment.clone(),
+            };
+            kind_rank(a)
+                .cmp(&kind_rank(b))
+                .then_with(|| segment(a).to_lowercase().cmp(&segment(b).to_lowercase()))
+        });
+
+        Ok(entries)
+    }
+
+    /// List the direct-child tracks of a folder (NON-recursive).
+    ///
+    /// Returns rows from `local_tracks` whose `file_path` is exactly
+    /// `folder_path + "/" + filename` — files in subfolders are
+    /// excluded. Mirrors the source filter from
+    /// [`Self::list_folder_children`] so Qobuz downloads do not appear.
+    /// Ordering matches the canonical album-track ordering used by
+    /// [`Self::get_album_tracks`]: disc, then track number, then title.
+    pub fn list_folder_tracks(
+        &self,
+        folder_path: &str,
+        exclude_network_folders: bool,
+    ) -> Result<Vec<LocalTrack>, LibraryError> {
+        let escaped_prefix = escape_like_pattern(folder_path);
+
+        // See `list_folder_children` for the rationale on the network
+        // filter — same EXISTS subquery so the tree rail and direct-
+        // children listing reflect the same visible-track set.
+        let network_filter = if exclude_network_folders {
+            "AND NOT EXISTS ( \
+                SELECT 1 FROM library_folders nf \
+                WHERE nf.is_network = 1 \
+                AND local_tracks.file_path LIKE nf.path || '%' \
+            )"
+        } else {
+            ""
+        };
+
+        let sql = format!(
+            "SELECT {cols} FROM local_tracks \
+             WHERE file_path LIKE ?1 || '/%' ESCAPE '\\' \
+               AND substr(file_path, length(?2) + 2) NOT LIKE '%/%' \
+               AND COALESCE(source, 'user') = 'user' \
+               {network_filter} \
+             ORDER BY disc_number ASC NULLS LAST, \
+                      track_number ASC NULLS LAST, \
+                      title COLLATE NOCASE ASC",
+            cols = Self::TRACK_COLUMNS,
+            network_filter = network_filter,
+        );
+
+        let mut stmt = self
+            .conn
+            .prepare(&sql)
+            .map_err(|e| LibraryError::Database(e.to_string()))?;
+
+        // ?1 = LIKE-escaped pattern (matches paths under the folder).
+        // ?2 = unescaped path used for substr arithmetic on stored
+        //      file_path (which is itself unescaped).
+        let rows = stmt
+            .query_map(params![escaped_prefix, folder_path], |row| {
+                Self::row_to_track(row)
+            })
+            .map_err(|e| LibraryError::Database(e.to_string()))?;
+
+        let mut tracks = Vec::new();
+        for track in rows {
+            tracks.push(track.map_err(|e| LibraryError::Database(e.to_string()))?);
+        }
+        Ok(tracks)
+    }
+
+    /// List ALL tracks recursively under a folder (every descendant, at
+    /// any depth). Mirrors the source filter and LIKE-escape strategy
+    /// from [`Self::list_folder_tracks`] but does NOT require the
+    /// `file_path` to live directly inside `folder_path` — every row
+    /// matching `file_path LIKE folder_path || '/%'` is included.
+    ///
+    /// Used by the tree-mode multi-select to populate the union of
+    /// `selectedTrackIds` when the user ticks a folder-row checkbox.
+    /// Returns the full track records (not just IDs) so the frontend
+    /// can build queue items for "Play Next" / "Add to Queue" without
+    /// a second round-trip.
+    ///
+    /// Ordering: by `file_path` ASC. This produces a stable, on-disk
+    /// reading order for cross-album / cross-disc subtrees, matching
+    /// the way `handlePlayRecursive` sorts before queuing.
+    pub fn list_folder_tracks_recursive(
+        &self,
+        folder_path: &str,
+        exclude_network_folders: bool,
+    ) -> Result<Vec<LocalTrack>, LibraryError> {
+        let escaped_prefix = escape_like_pattern(folder_path);
+
+        // Network filter mirrors the flat-mode `v2_library_search` /
+        // `get_albums_with_full_filter` predicate so the recursive
+        // multi-select boundary matches what the tree rail and the
+        // playback path see.
+        let network_filter = if exclude_network_folders {
+            "AND NOT EXISTS ( \
+                SELECT 1 FROM library_folders nf \
+                WHERE nf.is_network = 1 \
+                AND local_tracks.file_path LIKE nf.path || '%' \
+            )"
+        } else {
+            ""
+        };
+
+        let sql = format!(
+            "SELECT {cols} FROM local_tracks \
+             WHERE file_path LIKE ?1 || '/%' ESCAPE '\\' \
+               AND COALESCE(source, 'user') = 'user' \
+               {network_filter} \
+             ORDER BY file_path ASC",
+            cols = Self::TRACK_COLUMNS,
+            network_filter = network_filter,
+        );
+
+        let mut stmt = self
+            .conn
+            .prepare(&sql)
+            .map_err(|e| LibraryError::Database(e.to_string()))?;
+
+        let rows = stmt
+            .query_map(params![escaped_prefix], |row| Self::row_to_track(row))
+            .map_err(|e| LibraryError::Database(e.to_string()))?;
+
+        let mut tracks = Vec::new();
+        for track in rows {
+            tracks.push(track.map_err(|e| LibraryError::Database(e.to_string()))?);
+        }
+        Ok(tracks)
+    }
+
+    /// Lightweight `COUNT(*)` of every user track whose `file_path` lives
+    /// recursively under `folder_path`. Used by the tree-mode rail to
+    /// populate the recursive descendant count on top-level scan-root
+    /// rows (which are synthesized client-side and don't go through
+    /// [`Self::list_folder_children`], so they don't carry their own
+    /// precomputed `track_count_under`).
+    ///
+    /// Source filter (`COALESCE(source, 'user') = 'user'`) and the
+    /// optional network-folder NOT EXISTS predicate match the listing
+    /// primitives byte-for-byte so the count, the rail visibility, and
+    /// recursive playback all agree on the same boundary.
+    pub fn count_folder_tracks_recursive(
+        &self,
+        folder_path: &str,
+        exclude_network_folders: bool,
+    ) -> Result<u32, LibraryError> {
+        let escaped_prefix = escape_like_pattern(folder_path);
+
+        let network_filter = if exclude_network_folders {
+            "AND NOT EXISTS ( \
+                SELECT 1 FROM library_folders nf \
+                WHERE nf.is_network = 1 \
+                AND local_tracks.file_path LIKE nf.path || '%' \
+            )"
+        } else {
+            ""
+        };
+
+        let sql = format!(
+            "SELECT COUNT(*) FROM local_tracks \
+             WHERE file_path LIKE ?1 || '/%' ESCAPE '\\' \
+               AND COALESCE(source, 'user') = 'user' \
+               {network_filter}",
+            network_filter = network_filter,
+        );
+
+        let count: i64 = self
+            .conn
+            .query_row(&sql, params![escaped_prefix], |row| row.get(0))
+            .map_err(|e| LibraryError::Database(e.to_string()))?;
+        Ok(count.try_into().unwrap_or(0))
+    }
+
+    /// Get all albums grouped by metadata (album + album_artist OR
+    /// artist), with fallback to folder grouping for tracks with no
+    /// usable album tag, and a single 'Unknown Album' bucket for total
+    /// orphans.
+    ///
+    /// Mirrors the shape of [`Self::get_albums_with_full_filter`] but
+    /// uses the metadata group key from
+    /// [`crate::album_grouping::metadata_group_key_sql_expression`].
+    /// Rows have `directory_path = ""` and `source_folders` populated
+    /// with the comma-separated list of contributing folder keys (so
+    /// the UI can show a tooltip when N folders > 1).
+    ///
+    /// `include_hidden` is currently ignored: the `album_settings.hidden`
+    /// flag targets the FOLDER key, which does not map cleanly onto
+    /// metadata-grouped rows. Revisit if user feedback asks for it.
+    pub fn get_albums_metadata_grouped(
+        &self,
+        include_hidden: bool,
+        include_qobuz_downloads: bool,
+        exclude_network_folders: bool,
+    ) -> Result<Vec<LocalAlbum>, LibraryError> {
+        let _ = include_hidden;
+
+        let source_filter = if include_qobuz_downloads {
+            ""
+        } else {
+            "AND (source IS NULL OR source != 'qobuz_download')"
+        };
+
+        let network_filter = if exclude_network_folders {
+            "AND NOT EXISTS (
+                SELECT 1 FROM library_folders nf
+                WHERE nf.is_network = 1
+                AND local_tracks.file_path LIKE nf.path || '%'
+            )"
+        } else {
+            ""
+        };
+
+        let group_key_expr = crate::album_grouping::metadata_group_key_sql_expression();
+
+        let query = format!(
+            r#"
+            WITH grouped AS (
+                SELECT
+                    {group_key} AS group_key,
+                    -- Prefer `album` (metadata tag) over
+                    -- `album_group_title` (scan-time snapshot, which
+                    -- falls back to folder name if metadata is
+                    -- missing). Fixes #411 — when album metadata is
+                    -- valid, the folder name was winning because
+                    -- COALESCE returned `album_group_title` first.
+                    COALESCE(
+                        NULLIF(NULLIF(TRIM(album), ''), 'Unknown Album'),
+                        album_group_title,
+                        'Unknown Album'
+                    ) AS title,
+                    COALESCE(album_artist, artist, 'Unknown Artist') AS artist,
+                    year,
+                    catalog_number,
+                    artwork_path,
+                    duration_secs,
+                    format,
+                    bit_depth,
+                    sample_rate,
+                    album_group_key AS source_folder,
+                    COALESCE(source, 'user') AS source
+                FROM local_tracks
+                WHERE 1=1 {source_filter} {network_filter}
+            )
+            SELECT
+                group_key,
+                CASE WHEN group_key = '__unknown_album__'
+                     THEN 'Unknown Album'
+                     ELSE MIN(title)
+                END AS title,
+                CASE WHEN COUNT(DISTINCT artist) > 1
+                     THEN 'Various Artists'
+                     ELSE MIN(artist)
+                END AS artist,
+                GROUP_CONCAT(DISTINCT artist) AS all_artists,
+                MIN(year) AS year,
+                MIN(catalog_number) AS catalog_number,
+                MAX(CASE WHEN artwork_path IS NOT NULL THEN artwork_path END) AS artwork,
+                COUNT(*) AS track_count,
+                SUM(duration_secs) AS total_duration,
+                MAX(format) AS format,
+                MAX(bit_depth) AS bit_depth,
+                MAX(sample_rate) AS sample_rate,
+                GROUP_CONCAT(DISTINCT source_folder) AS source_folders,
+                MAX(source) AS source
+            FROM grouped
+            GROUP BY group_key
+            ORDER BY (group_key = '__unknown_album__'), artist, title
+            "#,
+            group_key = group_key_expr,
+            source_filter = source_filter,
+            network_filter = network_filter,
+        );
+
+        let mut stmt = self
+            .conn
+            .prepare(&query)
+            .map_err(|e| LibraryError::Database(e.to_string()))?;
+
+        let rows = stmt
+            .query_map([], |row| {
+                let group_key: String = row.get(0)?;
+                let album: String = row.get(1)?;
+                let artist: String = row.get(2)?;
+                let all_artists: String =
+                    row.get::<_, Option<String>>(3)?.unwrap_or_default();
+                let artwork_path: Option<String> = row.get(6)?;
+                let source_folders: Option<String> = row.get(12)?;
+
+                Ok(LocalAlbum {
+                    id: group_key.clone(),
+                    title: album,
+                    artist,
+                    all_artists,
+                    year: row.get(4)?,
+                    catalog_number: row.get(5)?,
+                    artwork_path,
+                    track_count: row.get(7)?,
+                    total_duration_secs: row.get(8)?,
+                    format: Self::parse_format(
+                        &row.get::<_, Option<String>>(9)?.unwrap_or_default(),
+                    ),
+                    bit_depth: row.get(10)?,
+                    sample_rate: row.get::<_, Option<f64>>(11)?.unwrap_or(44100.0),
+                    directory_path: String::new(),
+                    source_folders,
+                    source: row
+                        .get::<_, Option<String>>(13)?
+                        .unwrap_or_else(|| "user".to_string()),
+                })
+            })
+            .map_err(|e| LibraryError::Database(e.to_string()))?;
+
+        let mut albums = Vec::new();
+        for album in rows {
+            albums.push(album.map_err(|e| LibraryError::Database(e.to_string()))?);
+        }
+        Ok(albums)
+    }
+
+    /// Paginated, sort/filter-aware slice of metadata-grouped local
+    /// albums. Designed to back the chunked-store + recycling-grid pool
+    /// on the frontend: caller asks for `[offset, offset+limit)` and
+    /// receives those rows plus the total count of rows matching the
+    /// same filter (via `COUNT(*) OVER ()`).
+    ///
+    /// Sort: one of `"artist"` (default), `"title"`, `"year"`, paired
+    /// with direction `"asc"` (default) or `"desc"`. Unknown values
+    /// fall back to artist-ascending. Albums with no `year` always sink
+    /// to the bottom for the year sort.
+    ///
+    /// Search: a non-empty `search` becomes a `LIKE '%pattern%'` match
+    /// applied after aggregation against the album's title or artist
+    /// (mirrors the legacy in-memory `matchesAlbumSearchFast`).
+    ///
+    /// Source consolidation: when `plex_cache_path` is provided and
+    /// points to an existing file, the function `ATTACH`es that
+    /// database and unions plex_cache_tracks (aggregated by album_key)
+    /// with the local aggregation. Sort, filter, and pagination apply
+    /// to the union as a single result set, so a Plex-dominant library
+    /// behaves identically to a local-dominant one.
+    pub fn get_albums_metadata_page(
+        &self,
+        offset: u64,
+        limit: u64,
+        search: Option<&str>,
+        sort_by: &str,
+        sort_dir: &str,
+        include_qobuz_downloads: bool,
+        exclude_network_folders: bool,
+        plex_cache_path: Option<&std::path::Path>,
+    ) -> Result<crate::models::AlbumsMetadataPage, LibraryError> {
+        // Best-effort ATTACH of the Plex cache so the union below can
+        // see `plex_cache.plex_cache_tracks`. DETACH first defensively
+        // so a stale attachment from a previous call (or another
+        // connection user) doesn't fail the new one. Failure to
+        // attach is non-fatal — we fall back to local-only.
+        let plex_attached = if let Some(path) = plex_cache_path {
+            if path.exists() {
+                let _ = self.conn.execute("DETACH DATABASE plex_cache", []);
+                let path_str = path.to_string_lossy().replace('\'', "''");
+                self.conn
+                    .execute(
+                        &format!("ATTACH DATABASE '{}' AS plex_cache", path_str),
+                        [],
+                    )
+                    .is_ok()
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        let result = self.get_albums_metadata_page_inner(
+            offset,
+            limit,
+            search,
+            sort_by,
+            sort_dir,
+            include_qobuz_downloads,
+            exclude_network_folders,
+            plex_attached,
+        );
+        if plex_attached {
+            let _ = self.conn.execute("DETACH DATABASE plex_cache", []);
+        }
+        result
+    }
+
+    /// Resolve a folder cover for an album that has no `artwork_path` in the
+    /// index — e.g. an offline-cached (CMAF) album whose downloader wrote a
+    /// `cover.jpg` into the track folder but didn't backfill `artwork_path`.
+    /// Looks up a representative track for the metadata group, derives its
+    /// containing folder (the path itself when it is a directory, as for CMAF
+    /// bundles, else the parent dir), and returns `<folder>/cover.jpg` when
+    /// that file exists. Frontend-agnostic (no `tauri::State`).
+    pub fn resolve_album_cover_fallback(&self, group_key: &str) -> Option<String> {
+        // Common on-disk cover filenames (the offline-cache writes cover.jpg;
+        // ripped/local folders often use folder.jpg / front.*).
+        const NAMES: [&str; 6] = [
+            "cover.jpg",
+            "cover.png",
+            "folder.jpg",
+            "Folder.jpg",
+            "front.jpg",
+            "front.png",
+        ];
+        let expr = crate::album_grouping::metadata_group_key_sql_expression();
+        // Scan several tracks, not just one: a CMAF album keeps each track in
+        // its own folder, and only some may carry a cover.jpg.
+        let query = format!("SELECT file_path FROM local_tracks WHERE ({expr}) = ?1 LIMIT 12");
+        let mut stmt = self.conn.prepare(&query).ok()?;
+        let paths: Vec<String> = stmt
+            .query_map(rusqlite::params![group_key], |row| row.get::<_, String>(0))
+            .ok()?
+            .filter_map(Result::ok)
+            .collect();
+        for fp in &paths {
+            let p = std::path::Path::new(fp);
+            // The track folder: the path itself for a CMAF bundle dir, else
+            // the parent of the audio file.
+            let Some(folder) = (if p.is_dir() {
+                Some(p.to_path_buf())
+            } else {
+                p.parent().map(|x| x.to_path_buf())
+            }) else {
+                continue;
+            };
+            // Check the folder and its parent (covers multi-disc layouts where
+            // the art sits one level up).
+            let dirs = [Some(folder.clone()), folder.parent().map(|x| x.to_path_buf())];
+            for dir in dirs.into_iter().flatten() {
+                for name in NAMES {
+                    let cover = dir.join(name);
+                    if cover.is_file() {
+                        return Some(cover.to_string_lossy().into_owned());
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    fn get_albums_metadata_page_inner(
+        &self,
+        offset: u64,
+        limit: u64,
+        search: Option<&str>,
+        sort_by: &str,
+        sort_dir: &str,
+        include_qobuz_downloads: bool,
+        exclude_network_folders: bool,
+        plex_attached: bool,
+    ) -> Result<crate::models::AlbumsMetadataPage, LibraryError> {
+        let source_filter = if include_qobuz_downloads {
+            ""
+        } else {
+            "AND (source IS NULL OR source != 'qobuz_download')"
+        };
+
+        let network_filter = if exclude_network_folders {
+            "AND NOT EXISTS (
+                SELECT 1 FROM library_folders nf
+                WHERE nf.is_network = 1
+                AND local_tracks.file_path LIKE nf.path || '%'
+            )"
+        } else {
+            ""
+        };
+
+        // ORDER BY clause is built from a validated allowlist so user
+        // input never reaches the SQL string directly. The unknown-album
+        // sentinel always sorts last regardless of mode.
+        let order_clause = match (sort_by, sort_dir) {
+            ("title", "asc") => "(group_key = '__unknown_album__'), title COLLATE NOCASE",
+            ("title", "desc") => "(group_key = '__unknown_album__'), title COLLATE NOCASE DESC",
+            ("year", "asc") => "(group_key = '__unknown_album__'), year IS NULL, year ASC, title COLLATE NOCASE",
+            ("year", "desc") => "(group_key = '__unknown_album__'), year IS NULL, year DESC, title COLLATE NOCASE",
+            ("artist", "desc") => "(group_key = '__unknown_album__'), artist COLLATE NOCASE DESC, title COLLATE NOCASE",
+            // Default = artist asc
+            _ => "(group_key = '__unknown_album__'), artist COLLATE NOCASE, title COLLATE NOCASE",
+        };
+
+        let group_key_expr = crate::album_grouping::metadata_group_key_sql_expression();
+
+        let search_pattern = search.unwrap_or("").trim();
+        let has_search: i64 = if search_pattern.is_empty() { 0 } else { 1 };
+        let search_like = format!("%{}%", search_pattern);
+
+        // When Plex is attached, the plex_aggregated CTE is appended
+        // and the filtered set is built from the UNION of local + plex.
+        // Both CTEs produce the same column shape so the UNION ALL is
+        // straightforward; types are normalised via CAST in the plex
+        // arm (plex stores duration_ms / sampling_rate_hz as INTEGER
+        // while local uses REAL for sample_rate and seconds-INTEGER
+        // for duration).
+        let plex_cte = if plex_attached {
+            r#",
+            plex_aggregated AS (
+                SELECT
+                    -- `album_key` is populated by plex/mod.rs::plex_album_key()
+                    -- which already returns `"plex:<hash>"`. Only the
+                    -- rating_key fallback needs the prefix added.
+                    COALESCE(album_key, 'plex:' || rating_key) AS group_key,
+                    COALESCE(album, 'Unknown Album') AS title,
+                    CASE WHEN COUNT(DISTINCT artist) > 1
+                         THEN 'Various Artists'
+                         ELSE COALESCE(MIN(artist), 'Unknown Artist')
+                    END AS artist,
+                    GROUP_CONCAT(DISTINCT artist) AS all_artists,
+                    MIN(year) AS year,
+                    CAST(NULL AS TEXT) AS catalog_number,
+                    MAX(CASE WHEN artwork_path IS NOT NULL THEN artwork_path END) AS artwork,
+                    COUNT(*) AS track_count,
+                    CAST(SUM(COALESCE(duration_ms, 0)) / 1000 AS INTEGER) AS total_duration,
+                    -- Plex stream-level `codec` is often missing when the
+                    -- server hasn't fully analyzed a track. The `container`
+                    -- field is populated for the same media and usually
+                    -- carries the same value ("flac", "mp3", etc.), so it
+                    -- works as a fallback. Without it, any album where
+                    -- Plex didn't expose codec on every track ends up
+                    -- labeled "Unknown" in the UI even though the file
+                    -- format is known via container. Local CTE is not
+                    -- affected — local indexing always writes a non-null
+                    -- format string.
+                    COALESCE(MAX(codec), MAX(container)) AS format,
+                    -- Plex frequently omits bitDepth from its Media/Stream
+                    -- XML for older releases; the aggregated row inherits
+                    -- the gap as NULL. When the format ends up lossless
+                    -- and sample rate sits at CD range (<= 48 kHz),
+                    -- default to 16 — that's the universal CD-Audio /
+                    -- redbook assumption that virtually every lossless
+                    -- album at that rate matches. Higher rates leave the
+                    -- field NULL (could be 24, could be 32) and the UI
+                    -- falls back to its "--" placeholder; the per-track
+                    -- view shows the real value when the user clicks in.
+                    COALESCE(
+                        MAX(bit_depth),
+                        CASE
+                            WHEN LOWER(COALESCE(MAX(codec), MAX(container))) IN
+                                 ('flac', 'alac', 'wav', 'aiff', 'ape')
+                                 AND MAX(sampling_rate_hz) <= 48000
+                            THEN 16
+                            ELSE NULL
+                        END
+                    ) AS bit_depth,
+                    CAST(MAX(sampling_rate_hz) AS REAL) AS sample_rate,
+                    CAST(NULL AS TEXT) AS source_folders,
+                    'plex' AS source
+                FROM plex_cache.plex_cache_tracks
+                GROUP BY COALESCE(album_key, 'plex:' || rating_key)
+            )"#
+        } else {
+            ""
+        };
+
+        let unioned_clause = if plex_attached {
+            "SELECT * FROM aggregated UNION ALL SELECT * FROM plex_aggregated"
+        } else {
+            "SELECT * FROM aggregated"
+        };
+
+        let query = format!(
+            r#"
+            WITH grouped AS (
+                SELECT
+                    {group_key} AS group_key,
+                    -- Prefer `album` (metadata tag) over
+                    -- `album_group_title` (scan-time snapshot, which
+                    -- falls back to folder name if metadata is
+                    -- missing). Fixes #411 — when album metadata is
+                    -- valid, the folder name was winning because
+                    -- COALESCE returned `album_group_title` first.
+                    COALESCE(
+                        NULLIF(NULLIF(TRIM(album), ''), 'Unknown Album'),
+                        album_group_title,
+                        'Unknown Album'
+                    ) AS title,
+                    COALESCE(album_artist, artist, 'Unknown Artist') AS artist,
+                    year,
+                    catalog_number,
+                    artwork_path,
+                    duration_secs,
+                    format,
+                    bit_depth,
+                    sample_rate,
+                    album_group_key AS source_folder,
+                    COALESCE(source, 'user') AS source,
+                    artist AS track_artist
+                FROM local_tracks
+                WHERE 1=1 {source_filter} {network_filter}
+            ),
+            aggregated AS (
+                SELECT
+                    group_key,
+                    CASE WHEN group_key = '__unknown_album__'
+                         THEN 'Unknown Album'
+                         ELSE MIN(title)
+                    END AS title,
+                    CASE WHEN COUNT(DISTINCT track_artist) > 1
+                         THEN 'Various Artists'
+                         ELSE MIN(artist)
+                    END AS artist,
+                    GROUP_CONCAT(DISTINCT track_artist) AS all_artists,
+                    MIN(year) AS year,
+                    MIN(catalog_number) AS catalog_number,
+                    MAX(CASE WHEN artwork_path IS NOT NULL THEN artwork_path END) AS artwork,
+                    COUNT(*) AS track_count,
+                    SUM(duration_secs) AS total_duration,
+                    MAX(format) AS format,
+                    MAX(bit_depth) AS bit_depth,
+                    MAX(sample_rate) AS sample_rate,
+                    GROUP_CONCAT(DISTINCT source_folder) AS source_folders,
+                    MAX(source) AS source
+                FROM grouped
+                GROUP BY group_key
+            ){plex_cte},
+            filtered AS (
+                SELECT * FROM ({unioned_clause})
+                WHERE ?1 = 0 OR (title LIKE ?2 OR artist LIKE ?2)
+            )
+            SELECT
+                group_key, title, artist, all_artists, year, catalog_number,
+                artwork, track_count, total_duration, format, bit_depth,
+                sample_rate, source_folders, source,
+                COUNT(*) OVER () AS total
+            FROM filtered
+            ORDER BY {order_clause}
+            LIMIT ?3 OFFSET ?4
+            "#,
+            group_key = group_key_expr,
+            source_filter = source_filter,
+            network_filter = network_filter,
+            plex_cte = plex_cte,
+            unioned_clause = unioned_clause,
+            order_clause = order_clause,
+        );
+
+        let mut stmt = self
+            .conn
+            .prepare(&query)
+            .map_err(|e| LibraryError::Database(e.to_string()))?;
+
+        let rows = stmt
+            .query_map(
+                rusqlite::params![has_search, search_like, limit as i64, offset as i64],
+                |row| {
+                    let group_key: String = row.get(0)?;
+                    let title: String = row.get(1)?;
+                    let artist: String = row.get(2)?;
+                    let all_artists: String =
+                        row.get::<_, Option<String>>(3)?.unwrap_or_default();
+                    let artwork_path: Option<String> = row.get(6)?;
+                    let source_folders: Option<String> = row.get(12)?;
+                    let total: u64 = row.get::<_, i64>(14)? as u64;
+
+                    Ok((
+                        LocalAlbum {
+                            id: group_key,
+                            title,
+                            artist,
+                            all_artists,
+                            year: row.get(4)?,
+                            catalog_number: row.get(5)?,
+                            artwork_path,
+                            track_count: row.get(7)?,
+                            total_duration_secs: row.get(8)?,
+                            format: Self::parse_format(
+                                &row.get::<_, Option<String>>(9)?.unwrap_or_default(),
+                            ),
+                            bit_depth: row.get(10)?,
+                            sample_rate: row.get::<_, Option<f64>>(11)?.unwrap_or(44100.0),
+                            directory_path: String::new(),
+                            source_folders,
+                            source: row
+                                .get::<_, Option<String>>(13)?
+                                .unwrap_or_else(|| "user".to_string()),
+                        },
+                        total,
+                    ))
+                },
+            )
+            .map_err(|e| LibraryError::Database(e.to_string()))?;
+
+        let mut albums = Vec::new();
+        let mut total: u64 = 0;
+        for row_result in rows {
+            let (album, t) = row_result.map_err(|e| LibraryError::Database(e.to_string()))?;
+            total = t;
+            albums.push(album);
+        }
+
+        // Empty page (offset past the end or filter matches nothing).
+        // The window-function trick gives us total only on returned
+        // rows, so when there are none we have to ask separately.
+        if albums.is_empty() {
+            total = self.count_albums_metadata_for_page(
+                search,
+                include_qobuz_downloads,
+                exclude_network_folders,
+                plex_attached,
+            )?;
+        }
+
+        Ok(crate::models::AlbumsMetadataPage { albums, total })
+    }
+
+    /// Companion to `get_albums_metadata_page` — total count of albums
+    /// matching the same filter. Used when the page is empty (so the
+    /// window-function-derived total isn't available) or when the
+    /// frontend wants to know the count before requesting any page.
+    /// Honours the same Plex attachment state as the caller used.
+    fn count_albums_metadata_for_page(
+        &self,
+        search: Option<&str>,
+        include_qobuz_downloads: bool,
+        exclude_network_folders: bool,
+        plex_attached: bool,
+    ) -> Result<u64, LibraryError> {
+        let source_filter = if include_qobuz_downloads {
+            ""
+        } else {
+            "AND (source IS NULL OR source != 'qobuz_download')"
+        };
+        let network_filter = if exclude_network_folders {
+            "AND NOT EXISTS (
+                SELECT 1 FROM library_folders nf
+                WHERE nf.is_network = 1
+                AND local_tracks.file_path LIKE nf.path || '%'
+            )"
+        } else {
+            ""
+        };
+        let group_key_expr = crate::album_grouping::metadata_group_key_sql_expression();
+        let search_pattern = search.unwrap_or("").trim();
+        let has_search: i64 = if search_pattern.is_empty() { 0 } else { 1 };
+        let search_like = format!("%{}%", search_pattern);
+
+        let plex_cte = if plex_attached {
+            r#",
+            plex_aggregated AS (
+                SELECT
+                    -- `album_key` is populated by plex/mod.rs::plex_album_key()
+                    -- which already returns `"plex:<hash>"`. Only the
+                    -- rating_key fallback needs the prefix added.
+                    COALESCE(album_key, 'plex:' || rating_key) AS group_key,
+                    COALESCE(album, 'Unknown Album') AS title,
+                    COALESCE(MIN(artist), 'Unknown Artist') AS artist
+                FROM plex_cache.plex_cache_tracks
+                GROUP BY COALESCE(album_key, 'plex:' || rating_key)
+            )"#
+        } else {
+            ""
+        };
+        let unioned_clause = if plex_attached {
+            "SELECT * FROM aggregated UNION ALL SELECT * FROM plex_aggregated"
+        } else {
+            "SELECT * FROM aggregated"
+        };
+
+        let query = format!(
+            r#"
+            WITH grouped AS (
+                SELECT
+                    {group_key} AS group_key,
+                    -- Prefer `album` (metadata tag) over
+                    -- `album_group_title` (scan-time snapshot, which
+                    -- falls back to folder name if metadata is
+                    -- missing). Fixes #411 — when album metadata is
+                    -- valid, the folder name was winning because
+                    -- COALESCE returned `album_group_title` first.
+                    COALESCE(
+                        NULLIF(NULLIF(TRIM(album), ''), 'Unknown Album'),
+                        album_group_title,
+                        'Unknown Album'
+                    ) AS title,
+                    COALESCE(album_artist, artist, 'Unknown Artist') AS artist,
+                    artist AS track_artist
+                FROM local_tracks
+                WHERE 1=1 {source_filter} {network_filter}
+            ),
+            aggregated AS (
+                SELECT
+                    group_key,
+                    CASE WHEN group_key = '__unknown_album__'
+                         THEN 'Unknown Album'
+                         ELSE MIN(title)
+                    END AS title,
+                    CASE WHEN COUNT(DISTINCT track_artist) > 1
+                         THEN 'Various Artists'
+                         ELSE MIN(artist)
+                    END AS artist
+                FROM grouped
+                GROUP BY group_key
+            ){plex_cte}
+            SELECT COUNT(*)
+            FROM ({unioned_clause})
+            WHERE ?1 = 0 OR (title LIKE ?2 OR artist LIKE ?2)
+            "#,
+            group_key = group_key_expr,
+            source_filter = source_filter,
+            network_filter = network_filter,
+            plex_cte = plex_cte,
+            unioned_clause = unioned_clause,
+        );
+
+        let total: i64 = self
+            .conn
+            .query_row(
+                &query,
+                rusqlite::params![has_search, search_like],
+                |row| row.get(0),
+            )
+            .map_err(|e| LibraryError::Database(e.to_string()))?;
+        Ok(total as u64)
+    }
+
+    /// Get tracks for a metadata-grouped album. The `metadata_key`
+    /// matches what [`Self::get_albums_metadata_grouped`] returns for
+    /// the album's `id` field.
+    pub fn get_album_tracks_metadata(
+        &self,
+        metadata_key: &str,
+    ) -> Result<Vec<LocalTrack>, LibraryError> {
+        let group_key_expr = crate::album_grouping::metadata_group_key_sql_expression();
+        let sql = format!(
+            "SELECT {cols} FROM local_tracks
+             WHERE {group_key} = ?
+             ORDER BY disc_number, track_number, title",
+            cols = Self::TRACK_COLUMNS,
+            group_key = group_key_expr,
+        );
+
+        let mut stmt = self
+            .conn
+            .prepare(&sql)
+            .map_err(|e| LibraryError::Database(e.to_string()))?;
+
+        let rows = stmt
+            .query_map(params![metadata_key], |row| Self::row_to_track(row))
             .map_err(|e| LibraryError::Database(e.to_string()))?;
 
         let mut tracks = Vec::new();
@@ -1557,7 +2643,15 @@ impl LibraryDatabase {
         Ok(())
     }
 
-    /// Update artwork path for all tracks in an album group
+    /// Update artwork path for all tracks in an album group.
+    ///
+    /// **Deprecated**: this was used inside the scan loop to backfill
+    /// artwork across tracks in the same group, but it pisses every
+    /// track's individual artwork in the process — destroying unique
+    /// per-track embedded covers. Per-track artwork is now resolved
+    /// individually at scan time. Kept compilable for any caller that
+    /// might still exist; do not introduce new callers.
+    #[deprecated(note = "Was destructive in scan loop; per-track artwork is resolved during scan instead")]
     pub fn update_album_group_artwork(
         &self,
         group_key: &str,
@@ -1774,10 +2868,20 @@ impl LibraryDatabase {
             format!("LIMIT {}", limit)
         };
 
+        // ORDER BY matches the album-grouped browsing the Tracks tab uses
+        // by default. Sorting in SQLite is sub-100ms for 100K rows; doing it
+        // in JS with localeCompare on the same volume blocks the main thread
+        // for several seconds per pass.
         let sql = format!(
             "SELECT {} FROM local_tracks \
              WHERE (title LIKE ?1 OR artist LIKE ?1 OR album LIKE ?1) \
-             {} {} {}",
+             {} {} \
+             ORDER BY album COLLATE NOCASE, \
+                      COALESCE(album_artist, artist) COLLATE NOCASE, \
+                      disc_number, \
+                      track_number, \
+                      title COLLATE NOCASE \
+             {}",
             Self::TRACK_COLUMNS,
             source_filter,
             network_filter,
@@ -1798,6 +2902,95 @@ impl LibraryDatabase {
             tracks.push(track.map_err(|e| LibraryError::Database(e.to_string()))?);
         }
         Ok(tracks)
+    }
+
+    /// Paged variant of `search_with_filter` — the performant path for the
+    /// Tracks tab. Returns one page (`LIMIT`/`OFFSET`) in the `sort` order,
+    /// so the frontend never materializes the whole table (the documented
+    /// ~16K-row freeze). An empty `query` matches everything.
+    pub fn search_with_filter_page(
+        &self,
+        query: &str,
+        offset: u64,
+        limit: u64,
+        include_qobuz_downloads: bool,
+        exclude_network_folders: bool,
+        sort: &str,
+    ) -> Result<Vec<LocalTrack>, LibraryError> {
+        let pattern = format!("%{}%", query);
+        let source_filter = if include_qobuz_downloads {
+            ""
+        } else {
+            "AND (source IS NULL OR source != 'qobuz_download')"
+        };
+        let network_filter = if exclude_network_folders {
+            "AND NOT EXISTS (
+                SELECT 1 FROM library_folders nf
+                WHERE nf.is_network = 1
+                AND local_tracks.file_path LIKE nf.path || '%'
+            )"
+        } else {
+            ""
+        };
+        // ORDER BY clause is built from a validated allowlist so user
+        // input never reaches the SQL string directly. NULL years always
+        // sort last regardless of direction; the fallback ("default" or
+        // any unknown key) is the historical album-grouped order. Every
+        // explicit key ends in `id` so LIMIT/OFFSET pagination is
+        // deterministic across ties (mass ties are real: a batch scan
+        // shares one indexed_at).
+        let order_clause = match sort {
+            "title-asc" => "title COLLATE NOCASE, artist COLLATE NOCASE, id",
+            "title-desc" => "title COLLATE NOCASE DESC, artist COLLATE NOCASE, id",
+            "artist-asc" => "COALESCE(album_artist, artist) COLLATE NOCASE, album COLLATE NOCASE, disc_number, track_number, id",
+            "artist-desc" => "COALESCE(album_artist, artist) COLLATE NOCASE DESC, album COLLATE NOCASE, disc_number, track_number, id",
+            "year-desc" => "year IS NULL, year DESC, album COLLATE NOCASE, disc_number, track_number, id",
+            "year-asc" => "year IS NULL, year ASC, album COLLATE NOCASE, disc_number, track_number, id",
+            "added-desc" => "indexed_at DESC, album COLLATE NOCASE, disc_number, track_number, id",
+            // Default = the pre-sort hardcoded order (album-grouped).
+            _ => "album COLLATE NOCASE, \
+                  COALESCE(album_artist, artist) COLLATE NOCASE, \
+                  disc_number, \
+                  track_number, \
+                  title COLLATE NOCASE",
+        };
+        let sql = format!(
+            "SELECT {} FROM local_tracks \
+             WHERE (title LIKE ?1 OR artist LIKE ?1 OR album LIKE ?1) \
+             {} {} \
+             ORDER BY {} \
+             LIMIT ?2 OFFSET ?3",
+            Self::TRACK_COLUMNS,
+            source_filter,
+            network_filter,
+            order_clause,
+        );
+        let mut stmt = self
+            .conn
+            .prepare(&sql)
+            .map_err(|e| LibraryError::Database(e.to_string()))?;
+        let rows = stmt
+            .query_map(params![&pattern, limit as i64, offset as i64], |row| {
+                Self::row_to_track(row)
+            })
+            .map_err(|e| LibraryError::Database(e.to_string()))?;
+        let mut tracks = Vec::new();
+        for track in rows {
+            tracks.push(track.map_err(|e| LibraryError::Database(e.to_string()))?);
+        }
+        Ok(tracks)
+    }
+
+    /// Cheap total local-track count — the Tracks-tab badge number without
+    /// materializing the (potentially 16K-row) table. Mirrors the Tracks tab
+    /// filter (include_qobuz_downloads = true, no network exclusion, no search)
+    /// so the badge equals the unfiltered list length.
+    pub fn count_all_local_tracks(&self) -> Result<u64, LibraryError> {
+        let n: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM local_tracks", [], |row| row.get(0))
+            .map_err(|e| LibraryError::Database(e.to_string()))?;
+        Ok(n as u64)
     }
 
     /// Get library statistics
@@ -1900,6 +3093,20 @@ impl LibraryDatabase {
             _ => AudioFormat::Unknown,
         }
     }
+}
+
+/// Escape `%`, `_` and `\` characters so the input can be embedded as a
+/// LIKE pattern fragment. Pair with `LIKE ?n || '/%' ESCAPE '\'` at the
+/// SQL site. Used by [`LibraryDatabase::list_folder_children`] and
+/// [`LibraryDatabase::list_folder_tracks`] to defend against
+/// pattern-injection on filesystem paths that legitimately contain
+/// metacharacters (a track named `100%.flac`, a folder containing
+/// `_intro_`, etc.).
+fn escape_like_pattern(input: &str) -> String {
+    input
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
 }
 
 /// Library statistics
@@ -2358,6 +3565,40 @@ impl LibraryDatabase {
         ids.collect::<Result<Vec<_>, _>>().map_err(|e| {
             LibraryError::Database(format!("Failed to collect favorite playlist IDs: {}", e))
         })
+    }
+
+    /// Record that a Qobuz playlist (by its SOURCE id) was copied into the
+    /// user's library. Idempotent — re-copying the same source is a no-op.
+    pub fn mark_playlist_copied(&self, qobuz_playlist_id: u64) -> Result<(), LibraryError> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        self.conn
+            .execute(
+                "INSERT OR IGNORE INTO copied_playlists (qobuz_playlist_id, copied_at) VALUES (?1, ?2)",
+                params![qobuz_playlist_id as i64, now],
+            )
+            .map_err(|e| {
+                LibraryError::Database(format!("Failed to mark playlist copied: {}", e))
+            })?;
+        Ok(())
+    }
+
+    /// Whether a Qobuz playlist (by its SOURCE id) has already been copied into
+    /// the user's library — used to hide the Copy button on its detail view.
+    pub fn is_playlist_copied(&self, qobuz_playlist_id: u64) -> Result<bool, LibraryError> {
+        let count: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM copied_playlists WHERE qobuz_playlist_id = ?1",
+                params![qobuz_playlist_id as i64],
+                |row| row.get(0),
+            )
+            .map_err(|e| {
+                LibraryError::Database(format!("Failed to check copied playlist: {}", e))
+            })?;
+        Ok(count > 0)
     }
 
     /// Update position for a playlist
@@ -3189,6 +4430,159 @@ impl LibraryDatabase {
         Ok(())
     }
 
+    // === Sidecar position lifecycle (mixed "carrete" playlists) ===
+
+    /// Next append position for a local/Plex sidecar add to a Qobuz playlist.
+    ///
+    /// Tauri's convention is `qobuz_count + sidecar_count` — append after the
+    /// whole merged list — but that formula re-issues positions after a
+    /// removal (stored positions keep their gaps while counts shrink; Tauri
+    /// bug T3), which collides in the absolute-slot interleave and silently
+    /// loses rows. The fix-forward rule is the MAX of both worlds:
+    ///
+    /// `max(qobuz_count + local_count + plex_count, MAX(position) + 1)`
+    ///
+    /// computed across BOTH sidecar tables, so an add always lands after the
+    /// merged end AND past every stored position. Batch adds take this once
+    /// and assign `next + i` per row.
+    pub fn next_playlist_sidecar_position(
+        &self,
+        qobuz_playlist_id: u64,
+        qobuz_track_count: u32,
+    ) -> Result<i32, LibraryError> {
+        let local_count = self.get_playlist_local_track_count(qobuz_playlist_id)?;
+        let plex_count = self.get_playlist_plex_track_count(qobuz_playlist_id)?;
+        let max_pos: Option<i32> = self
+            .conn
+            .query_row(
+                "SELECT MAX(p) FROM (
+                    SELECT MAX(position) AS p FROM playlist_local_tracks
+                     WHERE qobuz_playlist_id = ?1
+                    UNION ALL
+                    SELECT MAX(position) AS p FROM playlist_plex_tracks
+                     WHERE qobuz_playlist_id = ?1
+                )",
+                params![qobuz_playlist_id as i64],
+                |row| row.get(0),
+            )
+            .map_err(|e| {
+                LibraryError::Database(format!("Failed to read max sidecar position: {}", e))
+            })?;
+        let count_based = (qobuz_track_count + local_count + plex_count) as i32;
+        Ok(count_based.max(max_pos.map(|p| p + 1).unwrap_or(0)))
+    }
+
+    /// One-shot healing for sidecar position collisions (mixed playlists).
+    ///
+    /// Positions are absolute slots in the merged interleave and have no
+    /// UNIQUE constraint; the legacy Slint picker/drag wrote them 0-based per
+    /// batch, and Tauri's create-and-add writes local AND plex rows 0-based
+    /// in parallel — both produce duplicate positions, which a Map-based
+    /// merge collapses (silent row loss, edges E1/E2). This walks both
+    /// tables in stable order (local table first, then plex; within a table
+    /// position ASC, added_at ASC, rowid ASC — the first claimant of a
+    /// contested slot keeps it, matching the merge's local-first emit) and
+    /// renumbers every LATER claimant into the append region:
+    /// `max(qobuz_track_count + sidecar_count, MAX(position) + 1)` onward.
+    ///
+    /// Non-colliding rows are NEVER touched — drift is normal (edge E7);
+    /// this is collision repair, not renormalization. Returns one
+    /// "kind ref: old -> new" description per moved row for the caller to
+    /// log; empty = nothing healed. Idempotent.
+    pub fn heal_playlist_sidecar_positions(
+        &self,
+        qobuz_playlist_id: u64,
+        qobuz_track_count: u32,
+    ) -> Result<Vec<String>, LibraryError> {
+        // (kind, rowid, ref-description, position) in stable claim order.
+        let mut rows: Vec<(&'static str, i64, String, i32)> = Vec::new();
+        {
+            let mut stmt = self
+                .conn
+                .prepare(
+                    "SELECT id, local_track_id, position FROM playlist_local_tracks
+                     WHERE qobuz_playlist_id = ?1
+                     ORDER BY position ASC, added_at ASC, id ASC",
+                )
+                .map_err(|e| {
+                    LibraryError::Database(format!("Failed to prepare heal query: {}", e))
+                })?;
+            let mapped = stmt
+                .query_map(params![qobuz_playlist_id as i64], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i32>(2)?,
+                    ))
+                })
+                .map_err(|e| LibraryError::Database(format!("Failed to query heal rows: {}", e)))?;
+            for r in mapped {
+                let (rowid, track, pos) = r.map_err(|e| {
+                    LibraryError::Database(format!("Failed to read heal row: {}", e))
+                })?;
+                rows.push(("local", rowid, track.to_string(), pos));
+            }
+        }
+        {
+            let mut stmt = self
+                .conn
+                .prepare(
+                    "SELECT id, plex_rating_key, position FROM playlist_plex_tracks
+                     WHERE qobuz_playlist_id = ?1
+                     ORDER BY position ASC, added_at ASC, id ASC",
+                )
+                .map_err(|e| {
+                    LibraryError::Database(format!("Failed to prepare heal query: {}", e))
+                })?;
+            let mapped = stmt
+                .query_map(params![qobuz_playlist_id as i64], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i32>(2)?,
+                    ))
+                })
+                .map_err(|e| LibraryError::Database(format!("Failed to query heal rows: {}", e)))?;
+            for r in mapped {
+                let (rowid, key, pos) = r.map_err(|e| {
+                    LibraryError::Database(format!("Failed to read heal row: {}", e))
+                })?;
+                rows.push(("plex", rowid, key, pos));
+            }
+        }
+        if rows.is_empty() {
+            return Ok(Vec::new());
+        }
+        let max_pos = rows.iter().map(|r| r.3).max().unwrap_or(-1);
+        let sidecar_total = rows.len();
+        let mut seen = std::collections::HashSet::new();
+        let mut moves: Vec<(&'static str, i64, String, i32)> = Vec::new();
+        for row in rows {
+            if !seen.insert(row.3) {
+                moves.push(row);
+            }
+        }
+        if moves.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut next =
+            ((qobuz_track_count as i32) + sidecar_total as i32).max(max_pos + 1);
+        let mut healed = Vec::with_capacity(moves.len());
+        for (kind, rowid, reference, old) in moves {
+            let sql = if kind == "local" {
+                "UPDATE playlist_local_tracks SET position = ?1 WHERE id = ?2"
+            } else {
+                "UPDATE playlist_plex_tracks SET position = ?1 WHERE id = ?2"
+            };
+            self.conn.execute(sql, params![next, rowid]).map_err(|e| {
+                LibraryError::Database(format!("Failed to heal sidecar position: {}", e))
+            })?;
+            healed.push(format!("{kind} {reference}: {old} -> {next}"));
+            next += 1;
+        }
+        Ok(healed)
+    }
+
     // === Playlist Custom Track Order ===
 
     /// Get custom track order for a playlist
@@ -3521,6 +4915,33 @@ impl LibraryDatabase {
 
     // === Qobuz Downloads Integration ===
 
+    /// All offline-copy rows: `source = 'qobuz_download'` with a real Qobuz
+    /// id — the same set the Local Library "Offline" source filter shows.
+    /// Read-only; used by the offline favorites rail (B9) to find favorite
+    /// tracks that are playable without Qobuz.
+    pub fn get_qobuz_download_tracks(&self) -> Result<Vec<LocalTrack>, LibraryError> {
+        let sql = format!(
+            "SELECT {} FROM local_tracks \
+             WHERE source = 'qobuz_download' AND qobuz_track_id IS NOT NULL \
+             ORDER BY artist COLLATE NOCASE, album COLLATE NOCASE, track_number",
+            Self::TRACK_COLUMNS
+        );
+        let mut stmt = self
+            .conn
+            .prepare(&sql)
+            .map_err(|e| LibraryError::Database(e.to_string()))?;
+
+        let rows = stmt
+            .query_map([], |row| Self::row_to_track(row))
+            .map_err(|e| LibraryError::Database(e.to_string()))?;
+
+        let mut tracks = Vec::new();
+        for track in rows {
+            tracks.push(track.map_err(|e| LibraryError::Database(e.to_string()))?);
+        }
+        Ok(tracks)
+    }
+
     /// Check if a track exists by Qobuz track ID
     pub fn track_exists_by_qobuz_id(&self, qobuz_track_id: u64) -> Result<bool, LibraryError> {
         let count: i64 = self
@@ -3783,6 +5204,42 @@ impl LibraryDatabase {
         for row in rows {
             if let Ok((artist_name, custom_image_path)) = row {
                 map.insert(artist_name, custom_image_path);
+            }
+        }
+        Ok(map)
+    }
+
+    /// Bulk-load every cached artist image (custom path preferred, else the
+    /// fetched Qobuz URL) keyed by artist_name. Lets a UI seed the rail with
+    /// previously-fetched portraits on revisit without re-hitting Qobuz.
+    /// (The Tauri batch command `library_get_artist_images` was never
+    /// registered; this is the corrected one-pass reader.)
+    pub fn get_all_artist_image_urls(
+        &self,
+    ) -> Result<std::collections::HashMap<String, String>, LibraryError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT artist_name, custom_image_path, image_url FROM artist_images \
+                 WHERE custom_image_path IS NOT NULL OR image_url IS NOT NULL",
+            )
+            .map_err(|e| LibraryError::Database(format!("Failed to prepare query: {}", e)))?;
+
+        let rows = stmt
+            .query_map([], |row| {
+                let custom: Option<String> = row.get(1)?;
+                let url: Option<String> = row.get(2)?;
+                Ok((row.get::<_, String>(0)?, custom.or(url)))
+            })
+            .map_err(|e| {
+                LibraryError::Database(format!("Failed to query artist images: {}", e))
+            })?;
+
+        let mut map = std::collections::HashMap::new();
+        for row in rows.flatten() {
+            let (name, maybe_path) = row;
+            if let Some(path) = maybe_path {
+                map.insert(name, path);
             }
         }
         Ok(map)
@@ -4246,5 +5703,811 @@ impl LibraryDatabase {
 
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(|e| LibraryError::Database(format!("Failed to collect formats: {}", e)))
+    }
+}
+
+#[cfg(test)]
+mod metadata_grouping_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn fresh_db() -> (TempDir, LibraryDatabase) {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("library.db");
+        let db = LibraryDatabase::open(&path).unwrap();
+        (tmp, db)
+    }
+
+    fn insert_track_for_test(
+        db: &LibraryDatabase,
+        file_path: &str,
+        album: Option<&str>,
+        album_artist: Option<&str>,
+        artist: &str,
+        album_group_key: &str,
+    ) {
+        let mut t = LocalTrack::default();
+        t.file_path = file_path.to_string();
+        t.title = format!("Track at {}", file_path);
+        t.album = album.unwrap_or("").to_string();
+        t.album_artist = album_artist.map(String::from);
+        t.artist = artist.to_string();
+        t.album_group_key = album_group_key.to_string();
+        t.album_group_title = album.unwrap_or("").to_string();
+        db.insert_track(&t).unwrap();
+    }
+
+    #[test]
+    fn metadata_group_merges_tracks_across_folders_with_same_album() {
+        let (_tmp, db) = fresh_db();
+        // Two folders, same album metadata -> one metadata group.
+        insert_track_for_test(
+            &db,
+            "/m/Bjork/Vespertine/01.flac",
+            Some("Vespertine"),
+            Some("Bjork"),
+            "Bjork",
+            "/m/Bjork/Vespertine",
+        );
+        insert_track_for_test(
+            &db,
+            "/m/Bjork/Vespertine/02.flac",
+            Some("Vespertine"),
+            Some("Bjork"),
+            "Bjork",
+            "/m/Bjork/Vespertine",
+        );
+        insert_track_for_test(
+            &db,
+            "/m/mix/cd/track-from-vespertine.flac",
+            Some("Vespertine"),
+            Some("Bjork"),
+            "Bjork",
+            "/m/mix/cd",
+        );
+
+        let albums = db.get_albums_metadata_grouped(false, true, false).unwrap();
+        let vespertine = albums
+            .iter()
+            .find(|a| a.title == "Vespertine")
+            .expect("Vespertine group");
+        assert_eq!(vespertine.track_count, 3);
+    }
+
+    #[test]
+    fn metadata_group_falls_back_to_folder_when_album_missing() {
+        let (_tmp, db) = fresh_db();
+        // Empty album tag -> use folder grouping.
+        insert_track_for_test(&db, "/m/folder/01.flac", None, None, "A", "/m/folder");
+        insert_track_for_test(&db, "/m/folder/02.flac", None, None, "B", "/m/folder");
+
+        let albums = db.get_albums_metadata_grouped(false, true, false).unwrap();
+        assert_eq!(albums.len(), 1, "single folder fallback group");
+        assert_eq!(albums[0].track_count, 2);
+        assert_eq!(albums[0].artist, "Various Artists");
+    }
+
+    #[test]
+    fn metadata_group_orphan_bucket_when_no_album_no_folder() {
+        let (_tmp, db) = fresh_db();
+        // No album tag AND no folder key -> orphan bucket.
+        insert_track_for_test(&db, "/m/ghost/01.flac", None, None, "X", "");
+        insert_track_for_test(&db, "/m/ghost/02.flac", None, None, "Y", "");
+
+        let albums = db.get_albums_metadata_grouped(false, true, false).unwrap();
+        let unknown = albums
+            .iter()
+            .find(|a| a.title == "Unknown Album")
+            .expect("Unknown Album bucket");
+        assert_eq!(unknown.track_count, 2);
+    }
+
+    #[test]
+    fn metadata_group_va_detection() {
+        let (_tmp, db) = fresh_db();
+        // Same album, different track artists, album_artist set to VA.
+        insert_track_for_test(
+            &db,
+            "/m/comp/01.flac",
+            Some("Comp"),
+            Some("Various Artists"),
+            "A",
+            "/m/comp",
+        );
+        insert_track_for_test(
+            &db,
+            "/m/comp/02.flac",
+            Some("Comp"),
+            Some("Various Artists"),
+            "B",
+            "/m/comp",
+        );
+
+        let albums = db.get_albums_metadata_grouped(false, true, false).unwrap();
+        let comp = albums
+            .iter()
+            .find(|a| a.title == "Comp")
+            .expect("Comp album");
+        assert_eq!(comp.track_count, 2);
+        assert_eq!(comp.artist, "Various Artists");
+    }
+
+    #[test]
+    fn metadata_group_tracks_fetch_returns_all_in_group() {
+        let (_tmp, db) = fresh_db();
+        insert_track_for_test(
+            &db,
+            "/m/folderA/01.flac",
+            Some("Album X"),
+            Some("Artist Y"),
+            "Artist Y",
+            "/m/folderA",
+        );
+        insert_track_for_test(
+            &db,
+            "/m/folderB/02.flac",
+            Some("Album X"),
+            Some("Artist Y"),
+            "Artist Y",
+            "/m/folderB",
+        );
+        insert_track_for_test(
+            &db,
+            "/m/folderA/03.flac",
+            Some("Album X"),
+            Some("Artist Y"),
+            "Artist Y",
+            "/m/folderA",
+        );
+        // Different album in same folder set
+        insert_track_for_test(
+            &db,
+            "/m/folderA/04.flac",
+            Some("Album Z"),
+            Some("Artist Y"),
+            "Artist Y",
+            "/m/folderA",
+        );
+
+        let key = "Album X|Artist Y";
+        let tracks = db.get_album_tracks_metadata(key).unwrap();
+        assert_eq!(tracks.len(), 3);
+    }
+}
+
+#[cfg(test)]
+mod folder_tree_tests {
+    //! Tests for `list_folder_children` / `list_folder_tracks`.
+    //!
+    //! Fixture layout (paths only — metadata is enough to round-trip
+    //! through `LocalTrack`):
+    //!
+    //! ```text
+    //! /m/A/album1/t1.flac           (user)
+    //! /m/A/album1/t2.flac           (user)
+    //! /m/A/album1/Disc 1/t3.flac    (user, in subfolder)
+    //! /m/A/album2/t4.flac           (user)
+    //! /m/B/album3/t5.flac           (user)
+    //! /m/A/album1/qcache.flac       (qobuz_download — must be filtered)
+    //! /m/percent_test/100%.flac     (user, special chars)
+    //! ```
+    use super::*;
+    use tempfile::TempDir;
+    fn fresh_db() -> (TempDir, LibraryDatabase) {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("library.db");
+        let db = LibraryDatabase::open(&path).unwrap();
+        (tmp, db)
+    }
+
+    fn insert_at(
+        db: &LibraryDatabase,
+        file_path: &str,
+        disc: Option<u32>,
+        track_no: Option<u32>,
+        title: &str,
+    ) {
+        // NB: `LibraryDatabase::insert_track` stamps `source` itself
+        // (always 'user' unless the path matches a downloaded_purchases
+        // row), so we never set track.source here. To insert with a
+        // different source value (e.g. 'qobuz_download'), use
+        // `insert_qobuz_download_at` below.
+        let mut t = LocalTrack::default();
+        t.file_path = file_path.to_string();
+        t.title = title.to_string();
+        t.album = "Test Album".to_string();
+        t.album_artist = Some("Test Artist".to_string());
+        t.artist = "Test Artist".to_string();
+        t.album_group_key = file_path
+            .rsplit_once('/')
+            .map(|(parent, _)| parent.to_string())
+            .unwrap_or_default();
+        t.album_group_title = "Test Album".to_string();
+        t.disc_number = disc;
+        t.track_number = track_no;
+        db.insert_track(&t).unwrap();
+    }
+
+    /// Insert a row directly with `source = 'qobuz_download'`.
+    /// `insert_track` overrides the source field so we go through raw
+    /// SQL to model the offline-cache code path that DOES write that
+    /// value.
+    fn insert_qobuz_download_at(db: &LibraryDatabase, file_path: &str, title: &str) {
+        db.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO local_tracks \
+                 (file_path, title, artist, album, album_artist, \
+                  track_number, disc_number, year, genre, catalog_number, \
+                  duration_secs, format, bit_depth, sample_rate, channels, \
+                  file_size_bytes, cue_file_path, cue_start_secs, cue_end_secs, \
+                  artwork_path, last_modified, indexed_at, album_group_key, \
+                  album_group_title, source, is_network_mount) \
+                 VALUES (?1, ?2, 'X', 'X', 'X', \
+                         1, 1, NULL, NULL, NULL, \
+                         0, 'FLAC', NULL, 44100.0, 2, \
+                         0, NULL, NULL, NULL, \
+                         NULL, 0, 0, 'qcache', \
+                         'qcache', 'qobuz_download', 0)",
+                rusqlite::params![file_path, title],
+            )
+            .unwrap();
+        });
+    }
+
+    fn seed_standard_fixture(db: &LibraryDatabase) {
+        // Standard layout — 5 user tracks under /m/A and /m/B.
+        insert_at(db, "/m/A/album1/t1.flac", Some(1), Some(1), "Alpha");
+        insert_at(db, "/m/A/album1/t2.flac", Some(1), Some(2), "Beta");
+        insert_at(db, "/m/A/album1/Disc 1/t3.flac", Some(1), Some(1), "Gamma");
+        insert_at(db, "/m/A/album2/t4.flac", Some(1), Some(1), "Delta");
+        insert_at(db, "/m/B/album3/t5.flac", Some(1), Some(1), "Epsilon");
+
+        // One Qobuz download in the same album — must be filtered out
+        // by both list_folder_children and list_folder_tracks.
+        insert_qobuz_download_at(db, "/m/A/album1/qcache.flac", "QobuzCache");
+    }
+
+    #[test]
+    fn list_folder_children_returns_folders_before_tracks() {
+        let (_tmp, db) = fresh_db();
+        seed_standard_fixture(&db);
+
+        // /m/A/album1 has: subfolder "Disc 1", tracks "t1.flac" + "t2.flac".
+        // Expected order: folder first, then tracks alphabetical.
+        let children = db.list_folder_children("/m/A/album1", false).unwrap();
+        assert_eq!(children.len(), 3, "one folder + two tracks expected");
+
+        match &children[0] {
+            FolderTreeEntry::Folder {
+                segment,
+                track_count_under,
+                path,
+                ..
+            } => {
+                assert_eq!(segment, "Disc 1");
+                assert_eq!(*track_count_under, 1);
+                assert_eq!(path, "/m/A/album1/Disc 1");
+            }
+            other => panic!("expected folder first, got {:?}", other),
+        }
+        match &children[1] {
+            FolderTreeEntry::Track { segment, path } => {
+                assert_eq!(segment, "t1.flac");
+                assert_eq!(path, "/m/A/album1/t1.flac");
+            }
+            other => panic!("expected track at index 1, got {:?}", other),
+        }
+        match &children[2] {
+            FolderTreeEntry::Track { segment, .. } => {
+                assert_eq!(segment, "t2.flac");
+            }
+            other => panic!("expected track at index 2, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn list_folder_children_filters_qobuz_downloads() {
+        let (_tmp, db) = fresh_db();
+        seed_standard_fixture(&db);
+
+        let children = db.list_folder_children("/m/A/album1", false).unwrap();
+        // qcache.flac (qobuz_download) must not appear, even though it
+        // shares the same parent folder as t1.flac/t2.flac.
+        for entry in &children {
+            if let FolderTreeEntry::Track { segment, .. } = entry {
+                assert_ne!(
+                    segment, "qcache.flac",
+                    "qobuz_download row leaked into tree"
+                );
+            }
+        }
+
+        // Track count under "Disc 1" should also exclude any qobuz rows
+        // (none here, but the filter must hold even at folder level).
+        let folder_count = children
+            .iter()
+            .filter_map(|e| match e {
+                FolderTreeEntry::Folder {
+                    track_count_under, ..
+                } => Some(*track_count_under),
+                _ => None,
+            })
+            .sum::<u32>();
+        assert_eq!(folder_count, 1, "Disc 1 contains exactly 1 user track");
+    }
+
+    #[test]
+    fn list_folder_children_handles_special_chars_in_path() {
+        let (_tmp, db) = fresh_db();
+        seed_standard_fixture(&db);
+
+        // Folder containing a literal '%' in the filename. Without
+        // escape_like_pattern, the '%' would behave as a wildcard and
+        // either over-match or fail to match.
+        insert_at(&db, "/m/percent_test/100%.flac", Some(1), Some(1), "Hundred");
+        // A second literal-percent path that should NOT show up under
+        // /m/percent_test (different parent).
+        insert_at(
+            &db,
+            "/m/percent_other/200%.flac",
+            Some(1),
+            Some(1),
+            "Two Hundred",
+        );
+
+        let children = db.list_folder_children("/m/percent_test", false).unwrap();
+        assert_eq!(children.len(), 1, "only the local 100% file matches");
+        match &children[0] {
+            FolderTreeEntry::Track { segment, path } => {
+                assert_eq!(segment, "100%.flac");
+                assert_eq!(path, "/m/percent_test/100%.flac");
+            }
+            other => panic!("expected single track, got {:?}", other),
+        }
+
+        // And vice-versa — also test underscore handling in the parent.
+        // /m/percent_test contains an '_' char that LIKE would match
+        // any single character. If escape_like_pattern is missing, a
+        // sibling like /m/percentXtest/foo.flac would also match.
+        insert_at(&db, "/m/percentXtest/decoy.flac", Some(1), Some(1), "Decoy");
+        let children = db.list_folder_children("/m/percent_test", false).unwrap();
+        assert_eq!(
+            children.len(),
+            1,
+            "underscore in parent path must be escaped"
+        );
+    }
+
+    #[test]
+    fn list_folder_tracks_excludes_subfolder_contents() {
+        let (_tmp, db) = fresh_db();
+        seed_standard_fixture(&db);
+
+        // /m/A/album1 has direct tracks t1.flac + t2.flac, plus one
+        // track in a subfolder (Disc 1/t3.flac). The latter must NOT
+        // appear in list_folder_tracks output.
+        let tracks = db.list_folder_tracks("/m/A/album1", false).unwrap();
+        assert_eq!(tracks.len(), 2, "subfolder tracks must be excluded");
+        let titles: Vec<_> = tracks.iter().map(|t| t.title.as_str()).collect();
+        assert!(titles.contains(&"Alpha"));
+        assert!(titles.contains(&"Beta"));
+        assert!(
+            !titles.contains(&"Gamma"),
+            "Disc 1/t3.flac leaked into direct-children list"
+        );
+
+        // Qobuz download must also be excluded from direct tracks.
+        assert!(
+            !titles.contains(&"QobuzCache"),
+            "qobuz_download row leaked into direct-children list"
+        );
+    }
+
+    #[test]
+    fn list_folder_tracks_orders_by_disc_track_title() {
+        let (_tmp, db) = fresh_db();
+        // Build a small fixture deliberately out of natural sort order.
+        // Expected sort: disc ASC, track ASC, title ASC (NOCASE).
+        insert_at(&db, "/m/order/disc2-track1.flac", Some(2), Some(1), "D2T1");
+        insert_at(&db, "/m/order/disc1-track2.flac", Some(1), Some(2), "D1T2");
+        insert_at(&db, "/m/order/disc1-track1-bee.flac", Some(1), Some(1), "Bee");
+        insert_at(
+            &db,
+            "/m/order/disc1-track1-ant.flac",
+            Some(1),
+            Some(1),
+            "ant", // lowercase — NOCASE collation should sort ant < Bee
+        );
+
+        let tracks = db.list_folder_tracks("/m/order", false).unwrap();
+        let titles: Vec<_> = tracks.iter().map(|track| track.title.clone()).collect();
+        assert_eq!(titles, vec!["ant", "Bee", "D1T2", "D2T1"]);
+    }
+
+    #[test]
+    fn list_folder_tracks_recursive_includes_all_descendants() {
+        let (_tmp, db) = fresh_db();
+        seed_standard_fixture(&db);
+
+        // /m/A/album1 has direct tracks t1.flac, t2.flac AND a deeper
+        // file at /m/A/album1/Disc 1/t3.flac. The recursive listing
+        // must return all three.
+        let tracks = db.list_folder_tracks_recursive("/m/A/album1", false).unwrap();
+        let titles: Vec<_> = tracks.iter().map(|track| track.title.clone()).collect();
+        assert_eq!(tracks.len(), 3, "recursive listing must include subfolder tracks");
+        assert!(titles.contains(&"Alpha".to_string()));
+        assert!(titles.contains(&"Beta".to_string()));
+        assert!(titles.contains(&"Gamma".to_string()));
+
+        // Qobuz download under the same parent must NOT appear.
+        assert!(
+            !titles.contains(&"QobuzCache".to_string()),
+            "qobuz_download row leaked into recursive listing"
+        );
+    }
+
+    #[test]
+    fn list_folder_tracks_recursive_orders_by_file_path() {
+        let (_tmp, db) = fresh_db();
+        // Insert files deliberately out of file_path order — recursive
+        // listing must return them sorted ASC by file_path.
+        insert_at(&db, "/m/r/zeta.flac", Some(1), Some(1), "Z");
+        insert_at(&db, "/m/r/alpha.flac", Some(1), Some(1), "A");
+        insert_at(&db, "/m/r/sub/middle.flac", Some(1), Some(1), "M");
+
+        let tracks = db.list_folder_tracks_recursive("/m/r", false).unwrap();
+        let paths: Vec<_> = tracks.iter().map(|track| track.file_path.clone()).collect();
+        assert_eq!(
+            paths,
+            vec![
+                "/m/r/alpha.flac".to_string(),
+                "/m/r/sub/middle.flac".to_string(),
+                "/m/r/zeta.flac".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn list_folder_tracks_recursive_handles_special_chars_in_path() {
+        let (_tmp, db) = fresh_db();
+        // Folder containing literal '_' that LIKE would otherwise treat
+        // as a single-character wildcard. With escape_like_pattern, the
+        // sibling /m/percentXtest must not contaminate the result set.
+        insert_at(&db, "/m/percent_test/100%.flac", Some(1), Some(1), "Hundred");
+        insert_at(&db, "/m/percent_test/inner/200.flac", Some(1), Some(1), "TwoHundred");
+        insert_at(&db, "/m/percentXtest/decoy.flac", Some(1), Some(1), "Decoy");
+
+        let tracks = db.list_folder_tracks_recursive("/m/percent_test", false).unwrap();
+        let titles: Vec<_> = tracks.iter().map(|track| track.title.clone()).collect();
+        assert_eq!(tracks.len(), 2, "underscore in parent path must be escaped");
+        assert!(titles.contains(&"Hundred".to_string()));
+        assert!(titles.contains(&"TwoHundred".to_string()));
+        assert!(!titles.contains(&"Decoy".to_string()));
+    }
+
+    #[test]
+    fn list_folder_tracks_recursive_returns_empty_for_unknown_path() {
+        // A folder path with no matching descendants must yield an empty
+        // Vec rather than an error — frontend treats empty as "nothing
+        // to play/queue" and skips the toast.
+        let (_tmp, db) = fresh_db();
+        let tracks = db.list_folder_tracks_recursive("/m/does/not/exist", false).unwrap();
+        assert!(tracks.is_empty());
+    }
+
+    /// Mirrors the offline / "exclude network folders" toggle: tracks
+    /// living under a `library_folders` row marked `is_network = 1`
+    /// must be filtered out of every tree-mode listing primitive when
+    /// `exclude_network_folders = true`, and present when `false`.
+    /// Matches the predicate used by `get_albums_with_full_filter`
+    /// and `v2_library_search` so flat mode and tree mode see the same
+    /// source of truth.
+    #[test]
+    fn list_folder_primitives_honor_network_exclude() {
+        let (_tmp, db) = fresh_db();
+
+        // Register two scan roots: one local, one flagged as network.
+        db.add_folder_with_network_info("/m/local", false, None)
+            .unwrap();
+        db.add_folder_with_network_info("/m/net", true, Some("nfs"))
+            .unwrap();
+
+        // Seed user tracks under each root. The folder structure is
+        // similar enough that the only thing distinguishing them is the
+        // network-mount flag on the parent library_folders row.
+        insert_at(&db, "/m/local/album/local1.flac", Some(1), Some(1), "L1");
+        insert_at(&db, "/m/local/album/local2.flac", Some(1), Some(2), "L2");
+        insert_at(&db, "/m/net/album/net1.flac", Some(1), Some(1), "N1");
+        insert_at(&db, "/m/net/album/sub/net2.flac", Some(1), Some(1), "N2");
+
+        // --- list_folder_children -----------------------------------
+        // Without filter: both roots appear under '/m'.
+        let all_children = db.list_folder_children("/m", false).unwrap();
+        let segments: Vec<_> = all_children
+            .iter()
+            .filter_map(|e| match e {
+                FolderTreeEntry::Folder { segment, .. } => Some(segment.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(segments.contains(&"local"));
+        assert!(segments.contains(&"net"));
+
+        // With filter: the network root collapses out (no descendant
+        // tracks survive the EXISTS predicate, so it stops aggregating).
+        let filtered = db.list_folder_children("/m", true).unwrap();
+        let segments: Vec<_> = filtered
+            .iter()
+            .filter_map(|e| match e {
+                FolderTreeEntry::Folder { segment, .. } => Some(segment.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(segments.contains(&"local"));
+        assert!(
+            !segments.contains(&"net"),
+            "network folder leaked into tree rail when exclude=true"
+        );
+
+        // --- list_folder_tracks (direct children) ------------------
+        let direct_all = db.list_folder_tracks("/m/net/album", false).unwrap();
+        assert_eq!(direct_all.len(), 1, "net1.flac must appear when exclude=false");
+
+        let direct_filtered = db.list_folder_tracks("/m/net/album", true).unwrap();
+        assert!(
+            direct_filtered.is_empty(),
+            "network track leaked into direct-children listing when exclude=true"
+        );
+
+        // Local folder is unaffected by the toggle.
+        let local_filtered = db.list_folder_tracks("/m/local/album", true).unwrap();
+        assert_eq!(local_filtered.len(), 2);
+
+        // --- list_folder_tracks_recursive --------------------------
+        let recursive_all = db.list_folder_tracks_recursive("/m/net", false).unwrap();
+        assert_eq!(recursive_all.len(), 2, "both net tracks visible when exclude=false");
+
+        let recursive_filtered = db
+            .list_folder_tracks_recursive("/m/net", true)
+            .unwrap();
+        assert!(
+            recursive_filtered.is_empty(),
+            "network tracks leaked into recursive listing when exclude=true"
+        );
+
+        // Recursive listing on a non-network root still returns its
+        // tracks even when exclude=true.
+        let recursive_local = db
+            .list_folder_tracks_recursive("/m/local", true)
+            .unwrap();
+        assert_eq!(recursive_local.len(), 2);
+    }
+
+    /// `count_folder_tracks_recursive` mirrors
+    /// `list_folder_tracks_recursive` row-for-row: same source filter
+    /// (qobuz_download excluded), same network-folder NOT EXISTS
+    /// predicate, same prefix-with-slash boundary. The count is what
+    /// the tree-mode rail uses for top-level scan-root rows that don't
+    /// come back through `list_folder_children`.
+    #[test]
+    fn count_folder_tracks_recursive_matches_listing_primitive() {
+        let (_tmp, db) = fresh_db();
+        seed_standard_fixture(&db);
+
+        // /m/A/album1 has 3 user descendants (t1, t2, Disc 1/t3) and one
+        // qobuz_download (qcache.flac) under the same parent. Recursive
+        // count must include the deeper subfolder track AND exclude the
+        // qobuz row.
+        let count = db
+            .count_folder_tracks_recursive("/m/A/album1", false)
+            .unwrap();
+        assert_eq!(count, 3);
+
+        // /m as the root catches every user track in the fixture.
+        let total = db.count_folder_tracks_recursive("/m", false).unwrap();
+        assert_eq!(total, 5);
+
+        // Unknown path returns 0 (no rows match the LIKE prefix).
+        let empty = db
+            .count_folder_tracks_recursive("/m/does/not/exist", false)
+            .unwrap();
+        assert_eq!(empty, 0);
+    }
+
+    /// Network-folder filter must apply to the count primitive too —
+    /// otherwise the rail would advertise tracks that don't show up in
+    /// the listing, recursive playback, or flat-mode search.
+    #[test]
+    fn count_folder_tracks_recursive_honors_network_exclude() {
+        let (_tmp, db) = fresh_db();
+
+        db.add_folder_with_network_info("/m/local", false, None)
+            .unwrap();
+        db.add_folder_with_network_info("/m/net", true, Some("nfs"))
+            .unwrap();
+
+        insert_at(&db, "/m/local/album/local1.flac", Some(1), Some(1), "L1");
+        insert_at(&db, "/m/local/album/local2.flac", Some(1), Some(2), "L2");
+        insert_at(&db, "/m/net/album/net1.flac", Some(1), Some(1), "N1");
+        insert_at(&db, "/m/net/album/sub/net2.flac", Some(1), Some(1), "N2");
+
+        // Without filter: every descendant counts.
+        assert_eq!(
+            db.count_folder_tracks_recursive("/m/net", false).unwrap(),
+            2
+        );
+        assert_eq!(
+            db.count_folder_tracks_recursive("/m/local", false).unwrap(),
+            2
+        );
+
+        // With filter: network root collapses to 0, local stays.
+        assert_eq!(db.count_folder_tracks_recursive("/m/net", true).unwrap(), 0);
+        assert_eq!(
+            db.count_folder_tracks_recursive("/m/local", true).unwrap(),
+            2
+        );
+    }
+}
+
+#[cfg(test)]
+mod sidecar_position_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn fresh_db() -> (TempDir, LibraryDatabase) {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("library.db");
+        let db = LibraryDatabase::open(&path).unwrap();
+        (tmp, db)
+    }
+
+    /// Real `local_tracks` rows for the FK on `playlist_local_tracks`.
+    /// Returns the library row ids in insertion order.
+    fn seed_local_tracks(db: &LibraryDatabase, count: usize) -> Vec<i64> {
+        (0..count)
+            .map(|i| {
+                let mut t = LocalTrack::default();
+                t.file_path = format!("/t/track{i}.flac");
+                t.title = format!("T{i}");
+                t.artist = "A".into();
+                t.album = "B".into();
+                db.insert_track(&t).unwrap()
+            })
+            .collect()
+    }
+
+    fn local_positions(db: &LibraryDatabase, pid: u64) -> Vec<(i64, i32)> {
+        let mut stmt = db
+            .conn
+            .prepare(
+                "SELECT local_track_id, position FROM playlist_local_tracks
+                 WHERE qobuz_playlist_id = ?1 ORDER BY local_track_id ASC",
+            )
+            .unwrap();
+        stmt.query_map(params![pid as i64], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    }
+
+    fn plex_positions(db: &LibraryDatabase, pid: u64) -> Vec<(String, i32)> {
+        let mut stmt = db
+            .conn
+            .prepare(
+                "SELECT plex_rating_key, position FROM playlist_plex_tracks
+                 WHERE qobuz_playlist_id = ?1 ORDER BY plex_rating_key ASC",
+            )
+            .unwrap();
+        stmt.query_map(params![pid as i64], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    }
+
+    #[test]
+    fn next_position_empty_sidecar_appends_after_qobuz_block() {
+        let (_tmp, db) = fresh_db();
+        assert_eq!(db.next_playlist_sidecar_position(7, 50).unwrap(), 50);
+        assert_eq!(db.next_playlist_sidecar_position(7, 0).unwrap(), 0);
+    }
+
+    #[test]
+    fn next_position_dense_positions_match_count_formula() {
+        let (_tmp, db) = fresh_db();
+        let ids = seed_local_tracks(&db, 1);
+        db.add_local_track_to_playlist(7, ids[0], 50).unwrap();
+        db.add_plex_track_to_playlist(7, "k1", 51).unwrap();
+        // count-based 50+1+1 == max+1 == 52.
+        assert_eq!(db.next_playlist_sidecar_position(7, 50).unwrap(), 52);
+    }
+
+    #[test]
+    fn next_position_gapped_positions_clear_the_stored_max() {
+        let (_tmp, db) = fresh_db();
+        // T3 regression: positions keep gaps after removals; the count
+        // formula alone would re-issue 52 while 80 is still stored.
+        let ids = seed_local_tracks(&db, 2);
+        db.add_local_track_to_playlist(7, ids[0], 50).unwrap();
+        db.add_local_track_to_playlist(7, ids[1], 80).unwrap();
+        assert_eq!(db.next_playlist_sidecar_position(7, 50).unwrap(), 81);
+    }
+
+    #[test]
+    fn next_position_legacy_low_positions_fall_back_to_counts() {
+        let (_tmp, db) = fresh_db();
+        // Legacy 0-based rows: max+1 == 2, but the merged list is 52 long.
+        let ids = seed_local_tracks(&db, 1);
+        db.add_local_track_to_playlist(7, ids[0], 0).unwrap();
+        db.add_plex_track_to_playlist(7, "k1", 1).unwrap();
+        assert_eq!(db.next_playlist_sidecar_position(7, 50).unwrap(), 52);
+    }
+
+    #[test]
+    fn next_position_scoped_per_playlist() {
+        let (_tmp, db) = fresh_db();
+        let ids = seed_local_tracks(&db, 1);
+        db.add_local_track_to_playlist(7, ids[0], 99).unwrap();
+        assert_eq!(db.next_playlist_sidecar_position(8, 10).unwrap(), 10);
+    }
+
+    #[test]
+    fn heal_without_collisions_is_a_noop() {
+        let (_tmp, db) = fresh_db();
+        let ids = seed_local_tracks(&db, 2);
+        db.add_local_track_to_playlist(7, ids[0], 0).unwrap();
+        db.add_local_track_to_playlist(7, ids[1], 5).unwrap();
+        db.add_plex_track_to_playlist(7, "k1", 9).unwrap();
+        let healed = db.heal_playlist_sidecar_positions(7, 50).unwrap();
+        assert!(healed.is_empty(), "drift is normal (E7): {healed:?}");
+        assert_eq!(local_positions(&db, 7), vec![(ids[0], 0), (ids[1], 5)]);
+        assert_eq!(plex_positions(&db, 7), vec![("k1".into(), 9)]);
+    }
+
+    #[test]
+    fn heal_within_table_collision_moves_the_later_claimant() {
+        let (_tmp, db) = fresh_db();
+        // Two legacy 0-based batches: 0,1 then 0 again (E1).
+        let ids = seed_local_tracks(&db, 3);
+        db.add_local_track_to_playlist(7, ids[0], 0).unwrap();
+        db.add_local_track_to_playlist(7, ids[1], 1).unwrap();
+        db.add_local_track_to_playlist(7, ids[2], 0).unwrap();
+        let healed = db.heal_playlist_sidecar_positions(7, 10).unwrap();
+        assert_eq!(healed.len(), 1, "{healed:?}");
+        // First claimant (rowid order on the added_at tie) keeps slot 0;
+        // the later one moves to the append region: max(10+3, 1+1) = 13.
+        assert_eq!(
+            local_positions(&db, 7),
+            vec![(ids[0], 0), (ids[1], 1), (ids[2], 13)]
+        );
+    }
+
+    #[test]
+    fn heal_cross_table_collision_keeps_local_moves_plex() {
+        let (_tmp, db) = fresh_db();
+        // Tauri create-and-add writes local AND plex 0-based (E2).
+        let ids = seed_local_tracks(&db, 2);
+        db.add_local_track_to_playlist(7, ids[0], 0).unwrap();
+        db.add_local_track_to_playlist(7, ids[1], 1).unwrap();
+        db.add_plex_track_to_playlist(7, "k1", 0).unwrap();
+        db.add_plex_track_to_playlist(7, "k2", 1).unwrap();
+        let healed = db.heal_playlist_sidecar_positions(7, 0).unwrap();
+        assert_eq!(healed.len(), 2, "{healed:?}");
+        assert_eq!(local_positions(&db, 7), vec![(ids[0], 0), (ids[1], 1)]);
+        // Plex rows append: max(0+4, 1+1) = 4 onward, stable order.
+        assert_eq!(
+            plex_positions(&db, 7),
+            vec![("k1".into(), 4), ("k2".into(), 5)]
+        );
+    }
+
+    #[test]
+    fn heal_is_idempotent() {
+        let (_tmp, db) = fresh_db();
+        let ids = seed_local_tracks(&db, 2);
+        db.add_local_track_to_playlist(7, ids[0], 0).unwrap();
+        db.add_local_track_to_playlist(7, ids[1], 0).unwrap();
+        assert!(!db.heal_playlist_sidecar_positions(7, 5).unwrap().is_empty());
+        assert!(db.heal_playlist_sidecar_positions(7, 5).unwrap().is_empty());
     }
 }

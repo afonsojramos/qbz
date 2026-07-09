@@ -44,17 +44,44 @@ pub struct AudioSettings {
     /// Target loudness in LUFS for normalization.
     /// Common values: -14.0 (Spotify/YouTube), -18.0 (audiophile), -23.0 (EBU broadcast)
     pub normalization_target_lufs: f32,
-    /// When true, tracks with the same format are cross-faded seamlessly via Rodio Sink queueing.
-    /// Only works with cached tracks on Rodio backend (not ALSA Direct or streaming).
+    /// When true, consecutive same-format tracks play without gap.
+    /// Works on Rodio (PipeWire/Pulse) and ALSA Direct backends. Requires cached tracks.
     pub gapless_enabled: bool,
     /// When true, force PipeWire clock.force-quantum alongside clock.force-rate for bit-perfect.
     /// Reset both to 0 on stop. PipeWire-only, requires dac_passthrough.
     pub pw_force_bitperfect: bool,
+    /// When true, reload audio settings from DB into the player on app startup.
+    /// Useful when Player::new() may hold stale settings (e.g., after Flatpak updates).
+    /// Default: false (most users don't need this).
+    pub sync_audio_on_startup: bool,
+    /// User preference for what happens when all quality retries fail.
+    /// Values: "ask" (default), "always_fallback", "always_skip"
+    /// Protected by ADR-003: must survive reset_all() and migrations.
+    pub quality_fallback_behavior: String,
     /// When true, skip `pactl set-default-sink` on stream creation.
     /// Preserves external routing (JACK, qjackctl, Reaper).
+    /// Mutually exclusive with dac_passthrough.
     pub skip_sink_switch: bool,
     /// When true, automatically try lower quality tiers if the requested one fails.
+    /// When false (default), playback or download fails if the exact quality is unavailable.
     pub allow_quality_fallback: bool,
+    /// When true, hold a per-process ALSA device reservation (Lifetime B) for the
+    /// configured output device while QBZ is running, so other PulseAudio/PipeWire
+    /// clients won't grab the DAC and break exclusive playback. Off by default.
+    /// See `qbz-nix-docs/specs/2026-05-07-alsa-exclusive-hardening-design.md`.
+    #[serde(default)]
+    pub reserve_dac_while_running: bool,
+    /// DSD delivery mode: "convert" (default — DSD→PCM, works everywhere),
+    /// "dop" (DSD over PCM, opt-in: NOT detectable, wrong DAC = loud noise),
+    /// or "native" (ALSA DSD_U32 formats, needs a kernel quirk for the DAC).
+    /// Only takes effect on the ALSA direct backend with stereo tracks;
+    /// everything else converts.
+    #[serde(default = "default_dsd_mode")]
+    pub dsd_mode: String,
+}
+
+fn default_dsd_mode() -> String {
+    "convert".to_string()
 }
 
 impl Default for AudioSettings {
@@ -64,21 +91,36 @@ impl Default for AudioSettings {
             exclusive_mode: false,
             dac_passthrough: false,
             preferred_sample_rate: None,
-            backend_type: None, // Auto-detect (PipeWire if available, else ALSA)
+            // OOTB default is "System" (Some(SystemDefault)): play through the OS
+            // default output, shared with other apps like any normal player — no
+            // bit-perfect, no `pactl`. See AudioBackendType::default(). "Auto"
+            // (None) and explicit backends (PipeWire / ALSA) are honored as-is;
+            // this only sets what a fresh install and the Reset action land on.
+            //
+            // History: this defaulted to Some(PipeWire) on Linux to dodge a rodio
+            // DeviceSink-drop-on-resume race on the CPAL path (#375), but that
+            // hard-required `pactl` and froze OOTB playback without it (#470). The
+            // #375 race is covered by the cpal 0.17.3 / alsa 0.11 stream-drop
+            // fixes, and "System" is the app-like default audiophiles override.
+            backend_type: Some(AudioBackendType::default()),
             alsa_plugin: Some(AlsaPlugin::Hw), // Default to hw (bit-perfect)
             alsa_hardware_volume: false, // Disabled by default (maximum compatibility)
-            stream_first_track: false, // Disabled by default — user opts in
-            stream_buffer_seconds: 3, // 3 seconds initial buffer
+            stream_first_track: true, // On by default (opt-out)
+            stream_buffer_seconds: 2, // 2 seconds initial buffer
             streaming_only: false, // Disabled by default (cache tracks for instant replay)
             limit_quality_to_device: false, // Disabled in 1.1.9 — detection logic unreliable (#45)
             device_max_sample_rate: None, // Set when device is selected
             device_sample_rate_limits: HashMap::new(), // Per-device limits (empty = no limit)
             normalization_enabled: false, // Off by default — preserves bit-perfect pipeline
             normalization_target_lufs: -14.0, // Spotify/YouTube standard
-            gapless_enabled: false, // Off by default — user opts in
+            gapless_enabled: true, // On by default — works for same-format tracks on all backends
             pw_force_bitperfect: false, // Off by default — experimental PipeWire feature
+            sync_audio_on_startup: false, // Off by default — opt-in for stale-settings edge case
+            quality_fallback_behavior: "ask".to_string(),
             skip_sink_switch: false, // Off by default — only for JACK/DAW routing setups
             allow_quality_fallback: false, // Off by default — fail rather than silently downgrade
+            reserve_dac_while_running: false, // Off by default — opt-in DAC reservation (Lifetime B)
+            dsd_mode: default_dsd_mode(), // "convert" — safe on every DAC
         }
     }
 }
@@ -109,11 +151,9 @@ impl AudioSettingsStore {
                 backend_type TEXT,
                 alsa_plugin TEXT,
                 alsa_hardware_volume INTEGER NOT NULL DEFAULT 0,
-                stream_first_track INTEGER NOT NULL DEFAULT 0,
-                stream_buffer_seconds INTEGER NOT NULL DEFAULT 3
-            );
-            INSERT OR IGNORE INTO audio_settings (id, exclusive_mode, dac_passthrough)
-            VALUES (1, 0, 0);",
+                stream_first_track INTEGER NOT NULL DEFAULT 1,
+                stream_buffer_seconds INTEGER NOT NULL DEFAULT 2
+            );",
         )
         .map_err(|e| format!("Failed to create audio settings table: {}", e))?;
 
@@ -128,11 +168,11 @@ impl AudioSettingsStore {
             [],
         );
         let _ = conn.execute(
-            "ALTER TABLE audio_settings ADD COLUMN stream_first_track INTEGER DEFAULT 0",
+            "ALTER TABLE audio_settings ADD COLUMN stream_first_track INTEGER DEFAULT 1",
             [],
         );
         let _ = conn.execute(
-            "ALTER TABLE audio_settings ADD COLUMN stream_buffer_seconds INTEGER DEFAULT 3",
+            "ALTER TABLE audio_settings ADD COLUMN stream_buffer_seconds INTEGER DEFAULT 2",
             [],
         );
         let _ = conn.execute(
@@ -168,6 +208,14 @@ impl AudioSettingsStore {
             [],
         );
         let _ = conn.execute(
+            "ALTER TABLE audio_settings ADD COLUMN sync_audio_on_startup INTEGER DEFAULT 0",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE audio_settings ADD COLUMN quality_fallback_behavior TEXT DEFAULT 'ask'",
+            [],
+        );
+        let _ = conn.execute(
             "ALTER TABLE audio_settings ADD COLUMN skip_sink_switch INTEGER DEFAULT 0",
             [],
         );
@@ -175,6 +223,32 @@ impl AudioSettingsStore {
             "ALTER TABLE audio_settings ADD COLUMN allow_quality_fallback INTEGER DEFAULT 0",
             [],
         );
+        let _ = conn.execute(
+            "ALTER TABLE audio_settings ADD COLUMN reserve_dac_while_running INTEGER DEFAULT 0",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE audio_settings ADD COLUMN dsd_mode TEXT DEFAULT 'convert'",
+            [],
+        );
+
+        // Seed the single settings row on first run with the OOTB default backend
+        // ("System"). INSERT OR IGNORE is a one-time seed: it only fires when the
+        // row does not exist yet, so existing installs are never rewritten on
+        // later launches (settings are only reset by the explicit Reset action,
+        // never just by restarting).
+        //
+        // There is deliberately NO backfill of existing NULL backend_type rows: a
+        // NULL backend_type means "Auto" and is preserved as-is. (An earlier #375
+        // workaround backfilled NULL -> PipeWire on every open, which hard-required
+        // `pactl` and froze OOTB playback without it, #470.)
+        let default_backend_json = serde_json::to_string(&AudioBackendType::default())
+            .map_err(|e| format!("Failed to serialize default backend: {}", e))?;
+        conn.execute(
+            "INSERT OR IGNORE INTO audio_settings (id, exclusive_mode, dac_passthrough, backend_type) VALUES (1, 0, 0, ?1)",
+            params![default_backend_json],
+        )
+        .map_err(|e| format!("Failed to seed audio settings row: {}", e))?;
 
         Ok(Self { conn })
     }
@@ -193,7 +267,7 @@ impl AudioSettingsStore {
     pub fn get_settings(&self) -> Result<AudioSettings, String> {
         self.conn
             .query_row(
-                "SELECT output_device, exclusive_mode, dac_passthrough, preferred_sample_rate, backend_type, alsa_plugin, alsa_hardware_volume, stream_first_track, stream_buffer_seconds, streaming_only, limit_quality_to_device, device_max_sample_rate, normalization_enabled, normalization_target_lufs, gapless_enabled, device_sample_rate_limits, pw_force_bitperfect, skip_sink_switch, allow_quality_fallback FROM audio_settings WHERE id = 1",
+                "SELECT output_device, exclusive_mode, dac_passthrough, preferred_sample_rate, backend_type, alsa_plugin, alsa_hardware_volume, stream_first_track, stream_buffer_seconds, streaming_only, limit_quality_to_device, device_max_sample_rate, normalization_enabled, normalization_target_lufs, gapless_enabled, device_sample_rate_limits, pw_force_bitperfect, sync_audio_on_startup, quality_fallback_behavior, skip_sink_switch, allow_quality_fallback, reserve_dac_while_running, dsd_mode FROM audio_settings WHERE id = 1",
                 [],
                 |row| {
                     // Parse backend_type from JSON string
@@ -230,8 +304,19 @@ impl AudioSettingsStore {
                         normalization_target_lufs: row.get::<_, Option<f64>>(13)?.unwrap_or(-14.0) as f32,
                         gapless_enabled: row.get::<_, Option<i64>>(14)?.unwrap_or(0) != 0,
                         pw_force_bitperfect: row.get::<_, Option<i64>>(16)?.unwrap_or(0) != 0,
-                        skip_sink_switch: row.get::<_, Option<i64>>(17)?.unwrap_or(0) != 0,
-                        allow_quality_fallback: row.get::<_, Option<i64>>(18)?.unwrap_or(0) != 0,
+                        sync_audio_on_startup: row.get::<_, Option<i64>>(17)?.unwrap_or(0) != 0,
+                        quality_fallback_behavior: row
+                            .get::<_, Option<String>>(18)?
+                            .unwrap_or_else(|| "ask".to_string()),
+                        skip_sink_switch: row.get::<_, Option<i64>>(19)?.unwrap_or(0) != 0,
+                        allow_quality_fallback: row.get::<_, Option<i64>>(20)?.unwrap_or(0) != 0,
+                        reserve_dac_while_running: row
+                            .get::<_, Option<i64>>(21)?
+                            .unwrap_or(0)
+                            != 0,
+                        dsd_mode: row
+                            .get::<_, Option<String>>(22)?
+                            .unwrap_or_else(default_dsd_mode),
                     })
                 },
             )
@@ -290,6 +375,25 @@ impl AudioSettingsStore {
                 params![backend_json],
             )
             .map_err(|e| format!("Failed to set backend type: {}", e))?;
+
+        // When switching to ALSA, ensure alsa_plugin has a value (default to Hw)
+        if backend == Some(AudioBackendType::Alsa) {
+            let current_plugin: Option<String> = self
+                .conn
+                .query_row(
+                    "SELECT alsa_plugin FROM audio_settings WHERE id = 1",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(|e| format!("Failed to check alsa_plugin: {}", e))?;
+
+            if current_plugin.is_none() {
+                log::info!(
+                    "[AudioSettings] ALSA backend selected with no plugin set, defaulting to Hw"
+                );
+                self.set_alsa_plugin(Some(AlsaPlugin::Hw))?;
+            }
+        }
         Ok(())
     }
 
@@ -445,6 +549,52 @@ impl AudioSettingsStore {
         Ok(())
     }
 
+    pub fn set_allow_quality_fallback(&self, enabled: bool) -> Result<(), String> {
+        self.conn
+            .execute(
+                "UPDATE audio_settings SET allow_quality_fallback = ?1 WHERE id = 1",
+                params![enabled as i64],
+            )
+            .map_err(|e| format!("Failed to set allow_quality_fallback: {}", e))?;
+        Ok(())
+    }
+
+    pub fn set_skip_sink_switch(&self, enabled: bool) -> Result<(), String> {
+        self.conn
+            .execute(
+                "UPDATE audio_settings SET skip_sink_switch = ?1 WHERE id = 1",
+                params![enabled as i64],
+            )
+            .map_err(|e| format!("Failed to set skip_sink_switch: {}", e))?;
+        Ok(())
+    }
+
+    /// Persist the `reserve_dac_while_running` flag (Lifetime B from the
+    /// ALSA exclusive-hardening design spec). Toggling this only updates
+    /// the DB row; applying the change to the live `DeviceReservation`
+    /// guard is the caller's responsibility.
+    pub fn set_reserve_dac_while_running(&self, enabled: bool) -> Result<(), String> {
+        self.conn
+            .execute(
+                "UPDATE audio_settings SET reserve_dac_while_running = ?1 WHERE id = 1",
+                params![enabled as i64],
+            )
+            .map_err(|e| format!("Failed to set reserve_dac_while_running: {}", e))?;
+        Ok(())
+    }
+
+    /// Persist the DSD delivery mode ("convert" | "dop" | "native", DSD plan
+    /// Phases 2-3). Deliberately NOT part of reset_all's UPDATE.
+    pub fn set_dsd_mode(&self, mode: &str) -> Result<(), String> {
+        self.conn
+            .execute(
+                "UPDATE audio_settings SET dsd_mode = ?1 WHERE id = 1",
+                params![mode],
+            )
+            .map_err(|e| format!("Failed to set dsd_mode: {}", e))?;
+        Ok(())
+    }
+
     pub fn set_pw_force_bitperfect(&self, enabled: bool) -> Result<(), String> {
         self.conn
             .execute(
@@ -452,6 +602,39 @@ impl AudioSettingsStore {
                 params![enabled as i64],
             )
             .map_err(|e| format!("Failed to set pw_force_bitperfect: {}", e))?;
+        Ok(())
+    }
+
+    pub fn set_sync_audio_on_startup(&self, enabled: bool) -> Result<(), String> {
+        self.conn
+            .execute(
+                "UPDATE audio_settings SET sync_audio_on_startup = ?1 WHERE id = 1",
+                params![enabled as i64],
+            )
+            .map_err(|e| format!("Failed to set sync_audio_on_startup: {}", e))?;
+        Ok(())
+    }
+
+    pub fn get_quality_fallback_behavior(&self) -> Result<String, String> {
+        let settings = self.get_settings()?;
+        let value = &settings.quality_fallback_behavior;
+        match value.as_str() {
+            "ask" | "always_fallback" | "always_skip" => Ok(value.clone()),
+            _ => Ok("ask".to_string()),
+        }
+    }
+
+    pub fn set_quality_fallback_behavior(&self, behavior: &str) -> Result<(), String> {
+        match behavior {
+            "ask" | "always_fallback" | "always_skip" => {}
+            _ => return Err(format!("Invalid quality_fallback_behavior: {}", behavior)),
+        }
+        self.conn
+            .execute(
+                "UPDATE audio_settings SET quality_fallback_behavior = ?1 WHERE id = 1",
+                params![behavior],
+            )
+            .map_err(|e| format!("Failed to set quality_fallback_behavior: {}", e))?;
         Ok(())
     }
 
@@ -467,6 +650,11 @@ impl AudioSettingsStore {
 
     /// Reset all audio settings to their default values
     pub fn reset_all(&self) -> Result<AudioSettings, String> {
+        // ADR-003: quality_fallback_behavior must survive reset_all()
+        let saved_fallback = self
+            .get_quality_fallback_behavior()
+            .unwrap_or_else(|_| "ask".to_string());
+
         let defaults = AudioSettings::default();
         let backend_json: Option<String> = defaults
             .backend_type
@@ -502,7 +690,11 @@ impl AudioSettingsStore {
                     normalization_target_lufs = ?14,
                     gapless_enabled = ?15,
                     device_sample_rate_limits = ?16,
-                    pw_force_bitperfect = ?17
+                    pw_force_bitperfect = ?17,
+                    sync_audio_on_startup = ?18,
+                    skip_sink_switch = ?19,
+                    allow_quality_fallback = ?20,
+                    reserve_dac_while_running = ?21
                 WHERE id = 1",
                 params![
                     defaults.output_device,
@@ -522,11 +714,30 @@ impl AudioSettingsStore {
                     defaults.gapless_enabled as i64,
                     limits_json,
                     defaults.pw_force_bitperfect as i64,
+                    defaults.sync_audio_on_startup as i64,
+                    defaults.skip_sink_switch as i64,
+                    defaults.allow_quality_fallback as i64,
+                    defaults.reserve_dac_while_running as i64,
                 ],
             )
             .map_err(|e| format!("Failed to reset audio settings: {}", e))?;
 
-        Ok(defaults)
+        // ADR-003: restore quality_fallback_behavior after reset (it is not an audio config)
+        self.conn
+            .execute(
+                "UPDATE audio_settings SET quality_fallback_behavior = ?1 WHERE id = 1",
+                params![saved_fallback],
+            )
+            .map_err(|e| {
+                format!(
+                    "Failed to restore quality_fallback_behavior after reset: {}",
+                    e
+                )
+            })?;
+
+        let mut result = defaults;
+        result.quality_fallback_behavior = saved_fallback;
+        Ok(result)
     }
 }
 
@@ -571,5 +782,220 @@ impl AudioSettingsState {
 impl Default for AudioSettingsState {
     fn default() -> Self {
         Self::new_empty()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn unique_test_dir(name: &str) -> std::path::PathBuf {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("qbz-audio-{name}-{}-{nonce}", std::process::id()))
+    }
+
+    fn fresh_store(name: &str) -> (std::path::PathBuf, AudioSettingsStore) {
+        let dir = unique_test_dir(name);
+        let store = AudioSettingsStore::new_at(&dir).expect("open store in temp dir");
+        (dir, store)
+    }
+
+    #[test]
+    fn audio_settings_default_values_are_stable() {
+        let settings = AudioSettings::default();
+
+        // OOTB default is "System" — the OS default output (#470).
+        assert_eq!(settings.backend_type, Some(AudioBackendType::SystemDefault));
+        assert_eq!(settings.alsa_plugin, Some(AlsaPlugin::Hw));
+        assert!(settings.gapless_enabled);
+        assert!(!settings.sync_audio_on_startup);
+        assert_eq!(settings.quality_fallback_behavior, "ask");
+        assert!(!settings.skip_sink_switch);
+        assert!(!settings.allow_quality_fallback);
+        assert!(!settings.reserve_dac_while_running);
+    }
+
+    #[test]
+    fn audio_settings_store_returns_current_defaults() {
+        let (dir, store) = fresh_store("defaults");
+
+        let settings = store.get_settings().expect("get settings");
+
+        // Fresh store is seeded with the OOTB default backend "System" (#470).
+        assert_eq!(settings.backend_type, Some(AudioBackendType::SystemDefault));
+        assert_eq!(settings.alsa_plugin, None);
+        assert!(!settings.gapless_enabled);
+        assert_eq!(settings.quality_fallback_behavior, "ask");
+        assert!(!settings.reserve_dac_while_running);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn backend_null_stays_auto_on_reopen() {
+        // A NULL backend_type means "Auto" (system default output). It must be
+        // preserved across restarts — never backfilled to a concrete backend on
+        // store open (the old #375 backfill hard-coded PipeWire and froze OOTB
+        // playback on hosts without `pactl`, #470). Only the explicit Reset
+        // action rewrites settings.
+        let dir = unique_test_dir("backend-null-auto");
+        {
+            let store = AudioSettingsStore::new_at(&dir).expect("open store");
+            store
+                .conn
+                .execute(
+                    "UPDATE audio_settings SET backend_type = NULL WHERE id = 1",
+                    [],
+                )
+                .expect("force null (Auto) backend");
+        }
+
+        let reopened = AudioSettingsStore::new_at(&dir).expect("reopen store");
+        let settings = reopened.get_settings().expect("get settings");
+
+        assert_eq!(settings.backend_type, None);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn switching_to_alsa_sets_default_plugin_when_missing() {
+        let (dir, store) = fresh_store("alsa-plugin-default");
+        store.set_alsa_plugin(None).expect("clear alsa plugin");
+
+        store
+            .set_backend_type(Some(AudioBackendType::Alsa))
+            .expect("set backend");
+        let settings = store.get_settings().expect("get settings");
+
+        assert_eq!(settings.backend_type, Some(AudioBackendType::Alsa));
+        assert_eq!(settings.alsa_plugin, Some(AlsaPlugin::Hw));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn stream_buffer_seconds_clamps_to_valid_range() {
+        let (dir, store) = fresh_store("stream-buffer-clamp");
+
+        store
+            .set_stream_buffer_seconds(0)
+            .expect("set low buffer");
+        assert_eq!(
+            store.get_settings().expect("get settings").stream_buffer_seconds,
+            1
+        );
+
+        store
+            .set_stream_buffer_seconds(99)
+            .expect("set high buffer");
+        assert_eq!(
+            store.get_settings().expect("get settings").stream_buffer_seconds,
+            10
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn quality_fallback_invalid_value_reads_as_ask() {
+        let (dir, store) = fresh_store("quality-invalid");
+        store
+            .conn
+            .execute(
+                "UPDATE audio_settings SET quality_fallback_behavior = 'bad-value' WHERE id = 1",
+                [],
+            )
+            .expect("write invalid fallback behavior");
+
+        assert_eq!(
+            store
+                .get_quality_fallback_behavior()
+                .expect("get quality fallback"),
+            "ask"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn reset_all_preserves_quality_fallback_behavior() {
+        let (dir, store) = fresh_store("reset-preserves-quality");
+        store
+            .set_quality_fallback_behavior("always_skip")
+            .expect("set quality fallback");
+        store.set_output_device(Some("hw:4,0")).expect("set device");
+        store.set_dac_passthrough(true).expect("set dac");
+
+        let reset = store.reset_all().expect("reset settings");
+        let settings = store.get_settings().expect("get settings");
+
+        assert_eq!(reset.quality_fallback_behavior, "always_skip");
+        assert_eq!(settings.quality_fallback_behavior, "always_skip");
+        assert_eq!(settings.output_device, None);
+        assert!(!settings.dac_passthrough);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn settings_persist_and_reopen_all_new_fields() {
+        let dir = unique_test_dir("persist-new-fields");
+        {
+            let store = AudioSettingsStore::new_at(&dir).expect("open store");
+            store
+                .set_sync_audio_on_startup(true)
+                .expect("set sync flag");
+            store
+                .set_quality_fallback_behavior("always_fallback")
+                .expect("set quality fallback");
+            store
+                .set_reserve_dac_while_running(true)
+                .expect("set reserve flag");
+            store
+                .set_allow_quality_fallback(true)
+                .expect("set allow fallback");
+            store
+                .set_skip_sink_switch(true)
+                .expect("set skip sink switch");
+        }
+
+        let reopened = AudioSettingsStore::new_at(&dir).expect("reopen store");
+        let settings = reopened.get_settings().expect("get settings");
+
+        assert!(settings.sync_audio_on_startup);
+        assert_eq!(settings.quality_fallback_behavior, "always_fallback");
+        assert!(settings.reserve_dac_while_running);
+        assert!(settings.allow_quality_fallback);
+        assert!(settings.skip_sink_switch);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn deserializes_legacy_json_without_reserve_dac_field() {
+        let legacy = r#"{
+            "output_device": null,
+            "exclusive_mode": false,
+            "dac_passthrough": false,
+            "preferred_sample_rate": null,
+            "backend_type": null,
+            "alsa_plugin": null,
+            "alsa_hardware_volume": false,
+            "stream_first_track": false,
+            "stream_buffer_seconds": 3,
+            "streaming_only": false,
+            "limit_quality_to_device": false,
+            "device_max_sample_rate": null,
+            "normalization_enabled": false,
+            "normalization_target_lufs": -14.0,
+            "gapless_enabled": true,
+            "pw_force_bitperfect": false,
+            "sync_audio_on_startup": false,
+            "quality_fallback_behavior": "ask",
+            "skip_sink_switch": false,
+            "allow_quality_fallback": false
+        }"#;
+
+        let settings: AudioSettings =
+            serde_json::from_str(legacy).expect("legacy JSON should deserialize");
+
+        assert!(!settings.reserve_dac_while_running);
     }
 }

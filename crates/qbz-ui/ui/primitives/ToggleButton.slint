@@ -1,0 +1,67 @@
+// One half of a segmented toggle (grid/list) or a standalone toolbar
+// toggle (group-by / Hi-Res / filter). Shared by every album-toolbar
+// view (Discover Browse, Label Releases, Favorites). 34px square icon
+// button: highlighted when active, surface-elevated on hover.
+
+import { Theme } from "../foundation/semantic-colors.slint";
+import { QbzIcon } from "QbzIcon.slint";
+
+export component ToggleButton inherits Rectangle {
+    in property <image> icon;
+    in property <bool> active: false;
+    // Bootstrap-style small variant. Default is the standard size.
+    in property <bool> sm: false;
+    callback clicked();
+
+    width: root.sm ? 30px : 34px;
+    height: root.sm ? 30px : 34px;
+    background: root.active
+        ? Theme.surface-hover
+        : (ta.has-hover ? Theme.surface-elevated : transparent);
+
+    QbzIcon {
+        source: root.icon;
+        width: root.sm ? 15px : 17px;
+        height: root.sm ? 15px : 17px;
+        // Snap the centered position to whole pixels so the icon stays
+        // crisp (same treatment as the HeaderBar / QueueSidebar icons).
+        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+        tint: root.active ? Theme.text-primary : Theme.text-muted;
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    // Keyboard activation: Enter/Space fire the same click. The TouchArea stays
+    // the pointer source; this only adds key activation + focusability.
+    fs := FocusScope {
+        // See QbzPrimaryButton: declared after `ta`, hit-tested first;
+        // focus-on-click:false stops it eating the first press (two-click bug).
+        focus-on-click: false;
+        key-pressed(event) => {
+            if (event.text == Key.Return || event.text == " ") {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    // Non-layout focus ring — transparent-bordered overlay shown only on
+    // keyboard focus, so it never reflows the toggle.
+    Rectangle {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        background: transparent;
+        border-width: 2px;
+        border-color: fs.has-focus ? Theme.focus-ring : transparent;
+        border-radius: parent.border-radius;
+    }
+}

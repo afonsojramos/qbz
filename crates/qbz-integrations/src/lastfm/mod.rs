@@ -31,4 +31,6 @@ mod client;
 mod models;
 
 pub use client::LastFmClient;
-pub use models::{LastFmSession, LastFmSimilarArtist};
+pub use models::{
+    LastFmAlbum, LastFmArtist, LastFmSession, LastFmSimilarArtist, LastFmSimilarTrack, LastFmTrack,
+};

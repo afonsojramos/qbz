@@ -2,7 +2,7 @@
 //!
 //! Extracted from `commands_v2/mod.rs` — no functional changes.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 
@@ -23,6 +23,7 @@ use crate::library::{LibraryState, LocalTrack};
 use crate::lyrics::LyricsState;
 use crate::musicbrainz::MusicBrainzSharedState;
 use crate::offline::OfflineState;
+use crate::offline_cache::downloader::spawn_track_cache_download;
 use crate::offline_cache::OfflineCacheState;
 use crate::runtime::RuntimeError;
 use crate::AppState;
@@ -883,490 +884,6 @@ pub async fn v2_check_albums_fully_cached_batch(
     Ok(result)
 }
 
-/// Shared helper: spawn the download task for a single track.
-/// CMAF-first offline download path (v2 format).
-///
-/// On success: the encrypted CMAF bundle is persisted under
-/// `<offline_root>/tracks-cmaf/<track_id>/`, the per-track AES content key
-/// + session infos are wrapped via `qbz-secrets` and stored on the DB row,
-/// `cache_format` flips to 2, `mark_complete` fires, and the library row
-/// is populated with the same metadata the legacy path would populate
-/// (title/artist/album, etc.).
-///
-/// Returns `Err` for any failure that makes CMAF unusable — the caller
-/// falls back to the legacy plain-FLAC path.
-async fn try_cmaf_offline_download(
-    track_id: u64,
-    bridge: &std::sync::Arc<tokio::sync::RwLock<Option<crate::core_bridge::CoreBridge>>>,
-    db: &std::sync::Arc<tokio::sync::Mutex<Option<crate::offline_cache::OfflineCacheDb>>>,
-    offline_root: &str,
-    library_db: &std::sync::Arc<tokio::sync::Mutex<Option<qbz_library::LibraryDatabase>>>,
-    client: &std::sync::Arc<tokio::sync::RwLock<crate::api::QobuzClient>>,
-    app: &tauri::AppHandle,
-) -> Result<(), String> {
-    use qbz_models::Quality;
-
-    let offline_root_path = std::path::PathBuf::from(offline_root);
-
-    // Progress callback: emit the same `offline:caching_progress` event
-    // shape the legacy StreamFetcher fires, so the UI's progress ring
-    // doesn't care whether the bytes came from CMAF or legacy.
-    //
-    // Note: one 'started' event here up front so the frontend sees
-    // 'downloading' status immediately (the ring starts empty); actual
-    // percentage updates arrive per completed segment.
-    let _ = app.emit(
-        "offline:caching_progress",
-        serde_json::json!({
-            "trackId": track_id,
-            "progressPercent": 0u32,
-            "bytesDownloaded": 0u64,
-            "totalBytes": serde_json::Value::Null,
-            "status": "downloading",
-        }),
-    );
-
-    let app_for_cb = app.clone();
-    let progress_cb: qbz_qobuz::CmafProgressCallback = std::sync::Arc::new(
-        move |update: qbz_qobuz::CmafProgressUpdate| {
-            let percent = if update.n_segments > 0 {
-                (update.segments_completed as f64 / update.n_segments as f64 * 100.0)
-                    .round()
-                    .clamp(0.0, 100.0) as u32
-            } else {
-                0u32
-            };
-            let _ = app_for_cb.emit(
-                "offline:caching_progress",
-                serde_json::json!({
-                    "trackId": track_id,
-                    "progressPercent": percent,
-                    "bytesDownloaded": update.bytes_this_segment,
-                    "totalBytes": serde_json::Value::Null,
-                    "status": "downloading",
-                }),
-            );
-        },
-    );
-
-    // Fetch the raw CMAF bundle. Requires an initialized CoreBridge →
-    // QobuzClient; if either is missing, bail so the legacy path runs.
-    let bundle = {
-        let bridge_guard = bridge.read().await;
-        let bridge = bridge_guard
-            .as_ref()
-            .ok_or_else(|| "CoreBridge not initialized".to_string())?;
-        let client_arc = bridge.core().client();
-        let client_guard = client_arc.read().await;
-        let qobuz_client = client_guard
-            .as_ref()
-            .ok_or_else(|| "QobuzClient not initialized".to_string())?;
-        qbz_qobuz::cmaf::download_raw_with_progress(
-            qobuz_client,
-            track_id,
-            Quality::UltraHiRes,
-            Some(progress_cb),
-        )
-        .await?
-    };
-
-    // Open (or lazily init) the secret vault and wrap the keying material
-    // before it touches the filesystem.
-    let vault = crate::offline_cache::secret_vault::get_or_init(&offline_root_path)
-        .map_err(|e| format!("SecretBox init failed: {}", e))?;
-    let content_key_wrapped = vault
-        .wrap(&bundle.content_key)
-        .map_err(|e| format!("Failed to wrap content_key: {}", e))?;
-    let infos_wrapped = vault
-        .wrap(bundle.infos.as_bytes())
-        .map_err(|e| format!("Failed to wrap infos: {}", e))?;
-
-    // Persist the encrypted bundle to disk.
-    let (layout, total_bytes) =
-        crate::offline_cache::cmaf_store::persist_bundle(&offline_root_path, track_id, &bundle)?;
-
-    // Flip the DB row to v2 and store the wrapped keying material.
-    {
-        let db_guard = db.lock().await;
-        let db_ref = db_guard
-            .as_ref()
-            .ok_or_else(|| "Offline cache DB not open".to_string())?;
-        db_ref.set_cmaf_bundle(
-            track_id,
-            layout.segments_path.to_string_lossy().as_ref(),
-            layout.init_path.to_string_lossy().as_ref(),
-            &content_key_wrapped,
-            &infos_wrapped,
-            bundle.format_id,
-            bundle.n_segments as u32,
-            total_bytes,
-        )?;
-        db_ref
-            .mark_complete(track_id, total_bytes)
-            .map_err(|e| format!("Failed to mark_complete: {}", e))?;
-    }
-
-    // Fetch metadata for the library row (same source the legacy path uses).
-    // We don't write FLAC tags or embed artwork INSIDE the encrypted blob
-    // — that would corrupt it. But we DO save a cover.jpg next to the
-    // bundle directory so the library UI has artwork to display.
-    let metadata = {
-        let qobuz_client = client.read().await;
-        crate::offline_cache::metadata::fetch_complete_metadata(track_id, &*qobuz_client).await
-    };
-    if let Ok(metadata) = metadata {
-        // Download and save album artwork alongside the bundle, same as
-        // the legacy path does next to the FLAC file. cover.jpg lives at
-        // <offline_root>/tracks-cmaf/<track_id>/cover.jpg — set as the
-        // library row's artwork_path so the UI picks it up.
-        let artwork_path: Option<String> = if let Some(artwork_url) = metadata.artwork_url.as_deref() {
-            match crate::offline_cache::metadata::save_album_artwork(&layout.track_dir, artwork_url).await {
-                Ok(()) => {
-                    let cover = layout.track_dir.join("cover.jpg");
-                    if cover.exists() {
-                        Some(cover.to_string_lossy().to_string())
-                    } else {
-                        None
-                    }
-                }
-                Err(e) => {
-                    log::warn!("[Offline/CMAF] Track {} artwork save failed: {}", track_id, e);
-                    None
-                }
-            }
-        } else {
-            None
-        };
-
-        let album_artist = metadata.album_artist.as_ref().unwrap_or(&metadata.artist);
-        let album_group_key = format!("{}|{}", metadata.album, album_artist);
-        let lib_opt = library_db.lock().await;
-        if let Some(lib_guard) = lib_opt.as_ref() {
-            let _ = lib_guard.insert_qobuz_cached_track_with_grouping(
-                track_id,
-                &metadata.title,
-                &metadata.artist,
-                Some(&metadata.album),
-                metadata.album_artist.as_deref(),
-                metadata.track_number,
-                metadata.disc_number,
-                metadata.year,
-                metadata.duration_secs,
-                // For v2 bundles the "playable path" in the library index
-                // is the track directory; the player resolves it through
-                // the DB's cache_format=2 branch anyway.
-                layout.track_dir.to_string_lossy().as_ref(),
-                &album_group_key,
-                &metadata.album,
-                bundle.bit_depth,
-                bundle.sampling_rate.map(|r| r as f64),
-                artwork_path.as_deref(),
-            );
-        }
-    } else if let Err(e) = metadata {
-        log::warn!(
-            "[Offline/CMAF] Track {} post-metadata fetch failed: {} (bundle already persisted)",
-            track_id,
-            e
-        );
-    }
-
-    log::info!(
-        "[Offline/CMAF] Track {} cached as v2 bundle: {:.2} MB under {:?}",
-        track_id,
-        total_bytes as f64 / (1024.0 * 1024.0),
-        layout.track_dir
-    );
-    let _ = app.emit(
-        "offline:caching_completed",
-        serde_json::json!({
-            "trackId": track_id,
-            "size": total_bytes,
-            "format": "cmaf",
-        }),
-    );
-    let _ = app.emit(
-        "offline:caching_processed",
-        serde_json::json!({
-            "trackId": track_id,
-            "path": layout.track_dir.to_string_lossy(),
-            "format": "cmaf",
-        }),
-    );
-    Ok(())
-}
-
-/// Used by both v2_cache_track_for_offline (single) and v2_cache_tracks_batch_for_offline (batch).
-#[allow(clippy::too_many_arguments)]
-fn spawn_track_cache_download(
-    track_id: u64,
-    file_path: std::path::PathBuf,
-    client: std::sync::Arc<tokio::sync::RwLock<crate::api::QobuzClient>>,
-    bridge: std::sync::Arc<tokio::sync::RwLock<Option<crate::core_bridge::CoreBridge>>>,
-    fetcher: std::sync::Arc<crate::offline_cache::StreamFetcher>,
-    db: std::sync::Arc<tokio::sync::Mutex<Option<crate::offline_cache::OfflineCacheDb>>>,
-    offline_root: String,
-    library_db: std::sync::Arc<tokio::sync::Mutex<Option<qbz_library::LibraryDatabase>>>,
-    app: tauri::AppHandle,
-    semaphore: std::sync::Arc<tokio::sync::Semaphore>,
-) {
-    tokio::spawn(async move {
-        let _permit = match semaphore.acquire_owned().await {
-            Ok(permit) => permit,
-            Err(err) => {
-                log::error!(
-                    "Failed to acquire cache slot for track {}: {}",
-                    track_id,
-                    err
-                );
-                if let Some(db_guard) = db.lock().await.as_ref() {
-                    let _ = db_guard.update_status(
-                        track_id,
-                        crate::offline_cache::OfflineCacheStatus::Failed,
-                        Some("Failed to start caching"),
-                    );
-                }
-                let _ = app.emit(
-                    "offline:caching_failed",
-                    serde_json::json!({
-                        "trackId": track_id,
-                        "error": "Failed to acquire cache slot"
-                    }),
-                );
-                return;
-            }
-        };
-
-        if let Some(db_guard) = db.lock().await.as_ref() {
-            let _ = db_guard.update_status(
-                track_id,
-                crate::offline_cache::OfflineCacheStatus::Downloading,
-                None,
-            );
-        }
-        let _ = app.emit(
-            "offline:caching_started",
-            serde_json::json!({ "trackId": track_id }),
-        );
-
-        // === CMAF-first offline download (v2 format) ===
-        //
-        // Stores bit-identical encrypted segments + wrapped content key.
-        // Falls through to the legacy path below if any step fails (no
-        // CoreBridge yet, /file/url returns a non-CMAF response, network
-        // flake, vault init failure, etc.). The legacy fallback keeps
-        // existing users unblocked while we validate the new path.
-        match try_cmaf_offline_download(
-            track_id,
-            &bridge,
-            &db,
-            &offline_root,
-            &library_db,
-            &client,
-            &app,
-        )
-        .await
-        {
-            Ok(()) => return,
-            Err(e) => {
-                log::warn!(
-                    "[Offline/CMAF] Track {} — CMAF path failed ({}), falling back to legacy /track/getFileUrl",
-                    track_id,
-                    e
-                );
-            }
-        }
-
-        let stream_url = {
-            let client_guard = client.read().await;
-            client_guard
-                .get_stream_url_with_fallback(track_id, crate::api::models::Quality::UltraHiRes)
-                .await
-        };
-
-        let url = match stream_url {
-            Ok(s) => s.url,
-            Err(e) => {
-                log::error!("Failed to get stream URL for track {}: {}", track_id, e);
-                if let Some(db_guard) = db.lock().await.as_ref() {
-                    let _ = db_guard.update_status(
-                        track_id,
-                        crate::offline_cache::OfflineCacheStatus::Failed,
-                        Some(&format!("Failed to get stream URL: {}", e)),
-                    );
-                }
-                let _ = app.emit(
-                    "offline:caching_failed",
-                    serde_json::json!({
-                        "trackId": track_id,
-                        "error": e.to_string()
-                    }),
-                );
-                return;
-            }
-        };
-
-        match fetcher
-            .fetch_to_file(&url, &file_path, track_id, Some(&app))
-            .await
-        {
-            Ok(size) => {
-                log::info!("Caching complete for track {}: {} bytes", track_id, size);
-                if let Some(db_guard) = db.lock().await.as_ref() {
-                    let _ = db_guard.mark_complete(track_id, size);
-                }
-                let _ = app.emit(
-                    "offline:caching_completed",
-                    serde_json::json!({
-                        "trackId": track_id,
-                        "size": size
-                    }),
-                );
-
-                // Post-processing kept in V2 to avoid command->command delegation.
-                let file_path_str = file_path.to_string_lossy().to_string();
-                let qobuz_client = client.read().await;
-                let metadata = match crate::offline_cache::metadata::fetch_complete_metadata(
-                    track_id,
-                    &*qobuz_client,
-                )
-                .await
-                {
-                    Ok(m) => m,
-                    Err(e) => {
-                        log::warn!(
-                            "Post-processing metadata fetch failed for {}: {}",
-                            track_id,
-                            e
-                        );
-                        return;
-                    }
-                };
-
-                if let Err(e) =
-                    crate::offline_cache::metadata::write_flac_tags(&file_path_str, &metadata)
-                {
-                    log::warn!("Failed to write tags for {}: {}", track_id, e);
-                }
-                if let Some(artwork_url) = &metadata.artwork_url {
-                    if let Err(e) =
-                        crate::offline_cache::metadata::embed_artwork(&file_path_str, artwork_url)
-                            .await
-                    {
-                        log::warn!("Failed to embed artwork for {}: {}", track_id, e);
-                    }
-                }
-
-                let new_path = match crate::offline_cache::metadata::organize_cached_file(
-                    track_id,
-                    &file_path_str,
-                    &offline_root,
-                    &metadata,
-                ) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        log::warn!("Failed to organize cached file {}: {}", track_id, e);
-                        return;
-                    }
-                };
-
-                // Save cover.jpg next to the organized FLAC so the library
-                // UI has artwork to display.
-                let artwork_path_v1: Option<String> =
-                    if let Some(artwork_url) = metadata.artwork_url.as_deref() {
-                        if let Some(parent_dir) = std::path::Path::new(&new_path).parent() {
-                            match crate::offline_cache::metadata::save_album_artwork(
-                                parent_dir,
-                                artwork_url,
-                            )
-                            .await
-                            {
-                                Ok(()) => {
-                                    let cover = parent_dir.join("cover.jpg");
-                                    if cover.exists() {
-                                        Some(cover.to_string_lossy().to_string())
-                                    } else {
-                                        None
-                                    }
-                                }
-                                Err(_) => None,
-                            }
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    };
-
-                let (bit_depth_detected, sample_rate_detected) =
-                    match lofty::read_from_path(&new_path) {
-                        Ok(tagged_file) => {
-                            use lofty::prelude::*;
-                            let properties = tagged_file.properties();
-                            (
-                                properties.bit_depth().map(|bd| bd as u32),
-                                properties.sample_rate().map(|sr| sr as f64),
-                            )
-                        }
-                        Err(_) => (None, None),
-                    };
-
-                let album_artist = metadata.album_artist.as_ref().unwrap_or(&metadata.artist);
-                let album_group_key = format!("{}|{}", metadata.album, album_artist);
-                let lib_opt = library_db.lock().await;
-                if let Some(lib_guard) = lib_opt.as_ref() {
-                    let _ = lib_guard.insert_qobuz_cached_track_with_grouping(
-                        track_id,
-                        &metadata.title,
-                        &metadata.artist,
-                        Some(&metadata.album),
-                        metadata.album_artist.as_deref(),
-                        metadata.track_number,
-                        metadata.disc_number,
-                        metadata.year,
-                        metadata.duration_secs,
-                        &new_path,
-                        &album_group_key,
-                        &metadata.album,
-                        bit_depth_detected,
-                        sample_rate_detected,
-                        artwork_path_v1.as_deref(),
-                    );
-                }
-
-                if let Some(db_guard) = db.lock().await.as_ref() {
-                    let _ = db_guard.update_file_path(track_id, &new_path);
-                }
-
-                let _ = app.emit(
-                    "offline:caching_processed",
-                    serde_json::json!({
-                        "trackId": track_id,
-                        "path": new_path
-                    }),
-                );
-            }
-            Err(e) => {
-                log::error!("Caching failed for track {}: {}", track_id, e);
-                if let Some(db_guard) = db.lock().await.as_ref() {
-                    let _ = db_guard.update_status(
-                        track_id,
-                        crate::offline_cache::OfflineCacheStatus::Failed,
-                        Some(&e),
-                    );
-                }
-                let _ = app.emit(
-                    "offline:caching_failed",
-                    serde_json::json!({
-                        "trackId": track_id,
-                        "error": e
-                    }),
-                );
-            }
-        }
-    });
-}
-
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn v2_cache_track_for_offline(
@@ -1379,7 +896,6 @@ pub async fn v2_cache_track_for_offline(
     quality: String,
     bit_depth: Option<u32>,
     sample_rate: Option<f64>,
-    state: State<'_, AppState>,
     bridge: State<'_, crate::core_bridge::CoreBridgeState>,
     cache_state: State<'_, OfflineCacheState>,
     app_handle: tauri::AppHandle,
@@ -1406,21 +922,26 @@ pub async fn v2_cache_track_for_offline(
     let file_path = cache_state.track_file_path(track_id, "flac");
     let file_path_str = file_path.to_string_lossy().to_string();
     {
+        let limit_bytes = *cache_state.limit_bytes.lock().await;
         let guard = cache_state.db.lock().await;
         let db = guard.as_ref().ok_or("No active session - please log in")?;
+        // Pre-flight: refuse new downloads when the cache is already at or
+        // above the configured limit (Fix #5d).
+        let cache_root = std::path::PathBuf::from(cache_state.get_cache_path());
+        crate::offline_cache::maintenance::check_cache_limit(db, &cache_root, limit_bytes)?;
         db.insert_track(&track_info, &file_path_str)?;
     }
 
+    let core_client = crate::offline_cache::core_client(&bridge).await?;
     spawn_track_cache_download(
         track_id,
         file_path,
-        state.client.clone(),
-        bridge.0.clone(),
+        core_client,
         cache_state.fetcher.clone(),
         cache_state.db.clone(),
         cache_state.get_cache_path(),
         cache_state.library_db.clone(),
-        app_handle.clone(),
+        crate::offline_cache::tauri_cache_sink(app_handle.clone()),
         cache_state.cache_semaphore.clone(),
     );
 
@@ -1444,7 +965,6 @@ pub struct BatchTrackInfo {
 #[tauri::command]
 pub async fn v2_cache_tracks_batch_for_offline(
     tracks: Vec<BatchTrackInfo>,
-    state: State<'_, AppState>,
     bridge: State<'_, crate::core_bridge::CoreBridgeState>,
     cache_state: State<'_, OfflineCacheState>,
     app_handle: tauri::AppHandle,
@@ -1478,8 +998,14 @@ pub async fn v2_cache_tracks_batch_for_offline(
 
     // Single transactional batch insert
     {
+        let limit_bytes = *cache_state.limit_bytes.lock().await;
         let guard = cache_state.db.lock().await;
         let db = guard.as_ref().ok_or("No active session - please log in")?;
+        // Pre-flight: refuse new batch downloads when the cache is already at
+        // or above the configured limit (Fix #5d). One check covers the whole
+        // batch; this is intentionally simple and does not predict batch size.
+        let cache_root = std::path::PathBuf::from(cache_state.get_cache_path());
+        crate::offline_cache::maintenance::check_cache_limit(db, &cache_root, limit_bytes)?;
         let refs: Vec<(&crate::offline_cache::TrackCacheInfo, String)> = batch
             .iter()
             .map(|(info, path)| (info, path.clone()))
@@ -1488,18 +1014,18 @@ pub async fn v2_cache_tracks_batch_for_offline(
     }
 
     // Spawn download tasks for each track
+    let core_client = crate::offline_cache::core_client(&bridge).await?;
     for track in &tracks {
         let file_path = cache_state.track_file_path(track.id, "flac");
         spawn_track_cache_download(
             track.id,
             file_path,
-            state.client.clone(),
-            bridge.0.clone(),
+            core_client.clone(),
             cache_state.fetcher.clone(),
             cache_state.db.clone(),
             cache_state.get_cache_path(),
             cache_state.library_db.clone(),
-            app_handle.clone(),
+            crate::offline_cache::tauri_cache_sink(app_handle.clone()),
             cache_state.cache_semaphore.clone(),
         );
     }
@@ -1509,7 +1035,7 @@ pub async fn v2_cache_tracks_batch_for_offline(
 
 #[tauri::command]
 pub async fn v2_start_legacy_migration(
-    state: State<'_, AppState>,
+    bridge: State<'_, crate::core_bridge::CoreBridgeState>,
     cache_state: State<'_, OfflineCacheState>,
     library_state: State<'_, crate::library::LibraryState>,
     app_handle: tauri::AppHandle,
@@ -1523,7 +1049,7 @@ pub async fn v2_start_legacy_migration(
     }
 
     let offline_root = cache_state.get_cache_path();
-    let qobuz_client = state.client.clone();
+    let qobuz_client = crate::offline_cache::core_client(&bridge).await?;
     let library_db = library_state.db.clone();
     let app_complete = app_handle.clone();
 
@@ -1619,6 +1145,9 @@ async fn library_process_cue_file(
     }
 
     if let (Some(path), false) = (artwork_path.as_ref(), group_key.is_empty()) {
+        // CUE = single album; propagating one cover to all CUE tracks is
+        // semantically correct (they all share the same physical disc).
+        #[allow(deprecated)]
         let _ = db.update_album_group_artwork(&group_key, path);
     }
 
@@ -1786,6 +1315,13 @@ pub async fn v2_library_scan(
             })
             .collect();
 
+        // Cache `find_folder_artwork` results per folder for this scan run.
+        // Avoids re-walking the same album folder for every track without
+        // embedded art. Replaces the destructive `update_album_group_artwork`
+        // shortcut that previously propagated one track's artwork to all
+        // tracks in the group, destroying per-track embedded covers.
+        let mut folder_artwork_cache: HashMap<PathBuf, Option<String>> = HashMap::new();
+
         for audio_path in &scan_result.audio_files {
             // Check for cancellation
             if state.scan_cancel.load(Ordering::Relaxed) {
@@ -1823,9 +1359,17 @@ pub async fn v2_library_scan(
                         } else {
                             Some(track.album.as_str())
                         };
-                        if let Some(folder_art) =
-                            MetadataExtractor::find_folder_artwork(&canonical_path, album_hint)
-                        {
+                        let folder = canonical_path
+                            .parent()
+                            .map(|p| p.to_path_buf())
+                            .unwrap_or_else(|| canonical_path.clone());
+                        let cached = folder_artwork_cache
+                            .entry(folder)
+                            .or_insert_with(|| {
+                                MetadataExtractor::find_folder_artwork(&canonical_path, album_hint)
+                            })
+                            .clone();
+                        if let Some(folder_art) = cached {
                             artwork_path = MetadataExtractor::cache_artwork_file(
                                 std::path::Path::new(&folder_art),
                                 &artwork_cache,
@@ -1843,11 +1387,6 @@ pub async fn v2_library_scan(
                             file_path: path_str,
                             error: e.to_string(),
                         });
-                    } else if let (Some(artwork_path), false) = (
-                        track.artwork_path.as_ref(),
-                        track.album_group_key.is_empty(),
-                    ) {
-                        let _ = db.update_album_group_artwork(&track.album_group_key, artwork_path);
                     }
                 }
                 Err(e) => {
@@ -2064,6 +1603,11 @@ pub async fn v2_library_scan_folder(
         })
         .collect();
 
+    // Per-folder cache for find_folder_artwork (same pattern as the main
+    // scan loop above; replaces the destructive update_album_group_artwork
+    // shortcut that destroyed unique embedded covers).
+    let mut folder_artwork_cache: HashMap<PathBuf, Option<String>> = HashMap::new();
+
     for audio_path in &scan_result.audio_files {
         if state.scan_cancel.load(Ordering::Relaxed) {
             let mut progress = state.scan_progress.lock().await;
@@ -2093,32 +1637,37 @@ pub async fn v2_library_scan_folder(
                 let mut artwork_path =
                     MetadataExtractor::extract_artwork(&canonical_path, &artwork_cache);
                 if artwork_path.is_none() {
-                    if let Some(folder_art) = MetadataExtractor::find_folder_artwork(
-                        canonical_path.as_path(),
-                        Some(&track.album),
-                    ) {
+                    let folder = canonical_path
+                        .parent()
+                        .map(|p| p.to_path_buf())
+                        .unwrap_or_else(|| canonical_path.clone());
+                    let cached = folder_artwork_cache
+                        .entry(folder)
+                        .or_insert_with(|| {
+                            MetadataExtractor::find_folder_artwork(
+                                canonical_path.as_path(),
+                                Some(&track.album),
+                            )
+                        })
+                        .clone();
+                    if let Some(folder_art) = cached {
                         artwork_path = MetadataExtractor::cache_artwork_file(
                             std::path::Path::new(&folder_art),
                             &artwork_cache,
                         );
                     }
                 }
-                track.artwork_path = artwork_path.clone();
+                track.artwork_path = artwork_path;
 
                 let guard__ = state.db.lock().await;
                 let db = guard__
                     .as_ref()
                     .ok_or("No active session - please log in")?;
-                let group_key = track.album_group_key.clone();
                 if let Err(e) = db.insert_track(&track) {
                     all_errors.push(ScanError {
                         file_path: path_str,
                         error: e.to_string(),
                     });
-                } else if let Some(path) = artwork_path.as_ref() {
-                    if !group_key.is_empty() {
-                        let _ = db.update_album_group_artwork(&group_key, path);
-                    }
                 }
             }
             Err(e) => {

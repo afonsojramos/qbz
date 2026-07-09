@@ -39,6 +39,7 @@
   import { openAddToMixtape } from '$lib/stores/addToMixtapeModalStore';
   import { playTrack } from '$lib/services/playbackService';
   import { playQueueIndex } from '$lib/stores/queueStore';
+  import { formatTrackTitle } from '$lib/utils/trackTitle';
   import {
     releaseTypeOverrides,
     loadReleaseTypeOverrides,
@@ -136,6 +137,7 @@
     id: number;
     number: number;
     title: string;
+    version?: string; // Remix/edition subtitle from Qobuz (#360 / #443)
     artist?: string;
     duration: number; // seconds (for internal math)
     durationStr: string; // formatted "m:ss" for TrackRow
@@ -218,6 +220,7 @@
         id: number;
         track_number?: number;
         title: string;
+        version?: string; // Remix/edition subtitle from Qobuz (#360 / #443)
         duration?: number;
         performer?: { name?: string };
         parental_warning?: boolean;
@@ -240,6 +243,7 @@
         id: t.id,
         number: t.track_number ?? i + 1,
         title: t.title,
+        version: t.version,
         artist: t.performer?.name,
         duration: t.duration ?? 0,
         durationStr: formatSec(t.duration ?? 0),
@@ -331,10 +335,10 @@
           const needleTitle = item.title.toLowerCase().trim();
           const needleArtist = (item.subtitle ?? '').toLowerCase().trim();
           const match = albums.find((a) => {
-            const t = a.title.toLowerCase().trim();
+            const title = a.title.toLowerCase().trim();
             const ar = a.artist.toLowerCase().trim();
             const allAr = (a.all_artists ?? '').toLowerCase();
-            if (t !== needleTitle) return false;
+            if (title !== needleTitle) return false;
             if (!needleArtist) return true;
             return ar === needleArtist || allAr.includes(needleArtist);
           });
@@ -377,7 +381,44 @@
       });
     }
 
-    // Plex cache / playlist paths still follow-ups.
+    // Qobuz playlist item — fetch the playlist's tracks. Without this,
+    // playlist rows in a Mixtape/Collection expanded to "No results found".
+    if (item.item_type === 'playlist' && item.source === 'qobuz') {
+      interface RawPlaylistTrack {
+        id: number;
+        title: string;
+        version?: string; // Remix/edition subtitle from Qobuz (#360 / #443)
+        duration?: number;
+        performer?: { name?: string };
+        parental_warning?: boolean;
+        maximum_bit_depth?: number;
+        maximum_sampling_rate?: number;
+      }
+      const playlistId = Number(item.source_item_id);
+      const playlist = await invoke<{ tracks?: { items?: RawPlaylistTrack[] } }>(
+        'v2_get_playlist',
+        { playlistId },
+      );
+      const raw = playlist.tracks?.items ?? [];
+      return raw.map((t, i) => {
+        const quality = t.maximum_bit_depth && t.maximum_sampling_rate
+          ? `FLAC ${t.maximum_bit_depth}/${t.maximum_sampling_rate}`
+          : undefined;
+        return {
+          id: t.id,
+          number: i + 1, // playlist position, not album track number
+          title: t.title,
+          version: t.version,
+          artist: t.performer?.name,
+          duration: t.duration ?? 0,
+          durationStr: formatSec(t.duration ?? 0),
+          quality,
+          parental_warning: t.parental_warning,
+        };
+      });
+    }
+
+    // Plex-cache playlist path still a follow-up.
     return [];
   }
 
@@ -395,9 +436,30 @@
 
   let sortBy = $state<SortBy>('position');
   let sortDir = $state<SortDir>('asc');
-  let showSortMenu = $state(false);
   let typeFilter = $state<TypeFilter>('all');
-  let showFilterMenu = $state(false);
+
+  // Mutually-exclusive toolbar dropdown state. Only one menu is open at a time.
+  type OpenMenu = 'sort' | 'filter' | null;
+  let openMenu = $state<OpenMenu>(null);
+
+  $effect(() => {
+    if (openMenu === null) return;
+
+    function handleClickOutside(event: MouseEvent) {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      if (target.closest('.control-btn') || target.closest('.control-menu')) return;
+      openMenu = null;
+    }
+
+    setTimeout(() => {
+      document.addEventListener('click', handleClickOutside);
+    }, 0);
+
+    return () => {
+      document.removeEventListener('click', handleClickOutside);
+    };
+  });
 
   // Source filter — multi-select, maps to the resolved item kind (qobuz /
   // plex / local, see resolveItems). Empty set means "all pass" (no filter).
@@ -467,7 +529,7 @@
       sortBy = value;
       sortDir = 'asc';
     }
-    showSortMenu = false;
+    openMenu = null;
   }
 
   const sortOptions: { value: SortBy; label: string }[] = $derived([
@@ -645,11 +707,17 @@
       const cols = Math.max(1, gridColumns);
       const rowH = gridRowHeight;
       const totalRows = Math.ceil(total / cols);
-      const firstRow = Math.max(0, Math.floor(localScroll / rowH) - WINDOW_BUFFER);
+      const rawFirstRow = Math.max(0, Math.floor(localScroll / rowH) - WINDOW_BUFFER);
       const lastRow = Math.min(
         totalRows,
         Math.ceil((localScroll + viewportHeight) / rowH) + WINDOW_BUFFER,
       );
+      // Clamp firstRow to keep at least one row in view when localScroll
+      // overshoots the content (briefly possible during rapid scroll, when
+      // listScrollTop updates ahead of spacer-height layout). Without this,
+      // rawFirstRow * cols >= total would slice an empty window and the
+      // user sees a blank container until scroll settles.
+      const firstRow = Math.min(rawFirstRow, Math.max(0, totalRows - 1));
       return {
         firstIdx: firstRow * cols,
         lastIdx: Math.min(total, lastRow * cols),
@@ -662,11 +730,13 @@
     // using the base row height still correctly windows the top-level items;
     // the loaded tracks just overflow the reserved spacer. Good enough for
     // the 60+ item case this is actually trying to fix.
-    const firstIdx = Math.max(0, Math.floor(localScroll / LIST_ROW_HEIGHT) - WINDOW_BUFFER);
+    const rawFirstIdx = Math.max(0, Math.floor(localScroll / LIST_ROW_HEIGHT) - WINDOW_BUFFER);
     const lastIdx = Math.min(
       total,
       Math.ceil((localScroll + viewportHeight) / LIST_ROW_HEIGHT) + WINDOW_BUFFER,
     );
+    // Same overscroll clamp as the grid branch above.
+    const firstIdx = Math.min(rawFirstIdx, Math.max(0, total - 1));
     return {
       firstIdx,
       lastIdx,
@@ -988,11 +1058,21 @@
 
   let resolvedById = $state<Record<string, ResolvedItem>>({});
 
-  function buildPlexArtworkUrl(path: string): string | null {
+  /**
+   * Build a Plex artwork URL. When `size` is provided, wraps the path
+   * in `/photo/:/transcode` so the Plex server returns a resized image
+   * (server-side downscale). Without `size`, returns the original
+   * full-res path. Mixtape items render at thumbnail-sized rows so
+   * 220px is plenty.
+   */
+  function buildPlexArtworkUrl(path: string, size?: number): string | null {
     const baseUrl = (getUserItem('qbz-plex-poc-base-url') || '').trim();
     const token = (getUserItem('qbz-plex-poc-token') || '').trim();
     if (!baseUrl || !token) return null;
     const base = baseUrl.replace(/\/+$/, '');
+    if (size && size > 0) {
+      return `${base}/photo/:/transcode?url=${encodeURIComponent(path)}&width=${size}&height=${size}&minSize=1&X-Plex-Token=${encodeURIComponent(token)}`;
+    }
     const separator = path.includes('?') ? '&' : '?';
     return `${base}${path}${separator}X-Plex-Token=${encodeURIComponent(token)}`;
   }
@@ -1062,7 +1142,7 @@
         next[key] = {
           kind: 'plex',
           artworkUrl: plexHit.artworkPath
-            ? buildPlexArtworkUrl(plexHit.artworkPath)
+            ? buildPlexArtworkUrl(plexHit.artworkPath, 220)
             : null,
           bitDepth: plexHit.bitDepth ?? null,
           sampleRateKhz: plexHit.sampleRate ? plexHit.sampleRate / 1000 : null,
@@ -1161,6 +1241,7 @@
     await playTrack({
       id: firstTrack.id,
       title: firstTrack.title,
+      version: firstTrack.version ?? null,
       artist: firstTrack.artist,
       album: firstTrack.album ?? '',
       artwork: firstTrack.artwork_url ?? '',
@@ -1373,7 +1454,7 @@
     </div>
   {:else}
     <!-- Header -->
-    <header class="detail-header">
+    <header class="detail-header" data-tauri-drag-region="deep">
       {#if onBack}
         <button class="back-btn" onclick={() => onBack()}>
           <ArrowLeft size={16} />
@@ -1534,15 +1615,14 @@
           <button
             type="button"
             class="control-btn"
-            onclick={() => { showSortMenu = !showSortMenu; showFilterMenu = false; }}
+            onclick={() => (openMenu = openMenu === 'sort' ? null : 'sort')}
             title={$t('collectionDetail.sort') || 'Sort'}
           >
             <ArrowUpDown size={14} />
             <span>{sortOptions.find((o) => o.value === sortBy)?.label}</span>
             <span class="sort-indicator">{sortDir === 'asc' ? '↑' : '↓'}</span>
           </button>
-          {#if showSortMenu}
-            <div class="control-backdrop" onclick={() => (showSortMenu = false)} role="presentation"></div>
+          {#if openMenu === 'sort'}
             <div class="control-menu">
               {#each sortOptions as option}
                 <button
@@ -1566,7 +1646,7 @@
             type="button"
             class="control-btn"
             class:active={typeFilter !== 'all' || sourceFilter.size > 0}
-            onclick={() => { showFilterMenu = !showFilterMenu; showSortMenu = false; }}
+            onclick={() => (openMenu = openMenu === 'filter' ? null : 'filter')}
             title={$t('collectionDetail.filter') || 'Filter'}
           >
             <Filter size={14} />
@@ -1575,8 +1655,7 @@
               <span class="filter-count">{(sourceFilter.size) + (typeFilter !== 'all' ? 1 : 0)}</span>
             {/if}
           </button>
-          {#if showFilterMenu}
-            <div class="control-backdrop" onclick={() => (showFilterMenu = false)} role="presentation"></div>
+          {#if openMenu === 'filter'}
             <div class="control-menu wide">
               <div class="filter-section-label">{$t('collectionDetail.colType') || $t('discographyBuilder.colType')}</div>
               {#each typeFilterOptions as option}
@@ -1795,8 +1874,17 @@
                whole unit when it's scrolled off-screen. With virtualization
                disabled in expanded mode the item-row count is the full
                visibleItems count, so this is how we keep layout cost
-               bounded to the viewport. -->
-          <div class="item-block">
+               bounded to the viewport.
+
+               In list mode the manual virtualizer already restricts which
+               items are rendered, and stacking content-visibility on top
+               of that produces visible glitches during fast scroll: the
+               browser's intersection check intermittently treats rows as
+               off-screen and collapses them to the intrinsic-size hint
+               for a frame, which our spacer math doesn't predict. The
+               `lazy` class gates content-visibility to expanded mode where
+               it's actually load-bearing. -->
+          <div class="item-block" class:lazy={viewMode === 'expanded'}>
           <div class="item-row" class:is-selected={isSelected} class:is-expanded={showTracks}>
             <div class="col-idx">
               {#if selectMode}
@@ -2032,7 +2120,7 @@
                   <TrackRow
                     trackId={et.id}
                     number={et.number}
-                    title={et.title}
+                    title={formatTrackTitle(et)}
                     artist={et.artist}
                     duration={et.durationStr}
                     quality={et.quality}
@@ -2161,7 +2249,16 @@
     padding: 8px 8px 100px 18px;
     color: var(--text-primary);
     box-sizing: border-box;
+    overflow-x: hidden;
     overflow-y: auto;
+    /* Disable browser scroll-anchoring: the virtualizer manages its own
+       top/bottom spacer heights, and as those resize during scroll the
+       browser's auto-anchoring tries to "preserve visual position" by
+       nudging scrollTop in the opposite direction of user input. The net
+       effect is the user can't reach scrollTop=0 by scrolling up (the
+       Top button still works because it sets scrollTop programmatically
+       in a single frame, no spacer-driven correction). */
+    overflow-anchor: none;
     position: relative;
   }
 
@@ -2416,11 +2513,6 @@
     color: var(--text-muted);
     font-size: 11px;
   }
-  .control-backdrop {
-    position: fixed;
-    inset: 0;
-    z-index: 100;
-  }
   .control-menu {
     position: absolute;
     top: calc(100% + 4px);
@@ -2482,7 +2574,7 @@
     font-size: 10px;
     font-weight: 600;
     background: var(--accent-primary);
-    color: #fff;
+    color: var(--btn-primary-text);
     border-radius: 10px;
     margin-left: 2px;
   }
@@ -2508,7 +2600,7 @@
   }
   .view-mode-group .control-btn.seg.active {
     background: var(--accent-primary);
-    color: #fff;
+    color: var(--btn-primary-text);
     border-color: var(--accent-primary);
   }
 
@@ -2795,15 +2887,19 @@
   }
 
   /* Wrapper around each item-row + expanded-tracks block.
-     content-visibility: auto tells the engine to skip rendering the
-     whole unit when it's off-screen. For expanded mode (where we
-     render every item so the scrollbar reaches the real end) this
-     substitutes manual virtualization with native skipping, so even
-     a 50-item collection fully expanded stays fluid.
-     The intrinsic hint is the collapsed row height (56px) — when
-     a row becomes visible and gets expanded, the browser measures
-     the real height and the scrollbar adjusts. */
-  .item-block {
+     content-visibility: auto is gated by the .lazy class — applied only
+     in expanded mode (script binds it via `class:lazy`). In expanded
+     mode virtualization is OFF (we render every item so the scrollbar
+     reaches the real end of variable-height content), and native
+     content-visibility skipping keeps layout cost bounded.
+     In list/grid mode the manual virtualizer already controls which
+     items are rendered; layering content-visibility on top of that
+     causes intermittent frame-level collapses to the intrinsic-size
+     during fast scroll (the browser briefly treats rows as off-screen
+     and our spacer math doesn't predict the collapse). The intrinsic
+     hint is the collapsed row height (56px) — when a row gets expanded
+     the browser measures the real height and the scrollbar adjusts. */
+  .item-block.lazy {
     content-visibility: auto;
     contain-intrinsic-size: 100% 56px;
   }
@@ -3089,7 +3185,7 @@
 
   .m-btn-primary {
     background: var(--accent-primary);
-    color: #fff;
+    color: var(--btn-primary-text);
     border: none;
   }
   .m-btn-primary:disabled {

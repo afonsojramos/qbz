@@ -49,7 +49,7 @@
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <div class="modal-backdrop" onclick={onClose} role="presentation">
     <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
-    <div class="modal" onclick={(e) => e.stopPropagation()}>
+    <div class="modal selectable" onclick={(e) => e.stopPropagation()}>
       <!-- Header -->
       <div class="modal-header">
         <div class="app-branding">
@@ -99,7 +99,7 @@
             <span class="label">{$t('about.buildInfo.version')}</span>
             <span class="value">{appVersion}</span>
             <span class="label">{$t('about.buildInfo.codename')}</span>
-            <span class="value codename">Quiet Polish</span>
+            <span class="value codename">Just cleaning</span>
             <span class="label">{$t('about.buildInfo.license')}</span>
             <span class="value">MIT</span>
             <span class="label">{$t('about.buildInfo.platform')}</span>
@@ -127,6 +127,9 @@
             </div>
             <div class="attribution">
               <strong>Lucide</strong> — {$t('about.attributions.lucideDesc')} (ISC)
+            </div>
+            <div class="attribution">
+              <strong>Kawarp</strong> — {$t('about.attributions.kawarpDesc')} (MIT)
             </div>
             <div class="attribution">
               <strong>MusicBrainz</strong> — {$t('about.attributions.musicBrainzDesc')}
@@ -185,6 +188,16 @@
             <button class="contributor-link" onclick={() => handleOpenUrl('https://github.com/AdamArstall')}>
               <img src="https://github.com/AdamArstall.png?size=28" alt="AdamArstall" class="contributor-avatar" />
               AdamArstall
+              <ExternalLink size={10} />
+            </button>
+            <button class="contributor-link" onclick={() => handleOpenUrl('https://github.com/Vudgekek')}>
+              <img src="https://github.com/Vudgekek.png?size=28" alt="Vudgekek" class="contributor-avatar" />
+              Vudgekek
+              <ExternalLink size={10} />
+            </button>
+            <button class="contributor-link" onclick={() => handleOpenUrl('https://github.com/DoubleGate')}>
+              <img src="https://github.com/DoubleGate.png?size=28" alt="DoubleGate" class="contributor-avatar" />
+              DoubleGate
               <ExternalLink size={10} />
             </button>
           </div>
@@ -331,7 +344,7 @@
 
   .link-btn:hover {
     background: var(--accent-primary);
-    color: white;
+    color: var(--btn-primary-text);
   }
 
   .link-btn :global(svg:last-child) {

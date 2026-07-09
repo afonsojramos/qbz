@@ -5,30 +5,45 @@
   import { getThumbnailUrl, getCachedThumbnailUrl } from '$lib/services/thumbnailService';
   import { open, ask } from '@tauri-apps/plugin-dialog';
   import { onMount, onDestroy, tick, untrack } from 'svelte';
+  import { fade } from 'svelte/transition';
   import {
-    HardDrive, Music, Disc3, MicVocal, FolderPlus, Trash2, RefreshCw,
-    Settings, ArrowLeft, X, Play, CircleAlert, ImageDown, Upload, Search, LayoutGrid, List, PenLine,
-    Network, Power, PowerOff, ChevronLeft, ChevronRight, Shuffle, SlidersHorizontal, ArrowUpDown, ChevronDown, Check, SquareCheckBig, CassetteTape
+    HardDrive, Music, Disc3, MicVocal, FolderPlus, FolderOpen, Trash2, RefreshCw,
+    Settings, ArrowLeft, X, Play, CircleAlert, ImageDown, Upload, Search, LayoutGrid, List, ListOrdered, PenLine,
+    Network, Power, PowerOff, ChevronLeft, ChevronRight, Shuffle, SlidersHorizontal, ArrowUpDown, ChevronDown, Check, SquareCheckBig, CassetteTape, ChevronsDownUp, BrushCleaning
   } from 'lucide-svelte';
   import BulkActionBar from '../BulkActionBar.svelte';
   import { openAddToMixtape } from '$lib/stores/addToMixtapeModalStore';
   import { buildQueueTrackFromLocalTrack } from '$lib/services/trackActions';
   import { cmdAddTracksToQueue, cmdAddTracksToQueueNext } from '$lib/services/commandRouter';
+  import { clearQueue } from '$lib/stores/queueStore';
+  import {
+    setCurrentTrack as setPlayerCurrentTrack,
+    getCurrentTrack as getPlayerCurrentTrack,
+    patchCurrentTrackCueInfo,
+  } from '$lib/stores/playerStore';
+  import { syncQueueState } from '$lib/stores/queueStore';
+  import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import FolderSettingsModal from '../FolderSettingsModal.svelte';
   import LocalLibraryTagEditorModal from '../LocalLibraryTagEditorModal.svelte';
+  import LibraryEditModal from '../LibraryEditModal.svelte';
+  import type { LibraryPreferences } from '$lib/types';
   import ViewTransition from '../ViewTransition.svelte';
   import { t } from '$lib/i18n';
-  import { getUserItem } from '$lib/utils/userStorage';
+  import { getUserItem, setUserItem } from '$lib/utils/userStorage';
   import { applyShiftRange, isSelectAllShortcut } from '$lib/utils/multiSelect';
   import { downloadSettingsVersion } from '$lib/stores/downloadSettingsStore';
-  import { showToast } from '$lib/stores/toastStore';
-  import AlbumCard from '../AlbumCard.svelte';
+  import { showToast, dismissBuffering } from '$lib/stores/toastStore';
+  import AlbumCard from '$lib/discovery-v2/AlbumCardLibraryLite.svelte';
+  import AlbumGridPool from '$lib/discovery-v2/AlbumGridPool.svelte';
+  import { LocalAlbumsChunkedStore } from '$lib/discovery-v2/localAlbumsChunkedStore.svelte';
   import VirtualizedAlbumList from '../VirtualizedAlbumList.svelte';
+  import SourceBadge from '../SourceBadge.svelte';
   import VirtualizedArtistGrid from '../VirtualizedArtistGrid.svelte';
   import VirtualizedArtistList from '../VirtualizedArtistList.svelte';
   import VirtualizedTrackList from '../VirtualizedTrackList.svelte';
   import {
     isVirtualizationEnabled,
+    isTrackArtworkEnabled,
     shouldUsePerformanceMode,
     subscribe as subscribePerformance
   } from '$lib/stores/libraryPerformanceStore';
@@ -52,6 +67,13 @@
     setPlaybackContext
   } from '$lib/stores/playbackContextStore';
   import { replacePlaybackQueue } from '$lib/services/queuePlaybackService';
+  import LocalLibraryFolderTree from '$lib/components/LocalLibraryFolderTree.svelte';
+  import LocalLibraryFolderDetail from '$lib/components/LocalLibraryFolderDetail.svelte';
+  import LocalLibraryFolderAlbumView from '$lib/components/LocalLibraryFolderAlbumView.svelte';
+  import type { FolderEntry, FolderTreeEntry } from '$lib/types/folderTree';
+  import { SvelteMap, SvelteSet } from 'svelte/reactivity';
+  import { setLibraryPreferences as setLibraryPreferencesStore } from '$lib/stores/libraryPreferencesStore';
+  import { libraryTargetTab } from '$lib/stores/libraryTargetTabStore';
 
   // Backend types matching Rust models
   interface LocalTrack {
@@ -98,6 +120,15 @@
     bit_depth?: number;
     sample_rate: number;
     directory_path: string;
+    /**
+     * Comma-separated list of folder keys that contributed tracks to this
+     * album. Populated only by the metadata-grouped Albums query
+     * (`v2_library_get_albums_metadata`); `null`/`undefined` for folder-
+     * grouped rows from `v2_library_get_albums`. The Albums tab uses
+     * presence of this field to detect a "metadata row" and renders a
+     * tooltip when more than one folder contributed.
+     */
+    source_folders?: string | null;
     source?: string; // 'user' | 'qobuz_download' | 'plex'
     likely_single_file_album?: boolean;
   }
@@ -261,27 +292,733 @@
   }: Props = $props();
 
   // View state
-  type TabType = 'albums' | 'artists' | 'tracks';
-  let activeTab = $state<TabType>('albums');
+  type TabType = 'tracks' | 'folders' | 'albums' | 'artists';
+  let activeTab = $state<TabType>('tracks');
+  // One-shot guard: on initial mount, after preferences load, jump to the
+  // user's first-visible tab. Subsequent visibility changes (e.g. user
+  // hides their current tab) are handled separately in
+  // `loadLibraryPreferences` / `handleLibraryPreferencesSaved` and must NOT
+  // override an explicit user click.
+  let initialTabSet = $state(false);
+
+  // Library tab preferences (persisted per-user via v2_*_library_preferences)
+  const DEFAULT_TAB_ORDER: TabType[] = ['tracks', 'folders', 'albums', 'artists'];
+  let libraryPreferences = $state<LibraryPreferences>({
+    tab_order: [...DEFAULT_TAB_ORDER],
+    hidden_tabs: [],
+  });
+  let isEditTabsModalOpen = $state(false);
+
+  function isKnownTab(tab: string): tab is TabType {
+    return (DEFAULT_TAB_ORDER as readonly string[]).includes(tab);
+  }
+
+  function sanitizeLibraryPreferences(prefs: LibraryPreferences): LibraryPreferences {
+    // Keep only known tabs; backfill any missing ones at the end so users
+    // with older preferences still surface tabs added in future releases.
+    const validOrder: TabType[] = (prefs.tab_order ?? []).filter(isKnownTab);
+    for (const tab of DEFAULT_TAB_ORDER) {
+      if (!validOrder.includes(tab)) validOrder.push(tab);
+    }
+    const validHidden: TabType[] = (prefs.hidden_tabs ?? []).filter(isKnownTab);
+    return { tab_order: validOrder, hidden_tabs: validHidden };
+  }
+
+  const visibleTabs = $derived(
+    libraryPreferences.tab_order.filter(
+      (tab): tab is TabType => isKnownTab(tab) && !libraryPreferences.hidden_tabs.includes(tab),
+    ),
+  );
+
+  async function loadLibraryPreferences() {
+    try {
+      const prefs = await invoke<LibraryPreferences>('v2_get_library_preferences');
+      libraryPreferences = sanitizeLibraryPreferences(prefs);
+      // Mirror the sanitized prefs into the shared store so TitleBarNav and
+      // Sidebar dropdowns see the same tab_order / hidden_tabs without each
+      // refetching from the backend.
+      setLibraryPreferencesStore(libraryPreferences);
+      // Hydrate Folders tab view-mode from the same payload. Defaults to
+      // 'flat' when the field is absent (legacy installs).
+      foldersViewMode = prefs.folders_view_mode === 'tree' ? 'tree' : 'flat';
+      // Hydrate the tree-mode sidebar width. NULL/missing → frontend
+      // default (302px). Anything non-positive is treated as missing so a
+      // corrupt/zeroed value can't collapse the rail at startup.
+      const persistedTreeWidth = prefs.folders_tree_sidebar_width;
+      if (typeof persistedTreeWidth === 'number' && persistedTreeWidth > 0) {
+        folderTreeSidebarWidth = persistedTreeWidth;
+      } else {
+        folderTreeSidebarWidth = FOLDER_TREE_SIDEBAR_DEFAULT_WIDTH;
+      }
+      // On initial mount, always honour the user's configured tab order and
+      // open whichever tab is first in their visible list — opening on
+      // 'tracks' by default freezes startup on large libraries (16K+ tracks).
+      // Afterwards (e.g. user hid their current tab on another device),
+      // fall back to the first visible tab only when the active one
+      // disappeared. The `initialTabSet` flag is one-shot so explicit user
+      // clicks are never overridden.
+      const currentVisible = libraryPreferences.tab_order.filter(
+        (tab): tab is TabType =>
+          isKnownTab(tab) && !libraryPreferences.hidden_tabs.includes(tab),
+      );
+      if (!initialTabSet) {
+        // If the user clicked a tab in the title-bar / sidebar dropdown
+        // before the view mounted, honour that target instead of defaulting
+        // to the first visible tab.
+        let target: string | null = null;
+        libraryTargetTab.subscribe((value) => { target = value; })();
+        if (target && isKnownTab(target) && currentVisible.includes(target)) {
+          activeTab = target;
+          libraryTargetTab.set(null);
+        } else if (currentVisible.length > 0) {
+          activeTab = currentVisible[0];
+        }
+        initialTabSet = true;
+      } else if (!currentVisible.includes(activeTab)) {
+        activeTab = currentVisible[0] ?? 'tracks';
+      }
+    } catch (err) {
+      console.warn('[LocalLibrary] Failed to load preferences, using defaults:', err);
+    }
+  }
+
+  // Persist the Folders tab view-mode toggle to library_preferences.
+  // Optimistic local update — the backend command stores the value but
+  // doesn't echo back, so we trust the input and revert on error.
+  async function setFoldersViewMode(mode: 'flat' | 'tree') {
+    if (foldersViewMode === mode) return;
+    const previous = foldersViewMode;
+    foldersViewMode = mode;
+    if (mode === 'flat') {
+      // Leaving tree mode — reset the selection and the expanded set so
+      // the next entry into tree mode starts clean (matching first-load).
+      selectedFolderPath = null;
+      treeExpandedPaths = new SvelteSet<string>();
+    }
+    try {
+      await invoke('v2_set_library_folders_view_mode', { mode });
+    } catch (err) {
+      console.error('[LocalLibrary] Failed to persist folders_view_mode:', err);
+      foldersViewMode = previous;
+    }
+  }
+
+  // ───────── Folders tab tree-mode sidebar resize handlers ─────────
+  // Drag interaction: capture starting cursor X + width on mousedown, then
+  // adjust width on each mousemove until mouseup. We disable text
+  // selection on <body> for the duration of the drag so the user doesn't
+  // accidentally select half the page while moving the mouse.
+  function clampTreeSidebarWidth(width: number): number {
+    const max = folderTreeSidebarMaxWidth;
+    const min = FOLDER_TREE_SIDEBAR_MIN_WIDTH;
+    if (width < min) return min;
+    if (width > max) return max;
+    return width;
+  }
+
+  function handleTreeSidebarMouseMove(event: MouseEvent) {
+    if (!isResizingTreeSidebar) return;
+    const delta = event.clientX - dragStartX;
+    folderTreeSidebarWidth = clampTreeSidebarWidth(dragStartWidth + delta);
+  }
+
+  async function handleTreeSidebarMouseUp() {
+    if (!isResizingTreeSidebar) return;
+    isResizingTreeSidebar = false;
+    document.body.style.userSelect = '';
+    document.body.style.cursor = '';
+    window.removeEventListener('mousemove', handleTreeSidebarMouseMove);
+    window.removeEventListener('mouseup', handleTreeSidebarMouseUp);
+    // Persist the user's chosen width. Best-effort — surface failures in
+    // the console but don't revert the UI; the local state is already the
+    // source of truth for the current session.
+    try {
+      await invoke('v2_set_library_folders_tree_sidebar_width', {
+        width: folderTreeSidebarWidth,
+      });
+    } catch (err) {
+      console.error(
+        '[LocalLibrary] Failed to persist folders_tree_sidebar_width:',
+        err,
+      );
+    }
+  }
+
+  function handleTreeSidebarMouseDown(event: MouseEvent) {
+    // Only react to the primary button; right-click / middle-click on the
+    // handle should be a no-op.
+    if (event.button !== 0) return;
+    event.preventDefault();
+    isResizingTreeSidebar = true;
+    dragStartX = event.clientX;
+    dragStartWidth = folderTreeSidebarWidth;
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'col-resize';
+    window.addEventListener('mousemove', handleTreeSidebarMouseMove);
+    window.addEventListener('mouseup', handleTreeSidebarMouseUp);
+  }
+
+  // Keyboard resize: arrow keys nudge the handle in 16px steps; Shift
+  // accelerates to 64px. Pressing Home/End jumps to the bounds. Persists
+  // on commit (key release) — same path as mouseup.
+  async function handleTreeSidebarKeyDown(event: KeyboardEvent) {
+    let next: number | null = null;
+    const step = event.shiftKey ? 64 : 16;
+    switch (event.key) {
+      case 'ArrowLeft':
+        next = folderTreeSidebarWidth - step;
+        break;
+      case 'ArrowRight':
+        next = folderTreeSidebarWidth + step;
+        break;
+      case 'Home':
+        next = FOLDER_TREE_SIDEBAR_MIN_WIDTH;
+        break;
+      case 'End':
+        next = folderTreeSidebarMaxWidth;
+        break;
+      default:
+        return;
+    }
+    event.preventDefault();
+    folderTreeSidebarWidth = clampTreeSidebarWidth(next);
+    try {
+      await invoke('v2_set_library_folders_tree_sidebar_width', {
+        width: folderTreeSidebarWidth,
+      });
+    } catch (err) {
+      console.error(
+        '[LocalLibrary] Failed to persist folders_tree_sidebar_width:',
+        err,
+      );
+    }
+  }
+
+  // Tree-row chevron toggle. SvelteSet mutations are reactive, but we
+  // reassign explicitly so the $derived/effect trees pick up the change
+  // unambiguously even when tree-rows further down the recursion are
+  // sharing the same set reference.
+  function toggleFolderExpand(path: string) {
+    if (treeExpandedPaths.has(path)) {
+      treeExpandedPaths.delete(path);
+    } else {
+      treeExpandedPaths.add(path);
+    }
+  }
+
+  // Collapse every expanded folder in the tree by wiping
+  // `treeExpandedPaths`. The tree component reads `expandedPaths`
+  // reactively so all rows fold back to scan-root level. Triggered by
+  // the toolbar collapse-all button. We do NOT touch the search-mode
+  // snapshot here; if the user has an active tree-search filter, the
+  // pre-search expand snapshot will still restore on clear.
+  function collapseAllTreeFolders() {
+    treeExpandedPaths = new SvelteSet<string>();
+  }
+
+  // Select a folder in the tree (left rail). Right pane routes via the
+  // `selectedAlbumForTree` derived: when the path maps to a known album
+  // the right pane renders the compact `LocalLibraryFolderAlbumView`
+  // (driven by `treeAlbumTracks`), otherwise the FolderDetail listing.
+  // We deliberately do NOT call `handleAlbumClick` here — that would set
+  // `selectedAlbum` and trigger the full-page album-detail takeover at
+  // line ~4563, hiding the tree rail. Tree mode keeps the navigation
+  // visible by loading album tracks into a separate state.
+  function handleFolderTreeSelect(path: string) {
+    // Navigating to a tree folder ends the ephemeral session — the user
+    // is moving back into the library proper, so the in-memory cache and
+    // the right-pane override both get dropped.
+    if (ephemeralFolder) {
+      void closeEphemeralFolder();
+    }
+    selectedFolderPath = path;
+  }
+
+  // Recursive play: queue every track whose file_path lives under the
+  // given folder, then start playback at the first one. Backend has no
+  // dedicated recursive-tracks-under-path command yet, so v1 prefix-
+  // filters the existing v2_library_search exhaustive fetch (limit:0
+  // returns all tracks). Documented as a Task 7 trade-off; revisit if
+  // perf telemetry shows tree-mode play stalling on large libraries.
+  async function handlePlayRecursive(folderPath: string) {
+    if (!folderPath) return;
+    try {
+      const allTracks = await invoke<LocalTrack[]>('v2_library_search', {
+        query: '',
+        limit: 0,
+        excludeNetworkFolders: shouldExcludeNetworkFolders(),
+      });
+      const prefix = folderPath.endsWith('/') ? folderPath : folderPath + '/';
+      const matching = allTracks.filter((trk) => trk.file_path.startsWith(prefix));
+      if (matching.length === 0) {
+        showToast($t('library.foldersTree.treeEmpty'), 'info');
+        return;
+      }
+      // Sort by file_path so playback follows on-disk ordering — closest
+      // analogue to "play this folder top-to-bottom" without per-folder
+      // disc/track-number handling (which we can't infer recursively
+      // across heterogeneous subfolders).
+      matching.sort((a, b) => a.file_path.localeCompare(b.file_path));
+      await setPlaybackContext(
+        'local_library',
+        folderPath,
+        folderPath.split('/').pop() || folderPath,
+        'local',
+        matching.map((trk) => trk.id),
+        0,
+      );
+      await setQueueForLocalTracks(matching, 0);
+      await handleTrackPlay(matching[0]);
+    } catch (err) {
+      console.error('[LocalLibrary] handlePlayRecursive failed:', err);
+      showToast($t('toast.failedPlayTrack'), 'error');
+    }
+  }
+
+  // Track click inside the FolderDetail right pane — single-track play
+  // using the existing handler (which also wires playback context).
+  async function handleFolderTreeTrackPlay(track: LocalTrack) {
+    await handleTrackPlay(track);
+  }
+
+  // Open an ad-hoc folder via the OS file picker. The backend scans the
+  // folder, extracts metadata for every supported audio file and stashes
+  // the result in EphemeralLibraryState (in-memory, negative ids). The
+  // tree itself is untouched — the right pane shows the result instead
+  // of the regular folder/album views. Replaces any prior ephemeral
+  // session.
+  async function openEphemeralFolder(): Promise<void> {
+    if (openingEphemeralFolder) return;
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: $t('library.ephemeralFolder.dialogTitle')
+      });
+      if (typeof selected !== 'string' || selected.length === 0) return;
+
+      openingEphemeralFolder = true;
+      // Clear the existing folder/album selection BEFORE assigning the
+      // ephemeral result. The $effect that closes ephemeral on
+      // selection-change reacts to either field becoming non-null while
+      // ephemeral is set; doing the reset first means we never enter the
+      // racy intermediate state where both ephemeral and a real
+      // selection are non-null at the same time.
+      selectedFolderPath = null;
+      selectedAlbum = null;
+      // Wipe any prior ephemeral playback state before the new scan
+      // overwrites the backend cache — otherwise stale ids from the
+      // previous folder linger in the queue / now-playing.
+      await wipeEphemeralPlaybackArtifacts();
+      const result = await invoke<EphemeralFolderState>('v2_ephemeral_open_folder', {
+        path: selected
+      });
+      ephemeralFolder = result;
+      setUserItem(EPHEMERAL_PATH_STORAGE_KEY, selected);
+      if (result.tracks.length === 0) {
+        showToast($t('library.ephemeralFolder.empty'), 'info');
+      } else if (result.skipped_files > 0) {
+        showToast(
+          $t('library.ephemeralFolder.openedWithSkips', {
+            values: { count: result.tracks.length, skipped: result.skipped_files }
+          }),
+          'success'
+        );
+      } else {
+        showToast(
+          $t('library.ephemeralFolder.opened', { values: { count: result.tracks.length } }),
+          'success'
+        );
+      }
+    } catch (err) {
+      console.error('[LocalLibrary] Failed to open ephemeral folder:', err);
+      showToast(
+        $t('library.ephemeralFolder.openFailed', { values: { error: String(err) } }),
+        'error'
+      );
+    } finally {
+      openingEphemeralFolder = false;
+    }
+  }
+
+  async function closeEphemeralFolder(): Promise<void> {
+    ephemeralFolder = null;
+    setUserItem(EPHEMERAL_PATH_STORAGE_KEY, '');
+    await wipeEphemeralPlaybackArtifacts();
+    try {
+      await invoke('v2_ephemeral_clear');
+    } catch (err) {
+      console.warn('[LocalLibrary] Failed to clear ephemeral state:', err);
+    }
+  }
+
+  // Wipe queue + now-playing if either is currently bound to ephemeral
+  // tracks. Detection is by id range — an id at or above the floor came
+  // from EphemeralLibraryState, so referencing it after the session is
+  // gone would 404 anyway. Regular library tracks are left alone;
+  // closing an ephemeral folder shouldn't interrupt unrelated playback
+  // the user started elsewhere.
+  //
+  // We check both `activeTrackId` (the actively-playing track) and the
+  // playerStore's currentTrack — sometimes an ephemeral track was
+  // restored visually from session without playback being active, in
+  // which case activeTrackId is null but the now-playing chrome is
+  // pinned to the stale ephemeral row. Without consulting both, the
+  // broom would clear the queue but leave the NowPlayingBar showing
+  // a track that can't actually be played.
+  async function wipeEphemeralPlaybackArtifacts(): Promise<void> {
+    const playerTrack = getPlayerCurrentTrack();
+    const playerTrackId = playerTrack?.id ?? null;
+    const activeIsEphemeral =
+      activeTrackId != null && activeTrackId >= EPHEMERAL_ID_FLOOR;
+    const playerIsEphemeral =
+      playerTrackId != null && playerTrackId >= EPHEMERAL_ID_FLOOR;
+    if (!activeIsEphemeral && !playerIsEphemeral) return;
+    try {
+      await clearQueue({ includeCurrent: true });
+    } catch (err) {
+      console.warn('[LocalLibrary] Failed to clear queue on ephemeral close:', err);
+    }
+    // The backend's stop+clear path doesn't reset current_track_id at the
+    // player level (it only flips is_playing=false), so the playback:state
+    // event keeps the old track_id and the frontend never nulls
+    // currentTrack on its own. Force-clear the NowPlayingBar slot here so
+    // the broom truly wipes the chrome.
+    if (playerIsEphemeral) {
+      setPlayerCurrentTrack(null);
+    }
+  }
+
+  // Flatten an album group's section structure into a linear track list
+  // honouring disc + track-number order. Used when the queue scope is a
+  // single album.
+  function flattenEphemeralAlbumGroup(group: EphemeralAlbumGroup): LocalTrack[] {
+    if (group.sections.length === 0) return [...group.tracks];
+    const out: LocalTrack[] = [];
+    for (const section of group.sections) {
+      out.push(...section.tracks);
+    }
+    return out;
+  }
+
+  // Build the full folder queue in album-then-disc-then-track order so
+  // "Play all" plays album 1 in order, then album 2, etc — instead of
+  // whatever the scanner happened to walk.
+  function flattenEphemeralFolder(): LocalTrack[] {
+    const out: LocalTrack[] = [];
+    for (const group of ephemeralAlbumGroups) {
+      out.push(...flattenEphemeralAlbumGroup(group));
+    }
+    return out;
+  }
+
+  function findEphemeralAlbumGroup(track: LocalTrack): EphemeralAlbumGroup | null {
+    for (const group of ephemeralAlbumGroups) {
+      if (group.tracks.some((item) => item.id === track.id)) return group;
+    }
+    return null;
+  }
+
+  async function playEphemeralTrackWithQueue(
+    track: LocalTrack,
+    queueTracks: LocalTrack[]
+  ): Promise<void> {
+    if (queueTracks.length === 0) return;
+    // Reading the source file (potentially a multi-GB CUE-mounted FLAC
+    // off a NAS) blocks for several seconds before audio actually starts.
+    // Without this toast the user sees no feedback and clicks Play again,
+    // queueing duplicate playback attempts. Toast is dismissed after the
+    // play_track invoke resolves (audio is then guaranteed to be
+    // initialising on the player side).
+    showToast(formatTrackTitle(track), 'buffering');
+    try {
+      const startIndex = queueTracks.findIndex((item) => item.id === track.id);
+      const safeIndex = Math.max(0, startIndex);
+      await setPlaybackContext(
+        'local_library',
+        'ephemeral',
+        $t('library.ephemeralFolder.contextLabel'),
+        'local',
+        queueTracks.map((item) => item.id),
+        safeIndex
+      );
+      await setQueueForLocalTracks(queueTracks, safeIndex);
+      await invoke('v2_library_play_track', { trackId: track.id });
+      dismissBuffering();
+    } catch (err) {
+      dismissBuffering();
+      const message = String(err);
+      console.error('[LocalLibrary] Failed to play ephemeral track:', err);
+      // Backend returns "Ephemeral file not found" / "Ephemeral track not found"
+      // when the folder or files have been moved/deleted/unmounted while the
+      // session was open. Treat that as the "directory or files no longer
+      // exist" cleanup trigger from the spec — drop the whole session so
+      // the user gets a clean slate instead of a half-broken pane.
+      if (message.includes('Ephemeral file not found')
+          || message.includes('Ephemeral track not found')) {
+        await closeEphemeralFolder();
+        showToast($t('library.ephemeralFolder.gone'), 'info');
+        return;
+      }
+      showToast(
+        $t('library.ephemeralFolder.playFailed', { values: { error: message } }),
+        'error'
+      );
+    }
+  }
+
+  // Single track click. Queue scope = the album the track belongs to,
+  // so playback flows through that album's tracks (and stops at the
+  // album boundary), not the whole folder. Mirrors how clicking a
+  // track inside album-detail in the regular library queues only the
+  // album's tracks.
+  async function playEphemeralTrack(track: LocalTrack): Promise<void> {
+    if (!ephemeralFolder) return;
+    const group = findEphemeralAlbumGroup(track);
+    const queue = group
+      ? flattenEphemeralAlbumGroup(group)
+      : ephemeralFolder.tracks;
+    await playEphemeralTrackWithQueue(track, queue);
+  }
+
+  // Patch the player's currentTrack with CUE virtual-track boundaries
+  // every time the active track changes to an ephemeral row. The
+  // playback service builds PlayingTrack from BackendQueueTrack which
+  // doesn't carry cue_start_secs / cue_end_secs, so without this hook
+  // the seekbar would report absolute FLAC time (e.g. 7:26 from frame
+  // zero of a virtual track that lives at offset 446s) instead of
+  // virtual time. Non-CUE ephemeral and non-ephemeral tracks pass
+  // through harmlessly with `null` boundaries.
+  $effect(() => {
+    if (!ephemeralFolder) {
+      patchCurrentTrackCueInfo(null, null);
+      return;
+    }
+    if (activeTrackId == null || activeTrackId < EPHEMERAL_ID_FLOOR) {
+      patchCurrentTrackCueInfo(null, null);
+      return;
+    }
+    const ephemTrack = ephemeralFolder.tracks.find((item) => item.id === activeTrackId);
+    if (!ephemTrack) return;
+    patchCurrentTrackCueInfo(
+      ephemTrack.cue_start_secs ?? null,
+      ephemTrack.cue_end_secs ?? null
+    );
+  });
+
+  // Spec rule: an ephemeral session "survives until a different album is
+  // loaded, the Clear/Close button is pressed, or the directory/files are
+  // gone". This effect handles the first trigger — anything that points
+  // the right pane at a real album or tree folder ends the session. The
+  // Close button handles the second trigger directly via closeEphemeralFolder;
+  // the playEphemeralTrack error path handles the third.
+  $effect(() => {
+    if (!ephemeralFolder) return;
+    // Rehydration on mount may set ephemeralFolder while other init
+    // settles; rehydrateEphemeralFolder checks for selection collisions
+    // itself, so suppress the effect during that window to avoid an
+    // unwanted close on the same tick the result lands.
+    if (rehydratingEphemeralFolder) return;
+    if (selectedAlbum != null || selectedFolderPath != null) {
+      untrack(() => {
+        void closeEphemeralFolder();
+      });
+    }
+  });
+
+  // Folder-level "Play all": queue scope = whole folder, in album order.
+  // CUE virtual-track boundary advance.
+  //
+  // Backend story: a CUE-derived ephemeral album is one big FLAC played
+  // through `play_data` with the FIRST virtual track's id. The player
+  // never changes `current_track_id` mid-album (the audio buffer is
+  // continuous), so neither the gapless transition path nor the regular
+  // queue auto-advance fires. The frontend has to detect the virtual
+  // boundary and update UI metadata itself.
+  //
+  // We listen to the raw playback:state event (not playerStore.currentTime)
+  // because once we virtually advance, playerStore filters out position
+  // updates whose track_id doesn't match the displayed track — but the
+  // RAW position keeps incrementing in the FLAC, which is exactly what
+  // we need to detect the next boundary.
+  let cueBoundaryUnlisten: UnlistenFn | null = null;
+  let cueAdvanceInProgress = false;
+  type RawPlaybackEvent = { track_id: number; position: number; is_playing: boolean };
+
+  async function startEphemeralCueBoundaryWatcher(): Promise<void> {
+    if (cueBoundaryUnlisten) return;
+    cueBoundaryUnlisten = await listen<RawPlaybackEvent>('playback:state', (event) => {
+      handleEphemeralCueBoundary(event.payload);
+    });
+  }
+
+  function handleEphemeralCueBoundary(event: RawPlaybackEvent): void {
+    if (cueAdvanceInProgress) return;
+    if (!ephemeralFolder) return;
+    if (!event.is_playing) return;
+
+    const playerTrack = getPlayerCurrentTrack();
+    if (!playerTrack || playerTrack.id < EPHEMERAL_ID_FLOOR) return;
+
+    const ephemTrack = ephemeralFolder.tracks.find((item) => item.id === playerTrack.id);
+    if (!ephemTrack || ephemTrack.cue_end_secs == null) return;
+
+    // Fire slightly before the boundary so the visible track flips at
+    // the natural transition point rather than a beat after.
+    const fireAt = ephemTrack.cue_end_secs - 0.5;
+    if (event.position < fireAt) return;
+
+    cueAdvanceInProgress = true;
+    void advanceCueEphemeralVirtualTrack(ephemTrack)
+      .finally(() => {
+        cueAdvanceInProgress = false;
+      });
+  }
+
+  async function advanceCueEphemeralVirtualTrack(currentTrack: LocalTrack): Promise<void> {
+    if (!ephemeralFolder) return;
+
+    // Mirror the queue scope used at playback start (same album group)
+    // so the boundary advance respects the user's "play this album"
+    // intent rather than bleeding into other albums in the folder.
+    const group = findEphemeralAlbumGroup(currentTrack);
+    const queue = group
+      ? flattenEphemeralAlbumGroup(group)
+      : ephemeralFolder.tracks;
+    const idx = queue.findIndex((item) => item.id === currentTrack.id);
+    if (idx < 0 || idx + 1 >= queue.length) return;
+    const next = queue[idx + 1];
+
+    // Advance the queue's current_index server-side so the queue panel
+    // and the bridge stay coherent. Failures here are non-fatal — we
+    // still want to update the displayed metadata.
+    try {
+      await invoke('v2_next_track');
+    } catch (err) {
+      console.warn('[Ephemeral] CUE boundary advance: v2_next_track failed:', err);
+    }
+
+    // Swap the displayed track. The audio is unchanged (continuous CUE
+    // FLAC); we're only updating chrome. Seekbar will reset to 0 and
+    // stop progressing — a known limitation while the underlying
+    // player.track_id is still the FIRST virtual track. Acceptable
+    // tradeoff in exchange for a coherent NowPlayingBar + queue panel.
+    setPlayerCurrentTrack({
+      id: next.id,
+      title: formatTrackTitle(next),
+      artist: next.artist,
+      album: next.album,
+      artwork: next.artwork_path ? getFullArtworkUrl(next.artwork_path) : '',
+      duration: next.duration_secs,
+      quality: getQualityBadge(next),
+      bitDepth: next.bit_depth ?? undefined,
+      // LocalTrack stores sample_rate in Hz; PlayingTrack expects kHz so
+      // the NowPlayingBar's "FLAC 16/44.1" badge formats correctly.
+      // Without /1000 the chrome reads as the raw 44100 number and
+      // looks like a quality downgrade vs. the badge in the album list.
+      samplingRate: next.sample_rate ? next.sample_rate / 1000 : undefined,
+      isLocal: true,
+      source: 'ephemeral',
+    });
+
+    await syncQueueState().catch(() => {});
+  }
+
+  async function playAllEphemeral(): Promise<void> {
+    if (!ephemeralFolder || ephemeralFolder.tracks.length === 0) return;
+    const queue = flattenEphemeralFolder();
+    if (queue.length === 0) return;
+    await playEphemeralTrackWithQueue(queue[0], queue);
+  }
+
+  // Rehydrate the ephemeral session from a persisted folder path. Called
+  // once during onMount: if the user closed the app without explicitly
+  // clearing the ephemeral pane, the folder reopens automatically as
+  // long as it's still accessible. The data itself isn't persisted —
+  // only the path — so we re-scan + re-extract metadata + re-load
+  // artwork on every restore.
+  async function rehydrateEphemeralFolder(): Promise<void> {
+    const stored = getUserItem(EPHEMERAL_PATH_STORAGE_KEY);
+    if (!stored || !stored.trim()) return;
+    // If something else (nav state, user click) has already pointed the
+    // right pane at a folder/album, defer to that rather than fighting
+    // for the slot.
+    if (selectedFolderPath != null || selectedAlbum != null) return;
+    openingEphemeralFolder = true;
+    rehydratingEphemeralFolder = true;
+    try {
+      const result = await invoke<EphemeralFolderState>('v2_ephemeral_open_folder', {
+        path: stored
+      });
+      // Re-check after the await: the user could have navigated during
+      // the scan. If so, drop the result (and tear down the backend
+      // cache) so we don't visually steal their selection.
+      if (selectedFolderPath != null || selectedAlbum != null) {
+        void invoke('v2_ephemeral_clear').catch(() => {});
+        return;
+      }
+      ephemeralFolder = result;
+    } catch (err) {
+      // Folder gone (USB unplugged, NAS unreachable, directory deleted).
+      // Drop the stored path so the next launch starts clean instead
+      // of failing the same way.
+      console.info('[LocalLibrary] Ephemeral folder no longer accessible:', err);
+      setUserItem(EPHEMERAL_PATH_STORAGE_KEY, '');
+    } finally {
+      openingEphemeralFolder = false;
+      rehydratingEphemeralFolder = false;
+    }
+  }
+
+  // Per-album play button (only rendered when there's >1 album group).
+  // Queue scope = just this album, so playback stops at the album
+  // boundary instead of bleeding into the next album in the folder.
+  async function playEphemeralAlbum(group: EphemeralAlbumGroup): Promise<void> {
+    if (!group || group.tracks.length === 0) return;
+    const queue = flattenEphemeralAlbumGroup(group);
+    if (queue.length === 0) return;
+    await playEphemeralTrackWithQueue(queue[0], queue);
+  }
+
+  function handleLibraryPreferencesSaved(prefs: LibraryPreferences) {
+    libraryPreferences = sanitizeLibraryPreferences(prefs);
+    // Keep the shared store in sync so the title-bar / sidebar dropdowns
+    // immediately reflect the user's new tab_order / hidden_tabs.
+    setLibraryPreferencesStore(libraryPreferences);
+    const currentVisible = libraryPreferences.tab_order.filter(
+      (tab): tab is TabType =>
+        isKnownTab(tab) && !libraryPreferences.hidden_tabs.includes(tab),
+    );
+    if (!currentVisible.includes(activeTab)) {
+      activeTab = currentVisible[0] ?? 'tracks';
+    }
+    isEditTabsModalOpen = false;
+  }
   let showSettings = $state(false);
   let showHiddenAlbums = $state(false);
   let albumSearch = $state('');
   let folderSearch = $state('');
-  let albumViewMode = $state<'grid' | 'list'>('grid');
+  // Default to list view per 2026-05-12 user call: list mode runs
+  // acceptably under SW compositing and is the safer default. Users
+  // can toggle to grid via the controls; persistence is in-session
+  // only.
+  let albumViewMode = $state<'grid' | 'list'>('list');
   type AlbumGroupMode = 'alpha' | 'artist';
   let albumGroupMode = $state<AlbumGroupMode>('alpha');
   let albumGroupingEnabled = $state(false);
-  let showGroupMenu = $state(false);
+
+  // Mutually-exclusive toolbar dropdown state. Only one menu is open at a time.
+  type OpenMenu = 'group' | 'filter' | 'sort' | 'trackGroup' | null;
+  let openMenu = $state<OpenMenu>(null);
 
   // Quality/Format filter with checkboxes (AND between sections, OR within section)
-  let showFilterPanel = $state(false);
   let filterPanelRef: HTMLDivElement | null = $state(null);
   let filterPanelTimeout: ReturnType<typeof setTimeout> | null = null;
 
   function startFilterPanelTimer() {
     clearFilterPanelTimer();
     filterPanelTimeout = setTimeout(() => {
-      showFilterPanel = false;
+      if (openMenu === 'filter') openMenu = null;
     }, 3000);
   }
 
@@ -293,21 +1030,21 @@
   }
 
   function handleFilterPanelActivity() {
-    if (showFilterPanel) {
+    if (openMenu === 'filter') {
       startFilterPanelTimer();
     }
   }
 
   function handleClickOutsideFilterPanel(event: MouseEvent) {
-    if (showFilterPanel && filterPanelRef && !filterPanelRef.contains(event.target as Node)) {
-      showFilterPanel = false;
+    if (openMenu === 'filter' && filterPanelRef && !filterPanelRef.contains(event.target as Node)) {
+      openMenu = null;
       clearFilterPanelTimer();
     }
   }
 
   // Effect to manage filter panel auto-close
   $effect(() => {
-    if (showFilterPanel) {
+    if (openMenu === 'filter') {
       startFilterPanelTimer();
       document.addEventListener('click', handleClickOutsideFilterPanel, true);
     } else {
@@ -322,11 +1059,11 @@
 
   // Effect to close sort menu on click outside
   $effect(() => {
-    if (showSortMenu) {
+    if (openMenu === 'sort') {
       const handleClickOutside = (event: MouseEvent) => {
         const target = event.target as HTMLElement;
         if (!target.closest('.sort-btn') && !target.closest('.sort-menu')) {
-          showSortMenu = false;
+          if (openMenu === 'sort') openMenu = null;
         }
       };
       document.addEventListener('click', handleClickOutside, true);
@@ -440,7 +1177,6 @@
   type SortDirection = 'asc' | 'desc';
   let sortBy = $state<SortBy>('title');
   let sortDirection = $state<SortDirection>('asc');
-  let showSortMenu = $state(false);
 
   const sortOptions: { value: SortBy; label: string }[] = [
     { value: 'title', label: 'Album Name' },
@@ -464,7 +1200,7 @@
       sortBy = value;
       sortDirection = 'asc';
     }
-    showSortMenu = false;
+    openMenu = null;
   }
 
   function sortAlbums(items: LocalAlbum[]): LocalAlbum[] {
@@ -498,13 +1234,16 @@
 
   // Performance mode state
   let useVirtualization = $state(isVirtualizationEnabled());
+  // Issue #412 — opt-in album cover thumbs in the tracks/folder list
+  // views. Default OFF: a 16k-track library renders 16k decoded
+  // images otherwise. Subscribed below alongside `useVirtualization`.
+  let showTrackArtwork = $state(isTrackArtworkEnabled());
   let virtualizedScrollTarget = $state<string | undefined>(undefined);
 
   // Artist view state
   let artistSearch = $state('');
   let artistViewMode = $state<'grid' | 'list'>('grid');
   let artistGroupingEnabled = $state(true); // Enable alpha grouping by default
-  let showArtistGroupMenu = $state(false);
   // Selected artist for the two-column layout
   let selectedArtistName = $state<string | null>(null);
   // Reference to the artist list scroll container
@@ -513,12 +1252,24 @@
   let artistImageFetchAborted = false; // Flag to abort fetching
   let trackSearch = $state('');
   let tracksHydrationRequestId = 0;
+  // Viewport-driven Plex quality hydration (Tracks tab).
+  // The Tracks tab can hold 16K+ rows; hydrating every Plex track up front
+  // floods the Plex server and freezes the app. Instead we hydrate only the
+  // rows currently visible in the virtualized list, and merge the result
+  // into a reactive override map that the renderer consults — avoiding a
+  // full-array reassignment of `tracks` (which would trigger a second pass
+  // through the grouping/sort pipeline on every hydration completion).
+  type PlexQualityOverride = { format?: string; bitDepth?: number; sampleRate?: number };
+  const plexQualityOverrides = new SvelteMap<string, PlexQualityOverride>();
+  const queuedPlexHydration = new Set<string>();
+  let pendingPlexHydration: LocalTrack[] = [];
+  let plexHydrationDebounce: ReturnType<typeof setTimeout> | null = null;
+  const PLEX_VISIBLE_HYDRATION_DEBOUNCE_MS = 150;
   let searchOpen = $state(false);
   let searchInputEl = $state<HTMLInputElement | undefined>(undefined);
   type TrackGroupMode = 'album' | 'artist' | 'name';
   let trackGroupMode = $state<TrackGroupMode>('album');
   let trackGroupingEnabled = $state(false);
-  let showTrackGroupMenu = $state(false);
   let trackSearchTimer: ReturnType<typeof setTimeout> | null = null;
   // Reference to virtualized track list for programmatic scrolling
   let virtualizedTrackListRef = $state<{ scrollToGroup: (groupId: string) => void } | undefined>(undefined);
@@ -529,12 +1280,519 @@
 
   // Data state
   let albums = $state<LocalAlbum[]>([]);
+  // Metadata-grouped Albums tab data — parallel to `albums` (folder-grouped).
+  // Declared early so the album-selection derivations below can reference it
+  // when the active tab is 'albums'. Hydrated lazily by loadMetadataAlbums.
+  let metadataAlbums = $state<LocalAlbum[]>([]);
+  let metadataAlbumsLoading = $state(false);
+  let metadataAlbumsLoaded = $state(false);
+
+  /** Chunked album store — backs the Plex-style recycling-grid pool on
+   *  the Albums tab when grouping is off and no quality filters are
+   *  active. Hydrated via `$effect` that mirrors search/sort/filter
+   *  state into `setParams`. Other paths (grouped grid, list mode,
+   *  quality-filtered) continue to read from `metadataAlbums` via the
+   *  legacy `VirtualizedAlbumList`. */
+  const metadataAlbumsChunked = new LocalAlbumsChunkedStore();
   let hiddenAlbums = $state<LocalAlbum[]>([]);
   let artists = $state<LocalArtist[]>([]);
   let tracks = $state<LocalTrack[]>([]);
   let stats = $state<LibraryStats | null>(null);
   let folders = $state<LibraryFolder[]>([]);
   let scanProgress = $state<ScanProgress | null>(null);
+
+  // ───────── Folders tab tree-mode state ─────────
+  // foldersViewMode toggles the Folders tab between the existing flat
+  // folder-grouped album list and the new two-column filesystem-hierarchy
+  // view. Persisted in `library_preferences.folders_view_mode`. Read on
+  // mount via `loadLibraryPreferences`.
+  let foldersViewMode = $state<'flat' | 'tree'>('flat');
+  // Path of the folder currently selected in the tree; drives the
+  // right-pane routing (album-detail vs FolderDetail vs empty-state).
+  let selectedFolderPath = $state<string | null>(null);
+
+  // Ephemeral folder session: when set, the right pane shows the contents
+  // of an ad-hoc folder the user opened via the "Open Folder" button. The
+  // tracks here have synthetic ids in the high-positive range that route
+  // to the in-memory EphemeralLibraryState on the backend (see
+  // v2_library_play_track). The data itself is rebuilt on every app
+  // launch — what survives the restart is just the folder path (saved to
+  // userStorage), so a re-scan on mount restores the same listing if
+  // the folder is still accessible.
+  // Field names are snake_case to match the Rust struct serde-serializes
+  // (consistent with LocalTrack, which is also snake_case across the FFI).
+  type EphemeralFolderState = {
+    folder_path: string;
+    tracks: LocalTrack[];
+    skipped_files: number;
+  };
+  // Mirror of EPHEMERAL_ID_FLOOR in the Rust ephemeral_library module:
+  // any track id at or above this value is an ephemeral synthetic id,
+  // not a DB row. Used for "did the user just close a folder whose
+  // tracks are still playing?" checks so we know whether to wipe the
+  // queue + now-playing slot when an ephemeral session ends.
+  // 2 ** 48 (NOT 1 << 48 — JS bitwise shift is 32-bit, 1 << 48 silently
+  // becomes 65536 and every Qobuz track gets mis-classified).
+  const EPHEMERAL_ID_FLOOR = 2 ** 48;
+  const EPHEMERAL_PATH_STORAGE_KEY = 'qbz-ephemeral-folder-path';
+  let ephemeralFolder = $state<EphemeralFolderState | null>(null);
+  let openingEphemeralFolder = $state(false);
+  let rehydratingEphemeralFolder = false;
+
+  const ephemeralFolderName = $derived.by(() => {
+    if (!ephemeralFolder) return '';
+    const segments = ephemeralFolder.folder_path.split('/').filter(Boolean);
+    return segments.length > 0 ? segments[segments.length - 1] : ephemeralFolder.folder_path;
+  });
+
+  // Group ephemeral tracks by album. The scanner walks recursively, so a
+  // single ephemeral session can hold tracks from multiple albums (e.g.
+  // a parent folder containing several discography subfolders). We use
+  // album_group_key from the metadata extractor as the canonical key
+  // and fall back to "album|album_artist" when it's empty (rare, but
+  // happens for files with no tags). Each group is then split into disc
+  // sections via buildAlbumSections so multi-disc albums get the same
+  // disc-header treatment as the regular library views.
+  type EphemeralAlbumGroup = {
+    key: string;
+    title: string;
+    artist: string;
+    year: number | null;
+    artworkPath: string | null;
+    qualityBadge: string;
+    isHiRes: boolean;
+    tracks: LocalTrack[];
+    sections: ReturnType<typeof buildAlbumSections>;
+  };
+
+  const ephemeralAlbumGroups = $derived.by((): EphemeralAlbumGroup[] => {
+    if (!ephemeralFolder) return [];
+    const map = new Map<string, EphemeralAlbumGroup>();
+    for (const track of ephemeralFolder.tracks) {
+      const key = (track.album_group_key && track.album_group_key.trim())
+        || `${track.album}|||${track.album_artist || track.artist}`;
+      let group = map.get(key);
+      if (!group) {
+        group = {
+          key,
+          title: track.album_group_title?.trim() || normalizeAlbumTitle(track.album),
+          artist: track.album_artist?.trim() || track.artist || 'Unknown Artist',
+          year: track.year ?? null,
+          artworkPath: track.artwork_path ?? null,
+          qualityBadge: getQualityBadge(track),
+          isHiRes: isHiRes(track),
+          tracks: [],
+          sections: []
+        };
+        map.set(key, group);
+      } else {
+        if (!group.artworkPath && track.artwork_path) group.artworkPath = track.artwork_path;
+        if (group.year == null && track.year != null) group.year = track.year;
+      }
+      group.tracks.push(track);
+    }
+    const groups = [...map.values()];
+    for (const group of groups) {
+      group.sections = buildAlbumSections(group.tracks);
+    }
+    // Sort groups by title for stable ordering across opens.
+    groups.sort((a, b) => a.title.localeCompare(b.title));
+    return groups;
+  });
+  // Set of paths the user has expanded in the tree. Each top-level
+  // <LocalLibraryFolderTree> shares this set so siblings stay in sync.
+  let treeExpandedPaths = $state(new SvelteSet<string>());
+  // Top-level scan-root entries fed into the tree as the first depth.
+  // Lazily seeded once we read `folders` (the registered scan roots) —
+  // each scan root becomes a top-level <LocalLibraryFolderTree> node.
+  // The recursive descendant count is fetched per-root via
+  // `v2_library_count_folder_tracks` and cached in `scanRootCounts`
+  // (see the $effect below). The child-level rows from
+  // `v2_library_list_folder_children` carry their own counts.
+  let scanRootCounts = $state(new SvelteMap<string, number>());
+  // Tracks the last `excludeNetworkFolders` value the count cache was
+  // populated under; flipping it invalidates the cache so the rail
+  // doesn't display stale counts after the offline toggle changes.
+  let lastTreeCountExcludeFilter = $state<boolean | null>(null);
+
+  // ───────── Folders tab tree-mode sidebar resize ─────────
+  // The left rail is user-resizable via a thin handle on its right edge.
+  // Default = 302px (~30% smaller than the previous 432px; long folder
+  // names that overflow scroll horizontally inside the rail rather than
+  // forcing the rail wider). Bounds: 200px floor; 40% of the live content
+  // area as ceiling. Persisted on drag-end via
+  // v2_set_library_folders_tree_sidebar_width.
+  const FOLDER_TREE_SIDEBAR_DEFAULT_WIDTH = 290;
+  const FOLDER_TREE_SIDEBAR_MIN_WIDTH = 290;
+  let folderTreeSidebarWidth = $state<number>(FOLDER_TREE_SIDEBAR_DEFAULT_WIDTH);
+  let isResizingTreeSidebar = $state(false);
+  let folderTreeContentAreaWidth = $state<number>(0);
+  let folderTreeLayoutEl = $state<HTMLDivElement | null>(null);
+  const folderTreeSidebarMaxWidth = $derived(
+    folderTreeContentAreaWidth > 0
+      ? Math.floor(folderTreeContentAreaWidth * 0.4)
+      : 800,
+  );
+
+  // Drag-state captured at mousedown so mousemove math doesn't rely on
+  // re-reading getBoundingClientRect every frame (cheap, but the captured
+  // offset also keeps the resize anchored to the column's left edge even
+  // if layout shifts mid-drag, e.g. global sidebar opening).
+  let dragStartX = 0;
+  let dragStartWidth = 0;
+
+  // Track the two-column layout's clientWidth via ResizeObserver. This
+  // covers both window resizes and global app-sidebar open/close, since
+  // both reflow the tree-mode container. Falls back to a window resize
+  // listener when ResizeObserver isn't available.
+  $effect(() => {
+    const el = folderTreeLayoutEl;
+    if (!el) return;
+    if (typeof ResizeObserver === 'undefined') {
+      const onResize = () => {
+        folderTreeContentAreaWidth = el.clientWidth;
+      };
+      onResize();
+      window.addEventListener('resize', onResize);
+      return () => {
+        window.removeEventListener('resize', onResize);
+      };
+    }
+    folderTreeContentAreaWidth = el.clientWidth;
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        folderTreeContentAreaWidth = entry.contentRect.width;
+      }
+    });
+    observer.observe(el);
+    return () => {
+      observer.disconnect();
+    };
+  });
+
+  // Re-clamp the user-chosen sidebar width when the live cap shrinks
+  // (e.g. window resized down). We only adjust on shrink — growing the
+  // window shouldn't widen the sidebar past what the user picked.
+  $effect(() => {
+    if (folderTreeSidebarWidth > folderTreeSidebarMaxWidth) {
+      folderTreeSidebarWidth = Math.max(
+        FOLDER_TREE_SIDEBAR_MIN_WIDTH,
+        folderTreeSidebarMaxWidth,
+      );
+    }
+  });
+
+  const treeScanRoots = $derived.by<FolderEntry[]>(() => {
+    return folders
+      .filter((sr) => sr.enabled !== false)
+      .map((sr) => {
+        const path = sr.path;
+        const lastSlash = path.lastIndexOf('/');
+        const fallback = lastSlash >= 0 && lastSlash < path.length - 1
+          ? path.slice(lastSlash + 1)
+          : path;
+        return {
+          kind: 'folder' as const,
+          path,
+          segment: sr.alias && sr.alias.length > 0 ? sr.alias : fallback || path,
+          track_count_under: scanRootCounts.get(path) ?? 0,
+          artwork: null,
+        };
+      });
+  });
+  // O(1) lookup `path → LocalAlbum` so click handlers can decide whether
+  // to render the existing album-detail flow or the new FolderDetail.
+  // Albums in folder-grouped mode use `id === album_group_key === directory_path`.
+  const albumByGroupKey = $derived.by(() => {
+    const map = new Map<string, LocalAlbum>();
+    for (const album of albums) {
+      if (album.id) map.set(album.id, album);
+    }
+    return map;
+  });
+  const selectedAlbumForTree = $derived(
+    selectedFolderPath ? (albumByGroupKey.get(selectedFolderPath) ?? null) : null,
+  );
+
+  // Track list for the compact album view rendered in tree-mode's right
+  // pane. Kept separate from the page-level `albumTracks` array (which is
+  // bound to `selectedAlbum` and the full-page album-detail view at
+  // line ~4563) so the tree rail stays visible while browsing an album.
+  let treeAlbumTracks = $state<LocalTrack[]>([]);
+  let treeAlbumTracksLoading = $state(false);
+
+  // Load tracks whenever the tree-selected album changes. The effect
+  // races correctly: it captures `targetAlbum.id` at fire time and only
+  // commits the result when the selection still matches, so a fast
+  // tree-click sequence doesn't render stale tracks.
+  $effect(() => {
+    const targetAlbum = selectedAlbumForTree;
+    if (!targetAlbum) {
+      treeAlbumTracks = [];
+      treeAlbumTracksLoading = false;
+      return;
+    }
+    const targetId = targetAlbum.id;
+    treeAlbumTracksLoading = true;
+    fetchAlbumTracks(targetAlbum)
+      .then((loaded) => {
+        if (selectedAlbumForTree?.id !== targetId) return;
+        treeAlbumTracks = loaded;
+      })
+      .catch((err) => {
+        if (selectedAlbumForTree?.id !== targetId) return;
+        console.error('[LocalLibrary] Failed to load tree album tracks:', err);
+        treeAlbumTracks = [];
+      })
+      .finally(() => {
+        if (selectedAlbumForTree?.id !== targetId) return;
+        treeAlbumTracksLoading = false;
+      });
+  });
+
+  // Play / shuffle the entire compact-view album. Mirrors
+  // handlePlayAllAlbum / handleShuffleAllAlbum but operates on
+  // `treeAlbumTracks` and sets the playback context against
+  // `selectedAlbumForTree` so the player's "now playing from" label and
+  // the queue-source remain accurate. We can't use the page-level
+  // helpers verbatim because they read `selectedAlbum`, which we
+  // intentionally never set in tree mode (that would trigger the
+  // page-takeover view).
+  async function handleTreeAlbumPlayAll() {
+    const target = selectedAlbumForTree;
+    if (!target || treeAlbumTracks.length === 0) return;
+    try {
+      await setPlaybackContext(
+        'local_library',
+        target.id,
+        target.title,
+        target.source === 'plex' ? 'plex' : 'local',
+        treeAlbumTracks.map((trk) => trk.id),
+        0,
+      );
+      await setQueueForAlbumTracks(treeAlbumTracks, 0);
+      if (onTrackPlay) {
+        await Promise.resolve(onTrackPlay(treeAlbumTracks[0]));
+      } else if (treeAlbumTracks[0].source !== 'plex') {
+        await invoke('v2_library_play_track', { trackId: treeAlbumTracks[0].id });
+      }
+    } catch (err) {
+      console.error('[LocalLibrary] tree album play-all failed:', err);
+    }
+  }
+
+  async function handleTreeAlbumShuffleAll() {
+    const target = selectedAlbumForTree;
+    if (!target || treeAlbumTracks.length === 0) return;
+    try {
+      await invoke('v2_set_shuffle', { enabled: true });
+      const randomIndex = Math.floor(Math.random() * treeAlbumTracks.length);
+      const randomTrack = treeAlbumTracks[randomIndex];
+      await setPlaybackContext(
+        'local_library',
+        target.id,
+        target.title,
+        target.source === 'plex' ? 'plex' : 'local',
+        treeAlbumTracks.map((trk) => trk.id),
+        randomIndex,
+      );
+      await setQueueForAlbumTracks(treeAlbumTracks, randomIndex);
+      if (onTrackPlay) {
+        await Promise.resolve(onTrackPlay(randomTrack));
+      } else if (randomTrack.source !== 'plex') {
+        await invoke('v2_library_play_track', { trackId: randomTrack.id });
+      }
+    } catch (err) {
+      console.error('[LocalLibrary] tree album shuffle failed:', err);
+    }
+  }
+
+  // Track click inside the compact album view — sets the playback context
+  // against the tree-selected album (not `selectedAlbum`, which is
+  // page-takeover-bound) and starts playback at that index. Same
+  // reasoning as handleTreeAlbumPlayAll above.
+  async function handleTreeAlbumTrackPlay(track: LocalTrack) {
+    const target = selectedAlbumForTree;
+    if (!target || treeAlbumTracks.length === 0) {
+      await handleTrackPlay(track);
+      return;
+    }
+    try {
+      const trackIndex = treeAlbumTracks.findIndex((trk) => trk.id === track.id);
+      const startIndex = trackIndex >= 0 ? trackIndex : 0;
+      await setPlaybackContext(
+        'local_library',
+        target.id,
+        target.title,
+        target.source === 'plex' ? 'plex' : 'local',
+        treeAlbumTracks.map((trk) => trk.id),
+        startIndex,
+      );
+      await setQueueForAlbumTracks(treeAlbumTracks, startIndex);
+      if (onTrackPlay) {
+        await Promise.resolve(onTrackPlay(track));
+      } else if (track.source !== 'plex') {
+        await invoke('v2_library_play_track', { trackId: track.id });
+      }
+    } catch (err) {
+      console.error('[LocalLibrary] tree album track play failed:', err);
+    }
+  }
+
+  // ───────── Folders tab tree-mode search state ─────────
+  // Tree-mode search piggybacks on the existing folders-tab search input
+  // (`albumSearch`), but maintains its own visible-path filter and
+  // expand-state snapshot so the user gets path-context preserved while
+  // typing. In-memory matching over the loaded `albums` array — the
+  // matcher walks each album_group_key and checks if any segment contains
+  // the query (case-insensitive). For libraries above ~50k tracks a
+  // backend search command would be a follow-up (see Task 10 notes).
+  // `searchVisiblePaths === null` means "no active filter, render
+  // everything" — that's the steady-state when the input is empty or the
+  // user is not on the folders tree tab.
+  let searchVisiblePaths = $state<SvelteSet<string> | null>(null);
+  // Snapshot of `treeExpandedPaths` taken on the FIRST non-empty keystroke
+  // and restored when the query is cleared. Null while no search is active.
+  let preSearchExpandedSnapshot = $state<SvelteSet<string> | null>(null);
+  // Raw value bound to the dedicated tree-mode search input rendered in
+  // the tree column toolbar. Decoupled from `albumSearch` (which still
+  // drives the flat-mode album grid filter) so tree mode has its own
+  // input and clearing one does not affect the other.
+  let treeSearchInput = $state('');
+  // Trimmed-lowercase copy of the current tree-search query, exposed to
+  // the tree component for the matched-segment highlight. Empty string
+  // when there is no active filter.
+  let treeSearchQuery = $state('');
+  // Debounce timer for the tree-mode search compute. The flat-mode search
+  // already has its own 150ms debounce on `debouncedAlbumSearch`; we add
+  // a separate timer here because the tree match-set computation is
+  // heavier (walks ancestors) and we don't want to thrash on every key.
+  let treeSearchTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function applyFolderTreeSearch(rawQuery: string) {
+    const query = rawQuery.trim().toLowerCase();
+    treeSearchQuery = query;
+    if (!query) {
+      // Cleared — restore the user's pre-search expand state.
+      if (preSearchExpandedSnapshot !== null) {
+        treeExpandedPaths = preSearchExpandedSnapshot;
+        preSearchExpandedSnapshot = null;
+      }
+      searchVisiblePaths = null;
+      return;
+    }
+    // Snapshot prior expand state on first non-empty search keystroke so
+    // we can restore it verbatim on clear.
+    if (preSearchExpandedSnapshot === null) {
+      preSearchExpandedSnapshot = new SvelteSet(treeExpandedPaths);
+    }
+    const matches = new Set<string>();
+    const ancestors = new Set<string>();
+    for (const album of albums) {
+      // Folder-grouped albums use `id === directory_path === album_group_key`
+      // (see comment on `albumByGroupKey`). That's the path we match against.
+      const path = album.id;
+      if (!path) continue;
+      const segments = path.split('/').filter(Boolean);
+      const hasMatch = segments.some((seg) => seg.toLowerCase().includes(query));
+      if (!hasMatch) continue;
+      matches.add(path);
+      let walker = path;
+      while (true) {
+        const idx = walker.lastIndexOf('/');
+        if (idx <= 0) break;
+        walker = walker.substring(0, idx);
+        ancestors.add(walker);
+      }
+    }
+    // Also surface registered scan roots whose label/path contains the
+    // query so the user can drill into a top-level match.
+    for (const scanRoot of treeScanRoots) {
+      const label = scanRoot.segment.toLowerCase();
+      const rootPath = scanRoot.path.toLowerCase();
+      if (label.includes(query) || rootPath.includes(query)) {
+        matches.add(scanRoot.path);
+      }
+    }
+    const visible = new SvelteSet<string>();
+    for (const p of matches) visible.add(p);
+    for (const p of ancestors) visible.add(p);
+    searchVisiblePaths = visible;
+    // Auto-expand every ancestor so the matches are reachable. Keep any
+    // paths the user already had expanded (union, not replace), so when
+    // they clear the search the snapshot still reflects their state.
+    const nextExpanded = new SvelteSet(treeExpandedPaths);
+    for (const p of ancestors) nextExpanded.add(p);
+    treeExpandedPaths = nextExpanded;
+  }
+
+  function scheduleFolderTreeSearch(query: string) {
+    if (treeSearchTimer) clearTimeout(treeSearchTimer);
+    treeSearchTimer = setTimeout(() => {
+      applyFolderTreeSearch(query);
+    }, 200);
+  }
+
+  // Drive the tree-mode search effect off the dedicated `treeSearchInput`
+  // (rendered in the tree column toolbar) plus tab/mode state. When the
+  // user leaves the folders tree (tab switch or mode toggle) we wipe the
+  // active filter so nothing is hidden when they come back. The flat-mode
+  // search continues to use `albumSearch`/`debouncedAlbumSearch`
+  // independently — the two inputs no longer share state.
+  $effect(() => {
+    if (activeTab !== 'folders' || foldersViewMode !== 'tree') {
+      // Leaving tree mode — clear filter and any pending debounce.
+      if (treeSearchTimer) {
+        clearTimeout(treeSearchTimer);
+        treeSearchTimer = null;
+      }
+      if (searchVisiblePaths !== null || preSearchExpandedSnapshot !== null) {
+        if (preSearchExpandedSnapshot !== null) {
+          treeExpandedPaths = preSearchExpandedSnapshot;
+          preSearchExpandedSnapshot = null;
+        }
+        searchVisiblePaths = null;
+        treeSearchQuery = '';
+      }
+      treeSearchInput = '';
+      return;
+    }
+    scheduleFolderTreeSearch(treeSearchInput);
+  });
+
+  // Fetch recursive descendant counts for every enabled scan-root row in
+  // the tree rail. The count primitive (`v2_library_count_folder_tracks`)
+  // mirrors the listing primitives' source + network filters byte-for-
+  // byte, so the cached count agrees with what the rail visibility,
+  // `LocalLibraryFolderDetail`, and recursive playback would see.
+  // Cache invalidates whenever the exclude-network toggle flips.
+  $effect(() => {
+    if (activeTab !== 'folders' || foldersViewMode !== 'tree') return;
+    const exclude = shouldExcludeNetworkFolders();
+    if (lastTreeCountExcludeFilter !== exclude) {
+      scanRootCounts.clear();
+      lastTreeCountExcludeFilter = exclude;
+    }
+    for (const root of folders) {
+      if (root.enabled === false) continue;
+      if (scanRootCounts.has(root.path)) continue;
+      const path = root.path;
+      invoke<number>('v2_library_count_folder_tracks', {
+        folderPath: path,
+        excludeNetworkFolders: exclude,
+      })
+        .then((count) => {
+          // Guard against a stale resolution after the user flipped the
+          // exclude toggle while the request was in flight.
+          if (lastTreeCountExcludeFilter === exclude) {
+            scanRootCounts.set(path, count);
+          }
+        })
+        .catch((err) => {
+          console.error('[LocalLibrary] count_folder_tracks failed:', err);
+        });
+    }
+  });
 
   // Multi-select (tracks tab) — mirrors FavoritesView pattern
   let trackSelectMode = $state(false);
@@ -543,6 +1801,7 @@
   function toggleTrackSelectMode() {
     trackSelectMode = !trackSelectMode;
     if (!trackSelectMode) selectedTrackIds = new Set();
+    else clearOtherSelectionContexts('tracks');
   }
 
   function toggleTrackSelect(id: number) {
@@ -573,30 +1832,50 @@
   }
 
   // Ctrl/Cmd+A while the tracks tab's select mode is active selects
-  // every visible track. We read `tracks` at fire-time (not via the
-  // effect's reactive deps) so flipping select mode doesn't re-attach
-  // the listener every time the library mutates. The shortcut is a
-  // no-op when focus is in a text input (search field etc.).
+  // every visible track. We read `tracks`/`albumTracks` at fire-time
+  // (not via the effect's reactive deps) so flipping select mode
+  // doesn't re-attach the listener every time the library mutates.
+  // When the user has drilled into an album (selectedAlbum != null)
+  // the shortcut scopes to that album's tracks; otherwise it covers
+  // the library-wide tracks tab. The shortcut is a no-op when focus
+  // is in a text input (search field etc.).
   $effect(() => {
     if (!trackSelectMode) return;
     const handler = (e: KeyboardEvent) => {
       if (!isSelectAllShortcut(e)) return;
       e.preventDefault();
-      selectedTrackIds = new Set(tracks.map((trk) => trk.id));
+      if (selectedAlbum) {
+        // Album detail: union — preserve any selections built up from
+        // other views (tracks tab, etc.) instead of clobbering them.
+        const next = new Set(selectedTrackIds);
+        for (const trk of albumTracks) next.add(trk.id);
+        selectedTrackIds = next;
+      } else {
+        // Tracks tab covers the entire library, so replace == "select all".
+        selectedTrackIds = new Set(tracks.map((trk) => trk.id));
+      }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   });
 
   function selectedLocalTracks(): LocalTrack[] {
-    // Union of library-wide tracks and current album tracks so selection works
-    // from both the tracks tab and the album detail view.
+    // Union of library-wide tracks, current album tracks, and tree-mode
+    // recursive selections so bulk actions work regardless of which
+    // surface populated the selection. `treeSelectedTracksById` is the
+    // fallback for tracks that live outside `tracks` / `albumTracks`
+    // (rare in practice — `tracks` covers the whole user library).
     const byId = new Map<number, LocalTrack>();
     for (const trk of tracks) {
       if (selectedTrackIds.has(trk.id)) byId.set(trk.id, trk);
     }
     for (const trk of albumTracks) {
       if (selectedTrackIds.has(trk.id) && !byId.has(trk.id)) byId.set(trk.id, trk);
+    }
+    for (const id of selectedTrackIds) {
+      if (byId.has(id)) continue;
+      const trk = treeSelectedTracksById.get(id);
+      if (trk) byId.set(id, trk);
     }
     return [...byId.values()];
   }
@@ -605,16 +1884,17 @@
     const queueTracks = selectedLocalTracks().map(buildQueueTrackFromLocalTrack);
     if (queueTracks.length === 0) return;
     await cmdAddTracksToQueueNext(queueTracks);
-    trackSelectMode = false;
-    selectedTrackIds = new Set();
+    // Use resetMultiSelect so tree-mode state (treeSelectMode +
+    // treeSelectedTracksById) is cleared too; otherwise the
+    // BulkActionBar lingers with count 0 after firing from tree mode.
+    resetMultiSelect();
   }
 
   async function handleBulkPlayLater() {
     const queueTracks = selectedLocalTracks().map(buildQueueTrackFromLocalTrack);
     if (queueTracks.length === 0) return;
     await cmdAddTracksToQueue(queueTracks);
-    trackSelectMode = false;
-    selectedTrackIds = new Set();
+    resetMultiSelect();
   }
 
   function handleBulkAddToPlaylist() {
@@ -629,8 +1909,7 @@
     if (localIds.length === 0 && plexRatingKeys.length === 0) return;
     if (localIds.length > 0) onBulkAddToPlaylist?.(localIds);
     if (plexRatingKeys.length > 0) onBulkAddPlexToPlaylist?.(plexRatingKeys);
-    trackSelectMode = false;
-    selectedTrackIds = new Set();
+    resetMultiSelect();
   }
 
   function resetMultiSelect() {
@@ -638,10 +1917,48 @@
       trackSelectMode = false;
       selectedTrackIds = new Set();
     }
+    if (treeSelectMode || treeSelectedTracksById.size > 0) {
+      treeSelectMode = false;
+      treeSelectedTracksById = new SvelteMap();
+    }
     if (albumSelectMode || selectedAlbumIds.size > 0) {
       albumSelectMode = false;
       selectedAlbumIds = new Set();
     }
+  }
+
+  // Compact album-view (LocalLibraryFolderAlbumView) bulk handlers.
+  // The compact view manages its own local selection set (so navigating
+  // between albums in the tree doesn't bleed selection across albums).
+  // It hands us the picked track IDs at fire-time; we resolve them
+  // against `treeAlbumTracks` (the tracks the compact view is rendering)
+  // and feed the same backend commands the tracks-tab path uses. The
+  // local/Plex split mirrors handleBulkAddToPlaylist above.
+  function resolveTreeAlbumTracksByIds(ids: number[]): LocalTrack[] {
+    const idSet = new Set(ids);
+    return treeAlbumTracks.filter((trk) => idSet.has(trk.id));
+  }
+
+  async function handleFolderAlbumBulkPlayNext(ids: number[]) {
+    const queueTracks = resolveTreeAlbumTracksByIds(ids).map(buildQueueTrackFromLocalTrack);
+    if (queueTracks.length === 0) return;
+    await cmdAddTracksToQueueNext(queueTracks);
+  }
+
+  async function handleFolderAlbumBulkPlayLater(ids: number[]) {
+    const queueTracks = resolveTreeAlbumTracksByIds(ids).map(buildQueueTrackFromLocalTrack);
+    if (queueTracks.length === 0) return;
+    await cmdAddTracksToQueue(queueTracks);
+  }
+
+  function handleFolderAlbumBulkAddToPlaylist(ids: number[]) {
+    if (ids.length === 0) return;
+    onBulkAddToPlaylist?.(ids);
+  }
+
+  function handleFolderAlbumBulkAddPlexToPlaylist(ratingKeys: string[]) {
+    if (ratingKeys.length === 0) return;
+    onBulkAddPlexToPlaylist?.(ratingKeys);
   }
 
   // Multi-select for albums tab — mirrors track-select state.
@@ -651,6 +1968,7 @@
   function toggleAlbumSelectMode() {
     albumSelectMode = !albumSelectMode;
     if (!albumSelectMode) selectedAlbumIds = new Set();
+    else clearOtherSelectionContexts('albums');
   }
 
   function toggleAlbumSelect(album: LocalAlbum) {
@@ -666,10 +1984,17 @@
     selectedAlbumIds = next;
   }
 
+  /** The album list driving Select All / Bulk Action behaviour for the
+   *  current tab. Folders-tab uses folder-grouped `albums`; the Albums-tab
+   *  uses metadata-grouped `metadataAlbums`. */
+  const currentAlbumsSource = $derived(
+    activeTab === 'albums' ? metadataAlbums : albums
+  );
+
   const albumSelectAllState = $derived(
-    albums.length === 0 ? 'none' as const
+    currentAlbumsSource.length === 0 ? 'none' as const
     : selectedAlbumIds.size === 0 ? 'none' as const
-    : selectedAlbumIds.size >= albums.length ? 'all' as const
+    : selectedAlbumIds.size >= currentAlbumsSource.length ? 'all' as const
     : 'partial' as const
   );
 
@@ -677,7 +2002,7 @@
     if (albumSelectAllState === 'all') {
       selectedAlbumIds = new Set();
     } else {
-      selectedAlbumIds = new Set(albums.map((a) => a.id));
+      selectedAlbumIds = new Set(currentAlbumsSource.map((a) => a.id));
     }
   }
 
@@ -686,14 +2011,27 @@
     const handler = (e: KeyboardEvent) => {
       if (!isSelectAllShortcut(e)) return;
       e.preventDefault();
-      selectedAlbumIds = new Set(albums.map((a) => a.id));
+      selectedAlbumIds = new Set(currentAlbumsSource.map((a) => a.id));
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   });
 
   function selectedAlbums(): LocalAlbum[] {
-    return albums.filter((a) => selectedAlbumIds.has(a.id));
+    // Look up across both album sources so bulk actions work whether the
+    // current tab is Folders (folder-grouped) or Albums (metadata-grouped).
+    // IDs differ between the two pipelines, so a union lookup is safe.
+    const byId = new Map<string, LocalAlbum>();
+    for (const a of albums) byId.set(a.id, a);
+    for (const a of metadataAlbums) {
+      if (!byId.has(a.id)) byId.set(a.id, a);
+    }
+    const result: LocalAlbum[] = [];
+    for (const id of selectedAlbumIds) {
+      const album = byId.get(id);
+      if (album) result.push(album);
+    }
+    return result;
   }
 
   /** Resolve tracks for a list of albums, concatenated in list order.
@@ -775,8 +2113,8 @@
     if (activeTab === 'tracks' && tracks.length > 0) {
       return tracks.length;
     }
-    // When in albums view, calculate from filtered albums
-    if (activeTab === 'albums') {
+    // When in folders (album-by-folder) view, calculate from filtered albums
+    if (activeTab === 'folders') {
       return albums.reduce((sum, album) => sum + album.track_count, 0);
     }
     // When in artists view, calculate from filtered artists
@@ -979,10 +2317,14 @@
     };
   });
 
-  // Memoized filtered and grouped albums
-  let filteredAndGroupedAlbums = $derived.by(() => {
-    // Filter albums by search and quality
-    let filtered = albums;
+  /** Apply search/quality filters, sorting, and grouping to a list of
+   *  albums. Used by both the Folders tab (folder-grouped `albums`) and the
+   *  Albums tab (metadata-grouped `metadataAlbums`) so the action bar
+   *  controls behave identically across both surfaces. Do not call $t() or
+   *  any svelte-i18n store inside this helper — it runs from $derived.by
+   *  and would break Svelte CSS extraction (ADR-001). */
+  function buildFilteredAndGroupedAlbums(source: LocalAlbum[]) {
+    let filtered = source;
 
     // Apply search filter
     if (debouncedAlbumSearch) {
@@ -1012,6 +2354,36 @@
       : new Set<string>();
 
     return { filtered, grouped, alphaGroups };
+  }
+
+  // Memoized filtered and grouped albums (folder-grouped source)
+  let filteredAndGroupedAlbums = $derived.by(() => buildFilteredAndGroupedAlbums(albums));
+
+  // Same pipeline for the metadata-grouped Albums tab
+  let filteredAndGroupedMetadataAlbums = $derived.by(() => buildFilteredAndGroupedAlbums(metadataAlbums));
+
+  /** Push search/sort/filter state into the chunked store whenever any
+   *  of them change. The store no-ops if the params are unchanged, so
+   *  this is safe to run every reactive tick. We only feed the store
+   *  while the Albums tab is the active view — chunk 0 + total count
+   *  is one round-trip to the backend, cheap but not free. */
+  $effect(() => {
+    if (activeTab !== 'albums') return;
+    if (albumViewMode !== 'grid') return;
+    if (albumGroupingEnabled) return;
+    if (hasActiveFilters) return;
+    // Plex now consolidated in the backend via ATTACH + UNION when
+    // `include_plex` is passed. Users with Plex-dominant libraries
+    // get the chunked-store benefit too.
+    const mappedSortBy: 'artist' | 'title' | 'year' =
+      sortBy === 'title' || sortBy === 'year' ? sortBy : 'artist';
+    void metadataAlbumsChunked.setParams({
+      search: debouncedAlbumSearch,
+      sortBy: mappedSortBy,
+      sortDir: sortDirection,
+      excludeNetworkFolders: shouldExcludeNetworkFolders(),
+      includePlex: isPlexLibraryEnabled(),
+    });
   });
 
   // Albums for the selected artist (used in artist view two-column layout)
@@ -1170,6 +2542,52 @@
   // Album detail state (for viewing album tracks)
   let selectedAlbum = $state<LocalAlbum | null>(null);
   let albumTracks = $state<LocalTrack[]>([]);
+
+  // Album-detail multi-select helpers — shift-click anchor + select-all
+  // state derived against the open album's track list. selectedTrackIds
+  // is the same Set the tracks tab uses, so selections compose cleanly
+  // when the user moves between views (see selectedLocalTracks above).
+  let albumDetailLastSelectedIndex = $state<number | null>(null);
+
+  $effect(() => {
+    // Reset anchor when leaving select mode or closing the album view.
+    if (!trackSelectMode || !selectedAlbum) albumDetailLastSelectedIndex = null;
+  });
+
+  const albumDetailSelectAllState = $derived(
+    albumTracks.length === 0 ? 'none' as const
+    : albumTracks.every((trk) => selectedTrackIds.has(trk.id)) ? 'all' as const
+    : albumTracks.some((trk) => selectedTrackIds.has(trk.id)) ? 'partial' as const
+    : 'none' as const
+  );
+
+  function toggleAlbumDetailSelectAll() {
+    if (albumDetailSelectAllState === 'all') {
+      const next = new Set(selectedTrackIds);
+      for (const trk of albumTracks) next.delete(trk.id);
+      selectedTrackIds = next;
+    } else {
+      const next = new Set(selectedTrackIds);
+      for (const trk of albumTracks) next.add(trk.id);
+      selectedTrackIds = next;
+    }
+  }
+
+  function toggleAlbumDetailTrackSelect(id: number, index: number, event?: MouseEvent | KeyboardEvent) {
+    if (event?.shiftKey && albumDetailLastSelectedIndex !== null) {
+      const ids = albumTracks.map((trk) => trk.id);
+      selectedTrackIds = applyShiftRange({
+        current: selectedTrackIds,
+        ids,
+        lastIndex: albumDetailLastSelectedIndex,
+        currentIndex: index,
+      });
+      albumDetailLastSelectedIndex = index;
+      return;
+    }
+    toggleTrackSelect(id);
+    albumDetailLastSelectedIndex = index;
+  }
   let albumTrackSearch = $state('');
   let showAlbumTrackSearch = $state(false);
 
@@ -1183,6 +2601,214 @@
     untrack(() => resetMultiSelect());
   });
 
+  // ───────── Folders tab tree-mode multi-select ─────────
+  // The tree-mode select toggle drives a separate flag from the flat-mode
+  // tracks-tab `trackSelectMode` so the user can move between tabs without
+  // the modes bleeding into each other. The underlying selection set is
+  // shared (`selectedTrackIds`) so the BulkActionBar invocation stays
+  // unchanged.
+  let treeSelectMode = $state(false);
+  // file_path lookup keyed by track id, used by `countSelectedUnder` to
+  // resolve folder-row selection state without re-fetching descendants
+  // on every render. Populated from `tracks` / `albumTracks` (effects
+  // below) and from recursive folder fetches on toggle.
+  let trackPathById = $state(new SvelteMap<number, string>());
+  // Full LocalTrack records for tree-mode-selected tracks that may NOT
+  // live in `tracks` or `albumTracks` (defensive — `tracks` covers the
+  // whole user library so this is usually empty). `selectedLocalTracks`
+  // falls back here when an id isn't found in the primary lists.
+  let treeSelectedTracksById = $state(new SvelteMap<number, LocalTrack>());
+
+  // Keep `trackPathById` populated from the in-memory track lists so the
+  // partial-state computation can resolve any track ID the user already
+  // sees in the UI. Recursive folder fetches add additional entries on
+  // top of this; deletions are not necessary because the cache lookups
+  // are bounded by `selectedTrackIds` membership at call time.
+  $effect(() => {
+    for (const trk of tracks) {
+      trackPathById.set(trk.id, trk.file_path);
+    }
+  });
+  $effect(() => {
+    for (const trk of albumTracks) {
+      trackPathById.set(trk.id, trk.file_path);
+    }
+  });
+
+  function toggleTreeSelectMode() {
+    treeSelectMode = !treeSelectMode;
+    if (!treeSelectMode) {
+      selectedTrackIds = new Set();
+      treeSelectedTracksById = new SvelteMap();
+    } else {
+      clearOtherSelectionContexts('tree');
+    }
+  }
+
+  /**
+   * Mutual exclusion between the three selection contexts in this view:
+   *
+   *   - `tracks`  — flat tracks-tab multi-select (trackSelectMode)
+   *   - `albums`  — albums-tab multi-select (albumSelectMode)
+   *   - `tree`    — folder-tree multi-select (treeSelectMode)
+   *
+   * The bulk-action bar in the footer is a single sink that doesn't know
+   * which context filled it, so allowing two contexts to be active at the
+   * same time confuses the user about what a bulk action will operate on.
+   * Whenever the user enters a new context, this function clears the
+   * other two — explicit, no `$effect` reactivity, no infinite loops.
+   *
+   * Pure light-switch behaviour: tap "select" in tracks while tree
+   * select is on, and tree just turns off — no warning toast, no
+   * disabled state, no extra UI noise. The user already understands
+   * how a toggle works.
+   */
+  function clearOtherSelectionContexts(entering: 'tracks' | 'albums' | 'tree' | 'folder-album') {
+    // Turn off any parent mode flag that isn't the one being entered.
+    // The 'folder-album' value covers the child component's local
+    // selection mode (LocalLibraryFolderAlbumView). Its own state lives
+    // inside the child; the child reacts to a `parentSelectionActive`
+    // prop becoming true by clearing its local selection. Here we just
+    // ensure all parent contexts go off when the child enters select.
+    if (entering !== 'tracks' && trackSelectMode) trackSelectMode = false;
+    if (entering !== 'albums' && albumSelectMode) albumSelectMode = false;
+    if (entering !== 'tree' && treeSelectMode) treeSelectMode = false;
+
+    // `selectedTrackIds` is shared between tracks-tab and tree contexts,
+    // so it ALWAYS gets cleared on a context switch — the entering
+    // context starts fresh and the BulkActionBar count reflects only
+    // the new accumulation. The albums set is tab-local and only needs
+    // clearing when leaving albums.
+    if (selectedTrackIds.size > 0) selectedTrackIds = new Set();
+    if (entering !== 'albums' && selectedAlbumIds.size > 0) selectedAlbumIds = new Set();
+    if (entering !== 'tree') {
+      if (selectedFolders.size > 0) selectedFolders = new Set();
+      if (treeSelectedTracksById.size > 0) treeSelectedTracksById = new SvelteMap();
+    }
+  }
+
+
+  // Returns the count of selected track IDs whose file_path lives under
+  // the given folder. O(|selection|) — selection is small in practice.
+  function countSelectedUnder(folderPath: string): number {
+    if (selectedTrackIds.size === 0) return 0;
+    const prefix = folderPath + '/';
+    let count = 0;
+    for (const id of selectedTrackIds) {
+      const path = trackPathById.get(id);
+      if (path && path.startsWith(prefix)) count += 1;
+    }
+    return count;
+  }
+
+  function getFolderSelectionState(
+    entry: FolderTreeEntry,
+  ): 'none' | 'partial' | 'all' {
+    if (entry.kind !== 'folder') return 'none';
+    const total = entry.track_count_under;
+    if (total === 0) return 'none';
+    const selected = countSelectedUnder(entry.path);
+    if (selected === 0) return 'none';
+    if (selected >= total) return 'all';
+    return 'partial';
+  }
+
+  // Path-based track-row state for the tree component, which only knows
+  // file_path (no track id). Walks `trackPathById` once to produce the
+  // boolean. Cheap because the cache is bounded by the visible library.
+  function isTrackPathSelected(trackPath: string): boolean {
+    for (const id of selectedTrackIds) {
+      if (trackPathById.get(id) === trackPath) return true;
+    }
+    return false;
+  }
+
+  async function toggleTreeFolderSelection(
+    folderPath: string,
+    currentState: 'none' | 'partial' | 'all',
+  ) {
+    if (!folderPath) return;
+    try {
+      const fetched = await invoke<LocalTrack[]>(
+        'v2_library_list_folder_tracks_recursive',
+        { folderPath, excludeNetworkFolders: shouldExcludeNetworkFolders() },
+      );
+      const next = new Set(selectedTrackIds);
+      // 'all' means user wants to deselect every descendant. 'none' and
+      // 'partial' both treat the click as a "select all" intent (the
+      // standard UX for ticking a partial-state checkbox).
+      if (currentState === 'all') {
+        for (const trk of fetched) {
+          next.delete(trk.id);
+          treeSelectedTracksById.delete(trk.id);
+        }
+      } else {
+        for (const trk of fetched) {
+          next.add(trk.id);
+          trackPathById.set(trk.id, trk.file_path);
+          treeSelectedTracksById.set(trk.id, trk);
+        }
+      }
+      selectedTrackIds = next;
+    } catch (err) {
+      console.error('[LocalLibrary] toggleTreeFolderSelection failed:', err);
+      showToast($t('toast.failedSelectFolderTracks'), 'error');
+    }
+  }
+
+  async function toggleTreeTrackSelection(trackPath: string) {
+    // Resolve trackPath → track id by walking the path cache. The cache
+    // is normally populated from the global `tracks` array (whole user
+    // library), so the first pass hits.
+    let resolvedId: number | null = null;
+    for (const [id, path] of trackPathById) {
+      if (path === trackPath) {
+        resolvedId = id;
+        break;
+      }
+    }
+    if (resolvedId === null) {
+      // Cache miss — fetch the parent folder's recursive listing to
+      // populate the cache, then retry. Defensive fallback.
+      const lastSlash = trackPath.lastIndexOf('/');
+      if (lastSlash <= 0) {
+        console.warn(
+          '[LocalLibrary] Cannot resolve track path with no parent folder:',
+          trackPath,
+        );
+        return;
+      }
+      const parent = trackPath.substring(0, lastSlash);
+      try {
+        const fetched = await invoke<LocalTrack[]>(
+          'v2_library_list_folder_tracks_recursive',
+          { folderPath: parent, excludeNetworkFolders: shouldExcludeNetworkFolders() },
+        );
+        for (const trk of fetched) {
+          trackPathById.set(trk.id, trk.file_path);
+          if (trk.file_path === trackPath) {
+            resolvedId = trk.id;
+            // Also cache the full record so bulk-actions can resolve it.
+            treeSelectedTracksById.set(trk.id, trk);
+          }
+        }
+      } catch (err) {
+        console.error('[LocalLibrary] toggleTreeTrackSelection lookup failed:', err);
+        return;
+      }
+    }
+    if (resolvedId === null) return;
+    const id = resolvedId;
+    const next = new Set(selectedTrackIds);
+    if (next.has(id)) {
+      next.delete(id);
+      treeSelectedTracksById.delete(id);
+    } else {
+      next.add(id);
+    }
+    selectedTrackIds = next;
+  }
+
   // Qobuz artist images cache (artist name -> image URL)
   let artistImages = $state<Map<string, string>>(new Map());
 
@@ -1195,6 +2821,17 @@
   let refreshingAlbumMetadata = $state(false);
   let albumMetadataRefreshed = $state(false);
   let editingAlbumHidden = $state(false);
+  // Tree-mode edit flag: set when the album-edit modal is opened from the
+  // compact tree-mode album view. Two responsibilities:
+  //   1. Suppresses the page-level album-detail takeover (gate at the
+  //      `{#if selectedAlbum}` block) so the tree rail stays visible while
+  //      the modal is open. The takeover is the default for flat mode and
+  //      direct nav, so we keep the gate scoped to tree-mode edits only.
+  //   2. Drives an $effect-based cleanup that clears `selectedAlbum` /
+  //      `albumTracks` once both album-edit and tag-editor modals close,
+  //      so the tree-mode-set `selectedAlbum` doesn't leak into a later
+  //      flat-mode tab switch.
+  let treeAlbumEditMode = $state(false);
   let discogsImageOptions = $state<DiscogsImageOption[]>([]);
   let selectedDiscogsImage = $state<string | null>(null);
   let fetchingDiscogsImages = $state(false);
@@ -1254,8 +2891,29 @@
     useVirtualization = isVirtualizationEnabled() && shouldUsePerformanceMode(itemCount);
   });
 
+  // React to navigation requests from the title-bar / sidebar Local Library
+  // dropdowns while the view is already mounted. The initial-mount path is
+  // handled inside `loadLibraryPreferences` so this guard avoids racing it.
+  $effect(() => {
+    const target = $libraryTargetTab;
+    if (!target) return;
+    if (!initialTabSet) return;
+    if (visibleTabs.includes(target as TabType)) {
+      activeTab = target as TabType;
+      libraryTargetTab.set(null);
+      // Ensure the newly-activated tab fetches its data if it hasn't yet.
+      ensureActiveTabDataLoaded();
+    }
+  });
+
   onMount(async () => {
+    // Load tab preferences first so the initial render uses the saved order.
+    await loadLibraryPreferences();
     await loadLibraryData();
+    // Trigger the active tab's loader now that activeTab reflects user prefs.
+    // Without this, a user whose first visible tab is e.g. 'tracks' lands on
+    // an empty list because loadLibraryData only populates albums/folders.
+    ensureActiveTabDataLoaded();
     // Load folders (now safe in offline mode - uses library_get_folders instead)
     loadFolders(); // Load in background - doesn't block UI
     checkDiscogsCredentials();
@@ -1269,6 +2927,7 @@
     unsubscribePerformance = subscribePerformance(() => {
       const itemCount = Math.max(albums.length, tracks.length);
       useVirtualization = isVirtualizationEnabled() && shouldUsePerformanceMode(itemCount);
+      showTrackArtwork = isTrackArtworkEnabled();
     });
 
     // Subscribe to navigation changes for back/forward support
@@ -1297,6 +2956,18 @@
     if (initialNavState.activeView === 'library-album' && initialNavState.selectedLocalAlbumId) {
       loadAlbumById(initialNavState.selectedLocalAlbumId);
     }
+
+    // Restore the ephemeral folder pane if the user left one open last
+    // session. Runs in the background (void) so it doesn't block the
+    // initial render — the user can navigate freely while the rescan
+    // happens; rehydrateEphemeralFolder bails gracefully if so.
+    void rehydrateEphemeralFolder();
+
+    // Watch raw playback events so we can advance the displayed track
+    // when CUE virtual-track boundaries are crossed (the audio engine
+    // can't help here — one FLAC, one track_id, multiple virtual
+    // tracks). Watcher self-no-ops outside ephemeral sessions.
+    void startEphemeralCueBoundaryWatcher();
   });
 
   onDestroy(() => {
@@ -1311,6 +2982,10 @@
     }
     if (unsubscribePerformance) {
       unsubscribePerformance();
+    }
+    if (cueBoundaryUnlisten) {
+      cueBoundaryUnlisten();
+      cueBoundaryUnlisten = null;
     }
   });
 
@@ -1405,11 +3080,22 @@
     return enabled && baseUrl.length > 0 && token.length > 0;
   }
 
-  function buildPlexArtworkUrl(path: string): string {
+  /**
+   * Build a Plex artwork URL. When `size` is provided, wraps the path
+   * in `/photo/:/transcode` so the Plex server returns a resized image
+   * (server-side downscale) — critical for thumbnail contexts where
+   * the original artwork is typically 1000x1000+ and blowing through
+   * decode + memory budget otherwise. When `size` is omitted, returns
+   * the original full-resolution path (used by AlbumDetailView).
+   */
+  function buildPlexArtworkUrl(path: string, size?: number): string {
     const baseUrl = getUserItem('qbz-plex-poc-base-url') || '';
     const token = getUserItem('qbz-plex-poc-token') || '';
     if (!baseUrl || !token) return path;
     const base = baseUrl.replace(/\/+$/, '');
+    if (size && size > 0) {
+      return `${base}/photo/:/transcode?url=${encodeURIComponent(path)}&width=${size}&height=${size}&minSize=1&X-Plex-Token=${encodeURIComponent(token)}`;
+    }
     const separator = path.includes('?') ? '&' : '?';
     return `${base}${path}${separator}X-Plex-Token=${encodeURIComponent(token)}`;
   }
@@ -1583,6 +3269,9 @@
     const background = options.background === true;
     const startedAt = performance.now();
     console.log('[LocalLibrary] loadLibraryData START, isOffline:', isOffline, 'background:', background);
+    // Library data was just refreshed (or is about to be) — drop the
+    // cached metadata-grouped Albums list so the next visit re-fetches.
+    metadataAlbumsLoaded = false;
     if (!background) {
       loading = true;
       error = null;
@@ -1662,6 +3351,31 @@
         console.log('[LocalLibrary] Setting loading = false');
         loading = false;
       }
+    }
+  }
+
+  async function loadMetadataAlbums() {
+    if (metadataAlbumsLoaded || metadataAlbumsLoading) return;
+    try {
+      metadataAlbumsLoading = true;
+      const includePlex = isPlexLibraryEnabled();
+      const [localResult, plexAlbumsRaw] = await Promise.all([
+        invoke<LocalAlbum[]>('v2_library_get_albums_metadata', {
+          includeHidden: false,
+          excludeNetworkFolders: shouldExcludeNetworkFolders(),
+        }),
+        includePlex
+          ? invoke<PlexCachedAlbum[]>('v2_plex_cache_get_albums').catch(() => [])
+          : Promise.resolve([]),
+      ]);
+      const plexAlbums = plexAlbumsRaw.map(mapPlexAlbum);
+      metadataAlbums = [...localResult, ...plexAlbums];
+      metadataAlbumsLoaded = true;
+    } catch (err) {
+      console.error('[LocalLibrary] Failed to load metadata albums:', err);
+      metadataAlbums = [];
+    } finally {
+      metadataAlbumsLoading = false;
     }
   }
 
@@ -1786,7 +3500,19 @@
 
   async function loadTracks(query = '') {
     console.log('[LocalLibrary] loadTracks START, query:', query);
-    const requestId = ++tracksHydrationRequestId;
+    // Bumping the request id invalidates any in-flight viewport hydration
+    // batches keyed off the previous query. The actual hydration happens
+    // viewport-driven via onVisibleTracksChange — we no longer front-load
+    // the full Plex catalog, which used to flood the server and trigger a
+    // second reactive pass through groupTracks on every completion.
+    ++tracksHydrationRequestId;
+    queuedPlexHydration.clear();
+    pendingPlexHydration = [];
+    if (plexHydrationDebounce) {
+      clearTimeout(plexHydrationDebounce);
+      plexHydrationDebounce = null;
+    }
+    plexQualityOverrides.clear();
     loading = true;
     try {
       console.log('[LocalLibrary] Calling library_search + plex_cache_search_tracks');
@@ -1806,17 +3532,6 @@
       const mappedPlexTracks = plexTracksRaw.map(mapPlexTrack);
       tracks = [...localTracks, ...mappedPlexTracks];
       console.log('[LocalLibrary] Received tracks:', tracks.length, 'local:', localTracks.length, 'plex:', plexTracksRaw.length);
-
-      // Hydrate Plex quality in the background; don't block rendering track lists.
-      // Guard with requestId to avoid stale updates after a newer search.
-      void hydratePlexTrackQuality(mappedPlexTracks)
-        .then((hydratedPlexTracks) => {
-          if (requestId !== tracksHydrationRequestId) return;
-          tracks = [...localTracks, ...hydratedPlexTracks];
-        })
-        .catch((error) => {
-          console.warn('[LocalLibrary] Background Plex quality hydration failed:', error);
-        });
     } catch (err) {
       console.error('[LocalLibrary] Failed to load tracks:', err);
       error = String(err);
@@ -1826,7 +3541,88 @@
     }
   }
 
+  function onVisibleTracksChange(visible: LocalTrack[]) {
+    if (visible.length === 0) return;
+    let queuedAny = false;
+    for (const track of visible) {
+      if (track.source !== 'plex') continue;
+      if (plexQualityOverrides.has(track.file_path)) continue;
+      if (queuedPlexHydration.has(track.file_path)) continue;
+      if (!isLikelyFallbackPlexQuality(track)) continue;
+      queuedPlexHydration.add(track.file_path);
+      pendingPlexHydration.push(track);
+      queuedAny = true;
+    }
+    if (!queuedAny || plexHydrationDebounce) return;
+    const requestId = tracksHydrationRequestId;
+    plexHydrationDebounce = setTimeout(() => {
+      plexHydrationDebounce = null;
+      if (requestId !== tracksHydrationRequestId) return;
+      const batch = pendingPlexHydration;
+      pendingPlexHydration = [];
+      void hydrateVisiblePlexTracks(batch, requestId);
+    }, PLEX_VISIBLE_HYDRATION_DEBOUNCE_MS);
+  }
+
+  async function hydrateVisiblePlexTracks(batch: LocalTrack[], requestId: number) {
+    const baseUrl = getUserItem('qbz-plex-poc-base-url') || '';
+    const token = getUserItem('qbz-plex-poc-token') || '';
+    if (!baseUrl || !token || batch.length === 0) return;
+
+    const updates: PlexTrackQualityUpdate[] = [];
+    for (let i = 0; i < batch.length; i += PLEX_HYDRATION_BATCH_SIZE) {
+      if (requestId !== tracksHydrationRequestId) return;
+      const chunk = batch.slice(i, i + PLEX_HYDRATION_BATCH_SIZE);
+      await Promise.all(
+        chunk.map(async (track) => {
+          const metadata = await fetchPlexTrackMetadataWithTimeout(baseUrl, token, track.file_path);
+          if (!metadata) {
+            // Allow a future retry if the row stays visible.
+            queuedPlexHydration.delete(track.file_path);
+            return;
+          }
+          plexQualityOverrides.set(track.file_path, {
+            format: (metadata.container ?? metadata.codec ?? '').toLowerCase() || undefined,
+            bitDepth: metadata.bitDepth ?? undefined,
+            sampleRate: metadata.samplingRateHz ?? undefined
+          });
+          updates.push({
+            ratingKey: track.file_path,
+            container: metadata.container ?? metadata.codec,
+            samplingRateHz: metadata.samplingRateHz,
+            bitDepth: metadata.bitDepth
+          });
+        })
+      );
+    }
+
+    if (updates.length > 0) {
+      invoke<number>('v2_plex_cache_update_track_quality', { updates }).catch((error) => {
+        console.warn('[LocalLibrary] Failed to persist Plex track quality updates:', error);
+      });
+    }
+  }
+
+  /**
+   * Trigger the lazy loader for whichever tab is currently active. Used by
+   * `handleTabChange` and from `onMount` after preferences settle so the
+   * initial visible tab always fetches its data — otherwise users can land
+   * on Tracks (or any other configured first tab) and see an empty list.
+   * `'folders'` doesn't need a branch because `loadLibraryData()` already
+   * fetches the folder-grouped albums during mount/refresh.
+   */
+  function ensureActiveTabDataLoaded() {
+    if (activeTab === 'artists' && artists.length === 0) {
+      loadArtists();
+    } else if (activeTab === 'tracks' && tracks.length === 0) {
+      loadTracks(trackSearch.trim());
+    } else if (activeTab === 'albums' && !metadataAlbumsLoaded) {
+      loadMetadataAlbums();
+    }
+  }
+
   function handleTabChange(tab: TabType) {
+    const previous = activeTab;
     activeTab = tab;
 
     // If we're viewing an album, navigate back to library
@@ -1840,11 +3636,15 @@
     selectedAlbum = null;
     albumTracks = [];
 
-    if (tab === 'artists' && artists.length === 0) {
-      loadArtists();
-    } else if (tab === 'tracks' && tracks.length === 0) {
-      loadTracks(trackSearch.trim());
+    // Folders and Albums share the album-selection state but their album
+    // ID spaces don't overlap. Clear any in-flight selection when crossing
+    // tabs so the bulk-action bar doesn't show stale counts.
+    if (previous !== tab && (albumSelectMode || selectedAlbumIds.size > 0)) {
+      albumSelectMode = false;
+      selectedAlbumIds = new Set();
     }
+
+    ensureActiveTabDataLoaded();
   }
 
   async function handleAddFolder() {
@@ -1984,6 +3784,7 @@
           await loadLibraryData();
           if (activeTab === 'artists') await loadArtists();
           if (activeTab === 'tracks') await loadTracks();
+          if (activeTab === 'albums') await loadMetadataAlbums();
         }
       } catch (err) {
         console.error('Failed to get scan progress:', err);
@@ -2090,6 +3891,8 @@
       albums = [];
       artists = [];
       tracks = [];
+      metadataAlbums = [];
+      metadataAlbumsLoaded = false;
     } catch (err) {
       console.error('Failed to clear library:', err);
       alert(`Failed to clear library: ${err}`);
@@ -2295,6 +4098,17 @@
         return await hydratePlexTrackQuality(mappedTracks);
       }
 
+      // Detect a metadata-grouped album row: the metadata Albums query
+      // emits an empty `directory_path` and populates `source_folders`.
+      // Use `v2_library_get_album_tracks_metadata` for those; folder-
+      // grouped rows keep the original `v2_library_get_album_tracks`.
+      const isMetadataAlbum = album.source_folders != null;
+      if (isMetadataAlbum) {
+        return await invoke<LocalTrack[]>('v2_library_get_album_tracks_metadata', {
+          metadataKey: album.id
+        });
+      }
+
       return await invoke<LocalTrack[]>('v2_library_get_album_tracks', {
         albumGroupKey: album.id
       });
@@ -2312,6 +4126,26 @@
     return format === 'flac' && bitDepth <= 16 && sampleRate <= 44100;
   }
 
+  const PLEX_HYDRATION_BATCH_SIZE = 5;
+  const PLEX_HYDRATION_TIMEOUT_MS = 5000;
+
+  async function fetchPlexTrackMetadataWithTimeout(
+    baseUrl: string,
+    token: string,
+    ratingKey: string
+  ): Promise<PlexTrackMetadata | null> {
+    try {
+      return await Promise.race<PlexTrackMetadata>([
+        invoke<PlexTrackMetadata>('v2_plex_get_track_metadata', { baseUrl, token, ratingKey }),
+        new Promise<PlexTrackMetadata>((_, reject) =>
+          setTimeout(() => reject(new Error('plex_hydration_timeout')), PLEX_HYDRATION_TIMEOUT_MS)
+        )
+      ]);
+    } catch {
+      return null;
+    }
+  }
+
   async function hydratePlexTrackQuality(tracks: LocalTrack[]): Promise<LocalTrack[]> {
     const baseUrl = getUserItem('qbz-plex-poc-base-url') || '';
     const token = getUserItem('qbz-plex-poc-token') || '';
@@ -2320,33 +4154,27 @@
     const candidates = tracks.filter((track) => isLikelyFallbackPlexQuality(track));
     if (candidates.length === 0) return tracks;
 
-    const metadataEntries = await Promise.all(
-      candidates.map(async (track) => {
-        try {
-          const metadata = await invoke<PlexTrackMetadata>('v2_plex_get_track_metadata', {
-            baseUrl,
-            token,
-            ratingKey: track.file_path
-          });
-          return [track.file_path, metadata] as const;
-        } catch (error) {
-          console.warn('[LocalLibrary] Failed to hydrate Plex track metadata for', track.file_path, error);
-          return null;
-        }
-      })
-    );
-
     const metadataByRatingKey = new Map<string, PlexTrackMetadata>();
     const qualityUpdates: PlexTrackQualityUpdate[] = [];
-    for (const entry of metadataEntries) {
-      if (!entry) continue;
-      metadataByRatingKey.set(entry[0], entry[1]);
-      qualityUpdates.push({
-        ratingKey: entry[0],
-        container: entry[1].container ?? entry[1].codec,
-        samplingRateHz: entry[1].samplingRateHz,
-        bitDepth: entry[1].bitDepth
-      });
+
+    for (let i = 0; i < candidates.length; i += PLEX_HYDRATION_BATCH_SIZE) {
+      const batch = candidates.slice(i, i + PLEX_HYDRATION_BATCH_SIZE);
+      const results = await Promise.all(
+        batch.map(async (track) => {
+          const metadata = await fetchPlexTrackMetadataWithTimeout(baseUrl, token, track.file_path);
+          return metadata ? ({ ratingKey: track.file_path, metadata } as const) : null;
+        })
+      );
+      for (const entry of results) {
+        if (!entry) continue;
+        metadataByRatingKey.set(entry.ratingKey, entry.metadata);
+        qualityUpdates.push({
+          ratingKey: entry.ratingKey,
+          container: entry.metadata.container ?? entry.metadata.codec,
+          samplingRateHz: entry.metadata.samplingRateHz,
+          bitDepth: entry.metadata.bitDepth
+        });
+      }
     }
     if (metadataByRatingKey.size === 0) return tracks;
 
@@ -2539,6 +4367,44 @@
     showAlbumEditModal = true;
   }
 
+  // Tree-mode counterpart: opens the same album-edit modal against the
+  // tree-selected album without triggering the page-level album-detail
+  // takeover. Bridges the modal's `selectedAlbum` dependency to
+  // `selectedAlbumForTree`, mirrors `albumTracks` from `treeAlbumTracks`
+  // (TagEditorModal reads `albumTracks`), and sets `treeAlbumEditMode` so
+  // the takeover gate stays suppressed and the cleanup effect knows to
+  // clear `selectedAlbum` when both modals close.
+  function openTreeAlbumEditModal() {
+    const album = selectedAlbumForTree;
+    if (!album) return;
+    if (album.source === 'plex' && getUserItem(PLEX_METADATA_WRITE_KEY) !== 'true') {
+      showToast($t('settings.integrations.plexWriteDisabledNotice'), 'info');
+      return;
+    }
+    treeAlbumEditMode = true;
+    selectedAlbum = album;
+    albumTracks = treeAlbumTracks;
+    editingAlbumHidden = false;
+    albumMetadataRefreshed = false;
+    discogsImageOptions = [];
+    selectedDiscogsImage = null;
+    discogsFetchSuccessful = false;
+    showAlbumEditModal = true;
+  }
+
+  // Cleanup effect for tree-mode edits. Fires when both album-edit and
+  // tag-editor modals are closed AND we entered through the tree path.
+  // We can't blindly clear on `!showAlbumEditModal` alone because
+  // `openTagEditorFromAlbumSettings` closes the album-edit modal to hand
+  // off to the tag editor — the tag editor still needs `selectedAlbum`.
+  $effect(() => {
+    if (treeAlbumEditMode && !showAlbumEditModal && !showTagEditorModal) {
+      treeAlbumEditMode = false;
+      selectedAlbum = null;
+      albumTracks = [];
+    }
+  });
+
   function openTagEditorFromAlbumSettings() {
     if (!selectedAlbum) return;
     showAlbumEditModal = false;
@@ -2685,10 +4551,21 @@
   }
 
   function getQualityBadge(track: LocalTrack): string {
-    const format = track.format.toUpperCase();
-    const bitDepth = track.bit_depth && track.bit_depth > 0 ? String(track.bit_depth) : '--';
-    const sampleRate = track.sample_rate > 0
-      ? Number((track.sample_rate / 1000).toFixed(1)).toString()
+    let rawFormat = track.format;
+    let bitDepthRaw = track.bit_depth;
+    let sampleRateRaw = track.sample_rate;
+    if (track.source === 'plex') {
+      const override = plexQualityOverrides.get(track.file_path);
+      if (override) {
+        if (override.format) rawFormat = override.format;
+        if (override.bitDepth != null) bitDepthRaw = override.bitDepth;
+        if (override.sampleRate != null) sampleRateRaw = override.sampleRate;
+      }
+    }
+    const format = rawFormat.toUpperCase();
+    const bitDepth = bitDepthRaw && bitDepthRaw > 0 ? String(bitDepthRaw) : '--';
+    const sampleRate = sampleRateRaw > 0
+      ? Number((sampleRateRaw / 1000).toFixed(1)).toString()
       : '--';
 
     // Format: "FLAC 24/96" style that audiophiles love
@@ -2797,7 +4674,7 @@
   function getArtworkUrl(path?: string): string {
     if (!path) return '';
     if (/^https?:\/\//i.test(path)) return path;
-    if (path.startsWith('/library/')) return buildPlexArtworkUrl(path);
+    if (path.startsWith('/library/')) return buildPlexArtworkUrl(path, 220);
 
     // For grid/list views, prefer thumbnails
     const cachedThumb = thumbnailUrlCache.get(path);
@@ -2962,7 +4839,7 @@
       setTimeout(() => searchInputEl?.focus(), 50);
     } else {
       // Clear search when closing
-      if (activeTab === 'albums') {
+      if (activeTab === 'folders') {
         albumSearch = '';
         debouncedAlbumSearch = '';
         if (albumSearchTimer) clearTimeout(albumSearchTimer);
@@ -2978,20 +4855,20 @@
   }
 
   function getCurrentSearchValue(): string {
-    if (activeTab === 'albums') return albumSearch;
+    if (activeTab === 'folders') return albumSearch;
     if (activeTab === 'artists') return artistSearch;
     return trackSearch;
   }
 
   function getCurrentSearchPlaceholder(): string {
-    if (activeTab === 'albums') return 'Search albums or artists...';
+    if (activeTab === 'folders') return 'Search albums or artists...';
     if (activeTab === 'artists') return 'Search artists...';
     return 'Search tracks, albums, artists...';
   }
 
   function handleSearchInput(e: Event) {
     const value = (e.target as HTMLInputElement).value;
-    if (activeTab === 'albums') {
+    if (activeTab === 'folders') {
       albumSearch = value;
       scheduleAlbumSearch();
     } else if (activeTab === 'artists') {
@@ -3295,38 +5172,40 @@
 
   function groupTracks(items: LocalTrack[], mode: TrackGroupMode) {
     const prefix = `track-${mode}`;
-    const sorted = [...items].sort((a, b) => {
+    // Decorate-sort-undecorate: precompute one composite key per track and
+    // sort by string compare. localeCompare creates an Intl.Collator on
+    // every call, which costs seconds across 16K-66K rows; padded-numeric
+    // ASCII keys with `<`/`>` are 10-100× faster and good enough for
+    // library browsing.
+    const SEP = '';
+    const padDisc = (d: number) => String(d).padStart(4, '0');
+    const padTrack = (n: number) => String(n).padStart(6, '0');
+    const decorated = items.map((track) => {
+      let key: string;
       if (mode === 'album') {
-        const albumCmp = a.album.localeCompare(b.album);
-        if (albumCmp !== 0) return albumCmp;
-        const artistCmp = a.artist.localeCompare(b.artist);
-        if (artistCmp !== 0) return artistCmp;
-        const aOrder = trackSortValue(a);
-        const bOrder = trackSortValue(b);
-        if (aOrder.disc !== bOrder.disc) return aOrder.disc - bOrder.disc;
-        if (aOrder.trackNumber !== bOrder.trackNumber) return aOrder.trackNumber - bOrder.trackNumber;
-        return a.title.localeCompare(b.title);
+        const order = trackSortValue(track);
+        key = (track.album || '').toLowerCase() + SEP +
+              (track.artist || '').toLowerCase() + SEP +
+              padDisc(order.disc) + SEP +
+              padTrack(order.trackNumber) + SEP +
+              (track.title || '').toLowerCase();
+      } else if (mode === 'artist') {
+        const canonical = (allCanonicalNames.get(track.artist) || track.artist || '').toLowerCase();
+        const order = trackSortValue(track);
+        key = canonical + SEP +
+              (track.album || '').toLowerCase() + SEP +
+              padDisc(order.disc) + SEP +
+              padTrack(order.trackNumber) + SEP +
+              (track.title || '').toLowerCase();
+      } else {
+        key = (track.title || '').toLowerCase() + SEP +
+              (track.artist || '').toLowerCase() + SEP +
+              (track.album || '').toLowerCase();
       }
-      if (mode === 'artist') {
-        // Use canonical names for sorting to keep variants together
-        const aArtist = allCanonicalNames.get(a.artist) || a.artist;
-        const bArtist = allCanonicalNames.get(b.artist) || b.artist;
-        const artistCmp = aArtist.localeCompare(bArtist);
-        if (artistCmp !== 0) return artistCmp;
-        const albumCmp = a.album.localeCompare(b.album);
-        if (albumCmp !== 0) return albumCmp;
-        const aOrder = trackSortValue(a);
-        const bOrder = trackSortValue(b);
-        if (aOrder.disc !== bOrder.disc) return aOrder.disc - bOrder.disc;
-        if (aOrder.trackNumber !== bOrder.trackNumber) return aOrder.trackNumber - bOrder.trackNumber;
-        return a.title.localeCompare(b.title);
-      }
-      const titleCmp = a.title.localeCompare(b.title);
-      if (titleCmp !== 0) return titleCmp;
-      const artistCmp = a.artist.localeCompare(b.artist);
-      if (artistCmp !== 0) return artistCmp;
-      return a.album.localeCompare(b.album);
+      return { track, key };
     });
+    decorated.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+    const sorted = decorated.map((d) => d.track);
 
     const groups = new Map<string, { title: string; subtitle?: string; tracks: LocalTrack[]; artists: Set<string> }>();
     for (const track of sorted) {
@@ -3421,8 +5300,249 @@
 </script>
 
 <ViewTransition duration={200} distance={12} direction="down">
-<div class="library-view" class:virtualized-active={!selectedAlbum && ((activeTab === 'albums' && !showHiddenAlbums && albums.length > 0) || (activeTab === 'artists' && artists.length > 0) || (activeTab === 'tracks' && tracks.length > 0))}>
-  {#if selectedAlbum}
+<div class="library-view" class:virtualized-active={!selectedAlbum && ((activeTab === 'folders' && !showHiddenAlbums && albums.length > 0) || (activeTab === 'albums' && metadataAlbums.length > 0) || (activeTab === 'artists' && artists.length > 0) || (activeTab === 'tracks' && tracks.length > 0))}>
+  {#snippet albumControls(alphaGroups: Set<string>)}
+    <div class="album-controls">
+      <div class="dropdown-container">
+        <button
+          class="control-btn"
+          onclick={() => (openMenu = openMenu === 'group' ? null : 'group')}
+          title="Group albums"
+        >
+          <span>{!albumGroupingEnabled
+            ? $t('purchases.group.off')
+            : albumGroupMode === 'alpha'
+              ? $t('purchases.group.alpha')
+              : $t('purchases.group.artist')}</span>
+        </button>
+        {#if openMenu === 'group'}
+          <div class="dropdown-menu">
+            <button
+              class="dropdown-item"
+              class:selected={!albumGroupingEnabled}
+              onclick={() => { albumGroupingEnabled = false; openMenu = null; }}
+            >
+              {$t('purchases.group.optionOff')}
+            </button>
+            <button
+              class="dropdown-item"
+              class:selected={albumGroupingEnabled && albumGroupMode === 'alpha'}
+              onclick={() => { albumGroupMode = 'alpha'; albumGroupingEnabled = true; openMenu = null; }}
+            >
+              {$t('purchases.group.optionAlpha')}
+            </button>
+            <button
+              class="dropdown-item"
+              class:selected={albumGroupingEnabled && albumGroupMode === 'artist'}
+              onclick={() => { albumGroupMode = 'artist'; albumGroupingEnabled = true; openMenu = null; }}
+            >
+              {$t('purchases.group.optionArtist')}
+            </button>
+          </div>
+        {/if}
+      </div>
+
+      <!-- Quality/Format Filter -->
+      <div class="dropdown-container" bind:this={filterPanelRef}>
+        <button
+          class="control-btn icon-only"
+          class:active={hasActiveFilters}
+          onclick={() => (openMenu = openMenu === 'filter' ? null : 'filter')}
+          title="Filter by quality/format"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M4.22657 2C2.50087 2 1.58526 4.03892 2.73175 5.32873L8.99972 12.3802V19C8.99972 19.3788 9.21373 19.725 9.55251 19.8944L13.5525 21.8944C13.8625 22.0494 14.2306 22.0329 14.5255 21.8507C14.8203 21.6684 14.9997 21.3466 14.9997 21V12.3802L21.2677 5.32873C22.4142 4.03893 21.4986 2 19.7729 2H4.22657Z"/>
+          </svg>
+          {#if activeFilterCount > 0}
+            <span class="filter-badge">{activeFilterCount}</span>
+          {/if}
+        </button>
+        {#if openMenu === 'filter'}
+          <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
+          <div
+            class="filter-panel"
+            role="region"
+            onmouseenter={clearFilterPanelTimer}
+            onmouseleave={startFilterPanelTimer}
+            onclick={handleFilterPanelActivity}
+          >
+            <div class="filter-panel-header">
+              <span>{$t('library.filters')}</span>
+              {#if hasActiveFilters}
+                <button class="clear-filters-btn" onclick={clearAllFilters}>{$t('library.clearAllFilters')}</button>
+              {/if}
+            </div>
+
+            <div class="filter-section">
+              <div class="filter-section-label">{$t('library.quality')}</div>
+              <div class="filter-checkboxes">
+                <label class="filter-checkbox">
+                  <input type="checkbox" bind:checked={filterHiRes} />
+                  <span class="checkmark"></span>
+                  <span class="label-text">Hi-Res</span>
+                  <span class="label-hint">24bit+</span>
+                </label>
+                <label class="filter-checkbox">
+                  <input type="checkbox" bind:checked={filterCdQuality} />
+                  <span class="checkmark"></span>
+                  <span class="label-text">{$t('quality.cdQuality')}</span>
+                  <span class="label-hint">16bit</span>
+                </label>
+                <label class="filter-checkbox">
+                  <input type="checkbox" bind:checked={filterLossy} />
+                  <span class="checkmark"></span>
+                  <span class="label-text">Lossy</span>
+                </label>
+              </div>
+            </div>
+
+            <div class="filter-section">
+              <div class="filter-section-label">Format</div>
+              <div class="filter-checkboxes format-grid">
+                <label class="filter-checkbox">
+                  <input type="checkbox" bind:checked={filterFlac} />
+                  <span class="checkmark"></span>
+                  <span class="label-text">FLAC</span>
+                </label>
+                <label class="filter-checkbox">
+                  <input type="checkbox" bind:checked={filterAlac} />
+                  <span class="checkmark"></span>
+                  <span class="label-text">ALAC</span>
+                </label>
+                <label class="filter-checkbox">
+                  <input type="checkbox" bind:checked={filterApe} />
+                  <span class="checkmark"></span>
+                  <span class="label-text">APE</span>
+                </label>
+                <label class="filter-checkbox">
+                  <input type="checkbox" bind:checked={filterWav} />
+                  <span class="checkmark"></span>
+                  <span class="label-text">WAV</span>
+                </label>
+                <label class="filter-checkbox">
+                  <input type="checkbox" bind:checked={filterMp3} />
+                  <span class="checkmark"></span>
+                  <span class="label-text">MP3</span>
+                </label>
+                <label class="filter-checkbox">
+                  <input type="checkbox" bind:checked={filterAac} />
+                  <span class="checkmark"></span>
+                  <span class="label-text">AAC</span>
+                </label>
+                <label class="filter-checkbox">
+                  <input type="checkbox" bind:checked={filterOther} />
+                  <span class="checkmark"></span>
+                  <span class="label-text">Other</span>
+                </label>
+              </div>
+            </div>
+
+            <div class="filter-section">
+              <div class="filter-section-label">{$t('library.source')}</div>
+              <div class="filter-checkboxes source-row">
+                <label class="filter-checkbox">
+                  <input type="checkbox" bind:checked={filterLocalFiles} />
+                  <span class="checkmark"></span>
+                  <HardDrive size={14} class="filter-icon" />
+                  <span class="label-text">{$t('library.localFiles')}</span>
+                </label>
+                <label class="filter-checkbox">
+                  <input type="checkbox" bind:checked={filterOfflineCache} />
+                  <span class="checkmark"></span>
+                  <img src="/qobuz-logo-filled.svg" alt="" class="filter-icon qobuz-icon" />
+                  <span class="label-text">{$t('library.offlineCache')}</span>
+                </label>
+                <label class="filter-checkbox">
+                  <input type="checkbox" bind:checked={filterPlexLibrary} />
+                  <span class="checkmark"></span>
+                  <Network size={14} class="filter-icon" />
+                  <span class="label-text">{$t('library.plexLibrary')}</span>
+                </label>
+              </div>
+            </div>
+          </div>
+        {/if}
+      </div>
+
+      <!-- Sort dropdown -->
+      <div class="dropdown-container">
+        <button
+          class="control-btn icon-only"
+          onclick={() => (openMenu = openMenu === 'sort' ? null : 'sort')}
+          title="Sort albums"
+        >
+          <ArrowUpDown size={14} />
+        </button>
+        {#if openMenu === 'sort'}
+          <div class="sort-menu">
+            {#each sortOptions as option}
+              <button
+                class="dropdown-item"
+                class:selected={sortBy === option.value}
+                onclick={() => selectSort(option.value)}
+              >
+                <span>{option.label}</span>
+                {#if sortBy === option.value}
+                  <span class="sort-indicator">{sortDirection === 'asc' ? '↑' : '↓'}</span>
+                {/if}
+              </button>
+            {/each}
+          </div>
+        {/if}
+      </div>
+
+      <button
+        class="control-btn icon-only"
+        onclick={() => (albumViewMode = albumViewMode === 'list' ? 'grid' : 'list')}
+        title={albumViewMode === 'list' ? $t('purchases.view.grid') : $t('purchases.view.list')}
+      >
+        {#if albumViewMode === 'list'}
+          <LayoutGrid size={16} />
+        {:else}
+          <List size={16} />
+        {/if}
+      </button>
+
+      <button
+        class="control-btn icon-only"
+        class:active={albumSelectMode}
+        onclick={toggleAlbumSelectMode}
+        title={albumSelectMode ? $t('actions.cancelSelection') : $t('actions.select')}
+      >
+        <SquareCheckBig size={16} />
+      </button>
+
+      {#if albumSelectMode}
+        <label class="select-all-checkbox" title={$t('actions.selectAll')}>
+          <input
+            type="checkbox"
+            checked={albumSelectAllState === 'all'}
+            indeterminate={albumSelectAllState === 'partial'}
+            onchange={toggleAlbumSelectAll}
+          />
+          <span>{$t('actions.selectAll')}</span>
+        </label>
+      {/if}
+
+      {#if albumGroupingEnabled && albumGroupMode === 'alpha'}
+        <div class="alpha-index-inline">
+          {#each alphaIndexLetters as letter}
+            <button
+              class="alpha-letter"
+              class:disabled={!alphaGroups.has(letter)}
+              onclick={() => {
+                const groupId = groupIdForKey('album-alpha', letter);
+                virtualizedScrollTarget = alphaGroups.has(letter) ? groupId : undefined;
+              }}
+            >
+              {letter}
+            </button>
+          {/each}
+        </div>
+      {/if}
+    </div>
+  {/snippet}
+  {#if selectedAlbum && !treeAlbumEditMode}
     {@const filteredAlbumTracks = albumTrackSearch.trim()
       ? albumTracks.filter(track =>
           track.title.toLowerCase().includes(albumTrackSearch.toLowerCase()) ||
@@ -3507,6 +5627,15 @@
               <span class="spec-item">{formatBitDepth(firstTrack.bit_depth)}</span>
               <span class="spec-item">{formatSampleRate(firstTrack.sample_rate)}</span>
               <span class="spec-item">{firstTrack.channels === 2 ? $t('quality.stereo') : firstTrack.channels === 1 ? $t('quality.mono') : `${firstTrack.channels}ch`}</span>
+              <SourceBadge
+                value={selectedAlbum.source === 'plex'
+                  ? 'plex'
+                  : selectedAlbum.source === 'qobuz_purchase'
+                    ? 'qobuz_purchase'
+                    : selectedAlbum.source === 'qobuz_download'
+                      ? 'qobuz_download'
+                      : 'user'}
+              />
             </div>
           {/if}
           {#if selectedAlbum.likely_single_file_album}
@@ -3555,6 +5684,17 @@
 
       <div class="track-list">
         <div class="track-list-header">
+          {#if trackSelectMode}
+            <div class="col-select-all">
+              <input
+                type="checkbox"
+                checked={albumDetailSelectAllState === 'all'}
+                indeterminate={albumDetailSelectAllState === 'partial'}
+                onchange={toggleAlbumDetailSelectAll}
+                title={$t('actions.selectAll')}
+              />
+            </div>
+          {/if}
           <div class="col-number">#</div>
           <div class="col-title">{$t('tracklist.title')}</div>
           <div class="col-duration">{$t('tracklist.duration')}</div>
@@ -3582,7 +5722,10 @@
               hideFavorite={true}
               selectable={trackSelectMode}
               selected={selectedTrackIds.has(track.id)}
-              onToggleSelect={() => toggleTrackSelect(track.id)}
+              onToggleSelect={(e) => {
+                const absIdx = albumTracks.findIndex((trk) => trk.id === track.id);
+                toggleAlbumDetailTrackSelect(track.id, absIdx, e);
+              }}
               onArtistClick={track.artist && track.artist !== selectedAlbum?.artist
                 ? () => handleLocalArtistClick(track.artist)
                 : undefined}
@@ -3609,10 +5752,7 @@
     </div>
   {:else}
     <!-- Main Library View -->
-    <div class="header">
-      <div class="header-icon">
-        <HardDrive size={32} />
-      </div>
+    <div class="header" data-tauri-drag-region="deep">
       <div class="header-content">
         <h1>{$t('library.title')}</h1>
         {#if stats}
@@ -3625,7 +5765,7 @@
           <p class="subtitle">{$t('library.yourCollection')}</p>
         {/if}
       </div>
-      <div class="header-actions">
+      <div class="header-actions" data-tauri-drag-region="false">
         {#if hasPlexConfig()}
           <button
             class="icon-btn plex-sync-btn"
@@ -3685,7 +5825,7 @@
     {#if showSettings}
       <div class="settings-panel">
         <div class="settings-header">
-          <h3>{$t('library.folders')}</h3>
+          <h3>{$t('library.folderListTitle')}</h3>
           <div class="folder-actions">
             <div class="folder-search">
               <Search size={14} />
@@ -3713,6 +5853,14 @@
               title={$t('library.removeSelectedFolders')}
             >
               <Trash2 size={16} />
+            </button>
+            <button
+              class="icon-btn"
+              onclick={() => (isEditTabsModalOpen = true)}
+              aria-label={$t('library.editTabs.title')}
+              title={$t('library.editTabs.title')}
+            >
+              <ListOrdered size={16} />
             </button>
           </div>
         </div>
@@ -3829,55 +5977,77 @@
     <div class="jump-nav">
       <div class="jump-nav-left">
         <div class="jump-links">
-          <button
-            class="jump-link"
-            class:active={activeTab === 'albums'}
-            onclick={() => handleTabChange('albums')}
-          >
-            {$t('library.albums')}
-          </button>
-          <button
-            class="jump-link"
-            class:active={activeTab === 'artists'}
-            onclick={() => handleTabChange('artists')}
-          >
-            {$t('library.artists')}
-          </button>
-          <button
-            class="jump-link"
-            class:active={activeTab === 'tracks'}
-            onclick={() => handleTabChange('tracks')}
-          >
-            {$t('library.tracks')}
-          </button>
+          {#each visibleTabs as tab (tab)}
+            <button
+              type="button"
+              class="jump-link"
+              class:active={activeTab === tab}
+              onclick={() => handleTabChange(tab)}
+            >
+              {$t(`library.${tab}`)}
+            </button>
+          {/each}
         </div>
-      </div>
-      <div class="page-search" class:open={searchOpen}>
-        {#if searchOpen}
-          <div class="search-input-container">
-            <input
-              type="text"
-              class="search-input-sticky"
-              placeholder={getCurrentSearchPlaceholder()}
-              value={getCurrentSearchValue()}
-              bind:this={searchInputEl}
-              oninput={handleSearchInput}
-              onkeydown={(e) => {
-                if (e.key === 'Escape') toggleSearch();
-              }}
-            />
-            <div class="search-controls">
-              <button class="search-close-btn" onclick={toggleSearch} title="Close search">
-                <X size={16} />
-              </button>
-            </div>
+        {#if activeTab === 'folders' && !showHiddenAlbums}
+          <!-- Inline Flat/Tree toggle: appears only on the Folders tab and
+               sits to the right of the tab list. Lower visual weight than
+               the tabs (no border, smaller font, transparent ghost style)
+               so it reads as a secondary affordance, not a competing nav
+               element. Conditional render + 120ms fade keeps the entry
+               subtle. Other tabs do not see it at all. -->
+          <div class="folders-mode-inline-toggle" transition:fade={{ duration: 120 }}>
+            <button
+              type="button"
+              class="folders-mode-btn"
+              class:active={foldersViewMode === 'flat'}
+              aria-pressed={foldersViewMode === 'flat'}
+              onclick={() => setFoldersViewMode('flat')}
+            >
+              {$t('library.foldersTree.flatLabel')}
+            </button>
+            <button
+              type="button"
+              class="folders-mode-btn"
+              class:active={foldersViewMode === 'tree'}
+              aria-pressed={foldersViewMode === 'tree'}
+              onclick={() => setFoldersViewMode('tree')}
+            >
+              {$t('library.foldersTree.modeLabel')}
+            </button>
           </div>
-        {:else}
-          <button class="search-toggle" onclick={toggleSearch} title={ $t('search.title') }>
-            <Search size={18} />
-          </button>
         {/if}
       </div>
+      {#if activeTab !== 'folders'}
+        <!-- Page-level search icon hides on the Folders tab. Flat mode
+             previously relied on this toggle for `albumSearch`; tree mode
+             will gain a dedicated tree-search input in a follow-up. -->
+        <div class="page-search" class:open={searchOpen}>
+          {#if searchOpen}
+            <div class="search-input-container">
+              <input
+                type="text"
+                class="search-input-sticky"
+                placeholder={getCurrentSearchPlaceholder()}
+                value={getCurrentSearchValue()}
+                bind:this={searchInputEl}
+                oninput={handleSearchInput}
+                onkeydown={(e) => {
+                  if (e.key === 'Escape') toggleSearch();
+                }}
+              />
+              <div class="search-controls">
+                <button class="search-close-btn" onclick={toggleSearch} title="Close search">
+                  <X size={16} />
+                </button>
+              </div>
+            </div>
+          {:else}
+            <button class="search-toggle" onclick={toggleSearch} title={ $t('search.title') }>
+              <Search size={18} />
+            </button>
+          {/if}
+        </div>
+      {/if}
     </div>
 
     <!-- Content -->
@@ -3894,9 +6064,342 @@
           <p class="error-detail">{error}</p>
           <button class="retry-btn" onclick={() => loadLibraryData()}>{$t('actions.retry')}</button>
         </div>
-      {:else if activeTab === 'albums'}
+      {:else if activeTab === 'folders'}
         {#key activeTab}
         <ViewTransition duration={200} distance={12} direction="up">
+        <!-- Folders view-mode toggle (Flat / Tree) lives inline with the
+             jumpnav above. The Hidden Albums sub-view still bypasses the
+             toggle and renders the flat hidden-album list regardless of
+             the current `foldersViewMode`. -->
+        {#if foldersViewMode === 'tree' && !showHiddenAlbums}
+          <!-- Tree mode: two-column shell mirroring the Artists tab CSS
+               byte-for-byte. Left rail renders registered scan roots as
+               top-level <LocalLibraryFolderTree> nodes; right pane routes
+               between the existing album-detail flow (when the selected
+               folder matches an album_group_key), the new FolderDetail
+               component (otherwise), or an empty-state hint. -->
+          <div class="folders-tree-container">
+            <div class="folders-tree-two-column-layout" bind:this={folderTreeLayoutEl}>
+              <div class="folder-tree-column" style:width="{folderTreeSidebarWidth}px">
+                <!-- Select-mode toggle now lives at the top of the tree
+                     column itself (was previously above the two-column
+                     layout). This lets the column divider start right
+                     below the jumpnav row, almost touching it. -->
+                <div class="folder-tree-column-toolbar">
+                  <button
+                    type="button"
+                    class="tree-toolbar-btn"
+                    class:active={treeSelectMode}
+                    onclick={toggleTreeSelectMode}
+                    title={treeSelectMode ? $t('actions.cancelSelection') : $t('actions.select')}
+                    aria-pressed={treeSelectMode}
+                  >
+                    <SquareCheckBig size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    class="tree-toolbar-btn"
+                    onclick={collapseAllTreeFolders}
+                    title={$t('library.foldersTree.collapseAll')}
+                    aria-label={$t('library.foldersTree.collapseAll')}
+                  >
+                    <ChevronsDownUp size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    class="tree-toolbar-btn"
+                    onclick={openEphemeralFolder}
+                    disabled={openingEphemeralFolder}
+                    title={$t('library.ephemeralFolder.tooltip')}
+                    aria-label={$t('library.ephemeralFolder.buttonLabel')}
+                  >
+                    <FolderOpen size={14} />
+                  </button>
+                  <input
+                    type="search"
+                    class="tree-search-input"
+                    placeholder={$t('library.foldersTree.searchPlaceholder')}
+                    bind:value={treeSearchInput}
+                    aria-label={$t('library.foldersTree.searchAriaLabel')}
+                  />
+                </div>
+                <div class="folder-tree-scroll">
+                  {#if treeScanRoots.length === 0}
+                    <div class="folders-tree-empty-state">
+                      {$t('library.noFolders')}
+                    </div>
+                  {:else}
+                    {#each treeScanRoots as scanRoot (scanRoot.path)}
+                      <LocalLibraryFolderTree
+                        node={scanRoot}
+                        depth={0}
+                        selectedPath={selectedFolderPath}
+                        expandedPaths={treeExpandedPaths}
+                        visiblePaths={searchVisiblePaths}
+                        searchQuery={treeSearchQuery}
+                        onSelect={handleFolderTreeSelect}
+                        onToggleExpand={toggleFolderExpand}
+                        selectionMode={treeSelectMode}
+                        {selectedTrackIds}
+                        {getFolderSelectionState}
+                        {isTrackPathSelected}
+                        onToggleFolderSelection={toggleTreeFolderSelection}
+                        onToggleTrackSelection={toggleTreeTrackSelection}
+                        excludeNetworkFolders={shouldExcludeNetworkFolders()}
+                      />
+                    {/each}
+                  {/if}
+                </div>
+                <!-- Drag handle anchored to the column's right edge.
+                     Mouse drag is the primary affordance; arrow keys
+                     (with Shift for big steps) and Home/End provide
+                     keyboard parity for accessibility.
+                     role="separator" with aria-orientation + aria-valuenow
+                     is the WAI-ARIA splitter pattern; Svelte's a11y linter
+                     doesn't recognize it as interactive, so silence the
+                     two rules that misfire here. -->
+                <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+                <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+                <div
+                  class="tree-sidebar-resize-handle"
+                  class:resizing={isResizingTreeSidebar}
+                  role="separator"
+                  tabindex="0"
+                  aria-orientation="vertical"
+                  aria-label={$t('library.foldersTree.resizeHandle')}
+                  aria-valuenow={folderTreeSidebarWidth}
+                  aria-valuemin={FOLDER_TREE_SIDEBAR_MIN_WIDTH}
+                  aria-valuemax={folderTreeSidebarMaxWidth}
+                  onmousedown={handleTreeSidebarMouseDown}
+                  onkeydown={handleTreeSidebarKeyDown}
+                >
+                  <div class="tree-sidebar-resize-pill" aria-hidden="true"></div>
+                </div>
+              </div>
+              <div class="folder-content-column">
+                {#if openingEphemeralFolder && !ephemeralFolder}
+                  <!-- Scanning indicator: shown while the backend is
+                       walking the selected folder, extracting metadata
+                       and building thumbnails. Large folders on slow
+                       network shares (NAS) take real time, so this is
+                       a hard requirement for perceived responsiveness. -->
+                  <div class="ephemeral-loading">
+                    <div class="spinner"></div>
+                    <div class="ephemeral-loading-text">
+                      {$t('library.ephemeralFolder.scanning')}
+                    </div>
+                  </div>
+                {:else if ephemeralFolder}
+                  <!-- Ephemeral session: an ad-hoc folder the user opened
+                       without persisting it to local_tracks. The track
+                       ids are in the high-positive range (>= 2^48);
+                       playback through them lands in the ephemeral branch
+                       of v2_library_play_track. The pane mirrors the
+                       regular folder/album views — cover art header per
+                       album group, disc sections for multi-disc rips —
+                       so it reads as part of the app even though the
+                       data is transient. -->
+                  <div class="ephemeral-pane">
+                    <div class="ephemeral-header">
+                      <div class="ephemeral-header-info">
+                        <FolderOpen size={20} class="ephemeral-icon" />
+                        <div class="ephemeral-titles">
+                          <div class="ephemeral-title">{ephemeralFolderName}</div>
+                          <div class="ephemeral-subtitle">
+                            {$t('library.ephemeralFolder.subtitle', {
+                              values: {
+                                count: ephemeralFolder.tracks.length,
+                                path: ephemeralFolder.folder_path
+                              }
+                            })}
+                          </div>
+                        </div>
+                      </div>
+                      <div class="ephemeral-actions">
+                        <button
+                          type="button"
+                          class="ephemeral-play-btn"
+                          onclick={playAllEphemeral}
+                          disabled={ephemeralFolder.tracks.length === 0}
+                          title={$t('library.ephemeralFolder.playAll')}
+                        >
+                          <Play size={14} />
+                          <span>{$t('library.ephemeralFolder.playAll')}</span>
+                        </button>
+                        <button
+                          type="button"
+                          class="ephemeral-close-btn"
+                          onclick={closeEphemeralFolder}
+                          title={$t('library.ephemeralFolder.close')}
+                          aria-label={$t('library.ephemeralFolder.close')}
+                        >
+                          <BrushCleaning size={16} />
+                        </button>
+                      </div>
+                    </div>
+                    {#if ephemeralFolder.tracks.length === 0}
+                      <div class="ephemeral-empty">
+                        {$t('library.ephemeralFolder.empty')}
+                      </div>
+                    {:else}
+                      <div class="ephemeral-album-list">
+                        {#each ephemeralAlbumGroups as group (group.key)}
+                          <section class="ephemeral-album-block">
+                            <header class="ephemeral-album-header">
+                              <div class="ephemeral-album-cover">
+                                {#if group.artworkPath}
+                                  <img
+                                    src={getFullArtworkUrl(group.artworkPath)}
+                                    alt=""
+                                    loading="lazy"
+                                  />
+                                {:else}
+                                  <div class="ephemeral-album-cover-placeholder" aria-hidden="true">
+                                    <Disc3 size={36} />
+                                  </div>
+                                {/if}
+                              </div>
+                              <div class="ephemeral-album-meta">
+                                <div class="ephemeral-album-title">{group.title}</div>
+                                <div class="ephemeral-album-artist">{group.artist}</div>
+                                <div class="ephemeral-album-info">
+                                  {#if group.year}
+                                    <span>{group.year}</span>
+                                    <span class="ephemeral-album-info-sep">·</span>
+                                  {/if}
+                                  <span class="ephemeral-album-quality" class:hires={group.isHiRes}>
+                                    {group.qualityBadge}
+                                  </span>
+                                  <span class="ephemeral-album-info-sep">·</span>
+                                  <span>
+                                    {$t('library.ephemeralFolder.trackCount', {
+                                      values: { count: group.tracks.length }
+                                    })}
+                                  </span>
+                                </div>
+                              </div>
+                              {#if ephemeralAlbumGroups.length > 1}
+                                <!-- The per-album play button is redundant
+                                     when there's only one group: the folder-
+                                     level "Play all" already plays the same
+                                     thing. Hide it in single-album sessions
+                                     (most common case — opening one album
+                                     folder) and surface only when the user
+                                     opened a parent folder containing
+                                     multiple albums and needs per-album
+                                     playback affordances. -->
+                                <button
+                                  type="button"
+                                  class="ephemeral-album-play-btn"
+                                  onclick={() => playEphemeralAlbum(group)}
+                                  title={$t('library.ephemeralFolder.playAlbum')}
+                                  aria-label={$t('library.ephemeralFolder.playAlbum')}
+                                >
+                                  <Play size={14} />
+                                </button>
+                              {/if}
+                            </header>
+                            <div class="ephemeral-album-tracks">
+                              {#each group.sections as section, sectionIdx (section.disc + '-' + sectionIdx)}
+                                {#if group.sections.length > 1 && section.label}
+                                  <div class="ephemeral-disc-header">{section.label}</div>
+                                {/if}
+                                {#each section.tracks as track, trackIdx (track.id)}
+                                  <button
+                                    type="button"
+                                    class="ephemeral-track-row"
+                                    class:active={activeTrackId === track.id}
+                                    onclick={() => playEphemeralTrack(track)}
+                                  >
+                                    <span class="ephemeral-track-num">
+                                      {section.useIndexNumbering
+                                        ? trackIdx + 1
+                                        : (track.track_number ?? '—')}
+                                    </span>
+                                    <span class="ephemeral-track-meta">
+                                      <span class="ephemeral-track-title">{formatTrackTitle(track)}</span>
+                                      {#if track.artist && track.artist !== group.artist}
+                                        <span class="ephemeral-track-secondary">{track.artist}</span>
+                                      {/if}
+                                    </span>
+                                    <span class="ephemeral-track-duration">
+                                      {formatDuration(track.duration_secs)}
+                                    </span>
+                                  </button>
+                                {/each}
+                              {/each}
+                            </div>
+                          </section>
+                        {/each}
+                      </div>
+                    {/if}
+                  </div>
+                {:else if selectedAlbumForTree}
+                  <!-- Compact album view: artwork + metadata + play +
+                       track list, sized for the right pane so the tree
+                       rail stays visible. The full-page album-detail
+                       view at line ~4573 is reserved for flat mode and
+                       direct nav; tree mode keeps the user oriented in
+                       the folder hierarchy by rendering inline here. -->
+                  <LocalLibraryFolderAlbumView
+                    album={selectedAlbumForTree}
+                    tracks={treeAlbumTracks}
+                    {activeTrackId}
+                    {isPlaybackActive}
+                    onPlayAll={handleTreeAlbumPlayAll}
+                    onShuffleAll={handleTreeAlbumShuffleAll}
+                    onTrackPlay={handleTreeAlbumTrackPlay}
+                    {onTrackPlayNext}
+                    {onTrackPlayLater}
+                    {onTrackAddToPlaylist}
+                    {onTrackAddPlexToPlaylist}
+                    onBulkPlayNext={handleFolderAlbumBulkPlayNext}
+                    onBulkPlayLater={handleFolderAlbumBulkPlayLater}
+                    onBulkAddToPlaylist={handleFolderAlbumBulkAddToPlaylist}
+                    onBulkAddPlexToPlaylist={handleFolderAlbumBulkAddPlexToPlaylist}
+                    onEditAlbum={openTreeAlbumEditModal}
+                    onArtistClick={handleLocalArtistClick}
+                    {formatDuration}
+                    {formatTotalDuration}
+                    {formatBitDepth}
+                    {formatSampleRate}
+                    {getQualityBadge}
+                    {isHiRes}
+                    {getFullArtworkUrl}
+                    {buildAlbumSections}
+                    {normalizeArtistName}
+                    parentSelectionActive={trackSelectMode || albumSelectMode || treeSelectMode}
+                    onSelectionEntered={() => clearOtherSelectionContexts('folder-album')}
+                  />
+                {:else if selectedFolderPath}
+                  <LocalLibraryFolderDetail
+                    folderPath={selectedFolderPath}
+                    onSubfolderClick={(path) => {
+                      selectedFolderPath = path;
+                      treeExpandedPaths.add(path);
+                    }}
+                    onPlayTrack={handleFolderTreeTrackPlay}
+                    onPlayAllRecursive={handlePlayRecursive}
+                    excludeNetworkFolders={shouldExcludeNetworkFolders()}
+                  />
+                {:else}
+                  <div class="folders-tree-empty-state">
+                    {$t('library.foldersTree.selectAFolder')}
+                  </div>
+                {/if}
+              </div>
+            </div>
+          </div>
+          {#if treeSelectMode}
+            <BulkActionBar
+              count={selectedTrackIds.size}
+              onPlayNext={handleBulkPlayNext}
+              onPlayLater={handleBulkPlayLater}
+              onAddToPlaylist={handleBulkAddToPlaylist}
+              onClearSelection={() => { resetMultiSelect(); }}
+            />
+          {/if}
+        {:else}
         {#if showHiddenAlbums}
           <!-- Hidden Albums View -->
           <div class="albums-section">
@@ -3956,245 +6459,7 @@
           <!-- Use memoized filtered and grouped albums -->
           {@const { filtered: filteredAlbums, grouped: groupedAlbums, alphaGroups } = filteredAndGroupedAlbums}
 
-          <div class="album-controls">
-            <div class="dropdown-container">
-              <button
-                class="control-btn"
-                onclick={() => (showGroupMenu = !showGroupMenu)}
-                title="Group albums"
-              >
-                <span>{!albumGroupingEnabled
-                  ? $t('purchases.group.off')
-                  : albumGroupMode === 'alpha'
-                    ? $t('purchases.group.alpha')
-                    : $t('purchases.group.artist')}</span>
-              </button>
-              {#if showGroupMenu}
-                <div class="dropdown-menu">
-                  <button
-                    class="dropdown-item"
-                    class:selected={!albumGroupingEnabled}
-                    onclick={() => { albumGroupingEnabled = false; showGroupMenu = false; }}
-                  >
-                    {$t('purchases.group.optionOff')}
-                  </button>
-                  <button
-                    class="dropdown-item"
-                    class:selected={albumGroupingEnabled && albumGroupMode === 'alpha'}
-                    onclick={() => { albumGroupMode = 'alpha'; albumGroupingEnabled = true; showGroupMenu = false; }}
-                  >
-                    {$t('purchases.group.optionAlpha')}
-                  </button>
-                  <button
-                    class="dropdown-item"
-                    class:selected={albumGroupingEnabled && albumGroupMode === 'artist'}
-                    onclick={() => { albumGroupMode = 'artist'; albumGroupingEnabled = true; showGroupMenu = false; }}
-                  >
-                    {$t('purchases.group.optionArtist')}
-                  </button>
-                </div>
-              {/if}
-            </div>
-
-            <!-- Quality/Format Filter -->
-            <div class="dropdown-container" bind:this={filterPanelRef}>
-              <button
-                class="control-btn icon-only"
-                class:active={hasActiveFilters}
-                onclick={() => (showFilterPanel = !showFilterPanel)}
-                title="Filter by quality/format"
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M4.22657 2C2.50087 2 1.58526 4.03892 2.73175 5.32873L8.99972 12.3802V19C8.99972 19.3788 9.21373 19.725 9.55251 19.8944L13.5525 21.8944C13.8625 22.0494 14.2306 22.0329 14.5255 21.8507C14.8203 21.6684 14.9997 21.3466 14.9997 21V12.3802L21.2677 5.32873C22.4142 4.03893 21.4986 2 19.7729 2H4.22657Z"/>
-                </svg>
-                {#if activeFilterCount > 0}
-                  <span class="filter-badge">{activeFilterCount}</span>
-                {/if}
-              </button>
-              {#if showFilterPanel}
-                <!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
-                <div
-                  class="filter-panel"
-                  role="region"
-                  onmouseenter={clearFilterPanelTimer}
-                  onmouseleave={startFilterPanelTimer}
-                  onclick={handleFilterPanelActivity}
-                >
-                  <div class="filter-panel-header">
-                    <span>{$t('library.filters')}</span>
-                    {#if hasActiveFilters}
-                      <button class="clear-filters-btn" onclick={clearAllFilters}>{$t('library.clearAllFilters')}</button>
-                    {/if}
-                  </div>
-
-                  <div class="filter-section">
-                    <div class="filter-section-label">{$t('library.quality')}</div>
-                    <div class="filter-checkboxes">
-                      <label class="filter-checkbox">
-                        <input type="checkbox" bind:checked={filterHiRes} />
-                        <span class="checkmark"></span>
-                        <span class="label-text">Hi-Res</span>
-                        <span class="label-hint">24bit+</span>
-                      </label>
-                      <label class="filter-checkbox">
-                        <input type="checkbox" bind:checked={filterCdQuality} />
-                        <span class="checkmark"></span>
-                        <span class="label-text">{$t('quality.cdQuality')}</span>
-                        <span class="label-hint">16bit</span>
-                      </label>
-                      <label class="filter-checkbox">
-                        <input type="checkbox" bind:checked={filterLossy} />
-                        <span class="checkmark"></span>
-                        <span class="label-text">Lossy</span>
-                      </label>
-                    </div>
-                  </div>
-
-                  <div class="filter-section">
-                    <div class="filter-section-label">Format</div>
-                    <div class="filter-checkboxes format-grid">
-                      <label class="filter-checkbox">
-                        <input type="checkbox" bind:checked={filterFlac} />
-                        <span class="checkmark"></span>
-                        <span class="label-text">FLAC</span>
-                      </label>
-                      <label class="filter-checkbox">
-                        <input type="checkbox" bind:checked={filterAlac} />
-                        <span class="checkmark"></span>
-                        <span class="label-text">ALAC</span>
-                      </label>
-                      <label class="filter-checkbox">
-                        <input type="checkbox" bind:checked={filterApe} />
-                        <span class="checkmark"></span>
-                        <span class="label-text">APE</span>
-                      </label>
-                      <label class="filter-checkbox">
-                        <input type="checkbox" bind:checked={filterWav} />
-                        <span class="checkmark"></span>
-                        <span class="label-text">WAV</span>
-                      </label>
-                      <label class="filter-checkbox">
-                        <input type="checkbox" bind:checked={filterMp3} />
-                        <span class="checkmark"></span>
-                        <span class="label-text">MP3</span>
-                      </label>
-                      <label class="filter-checkbox">
-                        <input type="checkbox" bind:checked={filterAac} />
-                        <span class="checkmark"></span>
-                        <span class="label-text">AAC</span>
-                      </label>
-                      <label class="filter-checkbox">
-                        <input type="checkbox" bind:checked={filterOther} />
-                        <span class="checkmark"></span>
-                        <span class="label-text">Other</span>
-                      </label>
-                    </div>
-                  </div>
-
-                  <div class="filter-section">
-                    <div class="filter-section-label">{$t('library.source')}</div>
-                    <div class="filter-checkboxes source-row">
-                      <label class="filter-checkbox">
-                        <input type="checkbox" bind:checked={filterLocalFiles} />
-                        <span class="checkmark"></span>
-                        <HardDrive size={14} class="filter-icon" />
-                        <span class="label-text">{$t('library.localFiles')}</span>
-                      </label>
-                      <label class="filter-checkbox">
-                        <input type="checkbox" bind:checked={filterOfflineCache} />
-                        <span class="checkmark"></span>
-                        <img src="/qobuz-logo-filled.svg" alt="" class="filter-icon qobuz-icon" />
-                        <span class="label-text">{$t('library.offlineCache')}</span>
-                      </label>
-                      <label class="filter-checkbox">
-                        <input type="checkbox" bind:checked={filterPlexLibrary} />
-                        <span class="checkmark"></span>
-                        <Network size={14} class="filter-icon" />
-                        <span class="label-text">{$t('library.plexLibrary')}</span>
-                      </label>
-                    </div>
-                  </div>
-                </div>
-              {/if}
-            </div>
-
-            <!-- Sort dropdown -->
-            <div class="dropdown-container">
-              <button
-                class="control-btn icon-only"
-                onclick={() => (showSortMenu = !showSortMenu)}
-                title="Sort albums"
-              >
-                <ArrowUpDown size={14} />
-              </button>
-              {#if showSortMenu}
-                <div class="sort-menu">
-                  {#each sortOptions as option}
-                    <button
-                      class="dropdown-item"
-                      class:selected={sortBy === option.value}
-                      onclick={() => selectSort(option.value)}
-                    >
-                      <span>{option.label}</span>
-                      {#if sortBy === option.value}
-                        <span class="sort-indicator">{sortDirection === 'asc' ? '↑' : '↓'}</span>
-                      {/if}
-                    </button>
-                  {/each}
-                </div>
-              {/if}
-            </div>
-
-            <button
-              class="control-btn icon-only"
-              onclick={() => (albumViewMode = albumViewMode === 'list' ? 'grid' : 'list')}
-              title={albumViewMode === 'list' ? $t('purchases.view.grid') : $t('purchases.view.list')}
-            >
-              {#if albumViewMode === 'list'}
-                <LayoutGrid size={16} />
-              {:else}
-                <List size={16} />
-              {/if}
-            </button>
-
-            <button
-              class="control-btn icon-only"
-              class:active={albumSelectMode}
-              onclick={toggleAlbumSelectMode}
-              title={albumSelectMode ? $t('actions.cancelSelection') : $t('actions.select')}
-            >
-              <SquareCheckBig size={16} />
-            </button>
-
-            {#if albumSelectMode}
-              <label class="select-all-checkbox" title={$t('actions.selectAll')}>
-                <input
-                  type="checkbox"
-                  checked={albumSelectAllState === 'all'}
-                  indeterminate={albumSelectAllState === 'partial'}
-                  onchange={toggleAlbumSelectAll}
-                />
-                <span>{$t('actions.selectAll')}</span>
-              </label>
-            {/if}
-
-            {#if albumGroupingEnabled && albumGroupMode === 'alpha'}
-              <div class="alpha-index-inline">
-                {#each alphaIndexLetters as letter}
-                  <button
-                    class="alpha-letter"
-                    class:disabled={!alphaGroups.has(letter)}
-                    onclick={() => {
-                      const groupId = groupIdForKey('album-alpha', letter);
-                      virtualizedScrollTarget = alphaGroups.has(letter) ? groupId : undefined;
-                    }}
-                  >
-                    {letter}
-                  </button>
-                {/each}
-              </div>
-            {/if}
-          </div>
+          {@render albumControls(alphaGroups)}
 
           {#if filteredAlbums.length === 0}
             <div class="empty">
@@ -4230,15 +6495,113 @@
           {/if}
         {/if}
         {/if}
+        {/if}
+        </ViewTransition>
+        {/key}
+      {:else if activeTab === 'albums'}
+        {#key activeTab}
+        <ViewTransition duration={200} distance={12} direction="up">
+          {#if metadataAlbumsLoading && metadataAlbums.length === 0}
+            <div class="loading">
+              <div class="spinner"></div>
+              <p>{$t('library.loadingLibrary')}</p>
+            </div>
+          {:else if metadataAlbums.length === 0}
+            <div class="empty">
+              <Disc3 size={48} />
+              <p>{$t('library.noAlbumsInLibrary')}</p>
+              <p class="empty-hint">{$t('library.addFoldersHint')}</p>
+            </div>
+          {:else}
+            {@const { filtered: filteredMetadataAlbums, grouped: groupedMetadataAlbums, alphaGroups: metadataAlphaGroups } = filteredAndGroupedMetadataAlbums}
 
-        <BulkActionBar
-          count={selectedAlbumIds.size}
-          onPlayNext={handleAlbumBulkPlayNext}
-          onPlayLater={handleAlbumBulkPlayLater}
-          onAddToPlaylist={handleAlbumBulkAddToPlaylist}
-          onAddToMixtape={handleAlbumBulkAddToMixtape}
-          onClearSelection={() => { albumSelectMode = false; selectedAlbumIds = new Set(); }}
-        />
+            {@render albumControls(metadataAlphaGroups)}
+
+            {#if filteredMetadataAlbums.length === 0}
+              <div class="empty">
+                <Disc3 size={48} />
+                <p>{$t('library.noAlbumsMatch')}</p>
+                <p class="empty-hint">{$t('library.tryDifferentSearch')}</p>
+              </div>
+            {:else}
+              <div class="album-sections virtualized">
+                <div class="virtualized-container">
+                  {#if albumViewMode === 'grid' && !albumGroupingEnabled && !hasActiveFilters}
+                    <!-- Chunked path: on-demand fetch via Tauri command
+                         per chunk, recycling-pool render. The pool
+                         binds to the chunked store's reactive
+                         `total` + `version`. Falls back to the legacy
+                         path below when grouping or quality filters
+                         are on (those don't have backend support yet). -->
+                    {#snippet renderMetadataAlbumCell(album: LocalAlbum, _idx: number)}
+                      <AlbumCard
+                        albumId={album.id}
+                        year={album.year}
+                        trackCount={album.track_count}
+                        artwork={getArtworkUrl(album.artwork_path)}
+                        title={album.title}
+                        artist={album.artist}
+                        quality={getAlbumQualityBadge(album)}
+                        format={album.format}
+                        bitDepth={album.bit_depth}
+                        samplingRate={album.sample_rate ? album.sample_rate / 1000 : undefined}
+                        onPlay={() => handleAlbumPlayFromGrid(album)}
+                        onPlayNext={() => handleAlbumQueueNextFromGrid(album)}
+                        onPlayLater={() => handleAlbumQueueLaterFromGrid(album)}
+                        onClick={() => handleAlbumClick(album)}
+                        sourceBadge={album.source === 'plex' ? 'plex' : album.source === 'qobuz_purchase' ? 'qobuz_purchase' : album.source === 'qobuz_download' ? 'qobuz_download' : 'user'}
+                        selectable={albumSelectMode}
+                        selected={selectedAlbumIds.has(album.id)}
+                        onToggleSelect={() => toggleAlbumSelect(album)}
+                      />
+                    {/snippet}
+                    {#snippet renderMetadataAlbumPlaceholder(_idx: number)}
+                      <!-- Static skeleton: 210x210 cover block + 14px
+                           title bar + 12px artist bar + 14px quality
+                           pill. No shimmer, no animation — the shape
+                           alone signals "loading" without paint per
+                           frame. Matches the loaded card dimensions
+                           so layout doesn't shift on rebind. -->
+                      <div class="album-skeleton" aria-hidden="true">
+                        <div class="album-skeleton-cover"></div>
+                        <div class="album-skeleton-line album-skeleton-title"></div>
+                        <div class="album-skeleton-line album-skeleton-artist"></div>
+                        <div class="album-skeleton-line album-skeleton-quality"></div>
+                      </div>
+                    {/snippet}
+                    <AlbumGridPool
+                      totalCount={metadataAlbumsChunked.total}
+                      getItem={(i) => metadataAlbumsChunked.getAlbum(i) as LocalAlbum | null}
+                      onNeedIndex={(i) => metadataAlbumsChunked.requestIndex(i)}
+                      dataVersion={metadataAlbumsChunked.version}
+                      renderCell={renderMetadataAlbumCell}
+                      renderPlaceholder={renderMetadataAlbumPlaceholder}
+                    />
+                  {:else}
+                    <VirtualizedAlbumList
+                      groups={groupedMetadataAlbums}
+                      viewMode={albumViewMode}
+                      showGroupHeaders={albumGroupingEnabled}
+                      {getArtworkUrl}
+                      getQualityBadge={getAlbumQualityBadge}
+                      isHiRes={isAlbumHiRes}
+                      formatDuration={formatTotalDuration}
+                      onAlbumClick={handleAlbumClick}
+                      onAlbumPlay={handleAlbumPlayFromGrid}
+                      onAlbumQueueNext={handleAlbumQueueNextFromGrid}
+                      onAlbumQueueLater={handleAlbumQueueLaterFromGrid}
+                      scrollToGroupId={virtualizedScrollTarget}
+                      showSourceBadge={true}
+                      selectable={albumSelectMode}
+                      selectedAlbumIds={selectedAlbumIds}
+                      onAlbumToggleSelect={toggleAlbumSelect}
+                      onAlbumToggleSelectRange={addAlbumsToSelection}
+                    />
+                  {/if}
+                </div>
+              </div>
+            {/if}
+          {/if}
         </ViewTransition>
         {/key}
       {:else if activeTab === 'artists'}
@@ -4341,13 +6704,13 @@
                         title={album.title}
                         artist={album.artist}
                         quality={getAlbumQualityBadge(album)}
-                        size="large"
-                        showFavorite={false}
-                        showGenre={false}
+                        format={album.format}
+                        bitDepth={album.bit_depth}
+                        samplingRate={album.sample_rate ? album.sample_rate / 1000 : undefined}
                         onPlay={() => handleAlbumPlayFromGrid(album)}
                         onPlayNext={() => handleAlbumQueueNextFromGrid(album)}
                         onPlayLater={() => handleAlbumQueueLaterFromGrid(album)}
-                        onclick={() => handleAlbumClick(album)}
+                        onClick={() => handleAlbumClick(album)}
                         sourceBadge={album.source === 'plex' ? 'plex' : album.source === 'qobuz_purchase' ? 'qobuz_purchase' : album.source === 'qobuz_download' ? 'qobuz_download' : 'user'}
                       />
                     {/each}
@@ -4398,7 +6761,7 @@
             <div class="dropdown-container">
               <button
                 class="control-btn"
-                onclick={() => (showTrackGroupMenu = !showTrackGroupMenu)}
+                onclick={() => (openMenu = openMenu === 'trackGroup' ? null : 'trackGroup')}
                 title="Group tracks"
               >
                 <span>
@@ -4411,33 +6774,33 @@
                         : $t('purchases.group.name')}
                 </span>
               </button>
-              {#if showTrackGroupMenu}
+              {#if openMenu === 'trackGroup'}
                 <div class="dropdown-menu">
                   <button
                     class="dropdown-item"
                     class:selected={!trackGroupingEnabled}
-                    onclick={() => { trackGroupingEnabled = false; showTrackGroupMenu = false; }}
+                    onclick={() => { trackGroupingEnabled = false; openMenu = null; }}
                   >
                     {$t('purchases.group.optionOff')}
                   </button>
                   <button
                     class="dropdown-item"
                     class:selected={trackGroupingEnabled && trackGroupMode === 'album'}
-                    onclick={() => { trackGroupMode = 'album'; trackGroupingEnabled = true; showTrackGroupMenu = false; }}
+                    onclick={() => { trackGroupMode = 'album'; trackGroupingEnabled = true; openMenu = null; }}
                   >
                     {$t('purchases.group.optionAlbum')}
                   </button>
                   <button
                     class="dropdown-item"
                     class:selected={trackGroupingEnabled && trackGroupMode === 'artist'}
-                    onclick={() => { trackGroupMode = 'artist'; trackGroupingEnabled = true; showTrackGroupMenu = false; }}
+                    onclick={() => { trackGroupMode = 'artist'; trackGroupingEnabled = true; openMenu = null; }}
                   >
                     {$t('purchases.group.optionArtist')}
                   </button>
                   <button
                     class="dropdown-item"
                     class:selected={trackGroupingEnabled && trackGroupMode === 'name'}
-                    onclick={() => { trackGroupMode = 'name'; trackGroupingEnabled = true; showTrackGroupMenu = false; }}
+                    onclick={() => { trackGroupMode = 'name'; trackGroupingEnabled = true; openMenu = null; }}
                   >
                     {$t('purchases.group.optionAlpha')}
                   </button>
@@ -4491,6 +6854,9 @@
                 selectedIds={selectedTrackIds}
                 onToggleSelect={toggleTrackSelect}
                 onToggleSelectRange={addTracksToSelection}
+                onVisibleTracksChange={onVisibleTracksChange}
+                showArtwork={showTrackArtwork}
+                getArtworkUrl={(track) => getArtworkUrl(track.artwork_path)}
               />
             </div>
           </div>
@@ -4504,6 +6870,17 @@
         {/if}
         </ViewTransition>
         {/key}
+      {/if}
+
+      {#if activeTab === 'folders' || activeTab === 'albums'}
+        <BulkActionBar
+          count={selectedAlbumIds.size}
+          onPlayNext={handleAlbumBulkPlayNext}
+          onPlayLater={handleAlbumBulkPlayLater}
+          onAddToPlaylist={handleAlbumBulkAddToPlaylist}
+          onAddToMixtape={handleAlbumBulkAddToMixtape}
+          onClearSelection={() => { albumSelectMode = false; selectedAlbumIds = new Set(); }}
+        />
       {/if}
     </div>
   {/if}
@@ -4684,6 +7061,14 @@
   onScanFolder={handleScanSingleFolder}
 />
 
+<!-- Library Edit Tabs Modal -->
+<LibraryEditModal
+  isOpen={isEditTabsModalOpen}
+  initialPreferences={libraryPreferences}
+  onClose={() => (isEditTabsModalOpen = false)}
+  onSave={handleLibraryPreferencesSaved}
+/>
+
 <style>
   .library-view {
     padding: 8px 8px 100px 18px;
@@ -4720,17 +7105,6 @@
     align-items: center;
     gap: 20px;
     margin-bottom: 24px;
-  }
-
-  .header-icon {
-    width: 80px;
-    height: 80px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: linear-gradient(135deg, var(--accent-primary) 0%, #64b5f6 100%);
-    border-radius: 16px;
-    color: white;
   }
 
   .header-content {
@@ -5212,6 +7586,11 @@
     flex-wrap: wrap;
     align-items: center;
     gap: 10px;
+    /* Claim the available row width so the inline Folders Flat/Tree
+       toggle can right-align via `margin-left: auto`. Doesn't disturb
+       layout on other tabs (the tabs anchor at the left as before). */
+    flex: 1;
+    min-width: 0;
   }
 
   .jump-links {
@@ -5354,7 +7733,7 @@
   .control-btn.active {
     background: var(--accent-primary);
     border-color: var(--accent-primary);
-    color: white;
+    color: var(--btn-primary-text);
   }
 
   .control-btn.active:hover {
@@ -5444,7 +7823,7 @@
     height: 18px;
     padding: 0 5px;
     background: var(--accent-primary);
-    color: white;
+    color: var(--btn-primary-text);
     font-size: 11px;
     font-weight: 600;
     border-radius: 9px;
@@ -5676,7 +8055,7 @@
     margin-top: 16px;
     padding: 8px 24px;
     background-color: var(--accent-primary);
-    color: white;
+    color: var(--btn-primary-text);
     border: none;
     border-radius: 8px;
     cursor: pointer;
@@ -5687,6 +8066,30 @@
     margin-top: 8px;
   }
 
+  /* Skeleton placeholder for chunked-album grid slots whose data is
+     still in flight. Static blocks only — no shimmer, no animation;
+     the shape signals "loading" without paint per frame. */
+  .album-skeleton {
+    width: 210px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .album-skeleton-cover {
+    width: 210px;
+    height: 210px;
+    border-radius: 8px;
+    background: var(--bg-tertiary);
+  }
+  .album-skeleton-line {
+    height: 12px;
+    border-radius: 3px;
+    background: var(--bg-tertiary);
+  }
+  .album-skeleton-title { width: 80%; height: 14px; margin-top: 2px; }
+  .album-skeleton-artist { width: 60%; }
+  .album-skeleton-quality { width: 90px; height: 14px; border-radius: 4px; margin-top: 2px; }
+
   /* Album Grid */
   .album-sections {
     display: flex;
@@ -5696,7 +8099,13 @@
 
   .album-sections.virtualized {
     flex: 1;
-    height: calc(100vh - 280px); /* Adjust based on header/controls height */
+    /* `100vh - 280` over-extended past the NowPlayingBar (104px tall
+       at the bottom) once we forced the scrollbar always visible —
+       the bar ran to viewport-bottom instead of ending at the player.
+       Bumped subtraction to 360 to clear the player + controls
+       above the grid; the min-height keeps the area reasonable on
+       small windows. */
+    height: calc(100vh - 360px);
     min-height: 400px;
   }
 
@@ -5797,7 +8206,6 @@
     font-size: 13px;
     color: var(--text-secondary);
     cursor: pointer;
-    user-select: none;
   }
 
   .select-all-checkbox input[type='checkbox'] {
@@ -5893,6 +8301,21 @@
     box-sizing: border-box;
     border-bottom: 1px solid var(--bg-tertiary);
     margin-bottom: 8px;
+  }
+
+  .track-list-header .col-select-all {
+    width: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .track-list-header .col-select-all input[type='checkbox'] {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--accent-primary);
+    cursor: pointer;
   }
 
   .track-list-header .col-number {
@@ -6643,11 +9066,11 @@
   }
 
   .artist-card-compact.selected .artist-name {
-    color: white;
+    color: var(--btn-primary-text);
   }
 
   .artist-card-compact.selected .artist-meta {
-    color: rgba(255, 255, 255, 0.7);
+    color: color-mix(in srgb, var(--btn-primary-text) 70%, transparent);
   }
 
   .artist-card-image {
@@ -6761,5 +9184,560 @@
   .empty-small p {
     margin: 0;
     font-size: 13px;
+  }
+
+  /* ─── Folders tab tree-mode (Task 7) ───
+     Mirrors the Artists tab two-column layout byte-for-byte. The shell
+     unmounts when foldersViewMode === 'flat', so the existing flat
+     folder-grouped list keeps full width.
+
+     The select-mode toolbar previously rendered as `.folders-tree-controls`
+     above the two-column layout; it now lives inside the tree column
+     (`.folder-tree-column-toolbar`) so the column divider starts right
+     below the jumpnav. The container height grew accordingly (was
+     `calc(100vh - 320px)`). */
+  .folders-tree-container {
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - 280px);
+    min-height: 400px;
+  }
+
+  .folders-tree-two-column-layout {
+    display: flex;
+    gap: 0;
+    flex: 1;
+    min-height: 0;
+    margin: 0 -24px 0 -18px;
+    padding: 0;
+  }
+
+  /* Toolbar at the top of the tree column hosting the select-mode
+     button. Sits inside `.folder-tree-column` so the column divider
+     visually starts at the very top of the two-column layout (almost
+     touching the jumpnav row). */
+  .folder-tree-column-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 12px 8px 0;
+    flex-shrink: 0;
+  }
+
+  /* Flat icon button used for the select-mode toggle and the
+     collapse-all action. No background or border in the resting
+     state — only a subtle hover background to telegraph the hit area,
+     and a color shift to the accent when `.active` (drives the
+     select-mode "on" feedback). User explicitly asked for this to
+     stay flat: "que sea un boton plano y solo cambie de color". */
+  .tree-toolbar-btn {
+    background: transparent;
+    border: none;
+    padding: 3px;
+    cursor: pointer;
+    color: var(--text-secondary);
+    border-radius: 3px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: color 120ms, background 120ms;
+  }
+  .tree-toolbar-btn:hover {
+    color: var(--text-primary);
+    background: var(--bg-tertiary, rgba(255, 255, 255, 0.04));
+  }
+  .tree-toolbar-btn.active {
+    color: var(--accent-color, var(--accent-primary));
+  }
+
+  /* Dedicated tree-mode search input. Decoupled from the global
+     `albumSearch` input — driving its own filter via `treeSearchInput`
+     in the script. Pinned to a moderate fixed width (~140px) and
+     pushed to the right edge of the toolbar via `margin-left: auto`
+     so the action icons stay anchored on the left. */
+  .tree-search-input {
+    flex: 0 0 auto;
+    width: 140px;
+    margin-left: auto;
+    padding: 4px 8px;
+    border: 1px solid var(--border-color);
+    border-radius: 3px;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font-size: 12px;
+  }
+  .tree-search-input:focus {
+    outline: none;
+    border-color: var(--accent-color);
+  }
+
+  .folder-tree-column {
+    /* Width is set inline via style:width — see folderTreeSidebarWidth in
+       LocalLibraryView.svelte. The 290px fallback only kicks in if the
+       inline style fails to attach (defensive). */
+    width: 290px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    background: transparent;
+    border-right: 1px solid var(--bg-tertiary);
+    overflow: hidden;
+    padding-left: 18px;
+    /* Anchor the absolutely-positioned resize handle on the right edge. */
+    position: relative;
+  }
+
+  .tree-sidebar-resize-handle {
+    position: absolute;
+    top: 0;
+    right: 0;
+    /* 8px (vs prior 6px) widens the hit area so the divider is easier
+       to grab, especially on Wayland/XWayland where cursor-shape hand-
+       offs are less consistent than on X11. */
+    width: 8px;
+    height: 100%;
+    cursor: col-resize;
+    background: transparent;
+    transition: background 120ms ease;
+    z-index: 1;
+    /* Centers the visible pill child vertically + horizontally on the
+       divider line. */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .tree-sidebar-resize-handle:hover,
+  .tree-sidebar-resize-handle.resizing {
+    background: var(--bg-tertiary, rgba(255, 255, 255, 0.05));
+  }
+
+  /* Always-visible affordance: a small vertical pill marker centered on
+     the divider, low-opacity by default and brightening to the accent
+     color on hover/drag. Decorative — `aria-hidden` on the markup. */
+  .tree-sidebar-resize-pill {
+    width: 4px;
+    height: 36px;
+    border-radius: 2px;
+    background: var(--text-tertiary, var(--text-muted, #666));
+    opacity: 0.4;
+    transition:
+      opacity 120ms ease,
+      background 120ms ease;
+    pointer-events: none;
+  }
+
+  .tree-sidebar-resize-handle:hover .tree-sidebar-resize-pill,
+  .tree-sidebar-resize-handle.resizing .tree-sidebar-resize-pill {
+    opacity: 1;
+    background: var(--accent-color, var(--accent-primary, var(--text-primary)));
+  }
+
+  .folder-tree-scroll {
+    /* Block-level scroll wrapper. Long folder names extend past the
+       column width via `width: max-content` on `.folder-tree-row`, and
+       this wrapper renders the horizontal scrollbar at its own bottom
+       edge (Plex/foobar2000 pattern).
+
+       `contain: strict` was the regression: it includes `contain: size`,
+       which makes the element ignore descendants for intrinsic sizing.
+       In WebKit (Tauri) this caused scrollWidth to under-report on a
+       scroll container whose children use `width: max-content`, so the
+       horizontal scrollbar never appeared even though rows visibly
+       extended past the rail. Dropping `size` (keeping layout + paint
+       for perf) restores horizontal scrolling. */
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: auto;
+    padding: 4px 12px 4px 0;
+    -webkit-overflow-scrolling: touch;
+    scroll-behavior: smooth;
+    overscroll-behavior: contain;
+    will-change: scroll-position;
+    contain: layout paint;
+  }
+
+  .folder-content-column {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    overflow: hidden;
+    padding: 0 24px 0 24px;
+  }
+
+  .folders-tree-empty-state {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+    font-size: 14px;
+    padding: 24px;
+    text-align: center;
+  }
+
+  /* Ephemeral folder pane: full content area showing the contents of an
+     ad-hoc folder the user opened without persisting to the library. The
+     header carries a Play All affordance and a close button; below it a
+     simple track list (no virtualization needed — ephemeral sessions are
+     bounded to one folder at a time and rarely exceed a few hundred
+     rows). Visually marked as transient via the "Session" eyebrow color
+     so it doesn't read as part of the persistent library. */
+  .ephemeral-pane {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    padding: 16px 0 0 0;
+  }
+
+  .ephemeral-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 0 4px 12px 4px;
+    border-bottom: 1px solid var(--bg-tertiary);
+  }
+
+  .ephemeral-header-info {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .ephemeral-titles {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .ephemeral-title {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .ephemeral-subtitle {
+    font-size: 12px;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .ephemeral-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+
+  .ephemeral-play-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 30px;
+    padding: 0 14px;
+    background: var(--accent-primary);
+    color: var(--bg-primary);
+    border: none;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background-color 120ms ease;
+  }
+
+  .ephemeral-play-btn:hover:not(:disabled) {
+    background: var(--accent-hover);
+  }
+
+  .ephemeral-play-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .ephemeral-close-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: background-color 120ms ease, color 120ms ease;
+  }
+
+  .ephemeral-close-btn:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+  }
+
+  .ephemeral-empty {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+    font-size: 13px;
+    padding: 24px;
+  }
+
+  .ephemeral-loading {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    padding: 24px;
+    color: var(--text-secondary);
+  }
+
+  .ephemeral-loading-text {
+    font-size: 13px;
+    color: var(--text-muted);
+  }
+
+  .ephemeral-album-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px 0 24px 0;
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+  }
+
+  .ephemeral-album-block {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .ephemeral-album-header {
+    display: grid;
+    grid-template-columns: 96px 1fr auto;
+    gap: 16px;
+    align-items: center;
+    padding: 4px;
+  }
+
+  .ephemeral-album-cover {
+    width: 96px;
+    height: 96px;
+    border-radius: 6px;
+    overflow: hidden;
+    background: var(--bg-secondary);
+    flex-shrink: 0;
+  }
+
+  .ephemeral-album-cover img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+
+  .ephemeral-album-cover-placeholder {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+  }
+
+  .ephemeral-album-meta {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .ephemeral-album-title {
+    font-size: 17px;
+    font-weight: 600;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .ephemeral-album-artist {
+    font-size: 13px;
+    color: var(--text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .ephemeral-album-info {
+    font-size: 11px;
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .ephemeral-album-info-sep {
+    opacity: 0.6;
+  }
+
+  .ephemeral-album-quality {
+    font-variant-numeric: tabular-nums;
+  }
+
+  .ephemeral-album-quality.hires {
+    color: var(--color-success, #22c55e);
+    font-weight: 600;
+  }
+
+  .ephemeral-album-play-btn {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    border: none;
+    background: var(--accent-primary);
+    color: var(--bg-primary);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: background-color 120ms ease, transform 120ms ease;
+    flex-shrink: 0;
+  }
+
+  .ephemeral-album-play-btn:hover {
+    background: var(--accent-hover);
+    transform: scale(1.05);
+  }
+
+  .ephemeral-album-tracks {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .ephemeral-disc-header {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 8px 8px 6px 8px;
+    border-bottom: 1px solid var(--bg-tertiary);
+    margin-top: 4px;
+  }
+
+  .ephemeral-track-row {
+    display: grid;
+    grid-template-columns: 32px 1fr auto;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    padding: 8px;
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    color: var(--text-primary);
+    cursor: pointer;
+    text-align: left;
+    transition: background-color 100ms ease;
+  }
+
+  .ephemeral-track-row:hover {
+    background: var(--bg-tertiary);
+  }
+
+  .ephemeral-track-row.active {
+    color: var(--accent-primary);
+  }
+
+  .ephemeral-track-num {
+    font-size: 12px;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+  }
+
+  .ephemeral-track-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+  }
+
+  .ephemeral-track-title {
+    font-size: 13px;
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .ephemeral-track-secondary {
+    font-size: 11px;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .ephemeral-track-duration {
+    font-size: 12px;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+    min-width: 40px;
+    text-align: right;
+  }
+
+  /* Inline Flat / Tree toggle in the jumpnav row.
+     Frontend-design intent: the toggle must NOT compete with the tab
+     list for visual weight. So it sits right of the tabs (separated by
+     a flex spacer via `margin-left: auto`), uses a smaller font, and
+     adopts a flat ghost-pill style: only the active option carries a
+     subtle background. No autofocus on entry — Tab order remains
+     tabs → toggle → page actions. */
+  .folders-mode-inline-toggle {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    padding: 2px;
+    border-radius: 4px;
+    background: var(--bg-tertiary, rgba(255, 255, 255, 0.04));
+  }
+
+  .folders-mode-btn {
+    padding: 4px 10px;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary, var(--text-muted));
+    font-family: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    border-radius: 3px;
+    transition: background 120ms ease, color 120ms ease;
+  }
+
+  .folders-mode-btn:hover {
+    color: var(--text-primary);
+  }
+
+  .folders-mode-btn.active {
+    background: var(--bg-secondary, rgba(255, 255, 255, 0.08));
+    color: var(--text-primary);
   }
 </style>

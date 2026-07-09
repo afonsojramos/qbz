@@ -2,7 +2,7 @@
   import { startActiveLineUpdates, setProgressTrackingEnabled } from '$lib/stores/lyricsStore';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { t } from '$lib/i18n';
-  import Modal from '$lib/components/Modal.svelte';
+  import Modal from '$lib/discovery-v2/ModalLite.svelte';
   import ImmersiveBackground from './ImmersiveBackground.svelte';
   import ImmersiveArtwork from './ImmersiveArtwork.svelte';
   import ImmersiveHeader, { type ImmersiveTab, type FocusTab, type ViewMode } from './ImmersiveHeader.svelte';
@@ -25,7 +25,7 @@
   import AlbumReactivePanel from './panels/AlbumReactivePanel.svelte';
   import LinebedPanel from './panels/LinebedPanel.svelte';
   import LyricsFocusPanel from './panels/LyricsFocusPanel.svelte';
-  import QualityBadge from '$lib/components/QualityBadge.svelte';
+  import QualityBadgeStatic from '$lib/components/QualityBadgeStatic.svelte';
   import { getUserItem, setUserItem } from '$lib/utils/userStorage';
 
   interface LyricsLine {
@@ -100,6 +100,10 @@
     onPlayHistoryTrack?: (trackId: string) => void;
     // Content flags
     explicit?: boolean;
+    /** Disable metadata-bound actions (favorite, etc) when the active
+     * track lives outside the library. Passed down to ImmersiveControls
+     * and PlayerControlsCompact. */
+    metadataActionsDisabled?: boolean;
   }
 
   let {
@@ -150,7 +154,8 @@
     onQueueClear,
     historyTracks = [],
     onPlayHistoryTrack,
-    explicit = false
+    explicit = false,
+    metadataActionsDisabled = false
   }: Props = $props();
 
   // UI State
@@ -437,7 +442,7 @@
       ondblclick={toggleMaximize}
     ></div>
 
-    <!-- Background (skip for canvas-based visualizers that render their own black background) -->
+    <!-- Background (skip for canvas-based visualizer panels that render their own background) -->
     {#if activeFocusTab !== 'visualizer' && activeFocusTab !== 'neon-flow' && activeFocusTab !== 'tunnel-flow' && activeFocusTab !== 'comet-flow' && activeFocusTab !== 'oscilloscope' && activeFocusTab !== 'spectral-ribbon' && activeFocusTab !== 'energy-bands' && activeFocusTab !== 'lissajous' && activeFocusTab !== 'transient-pulse'}
       <ImmersiveBackground {artwork} />
     {/if}
@@ -716,7 +721,7 @@
               <p class="split-track-album">{album}</p>
             {/if}
             <div class="split-quality-badge">
-              <QualityBadge {quality} {bitDepth} {samplingRate} {originalBitDepth} {originalSamplingRate} {format} />
+              <QualityBadgeStatic {quality} {bitDepth} {samplingRate} {format} />
             </div>
           </div>
         </div>
@@ -778,6 +783,7 @@
       {onToggleShuffle}
       {onToggleRepeat}
       {onToggleFavorite}
+      {metadataActionsDisabled}
       {isInfinitePlay}
       {onToggleInfinitePlay}
       {onVolumeChange}
@@ -858,6 +864,29 @@
     overflow: hidden;
   }
 
+  /* CPU mode: nuke every CSS transition, keyframe animation, drop shadow
+     and text shadow inside the immersive chrome AND every panel —
+     header tabs, visualizer dropdown, Neon submenu, window-controls
+     expansion, player bar fade/slide, window menu fade-in, the
+     immersive-player fadeIn itself, the artwork halo on the visualizer
+     and static panels, the cover wrappers in Coverflow, the now-playing
+     thumbs on Lissajous / Oscilloscope / EnergyBands, every text-shadow
+     on track titles and labels. Box-shadows with large blur radii
+     (some up to 60px) extend a halo around every element and force the
+     compositor to alpha-recomposite that halo against the canvas
+     beneath on each visualizer frame — confirmed game-changer when
+     stripped, per user testing on the Spectrum visualizer. The
+     visualizer canvases inside have their own LOW_PROFILE flag and
+     don't rely on CSS for any of this, so this doesn't touch their
+     behaviour. */
+  :global(html.no-hwaccel .immersive-player),
+  :global(html.no-hwaccel .immersive-player *) {
+    transition: none !important;
+    animation: none !important;
+    box-shadow: none !important;
+    text-shadow: none !important;
+  }
+
   .immersive-drag-region {
     position: absolute;
     top: 0;
@@ -866,7 +895,6 @@
     height: 32px;
     z-index: 15; /* Above content (1-5), below header controls (20) */
     -webkit-app-region: drag;
-    app-region: drag;
   }
 
   /* macOS: overlay titlebar needs drag region above all UI (matches homepage pattern) */
@@ -889,6 +917,12 @@
     border-color: rgba(255, 255, 255, 0.1);
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
+  }
+
+  :global(html.no-hwaccel) .immersive-player :global(.quality-badge) {
+    background: #000;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
   }
 
   /* Split mode layout */

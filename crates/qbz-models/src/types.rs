@@ -9,6 +9,19 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
+// ============ Dynamic-suggest (DailyQ/WeeklyQ) ============
+
+/// A seed track resolved for the `/dynamic/suggest` `track_to_analysed`
+/// payload (DailyQ / WeeklyQ). Field names match the Qobuz wire shape
+/// exactly; `0` marks an unknown id (mirrors Tauri's `?? 0`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrackToAnalyse {
+    pub track_id: u64,
+    pub artist_id: u64,
+    pub genre_id: u64,
+    pub label_id: u64,
+}
+
 // ============ Quality Types ============
 
 /// Audio quality format IDs (matches Qobuz API format IDs)
@@ -116,6 +129,92 @@ pub struct StreamRestriction {
     pub code: String,
 }
 
+// ============ External streaming (Cast / DLNA) ============
+
+/// Resolved audio quality actually delivered for an external stream, in the
+/// kHz convention used across the catalog and [`StreamUrl`]. Surfaced so the
+/// UI can show the REAL quality of a cast stream, which can fall back below
+/// the requested tier (HiRes -> Lossless -> Mp3) without the user knowing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StreamQualityInfo {
+    /// Qobuz format id: 5=MP3, 6=Lossless, 7=HiRes, 27=UltraHiRes.
+    pub format_id: u32,
+    /// Sampling rate in kHz (e.g. 96.0, 192.0), when known.
+    pub sampling_rate_khz: Option<f64>,
+    /// Bit depth (16 / 24), when known.
+    pub bit_depth: Option<u32>,
+}
+
+impl StreamQualityInfo {
+    /// Build from a raw sampling-rate value whose unit may be kHz or Hz
+    /// depending on the Qobuz endpoint (`get_stream_url` reports kHz as f64,
+    /// `file/url` reports an integer that has been observed as kHz). Normalize
+    /// to kHz robustly: any real audio rate is < 1000 kHz and >= 8000 Hz, so a
+    /// value >= 1000 is Hz and gets divided. Zero/negative -> unknown.
+    pub fn from_raw(format_id: u32, raw_rate: Option<f64>, bit_depth: Option<u32>) -> Self {
+        let sampling_rate_khz = raw_rate.and_then(|r| {
+            if r <= 0.0 {
+                None
+            } else if r >= 1000.0 {
+                Some(r / 1000.0)
+            } else {
+                Some(r)
+            }
+        });
+        Self {
+            format_id,
+            sampling_rate_khz,
+            bit_depth,
+        }
+    }
+
+    /// The `Quality` tier this format id maps to, if recognized.
+    pub fn quality(&self) -> Option<Quality> {
+        Quality::from_id(self.format_id)
+    }
+
+    /// Coarse tier label like "FLAC 24-bit/>96kHz" (from the format id).
+    pub fn tier_label(&self) -> &'static str {
+        self.quality().map(|q| q.label()).unwrap_or("Unknown")
+    }
+}
+
+/// Where the bytes for an external/cast track were resolved from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AssetOrigin {
+    Network,
+    Cache,
+    Offline,
+}
+
+/// A fully-materialized audio asset to hand to an external renderer
+/// (Chromecast / DLNA) through the local media server. Carries the raw bytes
+/// VERBATIM (no transcode), the MIME to advertise, and the quality actually
+/// resolved so the UI can display it. Casting bypasses the local audio
+/// backend, so this is the only place the delivered quality is known.
+#[derive(Clone)]
+pub struct ExternalStreamAsset {
+    pub bytes: Vec<u8>,
+    pub content_type: String,
+    pub quality: StreamQualityInfo,
+    /// Track duration in seconds, when known by the resolver.
+    pub duration_secs: Option<f64>,
+    pub origin: AssetOrigin,
+}
+
+impl std::fmt::Debug for ExternalStreamAsset {
+    // Don't dump the whole byte vec into logs.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ExternalStreamAsset")
+            .field("bytes", &format_args!("{} bytes", self.bytes.len()))
+            .field("content_type", &self.content_type)
+            .field("quality", &self.quality)
+            .field("duration_secs", &self.duration_secs)
+            .field("origin", &self.origin)
+            .finish()
+    }
+}
+
 // ============ CMAF Stream Types ============
 
 /// Response from POST /api.json/0.2/session/start
@@ -182,12 +281,23 @@ impl ImageSet {
             .or(self.thumbnail.as_ref())
             .or(self.small.as_ref())
     }
+
+    /// The smallest available variant — for list-row thumbnails, where
+    /// `best()` (mega/large) would needlessly download huge images.
+    pub fn smallest(&self) -> Option<&String> {
+        self.small
+            .as_ref()
+            .or(self.thumbnail.as_ref())
+            .or(self.large.as_ref())
+            .or(self.extralarge.as_ref())
+            .or(self.mega.as_ref())
+    }
 }
 
 // ============ Core Media Types ============
 
 /// Track model
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Track {
     #[serde(default)]
     pub id: u64,
@@ -198,6 +308,11 @@ pub struct Track {
     /// it parenthesized after the title so remix and reissue albums are
     /// distinguishable from originals (issue #360).
     pub version: Option<String>,
+    /// Classical "work" the track belongs to (e.g. "Symphony No. 9 in D minor,
+    /// Op. 125"). Qobuz returns it on the track object (always present in the
+    /// envelope, `null` for non-classical catalog). Drives the per-work section
+    /// headers on the album view, mirroring the official Qobuz player (PR #536).
+    pub work: Option<String>,
     pub isrc: Option<String>,
     #[serde(default)]
     pub duration: u32,
@@ -237,6 +352,8 @@ pub struct AlbumSummary {
     pub image: ImageSet,
     /// Label (if returned in track response)
     pub label: Option<Label>,
+    /// Genre (when returned, e.g. on favorites track album objects).
+    pub genre: Option<Genre>,
 }
 
 /// Album model
@@ -251,6 +368,14 @@ pub struct Album {
     #[serde(default)]
     pub image: ImageSet,
     pub release_date_original: Option<String>,
+    /// Date the album becomes available for streaming (ISO YYYY-MM-DD).
+    /// When in the future, the album is upcoming and cannot be fetched
+    /// via `get_album` yet — Release Watch uses this to gate clicks.
+    pub release_date_stream: Option<String>,
+    /// Whether the album is currently streamable. False for upcoming
+    /// releases, regional restrictions, or label takedowns.
+    #[serde(default)]
+    pub streamable: Option<bool>,
     pub label: Option<Label>,
     pub genre: Option<Genre>,
     pub tracks_count: Option<u32>,
@@ -261,6 +386,23 @@ pub struct Album {
     pub hires_streamable: bool,
     pub maximum_sampling_rate: Option<f64>,
     pub maximum_bit_depth: Option<u32>,
+    /// V2 nested quality block. The modern album shape returned by
+    /// `/label/getAlbums` (DiscographyAlbumDto) and `/discover`-style items
+    /// nests quality here; preferred over the flat `maximum_*` fields.
+    #[serde(default)]
+    pub audio_info: Option<DiscoverAudioInfo>,
+    /// V2 nested release dates (`{original, download, stream}`); preferred
+    /// over the flat `release_date_original` when present.
+    #[serde(default)]
+    pub dates: Option<DiscoverAlbumDates>,
+    /// The V2 wire spells the album track count `track_count` (no trailing
+    /// `s`); the flat shape uses `tracks_count`.
+    #[serde(default)]
+    pub track_count: Option<u32>,
+    /// Explicit release type when provided ("album" | "ep" | "single" |
+    /// "live" | "compilation" | ...).
+    #[serde(default)]
+    pub release_type: Option<String>,
     #[serde(default)]
     pub tracks: Option<TracksContainer>,
     /// Universal Product Code for the album
@@ -273,6 +415,35 @@ pub struct Album {
     /// Editorial awards (Qobuzissime, Album of the Week, press accolades).
     #[serde(default)]
     pub awards: Option<Vec<AlbumAward>>,
+    /// Parental advisory / explicit content marker.
+    #[serde(default)]
+    pub parental_warning: Option<bool>,
+    /// Full artist contributor list including roles. The primary artist is
+    /// duplicated here as `roles: ["main-artist"]`; non-main entries are
+    /// the album's featured artists.
+    #[serde(default)]
+    pub artists: Option<Vec<AlbumArtist>>,
+    /// Release variant label ("2009 Remaster", "Hi-Res", "Deluxe Edition", …).
+    /// Qobuz keeps this out of `title`; the web player appends it in parens so
+    /// re-editions of the same album are distinguishable. Surfaced the same way
+    /// on every album title (see `format_album_title`).
+    #[serde(default)]
+    pub version: Option<String>,
+    /// Album-level composer credit (single Artist). The official web player
+    /// renders this — NOT the per-track `composer` — as the "… • X
+    /// (composer)" tail of the header credit line, and suppresses it when the
+    /// name is the "Various Composers" placeholder. See `album::build_credits`.
+    #[serde(default)]
+    pub composer: Option<Artist>,
+}
+
+/// Album artist contributor entry (main artist + featured artists).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AlbumArtist {
+    pub id: u64,
+    pub name: String,
+    #[serde(default)]
+    pub roles: Option<Vec<String>>,
 }
 
 /// A downloadable extra bundled with an album (e.g. PDF booklet)
@@ -632,12 +803,180 @@ pub struct SearchResults {
     pub playlists: Option<SearchResultsPage<Playlist>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SearchResultsPage<T> {
+    #[serde(default = "Vec::new")]
     pub items: Vec<T>,
+    // `/album/suggest` returns a page with only `{limit, items}` (no `total`
+    // or `offset`); without defaults the whole response failed to deserialize
+    // and the album "Suggestions" carousel silently never showed. Defaulting
+    // the pagination scalars to 0 is harmless — only `items` is consumed there.
+    #[serde(default)]
     pub total: u32,
+    #[serde(default)]
     pub offset: u32,
+    #[serde(default)]
     pub limit: u32,
+}
+
+// ============ Purchases API Models ============
+//
+// Ported field-for-field from `src-tauri/src/api/models.rs:546-628`. These are
+// the wire shapes returned by the Qobuz `/purchase/*` endpoints. The lenient
+// deserializers live in `crate::purchase_serde` (see that module's docs for the
+// per-field coercion rules).
+
+/// Response from `/purchase/getUserPurchases` (commands #1/#3/#4).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PurchaseResponse {
+    #[serde(default, deserialize_with = "crate::purchase_serde::lenient_page")]
+    pub albums: SearchResultsPage<PurchaseAlbum>,
+    #[serde(default, deserialize_with = "crate::purchase_serde::lenient_page")]
+    pub tracks: SearchResultsPage<PurchaseTrack>,
+}
+
+/// Response from `/purchase/getUserPurchasesIds` (command #2). Items are OPAQUE
+/// JSON — the UI reads only `.total` from each page.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PurchaseIdsResponse {
+    #[serde(default, deserialize_with = "crate::purchase_serde::lenient_page")]
+    pub albums: SearchResultsPage<serde_json::Value>,
+    #[serde(default, deserialize_with = "crate::purchase_serde::lenient_page")]
+    pub tracks: SearchResultsPage<serde_json::Value>,
+}
+
+/// A purchased album. `downloadable` defaults TRUE; `downloaded` is NOT from
+/// Qobuz — it is server-computed from the local registry. `purchased_at` is
+/// unix epoch seconds. Nested `tracks` is populated only on the album-detail /
+/// by-type-albums paths.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PurchaseAlbum {
+    #[serde(
+        default,
+        deserialize_with = "crate::purchase_serde::deserialize_string_id"
+    )]
+    pub id: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub artist: Artist,
+    #[serde(default)]
+    pub image: ImageSet,
+    #[serde(default, deserialize_with = "crate::purchase_serde::lenient_option")]
+    pub release_date_original: Option<String>,
+    #[serde(default, deserialize_with = "crate::purchase_serde::lenient_option")]
+    pub label: Option<Label>,
+    #[serde(default, deserialize_with = "crate::purchase_serde::lenient_option")]
+    pub genre: Option<Genre>,
+    #[serde(default, deserialize_with = "crate::purchase_serde::lenient_option")]
+    pub tracks_count: Option<u32>,
+    #[serde(default, deserialize_with = "crate::purchase_serde::lenient_option")]
+    pub duration: Option<u32>,
+    #[serde(default)]
+    pub hires: bool,
+    #[serde(default, deserialize_with = "crate::purchase_serde::lenient_option")]
+    pub maximum_sampling_rate: Option<f64>,
+    #[serde(default, deserialize_with = "crate::purchase_serde::lenient_option")]
+    pub maximum_bit_depth: Option<u32>,
+    #[serde(default = "crate::purchase_serde::serde_true")]
+    pub downloadable: bool,
+    #[serde(default)]
+    pub downloaded: bool,
+    #[serde(default, deserialize_with = "crate::purchase_serde::lenient_option")]
+    pub purchased_at: Option<i64>,
+    #[serde(default, deserialize_with = "crate::purchase_serde::lenient_option")]
+    pub tracks: Option<SearchResultsPage<PurchaseTrack>>,
+}
+
+/// A purchased track. NOTE: there is intentionally **no `version` field** — the
+/// purchases path never carries the track subtitle/edition (see source-of-truth
+/// §4.6). `streamable` defaults TRUE; `downloaded`/`downloaded_format_ids` are
+/// server-computed from the local registry; `media_number` is the disc number
+/// used for disc-grouping. `purchased_at` is unix epoch seconds.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PurchaseTrack {
+    #[serde(default, deserialize_with = "crate::purchase_serde::deserialize_u64_id")]
+    pub id: u64,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub track_number: u32,
+    #[serde(default, deserialize_with = "crate::purchase_serde::lenient_option")]
+    pub media_number: Option<u32>,
+    #[serde(default)]
+    pub duration: u32,
+    #[serde(default)]
+    pub performer: Artist,
+    #[serde(default, deserialize_with = "crate::purchase_serde::lenient_option")]
+    pub album: Option<AlbumSummary>,
+    #[serde(default)]
+    pub hires: bool,
+    #[serde(default, deserialize_with = "crate::purchase_serde::lenient_option")]
+    pub maximum_sampling_rate: Option<f64>,
+    #[serde(default, deserialize_with = "crate::purchase_serde::lenient_option")]
+    pub maximum_bit_depth: Option<u32>,
+    #[serde(default = "crate::purchase_serde::serde_true")]
+    pub streamable: bool,
+    #[serde(default)]
+    pub downloaded: bool,
+    #[serde(default)]
+    pub downloaded_format_ids: Vec<u32>,
+    #[serde(default, deserialize_with = "crate::purchase_serde::lenient_option")]
+    pub purchased_at: Option<i64>,
+}
+
+/// A downloadable format option synthesized client-side from an `Album`
+/// (command #6). `id` feeds `getFileUrl`'s `format_id`; `label` (with `/`→`-`)
+/// becomes the `qualityDir` subfolder. The synthesis table lives in the
+/// orchestration service (Slice 4); this struct is just the wire/UI shape.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PurchaseFormatOption {
+    pub id: u32,
+    pub label: String,
+    pub bit_depth: Option<u32>,
+    pub sampling_rate: Option<f64>,
+}
+
+/// Response from `/album/suggest` — albums similar to a seed album.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AlbumSuggestResponse {
+    #[serde(default)]
+    pub algorithm: Option<String>,
+    #[serde(default)]
+    pub albums: Option<SearchResultsPage<Album>>,
+}
+
+/// Response from the `/radio/*` endpoints — a generated track list.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RadioResponse {
+    #[serde(rename = "type", default)]
+    pub radio_type: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default, deserialize_with = "crate::purchase_serde::lenient_page_flexible")]
+    pub tracks: SearchResultsPage<Track>,
+}
+
+/// One entry of the Qobuz `most_popular` block in a combined search.
+/// Serde tagging matches the legacy `V2MostPopularItem` so the Tauri
+/// command's response shape is unchanged.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", content = "content", rename_all = "lowercase")]
+pub enum MostPopularItem {
+    Tracks(Track),
+    Albums(Album),
+    Artists(Artist),
+}
+
+/// Combined search result: the four category pages plus an optional
+/// "most popular" hero entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchAllResults {
+    pub albums: SearchResultsPage<Album>,
+    pub tracks: SearchResultsPage<Track>,
+    pub artists: SearchResultsPage<Artist>,
+    pub playlists: SearchResultsPage<Playlist>,
+    pub most_popular: Option<MostPopularItem>,
 }
 
 /// Favorites container
@@ -800,7 +1139,7 @@ pub struct PageArtistResponse {
     pub images: Option<PageArtistImages>,
     pub similar_artists: Option<PageArtistSimilar>,
     pub top_tracks: Option<Vec<PageArtistTrack>>,
-    pub last_release: Option<serde_json::Value>,
+    pub last_release: Option<PageArtistRelease>,
     pub releases: Option<Vec<PageArtistReleaseGroup>>,
     pub tracks_appears_on: Option<Vec<PageArtistTrack>>,
     pub playlists: Option<PageArtistPlaylists>,
@@ -1024,4 +1363,51 @@ pub struct PageArtistPlaylistImages {
 pub struct ReleasesGridResponse {
     pub has_more: bool,
     pub items: Vec<PageArtistRelease>,
+}
+
+// ============ Artist Story Types (/artist/story) ============
+
+/// Response from /artist/story (Magazine / editorial articles about the artist).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArtistStoryResponse {
+    pub has_more: bool,
+    #[serde(default)]
+    pub items: Vec<ArtistStoryItem>,
+}
+
+/// A single Magazine story. `image`/`images[].url` are ready-to-use signed
+/// arc-cdn URLs — do NOT run them through the portrait hash/format builder.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArtistStoryItem {
+    pub id: String,
+    pub title: String,
+    /// Epoch SECONDS, not an ISO string.
+    #[serde(default)]
+    pub display_date: Option<i64>,
+    #[serde(default)]
+    pub image: Option<String>,
+    #[serde(default)]
+    pub images: Option<Vec<ArtistStoryImage>>,
+    #[serde(default)]
+    pub description_short: Option<String>,
+    #[serde(default)]
+    pub authors: Option<Vec<ArtistStoryAuthor>>,
+    #[serde(default)]
+    pub section_slugs: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArtistStoryImage {
+    #[serde(default)]
+    pub format: Option<String>,
+    pub url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArtistStoryAuthor {
+    pub name: String,
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub slug: Option<String>,
 }

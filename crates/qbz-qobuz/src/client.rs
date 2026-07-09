@@ -9,9 +9,10 @@ use super::auth::{
     get_timestamp, parse_login_response, sign_file_url, sign_get_favorites, sign_get_file_url,
     sign_request, sign_search, sign_session_start,
 };
-use super::bundle::{extract_bundle_tokens, BundleTokens};
+use super::bundle::{self, BundleTokens};
 use super::endpoints::{self, paths};
 use super::error::{ApiError, Result};
+use super::lyrics::{QobuzLyricsDocument, QobuzLyricsUrls};
 use qbz_models::*;
 
 const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64; rv:120.0) Gecko/20100101 Firefox/120.0";
@@ -52,6 +53,10 @@ impl QobuzClient {
         let http = Client::builder()
             .user_agent(USER_AGENT)
             .cookie_store(true)
+            // Bound the TCP connect phase so a dead route (e.g. a stale CDN
+            // address) can't hang startup. Does not affect body-read time, so
+            // long streaming reads are unaffected.
+            .connect_timeout(std::time::Duration::from_secs(10))
             .build()?;
 
         Ok(Self {
@@ -64,11 +69,55 @@ impl QobuzClient {
         })
     }
 
-    /// Initialize client by extracting bundle tokens
-    pub async fn init(&self) -> Result<()> {
-        let tokens = extract_bundle_tokens(&self.http).await?;
+    /// Initialize client by extracting bundle tokens.
+    ///
+    /// Warm start: if cached tokens exist, use them immediately so the UI never
+    /// blocks on Qobuz's (sometimes very slow) ~7 MB bundle download, then
+    /// refresh in the background — re-downloading only if Qobuz rotated the
+    /// bundle version. Cold start (first run or after a cache wipe): fetch now,
+    /// bounded by a per-request timeout + a small retry so a slow/dead CDN can't
+    /// hang forever.
+    ///
+    /// Returns `true` if it served cached tokens (warm), `false` if it had to do
+    /// a live extraction (cold) — callers can use this to drive a "connecting"
+    /// UI only when it actually matters.
+    pub async fn init(&self) -> Result<bool> {
+        if let Some(cached) = bundle::load_cached_bundle() {
+            let version = cached.bundle_version.clone();
+            log::info!("[Bundle] Using cached tokens (version {})", version);
+            *self.tokens.write().await = Some(cached.into());
+
+            // Cache reads are never gated, but the background refresh is a
+            // network request — gate it once before cloning the client into
+            // the spawned task, skipping the refresh instead of failing the
+            // warm start.
+            match self.http() {
+                Ok(client) => {
+                    let client = client.clone();
+                    let tokens_arc = Arc::clone(&self.tokens);
+                    tokio::spawn(async move {
+                        if let Some(fresh) =
+                            bundle::refresh_bundle_if_changed(&client, &version).await
+                        {
+                            *tokens_arc.write().await = Some(fresh);
+                            log::info!("[Bundle] Background refresh applied rotated tokens");
+                        }
+                    });
+                }
+                Err(_) => {
+                    log::info!("[Bundle] Offline mode - skipping background bundle refresh");
+                }
+            }
+            return Ok(true);
+        }
+
+        log::info!("[Bundle] No cached tokens, extracting from Qobuz...");
+        // Cold start: a live bundle fetch is a network request — gated on
+        // purpose so an offline cold start fails fast instead of waiting out
+        // the network timeouts.
+        let tokens = bundle::extract_and_cache_bundle_tokens(self.http()?).await?;
         *self.tokens.write().await = Some(tokens);
-        Ok(())
+        Ok(false)
     }
 
     /// Set the locale for API requests
@@ -101,8 +150,25 @@ impl QobuzClient {
         &self.http
     }
 
+    /// The single offline choke point (D3): every Qobuz SERVICE request flows
+    /// through here. While offline mode is active, fail fast with a typed,
+    /// non-transient error instead of timing out against the network.
+    ///
+    /// Exemption: the sign-in methods (`login`, `login_with_oauth_code`,
+    /// `login_with_token`) use the raw `self.http` field instead —
+    /// user-initiated authentication is an explicit intent to reach Qobuz;
+    /// the offline gate governs services, not sign-in. Without the exemption
+    /// a closed gate (induced offline, or a stale offline session) refuses
+    /// the very login that would resolve it.
+    pub(crate) fn http(&self) -> Result<&Client> {
+        if crate::offline_gate::is_offline() {
+            return Err(ApiError::OfflineMode);
+        }
+        Ok(&self.http)
+    }
+
     /// Get validated secret (validates on first use)
-    async fn secret(&self) -> Result<String> {
+    pub(crate) async fn secret(&self) -> Result<String> {
         // Check if we already have a validated secret
         if let Some(secret) = self.validated_secret.read().await.clone() {
             return Ok(secret);
@@ -132,7 +198,7 @@ impl QobuzClient {
 
         let url = endpoints::build_url(paths::TRACK_GET_FILE_URL);
         let response = self
-            .http
+            .http()?
             .get(&url)
             .headers(self.api_headers().await?)
             .query(&[
@@ -151,6 +217,8 @@ impl QobuzClient {
     /// Login with email and password
     pub async fn login(&self, email: &str, password: &str) -> Result<UserSession> {
         let url = endpoints::build_url(paths::USER_LOGIN);
+        // Auth exemption: raw client, bypasses the offline gate (sign-in is
+        // explicit user intent to reach Qobuz; the gate governs services).
         let response = self
             .http
             .get(&url)
@@ -220,6 +288,8 @@ impl QobuzClient {
         );
 
         log::info!("[OAuth] Exchanging code for token via /oauth/callback");
+        // Auth exemption: raw client, bypasses the offline gate (sign-in is
+        // explicit user intent to reach Qobuz; the gate governs services).
         let callback_response = self
             .http
             .get(&callback_url)
@@ -262,6 +332,7 @@ impl QobuzClient {
                 .map_err(|_| ApiError::AuthenticationError("Invalid OAuth token format".into()))?,
         );
 
+        // Auth exemption: raw client (see /oauth/callback step above).
         let login_response = self
             .http
             .post(&user_login_url)
@@ -318,6 +389,8 @@ impl QobuzClient {
         );
 
         log::info!("[OAuth] Restoring session from saved token");
+        // Auth exemption: raw client, bypasses the offline gate (sign-in is
+        // explicit user intent to reach Qobuz; the gate governs services).
         let resp = self
             .http
             .post(&user_login_url)
@@ -390,7 +463,7 @@ impl QobuzClient {
     }
 
     /// Build headers that REQUIRE authentication. Fails if not logged in.
-    async fn authenticated_headers(&self) -> Result<reqwest::header::HeaderMap> {
+    pub(crate) async fn authenticated_headers(&self) -> Result<reqwest::header::HeaderMap> {
         use reqwest::header::{HeaderMap, HeaderValue};
         let mut headers = HeaderMap::new();
 
@@ -430,7 +503,7 @@ impl QobuzClient {
         query_params.push(("request_sig", &sig));
 
         let response = self
-            .http
+            .http()?
             .get(url)
             .headers(self.api_headers().await?)
             .query(&query_params)
@@ -457,7 +530,7 @@ impl QobuzClient {
         query_params.push(("request_sig", &sig));
 
         let response = self
-            .http
+            .http()?
             .get(url)
             .headers(self.authenticated_headers().await?)
             .query(&query_params)
@@ -498,7 +571,7 @@ impl QobuzClient {
         }
 
         let http_response = self
-            .http
+            .http()?
             .get(&url)
             .headers(self.api_headers().await?)
             .query(&params)
@@ -544,7 +617,7 @@ impl QobuzClient {
         }
 
         let http_response = self
-            .http
+            .http()?
             .get(&url)
             .headers(self.api_headers().await?)
             .query(&params)
@@ -590,7 +663,7 @@ impl QobuzClient {
         }
 
         let http_response = self
-            .http
+            .http()?
             .get(&url)
             .headers(self.api_headers().await?)
             .query(&params)
@@ -618,7 +691,7 @@ impl QobuzClient {
         let ts_str = timestamp.to_string();
 
         let http_response = self
-            .http
+            .http()?
             .get(&url)
             .headers(self.api_headers().await?)
             .query(&[
@@ -785,7 +858,7 @@ impl QobuzClient {
         let offset_str = offset.to_string();
 
         let http_response = self
-            .http
+            .http()?
             .get(&url)
             .headers(self.authenticated_headers().await?)
             .query(&[
@@ -881,6 +954,112 @@ impl QobuzClient {
             offset,
             limit,
         })
+    }
+
+    /// Albums similar to a seed album (`/album/suggest`). Ported from
+    /// the legacy api client.
+    pub async fn get_album_suggest(&self, album_id: &str) -> Result<AlbumSuggestResponse> {
+        let url = endpoints::build_url(paths::ALBUM_SUGGEST);
+        let http_response = self
+            .http()?
+            .get(&url)
+            .headers(self.api_headers().await?)
+            .query(&[("album_id", album_id)])
+            .send()
+            .await?;
+        let status = http_response.status();
+        if !status.is_success() {
+            return Err(ApiError::ApiResponse(format!(
+                "get_album_suggest({album_id}) status {status}"
+            )));
+        }
+        let response: Value = http_response.json().await?;
+        Ok(serde_json::from_value(response)?)
+    }
+
+    /// Dynamic suggestions for mixes (`POST /dynamic/suggest`). Seeds
+    /// from recently-listened track ids. Returns the suggested tracks
+    /// (items parsed leniently). Ported from the legacy api client;
+    /// the `track_to_analysed` payload is optional and omitted here.
+    pub async fn get_dynamic_suggest(
+        &self,
+        listened_track_ids: &[u64],
+        limit: u32,
+    ) -> Result<Vec<Track>> {
+        self.get_dynamic_suggest_full(listened_track_ids, &[], limit)
+            .await
+    }
+
+    /// Like [`get_dynamic_suggest`] but carrying the `track_to_analysed`
+    /// payload — the PRIMARY DailyQ/WeeklyQ path. Tauri seeds this with up to 9
+    /// resolved `{track_id, artist_id, genre_id, label_id}` tuples and only
+    /// falls back to an empty analysis when a call returns zero items.
+    pub async fn get_dynamic_suggest_full(
+        &self,
+        listened_track_ids: &[u64],
+        tracks_to_analyse: &[TrackToAnalyse],
+        limit: u32,
+    ) -> Result<Vec<Track>> {
+        let url = endpoints::build_url(paths::DYNAMIC_SUGGEST);
+        let body = serde_json::json!({
+            "limit": limit,
+            "listened_tracks_ids": listened_track_ids,
+            "track_to_analysed": tracks_to_analyse,
+        });
+        let http_response = self
+            .http()?
+            .post(&url)
+            .headers(self.authenticated_headers().await?)
+            .json(&body)
+            .send()
+            .await?;
+        let status = http_response.status();
+        if !status.is_success() {
+            return Err(ApiError::ApiResponse(format!(
+                "get_dynamic_suggest status {status}"
+            )));
+        }
+        let response: Value = http_response.json().await?;
+        Ok(qbz_models::lenient::parse_items_array(
+            &response,
+            "tracks",
+            "dynamic-suggest track",
+        ))
+    }
+
+    /// Qobuz radio for an artist (`/radio/artist`) — a generated track
+    /// list. Ported from the legacy api client.
+    pub async fn get_radio_artist(&self, artist_id: &str) -> Result<RadioResponse> {
+        self.get_radio(paths::RADIO_ARTIST, "artist_id", artist_id).await
+    }
+
+    /// Qobuz radio for a track (`/radio/track`).
+    pub async fn get_radio_track(&self, track_id: &str) -> Result<RadioResponse> {
+        self.get_radio(paths::RADIO_TRACK, "track_id", track_id).await
+    }
+
+    /// Qobuz radio for an album (`/radio/album`).
+    pub async fn get_radio_album(&self, album_id: &str) -> Result<RadioResponse> {
+        self.get_radio(paths::RADIO_ALBUM, "album_id", album_id).await
+    }
+
+    async fn get_radio(&self, path: &str, key: &str, id: &str) -> Result<RadioResponse> {
+        let url = endpoints::build_url(path);
+        let http_response = self
+            .http()?
+            .get(&url)
+            .headers(self.authenticated_headers().await?)
+            .query(&[(key, id)])
+            .send()
+            .await?;
+        let status = http_response.status();
+        if !status.is_success() {
+            return Err(ApiError::ApiResponse(format!(
+                "get_radio({path}, {id}) status {status}"
+            )));
+        }
+        let response: Value = http_response.json().await?;
+        Ok(serde_json::from_value(response)?)
     }
 
     /// Get list of genres
@@ -1143,6 +1322,117 @@ impl QobuzClient {
         Ok(serde_json::from_value(response)?)
     }
 
+    // === Lyrics (v9.9.0.0-beta delta) ===
+
+    /// Raw step-1 lyrics call: signed `GET /track/lyricsUrl`, returning
+    /// `(HTTP status, raw body)`. The signed-GET helpers are private to the
+    /// client, so this is the only way diagnostic tooling (e.g.
+    /// `examples/lyrics_probe.rs`) can observe the exact wire shape; the
+    /// typed [`Self::get_lyrics_url`] builds on it.
+    pub async fn get_lyrics_url_raw(&self, track_id: u64) -> Result<(u16, String)> {
+        let url = endpoints::build_url(paths::TRACK_LYRICS_URL);
+        // Signing method name per the concatenation convention ("trackget" at
+        // get_track, "trackgetFileUrl" in auth.rs): path with slashes removed,
+        // case preserved -> "tracklyricsUrl". Verified against the live API
+        // 2026-06-10 (HTTP 200 with a valid envelope).
+        let response = self
+            .signed_get_auth(&url, "tracklyricsUrl", &[("track_id", track_id.to_string())])
+            .await?;
+        let status = response.status().as_u16();
+        let body = response.text().await?;
+        Ok((status, body))
+    }
+
+    /// Step 1: fetch the lyrics-URL envelope for a track.
+    ///
+    /// `Ok(None)` is the typed miss: no lyrics for this track (non-200, or a
+    /// 200 envelope without a usable `lyrics_url`, or an unparsable body).
+    /// `Err` is reserved for transport/auth/offline failures — the lyrics
+    /// orchestrator degrades those to a miss as well (spec §1.1); nothing in
+    /// this path is ever a user-facing error.
+    pub async fn get_lyrics_url(&self, track_id: u64) -> Result<Option<QobuzLyricsUrls>> {
+        let (status, body) = self.get_lyrics_url_raw(track_id).await?;
+        if status != 200 {
+            // Live-observed miss: HTTP 404 with body
+            // {"status":"error","code":404,"message":"No lyrics found"}
+            // (sample: qbz-nix-docs/qobuz-api/lyrics-miss-response.json).
+            log::debug!(
+                "[API] get_lyrics_url({}) status={} -> no lyrics",
+                track_id,
+                status
+            );
+            return Ok(None);
+        }
+        match serde_json::from_str::<QobuzLyricsUrls>(&body) {
+            Ok(urls) if urls.lyrics_url.is_some() => Ok(Some(urls)),
+            Ok(_) => {
+                log::debug!(
+                    "[API] get_lyrics_url({}) 200 without lyrics_url -> no lyrics",
+                    track_id
+                );
+                Ok(None)
+            }
+            Err(e) => {
+                log::warn!(
+                    "[API] get_lyrics_url({}) unparsable 200 body ({}) -> no lyrics",
+                    track_id,
+                    e
+                );
+                Ok(None)
+            }
+        }
+    }
+
+    /// Steps 1 + 2: fetch the full lyrics document for a track.
+    ///
+    /// The CDN GET goes through [`Self::http`] (the offline choke point) so
+    /// offline mode fails fast. The returned `lyrics_url` is self-authorizing
+    /// — a pre-signed CloudFront URL (`Expires`/`Signature`/`Key-Pair-Id`);
+    /// no `X-App-Id`/auth headers are sent (verified live 2026-06-10, HTTP
+    /// 200 on a bare GET). `Ok(None)` = typed miss, same contract as
+    /// [`Self::get_lyrics_url`]; a document without `original` content also
+    /// counts as a miss.
+    pub async fn get_lyrics(&self, track_id: u64) -> Result<Option<QobuzLyricsDocument>> {
+        let urls = match self.get_lyrics_url(track_id).await? {
+            Some(urls) => urls,
+            None => return Ok(None),
+        };
+        let lyrics_url = match urls.lyrics_url {
+            Some(url) => url,
+            None => return Ok(None),
+        };
+
+        let response = self.http()?.get(&lyrics_url).send().await?;
+        let status = response.status();
+        if !status.is_success() {
+            log::debug!(
+                "[API] get_lyrics({}) CDN doc status={} -> no lyrics",
+                track_id,
+                status
+            );
+            return Ok(None);
+        }
+        let body = response.text().await?;
+        match serde_json::from_str::<QobuzLyricsDocument>(&body) {
+            Ok(doc) if doc.original.is_some() => Ok(Some(doc)),
+            Ok(_) => {
+                log::debug!(
+                    "[API] get_lyrics({}) document without original content -> no lyrics",
+                    track_id
+                );
+                Ok(None)
+            }
+            Err(e) => {
+                log::warn!(
+                    "[API] get_lyrics({}) unparsable CDN doc ({}) -> no lyrics",
+                    track_id,
+                    e
+                );
+                Ok(None)
+            }
+        }
+    }
+
     /// Get artist by ID (basic info only - no albums, faster response)
     pub async fn get_artist_basic(&self, artist_id: u64) -> Result<Artist> {
         let url = endpoints::build_url(paths::ARTIST_GET);
@@ -1284,13 +1574,37 @@ impl QobuzClient {
         Ok(result)
     }
 
-    /// Fetch full Track objects for a batch of track IDs (max 50 per call).
-    /// Uses the `track/getList` endpoint.
-    ///
-    /// Tries multiple API call strategies:
-    /// POST to track/getList with JSON body {"tracks_id": [...]}
-    /// Returns full Track objects for the given IDs (max 50 per call).
+    /// Fetch full Track objects for a batch of track IDs.
+    /// Uses the `track/getList` endpoint, which caps at 50 IDs per call,
+    /// so larger inputs are split into 50-ID windows and fetched serially.
+    /// Input order is preserved in the returned vector.
     pub async fn get_tracks_batch(&self, track_ids: &[u64]) -> Result<Vec<Track>> {
+        const MAX_PER_CALL: usize = 50;
+
+        if track_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        if track_ids.len() <= MAX_PER_CALL {
+            return self.get_tracks_batch_chunk(track_ids).await;
+        }
+
+        log::debug!(
+            "[API] get_tracks_batch chunking {} IDs into {}-windows",
+            track_ids.len(),
+            MAX_PER_CALL
+        );
+        let mut all = Vec::with_capacity(track_ids.len());
+        for chunk in track_ids.chunks(MAX_PER_CALL) {
+            let mut tracks = self.get_tracks_batch_chunk(chunk).await?;
+            all.append(&mut tracks);
+        }
+        Ok(all)
+    }
+
+    /// Single `track/getList` POST. Caller is responsible for keeping
+    /// `track_ids.len() <= 50` — `get_tracks_batch` handles that.
+    async fn get_tracks_batch_chunk(&self, track_ids: &[u64]) -> Result<Vec<Track>> {
         let url = endpoints::build_url(paths::TRACK_GET_LIST);
         let headers = self.api_headers().await?;
         let timestamp = get_timestamp();
@@ -1302,7 +1616,7 @@ impl QobuzClient {
         log::debug!("[API] get_tracks_batch POST ({} IDs)", track_ids.len());
 
         let http_response = self
-            .http
+            .http()?
             .post(&url)
             .headers(headers)
             .query(&[("request_ts", timestamp.to_string()), ("request_sig", sig)])
@@ -1383,11 +1697,16 @@ impl QobuzClient {
                 let headers = self.api_headers().await?;
                 let secret = self.secret().await.unwrap_or_default();
 
+                // Offline gate checked ONCE for the whole page batch (the
+                // first page above already passed through it) — not inside
+                // the per-page loop.
+                let gated_http = self.http()?;
+
                 // Launch all page requests concurrently
                 let futures: Vec<_> = offsets
                     .iter()
                     .map(|&offset| {
-                        let http = &self.http;
+                        let http = gated_http;
                         let url = &url;
                         let headers = headers.clone();
                         let pid = playlist_id.to_string();
@@ -1809,7 +2128,7 @@ impl QobuzClient {
         log::debug!("[API] get_label_list POST ({} ids)", label_ids.len());
 
         let response: Value = self
-            .http
+            .http()?
             .post(&url)
             .headers(headers)
             .query(&[("request_ts", timestamp.to_string()), ("request_sig", sig)])
@@ -1839,7 +2158,7 @@ impl QobuzClient {
 
         log::debug!("Sending stream URL request...");
         let response = self
-            .http
+            .http()?
             .get(&url)
             .headers(self.authenticated_headers().await?)
             .query(&[
@@ -1963,7 +2282,7 @@ impl QobuzClient {
         let signature = sign_get_favorites(timestamp, &secret);
 
         let http_response = self
-            .http
+            .http()?
             .get(&url)
             .headers(self.authenticated_headers().await?)
             .query(&[
@@ -2018,7 +2337,7 @@ impl QobuzClient {
         let ts_str = timestamp.to_string();
 
         let http_response = self
-            .http
+            .http()?
             .get(&url)
             .headers(self.api_headers().await?)
             .query(&[
@@ -2286,6 +2605,36 @@ impl QobuzClient {
         Ok(serde_json::from_value(response)?)
     }
 
+    /// Get artist Magazine stories (editorial articles about the artist).
+    /// REST header-auth only (no per-op signing). Web client calls offset=0 limit=2.
+    pub async fn get_artist_story(
+        &self,
+        artist_id: u64,
+        offset: u32,
+        limit: u32,
+    ) -> Result<ArtistStoryResponse> {
+        let url = endpoints::build_url(paths::ARTIST_STORY);
+        let query = vec![
+            ("artist_id", artist_id.to_string()),
+            ("offset", offset.to_string()),
+            ("limit", limit.to_string()),
+        ];
+
+        log::debug!(
+            "[API] get_artist_story({}) offset={} limit={}",
+            artist_id,
+            offset,
+            limit
+        );
+        let response: serde_json::Value = self
+            .signed_get(&url, "artiststory", &query.iter().map(|(k, v)| (*k, v.clone())).collect::<Vec<_>>())
+            .await?
+            .json()
+            .await?;
+
+        Ok(serde_json::from_value(response)?)
+    }
+
     // === CMAF streaming endpoints ===
 
     /// Ensure we have a valid CMAF session, renewing if expired.
@@ -2335,7 +2684,7 @@ impl QobuzClient {
 
         let url = endpoints::build_url(paths::SESSION_START);
         let response = self
-            .http
+            .http()?
             .post(&url)
             .headers(self.authenticated_headers().await?)
             .form(&[
@@ -2383,64 +2732,183 @@ impl QobuzClient {
         track_id: u64,
         quality: Quality,
     ) -> Result<TrackFileUrl> {
-        let (session_id, _infos) = self.ensure_cmaf_session().await?;
-
-        let timestamp = get_timestamp();
         let format_id = quality.id();
-        let sig = sign_file_url(track_id, format_id, timestamp);
-
         let url = endpoints::build_url(paths::FILE_URL);
 
-        let mut headers = self.authenticated_headers().await?;
-        headers.insert(
-            "X-Session-Id",
-            reqwest::header::HeaderValue::from_str(&session_id)
-                .map_err(|_| ApiError::ApiResponse("Invalid session ID format".into()))?,
-        );
+        // Retry transient failures (5xx / 429 / network blips) with backoff so
+        // a momentary hiccup on the next track's file/url is not turned into a
+        // queue skip. A real 404 → TrackUnavailable is terminal and returns
+        // immediately to the (bounded) skip path. Issue #467.
+        crate::retry::retry_transient(
+            crate::retry::DEFAULT_MAX_ATTEMPTS,
+            "CMAF file/url",
+            ApiError::is_transient,
+            |_attempt| {
+                let url = url.clone();
+                async move {
+                    let (session_id, _infos) = self.ensure_cmaf_session().await?;
 
-        let response = self
-            .http
-            .get(&url)
-            .headers(headers)
-            .query(&[
-                ("track_id", track_id.to_string()),
-                ("format_id", format_id.to_string()),
-                ("intent", "stream".to_string()),
-                ("request_ts", timestamp.to_string()),
-                ("request_sig", sig),
-            ])
-            .send()
-            .await?;
+                    // Fresh timestamp + signature per attempt — the request
+                    // signature is time-bound and would expire across retries.
+                    let timestamp = get_timestamp();
+                    let sig = sign_file_url(track_id, format_id, timestamp);
 
-        let status = response.status();
-        log::info!(
-            "[CMAF] file/url track_id={} format_id={} status={}",
-            track_id,
-            format_id,
-            status
-        );
+                    let mut headers = self.authenticated_headers().await?;
+                    headers.insert(
+                        "X-Session-Id",
+                        reqwest::header::HeaderValue::from_str(&session_id).map_err(|_| {
+                            ApiError::ApiResponse("Invalid session ID format".into())
+                        })?,
+                    );
 
-        if !status.is_success() {
-            return Err(ApiError::ApiResponse(format!(
-                "file/url failed with status {}",
-                status
-            )));
-        }
+                    let response = self
+                        .http()?
+                        .get(&url)
+                        .headers(headers)
+                        .query(&[
+                            ("track_id", track_id.to_string()),
+                            ("format_id", format_id.to_string()),
+                            ("intent", "stream".to_string()),
+                            ("request_ts", timestamp.to_string()),
+                            ("request_sig", sig),
+                        ])
+                        .send()
+                        .await?;
 
-        let file_url: TrackFileUrl = response.json().await?;
-        log::info!(
-            "[CMAF] file/url result: segments={}, mime={:?}, sampling_rate={:?}",
-            file_url.n_segments,
-            file_url.mime_type,
-            file_url.sampling_rate
-        );
+                    let status = response.status();
+                    log::info!(
+                        "[CMAF] file/url track_id={} format_id={} status={}",
+                        track_id,
+                        format_id,
+                        status
+                    );
 
-        Ok(file_url)
+                    if !status.is_success() {
+                        let code = status.as_u16();
+                        return Err(if code == 404 {
+                            ApiError::TrackUnavailable(track_id)
+                        } else if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                            // Honor Retry-After (seconds) when the server sends it.
+                            let retry_after = response
+                                .headers()
+                                .get(reqwest::header::RETRY_AFTER)
+                                .and_then(|v| v.to_str().ok())
+                                .and_then(|s| s.trim().parse::<u64>().ok())
+                                .unwrap_or(2);
+                            ApiError::RateLimited(retry_after)
+                        } else if status.is_server_error() {
+                            ApiError::ServerError(code)
+                        } else {
+                            ApiError::ApiResponse(format!(
+                                "file/url failed with status {}",
+                                status
+                            ))
+                        });
+                    }
+
+                    let file_url: TrackFileUrl = response.json().await?;
+                    log::info!(
+                        "[CMAF] file/url result: segments={}, mime={:?}, sampling_rate={:?}",
+                        file_url.n_segments,
+                        file_url.mime_type,
+                        file_url.sampling_rate
+                    );
+
+                    Ok(file_url)
+                }
+            },
+        )
+        .await
     }
 }
 
 impl Default for QobuzClient {
     fn default() -> Self {
         Self::new().expect("Failed to create client")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// With the offline gate closed, any public API method must fail fast
+    /// with the typed `ApiError::OfflineMode` — no network access, no
+    /// connect timeout. The gate is process-global and tests run in
+    /// parallel, so the shared lock serializes gate-touching tests and the
+    /// drop guard reopens the gate even if the test panics.
+    #[tokio::test]
+    async fn offline_gate_fails_fast_with_typed_error() {
+        let _lock = crate::offline_gate::test_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _reset = crate::offline_gate::TestGateReset;
+
+        crate::offline_gate::set_offline(true);
+
+        let client = QobuzClient::new().expect("client construction is local-only");
+        let started = std::time::Instant::now();
+        let result = client.get_album_suggest("0060254735180").await;
+        let elapsed = started.elapsed();
+
+        let err = result.err().expect("offline gate must fail the request");
+        assert!(
+            matches!(err, ApiError::OfflineMode),
+            "expected ApiError::OfflineMode, got: {err}"
+        );
+        // OfflineMode must never be retried by the retry layer.
+        assert!(!err.is_transient(), "OfflineMode must be non-transient");
+        // Fail-fast: well under the 10s connect timeout — proves no network.
+        assert!(
+            elapsed < std::time::Duration::from_secs(1),
+            "offline gate took {elapsed:?} — it must not touch the network"
+        );
+    }
+
+    /// The sign-in methods are EXEMPT from the offline gate: user-initiated
+    /// authentication is an explicit intent to reach Qobuz. On an
+    /// uninitialized client each method gets PAST the closed gate and fails
+    /// on the missing bundle tokens instead — never `ApiError::OfflineMode`,
+    /// and without touching the network.
+    #[tokio::test]
+    async fn offline_gate_exempts_login_methods() {
+        let _lock = crate::offline_gate::test_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _reset = crate::offline_gate::TestGateReset;
+
+        crate::offline_gate::set_offline(true);
+
+        let client = QobuzClient::new().expect("client construction is local-only");
+
+        let err = client
+            .login("user@example.com", "pw")
+            .await
+            .err()
+            .expect("uninitialized client must fail");
+        assert!(
+            !matches!(err, ApiError::OfflineMode),
+            "login must bypass the offline gate, got: {err}"
+        );
+
+        let err = client
+            .login_with_oauth_code("code")
+            .await
+            .err()
+            .expect("uninitialized client must fail");
+        assert!(
+            !matches!(err, ApiError::OfflineMode),
+            "login_with_oauth_code must bypass the offline gate, got: {err}"
+        );
+
+        let err = client
+            .login_with_token("token")
+            .await
+            .err()
+            .expect("uninitialized client must fail");
+        assert!(
+            !matches!(err, ApiError::OfflineMode),
+            "login_with_token must bypass the offline gate, got: {err}"
+        );
     }
 }

@@ -20,8 +20,11 @@ pub struct V2PlaylistSuggestionsInput {
     pub config: Option<crate::artist_vectors::SuggestionConfig>,
 }
 
-mod helpers;
+pub(crate) mod helpers;
 pub use helpers::*;
+
+mod graphics_recommendation;
+pub use graphics_recommendation::*;
 
 mod runtime;
 pub use runtime::*;
@@ -80,3 +83,9 @@ pub use diagnostics::*;
 
 mod mixtapes;
 pub use mixtapes::*;
+
+pub mod offline_cache;
+pub use offline_cache::*;
+
+mod ephemeral;
+pub use ephemeral::*;

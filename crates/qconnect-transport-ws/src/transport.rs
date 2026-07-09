@@ -356,7 +356,21 @@ async fn run_native_transport_loop(
                 .await
                 {
                     ReconnectOutcome::Continue => continue,
-                    ReconnectOutcome::Shutdown | ReconnectOutcome::Exhausted => break,
+                    ReconnectOutcome::Shutdown => break,
+                    ReconnectOutcome::Exhausted => {
+                        if idle_retry_after_exhausted(
+                            &mut shutdown_rx,
+                            &mut reconnect_attempt,
+                            &mut backoff,
+                            base_backoff,
+                            config.reconnect_idle_retry_ms,
+                        )
+                        .await
+                        {
+                            continue;
+                        }
+                        break;
+                    }
                 }
             }
             Err(_) => {
@@ -372,7 +386,21 @@ async fn run_native_transport_loop(
                 .await
                 {
                     ReconnectOutcome::Continue => continue,
-                    ReconnectOutcome::Shutdown | ReconnectOutcome::Exhausted => break,
+                    ReconnectOutcome::Shutdown => break,
+                    ReconnectOutcome::Exhausted => {
+                        if idle_retry_after_exhausted(
+                            &mut shutdown_rx,
+                            &mut reconnect_attempt,
+                            &mut backoff,
+                            base_backoff,
+                            config.reconnect_idle_retry_ms,
+                        )
+                        .await
+                        {
+                            continue;
+                        }
+                        break;
+                    }
                 }
             }
         };
@@ -417,10 +445,70 @@ async fn run_native_transport_loop(
                 .await
                 {
                     ReconnectOutcome::Continue => continue,
-                    ReconnectOutcome::Shutdown | ReconnectOutcome::Exhausted => break,
+                    ReconnectOutcome::Shutdown => break,
+                    ReconnectOutcome::Exhausted => {
+                        if idle_retry_after_exhausted(
+                            &mut shutdown_rx,
+                            &mut reconnect_attempt,
+                            &mut backoff,
+                            base_backoff,
+                            config.reconnect_idle_retry_ms,
+                        )
+                        .await
+                        {
+                            continue;
+                        }
+                        break;
+                    }
                 }
             }
             emit(&events_tx, TransportEvent::Authenticated);
+        } else if config.require_jwt {
+            // gap #12: the real Qobuz endpoint requires AUTHENTICATE. Silently
+            // skipping it leaves the session un-joinable; surface it as a hard
+            // credential error and route it through the existing bounded
+            // reconnect path (increment-only — issue #358 latch unaffected).
+            emit(
+                &events_tx,
+                TransportEvent::TransportError {
+                    stage: "authenticate".to_string(),
+                    message: "missing jwt_qws for endpoint that requires AUTHENTICATE".to_string(),
+                },
+            );
+            let _ = ws.close(None).await;
+            {
+                let mut guard = state.lock().await;
+                guard.connected = false;
+            }
+            emit(&events_tx, TransportEvent::Disconnected);
+            match handle_reconnect_delay(
+                &events_tx,
+                &mut shutdown_rx,
+                &mut reconnect_attempt,
+                &mut backoff,
+                max_backoff,
+                max_attempts,
+                "missing_authenticate_jwt".to_string(),
+            )
+            .await
+            {
+                ReconnectOutcome::Continue => continue,
+                ReconnectOutcome::Shutdown => break,
+                ReconnectOutcome::Exhausted => {
+                    if idle_retry_after_exhausted(
+                        &mut shutdown_rx,
+                        &mut reconnect_attempt,
+                        &mut backoff,
+                        base_backoff,
+                        config.reconnect_idle_retry_ms,
+                    )
+                    .await
+                    {
+                        continue;
+                    }
+                    break;
+                }
+            }
         }
 
         if config.auto_subscribe {
@@ -457,7 +545,21 @@ async fn run_native_transport_loop(
                 .await
                 {
                     ReconnectOutcome::Continue => continue,
-                    ReconnectOutcome::Shutdown | ReconnectOutcome::Exhausted => break,
+                    ReconnectOutcome::Shutdown => break,
+                    ReconnectOutcome::Exhausted => {
+                        if idle_retry_after_exhausted(
+                            &mut shutdown_rx,
+                            &mut reconnect_attempt,
+                            &mut backoff,
+                            base_backoff,
+                            config.reconnect_idle_retry_ms,
+                        )
+                        .await
+                        {
+                            continue;
+                        }
+                        break;
+                    }
                 }
             }
             emit(&events_tx, TransportEvent::Subscribed);
@@ -472,6 +574,18 @@ async fn run_native_transport_loop(
         // the reconnect counters — subsequent ones are no-ops, so we don't
         // keep paying the lock cost.
         let mut session_established = false;
+
+        // Per-connection keepalive half-open tracking (gap #6). The deadline is
+        // ~2.5× the ping interval: a healthy peer answers within one interval,
+        // so two unanswered pings plus 2.5× silence is a confident half-open
+        // signal without being trigger-happy.
+        let keepalive_deadline_ms = config
+            .keepalive_interval_ms
+            .max(1_000)
+            .saturating_mul(5)
+            / 2;
+        let mut last_pong_at_ms = now_ms();
+        let mut outstanding_pings: u32 = 0;
 
         let disconnect_reason = loop {
             tokio::select! {
@@ -504,9 +618,23 @@ async fn run_native_transport_loop(
                     }
                 }
                 _ = keepalive.tick() => {
+                    // Detect a half-open connection BEFORE sending the next ping:
+                    // if prior pings went unanswered past the deadline, the TCP
+                    // path is dead even though no read/write has errored yet.
+                    // Breaking falls into the existing increment-only reconnect
+                    // path (issue #358 latch unaffected).
+                    if keepalive_is_stale(
+                        now_ms(),
+                        last_pong_at_ms,
+                        outstanding_pings,
+                        keepalive_deadline_ms,
+                    ) {
+                        break "keepalive_timeout".to_string();
+                    }
                     if let Err(err) = ws.send(WsMessage::Ping(Vec::new().into())).await {
                         break format!("keepalive_ping_error:{err}");
                     }
+                    outstanding_pings = outstanding_pings.saturating_add(1);
                     emit(&events_tx, TransportEvent::KeepalivePingSent);
                 }
                 incoming = ws.next() => {
@@ -533,6 +661,8 @@ async fn run_native_transport_loop(
                             }
                         }
                         Some(Ok(WsMessage::Pong(_))) => {
+                            last_pong_at_ms = now_ms();
+                            outstanding_pings = 0;
                             emit(&events_tx, TransportEvent::KeepalivePongReceived);
                         }
                         Some(Ok(WsMessage::Ping(payload))) => {
@@ -575,7 +705,21 @@ async fn run_native_transport_loop(
         .await
         {
             ReconnectOutcome::Continue => continue,
-            ReconnectOutcome::Shutdown | ReconnectOutcome::Exhausted => break,
+            ReconnectOutcome::Shutdown => break,
+            ReconnectOutcome::Exhausted => {
+                if idle_retry_after_exhausted(
+                    &mut shutdown_rx,
+                    &mut reconnect_attempt,
+                    &mut backoff,
+                    base_backoff,
+                    config.reconnect_idle_retry_ms,
+                )
+                .await
+                {
+                    continue;
+                }
+                break;
+            }
         }
     }
 
@@ -639,6 +783,39 @@ async fn handle_reconnect_delay(
 
     *backoff_ms = (*backoff_ms).saturating_mul(2).min(max_backoff);
     ReconnectOutcome::Continue
+}
+
+/// Long-backoff idle retry after the reconnect loop has Exhausted its bounded
+/// attempts (gap #7). When `idle_retry_ms == 0` this is a no-op returning
+/// `false` (legacy terminate behavior). Otherwise it sleeps `idle_retry_ms`
+/// (cancellable by shutdown); on a real shutdown it returns `false` without
+/// re-arming. On a clean wake it resets the attempt counter / backoff to base
+/// and returns `true` so the caller can `continue` the loop.
+///
+/// NOTE: this resets the counters ONLY after Exhausted + a deliberate idle
+/// wait — never on connect. The issue #358 latch (reset only on the first
+/// SESSION_STATE) is therefore untouched.
+async fn idle_retry_after_exhausted(
+    shutdown_rx: &mut watch::Receiver<bool>,
+    reconnect_attempt: &mut u32,
+    backoff: &mut u64,
+    base_backoff: u64,
+    idle_retry_ms: u64,
+) -> bool {
+    if idle_retry_ms == 0 {
+        return false;
+    }
+    tokio::select! {
+        _ = tokio::time::sleep(Duration::from_millis(idle_retry_ms)) => {}
+        _ = shutdown_rx.changed() => {
+            if *shutdown_rx.borrow() {
+                return false;
+            }
+        }
+    }
+    *reconnect_attempt = 0;
+    *backoff = base_backoff;
+    true
 }
 
 /// Side-channel result from `handle_incoming_binary`: we need to know whether
@@ -907,6 +1084,19 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
+/// Pure half-open TCP detector (gap #6). Returns `true` only when at least two
+/// keepalive pings have gone unanswered AND the last pong is older than
+/// `max_silence_ms`. Requiring two outstanding pings avoids tearing down a
+/// healthy connection that simply missed a single pong window.
+fn keepalive_is_stale(
+    now_ms: u64,
+    last_pong_at_ms: u64,
+    outstanding_pings: u32,
+    max_silence_ms: u64,
+) -> bool {
+    outstanding_pings >= 2 && now_ms.saturating_sub(last_pong_at_ms) >= max_silence_ms
+}
+
 #[derive(Clone, PartialEq, ::prost::Message)]
 struct Authenticate {
     #[prost(uint32, optional, tag = "1")]
@@ -963,6 +1153,52 @@ struct CloudPayload {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// gap #12: `require_jwt` must default to `false` so the InMemory / test
+    /// transport path keeps working without a JWT. Only the real Qobuz endpoint
+    /// (set in `resolve_transport_config`) flips it on.
+    #[test]
+    fn config_require_jwt_defaults_false_for_test_path() {
+        let cfg = WsTransportConfig::default();
+        assert!(!cfg.require_jwt);
+    }
+
+    /// gap #6: half-open detection only fires after BOTH at least two
+    /// unanswered pings AND silence past the deadline. A single missed pong, or
+    /// recent silence with fewer than two outstanding pings, must NOT tear the
+    /// connection down.
+    #[test]
+    fn keepalive_stale_only_after_two_unanswered_pings_and_silence() {
+        let interval = 30_000u64;
+        let deadline = interval * 5 / 2;
+        let now = 1_000_000u64;
+        assert!(!keepalive_is_stale(now, now, 3, deadline));
+        assert!(!keepalive_is_stale(now, now - deadline - 1, 0, deadline));
+        assert!(!keepalive_is_stale(now, now - deadline - 1, 1, deadline));
+        assert!(keepalive_is_stale(now, now - deadline - 1, 2, deadline));
+    }
+
+    /// gap #7: with `idle_retry_ms == 0` the helper is a no-op — it returns
+    /// `false` (terminate) and leaves the counters untouched.
+    #[tokio::test]
+    async fn idle_retry_disabled_when_interval_zero() {
+        let (_tx, mut rx) = watch::channel(false);
+        let mut attempt = 5u32;
+        let mut backoff = 8u64;
+        assert!(!idle_retry_after_exhausted(&mut rx, &mut attempt, &mut backoff, 2, 0).await);
+        assert_eq!(attempt, 5);
+    }
+
+    /// gap #7: a shutdown signalled during the idle wait must cancel the retry
+    /// and NOT re-arm (returns `false`, counters untouched).
+    #[tokio::test]
+    async fn idle_retry_cancelled_by_shutdown_does_not_rearm() {
+        let (tx, mut rx) = watch::channel(false);
+        let _ = tx.send(true);
+        let mut attempt = 5u32;
+        let mut backoff = 8u64;
+        assert!(!idle_retry_after_exhausted(&mut rx, &mut attempt, &mut backoff, 2, 60_000).await);
+    }
 
     #[test]
     fn qcloud_frame_roundtrip() {

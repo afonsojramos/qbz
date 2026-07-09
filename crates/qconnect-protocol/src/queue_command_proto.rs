@@ -716,6 +716,16 @@ pub struct RendererFileAudioQualityChangedMessage {
 }
 
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RendererDeviceAudioQualityChangedMessage {
+    #[prost(int32, optional, tag = "1")]
+    pub sampling_rate: Option<i32>,
+    #[prost(int32, optional, tag = "2")]
+    pub bit_depth: Option<i32>,
+    #[prost(int32, optional, tag = "3")]
+    pub nb_channels: Option<i32>,
+}
+
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RendererMaxAudioQualityChangedMessage {
     #[prost(int32, optional, tag = "1")]
     pub max_audio_quality: Option<i32>,
@@ -872,10 +882,29 @@ pub struct QConnectMessages {
     pub messages: Vec<QConnectMessage>,
 }
 
+/// Renderer per-track failure (unstreamable, geo-block, network, ...). Rides at
+/// tag 3 of each `QConnectMessage` (`message_type = PLAYBACK_ERROR(2)`).
+/// Shape: queue_version + queue_item_id + error_type (Common.ErrorType).
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PlaybackErrorMessage {
+    #[prost(message, optional, tag = "1")]
+    pub queue_version: Option<QueueVersionRef>,
+    #[prost(int32, optional, tag = "2")]
+    pub queue_item_id: Option<i32>,
+    #[prost(int32, optional, tag = "3")]
+    pub error_type: Option<i32>,
+}
+
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct QConnectMessage {
     #[prost(int32, optional, tag = "1")]
     pub message_type: Option<i32>,
+    // Tag 3 of the official `Message` envelope record (message_type #1; error #2;
+    // playback_error #3; oneof payloads 21-105). Resolved from the actual transport
+    // bytes: the decoder receives the batch `QConnectMessages` and `playback_error`
+    // rides inside each `messages[]` entry, NOT on the batch wrapper.
+    #[prost(message, optional, tag = "3")]
+    pub playback_error: Option<PlaybackErrorMessage>,
     #[prost(message, optional, tag = "21")]
     pub rndr_srvr_join_session: Option<JoinSessionMessage>,
     #[prost(message, optional, tag = "22")]
@@ -886,6 +915,9 @@ pub struct QConnectMessage {
     pub rndr_srvr_volume_changed: Option<RendererVolumeChangedMessage>,
     #[prost(message, optional, tag = "26")]
     pub rndr_srvr_file_audio_quality_changed: Option<RendererFileAudioQualityChangedMessage>,
+    #[prost(message, optional, tag = "27")]
+    pub rndr_srvr_device_audio_quality_changed:
+        Option<RendererDeviceAudioQualityChangedMessage>,
     #[prost(message, optional, tag = "28")]
     pub rndr_srvr_max_audio_quality_changed: Option<RendererMaxAudioQualityChangedMessage>,
     #[prost(message, optional, tag = "29")]

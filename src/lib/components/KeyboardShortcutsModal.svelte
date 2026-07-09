@@ -90,7 +90,7 @@
   >
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <div
-      class="modal"
+      class="modal selectable"
       role="dialog"
       aria-modal="true"
       aria-labelledby="shortcuts-modal-title"

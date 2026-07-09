@@ -1,6 +1,6 @@
 [package]
 name = "qbz-nix"
-version = "1.2.10"
+version = "2.0.1"
 description = "Native high-fidelity client for Qobuz™ subscribers on Linux with Hi-Fi audio support (uses the Qobuz API; not certified by Qobuz)"
 authors = ["blitzkriegfc"]
 edition = "2021"
@@ -25,6 +25,7 @@ updater = ["dep:tauri-plugin-updater", "dep:tauri-plugin-process"]
 
 [dependencies]
 # QBZ Crates (extracted core functionality)
+qbz-app = { path = "../crates/qbz-app" }
 qbz-models = { path = "../crates/qbz-models" }
 qbz-audio = { path = "../crates/qbz-audio" }
 qbz-player = { path = "../crates/qbz-player" }
@@ -32,11 +33,13 @@ qbz-qobuz = { path = "../crates/qbz-qobuz" }
 qbz-core = { path = "../crates/qbz-core" }
 qbz-integrations = { path = "../crates/qbz-integrations" }
 qbz-cache = { path = "../crates/qbz-cache" }
+qbz-credentials = { path = "../crates/qbz-credentials" }
 qbz-library = { path = "../crates/qbz-library" }
 qbz-cast = { path = "../crates/qbz-cast" }
 qbz-cmaf = { path = "../crates/qbz-cmaf" }
 qbz-secrets = { path = "../crates/qbz-secrets" }
-mdns-sd = "0.11"
+qbz-offline-cache = { path = "../crates/qbz-offline-cache" }
+qbz-plex = { path = "../crates/qbz-plex" }
 qconnect-app = { path = "../crates/qconnect-app" }
 qconnect-core = { path = "../crates/qconnect-core" }
 qconnect-transport-ws = { path = "../crates/qconnect-transport-ws" }
@@ -66,7 +69,7 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 axum = { version = "0.8", features = ["ws"] }
 axum-server = { version = "0.8", features = ["tls-rustls"] }
 rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs"] }
-tower-http = { version = "0.5", features = ["cors"] }
+tower-http = { version = "0.6", features = ["cors"] }
 qrcode-generator = "5.0"
 rcgen = "0.14"
 
@@ -74,7 +77,7 @@ rcgen = "0.14"
 md-5 = "0.10"
 base64 = "0.22"
 aes-gcm = "0.10"
-sha2 = "0.10"
+sha2 = "0.11"
 
 # Regex (for bundle parsing)
 regex = "1"
@@ -96,6 +99,9 @@ rand = "0.10"
 
 # Fuzzy string similarity (for track-mix dedup)
 strsim = "0.11"
+
+# Discord Rich Presence (#336)
+discord-rich-presence = "1.1.0"
 
 # Audio playback
 rodio = { version = "0.22", features = ["symphonia-all"] }
@@ -169,7 +175,7 @@ ksni = { version = "0.3", features = ["blocking"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 tauri-plugin-dialog = { version = "2.7.0" }
-notify-rust = "4.16.0"
+notify-rust = "4.16.1"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 tauri-plugin-dialog = { version = "2.7.0" }

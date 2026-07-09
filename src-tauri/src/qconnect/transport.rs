@@ -4,11 +4,8 @@
 //! handshake, hex helpers used for inbound payload diagnostics, and the
 //! once-initialized device UUID.
 
-use std::sync::OnceLock;
-
 use qconnect_transport_ws::WsTransportConfig;
 use serde_json::Value;
-use uuid::Uuid;
 
 use crate::AppState;
 
@@ -25,8 +22,6 @@ const DEFAULT_QCONNECT_SOFTWARE_PREFIX: &str = "qbz";
 const VOLUME_REMOTE_CONTROL_ALLOWED: i32 = 2;
 const QCONNECT_QWS_TOKEN_KIND: &str = "jwt_qws";
 const QCONNECT_QWS_CREATE_TOKEN_PATH: &str = "/qws/createToken";
-
-static QCONNECT_DEVICE_UUID: OnceLock<String> = OnceLock::new();
 
 pub(super) fn default_qconnect_device_info() -> QconnectDeviceInfoPayload {
     default_qconnect_device_info_with_name(None)
@@ -82,18 +77,12 @@ pub(super) fn default_qconnect_device_info_with_name(
     }
 }
 
+/// Persistent QConnect device identity moved to the frontend-agnostic
+/// `qbz_app::qconnect_identity` module so both the Tauri and Slint frontends
+/// resolve the SAME uuid for the same install (byte-identical DB path/key/env
+/// override). This is a one-line delegate.
 pub(super) fn resolve_qconnect_device_uuid() -> String {
-    if let Some(explicit) = std::env::var("QBZ_QCONNECT_DEVICE_UUID")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-    {
-        return explicit;
-    }
-
-    QCONNECT_DEVICE_UUID
-        .get_or_init(|| Uuid::new_v4().to_string())
-        .clone()
+    qbz_app::qconnect_identity::resolve_qconnect_device_uuid()
 }
 
 pub(super) fn resolve_system_hostname() -> String {
@@ -120,11 +109,11 @@ pub(super) fn resolve_default_qconnect_device_name() -> String {
     format!("Qbz - {hostname}")
 }
 
-/// Path to the QConnect settings database (global, not per-user).
+/// Path to the QConnect settings database (global, not per-user). Delegates to
+/// `qbz_app::qconnect_identity` so the device-name persistence here shares the
+/// exact same DB file as the relocated device-uuid persistence.
 fn qconnect_settings_db_path() -> Option<std::path::PathBuf> {
-    let data_dir = dirs::data_dir()?.join("qbz");
-    std::fs::create_dir_all(&data_dir).ok()?;
-    Some(data_dir.join("qconnect_settings.db"))
+    qbz_app::qconnect_identity::qconnect_settings_db_path()
 }
 
 /// Load the persisted custom device name from disk.
@@ -178,7 +167,7 @@ pub(super) fn persist_device_name(name: Option<&str>) {
     }
 }
 
-pub(super) async fn resolve_transport_config(
+pub(crate) async fn resolve_transport_config(
     options: QconnectConnectOptions,
     app_state: &AppState,
 ) -> Result<WsTransportConfig, String> {
@@ -230,6 +219,12 @@ pub(super) async fn resolve_transport_config(
     let mut config = WsTransportConfig::default();
     config.endpoint_url = endpoint_url;
     config.jwt_qws = jwt_qws;
+    // gap #12: the real Qobuz endpoint must AUTHENTICATE; a missing JWT here is
+    // a hard credential error, not a silent skip.
+    config.require_jwt = true;
+    // gap #7: instead of terminating after the bounded reconnect attempts are
+    // exhausted, idle 60s then rearm — the user no longer has to re-toggle.
+    config.reconnect_idle_retry_ms = 60_000;
     config.reconnect_backoff_ms = options
         .reconnect_backoff_ms
         .unwrap_or(config.reconnect_backoff_ms);
@@ -326,19 +321,6 @@ async fn fetch_qconnect_transport_credentials(
     Ok((endpoint_url, jwt_qws))
 }
 
-pub(super) fn hex_preview(data: &[u8], max_bytes: usize) -> String {
-    let take = data.len().min(max_bytes);
-    let hex: String = data[..take]
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect::<Vec<_>>()
-        .join("");
-    if data.len() > max_bytes {
-        format!("{hex}...({}B total)", data.len())
-    } else {
-        hex
-    }
-}
 
 fn normalize_opt_string(value: Option<String>) -> Option<String> {
     value.and_then(|value| {

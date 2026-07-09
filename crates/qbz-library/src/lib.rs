@@ -28,13 +28,19 @@
 //! let db = LibraryDatabase::open(Path::new("library.db")).unwrap();
 //! ```
 
+pub mod album_grouping;
 mod cue_parser;
 mod database;
+pub mod ephemeral;
+pub mod local_playlists;
+pub mod qobuz_playlist_snapshot;
 mod errors;
 mod metadata;
 mod models;
 mod mount_info;
+mod scan;
 mod scanner;
+mod tag_writer;
 mod tag_sidecar;
 mod thumbnails;
 
@@ -47,7 +53,11 @@ pub use database::{
 pub use errors::LibraryError;
 pub use metadata::MetadataExtractor;
 pub use models::*;
-pub use mount_info::is_network_path;
+pub use mount_info::{is_network_path, network_fs_label};
+pub use scan::{scan_with_progress, ScanEvent};
+pub use tag_writer::{
+    compute_track_artist_match, write_album_tags_to_files, AlbumTagWrite, TrackTagWrite,
+};
 pub use scanner::{LibraryScanner, ScanResult};
 pub use thumbnails::{
     clear_thumbnails, generate_thumbnail, generate_thumbnail_from_bytes, get_cache_size,

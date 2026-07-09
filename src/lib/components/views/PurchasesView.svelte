@@ -5,7 +5,7 @@
     Search, X, Download, Check, LoaderCircle, Music, Disc3, ShoppingBag,
     ChevronDown, LayoutGrid, List
   } from 'lucide-svelte';
-  import AlbumCard from '../AlbumCard.svelte';
+  import AlbumCard from '$lib/discovery-v2/AlbumCardLibraryLite.svelte';
   import { formatQuality } from '$lib/adapters/qobuzAdapters';
   import { getPurchasesByType, getPurchaseIds, searchPurchases, getDownloadedTrackIds, getFormats } from '$lib/services/purchases';
   import { allTrackStatuses, startTrackDownload, type TrackDownloadStatus } from '$lib/stores/purchaseDownloadStore';
@@ -78,13 +78,10 @@
   let albumViewMode = $state<'grid' | 'list'>('grid');
   let albumGroupingEnabled = $state(false);
   let albumGroupMode = $state<AlbumGroupMode>('alpha');
-  let showAlbumGroupMenu = $state(false);
   let albumSortBy = $state<SortBy>('date');
   let albumSortDirection = $state<SortDirection>('desc');
-  let showAlbumSortMenu = $state(false);
 
   // Albums: filter panel (LocalLibraryView pattern)
-  let showFilterPanel = $state(false);
   let filterPanelRef = $state<HTMLDivElement | null>(null);
   type QualityFilter = 'all' | 'hires' | 'cd' | 'lossy';
   let filterHideUnavailable = $state(getHideUnavailable());
@@ -94,7 +91,37 @@
   // Tracks: grouping
   let trackGroupingEnabled = $state(false);
   let trackGroupMode = $state<TrackGroupMode>('artist');
-  let showTrackGroupMenu = $state(false);
+
+  // Mutually-exclusive toolbar dropdown state. Only one menu is open at a time.
+  type OpenMenu = 'albumGroup' | 'albumSort' | 'filter' | 'trackGroup' | null;
+  let openMenu = $state<OpenMenu>(null);
+
+  // Close the open menu on clicks outside any toolbar control or menu.
+  // Clicks on `.control-btn` / `.dropdown-menu` / `.filter-panel` are
+  // handled by their own onclick handlers, which swap `openMenu` between
+  // siblings without ever closing the new one prematurely.
+  $effect(() => {
+    if (openMenu === null) return;
+
+    function handleClickOutside(event: MouseEvent) {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      if (
+        target.closest('.control-btn') ||
+        target.closest('.dropdown-menu') ||
+        target.closest('.filter-panel')
+      ) return;
+      openMenu = null;
+    }
+
+    setTimeout(() => {
+      document.addEventListener('click', handleClickOutside);
+    }, 0);
+
+    return () => {
+      document.removeEventListener('click', handleClickOutside);
+    };
+  });
 
   // Track format picker popup
   let formatPickerTrack = $state<PurchasedTrack | null>(null);
@@ -106,15 +133,6 @@
   $effect(() => { setHideUnavailable(filterHideUnavailable); });
   $effect(() => { setUserItem('qbz-purchases-quality-filter', filterQuality); });
   $effect(() => { setHideDownloaded(filterHideDownloaded); });
-
-  /** Close all dropdown menus (mutual exclusion) */
-  function closeAllMenus() {
-    showAlbumGroupMenu = false;
-    showAlbumSortMenu = false;
-    showFilterPanel = false;
-    showTrackGroupMenu = false;
-    closeFormatPicker();
-  }
 
   const albumSortOptions = [
     { value: 'date' as SortBy, labelKey: 'purchases.sort.date' },
@@ -144,7 +162,7 @@
       albumSortBy = value;
       albumSortDirection = value === 'date' ? 'desc' : 'asc';
     }
-    showAlbumSortMenu = false;
+    openMenu = null;
   }
 
   function formatPurchaseDate(ts?: number): string {
@@ -484,7 +502,7 @@
 
 <div class="purchases-view">
   <!-- Header -->
-  <div class="header">
+  <div class="header" data-tauri-drag-region="deep">
     <div class="header-icon">
       <ShoppingBag size={32} color="var(--accent-primary)" />
     </div>
@@ -503,8 +521,8 @@
   {/if}
 
   <!-- Sticky Navigation Bar -->
-  <div class="purchases-nav">
-    <div class="nav-left">
+  <div class="purchases-nav" data-tauri-drag-region="deep">
+    <div class="nav-left" data-tauri-drag-region="false">
       <button
         class="nav-link"
         class:active={activeTab === 'albums'}
@@ -559,7 +577,7 @@
       <div class="toolbar-controls">
         <!-- Group dropdown -->
         <div class="dropdown-container">
-          <button class="control-btn" onclick={() => { const wasOpen = showAlbumGroupMenu; closeAllMenus(); showAlbumGroupMenu = !wasOpen; }}>
+          <button class="control-btn" onclick={() => { closeFormatPicker(); openMenu = openMenu === 'albumGroup' ? null : 'albumGroup'; }}>
             <span>{!albumGroupingEnabled
               ? $t('purchases.group.off')
               : albumGroupMode === 'alpha'
@@ -567,26 +585,26 @@
                 : $t('purchases.group.artist')}</span>
             <ChevronDown size={14} />
           </button>
-          {#if showAlbumGroupMenu}
+          {#if openMenu === 'albumGroup'}
             <div class="dropdown-menu">
               <button
                 class="dropdown-item"
                 class:selected={!albumGroupingEnabled}
-                onclick={() => { albumGroupingEnabled = false; showAlbumGroupMenu = false; }}
+                onclick={() => { albumGroupingEnabled = false; openMenu = null; }}
               >
                 {$t('purchases.group.optionOff')}
               </button>
               <button
                 class="dropdown-item"
                 class:selected={albumGroupingEnabled && albumGroupMode === 'alpha'}
-                onclick={() => { albumGroupMode = 'alpha'; albumGroupingEnabled = true; showAlbumGroupMenu = false; }}
+                onclick={() => { albumGroupMode = 'alpha'; albumGroupingEnabled = true; openMenu = null; }}
               >
                 {$t('purchases.group.optionAlpha')}
               </button>
               <button
                 class="dropdown-item"
                 class:selected={albumGroupingEnabled && albumGroupMode === 'artist'}
-                onclick={() => { albumGroupMode = 'artist'; albumGroupingEnabled = true; showAlbumGroupMenu = false; }}
+                onclick={() => { albumGroupMode = 'artist'; albumGroupingEnabled = true; openMenu = null; }}
               >
                 {$t('purchases.group.optionArtist')}
               </button>
@@ -596,11 +614,11 @@
 
         <!-- Sort dropdown -->
         <div class="dropdown-container">
-          <button class="control-btn" onclick={() => { const wasOpen = showAlbumSortMenu; closeAllMenus(); showAlbumSortMenu = !wasOpen; }}>
+          <button class="control-btn" onclick={() => { closeFormatPicker(); openMenu = openMenu === 'albumSort' ? null : 'albumSort'; }}>
             <span>{$t('purchases.sortLabel')}: {$t(albumSortOptions.find(option => option.value === albumSortBy)?.labelKey ?? 'purchases.sort.date')}</span>
             <ChevronDown size={14} />
           </button>
-          {#if showAlbumSortMenu}
+          {#if openMenu === 'albumSort'}
             <div class="dropdown-menu sort-menu">
               {#each albumSortOptions as option}
                 <button
@@ -623,7 +641,7 @@
           <button
             class="control-btn icon-only"
             class:active={hasActiveFilters}
-            onclick={() => { const wasOpen = showFilterPanel; closeAllMenus(); showFilterPanel = !wasOpen; }}
+            onclick={() => { closeFormatPicker(); openMenu = openMenu === 'filter' ? null : 'filter'; }}
             title={$t('library.filters')}
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
@@ -633,8 +651,7 @@
               <span class="filter-badge">{activeFilterCount}</span>
             {/if}
           </button>
-          {#if showFilterPanel}
-            <div class="filter-backdrop" onclick={() => showFilterPanel = false} role="presentation"></div>
+          {#if openMenu === 'filter'}
             <div class="filter-panel">
               <div class="filter-panel-header">
                 <span>{$t('library.filters')}</span>
@@ -711,7 +728,7 @@
       <div class="toolbar-controls">
         <!-- Track group dropdown -->
         <div class="dropdown-container">
-          <button class="control-btn" onclick={() => { const wasOpen = showTrackGroupMenu; closeAllMenus(); showTrackGroupMenu = !wasOpen; }}>
+          <button class="control-btn" onclick={() => { closeFormatPicker(); openMenu = openMenu === 'trackGroup' ? null : 'trackGroup'; }}>
             <span>
               {trackGroupingEnabled
                 ? trackGroupMode === 'album'
@@ -723,33 +740,33 @@
             </span>
             <ChevronDown size={14} />
           </button>
-          {#if showTrackGroupMenu}
+          {#if openMenu === 'trackGroup'}
             <div class="dropdown-menu">
               <button
                 class="dropdown-item"
                 class:selected={!trackGroupingEnabled}
-                onclick={() => { trackGroupingEnabled = false; showTrackGroupMenu = false; }}
+                onclick={() => { trackGroupingEnabled = false; openMenu = null; }}
               >
                 {$t('purchases.group.optionOff')}
               </button>
               <button
                 class="dropdown-item"
                 class:selected={trackGroupingEnabled && trackGroupMode === 'album'}
-                onclick={() => { trackGroupMode = 'album'; trackGroupingEnabled = true; showTrackGroupMenu = false; }}
+                onclick={() => { trackGroupMode = 'album'; trackGroupingEnabled = true; openMenu = null; }}
               >
                 {$t('purchases.group.optionAlbum')}
               </button>
               <button
                 class="dropdown-item"
                 class:selected={trackGroupingEnabled && trackGroupMode === 'artist'}
-                onclick={() => { trackGroupMode = 'artist'; trackGroupingEnabled = true; showTrackGroupMenu = false; }}
+                onclick={() => { trackGroupMode = 'artist'; trackGroupingEnabled = true; openMenu = null; }}
               >
                 {$t('purchases.group.optionArtist')}
               </button>
               <button
                 class="dropdown-item"
                 class:selected={trackGroupingEnabled && trackGroupMode === 'name'}
-                onclick={() => { trackGroupMode = 'name'; trackGroupingEnabled = true; showTrackGroupMenu = false; }}
+                onclick={() => { trackGroupMode = 'name'; trackGroupingEnabled = true; openMenu = null; }}
               >
                 {$t('purchases.group.optionName')}
               </button>
@@ -762,7 +779,7 @@
           <button
             class="control-btn icon-only"
             class:active={hasActiveFilters}
-            onclick={() => { const wasOpen = showFilterPanel; closeAllMenus(); showFilterPanel = !wasOpen; }}
+            onclick={() => { closeFormatPicker(); openMenu = openMenu === 'filter' ? null : 'filter'; }}
             title={$t('library.filters')}
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
@@ -772,8 +789,7 @@
               <span class="filter-badge">{activeFilterCount}</span>
             {/if}
           </button>
-          {#if showFilterPanel}
-            <div class="filter-backdrop" onclick={() => showFilterPanel = false} role="presentation"></div>
+          {#if openMenu === 'filter'}
             <div class="filter-panel">
               <div class="filter-panel-header">
                 <span>{$t('library.filters')}</span>
@@ -859,10 +875,7 @@
                     title={album.title}
                     artist={album.artist.name}
                     quality={formatQualityLabel(album.maximum_bit_depth, album.maximum_sampling_rate)}
-                    releaseDate={formatPurchaseDate(album.purchased_at)}
-                    onclick={() => album.downloadable && onAlbumClick?.(album.id)}
-                    showFavorite={false}
-                    showGenre={false}
+                    onClick={() => album.downloadable && onAlbumClick?.(album.id)}
                   />
                   {#if !album.downloadable}
                     <div class="unavailable-overlay">
@@ -1270,7 +1283,7 @@
   .control-btn.active {
     background: var(--accent-primary);
     border-color: var(--accent-primary);
-    color: white;
+    color: var(--btn-primary-text);
   }
 
   .control-btn.active:hover {
@@ -1357,12 +1370,6 @@
   }
 
   /* ── Filter Panel (LocalLibraryView pattern) ── */
-  .filter-backdrop {
-    position: fixed;
-    inset: 0;
-    z-index: 19;
-  }
-
   .filter-badge {
     display: inline-flex;
     align-items: center;
@@ -1371,7 +1378,7 @@
     height: 18px;
     padding: 0 5px;
     background: var(--accent-primary);
-    color: white;
+    color: var(--btn-primary-text);
     font-size: 11px;
     font-weight: 600;
     border-radius: 9px;
@@ -1828,7 +1835,7 @@
 
   .download-btn:hover {
     background: var(--accent-primary);
-    color: #fff;
+    color: var(--btn-primary-text);
     border-color: var(--accent-primary);
   }
 

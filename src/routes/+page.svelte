@@ -193,6 +193,7 @@
   import CollectionsView from '$lib/components/views/CollectionsView.svelte';
   import MixtapeCollectionDetailView from '$lib/components/views/MixtapeCollectionDetailView.svelte';
   import DiscographyBuilderView from '$lib/components/views/DiscographyBuilderView.svelte';
+  import OfflineCacheManagerView from '$lib/components/views/OfflineCacheManagerView.svelte';
   import {
     collectionsStore,
     createCollection,
@@ -279,6 +280,7 @@
     stopQueueEventListener,
     consumeStopAfterIf,
     stopAfterTrackId,
+    registerQueueMutationObserver,
     type QueueTrack,
     type BackendQueueTrack,
     type RepeatMode
@@ -356,15 +358,24 @@
     addToPlaylist,
     shareQobuzTrackLink,
     shareSonglinkTrack,
-    loadQconnectQueue
+    reorderQconnectQueueIfRemote,
+    removeQconnectQueueItemsIfRemote,
+    clearQconnectQueueIfRemote
   } from '$lib/services/trackActions';
-  import { replacePlaybackQueue } from '$lib/services/queuePlaybackService';
+  import {
+    replacePlaybackQueue,
+    assessQconnectQueueSync,
+    syncQconnectQueueFromTracks,
+    shouldAutoSkipOnPlaybackError,
+    type QconnectPlaybackErrorPayload
+  } from '$lib/services/queuePlaybackService';
   import type {
     QconnectDiagnosticsPayload,
     QconnectQueueSnapshot,
     QconnectRendererReportDebugPayload,
     QconnectRendererSnapshot
   } from '$lib/services/qconnectRemoteQueue';
+  import { resolveQconnectQueueDisplayItems } from '$lib/services/qconnectRemoteQueue';
   import {
     DEFAULT_QCONNECT_CONNECTION_STATUS,
     QCONNECT_DIAGNOSTIC_LOG_LIMIT,
@@ -447,7 +458,7 @@
 
   // Views
   import LoginView from '$lib/components/views/LoginView.svelte';
-  import HomeView from '$lib/components/views/HomeView.svelte';
+  import DiscoveryView from '$lib/discovery-v2/DiscoveryView.svelte';
   import SearchView from '$lib/components/views/SearchView.svelte';
   import SettingsView from '$lib/components/views/SettingsView.svelte';
   import AlbumDetailView from '$lib/components/views/AlbumDetailView.svelte';
@@ -476,6 +487,8 @@
   // Overlays
   import QueuePanel from '$lib/components/QueuePanel.svelte';
   import { ImmersivePlayer } from '$lib/components/immersive';
+  import CpuModeWarningModal from '$lib/components/CpuModeWarningModal.svelte';
+  import { isHardwareAccelEnabled } from '$lib/runtime/graphicsState';
   import PlaylistModal from '$lib/components/PlaylistModal.svelte';
   import PlaylistImportModal from '$lib/components/PlaylistImportModal.svelte';
   import FolderEditModal from '$lib/components/FolderEditModal.svelte';
@@ -516,6 +529,7 @@
     resetLaunchFlow,
   } from '$lib/services/updatesService';
   import type { AutoUpdateProgress } from '$lib/services/updatesService';
+  import { initDiscordRpc } from '$lib/services/discordRpcService';
   import UpdateProgressModal from '$lib/components/updates/UpdateProgressModal.svelte';
 
   // Offline state
@@ -599,30 +613,52 @@
   let isAutoUpdating = $state(false);
   let autoUpdateProgress = $state<AutoUpdateProgress>({ state: 'checking' });
 
-  // Global back-to-top button
+  // Global back-to-top button.
+  //
+  // The previous implementation registered a capture-phase scroll listener
+  // on .main-content that wrote `globalScrollTop = target.scrollTop` to a
+  // `$state` on every scroll event, and used `$derived(globalScrollTop > 800)`
+  // to gate the button. That fired Svelte reactivity 60-120 times/second
+  // during scroll, and when the derived crossed the 800px threshold the
+  // button mount/unmount work added an extra repaint that registered as
+  // a visible hiccup at 4K under software compositing — especially
+  // pronounced when scrolling up (button unmount).
+  //
+  // New impl: track only the boolean visibility state, coalesce reads via
+  // requestAnimationFrame, and only assign when the threshold flips. This
+  // takes the per-scroll-tick reactive work from "every event" down to
+  // "at most once per animation frame, only on state change".
   let mainContentEl: HTMLElement | null = $state(null);
-  let globalScrollTop = $state(0);
+  let showGlobalBackToTop = $state(false);
   let activeScrollTarget: HTMLElement | null = null;
-  const showGlobalBackToTop = $derived(globalScrollTop > 800);
+  const BACK_TO_TOP_THRESHOLD_PX = 800;
 
   $effect(() => {
     if (!mainContentEl) return;
+    let rafId = 0;
     const handler = (e: Event) => {
       const target = e.target as HTMLElement;
-      if (target !== mainContentEl) {
-        globalScrollTop = target.scrollTop;
-        activeScrollTarget = target;
-      }
+      if (target === mainContentEl) return;
+      activeScrollTarget = target;
+      if (rafId !== 0) return;
+      rafId = requestAnimationFrame(() => {
+        rafId = 0;
+        const next = target.scrollTop > BACK_TO_TOP_THRESHOLD_PX;
+        if (next !== showGlobalBackToTop) showGlobalBackToTop = next;
+      });
     };
     mainContentEl.addEventListener('scroll', handler, true);
-    return () => mainContentEl?.removeEventListener('scroll', handler, true);
+    return () => {
+      mainContentEl?.removeEventListener('scroll', handler, true);
+      if (rafId !== 0) cancelAnimationFrame(rafId);
+    };
   });
 
   // Reset scroll state on view or item change (but not on back/forward — that restores saved position)
   $effect(() => {
     void activeView;
     void currentNavItemId;
-    globalScrollTop = 0;
+    showGlobalBackToTop = false;
     // Scroll to top for forward navigation (not back/forward, which restores saved position)
     if (!isBackForward()) {
       tick().then(() => {
@@ -723,6 +759,11 @@
         return 'library';
       case 'purchase-album':
         return 'purchases';
+      // Offline cache manager is intentionally NOT persisted as last_view to
+      // avoid Phantom CSS Error Cause 3 on rehydration when the cache DB is
+      // not yet ready at first paint. Fall back to settings (its entry point).
+      case 'offline-manager':
+        return 'settings';
       default:
         return 'home';
     }
@@ -955,6 +996,35 @@
   let isFocusModeOpen = $state(false);
   let isCastPickerOpen = $state(false);
 
+  // First-time CPU-mode warning for the immersive view. Fires once per
+  // user when they enter immersive with hardware acceleration off; the
+  // user can opt out forever via the "don't show again" checkbox.
+  const CPU_WARNING_FLAG_KEY = 'qbz-cpu-mode-warning-shown-v1';
+  let cpuModeWarningOpen = $state(false);
+  let cpuModeWarningArmed = true;
+
+  $effect(() => {
+    const immersiveOpen = isFullScreenOpen || isFocusModeOpen;
+    if (!immersiveOpen || !cpuModeWarningArmed) return;
+    if (isHardwareAccelEnabled()) return;
+    if (getUserItem(CPU_WARNING_FLAG_KEY) === 'true') return;
+    cpuModeWarningOpen = true;
+    // Disarm so re-renders of this effect during a single immersive
+    // session don't re-trigger the modal mid-flight.
+    cpuModeWarningArmed = false;
+  });
+
+  function handleCpuWarningClose(dontShowAgain: boolean) {
+    cpuModeWarningOpen = false;
+    if (dontShowAgain) {
+      setUserItem(CPU_WARNING_FLAG_KEY, 'true');
+    } else {
+      // User left the checkbox off — re-arm so it shows again next time
+      // they open immersive in this session.
+      cpuModeWarningArmed = true;
+    }
+  }
+
   // Cast State
   let isCastConnected = $state(false);
   let isQconnectPanelOpen = $state(false);
@@ -1059,6 +1129,26 @@
   const qconnectPeerRendererActive = $derived(
     isQconnectPeerRendererActive(qobuzConnectSessionSnapshot)
   );
+  // P1-5: respect the active renderer's volume_remote_control capability.
+  // Absent (null/undefined) => allowed; only an explicit non-1 value disables.
+  const qconnectRemoteVolumeAllowed = $derived.by(() => {
+    if (!qconnectPeerRendererActive) return true;
+    const snap = qobuzConnectSessionSnapshot;
+    const activeId = snap?.active_renderer_id ?? null;
+    const info = snap?.renderers?.find((r) => r.renderer_id === activeId) ?? null;
+    const vrc = info?.volume_remote_control;
+    return vrc == null || vrc === 1;
+  });
+  // P1-5: unified volume-lock state shared by the now-playing bar + immersive
+  // player. Hardware lock applies only locally; remote lock applies when a peer
+  // renderer is active and disallows remote volume.
+  const qconnectVolumeLocked = $derived(
+    (isAlsaDirectHw && !qconnectPeerRendererActive) ||
+      (qconnectPeerRendererActive && !qconnectRemoteVolumeAllowed)
+  );
+  const qconnectVolumeLockedReason: 'hardware' | 'remote' = $derived(
+    qconnectPeerRendererActive && !qconnectRemoteVolumeAllowed ? 'remote' : 'hardware'
+  );
   const qconnectSuppressLocalPlaybackAutomation = $derived(
     shouldQconnectSuppressLocalPlaybackAutomation(
       isQobuzConnectConnected,
@@ -1096,6 +1186,15 @@
   let lyricsActiveIndex = $state(-1);
   let lyricsActiveProgress = $state(0);
   let lyricsSidebarVisible = $state(false);
+
+  // Hoisted out of the LyricsSidebar template so the `lines` prop only
+  // re-computes when lyricsLines itself changes — not on every re-render
+  // of +page triggered by other reactive state (progress ticks, etc.).
+  // Note: $derived re-evaluates lazily on dep change; it does not deep-
+  // compare, so this is not a memoization in the React useMemo sense.
+  const lyricsSidebarLines = $derived(
+    lyricsLines.map((l) => ({ text: l.text, timeMs: l.timeMs, endMs: l.endMs }))
+  );
 
   let favoritesDefaultTab = $state<FavoritesTab>('tracks');
 
@@ -1567,57 +1666,164 @@
    * parent Qobuz album. Builds the full album queue and jumps to the picked
    * track's index so the rest of the album continues after it.
    */
+  // Plays a track clicked inside an expanded Mixtape/Collection item.
+  // Handles Qobuz albums/playlists directly, and local-library / Plex albums
+  // via the backend collection-item resolver.
   async function handleMixtapePlayTrackFromAlbum(
     item: MixtapeCollectionItem,
     trackId: number,
   ) {
-    if (item.item_type !== 'album' || item.source !== 'qobuz') {
+    // Local-library and Plex albums: delegate album resolution to the backend
+    // (v2_enqueue_collection_item — the same path the working "play album"
+    // button uses), then jump the queue cursor to the clicked track. Building
+    // the queue frontend-side would risk getting the Plex base URL / token /
+    // id wrong, so we reuse the proven resolver.
+    if (item.item_type === 'album' && item.source === 'local') {
+      const collectionId = mixtapeDetailId;
+      if (!collectionId) {
+        showToast($t('toast.actionNotAvailableYet') ||
+          'Not available for this item type yet', 'info');
+        return;
+      }
+      try {
+        await invoke('v2_enqueue_collection_item', {
+          collectionId,
+          position: item.position,
+          mode: 'replace',
+        });
+        // The resolver staged the whole album at index 0; find the clicked
+        // track by id and move the cursor there before starting audio.
+        const snapshot = await invoke<{
+          tracks: BackendQueueTrack[];
+          current_index: number | null;
+        }>('v2_get_all_queue_tracks');
+        const idx = Math.max(
+          0,
+          snapshot.tracks.findIndex((qt) => qt.id === trackId),
+        );
+        const trk = await playQueueIndex(idx);
+        if (trk) await playQueueTrack(trk);
+      } catch (err) {
+        console.error(
+          '[Mixtape] handleMixtapePlayTrackFromAlbum (local) failed:',
+          err,
+        );
+        showToast($t('toast.failedAddToQueue'), 'error');
+      }
+      return;
+    }
+
+    if (item.source !== 'qobuz' ||
+        (item.item_type !== 'album' && item.item_type !== 'playlist')) {
       showToast($t('toast.actionNotAvailableYet') ||
         'Not available for this item type yet', 'info');
       return;
     }
     try {
-      const album = await invoke<QobuzAlbum>('v2_get_album', {
-        albumId: item.source_item_id,
-      });
-      const converted = convertQobuzAlbum(album);
-      if (!converted?.tracks?.length) {
-        showToast($t('toast.failedLoadAlbum'), 'error');
-        return;
+      let queueTracks: BackendQueueTrack[] = [];
+
+      if (item.item_type === 'album') {
+        const album = await invoke<QobuzAlbum>('v2_get_album', {
+          albumId: item.source_item_id,
+        });
+        const converted = convertQobuzAlbum(album);
+        if (!converted?.tracks?.length) {
+          showToast($t('toast.failedLoadAlbum'), 'error');
+          return;
+        }
+        const artwork = converted.artwork || '';
+        queueTracks = converted.tracks
+          .filter((trk) => {
+            const artistId = trk.artistId ?? converted.artistId;
+            return !artistId || !isArtistBlacklisted(artistId);
+          })
+          .map((trk) => ({
+            id: trk.id,
+            title: trk.title,
+            version: trk.version ?? null,
+            artist: trk.artist || converted.artist || 'Unknown Artist',
+            album: converted.title || '',
+            duration_secs: trk.durationSeconds,
+            artwork_url: artwork || null,
+            hires: trk.hires ?? false,
+            bit_depth: trk.bitDepth ?? null,
+            sample_rate: trk.samplingRate ?? null,
+            is_local: false,
+            album_id: converted.id,
+            artist_id: trk.artistId ?? converted.artistId,
+            streamable: trk.streamable ?? true,
+            source: 'qobuz' as const,
+            parental_warning: trk.parental_warning ?? false,
+          }));
+      } else {
+        // Playlist item — fetch the playlist and queue its tracks.
+        interface RawPlaylistTrack {
+          id: number;
+          title: string;
+          version?: string;
+          duration?: number;
+          performer?: { id?: number; name?: string };
+          album?: {
+            id?: string;
+            title?: string;
+            image?: { small?: string; large?: string; thumbnail?: string };
+          };
+          hires?: boolean;
+          maximum_bit_depth?: number;
+          maximum_sampling_rate?: number;
+          streamable?: boolean;
+          parental_warning?: boolean;
+        }
+        const playlist = await invoke<{ tracks?: { items?: RawPlaylistTrack[] } }>(
+          'v2_get_playlist',
+          { playlistId: Number(item.source_item_id) },
+        );
+        const raw = playlist.tracks?.items ?? [];
+        queueTracks = raw
+          .filter((trk) => {
+            const artistId = trk.performer?.id;
+            return !artistId || !isArtistBlacklisted(artistId);
+          })
+          .map((trk) => ({
+            id: trk.id,
+            title: trk.title,
+            version: trk.version ?? null,
+            artist: trk.performer?.name || 'Unknown Artist',
+            album: trk.album?.title || '',
+            duration_secs: trk.duration ?? 0,
+            artwork_url:
+              trk.album?.image?.large ||
+              trk.album?.image?.small ||
+              trk.album?.image?.thumbnail ||
+              null,
+            hires: trk.hires ?? false,
+            bit_depth: trk.maximum_bit_depth ?? null,
+            sample_rate: trk.maximum_sampling_rate ?? null,
+            is_local: false,
+            album_id: trk.album?.id ?? null,
+            artist_id: trk.performer?.id ?? null,
+            streamable: trk.streamable ?? true,
+            source: 'qobuz' as const,
+            parental_warning: trk.parental_warning ?? false,
+          }));
       }
-      const playableTracks = converted.tracks.filter((trk) => {
-        const artistId = trk.artistId ?? converted.artistId;
-        return !artistId || !isArtistBlacklisted(artistId);
-      });
-      if (playableTracks.length === 0) {
+
+      if (queueTracks.length === 0) {
         showToast($t('toast.noPlayableTracks') || 'No playable tracks', 'info');
         return;
       }
       const startIndex = Math.max(
         0,
-        playableTracks.findIndex((trk) => trk.id === trackId),
+        queueTracks.findIndex((qt) => qt.id === trackId),
       );
-      const artwork = converted.artwork || '';
-      const queueTracks = playableTracks.map((trk) => ({
-        id: trk.id,
-        title: trk.title,
-        version: trk.version ?? null,
-        artist: trk.artist || converted.artist || 'Unknown Artist',
-        album: converted.title || '',
-        duration_secs: trk.durationSeconds,
-        artwork_url: artwork || null,
-        hires: trk.hires ?? false,
-        bit_depth: trk.bitDepth ?? null,
-        sample_rate: trk.samplingRate ?? null,
-        is_local: false,
-        album_id: converted.id,
-        artist_id: trk.artistId ?? converted.artistId,
-        streamable: trk.streamable ?? true,
-        source: 'qobuz' as const,
-        parental_warning: trk.parental_warning ?? false,
-      }));
-      await invoke('v2_set_queue', { trackIds: queueTracks.map((qt) => qt.id) });
-      await invoke('v2_play_queue_index', { index: startIndex });
+      // Canonical set-queue + start-audio pattern (mirrors handleMixtapeItemAction):
+      // setQueue stages the full track objects server-side, and playQueueTrack is
+      // what actually loads + starts the audio.
+      await setQueue(queueTracks, startIndex, true);
+      const trk = await playQueueIndex(startIndex);
+      if (trk) {
+        await playQueueTrack(trk);
+      }
     } catch (err) {
       console.error('[Mixtape] handleMixtapePlayTrackFromAlbum failed:', err);
       showToast($t('toast.failedAddToQueue'), 'error');
@@ -2691,13 +2897,22 @@
   }
 
   // Playback controls (delegating to playerStore)
-  function handleSeek(time: number) {
+  async function handleSeek(time: number) {
+    try {
+      const positionMs = Math.max(0, Math.round(time * 1000));
+      const handledRemotely = await invoke<boolean>('v2_qconnect_set_position_if_remote', { positionMs });
+      if (handledRemotely) return;
+    } catch {
+      // Fall through to local
+    }
     playerSeek(time);
   }
 
   async function handleVolumeChange(newVolume: number) {
     // ALSA Direct hw: locks volume at 100% — unless controlling a remote renderer
     if (isAlsaDirectHw && !qconnectPeerRendererActive) return;
+    // P1-5: the active remote renderer disallows remote volume control.
+    if (qconnectPeerRendererActive && !qconnectRemoteVolumeAllowed) return;
 
     try {
       const handledRemotely = await invoke<boolean>('v2_qconnect_set_volume_if_remote', { volume: newVolume });
@@ -2922,7 +3137,18 @@
     // Local tracks are always available
     if (isLocalTrack(track.id)) return true;
 
-    // Check if Qobuz track has a local copy
+    // A track in the playback/disk cache is playable offline — this covers the
+    // currently-playing, fully-buffered track and prefetched upcoming tracks,
+    // not just explicitly downloaded copies (issue #467).
+    try {
+      if (await invoke<boolean>('v2_is_track_cached', { trackId: track.id })) {
+        return true;
+      }
+    } catch {
+      // Fall through to the downloaded-copy check below.
+    }
+
+    // Check if Qobuz track has a downloaded local copy
     try {
       const localIds = await invoke<number[]>('v2_playlist_get_tracks_with_local_copies', {
         trackIds: [track.id]
@@ -2933,18 +3159,28 @@
     }
   }
 
+  // Maximum consecutive offline skips before we stop walking the queue.
+  // Prevents the synchronous skip cascade from blasting the logical queue
+  // pointer to the end while the engine is still playing (issue #467).
+  const MAX_OFFLINE_SKIPS = 5;
+
   // Helper to play a track from the queue (with offline skip support)
   async function playQueueTrack(track: BackendQueueTrack, skippedIds = new Set<number>(), gaplessTransition = false) {
     const source = resolvePlaybackSource(track);
     const isLocal = isPlaybackSourceLocal(source, isLocalTrack(track.id));
 
-    // In offline mode, check if track is available
-    if (offlineStatus.isOffline && !isLocal) {
+    // In offline mode, check if track is available — but NEVER for the gapless
+    // target. By definition it is the track the engine is already playing, so
+    // entering the skip branch here would desync the logical queue from the
+    // audio engine and walk the queue to the end (issue #467). Fall through to
+    // update metadata only.
+    if (offlineStatus.isOffline && !isLocal && !gaplessTransition) {
       const available = await isTrackAvailable(track);
       if (!available) {
-        // Skip to next track (prevent infinite loop)
-        if (skippedIds.has(track.id)) {
-          // Already tried this track, stop to prevent infinite loop
+        // Bound the cascade: a run of undownloaded tracks must not walk the
+        // whole queue synchronously. Stop on a revisit OR once we hit the
+        // consecutive-skip cap (issue #467).
+        if (skippedIds.has(track.id) || skippedIds.size >= MAX_OFFLINE_SKIPS) {
           setQueueEnded(true);
           showToast($t('toast.noAvailableTracks'), 'info');
           return;
@@ -3024,10 +3260,50 @@
     }
   }
 
+  // Resolve the remote queue_item_id for a local upcoming row.
+  //
+  // When a peer renderer owns playback the local queue sidebar shows a
+  // projection of the local backend `upcoming[]` (track_id only). The remote
+  // renderer keys mutations on the cloud's stable `queue_item_id`, which lives
+  // only in `qobuzConnectQueueSnapshot.queue_items`. We map the upcoming row to
+  // a queue_item_id by walking the remote display order: slice off everything up
+  // to and including the renderer's current track, then index into the remaining
+  // (upcoming) portion. We corroborate by track_id so a stale/misaligned
+  // snapshot returns null instead of a wrong id (which would silently mutate the
+  // wrong row on the renderer).
+  function resolveRemoteQueueItemIdForUpcoming(
+    upcomingIndex: number,
+    expectedTrackId: number | null
+  ): number | null {
+    const displayItems = resolveQconnectQueueDisplayItems(qobuzConnectQueueSnapshot);
+    if (displayItems.length === 0) return null;
+
+    const currentQueueItemId = qobuzConnectRendererSnapshot?.current_track?.queue_item_id ?? null;
+    let upcomingStart = 0;
+    if (currentQueueItemId != null) {
+      const currentPos = displayItems.findIndex(
+        (item) => item.queue_item_id === currentQueueItemId
+      );
+      if (currentPos >= 0) {
+        upcomingStart = currentPos + 1;
+      }
+    }
+
+    const target = displayItems[upcomingStart + upcomingIndex] ?? null;
+    if (!target) return null;
+    // Corroborate by track_id: if the local row and the remote slot disagree,
+    // the snapshot is out of sync — refuse rather than mutate the wrong item.
+    if (expectedTrackId != null && target.track_id !== expectedTrackId) return null;
+    return target.queue_item_id;
+  }
+
   // Clear the queue. If nothing is actively playing, also wipe the
   // now-playing slot so a stale track doesn't linger in NOW PLAYING
   // after the user pressed Clear.
   async function handleClearQueue() {
+    // When a peer renderer owns playback, route the clear to the remote queue
+    // and skip the local mutation entirely.
+    if (qconnectPeerRendererActive && (await clearQconnectQueueIfRemote())) return;
     const includeCurrent = !isPlaying;
     const success = await clearQueue({ includeCurrent });
     if (success) {
@@ -3042,6 +3318,20 @@
   }
 
   // Reorder tracks in the queue
+  //
+  // NOTE (P1-4, DONE_WITH_CONCERNS): the remote `queue_reorder_tracks` command
+  // needs the FULL target order as queue_item_ids for the whole renderer queue.
+  // This handler only receives local upcoming-relative from/to indices, and the
+  // local backend queue rows carry no queue_item_id. Reconstructing the complete
+  // remote order would require mapping every local row to a queue_item_id by
+  // track_id (ambiguous when a track_id appears more than once) AND splicing in
+  // the current track + autoplay items under the renderer's shuffle order — none
+  // of which can be derived reliably from a from/to index pair. Sending a partial
+  // or mis-ordered id list would silently corrupt the renderer queue, so we do
+  // NOT route reorder remotely. The local store reorder is left intact (under a
+  // peer renderer it simply doesn't propagate). Wiring this correctly needs the
+  // backend to expose per-row queue_item_ids in the projected queue, or a
+  // dedicated move-by-queue_item_id remote command.
   async function handleQueueReorder(fromIndex: number, toIndex: number) {
     const success = await moveQueueTrack(fromIndex, toIndex);
     if (!success) {
@@ -3051,6 +3341,18 @@
 
   // Remove a track from the upcoming queue by its position in the upcoming list (V2)
   async function handleRemoveFromQueue(upcomingIndex: number) {
+    // When a peer renderer owns playback, route the removal to the remote queue.
+    // Map the local upcoming index to the renderer's stable queue_item_id; only
+    // route if we can resolve it unambiguously (else fall through to local so we
+    // never mutate the wrong remote row).
+    if (qconnectPeerRendererActive) {
+      const state = await getBackendQueueState();
+      const expectedTrackId = state?.upcoming[upcomingIndex]?.id ?? null;
+      const queueItemId = resolveRemoteQueueItemIdForUpcoming(upcomingIndex, expectedTrackId);
+      if (queueItemId != null) {
+        if (await removeQconnectQueueItemsIfRemote([queueItemId])) return;
+      }
+    }
     try {
       await invoke('v2_remove_upcoming_track', { upcomingIndex });
       await syncQueueState(); // Refresh UI
@@ -4106,11 +4408,24 @@
         await syncQueueState();
       }
 
-      if (sessionPersistEnabled && !qconnectRuntimeActive) {
+      if (sessionPersistEnabled) {
         const session = await loadSessionState();
 
-        // Restore queue + track (visual only — paused at 0:00)
-        if (session && session.queue_tracks.length > 0) {
+        // Last-page restore is unrelated to the queue and runs unconditionally
+        // — having QConnect connecting at startup shouldn't change which UI
+        // view the user lands on.
+        if (session) {
+          restoreLastView(session);
+        }
+
+        // Queue + track visual restore. Wrapped in a closure so the flicker
+        // guard below can defer it without duplicating the body. When
+        // QConnect is bootstrapping, we wait up to 1s for the remote queue
+        // to land — the QueueUpdated listener cancels this timer if it
+        // does, so the user sees the remote queue directly instead of
+        // flashing the local one and then swapping.
+        const performQueueRestore = async () => {
+          if (!session || session.queue_tracks.length === 0) return;
           console.log('[Session] Restoring previous session...');
 
           const tracks: BackendQueueTrack[] = session.queue_tracks.map(trk => ({
@@ -4130,6 +4445,9 @@
             // older versions that didn't persist source. Without this, a
             // restored local queue routed next-track auto-advance to Qobuz.
             source: trk.source ?? (trk.is_local ? 'local' : undefined),
+            streamable: trk.streamable ?? true,
+            parental_warning: trk.parental_warning ?? false,
+            source_item_id_hint: trk.source_item_id_hint ?? null,
           }));
 
           await setQueue(tracks, session.current_index ?? 0, true);
@@ -4209,14 +4527,25 @@
           }
 
           console.log('[Session] Session restored successfully');
-        }
+        };
 
-        // Restore last page (opt-in via settings)
-        if (session) {
-          restoreLastView(session);
+        if (qconnectRuntimeActive) {
+          // QConnect is bootstrapping at launch. Hold back the local
+          // restore for 1s — if the remote queue snapshot arrives first
+          // (QueueUpdated event in the QConnect listener cancels this
+          // timer), the user sees only the remote state and we skip the
+          // flicker. If 1s elapses without a remote snapshot, fall back
+          // to the local restore so the user isn't stuck looking at
+          // "No track playing" indefinitely.
+          console.log('[Session] Deferring local restore (waiting for QConnect snapshot)');
+          sessionRestoreFlickerGuard = setTimeout(() => {
+            sessionRestoreFlickerGuard = null;
+            console.log('[Session] QConnect snapshot timeout, applying local restore');
+            void performQueueRestore();
+          }, 1000);
+        } else {
+          await performQueueRestore();
         }
-      } else if (qconnectRuntimeActive) {
-        console.log('[Session] Skipping local session restore while Qobuz Connect remote mode is active');
       }
     } catch (err) {
       console.error('[Session] Failed to restore session:', err);
@@ -4370,30 +4699,61 @@
       const tracks = snapshot.tracks;
       const currentIndex = snapshot.current_index;
 
-      const allTracks: PersistedQueueTrack[] = tracks.map(track => ({
-        id: track.id,
-        title: track.title,
-        version: track.version ?? null,
-        artist: track.artist,
-        album: track.album,
-        duration_secs: track.duration_secs,
-        artwork_url: track.artwork_url,
-        hires: track.hires,
-        bit_depth: track.bit_depth ?? null,
-        sample_rate: track.sample_rate ?? null,
-        is_local: track.is_local ?? false,
-        album_id: track.album_id ?? null,
-        artist_id: track.artist_id ?? null,
-        // Preserve source (qobuz | local | plex). Dropping this on save meant
-        // local/plex queues came back as Qobuz after session restore, and
-        // auto-advance routed to v2_play_track with library row ids — which
-        // Qobuz then "resolved" to whatever track happened to share the id.
-        source: track.source ?? (track.is_local ? 'local' : null),
-      }));
+      // Ephemeral tracks (id >= 2^48) live in an in-memory cache that's
+      // rebuilt from scratch on every launch. The IDs aren't stable
+      // across processes, and even if they were, the playback path
+      // would 404 if session restore fired before the folder rehydrates.
+      // Strip them from the persisted queue and clear the current-index
+      // pointer if it was sitting on one — the ephemeral pane comes back
+      // via folder-path persistence and the user re-clicks play.
+      // 2 ** 48 (NOT 1 << 48 — JavaScript bitwise shift operates on
+      // 32-bit ints so 1 << 48 silently truncates to 65536, which
+      // mis-classified every Qobuz track as ephemeral).
+      const EPHEMERAL_ID_FLOOR = 2 ** 48;
+      const persistedTracks: PersistedQueueTrack[] = [];
+      let persistedCurrentIndex: number | null = null;
+      for (let i = 0; i < tracks.length; i++) {
+        const track = tracks[i];
+        if (Number(track.id) >= EPHEMERAL_ID_FLOOR) {
+          if (currentIndex !== null && i === currentIndex) {
+            persistedCurrentIndex = null;
+          }
+          continue;
+        }
+        if (currentIndex !== null && i === currentIndex) {
+          persistedCurrentIndex = persistedTracks.length;
+        }
+        persistedTracks.push({
+          id: track.id,
+          title: track.title,
+          artist: track.artist,
+          album: track.album,
+          duration_secs: track.duration_secs,
+          artwork_url: track.artwork_url,
+          hires: track.hires,
+          bit_depth: track.bit_depth ?? null,
+          sample_rate: track.sample_rate ?? null,
+          is_local: track.is_local ?? false,
+          album_id: track.album_id ?? null,
+          artist_id: track.artist_id ?? null,
+          // Preserve source (qobuz | local | plex). Dropping this on save meant
+          // local/plex queues came back as Qobuz after session restore, and
+          // auto-advance routed to v2_play_track with library row ids — which
+          // Qobuz then "resolved" to whatever track happened to share the id.
+          source: track.source ?? (track.is_local ? 'local' : null),
+          // Round-trip explicit-content + unstreamable visual state + the
+          // Mixtape/Collection source-item id so a restored queue mirrors
+          // the live one. Backend defaults streamable=true, parental=false
+          // and source_item_id_hint=null for tracks saved by older builds.
+          streamable: track.streamable ?? true,
+          parental_warning: track.parental_warning ?? false,
+          source_item_id_hint: track.source_item_id_hint ?? null,
+        });
+      }
 
       await saveSessionState(
-        allTracks,
-        currentIndex,
+        persistedTracks,
+        persistedCurrentIndex,
         currentTrack ? Math.floor(currentTime) : 0,
         volume / 100,
         isShuffle,
@@ -4482,6 +4842,15 @@
       console.warn('[WindowTitle] setTitle threw:', err);
     }
   });
+
+  // Timer that holds back the local session restore for ~1s when Qobuz
+  // Connect is bootstrapping at launch. If the remote queue arrives first
+  // (QueueUpdated event), the listener cancels the timer and we skip the
+  // local restore — avoids the visual flicker of swapping from the last
+  // local queue to the remote one. If QConnect doesn't respond in time,
+  // the timer fires and the local restore proceeds. See onMount QConnect
+  // event listener (~line 5577) for the cancellation site.
+  let sessionRestoreFlickerGuard: ReturnType<typeof setTimeout> | null = null;
 
   // Debounced full session save (coalesces rapid state changes into a single save)
   let sessionSaveDebounce: ReturnType<typeof setTimeout> | null = null;
@@ -4597,6 +4966,18 @@
     // Bootstrap app (theme, mouse nav, Last.fm restore)
     const { cleanup: cleanupBootstrap } = bootstrapApp();
 
+    // Tell the boot watchdog that the UI mounted successfully. This
+    // clears the pending-graphics-init marker the backend wrote at
+    // startup; if we never reach this line (WebKit crashed during
+    // graphics init) the next launch sees the stale marker and
+    // auto-reverts the offending risky setting. Idempotent and safe to
+    // call on every mount — backend just removes the file if present.
+    void invoke('v2_mark_boot_succeeded').catch((err) => {
+      console.warn('[BootWatchdog] mark_boot_succeeded failed:', err);
+    });
+
+    void initDiscordRpc();
+
     // Window-title preference: load from localStorage and subscribe so that
     // toggling the setting updates the OS title bar immediately.
     initWindowTitleStore();
@@ -4687,6 +5068,12 @@
     registerAction('ui.escape', handleUIEscape);
     registerAction('ui.showShortcuts', () => { isShortcutsModalOpen = true; });
     registerAction('ui.openLink', () => { isLinkResolverOpen = true; });
+
+    // Persist the queue on every mutation (add / remove / reorder / set /
+    // clear / stop-after consume / remove-after). The store calls back into
+    // debouncedFullSessionSave so multiple rapid mutations coalesce into one
+    // SQLite write — same 2s debounce the track-change save already uses.
+    const unregisterQueueMutationObserver = registerQueueMutationObserver(debouncedFullSessionSave);
 
     // Session save on window close/hide
     const handleBeforeUnload = () => {
@@ -4897,7 +5284,7 @@
 
       // Save scroll position of the view we're leaving
       if (prevView !== navState.activeView || prevItemId !== navState.activeItemId) {
-        const scrollTopToSave = activeScrollTarget?.scrollTop ?? globalScrollTop;
+        const scrollTopToSave = activeScrollTarget?.scrollTop ?? 0;
         saveScrollPosition(prevView, scrollTopToSave, prevItemId);
       }
 
@@ -4916,7 +5303,7 @@
         tick().then(() => {
           if (activeScrollTarget) {
             activeScrollTarget.scrollTop = savedScroll;
-            globalScrollTop = savedScroll;
+            showGlobalBackToTop = savedScroll > BACK_TO_TOP_THRESHOLD_PX;
           }
         });
       }
@@ -5023,15 +5410,19 @@
       repeatMode = queueState.repeatMode;
     });
 
-    // Subscribe to lyrics state changes
+    // Subscribe to lyrics state changes. Listener fires per progress tick
+    // (~12–30 Hz); guard each $state write with a reference/value check so
+    // we only fan out reactivity for fields that actually changed —
+    // critical for `lyricsLines`, which feeds a $derived `.map()` that
+    // would otherwise re-project N objects per tick.
     const unsubscribeLyrics = subscribeLyrics(() => {
       const state = getLyricsState();
-      lyricsStatus = state.status;
-      lyricsError = state.error;
-      lyricsLines = state.lines;
-      lyricsIsSynced = state.isSynced;
-      lyricsActiveIndex = state.activeIndex;
-      lyricsActiveProgress = state.activeProgress;
+      if (lyricsStatus !== state.status) lyricsStatus = state.status;
+      if (lyricsError !== state.error) lyricsError = state.error;
+      if (lyricsLines !== state.lines) lyricsLines = state.lines;
+      if (lyricsIsSynced !== state.isSynced) lyricsIsSynced = state.isSynced;
+      if (lyricsActiveIndex !== state.activeIndex) lyricsActiveIndex = state.activeIndex;
+      if (lyricsActiveProgress !== state.activeProgress) lyricsActiveProgress = state.activeProgress;
       // Close network sidebar and queue when lyrics opens; restore when it closes
       if (state.sidebarVisible && !lyricsSidebarVisible) {
         closeContentSidebar('network');
@@ -5259,12 +5650,32 @@
       console.log('[Gapless] Handling transition to track', trackId);
       // Advance the queue to match backend state
       const advanced = await nextTrackGuarded();
+      console.log(
+        '[Gapless] nextTrackGuarded returned:',
+        advanced?.id,
+        'expected:',
+        trackId,
+        'match:',
+        advanced?.id === trackId
+      );
       if (advanced && advanced.id === trackId) {
         // Queue advanced successfully — update UI metadata
         await playQueueTrack(advanced, undefined, true);
+        // Defensive sync: belt-and-suspenders for paths (e.g. ephemeral
+        // tracks) where the queue's view of "current" can lag the
+        // player's gapless transition. The cost is one cheap getter
+        // call to the backend; in exchange the queue panel highlight
+        // and now-playing slot stay coherent with what's actually
+        // playing.
+        await syncQueueState();
       } else {
         // Queue mismatch — sync from backend
-        console.warn('[Gapless] Queue mismatch, syncing state');
+        console.warn(
+          '[Gapless] Queue mismatch, syncing state. advanced=',
+          advanced?.id,
+          'trackId=',
+          trackId
+        );
         await syncQueueState();
       }
     });
@@ -5282,9 +5693,12 @@
     let unlistenQconnectError: UnlistenFn | null = null;
     let unlistenQconnectStatusChanged: UnlistenFn | null = null;
     let unlistenQconnectAdmissionBlocked: UnlistenFn | null = null;
+    let unlistenQconnectRendererDisconnected: UnlistenFn | null = null;
+    let unlistenQconnectRendererUnreachable: UnlistenFn | null = null;
     let unlistenQconnectDiagnostic: UnlistenFn | null = null;
     let unlistenQconnectRendererReportDebug: UnlistenFn | null = null;
     let unlistenAudioDeviceMissing: UnlistenFn | null = null;
+    let unlistenAudioInitFailed: UnlistenFn | null = null;
 
     (async () => {
       const unlisten1 = await listen('tray:play_pause', () => {
@@ -5418,18 +5832,54 @@
               // Delay briefly so the QConnect session setup (ask_for_queue_state etc.)
               // completes before we try to push our queue.
               setTimeout(() => {
-                const queueState = getQueueState();
-                const trackIds = queueState.queue
-                  .map(item => item.trackId ?? parseInt(item.id))
-                  .filter((id): id is number => typeof id === 'number' && !isNaN(id) && id > 0);
-                if (trackIds.length > 0) {
-                  console.log('[QConnect] Pushing local queue to remote on connect (%d tracks)', trackIds.length);
-                  loadQconnectQueue(trackIds, 0).then(ok => {
-                    if (ok) console.log('[QConnect] Local queue pushed to remote on connect');
-                    else console.warn('[QConnect] Local queue NOT pushed on connect (rejected or failed)');
-                  }).catch(err => console.error('[QConnect] Local queue push on connect error:', err));
-                }
+                void (async () => {
+                  // Use the BACKEND queue snapshot: its tracks carry `source`
+                  // and `is_local`, which the frontend display queue
+                  // (getQueueState) does not. The mixed-queue guard needs them
+                  // to refuse pushing a local/Plex row id to a Qobuz renderer.
+                  const state = await getBackendQueueState();
+                  if (!state) {
+                    console.warn('[QConnect] On-connect push skipped: no backend queue snapshot');
+                    return;
+                  }
+                  const tracks = [
+                    ...state.history,
+                    ...(state.current_track ? [state.current_track] : []),
+                    ...state.upcoming
+                  ];
+                  // Start index = the current track's position in the ordered list.
+                  const startIndex = state.current_track ? state.history.length : 0;
+                  const assessment = assessQconnectQueueSync(tracks);
+                  if (!assessment.syncable) {
+                    console.warn('[QConnect] On-connect push refused: reason=%s blocked=%o',
+                      assessment.reason, assessment.blockedTrackIds);
+                    if (assessment.reason === 'queue_contains_non_qobuz_tracks') {
+                      showToast($t('qconnect.mixedQueueNotCast'), 'warning');
+                    }
+                    return;
+                  }
+                  console.log('[QConnect] Pushing local queue to remote on connect (%d tracks)', tracks.length);
+                  const ok = await syncQconnectQueueFromTracks(tracks, startIndex, 'on-connect-push');
+                  console.log(ok
+                    ? '[QConnect] Local queue pushed to remote on connect'
+                    : '[QConnect] Local queue NOT pushed on connect (rejected or failed)');
+                })().catch(err => console.error('[QConnect] Local queue push on connect error:', err));
               }, 2000);
+            }
+          }
+
+          // Renderer reported a per-track playback failure. Auto-skip the
+          // failed track if it is the one currently playing and the error is a
+          // deterministic per-track failure; otherwise surface a toast.
+          if ('PlaybackError' in payloadObj) {
+            const pe = payloadObj.PlaybackError as QconnectPlaybackErrorPayload;
+            const currentQid =
+              qobuzConnectRendererSnapshot?.current_track?.queue_item_id ?? null;
+            if (shouldAutoSkipOnPlaybackError(pe, currentQid)) {
+              showToast($t('qconnect.trackUnavailableSkipping'), 'warning');
+              void handleSkipForward();
+            } else {
+              showToast($t('qconnect.trackPlaybackError'), 'error');
             }
           }
 
@@ -5440,7 +5890,22 @@
             'RendererCommandApplied' in payload ||
             'PendingActionCompleted' in payload;
           if (needsQueueSync) {
+            // The remote snapshot arrived. Cancel the startup flicker
+            // guard if it is still pending — we want the QConnect state
+            // to win, not the local restore (issue #315). If the timer
+            // already fired or wasn't set, this is a no-op.
+            if (sessionRestoreFlickerGuard !== null) {
+              clearTimeout(sessionRestoreFlickerGuard);
+              sessionRestoreFlickerGuard = null;
+              console.log('[Session] QConnect snapshot arrived, skipping deferred local restore');
+            }
             syncQueueState();
+            // Persist the QConnect-driven queue change so the local
+            // snapshot mirrors remote state. Covers the case where the
+            // remote keeps the same current_track but reorders/replaces
+            // upcoming tracks — the track-change effect wouldn't fire
+            // (issue #315 acceptance: local snapshot updated to match).
+            debouncedFullSessionSave();
           }
 
           const needsQconnectSnapshotRefresh =
@@ -5484,6 +5949,28 @@
       if (disposed) { unlisten8(); return; }
       unlistenQconnectAdmissionBlocked = unlisten8;
 
+      const unlistenRendererDisconnected = await listen<{ renderer_id: number }>(
+        'qconnect:renderer_disconnected',
+        (event) => {
+          pushQobuzConnectDiagnostic('qconnect:renderer_disconnected', 'warn', event.payload);
+          void refreshQobuzConnectRuntimeState();
+          showToast($t('qconnect.rendererDisconnected'), 'error');
+        }
+      );
+      if (disposed) { unlistenRendererDisconnected(); return; }
+      unlistenQconnectRendererDisconnected = unlistenRendererDisconnected;
+
+      const unlistenRendererUnreachable = await listen<{ renderer_id: number }>(
+        'qconnect:renderer_unreachable',
+        (event) => {
+          pushQobuzConnectDiagnostic('qconnect:renderer_unreachable', 'warn', event.payload);
+          void refreshQobuzConnectRuntimeState();
+          showToast($t('qconnect.rendererUnreachable'), 'error');
+        }
+      );
+      if (disposed) { unlistenRendererUnreachable(); return; }
+      unlistenQconnectRendererUnreachable = unlistenRendererUnreachable;
+
       const unlisten9 = await listen<QconnectDiagnosticsPayload>('qconnect:diagnostic', (event) => {
         pushQobuzConnectDiagnostic(
           event.payload.channel,
@@ -5516,6 +6003,23 @@
       });
       if (disposed) { unlistenDeviceMissing(); return; }
       unlistenAudioDeviceMissing = unlistenDeviceMissing;
+
+      // Backend audio init failed (e.g. macOS CoreAudio rate mismatch after
+      // the retry exhausted, Hog Mode already held by another app, device
+      // disconnected mid-init). The fallback to legacy CPAL is intentionally
+      // refused on macOS — silent wrong-speed audio is worse than no audio —
+      // so the user sees no playback. Surface the cause as a toast instead
+      // of leaving them guessing at the silence.
+      const unlistenInitFailed = await listen<{ message: string }>('audio:init-failed', (event) => {
+        const reason = event.payload?.message ?? '';
+        showToast(
+          $t('toast.audioInitFailed', { values: { reason } }),
+          'error',
+          8000
+        );
+      });
+      if (disposed) { unlistenInitFailed(); return; }
+      unlistenAudioInitFailed = unlistenInitFailed;
     })();
 
     return () => {
@@ -5532,9 +6036,12 @@
       unlistenQconnectError?.();
       unlistenQconnectStatusChanged?.();
       unlistenQconnectAdmissionBlocked?.();
+      unlistenQconnectRendererDisconnected?.();
+      unlistenQconnectRendererUnreachable?.();
       unlistenQconnectDiagnostic?.();
       unlistenQconnectRendererReportDebug?.();
       unlistenAudioDeviceMissing?.();
+      unlistenAudioInitFailed?.();
       unsubscribeWindowTitle();
       // Save session before cleanup
       saveSessionBeforeClose();
@@ -5564,6 +6071,11 @@
       unsubscribeNav();
       unsubscribePlayer();
       unsubscribeQueue();
+      unregisterQueueMutationObserver();
+      if (sessionRestoreFlickerGuard !== null) {
+        clearTimeout(sessionRestoreFlickerGuard);
+        sessionRestoreFlickerGuard = null;
+      }
       unsubscribeLyrics();
       unsubscribeContentSidebar();
       unsubscribeCast();
@@ -5705,10 +6217,15 @@
     class:match-chrome={matchSystemChrome && showTitleBar && windowTransparent}
     style="--chrome-radius: {chromeRadiusPx}px;"
   >
-    <!-- macOS: drag region for window movement (overlay title bar has no native drag area) -->
-    {#if !showTitleBar && platform === 'macos'}
-      <div class="macos-drag-region" data-tauri-drag-region></div>
-    {/if}
+    <!--
+      macOS overlay title bar: drag handling lives on the existing
+      .sidebar element. It already has a 32px top padding band (to
+      clear the traffic lights) — that's the area we reuse as the
+      window drag surface, by tagging the <aside> as a drag region
+      and tagging each of its direct children as no-drag. No new
+      elements added, no spacing added — just attributes.
+    -->
+
     <!-- Custom Title Bar (CSD) -->
     {#if showTitleBar}
       <TitleBar
@@ -5773,7 +6290,7 @@
             onGoToLibrary={() => navigateTo('library')}
           />
         {:else}
-          <HomeView
+          <DiscoveryView
             userName={userInfo?.userName}
             onAlbumClick={handleAlbumClick}
             onAlbumPlay={playAlbumById}
@@ -5905,6 +6422,7 @@
           isPlaybackActive={isPlaying}
           onBack={navGoBack}
           onArtistClick={() => selectedAlbum?.artistId && handleArtistClick(selectedAlbum.artistId)}
+          onFeaturedArtistClick={(artistId) => handleArtistClick(artistId)}
           onLabelClick={handleLabelClick}
           onAwardClick={handleAwardClick}
           onTrackPlay={handleAlbumTrackPlay}
@@ -6576,6 +7094,12 @@
             <p>No artist selected.</p>
           </div>
         {/if}
+      {:else if activeView === 'offline-manager'}
+        <OfflineCacheManagerView
+          onBack={() => navigateTo('settings')}
+          onGoToAlbum={(albumId) => handleAlbumClick(albumId)}
+          onGoToFavorites={() => navigateToFavorites()}
+        />
       {:else}
         <!-- Catch-all fallback: view has no matching data, show loading/error -->
         <div class="view-error">
@@ -6585,18 +7109,26 @@
       {/if}
     </main>
 
-    {#if showGlobalBackToTop}
-      <button class="back-to-top-global" onclick={globalScrollToTop} title="Back to top">
-        <ChevronUp size={20} />
-      </button>
-    {/if}
+    <!-- Always mounted to avoid the mount/unmount paint cost when crossing
+         the 800px threshold (visible hiccup on scroll-up at 4K under software
+         compositing). Visibility is toggled via class + opacity transition. -->
+    <button
+      class="back-to-top-global"
+      class:hidden={!showGlobalBackToTop}
+      onclick={globalScrollToTop}
+      title="Back to top"
+      tabindex={showGlobalBackToTop ? 0 : -1}
+      aria-hidden={!showGlobalBackToTop}
+    >
+      <ChevronUp size={20} />
+    </button>
 
     <!-- Lyrics Sidebar -->
     {#if lyricsSidebarVisible && !isQueueOpen}
       <LyricsSidebar
         title={currentTrack?.title}
         artist={currentTrack?.artist}
-        lines={lyricsLines.map(l => ({ text: l.text }))}
+        lines={lyricsSidebarLines}
         activeIndex={lyricsActiveIndex}
         activeProgress={lyricsActiveProgress}
         isSynced={lyricsIsSynced}
@@ -6659,6 +7191,7 @@
         {isFavorite}
         onToggleFavorite={toggleFavorite}
         onAddToPlaylist={openAddToPlaylistModal}
+        metadataActionsDisabled={currentTrack != null && currentTrack.id >= 2 ** 48}
         onOpenQueue={toggleQueue}
         onOpenMiniPlayer={() => {
           void enterMiniplayerMode();
@@ -6700,7 +7233,8 @@
         onToggleQconnectConnection={handleQobuzConnectButton}
         qconnectBusy={qobuzConnectBusy}
         {showQconnectDevButton}
-        volumeLocked={isAlsaDirectHw && !qconnectPeerRendererActive}
+        volumeLocked={qconnectVolumeLocked}
+        volumeLockedReason={qconnectVolumeLockedReason}
         {bufferProgress}
       />
     {:else}
@@ -6723,7 +7257,8 @@
         onToggleQconnectConnection={handleQobuzConnectButton}
         qconnectBusy={qobuzConnectBusy}
         {showQconnectDevButton}
-        volumeLocked={isAlsaDirectHw && !qconnectPeerRendererActive}
+        volumeLocked={qconnectVolumeLocked}
+        volumeLockedReason={qconnectVolumeLockedReason}
       />
     {/if}
 
@@ -6757,13 +7292,14 @@
         {volume}
         onVolumeChange={handleVolumeChange}
         onToggleMute={handleToggleMute}
-        volumeLocked={isAlsaDirectHw && !qconnectPeerRendererActive}
+        volumeLocked={qconnectVolumeLocked}
         {isShuffle}
         onToggleShuffle={toggleShuffle}
         {repeatMode}
         onToggleRepeat={toggleRepeat}
         {isFavorite}
         onToggleFavorite={toggleFavorite}
+        metadataActionsDisabled={currentTrack != null && currentTrack.id >= 2 ** 48}
         lyricsLines={lyricsLines}
         lyricsActiveIndex={lyricsActiveIndex}
         lyricsActiveProgress={lyricsActiveProgress}
@@ -6799,6 +7335,11 @@
       />
     {/if}
 
+    <CpuModeWarningModal
+      isOpen={cpuModeWarningOpen}
+      onClose={handleCpuWarningClose}
+    />
+
     <!-- Toast -->
     {#if toast}
       <Toast
@@ -6809,75 +7350,89 @@
       />
     {/if}
 
-    <!-- Playlist Modal -->
-    <PlaylistModal
-      isOpen={isPlaylistModalOpen}
-      mode={playlistModalMode}
-      playlist={playlistModalMode === 'edit' ? playlistModalEditPlaylist : undefined}
-      trackIds={playlistModalTrackIds}
-      isLocalTracks={playlistModalTracksAreLocal}
-      plexRatingKeys={playlistModalPlexRatingKeys}
-      isHidden={playlistModalMode === 'edit' ? playlistModalEditIsHidden : false}
-      currentFolderId={playlistModalMode === 'edit' ? playlistModalEditCurrentFolderId : null}
-      {userPlaylists}
-      onClose={handlePlaylistModalClose}
-      onSuccess={handlePlaylistCreated}
-    />
+    <!-- Modals are gated by `{#if}` at the mount site so their <script>
+         blocks (and the reactive declarations within) don't execute when
+         the modal is closed. Previously each modal was always mounted with
+         only its template gated internally, which kept its full reactive
+         graph alive and re-evaluating on every parent tick — the dominant
+         cost of opening any new modal at non-maximized window sizes. -->
+    {#if isPlaylistModalOpen}
+      <PlaylistModal
+        isOpen={isPlaylistModalOpen}
+        mode={playlistModalMode}
+        playlist={playlistModalMode === 'edit' ? playlistModalEditPlaylist : undefined}
+        trackIds={playlistModalTrackIds}
+        isLocalTracks={playlistModalTracksAreLocal}
+        plexRatingKeys={playlistModalPlexRatingKeys}
+        isHidden={playlistModalMode === 'edit' ? playlistModalEditIsHidden : false}
+        currentFolderId={playlistModalMode === 'edit' ? playlistModalEditCurrentFolderId : null}
+        {userPlaylists}
+        onClose={handlePlaylistModalClose}
+        onSuccess={handlePlaylistCreated}
+      />
+    {/if}
 
-    <!-- Playlist Import Modal -->
-    <PlaylistImportModal
-      isOpen={isPlaylistImportOpen}
-      onClose={closePlaylistImport}
-      onSuccess={handlePlaylistImported}
-    />
+    {#if isPlaylistImportOpen}
+      <PlaylistImportModal
+        isOpen={isPlaylistImportOpen}
+        onClose={closePlaylistImport}
+        onSuccess={handlePlaylistImported}
+      />
+    {/if}
 
-    <!-- Folder Edit Modal (sidebar entry-point — issue #364) -->
-    <FolderEditModal
-      isOpen={isSidebarFolderEditOpen}
-      folder={editingSidebarFolder}
-      onClose={closeSidebarFolderEdit}
-      onSave={handleSidebarFolderSave}
-      onDelete={handleSidebarFolderDelete}
-    />
+    {#if isSidebarFolderEditOpen}
+      <FolderEditModal
+        isOpen={isSidebarFolderEditOpen}
+        folder={editingSidebarFolder}
+        onClose={closeSidebarFolderEdit}
+        onSave={handleSidebarFolderSave}
+        onDelete={handleSidebarFolderDelete}
+      />
+    {/if}
 
-    <!-- About Modal -->
-    <AboutModal
-      isOpen={isAboutModalOpen}
-      onClose={() => isAboutModalOpen = false}
-    />
+    {#if isAboutModalOpen}
+      <AboutModal
+        isOpen={isAboutModalOpen}
+        onClose={() => isAboutModalOpen = false}
+      />
+    {/if}
 
-    <!-- Quality Fallback Modal -->
-    <QualityFallbackModal
-      isOpen={isQualityFallbackOpen}
-      trackTitle={qualityFallbackTrackTitle}
-      onTryLower={handleQualityFallbackTryLower}
-      onSkip={handleQualityFallbackSkip}
-      onClose={() => isQualityFallbackOpen = false}
-    />
+    {#if isQualityFallbackOpen}
+      <QualityFallbackModal
+        isOpen={isQualityFallbackOpen}
+        trackTitle={qualityFallbackTrackTitle}
+        onTryLower={handleQualityFallbackTryLower}
+        onSkip={handleQualityFallbackSkip}
+        onClose={() => isQualityFallbackOpen = false}
+      />
+    {/if}
 
-    <!-- Keyboard Shortcuts Modal -->
-    <KeyboardShortcutsModal
-      isOpen={isShortcutsModalOpen}
-      onClose={() => isShortcutsModalOpen = false}
-      onOpenSettings={() => {
-        isShortcutsModalOpen = false;
-        isKeybindingsSettingsOpen = true;
-      }}
-    />
+    {#if isShortcutsModalOpen}
+      <KeyboardShortcutsModal
+        isOpen={isShortcutsModalOpen}
+        onClose={() => isShortcutsModalOpen = false}
+        onOpenSettings={() => {
+          isShortcutsModalOpen = false;
+          isKeybindingsSettingsOpen = true;
+        }}
+      />
+    {/if}
 
-    <!-- Keybindings Settings Modal -->
-    <KeybindingsSettings
-      isOpen={isKeybindingsSettingsOpen}
-      onClose={() => isKeybindingsSettingsOpen = false}
-    />
+    {#if isKeybindingsSettingsOpen}
+      <KeybindingsSettings
+        isOpen={isKeybindingsSettingsOpen}
+        onClose={() => isKeybindingsSettingsOpen = false}
+      />
+    {/if}
 
-    <!-- Link Resolver Modal -->
-    <LinkResolverModal
-      isOpen={isLinkResolverOpen}
-      onClose={() => isLinkResolverOpen = false}
-      onResolve={handleResolvedLink}
-      onOpenImporter={() => { isLinkResolverOpen = false; openPlaylistImport(); }}
-    />
+    {#if isLinkResolverOpen}
+      <LinkResolverModal
+        isOpen={isLinkResolverOpen}
+        onClose={() => isLinkResolverOpen = false}
+        onResolve={handleResolvedLink}
+        onOpenImporter={() => { isLinkResolverOpen = false; openPlaylistImport(); }}
+      />
+    {/if}
 
     {#if updateRelease}
       <UpdateAvailableModal
@@ -7141,28 +7696,6 @@
     height: calc(100vh - var(--player-bar-height, 104px));
   }
 
-  /* macOS: pad main content to clear native overlay title bar */
-  :global(html.macos) .main-content {
-    padding-top: 16px;
-    height: calc(100vh - 104px - 16px);
-  }
-
-  /* macOS: home view handles its own spacing */
-  :global(html.macos) .main-content :global(.home-view) {
-    margin-top: -16px;
-  }
-
-  /* macOS: invisible drag region for window movement (overlay title bar) */
-  :global(html.macos) .macos-drag-region {
-    height: 28px;
-    width: 100%;
-    position: absolute;
-    top: 0;
-    left: 0;
-    z-index: 9999;
-    -webkit-app-region: drag;
-  }
-
   .view-error {
     display: flex;
     flex-direction: column;
@@ -7204,8 +7737,17 @@
     align-items: center;
     justify-content: center;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
-    transition: background 150ms ease, color 150ms ease;
+    /* Opacity-only transition for show/hide so the button can stay mounted
+       at all times. Mounting/unmounting a position:fixed element on every
+       scroll-threshold crossing forced an extra paint event that the user
+       perceived as a stutter, especially on scroll-up at 4K. */
+    transition: background 150ms ease, color 150ms ease, opacity 150ms ease;
     z-index: 200;
+  }
+
+  .back-to-top-global.hidden {
+    opacity: 0;
+    pointer-events: none;
   }
 
   .back-to-top-global:hover {
@@ -7292,7 +7834,7 @@
   .create-modal .primary-btn {
     padding: 10px 20px;
     background: var(--accent-primary);
-    color: #ffffff;
+    color: var(--btn-primary-text);
     border: none;
     border-radius: 8px;
     font-size: 14px;

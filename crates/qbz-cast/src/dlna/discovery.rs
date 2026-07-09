@@ -80,11 +80,13 @@ impl DlnaDiscovery {
                         let mut has_rendering_control = false;
 
                         for service in device.services_iter() {
+                            // Version-agnostic match: a renderer advertising only
+                            // AVTransport:2/:3 (not :1) must still count as capable.
                             let service_type = service.service_type().to_string();
-                            if service_type == av_transport_urn().to_string() {
+                            if service_type.contains(":service:AVTransport:") {
                                 has_av_transport = true;
                             }
-                            if service_type == rendering_control_urn().to_string() {
+                            if service_type.contains(":service:RenderingControl:") {
                                 has_rendering_control = true;
                             }
                         }
@@ -148,12 +150,4 @@ impl Default for DlnaDiscovery {
 
 fn media_renderer_urn() -> URN {
     URN::Device("schemas-upnp-org".into(), "MediaRenderer".into(), 1)
-}
-
-fn av_transport_urn() -> URN {
-    URN::Service("schemas-upnp-org".into(), "AVTransport".into(), 1)
-}
-
-fn rendering_control_urn() -> URN {
-    URN::Service("schemas-upnp-org".into(), "RenderingControl".into(), 1)
 }

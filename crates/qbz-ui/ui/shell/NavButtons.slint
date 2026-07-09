@@ -1,0 +1,8 @@
+// The back / forward / collapse buttons moved to the app header (HeaderBar,
+// floating right). This component is now an empty zero-size placeholder so
+// the many per-view headers that still instantiate it render nothing — the
+// real buttons live once, in the header.
+export component NavButtons inherits HorizontalLayout {
+    width: 0px;
+    height: 0px;
+}

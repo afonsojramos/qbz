@@ -479,7 +479,7 @@
   --accent-primary: #d7827e;
   --accent-hover: #e5a478;
   --accent-active: #286983;
-  --btn-primary-text: #faf4ed;
+  --btn-primary-text: #575279;
   --danger: #b4637a;
   --danger-bg: rgba(180, 99, 122, 0.1);
   --danger-border: rgba(180, 99, 122, 0.3);
@@ -901,7 +901,7 @@
   --accent-primary: #5e81ac;
   --accent-hover: #81a1c1;
   --accent-active: #88c0d0;
-  --btn-primary-text: #eceff4;
+  --btn-primary-text: #2e3440;
   --danger: #bf616a;
   --danger-bg: rgba(191, 97, 106, 0.1);
   --danger-border: rgba(191, 97, 106, 0.3);
@@ -1237,7 +1237,7 @@
   --accent-primary: #ed2f3d;
   --accent-hover: #f74a58;
   --accent-active: #c41e2a;
-  --btn-primary-text: #0a0a0a;
+  --btn-primary-text: #ffffff;
 
   /* Status — bright alert red (distinct from accent) + antique gold (dragon crest horns) */
   --danger: #e63946;
@@ -1294,7 +1294,7 @@
   --accent-primary: #d5be58;
   --accent-hover: #e8ce66;
   --accent-active: #b49f45;
-  --btn-primary-text: #fbf9f2;
+  --btn-primary-text: #262424;
 
   /* Status colours */
   --danger: #c0392b;
@@ -1547,6 +1547,40 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   overflow: hidden;
+  /* App-wide non-selection. Music app text (titles, artists, headers) is
+     not meant to be selected — and selectable text breaks window drag
+     regions, since native text selection preempts the drag gesture.
+     Exceptions below opt specific elements back into selectability. */
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Text-input controls always get native selection back. */
+input,
+textarea,
+[contenteditable]:not([contenteditable='false']) {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* Semantic literal-text elements stay selectable everywhere. Covers the
+   HiFi Wizard command/path blocks, recovery commands, environment-variable
+   hints, log viewers, keyboard-shortcut chips, and any other place where
+   users need to copy text verbatim from settings, diagnostics, or modals. */
+pre,
+code,
+kbd,
+samp {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* Escape hatch: add class="selectable" to any element whose text users
+   should be able to copy (error messages, tokens, release notes, etc.). */
+.selectable,
+.selectable * {
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 /* Scrollbar Styling */

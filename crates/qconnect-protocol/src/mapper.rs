@@ -15,7 +15,8 @@ use crate::{
         DeviceInfoMessage, JoinSessionMessage, MuteVolumeMessage, PlaybackPositionMessage,
         QConnectMessage, QConnectMessageType, QConnectMessages, QueueAddTracksMessage,
         QueueInsertTracksMessage, QueueLoadTracksMessage, QueueRemoveTracksMessage,
-        QueueReorderTracksMessage, QueueVersionRef, RendererFileAudioQualityChangedMessage,
+        QueueReorderTracksMessage, QueueVersionRef, RendererDeviceAudioQualityChangedMessage,
+        RendererFileAudioQualityChangedMessage,
         RendererMaxAudioQualityChangedMessage, RendererStateMessage, RendererStateUpdatedMessage,
         RendererVolumeChangedMessage, RendererVolumeMutedMessage, SetActiveRendererMessage,
         SetAutoplayModeMessage, SetLoopModeMessage, SetMaxAudioQualityMessage,
@@ -486,6 +487,19 @@ fn map_renderer_report(report: &RendererReport) -> Result<QConnectMessage, Proto
             }),
             ..Default::default()
         }),
+        RendererReportType::RndrSrvrDeviceAudioQualityChanged => Ok(QConnectMessage {
+            message_type: Some(
+                QConnectMessageType::MessageTypeRndrSrvrDeviceAudioQualityChanged as i32,
+            ),
+            rndr_srvr_device_audio_quality_changed: Some(
+                RendererDeviceAudioQualityChangedMessage {
+                    sampling_rate: optional_i32(&report.payload, "sampling_rate")?,
+                    bit_depth: optional_i32(&report.payload, "bit_depth")?,
+                    nb_channels: optional_i32(&report.payload, "nb_channels")?,
+                },
+            ),
+            ..Default::default()
+        }),
         RendererReportType::RndrSrvrMaxAudioQualityChanged => Ok(QConnectMessage {
             message_type: Some(
                 QConnectMessageType::MessageTypeRndrSrvrMaxAudioQualityChanged as i32,
@@ -868,6 +882,13 @@ fn parse_set_player_state_queue_item(
     let nested = payload
         .get("current_queue_item")
         .or_else(|| payload.get("currentQueueItem"));
+    // A present-but-null `current_queue_item` means "no item" — a bare play/pause
+    // toggle. Treat it as ABSENT rather than hard-failing the whole command encode
+    // (the old behavior aborted the send before it reached the wire). Defense in
+    // depth alongside `skip_serializing_if` on the request struct.
+    if matches!(nested, Some(Value::Null)) {
+        return Ok(None);
+    }
     let source = match nested {
         Some(value) => value,
         None => payload,
@@ -927,6 +948,29 @@ mod tests {
     use prost::Message;
     use qconnect_core::QueueVersion;
     use serde_json::json;
+
+    #[test]
+    fn maps_device_audio_quality_changed_report_to_tag_27() {
+        let report = RendererReport::new(
+            RendererReportType::RndrSrvrDeviceAudioQualityChanged,
+            "00000000-0000-0000-0000-000000000000",
+            QueueVersion { major: 1, minor: 2 },
+            json!({ "sampling_rate": 96000, "bit_depth": 24, "nb_channels": 2 }),
+        );
+        let msg = map_renderer_report(&report).expect("mapping should succeed");
+        assert_eq!(
+            msg.message_type,
+            Some(QConnectMessageType::MessageTypeRndrSrvrDeviceAudioQualityChanged as i32)
+        );
+        let dev = msg
+            .rndr_srvr_device_audio_quality_changed
+            .expect("device AQ submessage present");
+        assert_eq!(dev.sampling_rate, Some(96000));
+        assert_eq!(dev.bit_depth, Some(24));
+        assert_eq!(dev.nb_channels, Some(2));
+        assert!(msg.rndr_srvr_file_audio_quality_changed.is_none());
+        assert!(msg.rndr_srvr_max_audio_quality_changed.is_none());
+    }
 
     #[test]
     fn encodes_add_tracks_command_into_binary_batch() {
@@ -1057,6 +1101,39 @@ mod tests {
             queue_item.queue_version.as_ref().and_then(|v| v.minor),
             Some(3)
         );
+    }
+
+    #[test]
+    fn encodes_bare_set_player_state_pause_without_queue_item() {
+        // A bare play/pause toggle sends ONLY playing_state — the renderer
+        // pauses/resumes its current item in place. Two shapes must both encode
+        // cleanly with NO current_queue_item: the key omitted (via
+        // skip_serializing_if), and present-but-null (defense in depth). The old
+        // mapper rejected the null shape ("must be an object") and aborted the
+        // whole send, which is why pause-to-an-iOS-renderer silently failed.
+        for payload in [
+            json!({ "playing_state": 3 }),
+            json!({ "playing_state": 3, "current_position": null, "current_queue_item": null }),
+        ] {
+            let command = QueueCommand::new(
+                QueueCommandType::CtrlSrvrSetPlayerState,
+                "132db70b-d293-4576-bfd6-747c40ab764f",
+                QueueVersion::new(5, 3),
+                payload,
+            );
+            let encoded =
+                encode_queue_command_batch(&command).expect("bare pause must encode (not abort)");
+            let decoded = QConnectMessages::decode(encoded.as_slice()).expect("decode batch");
+            let player_state = decoded.messages[0]
+                .ctrl_srvr_set_player_state
+                .as_ref()
+                .expect("player state payload");
+            assert_eq!(player_state.playing_state, Some(3));
+            assert!(
+                player_state.current_queue_item.is_none(),
+                "bare pause must carry NO current_queue_item (qid 0 is the placeholder iOS rejects)"
+            );
+        }
     }
 
     #[test]

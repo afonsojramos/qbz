@@ -305,7 +305,7 @@
     </div>
 
     <!-- Content -->
-    <div class="booklet-content" bind:this={containerEl}>
+    <div class="booklet-content selectable" bind:this={containerEl}>
       {#if isLoading}
         <div class="booklet-loading">
           <div class="spinner"></div>

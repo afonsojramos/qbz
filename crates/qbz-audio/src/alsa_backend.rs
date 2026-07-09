@@ -20,6 +20,67 @@ use rodio::{
 };
 use std::collections::HashMap;
 use std::fs;
+use std::sync::Mutex;
+
+/// The PipeWire sink QBZ suspended to take a device exclusively (ALSA-direct
+/// EBUSY retry / CPAL-exclusive). Recorded by *resolved name* so
+/// `resume_suspended_sink` wakes the exact sink that was suspended — PipeWire
+/// sink names are deterministic, so resume-by-name is reliable even if the sink
+/// was vacated and re-created while QBZ held the device. Issue #263: QBZ
+/// suspended the default sink but never resumed it, leaving the rest of the
+/// system stuck on a suspended sink after exclusive playback.
+static SUSPENDED_SINK: Mutex<Option<String>> = Mutex::new(None);
+
+/// Suspend the current default PipeWire sink so an exclusive ALSA device open
+/// can grab the hardware, recording the resolved sink name for later resume.
+/// Falls back to the `@DEFAULT_SINK@` alias if the name can't be resolved.
+fn suspend_default_sink_for_exclusive() {
+    let resolved = std::process::Command::new("pactl")
+        .args(["get-default-sink"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let target = resolved.unwrap_or_else(|| "@DEFAULT_SINK@".to_string());
+    match std::process::Command::new("pactl")
+        .args(["suspend-sink", &target, "1"])
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            log::info!(
+                "[ALSA Backend] Suspended PipeWire sink '{}' for exclusive access",
+                target
+            );
+            if let Ok(mut guard) = SUSPENDED_SINK.lock() {
+                *guard = Some(target);
+            }
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            log::warn!("[ALSA Backend] Failed to suspend PipeWire sink: {}", stderr);
+        }
+        Err(e) => log::warn!("[ALSA Backend] Error suspending PipeWire sink: {}", e),
+    }
+}
+
+/// Resume the PipeWire sink QBZ suspended for exclusive access (issue #263 leak
+/// fix). No-op if QBZ did not suspend one — so it is safe to call on every
+/// stop/teardown. Call it once the exclusive device has actually been released
+/// so the rest of the system can use the sink again.
+pub fn resume_suspended_sink() {
+    let target = match SUSPENDED_SINK.lock() {
+        Ok(mut guard) => guard.take(),
+        Err(_) => None,
+    };
+    if let Some(sink) = target {
+        let _ = std::process::Command::new("pactl")
+            .args(["suspend-sink", &sink, "0"])
+            .output();
+        log::info!("[ALSA Backend] Resumed PipeWire sink '{}'", sink);
+    }
+}
 
 /// Common audio sample rates to check for device support
 const COMMON_SAMPLE_RATES: &[u32] = &[
@@ -495,6 +556,23 @@ impl AlsaBackend {
 
         // For each card, add relevant devices using STABLE IDs (card NAME, not number)
         for card in &cards {
+            // Skip cards with no PCM playback devices. /proc/asound/cards lists
+            // every registered sound card, including capture-only hardware
+            // (USB webcams, microphones, HDMI-audio-less capture devices).
+            // Those expose only `pcmXc` (capture) nodes, so `read_card_pcm_devices`
+            // — which keeps only `pcmXp` (playback) — yields an empty list for
+            // them. Without this guard such a card still got a bogus
+            // `sysdefault:CARD=<name>` output entry, e.g. a webcam showing up as
+            // a selectable "output device".
+            if card.pcm_playback_devices.is_empty() {
+                log::debug!(
+                    "[ALSA Backend] Skipping capture-only card {} ({}) — no playback PCMs",
+                    card.number,
+                    card.short_name
+                );
+                continue;
+            }
+
             // Add sysdefault:CARD=name (card default with software mixing)
             let sysdefault_id = format!("sysdefault:CARD={}", card.short_name);
             let sysdefault_rates = cpal_devices
@@ -708,10 +786,9 @@ impl AlsaBackend {
                         // Retry with progressive backoff before giving up.
                         log::info!("[ALSA Backend] Device busy — retrying with backoff");
 
-                        // Try suspending PipeWire once (covers PipeWire-held case)
-                        let _ = std::process::Command::new("pactl")
-                            .args(["suspend-sink", "@DEFAULT_SINK@", "1"])
-                            .output();
+                        // Try suspending PipeWire once (covers PipeWire-held case).
+                        // Records the sink so it is resumed on stop/teardown (#263).
+                        suspend_default_sink_for_exclusive();
 
                         let retry_delays_ms = [50, 100, 200, 400, 800];
                         for (i, delay_ms) in retry_delays_ms.iter().enumerate() {
@@ -804,9 +881,7 @@ impl AlsaBackend {
 
                 if matches!(error, super::backend::AlsaDirectError::DeviceBusy(_)) {
                     log::info!("[ALSA Backend] plughw device busy — retrying with backoff");
-                    let _ = std::process::Command::new("pactl")
-                        .args(["suspend-sink", "@DEFAULT_SINK@", "1"])
-                        .output();
+                    suspend_default_sink_for_exclusive();
 
                     let retry_delays_ms = [50, 100, 200, 400, 800];
                     for (i, delay_ms) in retry_delays_ms.iter().enumerate() {
@@ -958,6 +1033,104 @@ pub fn device_supports_sample_rate(device_id: &str, sample_rate: u32) -> Option<
 pub fn get_device_supported_rates(device_id: &str) -> Option<Vec<u32>> {
     let card_name = extract_card_name_from_device(device_id)?;
     get_hw_supported_rates(&card_name)
+}
+
+/// Create a DoP-capable ALSA direct stream (DSD plan Phase 2). ADDITIVE
+/// helper next to the protected PCM path: exclusive `hw:` open, S32_LE only,
+/// exact carrier rate, `/proc` rate pre-check, and the same busy backoff +
+/// PipeWire-suspend dance as the PCM path. Errors are user-meaningful (the
+/// caller falls back to DSD→PCM conversion with a toast).
+/// Create a NATIVE-DSD ALSA direct stream (DSD plan Phase 3). Same shape as
+/// [`create_dop_stream`]: hw-only, busy backoff. No /proc rate pre-check —
+/// the DSD altset rates aren't reliably visible there; the open itself
+/// validates (and fails cleanly when the kernel quirk is missing).
+/// Returns the stream plus `little_endian` for the packer.
+pub fn create_native_dsd_stream(
+    device_id: &str,
+    dsd_rate: u32,
+    channels: u16,
+) -> Result<(super::AlsaDirectStream, bool), String> {
+    if !super::AlsaDirectStream::is_hw_device(device_id) {
+        return Err(format!(
+            "device '{}' is not a direct hardware (hw:) device",
+            device_id
+        ));
+    }
+    let hw_device = if device_id.starts_with("plughw:") {
+        device_id.replace("plughw:", "hw:")
+    } else {
+        device_id.to_string()
+    };
+    match super::AlsaDirectStream::new_native_dsd(&hw_device, dsd_rate, channels) {
+        Ok(pair) => Ok(pair),
+        Err(first_err) => {
+            let error = super::backend::AlsaDirectError::from_alsa_error(&first_err);
+            if !matches!(error, super::backend::AlsaDirectError::DeviceBusy(_)) {
+                return Err(first_err);
+            }
+            log::info!("[ALSA Backend] Native-DSD device busy — retrying with backoff");
+            suspend_default_sink_for_exclusive();
+            let mut last_err = first_err;
+            for delay_ms in [50u64, 100, 200, 400, 800] {
+                std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+                match super::AlsaDirectStream::new_native_dsd(&hw_device, dsd_rate, channels) {
+                    Ok(pair) => return Ok(pair),
+                    Err(e) => last_err = e,
+                }
+            }
+            Err(last_err)
+        }
+    }
+}
+
+pub fn create_dop_stream(
+    device_id: &str,
+    carrier_rate: u32,
+    channels: u16,
+) -> Result<super::AlsaDirectStream, String> {
+    if !super::AlsaDirectStream::is_hw_device(device_id) {
+        return Err(format!(
+            "device '{}' is not a direct hardware (hw:) device",
+            device_id
+        ));
+    }
+    // Same base-id mapping as the PCM direct path (plughw is useless for DoP —
+    // any conversion breaks the markers, so only the raw hw id is tried).
+    let hw_device = if device_id.starts_with("plughw:") {
+        device_id.replace("plughw:", "hw:")
+    } else {
+        device_id.to_string()
+    };
+    if let Some(card_name) = extract_card_name_from_device(device_id) {
+        if let Some(hw_rates) = get_hw_supported_rates(&card_name) {
+            if !hw_rates.contains(&carrier_rate) {
+                return Err(format!(
+                    "device does not support the {} Hz DoP carrier rate (supported: {:?})",
+                    carrier_rate, hw_rates
+                ));
+            }
+        }
+    }
+    match super::AlsaDirectStream::new_dop(&hw_device, carrier_rate, channels) {
+        Ok(stream) => Ok(stream),
+        Err(first_err) => {
+            let error = super::backend::AlsaDirectError::from_alsa_error(&first_err);
+            if !matches!(error, super::backend::AlsaDirectError::DeviceBusy(_)) {
+                return Err(first_err);
+            }
+            log::info!("[ALSA Backend] DoP device busy — retrying with backoff");
+            suspend_default_sink_for_exclusive();
+            let mut last_err = first_err;
+            for delay_ms in [50u64, 100, 200, 400, 800] {
+                std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+                match super::AlsaDirectStream::new_dop(&hw_device, carrier_rate, channels) {
+                    Ok(stream) => return Ok(stream),
+                    Err(e) => last_err = e,
+                }
+            }
+            Err(last_err)
+        }
+    }
 }
 
 impl AudioBackend for AlsaBackend {
@@ -1126,18 +1299,8 @@ impl AudioBackend for AlsaBackend {
             log::info!(
                 "[ALSA Backend] Exclusive mode: suspending PipeWire sinks before CPAL stream"
             );
-            if let Ok(output) = std::process::Command::new("pactl")
-                .args(["suspend-sink", "@DEFAULT_SINK@", "1"])
-                .output()
-            {
-                if output.status.success() {
-                    log::info!("[ALSA Backend] PipeWire sink suspended");
-                    std::thread::sleep(std::time::Duration::from_millis(200));
-                } else {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    log::warn!("[ALSA Backend] Failed to suspend PipeWire sink: {}", stderr);
-                }
-            }
+            suspend_default_sink_for_exclusive();
+            std::thread::sleep(std::time::Duration::from_millis(200));
         }
 
         // Create MixerDeviceSink with custom config

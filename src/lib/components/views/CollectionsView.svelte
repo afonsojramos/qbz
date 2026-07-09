@@ -61,8 +61,33 @@
   let sortDir = $state<SortDir>(initial.sortDir ?? 'asc');
   let kindFilter = $state<KindFilter>(initial.kindFilter ?? 'all');
   let searchQuery = $state('');
-  let showSortMenu = $state(false);
-  let showFilterMenu = $state(false);
+  // Mutually-exclusive toolbar dropdown state. Only one menu is open at a time.
+  type OpenMenu = 'sort' | 'filter' | null;
+  let openMenu = $state<OpenMenu>(null);
+
+  // Close the open menu on clicks outside any control button or menu.
+  // Clicks on `.control-btn` / `.control-menu` are handled by their own
+  // onclick handlers, which correctly swap `openMenu` between siblings.
+  $effect(() => {
+    if (openMenu === null) return;
+
+    function handleClickOutside(event: MouseEvent) {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      if (target.closest('.control-btn') || target.closest('.control-menu')) return;
+      openMenu = null;
+    }
+
+    // Defer registration so the click that opened the menu doesn't
+    // immediately close it.
+    setTimeout(() => {
+      document.addEventListener('click', handleClickOutside);
+    }, 0);
+
+    return () => {
+      document.removeEventListener('click', handleClickOutside);
+    };
+  });
 
   const normalizedSearch = $derived(searchQuery.trim().toLowerCase());
 
@@ -122,7 +147,7 @@
       sortBy = value;
       sortDir = 'asc';
     }
-    showSortMenu = false;
+    openMenu = null;
   }
 
   function resetFilters() {
@@ -156,9 +181,9 @@
       <span>{$t('actions.back')}</span>
     </button>
   {/if}
-  <header class="view-header">
+  <header class="view-header" data-tauri-drag-region="deep">
     <h1>{$t('collections.nav')}</h1>
-    <div class="header-actions">
+    <div class="header-actions" data-tauri-drag-region="false">
       <button
         type="button"
         class="primary-cta"
@@ -215,15 +240,14 @@
         <button
           type="button"
           class="control-btn"
-          onclick={() => { showSortMenu = !showSortMenu; showFilterMenu = false; }}
+          onclick={() => (openMenu = openMenu === 'sort' ? null : 'sort')}
           title={$t('collectionDetail.sort')}
         >
           <ArrowUpDown size={14} />
           <span>{sortOptions.find((o) => o.value === sortBy)?.label}</span>
           <span class="sort-indicator">{sortDir === 'asc' ? '↑' : '↓'}</span>
         </button>
-        {#if showSortMenu}
-          <div class="control-backdrop" onclick={() => (showSortMenu = false)} role="presentation"></div>
+        {#if openMenu === 'sort'}
           <div class="control-menu">
             {#each sortOptions as option}
               <button
@@ -247,7 +271,7 @@
           type="button"
           class="control-btn"
           class:active={kindFilter !== 'all'}
-          onclick={() => { showFilterMenu = !showFilterMenu; showSortMenu = false; }}
+          onclick={() => (openMenu = openMenu === 'filter' ? null : 'filter')}
           title={$t('collectionDetail.filter')}
         >
           <Filter size={14} />
@@ -256,14 +280,13 @@
             <span class="filter-count">1</span>
           {/if}
         </button>
-        {#if showFilterMenu}
-          <div class="control-backdrop" onclick={() => (showFilterMenu = false)} role="presentation"></div>
+        {#if openMenu === 'filter'}
           <div class="control-menu">
             <button
               type="button"
               class="control-menu-item"
               class:selected={kindFilter === 'all'}
-              onclick={() => { kindFilter = 'all'; showFilterMenu = false; }}
+              onclick={() => { kindFilter = 'all'; openMenu = null; }}
             >
               <span>{$t('collections.kindFilterAll')}</span>
               {#if kindFilter === 'all'}<Check size={12} />{/if}
@@ -272,7 +295,7 @@
               type="button"
               class="control-menu-item"
               class:selected={kindFilter === 'collection'}
-              onclick={() => { kindFilter = 'collection'; showFilterMenu = false; }}
+              onclick={() => { kindFilter = 'collection'; openMenu = null; }}
             >
               <span>{$t('collections.kindFilterCollection')}</span>
               {#if kindFilter === 'collection'}<Check size={12} />{/if}
@@ -281,7 +304,7 @@
               type="button"
               class="control-menu-item"
               class:selected={kindFilter === 'artist_collection'}
-              onclick={() => { kindFilter = 'artist_collection'; showFilterMenu = false; }}
+              onclick={() => { kindFilter = 'artist_collection'; openMenu = null; }}
             >
               <span>{$t('collections.kindFilterArtistCollection')}</span>
               {#if kindFilter === 'artist_collection'}<Check size={12} />{/if}
@@ -436,7 +459,7 @@
     gap: 8px;
     padding: 10px 20px;
     background: var(--accent-primary);
-    color: #ffffff;
+    color: var(--btn-primary-text);
     border: none;
     border-radius: 8px;
     font-size: 14px;
@@ -551,16 +574,11 @@
     padding: 0 4px;
     border-radius: 8px;
     background: var(--accent-primary);
-    color: #fff;
+    color: var(--btn-primary-text);
     font-size: 10px;
     font-weight: 600;
   }
 
-  .control-backdrop {
-    position: fixed;
-    inset: 0;
-    z-index: 200;
-  }
   .control-menu {
     position: absolute;
     top: calc(100% + 4px);
@@ -613,7 +631,7 @@
   }
   .view-mode-group .control-btn.seg.active {
     background: var(--accent-primary);
-    color: #fff;
+    color: var(--btn-primary-text);
     border-color: var(--accent-primary);
   }
 

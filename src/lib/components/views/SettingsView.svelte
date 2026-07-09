@@ -16,6 +16,7 @@
   import LogsModal from '../LogsModal.svelte';
   import DiagnosticsPanel from '../DiagnosticsPanel.svelte';
   import { consumeSettingsIntent } from '$lib/stores/settingsIntentStore';
+  import { navigateTo } from '$lib/stores/navigationStore';
   import { platform } from '$lib/utils/platform';
   import VolumeSlider from '../VolumeSlider.svelte';
   import UpdateCheckResultModal from '../updates/UpdateCheckResultModal.svelte';
@@ -37,6 +38,10 @@
     setSystemNotificationsEnabled,
     loadSystemNotificationsPreference
   } from '$lib/services/playbackService';
+  import {
+    isDiscordRpcEnabled,
+    setDiscordRpcEnabled
+  } from '$lib/services/discordRpcService';
   import { getIsPlaying } from '$lib/stores/playerStore';
   import { setLocale, locale, t } from '$lib/i18n';
   import { get } from 'svelte/store';
@@ -84,6 +89,15 @@
   } from '$lib/stores/degradedStore';
   import { showToast } from '$lib/stores/toastStore';
   import {
+    isAlbumHeaderGradientEnabled,
+    setAlbumHeaderGradient,
+  } from '$lib/stores/appearancePreferencesStore';
+  import {
+    isTrackArtworkEnabled,
+    updateSetting as updateLibraryPerformanceSetting,
+    subscribe as subscribeLibraryPerformance,
+  } from '$lib/stores/libraryPerformanceStore';
+  import {
     enableVerboseCapture,
     disableVerboseCapture,
     isVerboseCaptureEnabled
@@ -102,6 +116,14 @@
     getMatchSystemWindowChrome,
     setMatchSystemWindowChrome,
   } from '$lib/stores/windowChromeStore';
+  import { isHardwareAccelEnabled } from '$lib/runtime/graphicsState';
+  import {
+    immersivePanelsStore,
+    setPanelEnabled,
+    ALL_IMMERSIVE_PANELS,
+    HEAVY_PANELS,
+    type ImmersivePanelId,
+  } from '$lib/stores/immersivePanelsStore';
   import {
     subscribe as subscribeSearchBarLocation,
     getSearchBarLocation,
@@ -367,7 +389,91 @@
   let gdkScale = $state('');
   let gdkDpiScale = $state('');
   let gskRenderer = $state('');
-  let compositionCollapsed = $state(true);
+  let preferredGpu = $state('auto');
+  let nvidiaCompatMode = $state(false);
+  // Track install method so the recovery command shown when nvidia
+  // compat mode is enabled matches what the user can actually run
+  // (`qbz --reset-graphics` vs `flatpak run com.blitzfc.qbz --reset-graphics`).
+  let installMethod = $state<string>('dev');
+
+  // Rendering-GPU detection for the Settings > Graphics dropdown. The
+  // backend cross-references PCI devices visible under /sys/class/drm/
+  // with EGL vendor JSONs available to the running process; the result
+  // lists every GPU the user can practically pick (auto + each usable
+  // discrete/integrated + software fallback). Loaded on mount.
+  type DetectedGpu = {
+    id: string;
+    vendor: string;
+    name: string;
+    pci_id: string | null;
+    kind: 'integrated' | 'discrete' | 'software';
+    egl_vendor_json: string | null;
+    is_usable: boolean;
+  };
+  let detectedGpus = $state<DetectedGpu[]>([]);
+  // Which GPU the backend currently resolves "Auto" to on this system.
+  // Non-null only on hybrid setups (iGPU + dGPU) where Auto pins to the
+  // iGPU; single-GPU and no-GPU systems get null and the dropdown shows
+  // a plain "Automatic" label without a sub-name.
+  let autoResolvedGpuId = $state<string | null>(null);
+  type GpuList = {
+    gpus: DetectedGpu[];
+    auto_resolved_id: string | null;
+  };
+
+  // Sticky crash recovery flags from the boot watchdog. If a previous
+  // launch crashed during graphics init, the offending knob was
+  // auto-reverted and one of these flags is true. Settings > Graphics
+  // renders a banner so the user can retry or keep the safe setting.
+  type CrashFlags = {
+    hardware_acceleration_disabled: boolean;
+    hardware_acceleration_consecutive_failures: number;
+    force_dmabuf_disabled: boolean;
+    force_dmabuf_consecutive_failures: number;
+    preferred_gpu_disabled: boolean;
+    preferred_gpu_consecutive_failures: number;
+    hardware_acceleration_locked: boolean;
+    force_dmabuf_locked: boolean;
+    preferred_gpu_locked: boolean;
+  };
+  let crashFlags = $state<CrashFlags | null>(null);
+
+  // Graphics recommendation surfaced in the Graphics tab. Populated on
+  // mount via v2_get_graphics_recommendation (matrix lives in
+  // autoconfig_graphics.rs). The banner is advisory-only: it fires when
+  // at least one recommended value differs from the currently persisted
+  // setting and tells the user what to change. There is no Apply button
+  // by design - the user toggles the real settings manually.
+  type GraphicsRecommendation = {
+    environment: {
+      display_server: string;
+      gpu_nvidia: boolean;
+      gpu_amd: boolean;
+      gpu_intel: boolean;
+      gpu_name: string;
+      desktop: string;
+      is_vm: boolean;
+    };
+    recommendation: {
+      hardware_acceleration: boolean;
+      force_x11: boolean;
+      gsk_renderer: string | null;
+      disable_dmabuf: boolean;
+      disable_blur_background: boolean;
+      rationale: string[];
+    };
+  };
+  let graphicsRecommendation = $state<GraphicsRecommendation | null>(null);
+
+  // Per-environment dismiss flag for the recommendation banner. The
+  // dismissed signature is the joined rationale string of the
+  // recommendation that was active when the user dismissed — if hardware
+  // or session state changes (different GPU vendor, switch X11<->Wayland,
+  // VM detected), the rationale changes, the signature mismatches, and
+  // the banner re-appears so the user can re-evaluate.
+  const RECOMMENDATION_DISMISS_KEY = 'qbz-graphics-recommendation-dismiss-v1';
+  let dismissedRecommendationSignature = $state<string | null>(null);
+
   // Graphics startup status (for showing degraded mode warning)
   let graphicsUsingFallback = $state(false);
   let graphicsIsWayland = $state(false);
@@ -403,8 +509,8 @@
       gdkDpiScale: '',
       gskRenderer: '',
       backgroundMode: 'full',
-      labelKey: 'settings.appearance.composition.profiles.nativeWaylandLabel',
-      descKey: 'settings.appearance.composition.profiles.nativeWaylandDesc',
+      labelKey: 'settings.graphics.profiles.nativeWaylandLabel',
+      descKey: 'settings.graphics.profiles.nativeWaylandDesc',
     },
     {
       id: 'x11Balanced',
@@ -413,8 +519,8 @@
       gdkDpiScale: '1.1',
       gskRenderer: '',
       backgroundMode: 'full',
-      labelKey: 'settings.appearance.composition.profiles.x11BalancedLabel',
-      descKey: 'settings.appearance.composition.profiles.x11BalancedDesc',
+      labelKey: 'settings.graphics.profiles.x11BalancedLabel',
+      descKey: 'settings.graphics.profiles.x11BalancedDesc',
     },
     {
       id: 'x11Performance',
@@ -423,8 +529,8 @@
       gdkDpiScale: '1',
       gskRenderer: '',
       backgroundMode: 'off',
-      labelKey: 'settings.appearance.composition.profiles.x11PerformanceLabel',
-      descKey: 'settings.appearance.composition.profiles.x11PerformanceDesc',
+      labelKey: 'settings.graphics.profiles.x11PerformanceLabel',
+      descKey: 'settings.graphics.profiles.x11PerformanceDesc',
     },
     {
       id: 'maxPerformance',
@@ -433,8 +539,8 @@
       gdkDpiScale: '',
       gskRenderer: 'cairo',
       backgroundMode: 'off',
-      labelKey: 'settings.appearance.composition.profiles.maxPerformanceLabel',
-      descKey: 'settings.appearance.composition.profiles.maxPerformanceDesc',
+      labelKey: 'settings.graphics.profiles.maxPerformanceLabel',
+      descKey: 'settings.graphics.profiles.maxPerformanceDesc',
     },
   ];
 
@@ -454,6 +560,18 @@
   // Navigation section definitions (dynamic: includes sandbox sections when detected)
   const navSectionDefs = $derived.by(() => {
     const sections = [...navSectionIds];
+    // Linux-only: GPU infrastructure (HW accel, DMA-BUF, GSK/GDK, X11 vs
+    // Wayland, env-var overrides). macOS/Windows don't expose these knobs
+    // so the section would just be empty on those platforms.
+    if (platform === 'linux') {
+      const appearanceIdx = sections.findIndex((s) => s.id === 'appearance');
+      if (appearanceIdx !== -1) {
+        sections.splice(appearanceIdx + 1, 0, {
+          id: 'graphics',
+          labelKey: 'settings.graphics.title',
+        });
+      }
+    }
     if (isFlatpak) sections.push({ id: 'flatpak', labelKey: 'nav.flatpak' });
     if (isSnap) sections.push({ id: 'snap', labelKey: 'nav.snap' });
     return sections;
@@ -816,6 +934,31 @@
   let limitQualityToDevice = $state(false);  // Re-enabled in 1.2.x with manual per-device config
   let deviceMaxSampleRate = $state<number | null>(null);  // Per-device max sample rate
 
+  // Reserve DAC (Lifetime B): per-process DAC reservation via D-Bus / WirePlumber.
+  // Status polled every 5s while the row is rendered (only for ALSA card-specific devices).
+  type DacReservationStatus =
+    | { kind: 'inactive' }
+    | { kind: 'active' }
+    | { kind: 'contested'; holder: string; holder_priority: number }
+    | { kind: 'unavailable'; reason: string };
+  let reserveDacEnabled = $state(false);
+  let reserveDacStatus = $state<DacReservationStatus>({ kind: 'inactive' });
+
+  // Mirrors the backend's is_card_specific_device allow-list (qbz-audio side).
+  // Reservation only makes sense for card-bound ALSA prefixes; other devices
+  // hide the toggle entirely.
+  function isCardSpecificDevice(deviceId: string | undefined | null): boolean {
+    if (!deviceId) return false;
+    return (
+      deviceId.startsWith('hw:') ||
+      deviceId.startsWith('plughw:') ||
+      deviceId.startsWith('front:') ||
+      deviceId.startsWith('surround') ||
+      deviceId.startsWith('iec958:') ||
+      deviceId.startsWith('hdmi:')
+    );
+  }
+
   // Sample rate options for the dropdown
   const sampleRateOptions = [
     { value: 44100, label: '44.1 kHz (CD)' },
@@ -962,10 +1105,26 @@
   );
 
   // Smart toggle states - auto-disable incompatible features
-  let exclusiveModeDisabled = $derived(selectedBackend === 'PipeWire' || selectedBackend === 'Auto' || selectedBackend === 'PulseAudio');
-  let exclusiveModeTooltipOverride = $derived(
-    exclusiveModeDisabled
-      ? 'Exclusive mode is only available with ALSA Direct backend. PipeWire and PulseAudio are multiplexed audio servers and cannot provide true exclusive access.'
+  let selectedBackendInfo = $derived(availableBackends.find(b => b.name === selectedBackend) ?? null);
+  let selectedBackendSupportsExclusive = $derived(
+    selectedBackend === 'ALSA Direct'
+      || (platform === 'macos' && selectedBackendInfo?.backend_type === 'SystemDefault')
+  );
+  let exclusiveModeDisabled = $derived(!selectedBackendSupportsExclusive);
+  let exclusiveModeTooltipOverrideKey = $derived(
+    !exclusiveModeDisabled
+      ? (platform === 'macos'
+        ? 'settings.audio.exclusiveModeMacosDesc'
+        : null)
+      : platform === 'macos'
+        ? 'settings.audio.exclusiveModeMacosAvailable'
+      : (selectedBackend === 'PipeWire' || selectedBackend === 'PulseAudio')
+        ? 'settings.audio.exclusiveModeUnavailableMultiplexed'
+        : 'settings.audio.exclusiveModeUnavailableGeneric'
+  );
+  let exclusiveModeHelpOverrideKey = $derived(
+    platform === 'macos'
+      ? 'settings.audio.exclusiveModeMacosHelp'
       : null
   );
   let dacPassthroughDisabled = $derived(selectedBackend !== 'PipeWire');
@@ -974,6 +1133,29 @@
       ? 'settings.audio.dacPassthroughDisabledDesc'
       : null
   );
+
+  // Reserve DAC: only meaningful for card-specific ALSA devices.
+  // Resolves the backend device id (e.g. "hw:0,0") from the display description.
+  let reserveDacDeviceId = $derived(
+    outputDevice === 'System Default'
+      ? null
+      : (deviceByDisplayName.get(outputDevice)?.id ?? null)
+  );
+  let isHwDevice = $derived(isCardSpecificDevice(reserveDacDeviceId));
+
+  // Poll DAC reservation status every 5s while a card-specific device is
+  // selected and the toggle is on. Cleans up the interval on dep change /
+  // unmount.
+  $effect(() => {
+    if (!isHwDevice || !reserveDacEnabled) {
+      return;
+    }
+    void refreshReserveDacStatus();
+    const id = setInterval(() => {
+      void refreshReserveDacStatus();
+    }, 5000);
+    return () => clearInterval(id);
+  });
   let gaplessDisabled = $derived(streamingOnly);
   let gaplessDisabledReasonKey = $derived(
     streamingOnly
@@ -996,6 +1178,20 @@
 
   // Appearance settings
   let theme = $state('Dark');
+  let albumHeaderGradient = $state(isAlbumHeaderGradientEnabled());
+
+  // Issue #412 — opt-in album cover thumbs in Local Library tracks/
+  // folder list views. Default OFF; large libraries take a real perf
+  // hit when 10k+ rows each render a decoded image.
+  let showTrackArtwork = $state(isTrackArtworkEnabled());
+  subscribeLibraryPerformance(() => {
+    showTrackArtwork = isTrackArtworkEnabled();
+  });
+
+  function handleAlbumHeaderGradientToggle(enabled: boolean) {
+    setAlbumHeaderGradient(enabled);
+    albumHeaderGradient = enabled;
+  }
   let toastsEnabled = $state(true);
   let systemNotificationsEnabled = $state(true);
   let language = $state('Auto');
@@ -1224,6 +1420,10 @@
   ] as const;
 
   let immersiveFpsCollapsed = $state(true);
+  let immersivePanelsCollapsed = $state(true);
+
+  const HEAVY_PANEL_SET = new Set<ImmersivePanelId>(HEAVY_PANELS);
+  const lowProfileMode = !isHardwareAccelEnabled();
   let panelFpsValues: Record<string, string> = $state(
     Object.fromEntries(FPS_PANEL_IDS.map(id => [id, getUserItem(`${FPS_KEY_PREFIX}${id}`) || '15']))
   );
@@ -1348,6 +1548,9 @@
   // MusicBrainz integration state
   let musicbrainzEnabled = $state(true);
 
+  // Discord Rich Presence integration state
+  let discordRpcEnabled = $state(false);
+
   // ListenBrainz integration state
   let listenbrainzConnected = $state(false);
   let listenbrainzUsername = $state('');
@@ -1408,6 +1611,29 @@
   // QConnect device name
   let qconnectDeviceName = $state('');
   let qconnectDeviceNameDefault = $state('');
+
+  // QConnect startup mode
+  let qconnectStartupMode = $state<'off' | 'on' | 'remember_last'>('off');
+
+  async function loadQconnectStartupMode() {
+    try {
+      const value = await invoke<string>('v2_qconnect_get_startup_mode');
+      if (value === 'off' || value === 'on' || value === 'remember_last') {
+        qconnectStartupMode = value;
+      }
+    } catch (err) {
+      console.warn('[Settings] Failed to load QConnect startup mode:', err);
+    }
+  }
+
+  async function setQconnectStartupMode(mode: 'off' | 'on' | 'remember_last') {
+    qconnectStartupMode = mode;
+    try {
+      await invoke('v2_qconnect_set_startup_mode', { mode });
+    } catch (err) {
+      console.error('[Settings] Failed to save QConnect startup mode:', err);
+    }
+  }
 
   async function loadQconnectDeviceName() {
     try {
@@ -1588,6 +1814,9 @@
     // Load ListenBrainz state
     loadListenBrainzState();
 
+    // Load Discord Rich Presence state
+    loadDiscordRpcState();
+
     // Load remote control status
     loadRemoteControlStatus();
 
@@ -1596,8 +1825,9 @@
       .then((registered) => { qobuzLinkHandlerEnabled = registered; })
       .catch((err) => { console.warn('Could not check qobuzapp handler:', err); });
 
-    // Load QConnect device name
+    // Load QConnect device name and startup mode
     loadQconnectDeviceName();
+    loadQconnectStartupMode();
 
     // Warm-start Plex panel from local cache and refresh in background
     hydratePlexAddressFieldsFromBaseUrl();
@@ -1654,6 +1884,15 @@
       gdkDpiScale = settings.gdk_dpi_scale || '';
       gskRenderer = settings.gsk_renderer || '';
       hardwareAcceleration = settings.hardware_acceleration;
+      preferredGpu = settings.preferred_gpu || 'auto';
+      nvidiaCompatMode = settings.nvidia_compat_mode || false;
+    }).catch(() => {});
+
+    // Read install method from system info so we can render the right
+    // reset-graphics command for the user's packaging when they enable
+    // NVIDIA compat mode below (Flatpak vs native).
+    invoke<{ install_method: string }>('v2_get_system_info').then((info) => {
+      installMethod = info.install_method ?? 'dev';
     }).catch(() => {});
 
     // Load graphics startup status (for fallback warning)
@@ -1663,6 +1902,33 @@
       graphicsHasNvidia = status.has_nvidia;
       graphicsHwAccelEnabled = status.hardware_accel_enabled;
     }).catch(() => {});
+
+    // Linux-only: recommendation banner in the Graphics tab
+    if (platform === 'linux') {
+      dismissedRecommendationSignature = getUserItem(RECOMMENDATION_DISMISS_KEY);
+      invoke<GraphicsRecommendation>('v2_get_graphics_recommendation')
+        .then((payload) => {
+          graphicsRecommendation = payload;
+        })
+        .catch((err) => {
+          console.warn('[Settings] graphics recommendation unavailable:', err);
+        });
+      invoke<GpuList>('v2_enumerate_gpus')
+        .then((payload) => {
+          detectedGpus = payload.gpus;
+          autoResolvedGpuId = payload.auto_resolved_id;
+        })
+        .catch((err) => {
+          console.warn('[Settings] gpu enumeration unavailable:', err);
+        });
+      invoke<CrashFlags>('v2_get_crash_flags')
+        .then((flags) => {
+          crashFlags = flags;
+        })
+        .catch((err) => {
+          console.warn('[Settings] crash flags unavailable:', err);
+        });
+    }
 
     // Subscribe to offline state changes
     const unsubscribeOffline = subscribeOffline(() => {
@@ -1872,6 +2138,20 @@
       musicbrainzEnabled = enabled;
     } catch (err) {
       console.error('Failed to update MusicBrainz setting:', err);
+    }
+  }
+
+  // Discord Rich Presence
+  function loadDiscordRpcState() {
+    discordRpcEnabled = isDiscordRpcEnabled();
+  }
+
+  async function handleDiscordRpcToggle(value: boolean) {
+    discordRpcEnabled = value;
+    try {
+      await setDiscordRpcEnabled(value);
+    } catch (err) {
+      console.error('Failed to update Discord RPC setting:', err);
     }
   }
 
@@ -2673,7 +2953,7 @@
     exclusive_mode: boolean;
     dac_passthrough: boolean;
     preferred_sample_rate: number | null;
-    backend_type: 'PipeWire' | 'Alsa' | 'Pulse' | null;
+    backend_type: 'PipeWire' | 'Alsa' | 'Pulse' | 'SystemDefault' | null;
     alsa_plugin: 'Hw' | 'PlugHw' | 'Pcm' | null;
     alsa_hardware_volume: boolean;
     stream_first_track: boolean;
@@ -2686,10 +2966,11 @@
     skip_sink_switch: boolean;
     allow_quality_fallback: boolean;
     sync_audio_on_startup: boolean;
+    reserve_dac_while_running: boolean;
   }
 
   interface BackendInfo {
-    backend_type: 'PipeWire' | 'Alsa' | 'Pulse';
+    backend_type: 'PipeWire' | 'Alsa' | 'Pulse' | 'SystemDefault';
     name: string;
     description: string;
     is_available: boolean;
@@ -2773,7 +3054,7 @@
     }
   }
 
-  async function loadBackendDevices(backendType: 'PipeWire' | 'Alsa' | 'Pulse') {
+  async function loadBackendDevices(backendType: BackendInfo['backend_type']) {
     isLoadingDevices = true;
     try {
       const devices = await invoke<AudioDevice[]>('v2_get_devices_for_backend', { backendType });
@@ -2798,11 +3079,14 @@
 
   async function handleRefreshDevices() {
     if (isLoadingDevices) return;
-    const backendType = selectedBackend === 'ALSA Direct' ? 'Alsa' :
-                        selectedBackend === 'PipeWire' ? 'PipeWire' :
-                        selectedBackend === 'PulseAudio' ? 'Pulse' : null;
-    if (backendType) {
-      await loadBackendDevices(backendType);
+    // Look up the backend_type for the currently-selected backend.
+    // Works for every backend that v2_get_available_backends returned
+    // (PipeWire/ALSA Direct/PulseAudio on Linux, System Audio on
+    // macOS/Windows). 'Auto' has no entry, so refresh stays a no-op
+    // there — matches the existing Linux behavior.
+    const backend = availableBackends.find(b => b.name === selectedBackend);
+    if (backend) {
+      await loadBackendDevices(backend.backend_type);
     }
   }
 
@@ -2842,6 +3126,7 @@
       skipSinkSwitch = settings.skip_sink_switch;
       allowQualityFallback = settings.allow_quality_fallback;
       syncAudioOnStartup = settings.sync_audio_on_startup;
+      reserveDacEnabled = settings.reserve_dac_while_running ?? false;
 
       // Load backend and plugin settings
       if (settings.backend_type) {
@@ -2875,6 +3160,16 @@
             }
           }
         }
+      } else if (platform !== 'linux' && availableBackends.length === 1) {
+        // Non-Linux platforms expose a single backend (CoreAudio on
+        // macOS, WASAPI on Windows). Pick it automatically so the
+        // device picker is populated — there is no meaningful "Auto"
+        // choice when only one backend exists, and leaving it on
+        // "Auto" leaves the picker stuck at "System Default" only.
+        const onlyBackend = availableBackends[0];
+        selectedBackend = onlyBackend.name;
+        await loadBackendDevices(onlyBackend.backend_type);
+        outputDevice = 'System Default';
       } else {
         selectedBackend = 'Auto';
         // Auto mode: always use System Default (no device selection)
@@ -2954,6 +3249,31 @@
       console.log('[Audio] Exclusive mode changed:', enabled);
     } catch (err) {
       console.error('[Audio] Failed to change exclusive mode:', err);
+    }
+  }
+
+  // Reserve DAC handlers — pair with v2_set_reserve_dac_while_running and
+  // v2_get_dac_reservation_status. Each toggle is followed by an immediate
+  // status refresh so the indicator reflects the new state.
+  async function refreshReserveDacStatus() {
+    try {
+      reserveDacStatus = await invoke<DacReservationStatus>('v2_get_dac_reservation_status');
+    } catch (err) {
+      console.warn('[ReserveDac] status fetch failed:', err);
+    }
+  }
+
+  async function handleReserveDacChange(enabled: boolean) {
+    reserveDacEnabled = enabled;
+    try {
+      await invoke('v2_set_reserve_dac_while_running', { enabled });
+      await refreshReserveDacStatus();
+      console.log('[ReserveDac] reservation changed:', enabled);
+    } catch (err) {
+      console.error('[ReserveDac] Failed to set reservation:', err);
+      // Roll back to whatever the backend reports so UI stays in lock-step.
+      await refreshReserveDacStatus();
+      reserveDacEnabled = false;
     }
   }
 
@@ -3038,11 +3358,26 @@
   }
 
   async function handleBackendChange(backendName: string) {
+    // "Auto" is a resolve-and-set action, not a persisted mode. Pick the best
+    // available backend — PipeWire if available (best quality + device routing),
+    // otherwise System (always works) — and continue exactly as if the user had
+    // selected that concrete backend. This keeps backend_type always concrete: it
+    // never stays null, which on Linux fell through to the legacy CPAL path that
+    // froze the seekbar with no audio and left a process-wide stuck audio handle
+    // surviving Reset (#470). The dropdown then shows what was chosen, and the
+    // device picker lets the user correct the DAC if the auto pick isn't theirs.
+    if (backendName === 'Auto') {
+      const pipewire = availableBackends.find(
+        b => b.backend_type === 'PipeWire' && b.is_available
+      );
+      const system = availableBackends.find(b => b.backend_type === 'SystemDefault');
+      backendName = (pipewire ?? system)?.name ?? 'System';
+    }
     selectedBackend = backendName;
 
-    // Map UI name to backend type
+    // Map UI name to backend type (always concrete after the Auto resolution above)
     const backend = availableBackends.find(b => b.name === backendName);
-    const backendType = backendName === 'Auto' ? null : backend?.backend_type ?? null;
+    const backendType = backend?.backend_type ?? null;
 
     // Auto-disable incompatible features
     // DAC Passthrough and PW force bit-perfect only work with PipeWire
@@ -3059,12 +3394,15 @@
       }
     }
 
-    // Exclusive mode only works with ALSA Direct
-    if (backendName !== 'ALSA Direct') {
+    const backendSupportsExclusive = backendName === 'ALSA Direct'
+      || (platform === 'macos' && backend?.backend_type === 'SystemDefault');
+
+    // Exclusive mode works with ALSA Direct and macOS System Audio.
+    if (!backendSupportsExclusive) {
       if (exclusiveMode) {
         exclusiveMode = false;
         await invoke('v2_set_audio_exclusive_mode', { enabled: false });
-        console.log('[Audio] Disabled exclusive mode (only compatible with ALSA Direct)');
+        console.log('[Audio] Disabled exclusive mode (only compatible with ALSA Direct or macOS System Audio)');
       }
     }
 
@@ -3356,7 +3694,9 @@
     try {
       await invoke('v2_set_enable_tray', { value });
       enableTray = value;
-      showToast($t('settings.appearance.tray.enableTrayDesc'), 'info');
+      showToast($t(platform === 'macos'
+        ? 'settings.appearance.tray.enableTrayDescMacos'
+        : 'settings.appearance.tray.enableTrayDesc'), 'info');
     } catch (err) {
       console.error('Failed to set enable tray:', err);
       showToast($t('toast.failedSaveTray'), 'error');
@@ -3498,13 +3838,8 @@
     }
   }
 
-  async function handleOpenCacheFolder() {
-    try {
-      await invoke('v2_open_offline_cache_folder');
-    } catch (err) {
-      console.error('Failed to open cache folder:', err);
-      showToast($t('toast.failedOpenCacheFolder'), 'error');
-    }
+  function handleManageOfflineCache() {
+    navigateTo('offline-manager');
   }
 
   async function handleClearCache() {
@@ -3838,7 +4173,7 @@
       setImmersiveConfig({ backgroundMode: profile.backgroundMode, disableBlurBackground: profile.backgroundMode === 'off' });
 
       showToast(
-        $t('settings.appearance.composition.profiles.applied', { values: { profile: $t(profile.labelKey) } }),
+        $t('settings.graphics.profiles.applied', { values: { profile: $t(profile.labelKey) } }),
         'info'
       );
       showToast($t('settings.developer.restartRequired'), 'info');
@@ -3865,19 +4200,206 @@
     }
   }
 
+  async function handlePreferredGpuChange(value: string) {
+    try {
+      await invoke('v2_set_preferred_gpu', { value });
+      preferredGpu = value;
+      showToast($t('settings.graphics.restartRequired'), 'info');
+    } catch (err) {
+      console.error('Failed to set preferred_gpu:', err);
+      showToast(String(err), 'error');
+    }
+  }
+
+  async function handleNvidiaCompatModeChange(enabled: boolean) {
+    try {
+      await invoke('v2_set_nvidia_compat_mode', { enabled });
+      nvidiaCompatMode = enabled;
+      showToast($t('settings.graphics.restartRequired'), 'info');
+    } catch (err) {
+      console.error('Failed to set nvidia_compat_mode:', err);
+      showToast(String(err), 'error');
+    }
+  }
+
+  // Command the user should run from a terminal to restore graphics
+  // settings to safe defaults if the NVIDIA compat mode (or any other
+  // risky toggle) crashes the app before first paint. The boot
+  // watchdog already auto-reverts on crash, but exposing the CLI here
+  // gives the user a manual escape hatch that doesn't depend on the
+  // app reaching the Settings screen.
+  const resetGraphicsCommand = $derived(
+    installMethod === 'flatpak'
+      ? 'flatpak run com.blitzfc.qbz --reset-graphics'
+      : 'qbz --reset-graphics'
+  );
+
+  async function copyResetGraphicsCommand() {
+    try {
+      await navigator.clipboard.writeText(resetGraphicsCommand);
+      showToast($t('actions.copiedToClipboard'), 'success');
+    } catch (err) {
+      console.error('Failed to copy reset command:', err);
+      showToast(String(err), 'error');
+    }
+  }
+
+  async function handleClearCrashFlag(flag: 'hardware_acceleration' | 'force_dmabuf' | 'preferred_gpu') {
+    try {
+      await invoke('v2_clear_crash_flag', { flag });
+      const flags = await invoke<CrashFlags>('v2_get_crash_flags');
+      crashFlags = flags;
+      // If the user just cleared the lockout, also re-apply the
+      // setting they probably wanted. Hardware acceleration: the user
+      // explicitly wants it back ON; same for force_dmabuf and a
+      // non-auto preferred_gpu. We don't auto-re-enable here because
+      // the watchdog already wrote the safer value to DB; the user
+      // needs to re-toggle to express intent. Toast hints what to do.
+      showToast($t('settings.graphics.recovery.cleared'), 'success');
+    } catch (err) {
+      console.error('Failed to clear crash flag:', err);
+      showToast(String(err), 'error');
+    }
+  }
+
+  const preferredGpuOptions = $derived.by(() => {
+    // On a hybrid NVIDIA + iGPU host, the iGPU is the recommended pick:
+    // WebKit composites there and the NVIDIA card stays idle. Mark it so
+    // the user does not leave the dropdown on the ambiguous Auto.
+    const env = graphicsRecommendation?.environment;
+    const igpuRecommended = !!env && env.gpu_nvidia && (env.gpu_intel || env.gpu_amd);
+    const autoTarget = autoResolvedGpuId
+      ? detectedGpus.find((g) => g.id === autoResolvedGpuId)
+      : null;
+    const autoLabel = autoTarget
+      ? $t('settings.graphics.gpu.autoWithTarget', { values: { name: autoTarget.name } })
+      : $t('settings.graphics.gpu.auto');
+    const opts: { value: string; label: string }[] = [
+      { value: 'auto', label: autoLabel },
+    ];
+    let hasIntegrated = false;
+    let hasDiscrete = false;
+    for (const g of detectedGpus) {
+      if (!g.is_usable) continue;
+      if (g.kind === 'integrated' && !hasIntegrated) {
+        const integratedLabel = $t('settings.graphics.gpu.integrated', { values: { name: g.name } });
+        opts.push({
+          value: 'integrated',
+          label: igpuRecommended
+            ? `${integratedLabel} ${$t('settings.graphics.gpu.recommendedSuffix')}`
+            : integratedLabel,
+        });
+        hasIntegrated = true;
+      }
+      if (g.kind === 'discrete' && !hasDiscrete) {
+        opts.push({ value: 'discrete', label: $t('settings.graphics.gpu.discrete', { values: { name: g.name } }) });
+        hasDiscrete = true;
+      }
+    }
+    opts.push({ value: 'software', label: $t('settings.graphics.gpu.software') });
+    return opts;
+  });
+
+  function getPreferredGpuDisplayValue(): string {
+    const match = preferredGpuOptions.find((o) => o.value === preferredGpu);
+    return match ? match.label : preferredGpu;
+  }
+
+  // Whether the auto-detected recommendation diverges from any of the
+  // four persisted graphics settings. The DMA-BUF axis is inverted:
+  // recommendation `disable_dmabuf=true` maps to `force_dmabuf=false`
+  // (1.2.13 opt-in semantics), so the two booleans differ iff
+  // `disable_dmabuf === force_dmabuf` (same value means mismatch given
+  // the inversion).
+  const recommendationDiffers = $derived.by(() => {
+    if (!graphicsRecommendation) return false;
+    const rec = graphicsRecommendation.recommendation;
+    if (rec.hardware_acceleration !== hardwareAcceleration) return true;
+    if (rec.force_x11 !== forceX11) return true;
+    if (rec.disable_dmabuf === forceDmabuf) return true;
+    if ((rec.gsk_renderer ?? '') !== gskRenderer) return true;
+    return false;
+  });
+
+  // Stable identifier for the dismiss flag: joined rationale of the
+  // currently computed recommendation. If the environment changes
+  // enough to flip the matrix branch, the signature changes and the
+  // banner unhides automatically.
+  function recommendationSignature(rec: GraphicsRecommendation): string {
+    return rec.recommendation.rationale.join('|');
+  }
+
+  const recommendationBannerVisible = $derived.by(() => {
+    if (!graphicsRecommendation) return false;
+    if (!recommendationDiffers) return false;
+    if (dismissedRecommendationSignature === null) return true;
+    return recommendationSignature(graphicsRecommendation) !== dismissedRecommendationSignature;
+  });
+
+  // DMA-BUF help text is GPU-aware. The instability warning only
+  // applies to NVIDIA-only systems; non-NVIDIA and hybrid setups (the
+  // iGPU composites) can enable it safely. Returns an i18n key so $t()
+  // stays in the template, not inside $derived (CSS-extraction rule).
+  const forceDmabufDescKey = $derived.by(() => {
+    const env = graphicsRecommendation?.environment;
+    if (!env) return 'settings.graphics.forceDmabufDesc';
+    if (env.gpu_nvidia && (env.gpu_intel || env.gpu_amd)) {
+      return 'settings.graphics.forceDmabufDescHybrid';
+    }
+    if (env.gpu_nvidia) {
+      return 'settings.graphics.forceDmabufDescNvidiaOnly';
+    }
+    return 'settings.graphics.forceDmabufDescSafe';
+  });
+
+  function handleDismissRecommendation() {
+    if (!graphicsRecommendation) return;
+    const signature = recommendationSignature(graphicsRecommendation);
+    dismissedRecommendationSignature = signature;
+    setUserItem(RECOMMENDATION_DISMISS_KEY, signature);
+  }
+
+  async function handleRedetectRecommendation() {
+    try {
+      const payload = await invoke<GraphicsRecommendation>('v2_get_graphics_recommendation');
+      graphicsRecommendation = payload;
+      // User explicitly asked to re-detect — wipe the dismiss so the
+      // banner can re-appear if the recommendation still diverges.
+      dismissedRecommendationSignature = null;
+      removeUserItem(RECOMMENDATION_DISMISS_KEY);
+      // If everything already matches, surface a confirmation toast so
+      // the user gets feedback instead of seeing nothing happen.
+      if (!recommendationDiffers) {
+        showToast($t('settings.graphics.recommendation.noChanges'), 'success');
+      }
+    } catch (err) {
+      console.error('Failed to re-detect graphics recommendation:', err);
+      showToast(String(err), 'error');
+    }
+  }
+
+  function buildEnvironmentSummary(env: GraphicsRecommendation['environment']): string {
+    const parts: string[] = [];
+    if (env.gpu_name) parts.push(env.gpu_name);
+    if (env.display_server) parts.push(env.display_server);
+    if (env.desktop && env.desktop !== 'Unknown') parts.push(env.desktop);
+    if (env.is_vm) parts.push('VM');
+    return parts.join(' / ');
+  }
+
   const GSK_RENDERER_KEYS = ['', 'gl', 'ngl', 'vulkan', 'cairo'] as const;
 
   function getGskRendererOptions(): string[] {
     return GSK_RENDERER_KEYS.map(key => {
-      if (key === '') return $t('settings.appearance.composition.gskRendererAuto');
-      if (key === 'cairo') return $t('settings.appearance.composition.gskRendererCairo');
+      if (key === '') return $t('settings.graphics.gskRendererAuto');
+      if (key === 'cairo') return $t('settings.graphics.gskRendererCairo');
       return key.toUpperCase();
     });
   }
 
   function getGskRendererDisplayValue(): string {
-    if (!gskRenderer) return $t('settings.appearance.composition.gskRendererAuto');
-    if (gskRenderer === 'cairo') return $t('settings.appearance.composition.gskRendererCairo');
+    if (!gskRenderer) return $t('settings.graphics.gskRendererAuto');
+    if (gskRenderer === 'cairo') return $t('settings.graphics.gskRendererCairo');
     return gskRenderer.toUpperCase();
   }
 
@@ -3993,7 +4515,7 @@
   {/if}
 
   <!-- Header -->
-  <div class="header">
+  <div class="header" data-tauri-drag-region="deep">
     {#if onBack}
       <button class="back-btn" onclick={onBack}>
         <ArrowLeft size={16} />
@@ -4206,11 +4728,42 @@
     {/if}
     <div class="setting-row">
       <div class="setting-info">
-        <span class="setting-label">{$t('settings.audio.exclusiveMode')} <span class="help-tip" title={$t('settings.audio.exclusiveModeHelp')}>(?)</span></span>
-        <span class="setting-desc">{exclusiveModeTooltipOverride ?? $t('settings.audio.exclusiveModeDesc')}</span>
+        <span class="setting-label">{$t('settings.audio.exclusiveMode')} <span class="help-tip" title={exclusiveModeHelpOverrideKey ? $t(exclusiveModeHelpOverrideKey) : $t('settings.audio.exclusiveModeHelp')}>(?)</span></span>
+        <span class="setting-desc">{exclusiveModeTooltipOverrideKey ? $t(exclusiveModeTooltipOverrideKey) : $t('settings.audio.exclusiveModeDesc')}</span>
       </div>
       <Toggle enabled={exclusiveMode} onchange={handleExclusiveModeChange} disabled={exclusiveModeDisabled} />
     </div>
+    {#if isHwDevice}
+    <div class="setting-row">
+      <div class="setting-info">
+        <span class="setting-label">{$t('settings.audio.reserveDac.label')}</span>
+        <span class="setting-desc">{$t('settings.audio.reserveDac.description')}</span>
+      </div>
+      <Toggle enabled={reserveDacEnabled} onchange={handleReserveDacChange} />
+    </div>
+    {#if reserveDacEnabled}
+    <div
+      class="reserve-dac-status"
+      class:status-active={reserveDacStatus.kind === 'active'}
+      class:status-contested={reserveDacStatus.kind === 'contested'}
+      class:status-unavailable={reserveDacStatus.kind === 'unavailable'}
+    >
+      {#if reserveDacStatus.kind === 'active'}
+        <span class="status-dot status-dot-green"></span>
+        <span>{$t('settings.audio.reserveDac.statusActive')}</span>
+      {:else if reserveDacStatus.kind === 'contested'}
+        <span class="status-dot status-dot-yellow"></span>
+        <span>{$t('settings.audio.reserveDac.statusContested')}</span>
+      {:else if reserveDacStatus.kind === 'unavailable'}
+        <span class="status-dot status-dot-grey"></span>
+        <span>{$t('settings.audio.reserveDac.statusUnavailable')}</span>
+      {/if}
+    </div>
+    <details class="reserve-dac-help">
+      <summary>{$t('settings.audio.reserveDac.wirePlumberNote')}</summary>
+    </details>
+    {/if}
+    {/if}
     <div class="setting-row">
       <div class="setting-info">
         <span class="setting-label">{$t('settings.audio.dacPassthrough')} <span class="help-tip" title={$t('settings.audio.dacPassthroughHelp')}>(?)</span></span>
@@ -4439,6 +4992,14 @@
       </div>
     </div>
 
+    <div class="setting-row">
+      <div class="setting-info">
+        <span class="setting-label">{$t('settings.appearance.albumHeaderGradient')}</span>
+        <small class="setting-note">{$t('settings.appearance.albumHeaderGradientDesc')}</small>
+      </div>
+      <Toggle enabled={albumHeaderGradient} onchange={handleAlbumHeaderGradientToggle} />
+    </div>
+
     <!-- Auto-Theme generating overlay -->
     {#if autoThemeGenerating}
       <div class="auto-theme-overlay">
@@ -4573,6 +5134,19 @@
       <Toggle enabled={sidebarPlaylistCollage} onchange={(v) => { sidebarPlaylistCollage = v; setShowPlaylistCollage(v); }} />
     </div>
     <div class="setting-row">
+      <div class="setting-info">
+        <span class="setting-label">{$t('settings.appearance.localLibraryTrackArtwork')}</span>
+        <small class="setting-note">{$t('settings.appearance.localLibraryTrackArtworkDesc')}</small>
+      </div>
+      <Toggle
+        enabled={showTrackArtwork}
+        onchange={(v) => {
+          showTrackArtwork = v;
+          updateLibraryPerformanceSetting('showTrackArtwork', v);
+        }}
+      />
+    </div>
+    <div class="setting-row">
       <span class="setting-label">{$t('settings.appearance.inAppToasts')}</span>
       <Toggle enabled={toastsEnabled} onchange={(v) => { toastsEnabled = v; setToastsEnabled(v); }} />
     </div>
@@ -4626,14 +5200,17 @@
       <div class="setting-info">
         <span class="setting-label">{$t('settings.appearance.matchSystemChrome')}</span>
         <span class="setting-desc">{$t('settings.appearance.matchSystemChromeDesc')}</span>
+        {#if !isHardwareAccelEnabled()}
+          <small class="setting-note">{$t('settings.appearance.matchSystemChromeCpuOverride')}</small>
+        {/if}
       </div>
       <Toggle
-        enabled={matchSystemWindowChromeState}
+        enabled={matchSystemWindowChromeState && isHardwareAccelEnabled()}
         onchange={(v) => {
           setMatchSystemWindowChrome(v);
           showToast($t('settings.appearance.matchSystemChromeRestart'), 'info');
         }}
-        disabled={hideTitleBar || useSystemTitleBar}
+        disabled={hideTitleBar || useSystemTitleBar || !isHardwareAccelEnabled()}
       />
     </div>
     {/if}
@@ -4856,6 +5433,7 @@
       </div>
       <Toggle enabled={closeToTray} onchange={(v) => handleCloseToTrayChange(v)} disabled={!enableTray} />
     </div>
+    {/if}
     <div class="setting-row">
       <div class="setting-info">
         <span class="setting-label">{$t('settings.appearance.tray.iconTheme.label')}</span>
@@ -4867,7 +5445,6 @@
         onchange={handleTrayIconThemeChange}
       />
     </div>
-    {/if}
 
     <!-- Immersive subsection -->
     <h4 class="subsection-title">{$t('settings.appearance.immersive.title')}</h4>
@@ -4880,160 +5457,6 @@
       />
     </div>
 
-    <!-- Composition subsection (collapsible, Linux-only: GDK/GSK/X11/Wayland/DMA-BUF) -->
-    {#if platform === 'linux'}
-    <div class="collapsible-section composition-subsection">
-      <button class="section-title-btn" onclick={() => compositionCollapsed = !compositionCollapsed}>
-        <div class="section-title-row">
-          <span class="section-title composition-title">{$t('settings.appearance.composition.title')}</span>
-          {#if compositionCollapsed}
-            <ChevronDown size={16} />
-          {:else}
-            <ChevronUp size={16} />
-          {/if}
-        </div>
-        <span class="section-summary">{$t('settings.appearance.composition.summary')}</span>
-      </button>
-      {#if !compositionCollapsed}
-        <p class="section-note">{$t('settings.appearance.composition.helpText')}</p>
-
-        {#if graphicsUsingFallback}
-          <div class="composition-warning fallback-warning">
-            <TriangleAlert size={14} />
-            <div>
-              <span class="fallback-title">{$t('settings.appearance.composition.fallbackWarning')}</span>
-              <span class="fallback-desc">{$t('settings.appearance.composition.fallbackDesc')}</span>
-              <code class="recovery-cmd">qbz --reset-graphics</code>
-            </div>
-          </div>
-        {/if}
-
-        <div class="composition-warning">
-          <TriangleAlert size={14} />
-          <div>
-            <span>{$t('settings.appearance.composition.recoveryNote')}</span>
-            <code class="recovery-cmd">{$t('settings.appearance.composition.recoveryCmd')}</code>
-          </div>
-        </div>
-
-        <div class="composition-profile-section">
-          <span class="composition-profile-title">{$t('settings.appearance.composition.profiles.title')}</span>
-          <p class="section-note">{$t('settings.appearance.composition.profiles.helpText')}</p>
-          <div class="composition-profile-grid">
-            {#each compositionProfiles as profile (profile.id)}
-              <button
-                class="composition-profile-card"
-                class:active={activeCompositionProfileId === profile.id}
-                type="button"
-                onclick={() => applyCompositionProfile(profile.id)}
-              >
-                <span class="profile-label">{$t(profile.labelKey)}</span>
-                <span class="profile-desc">{$t(profile.descKey)}</span>
-              </button>
-            {/each}
-          </div>
-        </div>
-
-        <div class="setting-row">
-          <div class="setting-info">
-            <span class="setting-label">{$t('settings.appearance.composition.hardwareAcceleration')}</span>
-            <span class="setting-desc">{$t('settings.appearance.composition.hardwareAccelerationDesc')}</span>
-          </div>
-          <Toggle enabled={hardwareAcceleration} onchange={(v) => handleHardwareAccelerationChange(v)} />
-        </div>
-
-        <div class="setting-row">
-          <div class="setting-info">
-            <span class="setting-label">{$t('settings.appearance.composition.forceDmabuf')}</span>
-            <span class="setting-desc">{$t('settings.appearance.composition.forceDmabufDesc')}</span>
-          </div>
-          <Toggle enabled={forceDmabuf} onchange={(v) => handleForceDmabufChange(v)} />
-        </div>
-
-        <div class="setting-row">
-          <div class="setting-info">
-            <span class="setting-label">{$t('settings.appearance.composition.forceX11')}</span>
-            <span class="setting-desc">{$t('settings.appearance.composition.forceX11Desc')}</span>
-          </div>
-          <Toggle enabled={forceX11} onchange={(v) => handleForceX11Change(v)} />
-        </div>
-
-        {#if forceX11}
-          <div class="setting-row">
-            <div class="setting-info">
-              <span class="setting-label">{$t('settings.appearance.composition.gdkScale')}</span>
-              <span class="setting-desc">{$t('settings.appearance.composition.gdkScaleDesc')}</span>
-            </div>
-            <input
-              class="composition-input"
-              type="text"
-              placeholder="auto"
-              bind:value={gdkScale}
-              onblur={handleGdkScaleChange}
-            />
-          </div>
-        {/if}
-
-        <div class="setting-row">
-          <div class="setting-info">
-            <span class="setting-label">{$t('settings.appearance.composition.gdkDpiScale')}</span>
-            <span class="setting-desc">{$t('settings.appearance.composition.gdkDpiScaleDesc')}</span>
-          </div>
-          <input
-            class="composition-input"
-            type="text"
-            placeholder="auto"
-            bind:value={gdkDpiScale}
-            onblur={handleGdkDpiScaleChange}
-          />
-        </div>
-
-        <div class="setting-row">
-          <div class="setting-info">
-            <span class="setting-label">{$t('settings.appearance.composition.gskRenderer')}</span>
-            <span class="setting-desc">{$t('settings.appearance.composition.gskRendererDesc')}</span>
-          </div>
-          <Dropdown
-            value={getGskRendererDisplayValue()}
-            options={getGskRendererOptions()}
-            onchange={handleGskRendererChange}
-          />
-        </div>
-
-        <div class="composition-env-section">
-          <span class="composition-env-title">{$t('settings.appearance.composition.envVarsTitle')}</span>
-          <p class="section-note">{$t('settings.appearance.composition.envVarsDesc')}</p>
-          <div class="env-vars-list">
-            <div class="env-var-row">
-              <code>QBZ_HARDWARE_ACCEL=0</code>
-              <span>{$t('settings.appearance.composition.envVarHwAccel0')}</span>
-            </div>
-            <div class="env-var-row">
-              <code>QBZ_HARDWARE_ACCEL=1</code>
-              <span>{$t('settings.appearance.composition.envVarHwAccel1')}</span>
-            </div>
-            <div class="env-var-row">
-              <code>QBZ_FORCE_X11=1</code>
-              <span>{$t('settings.appearance.composition.envVarForceX11')}</span>
-            </div>
-            <div class="env-var-row">
-              <code>QBZ_SOFTWARE_RENDER=1</code>
-              <span>{$t('settings.appearance.composition.envVarSoftwareRender')}</span>
-            </div>
-            <div class="env-var-row">
-              <code>QBZ_FORCE_DMABUF=1</code>
-              <span>{$t('settings.appearance.composition.envVarForceDmabuf')}</span>
-            </div>
-            <div class="env-var-row">
-              <code>QBZ_DISABLE_DMABUF=1</code>
-              <span>{$t('settings.appearance.composition.envVarDisableDmabuf')}</span>
-            </div>
-          </div>
-        </div>
-      {/if}
-    </div>
-    {/if}
-
     <div class="setting-row">
       <div class="setting-info">
         <span class="setting-label">{$t('settings.appearance.immersive.backgroundMode')}</span>
@@ -5044,6 +5467,42 @@
         options={BACKGROUND_MODES.map(m => getBackgroundModeLabel(m))}
         onchange={handleBackgroundModeChange}
       />
+    </div>
+
+    <div class="collapsible-section composition-subsection">
+      <button class="section-title-btn" onclick={() => immersivePanelsCollapsed = !immersivePanelsCollapsed}>
+        <div class="section-title-row">
+          <span class="section-title composition-title">{$t('settings.appearance.immersivePanels.title')}</span>
+          {#if immersivePanelsCollapsed}
+            <ChevronDown size={16} />
+          {:else}
+            <ChevronUp size={16} />
+          {/if}
+        </div>
+        <span class="section-summary">{$t('settings.appearance.immersivePanels.summary')}</span>
+      </button>
+      {#if !immersivePanelsCollapsed}
+        <p class="section-note">{$t('settings.appearance.immersivePanels.desc')}</p>
+        {#if lowProfileMode}
+          <p class="section-note section-note-warn">{$t('settings.appearance.immersivePanels.cpuWarning')}</p>
+        {/if}
+        {#each ALL_IMMERSIVE_PANELS as panelId}
+          <div class="setting-row">
+            <div class="setting-info">
+              <span class="setting-label">
+                {$t(`settings.appearance.immersiveFps.panels.${panelId}`)}
+                {#if lowProfileMode && HEAVY_PANEL_SET.has(panelId)}
+                  <span class="heavy-badge" title={$t('settings.appearance.immersivePanels.heavyTooltip')}>GPU</span>
+                {/if}
+              </span>
+            </div>
+            <Toggle
+              enabled={$immersivePanelsStore[panelId] !== false}
+              onchange={(v) => setPanelEnabled(panelId, v)}
+            />
+          </div>
+        {/each}
+      {/if}
     </div>
 
     <div class="collapsible-section composition-subsection">
@@ -5071,6 +5530,269 @@
           </div>
         {/each}
       {/if}
+    </div>
+  </section>
+  {/if}
+
+  <!-- Graphics Section (Linux-only: GDK/GSK/X11/Wayland/DMA-BUF) -->
+  {#if activeSection === 'graphics' && platform === 'linux'}
+  <section class="section">
+    <h3 class="section-title">{$t('settings.graphics.title')}</h3>
+    <p class="section-note">{$t('settings.graphics.helpText')}</p>
+
+    <div class="redetect-row">
+      <button class="secondary-link-btn" onclick={handleRedetectRecommendation}>
+        {$t('settings.graphics.recommendation.redetect')}
+      </button>
+    </div>
+
+    {#if graphicsRecommendation && recommendationBannerVisible}
+      <div class="recommendation-banner">
+        <div class="recommendation-info">
+          <span class="recommendation-title">{$t('settings.graphics.recommendation.title')}</span>
+          <span class="recommendation-detected">
+            {$t('settings.graphics.recommendation.detected')}: {buildEnvironmentSummary(graphicsRecommendation.environment)}
+          </span>
+          {#if graphicsRecommendation.recommendation.rationale.length > 0}
+            <ul class="recommendation-rationale">
+              {#each graphicsRecommendation.recommendation.rationale as line}
+                <li>{line}</li>
+              {/each}
+            </ul>
+          {/if}
+        </div>
+        <div class="recommendation-actions">
+          <button class="secondary-btn" onclick={handleDismissRecommendation}>
+            {$t('settings.graphics.recommendation.dismiss')}
+          </button>
+        </div>
+      </div>
+    {/if}
+
+    {#if crashFlags && (crashFlags.hardware_acceleration_disabled || crashFlags.force_dmabuf_disabled || crashFlags.preferred_gpu_disabled)}
+      <div class="crash-recovery-banner" class:locked={crashFlags.hardware_acceleration_locked || crashFlags.force_dmabuf_locked || crashFlags.preferred_gpu_locked}>
+        <TriangleAlert size={16} />
+        <div class="crash-recovery-body">
+          <span class="crash-recovery-title">
+            {#if crashFlags.hardware_acceleration_locked || crashFlags.force_dmabuf_locked || crashFlags.preferred_gpu_locked}
+              {$t('settings.graphics.recovery.titleLocked')}
+            {:else}
+              {$t('settings.graphics.recovery.title')}
+            {/if}
+          </span>
+          <ul class="crash-recovery-list">
+            {#if crashFlags.hardware_acceleration_disabled}
+              <li>
+                <span>{$t('settings.graphics.recovery.hwAccelDisabled')}</span>
+                <button class="link-btn" onclick={() => handleClearCrashFlag('hardware_acceleration')}>
+                  {$t('settings.graphics.recovery.tryAgain')}
+                </button>
+              </li>
+            {/if}
+            {#if crashFlags.force_dmabuf_disabled}
+              <li>
+                <span>{$t('settings.graphics.recovery.dmabufDisabled')}</span>
+                <button class="link-btn" onclick={() => handleClearCrashFlag('force_dmabuf')}>
+                  {$t('settings.graphics.recovery.tryAgain')}
+                </button>
+              </li>
+            {/if}
+            {#if crashFlags.preferred_gpu_disabled}
+              <li>
+                <span>{$t('settings.graphics.recovery.gpuPinDisabled')}</span>
+                <button class="link-btn" onclick={() => handleClearCrashFlag('preferred_gpu')}>
+                  {$t('settings.graphics.recovery.tryAgain')}
+                </button>
+              </li>
+            {/if}
+          </ul>
+        </div>
+      </div>
+    {/if}
+
+    {#if graphicsUsingFallback}
+      <div class="composition-warning fallback-warning">
+        <TriangleAlert size={14} />
+        <div>
+          <span class="fallback-title">{$t('settings.graphics.fallbackWarning')}</span>
+          <span class="fallback-desc">{$t('settings.graphics.fallbackDesc')}</span>
+          <code class="recovery-cmd">qbz --reset-graphics</code>
+        </div>
+      </div>
+    {/if}
+
+    <div class="composition-warning">
+      <TriangleAlert size={14} />
+      <div>
+        <span>{$t('settings.graphics.recoveryNote')}</span>
+        <code class="recovery-cmd">{$t('settings.graphics.recoveryCmd')}</code>
+      </div>
+    </div>
+
+    <div class="composition-profile-section">
+      <span class="composition-profile-title">{$t('settings.graphics.profiles.title')}</span>
+      <p class="section-note">{$t('settings.graphics.profiles.helpText')}</p>
+      <div class="composition-profile-grid">
+        {#each compositionProfiles as profile (profile.id)}
+          <button
+            class="composition-profile-card"
+            class:active={activeCompositionProfileId === profile.id}
+            type="button"
+            onclick={() => applyCompositionProfile(profile.id)}
+          >
+            <span class="profile-label">{$t(profile.labelKey)}</span>
+            <span class="profile-desc">{$t(profile.descKey)}</span>
+          </button>
+        {/each}
+      </div>
+    </div>
+
+    <div class="setting-row">
+      <div class="setting-info">
+        <span class="setting-label">{$t('settings.graphics.hardwareAcceleration')}</span>
+        <span class="setting-desc">{$t('settings.graphics.hardwareAccelerationDesc')}</span>
+      </div>
+      <Toggle enabled={hardwareAcceleration} onchange={(v) => handleHardwareAccelerationChange(v)} />
+    </div>
+
+    {#if preferredGpuOptions.length > 1}
+      <div class="setting-row">
+        <div class="setting-info">
+          <span class="setting-label">{$t('settings.graphics.gpu.label')}</span>
+          <span class="setting-desc">{$t('settings.graphics.gpu.desc')}</span>
+        </div>
+        <Dropdown
+          value={getPreferredGpuDisplayValue()}
+          options={preferredGpuOptions.map((o) => o.label)}
+          onchange={(displayLabel) => {
+            const match = preferredGpuOptions.find((o) => o.label === displayLabel);
+            if (match) void handlePreferredGpuChange(match.value);
+          }}
+        />
+      </div>
+    {/if}
+
+    <div class="setting-row">
+      <div class="setting-info">
+        <span class="setting-label">{$t('settings.graphics.forceDmabuf')}</span>
+        <span class="setting-desc">{$t(forceDmabufDescKey)}</span>
+      </div>
+      <Toggle enabled={forceDmabuf} onchange={(v) => handleForceDmabufChange(v)} />
+    </div>
+
+    <div class="setting-row">
+      <div class="setting-info">
+        <span class="setting-label">{$t('settings.graphics.nvidiaCompatMode')}</span>
+        <span class="setting-desc">{$t('settings.graphics.nvidiaCompatModeDesc')}</span>
+      </div>
+      <Toggle enabled={nvidiaCompatMode} onchange={(v) => handleNvidiaCompatModeChange(v)} />
+    </div>
+
+    {#if nvidiaCompatMode}
+      <div class="reset-cmd-row">
+        <div class="reset-cmd-info">
+          <span class="reset-cmd-label">{$t('settings.graphics.resetCmdTitle')}</span>
+          <span class="reset-cmd-desc">{$t('settings.graphics.resetCmdDesc')}</span>
+        </div>
+        <div class="reset-cmd-field">
+          <input
+            class="reset-cmd-input"
+            type="text"
+            readonly
+            value={resetGraphicsCommand}
+            onclick={(e) => (e.currentTarget as HTMLInputElement).select()}
+          />
+          <button
+            class="reset-cmd-copy-btn"
+            type="button"
+            onclick={copyResetGraphicsCommand}
+            title={$t('actions.copy')}
+          >
+            {$t('actions.copy')}
+          </button>
+        </div>
+      </div>
+    {/if}
+
+    <div class="setting-row">
+      <div class="setting-info">
+        <span class="setting-label">{$t('settings.graphics.forceX11')}</span>
+        <span class="setting-desc">{$t('settings.graphics.forceX11Desc')}</span>
+      </div>
+      <Toggle enabled={forceX11} onchange={(v) => handleForceX11Change(v)} />
+    </div>
+
+    {#if forceX11}
+      <div class="setting-row">
+        <div class="setting-info">
+          <span class="setting-label">{$t('settings.graphics.gdkScale')}</span>
+          <span class="setting-desc">{$t('settings.graphics.gdkScaleDesc')}</span>
+        </div>
+        <input
+          class="composition-input"
+          type="text"
+          placeholder="auto"
+          bind:value={gdkScale}
+          onblur={handleGdkScaleChange}
+        />
+      </div>
+    {/if}
+
+    <div class="setting-row">
+      <div class="setting-info">
+        <span class="setting-label">{$t('settings.graphics.gdkDpiScale')}</span>
+        <span class="setting-desc">{$t('settings.graphics.gdkDpiScaleDesc')}</span>
+      </div>
+      <input
+        class="composition-input"
+        type="text"
+        placeholder="auto"
+        bind:value={gdkDpiScale}
+        onblur={handleGdkDpiScaleChange}
+      />
+    </div>
+
+    <div class="setting-row">
+      <div class="setting-info">
+        <span class="setting-label">{$t('settings.graphics.gskRenderer')}</span>
+        <span class="setting-desc">{$t('settings.graphics.gskRendererDesc')}</span>
+      </div>
+      <Dropdown
+        value={getGskRendererDisplayValue()}
+        options={getGskRendererOptions()}
+        onchange={handleGskRendererChange}
+      />
+    </div>
+
+    <div class="composition-env-section">
+      <span class="composition-env-title">{$t('settings.graphics.envVarsTitle')}</span>
+      <p class="section-note">{$t('settings.graphics.envVarsDesc')}</p>
+      <div class="env-vars-list">
+        <div class="env-var-row">
+          <code>QBZ_HARDWARE_ACCEL=0</code>
+          <span>{$t('settings.graphics.envVarHwAccel0')}</span>
+        </div>
+        <div class="env-var-row">
+          <code>QBZ_HARDWARE_ACCEL=1</code>
+          <span>{$t('settings.graphics.envVarHwAccel1')}</span>
+        </div>
+        <div class="env-var-row">
+          <code>QBZ_FORCE_X11=1</code>
+          <span>{$t('settings.graphics.envVarForceX11')}</span>
+        </div>
+        <div class="env-var-row">
+          <code>QBZ_SOFTWARE_RENDER=1</code>
+          <span>{$t('settings.graphics.envVarSoftwareRender')}</span>
+        </div>
+        <div class="env-var-row">
+          <code>QBZ_FORCE_DMABUF=1</code>
+          <span>{$t('settings.graphics.envVarForceDmabuf')}</span>
+        </div>
+        <div class="env-var-row">
+          <code>QBZ_DISABLE_DMABUF=1</code>
+          <span>{$t('settings.graphics.envVarDisableDmabuf')}</span>
+        </div>
+      </div>
     </div>
   </section>
   {/if}
@@ -5202,7 +5924,7 @@
       </div>
       <button
         class="clear-btn"
-        onclick={handleOpenCacheFolder}
+        onclick={handleManageOfflineCache}
       >
         {$t('settings.offlineLibrary.openFolder')}
       </button>
@@ -5275,6 +5997,36 @@
         value={qconnectDeviceName}
         placeholder={qconnectDeviceNameDefault}
         onchange={(e) => handleQconnectDeviceNameChange(e.currentTarget.value)}
+      />
+    </div>
+
+    <!-- Qobuz Connect Startup Mode -->
+    <div class="setting-row">
+      <div class="setting-info">
+        <span class="setting-label">{$t('settings.integrations.qconnect.startupMode.title')}</span>
+        <small class="setting-note">{$t('settings.integrations.qconnect.startupMode.description')}</small>
+        <small class="setting-note">{$t('settings.integrations.qconnect.startupMode.localLibraryNote')}</small>
+      </div>
+      <Dropdown
+        value={qconnectStartupMode === 'off'
+          ? $t('settings.integrations.qconnect.startupMode.off')
+          : qconnectStartupMode === 'on'
+            ? $t('settings.integrations.qconnect.startupMode.on')
+            : $t('settings.integrations.qconnect.startupMode.rememberLast')}
+        options={[
+          $t('settings.integrations.qconnect.startupMode.off'),
+          $t('settings.integrations.qconnect.startupMode.on'),
+          $t('settings.integrations.qconnect.startupMode.rememberLast')
+        ]}
+        onchange={(label) => {
+          if (label === $t('settings.integrations.qconnect.startupMode.on')) {
+            setQconnectStartupMode('on');
+          } else if (label === $t('settings.integrations.qconnect.startupMode.rememberLast')) {
+            setQconnectStartupMode('remember_last');
+          } else {
+            setQconnectStartupMode('off');
+          }
+        }}
       />
     </div>
 
@@ -5432,6 +6184,28 @@
         </small>
       </div>
       <Toggle enabled={musicbrainzEnabled} onchange={handleMusicBrainzChange} />
+    </div>
+
+    <!-- Discord Rich Presence Integration -->
+    <div class="setting-row">
+      <div class="setting-info">
+        <span class="setting-label">{$t('settings.integrations.discordRpc.label')}</span>
+        <small class="setting-note">
+          {$t('settings.integrations.discordRpc.description')}
+        </small>
+      </div>
+      <Toggle enabled={discordRpcEnabled} onchange={handleDiscordRpcToggle} />
+    </div>
+
+    <div class="setting-row discord-rpc-override-row">
+      <details class="discord-rpc-override">
+        <summary>{$t('settings.integrations.discordRpc.overrideHeader')}</summary>
+        <div class="discord-rpc-override-body">
+          <p>{$t('settings.integrations.discordRpc.flatpakNote')}</p>
+          <pre><code>flatpak override --user --filesystem=xdg-run/discord-ipc-0 com.blitzfc.qbz</code></pre>
+          <p>{$t('settings.integrations.discordRpc.snapNote')}</p>
+        </div>
+      </details>
     </div>
 
     <div class="setting-row">
@@ -6277,7 +7051,7 @@ flatpak override --user --filesystem=/home/USUARIO/Música com.blitzfc.qbz</pre>
     background: var(--accent-primary);
     border: none;
     border-radius: 6px;
-    color: white;
+    color: var(--btn-primary-text);
     cursor: pointer;
     transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
     flex-shrink: 0;
@@ -6502,6 +7276,31 @@ flatpak override --user --filesystem=/home/USUARIO/Música com.blitzfc.qbz</pre>
     line-height: 1.4;
   }
 
+  .section-note-warn {
+    color: var(--warning, #f59e0b);
+    border-left: 3px solid var(--warning, #f59e0b);
+    padding: 6px 10px;
+    background: var(--alpha-05, rgba(255, 255, 255, 0.04));
+    border-radius: 4px;
+    margin-bottom: 16px;
+  }
+
+  /* Badge next to a panel name in Immersive Panels list, marking
+     it as requiring GPU compositing. Only rendered when the user
+     is running without HW accel. */
+  .heavy-badge {
+    display: inline-block;
+    margin-left: 8px;
+    padding: 1px 6px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    color: var(--warning, #f59e0b);
+    border: 1px solid var(--warning, #f59e0b);
+    border-radius: 4px;
+    vertical-align: middle;
+  }
+
   /* Compact Account Section */
   .account-section {
     padding: 16px 24px;
@@ -6522,7 +7321,7 @@ flatpak override --user --filesystem=/home/USUARIO/Música com.blitzfc.qbz</pre>
     display: flex;
     align-items: center;
     justify-content: center;
-    color: white;
+    color: var(--btn-primary-text);
     font-size: 14px;
     font-weight: 600;
     flex-shrink: 0;
@@ -6664,6 +7463,172 @@ flatpak override --user --filesystem=/home/USUARIO/Música com.blitzfc.qbz</pre>
     margin-bottom: 2px;
   }
 
+  /* Graphics recommendation banner. Shown at the top of the Graphics
+     section when the autoconfig recommendation diverges from the
+     persisted settings. Persistent (no dismiss) so the user knows the
+     option is available; disappears the moment recommendation == state. */
+  .recommendation-banner {
+    display: flex;
+    align-items: flex-start;
+    gap: 16px;
+    padding: 14px 16px;
+    margin-bottom: 16px;
+    border-radius: 8px;
+    background: var(--accent-primary-tint, rgba(124, 58, 237, 0.08));
+    border: 1px solid var(--accent-primary, rgba(124, 58, 237, 0.3));
+  }
+
+  .recommendation-info {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .recommendation-title {
+    font-weight: 600;
+    color: var(--text-primary);
+    font-size: 13px;
+  }
+
+  .recommendation-detected {
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+
+  .recommendation-rationale {
+    margin: 4px 0 0;
+    padding-left: 18px;
+    list-style: disc;
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+
+  .recommendation-rationale li {
+    margin: 1px 0;
+  }
+
+  .recommendation-actions {
+    display: flex;
+    align-items: flex-start;
+    flex-shrink: 0;
+    gap: 8px;
+  }
+
+  /* Crash-recovery banner. Yellow when a single setting was reverted
+     (recoverable), red when one or more knobs hit lockout state after
+     2+ consecutive crashes — the user has to explicitly clear the flag
+     to re-enable. */
+  .crash-recovery-banner {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 12px 16px;
+    margin-bottom: 16px;
+    border-radius: 8px;
+    background: rgba(245, 158, 11, 0.08);
+    border: 1px solid rgba(245, 158, 11, 0.3);
+    color: var(--text-secondary);
+  }
+
+  .crash-recovery-banner.locked {
+    background: rgba(239, 68, 68, 0.08);
+    border-color: rgba(239, 68, 68, 0.35);
+  }
+
+  .crash-recovery-banner :global(svg) {
+    flex-shrink: 0;
+    color: #f59e0b;
+    margin-top: 2px;
+  }
+
+  .crash-recovery-banner.locked :global(svg) {
+    color: #ef4444;
+  }
+
+  .crash-recovery-body {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex: 1;
+  }
+
+  .crash-recovery-title {
+    font-weight: 600;
+    color: var(--text-primary);
+    font-size: 13px;
+  }
+
+  .crash-recovery-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .crash-recovery-list li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    font-size: 12px;
+  }
+
+  .link-btn {
+    background: transparent;
+    color: var(--accent-primary, #7c3aed);
+    border: none;
+    padding: 0;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  .link-btn:hover {
+    filter: brightness(1.15);
+  }
+
+  .secondary-btn {
+    background: transparent;
+    color: var(--text-secondary);
+    border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.12));
+    border-radius: 6px;
+    padding: 6px 14px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+
+  .secondary-btn:hover {
+    color: var(--text-primary);
+    border-color: var(--border, rgba(255, 255, 255, 0.18));
+  }
+
+  .redetect-row {
+    margin: 4px 0 12px;
+  }
+
+  .secondary-link-btn {
+    background: transparent;
+    color: var(--accent-primary, #7c3aed);
+    border: none;
+    padding: 0;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  .secondary-link-btn:hover {
+    filter: brightness(1.15);
+  }
+
   .fallback-desc {
     display: block;
     color: var(--text-secondary);
@@ -6734,6 +7699,80 @@ flatpak override --user --filesystem=/home/USUARIO/Música com.blitzfc.qbz</pre>
     user-select: all;
   }
 
+  /* Inline "if this breaks, run this command" affordance for the
+     NVIDIA Wayland compat opt-in. Visible only when the toggle is on
+     so it doubles as a "you opted into the risky path, here's your
+     escape hatch" hint. */
+  .reset-cmd-row {
+    margin: 8px 0 16px 0;
+    padding: 12px;
+    border-radius: 8px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .reset-cmd-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .reset-cmd-label {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-primary);
+  }
+
+  .reset-cmd-desc {
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.4;
+  }
+
+  .reset-cmd-field {
+    display: flex;
+    gap: 8px;
+    align-items: stretch;
+  }
+
+  /* `user-select: all` ensures the whole command selects on a single
+     click even though `select` was disabled globally elsewhere in
+     SettingsView. Combined with onclick={(e) => e.select()} we cover
+     both paths. */
+  .reset-cmd-input {
+    flex: 1;
+    min-width: 0;
+    padding: 8px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    font-family: var(--font-mono, monospace);
+    font-size: 12px;
+    user-select: all;
+    -webkit-user-select: all;
+    cursor: text;
+  }
+
+  .reset-cmd-copy-btn {
+    padding: 8px 14px;
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+    background: var(--accent-primary, var(--bg-tertiary));
+    color: var(--text-primary);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s ease;
+  }
+
+  .reset-cmd-copy-btn:hover {
+    background: var(--accent-hover, var(--bg-tertiary));
+  }
+
   .composition-input {
     width: 80px;
     padding: 6px 8px;
@@ -6784,6 +7823,68 @@ flatpak override --user --filesystem=/home/USUARIO/Música com.blitzfc.qbz</pre>
 
   .env-var-row span {
     color: var(--text-muted);
+  }
+
+  .setting-row.discord-rpc-override-row {
+    height: auto;
+    align-items: flex-start;
+    padding: 8px 0;
+  }
+
+  .discord-rpc-override {
+    width: 100%;
+  }
+
+  .discord-rpc-override > summary {
+    cursor: pointer;
+    color: var(--text-secondary);
+    font-size: 13px;
+    list-style: none;
+  }
+
+  .discord-rpc-override > summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .discord-rpc-override > summary::before {
+    content: '▸ ';
+    display: inline-block;
+    width: 14px;
+    color: var(--text-muted);
+  }
+
+  .discord-rpc-override[open] > summary::before {
+    content: '▾ ';
+  }
+
+  .discord-rpc-override-body {
+    margin-top: 8px;
+    padding-left: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  .discord-rpc-override-body p {
+    margin: 0;
+  }
+
+  .discord-rpc-override-body pre {
+    margin: 0;
+    padding: 8px 10px;
+    background: var(--bg-tertiary);
+    border-radius: 4px;
+    overflow-x: auto;
+  }
+
+  .discord-rpc-override-body pre code {
+    font-family: var(--font-mono, monospace);
+    font-size: 11px;
+    color: var(--text-primary);
+    background: transparent;
+    padding: 0;
   }
 
   .setting-row {
@@ -6863,6 +7964,45 @@ flatpak override --user --filesystem=/home/USUARIO/Música com.blitzfc.qbz</pre>
     margin-top: 4px;
   }
 
+  .reserve-dac-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 0;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  .status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .status-dot-green {
+    background: var(--success, #2ecc71);
+  }
+
+  .status-dot-yellow {
+    background: var(--warning, #f39c12);
+  }
+
+  .status-dot-grey {
+    background: var(--text-muted);
+  }
+
+  .reserve-dac-help {
+    padding: 4px 0 8px 0;
+    font-size: 11px;
+    color: var(--text-muted);
+    opacity: 0.8;
+  }
+
+  .reserve-dac-help summary {
+    cursor: pointer;
+  }
+
   .setting-row:has(.setting-note) {
     height: auto;
     min-height: 48px;
@@ -6907,7 +8047,7 @@ flatpak override --user --filesystem=/home/USUARIO/Música com.blitzfc.qbz</pre>
     cursor: pointer;
     transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
     background-color: var(--accent-primary);
-    color: white;
+    color: var(--btn-primary-text);
     border: none;
   }
 
@@ -7166,7 +8306,7 @@ flatpak override --user --filesystem=/home/USUARIO/Música com.blitzfc.qbz</pre>
 
   .auth-start-btn {
     background-color: var(--accent-primary);
-    color: white;
+    color: var(--btn-primary-text);
     border: none;
   }
 
@@ -7407,7 +8547,7 @@ flatpak override --user --filesystem=/home/USUARIO/Música com.blitzfc.qbz</pre>
 
   .copy-btn {
     background: var(--accent-primary);
-    color: white;
+    color: var(--btn-primary-text);
     border: none;
     border-radius: 6px;
     padding: 6px 14px;

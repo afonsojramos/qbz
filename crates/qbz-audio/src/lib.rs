@@ -35,15 +35,23 @@ pub mod alsa_backend;
 pub mod alsa_error_handler;
 #[cfg(target_os = "linux")]
 pub mod pulse_backend;
+#[cfg(target_os = "linux")]
+pub mod jack_backend;
 pub mod alsa_direct;
 pub mod coreaudio_direct;
+pub mod dac_capabilities;
+pub mod dac_probe;
+pub mod health;
 pub mod analysis;
 pub mod analyzer_tap;
+pub mod device_filter;
+pub mod device_reservation;
 pub mod diagnostic;
 pub mod dynamic_amplify;
 pub mod loudness;
 pub mod loudness_analyzer;
 pub mod loudness_cache;
+pub mod network_throttle;
 pub mod output_sinks;
 pub mod settings;
 pub mod visualizer;
@@ -55,12 +63,22 @@ pub use alsa_backend::{
     resolve_stable_to_current_hw,
 };
 pub use alsa_direct::AlsaDirectStream;
+#[cfg(target_os = "linux")]
+pub use jack_backend::JackStream;
 pub use analysis::SpectralAnalyzer;
 pub use analyzer_tap::{AnalyzerMessage, AnalyzerTap};
 pub use backend::{
     AlsaDirectError, AlsaPlugin, AudioBackend, AudioBackendType, AudioDevice, BackendConfig,
     BackendManager, BackendResult, BitPerfectMode,
 };
+pub use coreaudio_direct::CoreAudioExclusiveGuard;
+pub use dac_capabilities::{query_dac_capabilities, DacCapabilities};
+pub use dac_probe::{negotiated_active_rate, negotiated_stream_rate, NegotiatedRate};
+pub use health::{
+    audio_stack_health, detect_distro, detect_init, detect_sandbox, AudioStackHealth, Distro,
+    InitSystem, Sandbox,
+};
+pub use device_reservation::{DeviceReservation, ReservationError};
 pub use diagnostic::{AudioDiagnostic, BitDepthResult, DiagnosticSource};
 pub use dynamic_amplify::DynamicAmplify;
 pub use loudness::{calculate_gain_factor, db_to_linear, extract_replaygain, ReplayGainData};

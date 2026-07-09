@@ -26,12 +26,86 @@ use super::cached_audio_incompatible_with_hw;
 
 // ==================== Prefetch (V2) ====================
 
-/// Number of Qobuz tracks to prefetch — resolved per-host from the
-/// detected memory profile. Normal hosts get 5 tracks (~2 minutes
-/// of HiRes cache ahead); LowMemory hosts (issue #331) get 1 to keep
-/// the in-memory footprint manageable on devices like the Pi 3B.
-fn v2_prefetch_count() -> usize {
+/// Memory-profile default number of Qobuz tracks to prefetch. Normal
+/// hosts get 5 (~2 minutes of HiRes cache ahead); LowMemory hosts
+/// (issue #331) get 1 to keep the in-memory footprint manageable on
+/// devices like the Pi 3B. This is the upper bound the adaptive
+/// throttle is allowed to walk back up to — it never raises above this.
+fn v2_prefetch_count_default() -> usize {
     qbz_core::system_capabilities::memory_profile().prefetch_count
+}
+
+/// Translate the active playback `Quality` into the throttle's coarse
+/// quality bucket, used to estimate the live stream's sustained
+/// bandwidth requirement (MB/s). Inputs to `current_prefetch_cap()`.
+fn quality_to_throttle_tag(q: qbz_models::Quality) -> qbz_audio::network_throttle::PlaybackQualityTag {
+    use qbz_audio::network_throttle::PlaybackQualityTag;
+    use qbz_models::Quality;
+    match q {
+        Quality::UltraHiRes => PlaybackQualityTag::UltraHiRes,
+        Quality::HiRes => PlaybackQualityTag::HiRes,
+        Quality::Lossless => PlaybackQualityTag::Lossless,
+        Quality::Mp3 => PlaybackQualityTag::Lossy,
+    }
+}
+
+/// Adaptive prefetch cap. Starts at the memory-profile default and gets
+/// scaled down by the network-throttle state based on observed
+/// bandwidth and recent audio underruns. The throttle never raises the
+/// cap above the memory-profile default, so a user with a fat
+/// connection still gets the full 5-track fan-out the firmware intends.
+fn v2_prefetch_count(quality: qbz_models::Quality) -> usize {
+    let default_cap = v2_prefetch_count_default();
+    let tag = quality_to_throttle_tag(quality);
+    let playback_mbps = qbz_audio::network_throttle::playback_mbps_for_quality(tag);
+    let throttled_cap = qbz_audio::network_throttle::state()
+        .current_prefetch_cap(playback_mbps, default_cap);
+    if throttled_cap < default_cap {
+        log::debug!(
+            "[V2/PREFETCH] Adaptive cap: {} (down from default {}). bw={:?} MB/s, panic={}, playback_need={:.2} MB/s",
+            throttled_cap,
+            default_cap,
+            qbz_audio::network_throttle::state().current_bandwidth_mbps(),
+            qbz_audio::network_throttle::state().in_panic_mode(),
+            playback_mbps,
+        );
+    }
+    throttled_cap
+}
+
+/// Lightweight offline-availability check used by the frontend queue guard
+/// (issue #467). A track counts as available offline if it is in the
+/// in-memory playback cache (covers the currently-playing, fully-buffered
+/// track and any prefetched upcoming tracks) OR has a ready file in the
+/// persistent offline cache. This stops the offline queue walk from skipping
+/// tracks that are actually playable.
+#[tauri::command]
+pub async fn v2_is_track_cached(
+    track_id: u64,
+    offline_cache: State<'_, OfflineCacheState>,
+    app_state: State<'_, AppState>,
+) -> Result<bool, RuntimeError> {
+    // In-memory playback cache: the currently-playing track and prefetched
+    // upcoming tracks live here.
+    if app_state.audio_cache.contains(track_id) {
+        return Ok(true);
+    }
+
+    // Persistent offline cache: a downloaded track whose file is still on disk.
+    let cached_path = {
+        let db_opt = offline_cache.db.lock().await;
+        match db_opt.as_ref() {
+            Some(db) => db.get_file_path(track_id).ok().flatten(),
+            None => None,
+        }
+    };
+    if let Some(path) = cached_path {
+        if std::path::Path::new(&path).exists() {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
 }
 
 /// How far ahead to look for tracks to prefetch (to handle mixed playlists
@@ -98,7 +172,7 @@ fn spawn_v2_prefetch_with_hw_check(
 
     let mut qobuz_prefetched = 0;
 
-    let prefetch_cap = v2_prefetch_count();
+    let prefetch_cap = v2_prefetch_count(quality);
     for track in upcoming_tracks {
         // Stop once we've prefetched enough Qobuz tracks
         if qobuz_prefetched >= prefetch_cap {
@@ -290,7 +364,9 @@ pub async fn v2_pause_playback(
     log::info!("[V2] Command: pause_playback");
     app_state.media_controls.set_playback(false);
     let bridge = bridge.get().await;
-    bridge.pause().map_err(RuntimeError::Internal)
+    bridge.pause().map_err(RuntimeError::Internal)?;
+    crate::commands_v2::helpers::PLAYBACK_STATE_WAKEUP.notify_one();
+    Ok(())
 }
 
 /// Resume playback (V2)
@@ -307,7 +383,9 @@ pub async fn v2_resume_playback(
     log::info!("[V2] Command: resume_playback");
     app_state.media_controls.set_playback(true);
     let bridge = bridge.get().await;
-    bridge.resume().map_err(RuntimeError::Internal)
+    bridge.resume().map_err(RuntimeError::Internal)?;
+    crate::commands_v2::helpers::PLAYBACK_STATE_WAKEUP.notify_one();
+    Ok(())
 }
 
 /// Stop playback (V2)
@@ -324,7 +402,9 @@ pub async fn v2_stop_playback(
     log::info!("[V2] Command: stop_playback");
     app_state.media_controls.set_stopped();
     let bridge = bridge.get().await;
-    bridge.stop().map_err(RuntimeError::Internal)
+    bridge.stop().map_err(RuntimeError::Internal)?;
+    crate::commands_v2::helpers::PLAYBACK_STATE_WAKEUP.notify_one();
+    Ok(())
 }
 
 /// Seek to position in seconds (V2)
@@ -351,6 +431,7 @@ pub async fn v2_seek(
         .media_controls
         .set_playback_with_progress(playback_state.is_playing, playback_state.position);
 
+    crate::commands_v2::helpers::PLAYBACK_STATE_WAKEUP.notify_one();
     Ok(())
 }
 
@@ -452,6 +533,7 @@ pub async fn v2_play_next_gapless(
     offline_cache: State<'_, OfflineCacheState>,
     app_state: State<'_, AppState>,
     library_state: State<'_, LibraryState>,
+    ephemeral_state: State<'_, crate::ephemeral_library::EphemeralLibraryState>,
     app_handle: tauri::AppHandle,
 ) -> Result<bool, RuntimeError> {
     log::info!("[V2] Command: play_next_gapless for track {}", track_id);
@@ -469,6 +551,56 @@ pub async fn v2_play_next_gapless(
             track_id
         );
         return Ok(false);
+    }
+
+    // Ephemeral path: track ids in the high range come from
+    // EphemeralLibraryState, not the DB. The downstream library/cache
+    // tiers all key off DB row ids and would silently fail the lookup,
+    // making gapless impossible. Resolve through the ephemeral cache
+    // and feed the file directly. CUE-derived ephemeral tracks share
+    // an audio file across virtual tracks and require a seek that the
+    // gapless engine doesn't perform — those return false here so the
+    // regular non-gapless next-track path takes over (which DOES seek).
+    if track_id >= crate::ephemeral_library::EPHEMERAL_ID_FLOOR as u64 {
+        let track_id_i64 = track_id as i64;
+        match ephemeral_state.get_track(track_id_i64) {
+            Some(track) => {
+                if track.cue_start_secs.is_some() {
+                    log::info!(
+                        "[V2/GAPLESS] Ephemeral track {} is CUE-derived; skipping gapless prefetch",
+                        track_id
+                    );
+                    return Ok(false);
+                }
+                let file_path = std::path::Path::new(&track.file_path);
+                if !file_path.exists() {
+                    log::warn!(
+                        "[V2/GAPLESS] Ephemeral file vanished: {}",
+                        track.file_path
+                    );
+                    return Ok(false);
+                }
+                let audio_data = std::fs::read(file_path).map_err(|e| {
+                    RuntimeError::Internal(format!("Failed to read ephemeral file: {}", e))
+                })?;
+                log::info!(
+                    "[V2/GAPLESS] Track {} from EPHEMERAL ({} bytes)",
+                    track_id,
+                    audio_data.len()
+                );
+                player
+                    .play_next(audio_data, track_id)
+                    .map_err(RuntimeError::Internal)?;
+                return Ok(true);
+            }
+            None => {
+                log::info!(
+                    "[V2/GAPLESS] Ephemeral track {} no longer in cache (session cleared?)",
+                    track_id
+                );
+                return Ok(false);
+            }
+        }
     }
 
     // Tier order: L1 memory → L2 disk → offline cache → local library.
@@ -526,7 +658,7 @@ pub async fn v2_play_next_gapless(
                     let cache_path = offline_cache.get_cache_path();
                     let decrypted =
                         crate::offline_cache::playback::load_cmaf_bundle_with_ui_events(
-                            &app_handle,
+                            &crate::offline_cache::tauri_cache_sink(app_handle.clone()),
                             track_id,
                             track_id,
                             row.clone(),
@@ -609,7 +741,7 @@ pub async fn v2_play_next_gapless(
                                 let cache_path = offline_cache.get_cache_path();
                                 let decrypted =
                                     crate::offline_cache::playback::load_cmaf_bundle_with_ui_events(
-                                        &app_handle,
+                                        &crate::offline_cache::tauri_cache_sink(app_handle.clone()),
                                         track_id,  // display: library row id
                                         qid as u64, // cmaf/bundle: qobuz id
                                         row.clone(),
@@ -829,12 +961,18 @@ pub struct V2PlayTrackResult {
 /// 3. Downloads audio
 /// 4. Plays via CoreBridge.player() (qbz-player crate)
 /// 5. Caches for future playback
+// `start_position_secs` (#315): when > 0, the streaming path waits for
+// enough buffer to cover this offset and pre-skips decoder output up to
+// that point, then engages audio. Avoids the play-then-seek race that
+// silently dropped the saved position on first-track session restore.
+// 0 / None = start from beginning.
 #[tauri::command]
 pub async fn v2_play_track(
     track_id: u64,
     quality: Option<String>,
     force_lowest_quality: Option<bool>,
     duration_secs: Option<u64>,
+    start_position_secs: Option<u64>,
     bridge: State<'_, CoreBridgeState>,
     offline_cache: State<'_, OfflineCacheState>,
     audio_settings: State<'_, AudioSettingsState>,
@@ -843,6 +981,7 @@ pub async fn v2_play_track(
     app_handle: tauri::AppHandle,
     runtime: State<'_, RuntimeManagerState>,
 ) -> Result<V2PlayTrackResult, RuntimeError> {
+    let start_position_secs = start_position_secs.unwrap_or(0);
     // Runtime contract: require CoreBridge auth for V2 playback
     runtime
         .manager()
@@ -984,7 +1123,7 @@ pub async fn v2_play_track(
             let audio_data_opt: Option<Vec<u8>> = if row.cache_format == 2 {
                 let cache_path = offline_cache.get_cache_path();
                 crate::offline_cache::playback::load_cmaf_bundle_with_ui_events(
-                    &app_handle,
+                    &crate::offline_cache::tauri_cache_sink(app_handle.clone()),
                     track_id,
                     track_id,
                     row.clone(),
@@ -1236,6 +1375,7 @@ pub async fn v2_play_track(
                     total_flac_size,
                     speed_mbps,
                     duration_secs.unwrap_or(0),
+                    start_position_secs,
                 )
                 .map_err(RuntimeError::Internal)?;
 
@@ -1470,6 +1610,7 @@ pub async fn v2_play_track(
                 stream_info.content_length,
                 stream_info.speed_mbps,
                 duration_secs.unwrap_or(0),
+                start_position_secs,
             )
             .map_err(RuntimeError::Internal)?;
 
@@ -1574,6 +1715,7 @@ pub async fn v2_play_track(
         .play_data(audio_data, track_id)
         .map_err(RuntimeError::Internal)?;
     log::info!("[V2] Playing track {} ({} bytes)", track_id, data_size);
+    crate::commands_v2::helpers::PLAYBACK_STATE_WAKEUP.notify_one();
 
     // Prefetch next tracks in background (using CoreBridge queue)
     let upcoming_tracks = bridge_guard.peek_upcoming(V2_PREFETCH_LOOKAHEAD).await;

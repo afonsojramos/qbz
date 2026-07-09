@@ -41,6 +41,7 @@ pub async fn runtime_bootstrap(
     app_state: State<'_, AppState>,
     core_bridge: State<'_, CoreBridgeState>,
     audio_settings: State<'_, AudioSettingsState>,
+    qconnect_cli_override: State<'_, crate::qconnect::startup::QconnectCliOverride>,
 ) -> Result<RuntimeStatus, RuntimeError> {
     let manager = runtime.manager();
 
@@ -52,8 +53,14 @@ pub async fn runtime_bootstrap(
 
     log::info!("[Runtime] Bootstrap starting...");
 
-    // Step 1: Initialize API client (bundle tokens)
+    // Step 1: Initialize API client (bundle tokens).
+    // On a cold start (no cached tokens) this must download Qobuz's ~7 MB bundle,
+    // which can take many seconds when their CDN is slow — tell the frontend so it
+    // shows a "connecting to Qobuz" state instead of a frozen splash.
     {
+        if qbz_qobuz::bundle::load_cached_bundle().is_none() {
+            let _ = app.emit("runtime:event", RuntimeEvent::BundleFetchStarted);
+        }
         let client = app_state.client.read().await;
         match client.init().await {
             Ok(_) => {
@@ -213,6 +220,15 @@ pub async fn runtime_bootstrap(
                         }
                     }
                 }
+
+                // QConnect auto-connect-on-startup. Only fires here, after a successful
+                // OAuth restore + session activation, because service.connect requires
+                // a fully initialized client.
+                crate::qconnect::startup::maybe_auto_connect_after_bootstrap(
+                    &app,
+                    qconnect_cli_override.0,
+                )
+                .await;
             }
             Err(e) => {
                 // Token expired — clear it and let user re-login via OAuth
@@ -437,7 +453,10 @@ pub async fn v2_start_oauth_login(
     .inner_size(520.0, 720.0)
     .resizable(true)
     .on_navigation(move |url| {
-        log::info!("[OAuth] on_navigation: {}", url);
+        log::info!(
+            "[OAuth] on_navigation: {}",
+            crate::log_sanitize::redact_url(url.as_str())
+        );
         // Intercept redirect to play.qobuz.com/discover?code_autorisation=...
         if url.host_str() == Some("play.qobuz.com") {
             for (key, value) in url.query_pairs() {
@@ -468,7 +487,7 @@ pub async fn v2_start_oauth_login(
         let label = format!("qobuz-oauth-popup-{}", popup_id);
         log::info!(
             "[OAuth] New popup window requested: {} (label={})",
-            url,
+            crate::log_sanitize::redact_url(url.as_str()),
             label
         );
 
@@ -487,7 +506,11 @@ pub async fn v2_start_oauth_login(
         .inner_size(520.0, 720.0)
         .resizable(true)
         .on_navigation(move |popup_url| {
-            log::info!("[OAuth] popup({}) on_navigation: {}", label_p, popup_url);
+            log::info!(
+                "[OAuth] popup({}) on_navigation: {}",
+                label_p,
+                crate::log_sanitize::redact_url(popup_url.as_str())
+            );
             if popup_url.host_str() == Some("play.qobuz.com") {
                 for (key, value) in popup_url.query_pairs() {
                     if key == "code_autorisation" || key == "code" {

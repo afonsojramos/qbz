@@ -56,7 +56,28 @@
   let sortBy = $state<SortBy>(initial.sortBy ?? 'position');
   let sortDir = $state<SortDir>(initial.sortDir ?? 'asc');
   let searchQuery = $state('');
-  let showSortMenu = $state(false);
+  // Mutually-exclusive toolbar dropdown state.
+  type OpenMenu = 'sort' | null;
+  let openMenu = $state<OpenMenu>(null);
+
+  $effect(() => {
+    if (openMenu === null) return;
+
+    function handleClickOutside(event: MouseEvent) {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      if (target.closest('.control-btn') || target.closest('.control-menu')) return;
+      openMenu = null;
+    }
+
+    setTimeout(() => {
+      document.addEventListener('click', handleClickOutside);
+    }, 0);
+
+    return () => {
+      document.removeEventListener('click', handleClickOutside);
+    };
+  });
 
   const normalizedSearch = $derived(searchQuery.trim().toLowerCase());
 
@@ -100,7 +121,7 @@
       sortBy = value;
       sortDir = 'asc';
     }
-    showSortMenu = false;
+    openMenu = null;
   }
 
   function resetFilters() {
@@ -132,7 +153,7 @@
       <span>{$t('actions.back')}</span>
     </button>
   {/if}
-  <header class="view-header">
+  <header class="view-header" data-tauri-drag-region="deep">
     <h1>{$t('mixtapes.nav')}</h1>
     <button
       type="button"
@@ -186,15 +207,14 @@
         <button
           type="button"
           class="control-btn"
-          onclick={() => (showSortMenu = !showSortMenu)}
+          onclick={() => (openMenu = openMenu === 'sort' ? null : 'sort')}
           title={$t('collectionDetail.sort')}
         >
           <ArrowUpDown size={14} />
           <span>{sortOptions.find((o) => o.value === sortBy)?.label}</span>
           <span class="sort-indicator">{sortDir === 'asc' ? '↑' : '↓'}</span>
         </button>
-        {#if showSortMenu}
-          <div class="control-backdrop" onclick={() => (showSortMenu = false)} role="presentation"></div>
+        {#if openMenu === 'sort'}
           <div class="control-menu">
             {#each sortOptions as option}
               <button
@@ -351,7 +371,7 @@
     gap: 8px;
     padding: 10px 20px;
     background: var(--accent-primary);
-    color: #ffffff;
+    color: var(--btn-primary-text);
     border: none;
     border-radius: 8px;
     font-size: 14px;
@@ -453,11 +473,6 @@
     font-size: 11px;
   }
 
-  .control-backdrop {
-    position: fixed;
-    inset: 0;
-    z-index: 200;
-  }
   .control-menu {
     position: absolute;
     top: calc(100% + 4px);
@@ -510,7 +525,7 @@
   }
   .view-mode-group .control-btn.seg.active {
     background: var(--accent-primary);
-    color: #fff;
+    color: var(--btn-primary-text);
     border-color: var(--accent-primary);
   }
 

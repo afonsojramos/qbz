@@ -10,8 +10,8 @@ pub mod renderer;
 pub mod telemetry;
 
 pub use admission::{
-    evaluate_remote_queue_admission, resolve_handoff_intent, AdmissionDecision, HandoffIntent,
-    TrackOrigin,
+    evaluate_remote_queue_admission, resolve_handoff_intent, validate_track_origins_for_admission,
+    AdmissionDecision, HandoffIntent, TrackOrigin,
 };
 pub use pending::{PendingActionError, PendingActionSlot, PendingCorrelation, PendingQueueAction};
 pub use queue::{QConnectQueueState, QueueEvent, QueueItem, QueueVersion};

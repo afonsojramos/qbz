@@ -9,6 +9,11 @@
     getSelectedGenreIds,
     type GenreFilterContext
   } from '$lib/stores/genreFilterStore';
+  import {
+    isAlbumFavorite,
+    toggleAlbumFavorite,
+    subscribe as subscribeAlbumFavs,
+  } from '$lib/stores/albumFavoritesStore';
 
   interface DiscoverAlbum {
     id: string;
@@ -93,6 +98,20 @@
     pressAward: 'discover-press-accolades',
   };
   const genreContext = $derived(GENRE_CONTEXT_MAP[endpointType]);
+
+  // Album favorite state — reactive against the shared albumFavoritesStore so
+  // the heart on each card reflects (and toggles) real favorite status. The
+  // collapsed Discovery view already wires this; the "see all" browse pages
+  // were missing it, so the heart did nothing here (issue #468).
+  let favoritesVersion = $state(0);
+  $effect(() => {
+    const unsub = subscribeAlbumFavs(() => { favoritesVersion++; });
+    return unsub;
+  });
+  function isFav(albumId: string): boolean {
+    void favoritesVersion;
+    return isAlbumFavorite(albumId);
+  }
 
   // State
   let albums = $state<FavoriteAlbum[]>([]);
@@ -234,14 +253,14 @@
 
 <div class="discover-browse">
   <!-- Top bar -->
-  <div class="top-bar">
-    <div class="top-bar-left">
+  <div class="top-bar" data-tauri-drag-region="deep">
+    <div class="top-bar-left" data-tauri-drag-region="false">
       <button class="back-btn" onclick={onBack}>
         <ChevronLeft size={20} />
       </button>
       <h1 class="page-title">{$t(titleKey)}</h1>
     </div>
-    <div class="top-bar-right">
+    <div class="top-bar-right" data-tauri-drag-region="false">
       <div class="search-wrapper">
         <Search size={16} />
         <input
@@ -309,6 +328,8 @@
         onOpenAlbumFolder={onOpenAlbumFolder}
         onReDownloadAlbum={onReDownloadAlbum}
         onAddAlbumToPlaylist={onAddAlbumToPlaylist}
+        onAlbumFavorite={(id) => { void toggleAlbumFavorite(id); }}
+        isAlbumFavorite={isFav}
         {downloadStateVersion}
         {isAlbumDownloaded}
         {showRanking}

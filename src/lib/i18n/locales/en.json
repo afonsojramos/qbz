@@ -18,6 +18,7 @@
       "svelteDesc": "UI framework",
       "rodioSymphoniaDesc": "Audio playback engine",
       "lucideDesc": "Icon library",
+      "kawarpDesc": "WebGL animated background renderer",
       "musicBrainzDesc": "Music metadata database",
       "songLinkOdesliDesc": "Music link aggregation API",
       "lrclibDesc": "Synced lyrics provider",
@@ -35,10 +36,13 @@
     "shuffle": "Shuffle",
     "shuffleAll": "Shuffle All",
     "playNext": "Play Next",
+    "playLater": "Play Later",
+    "download": "Download",
     "addToQueue": "Add to Queue",
     "addToPlaylist": "Add to Playlist",
     "addToFavorites": "Add to Library",
     "removeFromFavorites": "Remove from Library",
+    "unavailableForEphemeral": "Not available for ephemeral folders",
     "removeFromPlaylist": "Remove from Playlist",
     "selectedTracks": "{count, plural, one {# track selected} other {# tracks selected}}",
     "select": "Select",
@@ -52,6 +56,8 @@
     "goToAlbum": "Go to Album",
     "trackInfo": "Track Info",
     "more": "More",
+    "toggleFavorite": "Toggle favorite",
+    "moreActions": "More actions",
     "back": "Back",
     "seeAll": "See All",
     "cancel": "Cancel",
@@ -69,6 +75,7 @@
     "clearAll": "Clear All",
     "confirm": "Confirm",
     "copy": "Copy",
+    "copiedToClipboard": "Copied to clipboard",
     "yes": "Yes",
     "no": "No",
     "ok": "OK",
@@ -81,6 +88,7 @@
     "expand": "Expand sidebar",
     "moreOptions": "More options",
     "shareQobuz": "Share (Qobuz)",
+    "shareSonglink": "Share (Songlink)",
     "albumCredits": "Album credits",
     "startArtistRadio": "Start Artist Radio",
     "radio": {
@@ -157,6 +165,8 @@
     "bookletDownload": "Save booklet",
     "sameArtist": "By the same artist",
     "seeFullDiscography": "See full discography",
+    "readMore": "Read more",
+    "readLess": "Show less",
     "sidebar": {
       "label": "Label",
       "awards": "Awards"
@@ -685,6 +695,23 @@
     "expand": "Expand",
     "clearFilter": "Clear filter"
   },
+  "discovery": {
+    "seeAll": "See all",
+    "similarAlbums": "Similar albums",
+    "similarTo": "Similar to {seed}",
+    "rediscoverLibrary": "Rediscover your library",
+    "essentialsByGenre": "Essentials",
+    "essentialsIn": "Essentials in {genre}",
+    "artistsToFollow": "Artists to follow",
+    "artistSpotlight": "Artist spotlight",
+    "qobuzRadioStation": "Qobuz Radio Station",
+    "customize": "Customize home",
+    "perfWarning": "Each enabled section adds to the work done on every scroll. Turn on what you actually use; leave the rest off.",
+    "enabledCount": "{count} of {total} sections enabled",
+    "moveUp": "Move up",
+    "moveDown": "Move down",
+    "resetDefaults": "Reset to defaults"
+  },
   "home": {
     "title": "Home",
     "featuredForYou": "Featured for you",
@@ -889,8 +916,58 @@
     "albums": "Albums",
     "artists": "Artists",
     "tracks": "Tracks",
+    "folders": "Folders",
+    "foldersTree": {
+      "modeLabel": "Tree",
+      "flatLabel": "Flat",
+      "selectAFolder": "Select a folder to view its content.",
+      "treeFolderTracks": "{count, plural, one {# track} other {# tracks}}",
+      "treeLoading": "Loading…",
+      "treeEmpty": "This folder is empty.",
+      "playAllRecursive": "Play all tracks in this folder",
+      "resizeHandle": "Resize folder tree sidebar",
+      "searchTracksPlaceholder": "Search tracks…",
+      "searchTracksLabel": "Search tracks in this album",
+      "searchNoResults": "No tracks match your search.",
+      "collapseAll": "Collapse all folders",
+      "searchPlaceholder": "Search folders…",
+      "searchAriaLabel": "Search folders in tree",
+      "searchAlbumsPlaceholder": "Search albums…",
+      "searchAlbumsLabel": "Search albums in this folder",
+      "viewModeLabel": "View mode",
+      "gridView": "Grid",
+      "listView": "List",
+      "viewArtwork": "View album art"
+    },
+    "ephemeralFolder": {
+      "buttonLabel": "Open Folder",
+      "tooltip": "Open a folder ad-hoc — its tracks load into the content pane and remain available until the app closes. Nothing is added to your library.",
+      "dialogTitle": "Choose a folder to play",
+      "contextLabel": "Open Folder",
+      "subtitle": "{count, plural, one {# track} other {# tracks}} · {path}",
+      "playAll": "Play all",
+      "playAlbum": "Play album",
+      "trackCount": "{count, plural, one {# track} other {# tracks}}",
+      "scanning": "Scanning folder…",
+      "close": "Clear session",
+      "empty": "No supported audio files found in this folder.",
+      "opened": "Opened {count, plural, one {# track} other {# tracks}}",
+      "openedWithSkips": "Opened {count, plural, one {# track} other {# tracks}}, skipped {skipped, plural, one {# file} other {# files}}",
+      "openFailed": "Could not open folder: {error}",
+      "playFailed": "Playback failed: {error}",
+      "gone": "Folder is no longer available — session cleared."
+    },
     "explicit": "Explicit",
-    "folders": "Library Folders",
+    "folderListTitle": "Library Folders",
+    "editTabs": {
+      "title": "Edit Library Tabs",
+      "help": "Drag to reorder. Toggle visibility.",
+      "save": "Save",
+      "cancel": "Cancel",
+      "reset": "Reset to defaults",
+      "showTab": "Show tab",
+      "hideTab": "Hide tab"
+    },
     "noAlbums": "No albums in library",
     "noArtists": "No artists in library",
     "noTracks": "No tracks in library",
@@ -1146,6 +1223,72 @@
     "showNetworkFoldersDesc": "Display content from network-mounted folders (NAS, Samba, etc.) while in manual offline mode",
     "checkNow": "Check now"
   },
+  "offlineManager": {
+    "title": "Offline cache",
+    "stats": {
+      "totals": "{tracks} tracks · {albums} albums · {artists} artists",
+      "usage": "{used} of {limit}",
+      "unlimited": "{used} of unlimited"
+    },
+    "sort": {
+      "label": "Sort",
+      "alpha": "A–Z",
+      "recent": "Most recent",
+      "largest": "Largest first",
+      "smallest": "Smallest first"
+    },
+    "filter": {
+      "showOnlyFailed": "Show only failed"
+    },
+    "row": {
+      "completeNTracks": "Complete · {count} tracks",
+      "partialNCached": "Partial · {count} cached",
+      "mixedQuality": "Mixed",
+      "nFailed": "{count} failed",
+      "actions": {
+        "redownloadAlbum": "Re-download all tracks",
+        "removeAlbum": "Remove from offline",
+        "retryFailed": "Retry failed",
+        "goToAlbum": "Go to album"
+      }
+    },
+    "track": {
+      "actions": {
+        "redownloadTrack": "Re-download track",
+        "removeTrack": "Remove from offline"
+      }
+    },
+    "confirmRemoveAlbum": {
+      "title": "Remove from offline cache?",
+      "body": "Remove \"{album}\" from offline cache. This will free {size}."
+    },
+    "confirmRemoveTrack": {
+      "title": "Remove track from offline cache?",
+      "body": "Remove \"{title}\" from offline cache."
+    },
+    "toast": {
+      "redownloadingAlbum": "Re-downloading {count} tracks…",
+      "redownloadingTrack": "Re-downloading track…",
+      "removedAlbum": "Removed {album} ({size} freed)",
+      "removedTrack": "Removed track",
+      "limitTooLow": "Limit must be at least 5 GB",
+      "limitSaved": "Cache limit saved"
+    },
+    "limitModal": {
+      "title": "Cache size limit",
+      "helper": "Minimum 5 GB. High-quality tracks need space.",
+      "inputLabel": "Limit (GB)",
+      "editAria": "Edit cache size limit"
+    },
+    "empty": {
+      "title": "No offline content yet",
+      "body": "Mark tracks as available offline from any album or playlist.",
+      "cta": "Go to Favorites"
+    },
+    "singlesPseudoAlbum": "Singles & loose tracks",
+    "discographyHeading": "Discography",
+    "albumsCount": "{count} albums"
+  },
   "performerRoles": {
     "a&R": "Artists and Repertoire",
     "a&RDirector": "Artists and Repertoire Director",
@@ -1323,11 +1466,6 @@
   },
   "player": {
     "nowPlaying": "Now Playing",
-    "controllingRemote": "Controlling: {name}",
-    "noQbzdFound": "No QBZ Daemons found on your network",
-    "noQbzdFoundHint": "Make sure qbzd is running on the target device",
-    "recentDaemons": "Recent",
-    "discoveredDaemons": "Discovered on network",
     "queue": "Queue",
     "upNext": "Up Next",
     "ofTotal": "of",
@@ -1404,14 +1542,33 @@
     "volumeUp": "Increase volume",
     "volumeDown": "Decrease volume",
     "volumeLockedHw": "Volume locked at 100% — ALSA Direct hw: (adjust at DAC/hardware level)",
+    "volumeLockedRemote": "Volume control disabled by the cast device",
     "clearQueue": "Clear Queue",
     "queueEmpty": "Queue is empty",
     "queueEmptyDescription": "Search for music or browse your library to add tracks.",
     "playNext": "Play Next",
+    "playLater": "Play Later",
+    "download": "Download",
     "addToQueue": "Add to Queue",
     "removeFromQueue": "Remove from Queue",
     "saveQueue": "Save as Playlist",
     "searchQueue": "Search in queue...",
+    "sleepTimer": {
+      "title": "Sleep Timer",
+      "tooltipIdle": "Sleep Timer",
+      "tooltipActive": "Sleep timer · {remaining} left",
+      "stopAfter": "Stop playback after:",
+      "activeLabel": "Stops in",
+      "set": "Set Timer",
+      "edit": "Edit",
+      "cancel": "Cancel Timer",
+      "customMinutes": "Minutes",
+      "preset": {
+        "minutes": "{minutes} min",
+        "hours": "{hours} hr",
+        "custom": "Custom…"
+      }
+    },
     "noTracksMatch": "No tracks match \"{query}\"",
     "noTrackPlaying": "No track playing",
     "castToDevice": "Cast to device",
@@ -1647,6 +1804,7 @@
   },
   "qconnect": {
     "title": "Qobuz Connect",
+    "lastActionMayNotHaveApplied": "The last action may not have applied. Please check the current state.",
     "statusConnected": "Connected",
     "statusDisconnected": "Disconnected",
     "turnOn": "Turn On",
@@ -1654,6 +1812,9 @@
     "endpointLabel": "Endpoint",
     "lastErrorLabel": "Last error",
     "queueStateTitle": "Remote Queue",
+    "mixedQueueNotCast": "Mixed queue not cast to Qobuz Connect (contains local or Plex tracks).",
+    "trackUnavailableSkipping": "Track unavailable on the renderer, skipping to the next one.",
+    "trackPlaybackError": "The renderer could not play this track.",
     "queueVersionLabel": "Version",
     "queueItemsLabel": "Queue items",
     "autoplayModeLabel": "Autoplay",
@@ -1682,6 +1843,11 @@
     "remoteQueuedNext": "Queued on Qobuz Connect to play next.",
     "remoteQueuedLater": "Added to Qobuz Connect queue.",
     "remoteQueueFailed": "Failed to update Qobuz Connect queue.",
+    "remoteQueueReordered": "Reordered on Qobuz Connect",
+    "remoteQueueRemoved": "Removed from Qobuz Connect",
+    "remoteQueueCleared": "Cleared Qobuz Connect queue",
+    "rendererDisconnected": "The remote device disconnected from Qobuz Connect.",
+    "rendererUnreachable": "The remote device stopped responding.",
     "sessionTitle": "Session",
     "sessionUuid": "Session UUID",
     "activeRenderer": "Active renderer",
@@ -1959,6 +2125,11 @@
       "exclusiveModeDesc": "Lock audio device for exclusive use",
       "exclusiveModeNotAvailable": "Exclusive mode is only available with ALSA Direct backend. PipeWire and PulseAudio are multiplexed audio servers and cannot provide true exclusive access.",
       "exclusiveModeHelp": "ALSA Direct only. Locks the audio device so no other application can use it. Prevents system sounds from interfering with playback. Not available with PipeWire/PulseAudio since they are multiplexed audio servers.",
+      "exclusiveModeMacosDesc": "Lock audio device for exclusive use and automatically adjust sample rate for bit-perfect playback",
+      "exclusiveModeMacosHelp": "Prevents system sounds/other apps from interfering with playback and switches the sample rate of the output device to match playback using CoreAudio.",
+      "exclusiveModeMacosAvailable": "Exclusive mode is available with System Audio on macOS.",
+      "exclusiveModeUnavailableMultiplexed": "Exclusive mode is only available with ALSA Direct or macOS System Audio. PipeWire and PulseAudio are multiplexed audio servers and cannot provide true exclusive access.",
+      "exclusiveModeUnavailableGeneric": "Exclusive mode is only available with ALSA Direct or macOS System Audio.",
       "dacPassthrough": "DAC Passthrough",
       "dacPassthroughDesc": "Bypass system mixer for bit-perfect output",
       "dacPassthroughNote": "Refers to decoded audio content. DAC displays may show transport format, not content resolution.",
@@ -1979,7 +2150,7 @@
       "syncAudioOnStartup": "Sync audio settings on startup",
       "syncAudioOnStartupDesc": "Reload audio configuration from database when the app starts. Enable if your audio device or settings appear incorrect after launching.",
       "audioBackend": "Audio Backend",
-      "audioBackendDesc": "Choose audio system: Auto (recommended), PipeWire (modern), ALSA Direct (bit-perfect, exclusive), or PulseAudio (legacy).",
+      "audioBackendDesc": "Choose audio system: System (default — shared output like any app, no bit-perfect), Auto (recommended — picks the best available backend; you may still need to select your DAC), PipeWire (modern), ALSA Direct (bit-perfect, exclusive), or PulseAudio (legacy).",
       "currentSampleRate": "Current Sample Rate",
       "noActivePlayback": "No active playback",
       "loadingDevices": "Loading devices...",
@@ -2014,7 +2185,15 @@
       "resetConfirmTitle": "Reset Audio & Playback Settings?",
       "resetConfirmDesc": "This will reset all audio output, backend, and playback settings to defaults. Playback will be stopped.",
       "resetSuccess": "Audio and playback settings have been reset to defaults.",
-      "resetError": "Failed to reset audio settings: {error}"
+      "resetError": "Failed to reset audio settings: {error}",
+      "reserveDac": {
+        "label": "Reserve DAC for QBZ while running",
+        "description": "Tells the system audio service to leave this DAC alone while QBZ is open. Recommended if other apps occasionally interrupt your listening with notification sounds. Off by default.",
+        "statusActive": "Active — system audio is staying clear.",
+        "statusContested": "Another app currently holds this DAC at higher priority. Will retry when it releases.",
+        "statusUnavailable": "D-Bus unavailable in this environment. Reservation cannot be applied.",
+        "wirePlumberNote": "If your system has a custom WirePlumber configuration that overrides device reservation, this setting may have no effect."
+      }
     },
     "playback": {
       "title": "Playback",
@@ -2055,6 +2234,8 @@
     "appearance": {
       "title": "Appearance",
       "theme": "Theme",
+      "albumHeaderGradient": "Album header gradient",
+      "albumHeaderGradientDesc": "Use the album cover's dominant color as a backdrop in album detail views.",
       "themes": {
         "dark": "Dark",
         "light": "Light",
@@ -2108,6 +2289,8 @@
       "uiScale": "UI Scale",
       "sidebarPlaylistCollage": "Show playlist cover collages in sidebar",
       "sidebarPlaylistCollageDesc": "Render a 2×2 thumbnail of track covers next to each playlist. Disable on low-end machines to skip the extra images.",
+      "localLibraryTrackArtwork": "Show album artwork in Local Library track list",
+      "localLibraryTrackArtworkDesc": "Display the album cover thumbnail next to each track in the Tracks and Folders views. Off by default — large libraries pay a per-row image-decode cost.",
       "inAppToasts": "In-app toasts notifications",
       "systemNotifications": "System Notifications",
       "windowTitleShow": "Show track in window title",
@@ -2150,6 +2333,7 @@
       "matchSystemChrome": "Match system window chrome",
       "matchSystemChromeDesc": "Round the window corners and add a subtle edge so QBZ blends with your desktop theme. Takes effect after restarting the app (the window is rebuilt transparent so the corners don't show white).",
       "matchSystemChromeRestart": "Restart QBZ to apply the window chrome change.",
+      "matchSystemChromeCpuOverride": "Available only with GPU acceleration.",
       "windowControlsColorPresetCustom": "Custom",
       "windowControlsCustomColors": "Custom colors",
       "windowControlsClose": "Close",
@@ -2199,6 +2383,20 @@
         "blurChangeNote": "Re-enter immersive mode to apply.",
         "perfDegraded": "QBZ detected performance issues with the immersive view. Some effects have been temporarily disabled. You can re-enable them from Settings > Appearance.",
         "perfDontShowAgain": "Don't show this again"
+      },
+      "immersivePanels": {
+        "title": "Immersive Panels",
+        "summary": "Enable or disable individual immersive view panels",
+        "desc": "Disabled panels are hidden from the visualizer menu so you don't land on them by mistake.",
+        "cpuWarning": "Hardware acceleration is off. Panels marked GPU rely on shaders or 3D compositing and will be slow on your setup. They are disabled by default — only re-enable them if you know your machine can handle it.",
+        "heavyTooltip": "Requires GPU compositing for usable performance",
+        "warningModal": {
+          "title": "Hardware acceleration is off",
+          "body": "QBZ detected that your system is running without GPU compositing. Some immersive panels — Album Reactive, the three Neon variants, and Transient Pulse — rely on shaders or 3D effects that are not viable in software rendering. They have been hidden by default so you don't land on them by accident.",
+          "hint": "If you want to enable hardware acceleration, check Settings → Appearance → Composition. If you know your setup can handle GPU effects, you can re-enable individual panels from Settings → Appearance → Immersive Panels.",
+          "dontShowAgain": "Don't show this again",
+          "acknowledge": "Got it"
+        }
       },
       "immersiveFps": {
         "title": "Animation Frame Rate",
@@ -2265,50 +2463,6 @@
           "mono-dark": "Mono dark",
           "color": "Color"
         }
-      },
-      "composition": {
-        "title": "Composition",
-        "summary": "Visual rendering and GPU acceleration settings",
-        "helpText": "These settings control how QBZ renders the UI. Incorrect settings may cause crashes or poor performance. All options require a restart to take effect.",
-        "recoveryNote": "If QBZ crashes after changing these settings, launch from terminal with:",
-        "recoveryCmd": "QBZ_HARDWARE_ACCEL=0 qbz",
-        "fallbackWarning": "Graphics settings failed to load",
-        "fallbackDesc": "Using safe defaults. This may cause degraded performance. To reset:",
-        "hardwareAcceleration": "Hardware Acceleration",
-        "hardwareAccelerationDesc": "Enable GPU rendering. Disabling forces software rendering (CPU only). Turn off if you experience crashes or visual artifacts.",
-        "forceDmabuf": "Force DMA-BUF Renderer",
-        "forceDmabufDesc": "Force DMA-BUF buffer sharing with compositor. May improve performance but can crash on some systems (especially NVIDIA + Wayland).",
-        "forceX11": "Force X11 backend (Wayland)",
-        "forceX11Desc": "Use XWayland instead of native Wayland. Recommended for NVIDIA GPUs that crash on Wayland.",
-        "gdkScale": "Display scale (XWayland)",
-        "gdkScaleDesc": "GDK_SCALE override for XWayland. Leave empty for auto.",
-        "gdkDpiScale": "DPI scale (XWayland)",
-        "gdkDpiScaleDesc": "GDK_DPI_SCALE override for XWayland. Leave empty for auto.",
-        "gskRenderer": "GTK Renderer",
-        "gskRendererDesc": "GSK_RENDERER override. Controls how GTK4 renders the UI. Cairo is software-only (safest). GL/NGL use OpenGL. Vulkan uses the Vulkan API.",
-        "gskRendererAuto": "Auto (system default)",
-        "gskRendererCairo": "Cairo (Software)",
-        "envVarsTitle": "Environment variable overrides",
-        "envVarsDesc": "For advanced users. Set these before launching QBZ to override any setting above.",
-        "envVarHwAccel0": "Disable all GPU rendering (maximum compatibility)",
-        "envVarHwAccel1": "Force full GPU rendering (bypass all safety)",
-        "envVarForceX11": "Force XWayland backend",
-        "envVarSoftwareRender": "Force software rendering (Mesa llvmpipe)",
-        "envVarForceDmabuf": "Force DMA-BUF renderer on (may crash)",
-        "envVarDisableDmabuf": "Force DMA-BUF renderer off",
-        "profiles": {
-          "title": "Rendering profiles",
-          "helpText": "Quick presets for mixed-DPI and multi-monitor setups. Apply one and restart QBZ.",
-          "nativeWaylandLabel": "Native Wayland (Sharpest)",
-          "nativeWaylandDesc": "Use native Wayland rendering. Best text sharpness, may be heavier on some GPU/compositor combos.",
-          "x11BalancedLabel": "Xwayland Balanced",
-          "x11BalancedDesc": "Force Xwayland with GDK_SCALE=1 and GDK_DPI_SCALE=1.1 for a balanced size/sharpness tradeoff.",
-          "x11PerformanceLabel": "Xwayland Performance",
-          "x11PerformanceDesc": "Force Xwayland with neutral scaling (1.0/1.0). Blur background disabled for lower GPU load.",
-          "maxPerformanceLabel": "Max Performance",
-          "maxPerformanceDesc": "Software rendering (Cairo) with blur disabled. Maximum compatibility, lowest GPU usage. Use if experiencing stutter or crashes.",
-          "applied": "Applied profile: {profile}. Restart QBZ to take effect."
-        }
       }
     },
     "library": {
@@ -2325,6 +2479,13 @@
     },
     "integrations": {
       "title": "Integrations",
+      "discordRpc": {
+        "label": "Show Discord activity",
+        "description": "When playing music in QBZ, show the current track in your Discord status. Off by default — toggle on to enable.",
+        "overrideHeader": "If activity doesn't show in Discord (sandboxed installs)",
+        "flatpakNote": "Flatpak: run this once, then restart QBZ.",
+        "snapNote": "Snap: not supported. Install the .deb, .rpm, or .AppImage from GitHub Releases."
+      },
       "lastfm": "Last.fm",
       "spotify": "Spotify",
       "tidal": "Tidal",
@@ -2460,7 +2621,17 @@
       "qconnectDeviceName": "Device Name",
       "qconnectDeviceNameDesc": "Name displayed in Qobuz Connect",
       "noProtocolDeviceFound": "No {protocol} devices found",
-      "noProtocolDeviceFoundHint": "Make sure devices are on the same network"
+      "noProtocolDeviceFoundHint": "Make sure devices are on the same network",
+      "qconnect": {
+        "startupMode": {
+          "title": "Auto-connect Qobuz Connect on startup",
+          "description": "Choose whether Qobuz Connect activates automatically when QBZ launches.",
+          "off": "Off",
+          "on": "Always on",
+          "rememberLast": "Remember last state",
+          "localLibraryNote": "Remember, Qobuz Connect is not compatible with local library."
+        }
+      }
     },
     "storage": {
       "title": "Storage",
@@ -2560,12 +2731,12 @@
       "showInLibrary": "Show in Local Library",
       "showInLibraryDesc": "Display offline cached tracks in the Local Library view",
       "clearCache": "Clear All",
-      "openFolder": "Open Folder",
+      "openFolder": "Manage offline cache",
       "repair": "Repair Offline Cache",
       "repairDesc": "Fix offline markers lost during library scans",
       "manageCache": "Manage Offline Cache",
-      "manageCacheDesc": "Open the cache folder in your file manager",
-      "openFolderDesc": "Open the cache folder in your file manager",
+      "manageCacheDesc": "Browse and manage downloaded tracks and albums",
+      "openFolderDesc": "Browse and manage downloaded tracks and albums",
       "sectionSummary": "Cached tracks for offline playback",
       "repairing": "Repairing..."
     },
@@ -2619,6 +2790,84 @@
       "title": "Degraded performance",
       "perfDegraded": "Degraded performance",
       "perfDontShowAgain": "Don't show again"
+    },
+    "graphics": {
+      "title": "Graphics",
+      "summary": "GPU acceleration and rendering pipeline",
+      "helpText": "These settings control how QBZ renders the UI. Incorrect settings may cause crashes or poor performance. All options require a restart to take effect.",
+      "recoveryNote": "If QBZ crashes after changing these settings, launch from terminal with:",
+      "recoveryCmd": "QBZ_HARDWARE_ACCEL=0 qbz",
+      "fallbackWarning": "Graphics settings failed to load",
+      "fallbackDesc": "Using safe defaults. This may cause degraded performance. To reset:",
+      "hardwareAcceleration": "Hardware Acceleration",
+      "hardwareAccelerationDesc": "Enable GPU rendering. Disabling forces software rendering (CPU only). Turn off if you experience crashes or visual artifacts.",
+      "forceDmabuf": "Force DMA-BUF Renderer",
+      "forceDmabufDesc": "Force DMA-BUF buffer sharing with compositor. May improve performance but can crash on some systems (especially NVIDIA + Wayland).",
+      "forceDmabufDescSafe": "Enables DMA-BUF buffer sharing with the compositor for smoother rendering. Safe on your hardware. Restart required.",
+      "forceDmabufDescHybrid": "Your integrated GPU handles rendering, so DMA-BUF is safe to enable here. Improves rendering smoothness. Restart required.",
+      "forceDmabufDescNvidiaOnly": "Not recommended on NVIDIA-only systems — DMA-BUF can cause rendering instability. Restart required.",
+      "forceX11": "Force X11 backend (Wayland)",
+      "forceX11Desc": "Use XWayland instead of native Wayland. Recommended for NVIDIA GPUs that crash on Wayland.",
+      "gdkScale": "Display scale (XWayland)",
+      "gdkScaleDesc": "GDK_SCALE override for XWayland. Leave empty for auto.",
+      "gdkDpiScale": "DPI scale (XWayland)",
+      "gdkDpiScaleDesc": "GDK_DPI_SCALE override for XWayland. Leave empty for auto.",
+      "gskRenderer": "GTK Renderer",
+      "gskRendererDesc": "GSK_RENDERER override. Controls how GTK4 renders the UI. Cairo is software-only (safest). GL/NGL use OpenGL. Vulkan uses the Vulkan API.",
+      "gskRendererAuto": "Auto (system default)",
+      "gskRendererCairo": "Cairo (Software)",
+      "envVarsTitle": "Environment variable overrides",
+      "envVarsDesc": "For advanced users. Set these before launching QBZ to override any setting above.",
+      "envVarHwAccel0": "Disable all GPU rendering (maximum compatibility)",
+      "envVarHwAccel1": "Force full GPU rendering (bypass all safety)",
+      "envVarForceX11": "Force XWayland backend",
+      "envVarSoftwareRender": "Force software rendering (Mesa llvmpipe)",
+      "envVarForceDmabuf": "Force DMA-BUF renderer on (may crash)",
+      "envVarDisableDmabuf": "Force DMA-BUF renderer off",
+      "profiles": {
+        "title": "Rendering profiles",
+        "helpText": "Quick presets for mixed-DPI and multi-monitor setups. Apply one and restart QBZ.",
+        "nativeWaylandLabel": "Native Wayland (Sharpest)",
+        "nativeWaylandDesc": "Use native Wayland rendering. Best text sharpness, may be heavier on some GPU/compositor combos.",
+        "x11BalancedLabel": "Xwayland Balanced",
+        "x11BalancedDesc": "Force Xwayland with GDK_SCALE=1 and GDK_DPI_SCALE=1.1 for a balanced size/sharpness tradeoff.",
+        "x11PerformanceLabel": "Xwayland Performance",
+        "x11PerformanceDesc": "Force Xwayland with neutral scaling (1.0/1.0). Blur background disabled for lower GPU load.",
+        "maxPerformanceLabel": "Max Performance",
+        "maxPerformanceDesc": "Software rendering (Cairo) with blur disabled. Maximum compatibility, lowest GPU usage. Use if experiencing stutter or crashes.",
+        "applied": "Applied profile: {profile}. Restart QBZ to take effect."
+      },
+      "recommendation": {
+        "title": "Recommended for your system",
+        "detected": "Detected",
+        "dismiss": "Dismiss",
+        "redetect": "Detect recommended settings",
+        "noChanges": "Settings already match the recommendation for this system."
+      },
+      "restartRequired": "Restart QBZ for the change to take effect.",
+      "gpu": {
+        "label": "Rendering GPU",
+        "desc": "Pin WebKit to a specific GPU stack. Restart required. Auto lets the system pick.",
+        "auto": "Auto (system default)",
+        "autoWithTarget": "Auto ({name})",
+        "integrated": "Integrated — {name}",
+        "recommendedSuffix": "(recommended)",
+        "discrete": "Discrete — {name}",
+        "software": "Software (CPU, llvmpipe)"
+      },
+      "nvidiaCompatMode": "NVIDIA Wayland compatibility (experimental)",
+      "nvidiaCompatModeDesc": "Enable when NVIDIA + Wayland renders incorrectly with the default settings. Sets __NV_DISABLE_EXPLICIT_SYNC=1 and lifts the defensive compositing shutdown so WebKit can use the full GPU path. Requires libnvidia-egl-gbm installed.",
+      "resetCmdTitle": "If the app fails to launch",
+      "resetCmdDesc": "Run this command in a terminal to reset graphics settings to safe defaults. The boot watchdog usually recovers automatically, but this is the manual escape hatch.",
+      "recovery": {
+        "title": "Last launch crashed during graphics init",
+        "titleLocked": "Disabled after repeated graphics crashes",
+        "hwAccelDisabled": "Hardware acceleration was reverted.",
+        "dmabufDisabled": "DMA-BUF renderer was reverted.",
+        "gpuPinDisabled": "Rendering GPU preference was reset to Auto.",
+        "tryAgain": "Try again",
+        "cleared": "Crash flag cleared. Re-enable the setting in Settings if you want to retry."
+      }
     }
   },
   "sort": {
@@ -2669,6 +2918,7 @@
     "failedLoadMoreAlbums": "Failed to load more albums",
     "failedAddToQueue": "Failed to add to queue",
     "failedPlayTrack": "Failed to play track",
+    "failedSelectFolderTracks": "Failed to select folder tracks",
     "queueCleared": "Queue cleared",
     "queueEmpty": "Queue is empty",
     "queueEnded": "Queue ended",
@@ -2778,6 +3028,7 @@
     "findingSimilarArtists": "Finding similar artists...",
     "awardUnavailable": "Award detail not available for this entry.",
     "audioDeviceMissing": "Output device '{device}' is no longer available. Using system default.",
+    "audioInitFailed": "Audio output could not start: {reason}",
     "mixTrimmed": "Added {actual} songs to your queue (you asked for {requested}; some merged or capped per album)."
   },
   "topMixes": {
@@ -2791,7 +3042,9 @@
     "title": "Title",
     "album": "Album",
     "duration": "Duration",
-    "quality": "Quality"
+    "quality": "Quality",
+    "searchPlaceholder": "Search tracks…",
+    "noMatches": "No tracks match your search."
   },
   "updates": {
     "runningIn": "Running in {env}",

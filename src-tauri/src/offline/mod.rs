@@ -155,6 +155,12 @@ impl OfflineStore {
             "ALTER TABLE offline_settings ADD COLUMN pre_offline_stream_first_track INTEGER",
             "ALTER TABLE pending_playlist_sync ADD COLUMN local_track_ids TEXT",
             "ALTER TABLE pending_playlist_sync ADD COLUMN local_track_paths TEXT",
+            // Persisted offline cache size limit in bytes.
+            // NULL means "no explicit value set" — application layer falls
+            // back to the 5 GB default (see OfflineCacheState seed at session
+            // activation). Once the user sets a value through the UI, it is
+            // persisted as a non-NULL integer.
+            "ALTER TABLE offline_settings ADD COLUMN cache_limit_bytes INTEGER",
         ];
 
         for migration in migrations {
@@ -270,6 +276,36 @@ impl OfflineStore {
                 params![enabled as i64],
             )
             .map_err(|e| format!("Failed to set show network folders in manual offline: {}", e))?;
+        Ok(())
+    }
+
+    /// Read the persisted offline cache size limit in bytes.
+    ///
+    /// Returns:
+    /// - `Some(bytes)` when a value has been persisted via the UI.
+    /// - `None` when the column is NULL (legacy installs, never written).
+    ///   The application layer interprets this as "fall back to default".
+    pub fn get_cache_limit_bytes(&self) -> Result<Option<u64>, String> {
+        self.conn
+            .query_row(
+                "SELECT cache_limit_bytes FROM offline_settings WHERE id = 1",
+                [],
+                |row| row.get::<_, Option<i64>>(0),
+            )
+            .map(|opt| opt.map(|v| v as u64))
+            .map_err(|e| format!("Failed to read cache_limit_bytes: {}", e))
+    }
+
+    /// Persist the offline cache size limit. `None` clears the column to NULL
+    /// (no value set); `Some(bytes)` writes the value verbatim.
+    pub fn set_cache_limit_bytes(&self, limit: Option<u64>) -> Result<(), String> {
+        let param: Option<i64> = limit.map(|v| v as i64);
+        self.conn
+            .execute(
+                "UPDATE offline_settings SET cache_limit_bytes = ?1 WHERE id = 1",
+                params![param],
+            )
+            .map_err(|e| format!("Failed to set cache_limit_bytes: {}", e))?;
         Ok(())
     }
 
@@ -597,75 +633,84 @@ impl OfflineState {
     }
 }
 
-/// Counter for alternating between neutral endpoint and Qobuz checks.
-/// Using atomic for thread safety across async calls.
-static CHECK_COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+/// Consecutive failed connectivity polls. The offline flag is only raised
+/// once this reaches `OFFLINE_FAILURE_THRESHOLD`, so a single transient blip
+/// (Wi-Fi micro-drop, DNS hiccup, or a saturated link losing the probe race
+/// during a big Hi-Res download) can no longer flip the app offline. See
+/// issue #467.
+static CONSECUTIVE_FAILURES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
-/// Check network connectivity using a hybrid strategy:
-/// - 9 out of 10 checks go to a neutral endpoint (1.1.1.1) to verify basic internet
-/// - 1 out of 10 checks go to Qobuz to verify service availability
+/// Number of consecutive failed polls (~30 s apart) required before the app
+/// is declared offline. 2 ≈ 60 s of confirmed loss — lax enough to ride out
+/// blips, still reacts to a real outage within about a minute.
+pub const OFFLINE_FAILURE_THRESHOLD: u32 = 2;
+
+/// Record a connectivity-poll outcome and return the running consecutive
+/// failure count. Any success resets the counter to 0.
+pub fn record_connectivity_result(success: bool) -> u32 {
+    use std::sync::atomic::Ordering;
+    if success {
+        CONSECUTIVE_FAILURES.store(0, Ordering::Relaxed);
+        0
+    } else {
+        CONSECUTIVE_FAILURES.fetch_add(1, Ordering::Relaxed) + 1
+    }
+}
+
+/// Reset the consecutive-failure counter. Called on a strong positive signal
+/// (active streaming liveness, manual-mode change) so the next real loss
+/// starts counting from zero.
+pub fn reset_connectivity_failures() {
+    CONSECUTIVE_FAILURES.store(0, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Lightweight "generate_204"-style connectivity probes. A success is a
+/// near-empty 204/200 response, so the probe barely competes for bandwidth
+/// even while a large Hi-Res download is saturating the link — the exact
+/// condition (long Dream Theater / Yes tracks) that timed the old
+/// `HEAD https://1.1.1.1` probe out and produced a false offline (issue #467).
+const PROBE_ENDPOINTS: &[&str] = &[
+    "https://connectivitycheck.gstatic.com/generate_204",
+    "https://www.gstatic.com/generate_204",
+    "https://cloudflare.com/cdn-cgi/trace",
+];
+
+/// Check basic internet connectivity with a cheap, concurrent probe.
 ///
-/// This reduces load on Qobuz API and avoids false positives from rate limiting
-/// when the app is making many concurrent API calls.
+/// Races the lightweight endpoints above and returns `true` as soon as any
+/// one succeeds. This is intentionally *not* a Qobuz-service check: a slow or
+/// rate-limited Qobuz must never read as "offline" (issue #467). Actual Qobuz
+/// API failures are handled with retries/backoff in the fetch path instead.
 pub async fn check_network_connectivity() -> bool {
-    let counter = CHECK_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let check_qobuz = counter % 10 == 0;
-
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build();
-
-    let client = match client {
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(8))
+        .build()
+    {
         Ok(c) => c,
         Err(_) => return false,
     };
 
-    let endpoint = if check_qobuz {
-        "https://www.qobuz.com"
-    } else {
-        // Cloudflare DNS - highly reliable, low latency
-        "https://1.1.1.1"
-    };
-
-    // Try up to 2 times before declaring offline
-    for attempt in 1..=2 {
-        match client.head(endpoint).send().await {
-            Ok(response) => {
-                if response.status().is_success() || response.status().is_redirection() {
-                    return true;
+    let mut set = tokio::task::JoinSet::new();
+    for endpoint in PROBE_ENDPOINTS {
+        let client = client.clone();
+        let endpoint = (*endpoint).to_string();
+        set.spawn(async move {
+            match client.get(&endpoint).send().await {
+                Ok(response) => {
+                    response.status().is_success() || response.status().is_redirection()
                 }
+                Err(_) => false,
             }
-            Err(e) => {
-                log::warn!(
-                    "Network check attempt {} to {} failed: {}",
-                    attempt,
-                    endpoint,
-                    e
-                );
-            }
-        }
+        });
+    }
 
-        // Wait 1 second before retry
-        if attempt < 2 {
-            tokio::time::sleep(Duration::from_secs(1)).await;
+    while let Some(joined) = set.join_next().await {
+        if matches!(joined, Ok(true)) {
+            set.abort_all();
+            return true;
         }
     }
 
-    // If neutral endpoint failed, try Qobuz as fallback (maybe it's a DNS issue)
-    if !check_qobuz {
-        log::info!("Neutral endpoint failed, trying Qobuz as fallback...");
-        match client.head("https://www.qobuz.com").send().await {
-            Ok(response) => {
-                if response.status().is_success() || response.status().is_redirection() {
-                    return true;
-                }
-            }
-            Err(e) => {
-                log::warn!("Qobuz fallback check also failed: {}", e);
-            }
-        }
-    }
-
-    log::info!("Network connectivity check failed after all attempts");
+    log::info!("[offline] Connectivity probe failed on all endpoints");
     false
 }

@@ -2,7 +2,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { t } from '$lib/i18n';
   import { Disc3, LoaderCircle } from 'lucide-svelte';
-  import AlbumCard from './AlbumCard.svelte';
+  import AlbumCard from '$lib/discovery-v2/AlbumCardLite.svelte';
   import { formatQuality } from '$lib/adapters/qobuzAdapters';
   import { restoreScrollOnBackForward } from '$lib/utils/scrollRestore';
 
@@ -53,6 +53,8 @@
     onLoadMore?: () => void;
     isLoadingMore?: boolean;
     onAddAlbumToPlaylist?: (albumId: string) => void;
+    onAlbumFavorite?: (albumId: string) => void;
+    isAlbumFavorite?: (albumId: string) => boolean;
   }
 
   let {
@@ -79,6 +81,8 @@
     onLoadMore,
     isLoadingMore = false,
     onAddAlbumToPlaylist,
+    onAlbumFavorite,
+    isAlbumFavorite,
   }: Props = $props();
 
   // Constants
@@ -319,21 +323,20 @@
                   title={album.title}
                   artist={album.artist.name}
                   genre={getGenreLabel?.(album) ?? album.genre?.name ?? ''}
-                  releaseDate={album.release_date_original}
-                  size="large"
+                  releaseYear={Number(album.release_date_original?.slice(0, 4)) || undefined}
                   quality={getQualityLabel?.(album) ?? ''}
+                  isAlbumFullyDownloaded={isAlbumDownloaded?.(album.id) ?? false}
                   onPlay={onAlbumPlay ? () => onAlbumPlay(album.id) : undefined}
                   onPlayNext={onAlbumPlayNext ? () => onAlbumPlayNext(album.id) : undefined}
                   onPlayLater={onAlbumPlayLater ? () => onAlbumPlayLater(album.id) : undefined}
-                  onAddAlbumToPlaylist={onAddAlbumToPlaylist ? () => onAddAlbumToPlaylist(album.id) : undefined}
+                  onAddToPlaylist={onAddAlbumToPlaylist ? () => onAddAlbumToPlaylist(album.id) : undefined}
                   onShareQobuz={onAlbumShareQobuz ? () => onAlbumShareQobuz(album.id) : undefined}
                   onShareSonglink={onAlbumShareSonglink ? () => onAlbumShareSonglink(album.id) : undefined}
                   onDownload={onAlbumDownload ? () => onAlbumDownload(album.id) : undefined}
-                  isAlbumFullyDownloaded={isAlbumDownloaded?.(album.id) ?? false}
-                  onOpenContainingFolder={onOpenAlbumFolder ? () => onOpenAlbumFolder(album.id) : undefined}
                   onReDownloadAlbum={onReDownloadAlbum ? () => onReDownloadAlbum(album.id) : undefined}
-                  {downloadStateVersion}
-                  onclick={() => handleAlbumClickEvent(album.id)}
+                  isFavorite={isAlbumFavorite?.(album.id) ?? false}
+                  onFavorite={onAlbumFavorite ? () => onAlbumFavorite(album.id) : undefined}
+                  onClick={() => handleAlbumClickEvent(album.id)}
                 />
               </div>
             {/each}

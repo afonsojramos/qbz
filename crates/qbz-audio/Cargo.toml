@@ -29,6 +29,9 @@ rodio = { version = "0.22", features = ["symphonia-all"] }
 symphonia = { workspace = true }
 ebur128 = "0.1"
 rustfft = "6.4"
+# FFT spectrum helpers for the frontend-agnostic visualizer producer
+# (Hann window, log-bar mapping). Kept in lockstep with the src-tauri dep.
+spectrum-analyzer = "1.5"
 
 # Database for loudness cache
 rusqlite = { version = "0.31", features = ["bundled"] }
@@ -36,12 +39,28 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 # System directories
 dirs = "6"
 
+# Lock-free SPSC ring buffer (f32-native) for the JACK feeder -> RT callback
+# handoff (#263 Tier 3). f32 elements avoid any byte/alignment handling.
+ringbuf = "0.4"
+
 [target.'cfg(target_os = "linux")'.dependencies]
 # ALSA for direct hardware access (bit-perfect)
-alsa = "0.10"
-# alsa-sys: direct FFI for snd_lib_error_set_handler (custom error routing)
-alsa-sys = "0.3"
+alsa = "0.11"
+# alsa-sys: direct FFI for snd_lib_error_set_handler (custom error routing).
+# Kept in lockstep with alsa (0.11 -> alsa-sys 0.4); a single alsa-sys is
+# required because of the `links = "alsa"` constraint shared with cpal.
+alsa-sys = "0.4"
+# zbus for org.freedesktop.ReserveDevice1 D-Bus client (device reservation).
+# Pinned to v4 to share the transitive copy already pulled in by
+# secret-service/souvlaki and avoid duplicate zbus compiles.
+zbus = { version = "4", default-features = false, features = ["tokio"] }
+# JACK native backend (#263 Tier 3): QBZ as a first-class JACK client with stable
+# ports. Links libjack (provided by pipewire-jack on the rig). TODO(distribution):
+# feature-gate for Flatpak/distro builds that may not ship libjack — not blocking
+# while Tauri isn't being released.
+jack = "0.13"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # CoreAudio for device probing, sample rate switching, and (future) hog mode / exclusive mode
 coreaudio-rs = "0.14.1"
+objc2-core-audio = "0.3.2"

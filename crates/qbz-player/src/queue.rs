@@ -65,6 +65,54 @@ impl QueueManager {
         }
     }
 
+    /// The track at the current playback index, if any.
+    pub fn current(&self) -> Option<QueueTrack> {
+        let state = self.state.lock().unwrap();
+        state
+            .current_index
+            .and_then(|idx| state.tracks.get(idx).cloned())
+    }
+
+    /// Patch the cached quality (bit depth + sample rate) of every queued track
+    /// whose Plex `rating_key` matches one of `updates`. Used by the Plex
+    /// quality-hydration path so a track that gets hydrated while it is already
+    /// enqueued/playing has its frozen quality snapshot upgraded in place. Plex
+    /// rows carry their `rating_key` in `source_item_id_hint`. `sample_rate` is
+    /// in kHz to match the enqueue-time snapshot (`local_queue_track`). Returns
+    /// true if the CURRENT track was among those patched (the caller then
+    /// re-pushes the now-playing stamp).
+    pub fn patch_plex_quality(&self, updates: &[(String, Option<u32>, Option<f64>)]) -> bool {
+        if updates.is_empty() {
+            return false;
+        }
+        let mut state = self.state.lock().unwrap();
+        let current_idx = state.current_index;
+        let mut current_patched = false;
+        for (idx, track) in state.tracks.iter_mut().enumerate() {
+            if track.source.as_deref() != Some("plex") {
+                continue;
+            }
+            let Some(key) = track.source_item_id_hint.as_deref() else {
+                continue;
+            };
+            if let Some((_, bit_depth, sample_rate)) =
+                updates.iter().find(|(k, _, _)| k == key)
+            {
+                if let Some(bd) = *bit_depth {
+                    track.bit_depth = Some(bd);
+                    track.hires = bd > 16;
+                }
+                if let Some(sr) = *sample_rate {
+                    track.sample_rate = Some(sr);
+                }
+                if current_idx == Some(idx) {
+                    current_patched = true;
+                }
+            }
+        }
+        current_patched
+    }
+
     /// Add a track to the end of the queue
     pub fn add_track(&self, track: QueueTrack) {
         let mut state = self.state.lock().unwrap();
@@ -329,6 +377,54 @@ impl QueueManager {
             Self::remove_index_from_shuffle_internal(&mut state, actual_index);
         }
         Some(removed)
+    }
+
+    /// Number of upcoming tracks (those after the current one) in the current
+    /// play order. Mirrors `get_state_full`'s upcoming computation: shuffle-aware
+    /// when shuffle is on, otherwise the tail of `tracks` after `current_index`.
+    fn upcoming_len(state: &InternalState) -> usize {
+        match state.current_index {
+            Some(curr) => {
+                if state.shuffle {
+                    state
+                        .shuffle_order
+                        .len()
+                        .saturating_sub(state.shuffle_position + 1)
+                } else {
+                    state.tracks.len().saturating_sub(curr + 1)
+                }
+            }
+            None => state.tracks.len(),
+        }
+    }
+
+    /// Remove every upcoming track positioned AFTER `upcoming_index` in the
+    /// current play order; the track at `upcoming_index` is kept. Works in
+    /// UPCOMING space (not absolute `tracks` indices), so it stays correct under
+    /// shuffle by reusing `remove_upcoming_track`, which resolves upcoming
+    /// positions through `shuffle_order`. Peels positions off the tail inward so
+    /// the surviving positions never shift under it. Returns the count removed.
+    ///
+    /// This is the wired "Remove all after" queue action. (`remove_after`, below,
+    /// truncates by absolute `tracks` index and is NOT play-order-aware under
+    /// shuffle — it is kept only for its existing unit coverage.)
+    pub fn remove_upcoming_after(&self, upcoming_index: usize) -> usize {
+        let mut upcoming_len = {
+            let state = self.state.lock().unwrap();
+            Self::upcoming_len(&state)
+        };
+        if upcoming_index + 1 >= upcoming_len {
+            return 0;
+        }
+        let mut removed = 0usize;
+        while upcoming_len > upcoming_index + 1 {
+            if self.remove_upcoming_track(upcoming_len - 1).is_none() {
+                break;
+            }
+            removed += 1;
+            upcoming_len -= 1;
+        }
+        removed
     }
 
     /// Remove all tracks at indices greater than `index`. The track at
@@ -651,6 +747,38 @@ impl QueueManager {
         prev_idx.and_then(|idx| state.tracks.get(idx).cloned())
     }
 
+    /// Move the current pointer to the track whose id matches `id`, WITHOUT
+    /// starting playback. Used to reconcile the queue pointer to a track the
+    /// audio engine already advanced to on its own (a gapless hand-off
+    /// happens inside the player, not through `next`), so the now-playing
+    /// card never goes stale while the seek bar keeps moving.
+    ///
+    /// Returns the matched track plus whether the pointer actually moved
+    /// (`false` = it was already current). Returns `None` when no queue track
+    /// has that id, leaving the pointer untouched.
+    pub fn sync_current_to_id(&self, id: u64) -> Option<(QueueTrack, bool)> {
+        let mut state = self.state.lock().unwrap();
+        let target = state.tracks.iter().position(|t| t.id == id)?;
+        let moved = state.current_index != Some(target);
+        if moved {
+            // Record the outgoing track so `previous` still walks back.
+            if let Some(curr_idx) = state.current_index {
+                state.history.push_back(curr_idx);
+                while state.history.len() > 50 {
+                    state.history.pop_front();
+                }
+            }
+            state.current_index = Some(target);
+            // Keep the shuffle cursor aligned with the new position.
+            if state.shuffle {
+                if let Some(pos) = state.shuffle_order.iter().position(|&x| x == target) {
+                    state.shuffle_position = pos;
+                }
+            }
+        }
+        state.tracks.get(target).cloned().map(|t| (t, moved))
+    }
+
     /// Jump to a track by its position in the `upcoming` list as returned by
     /// `get_state`. This is the position the user sees in the Queue sidebar;
     /// the method resolves it to the correct canonical index even when
@@ -682,11 +810,19 @@ impl QueueManager {
             return None;
         }
 
-        // Save current to history
+        // Save current to history — ONLY when actually moving to a DIFFERENT
+        // track. Jumping to the index already current (e.g. the QConnect
+        // controller's `materialize_remote_queue` re-aligning the cursor to the
+        // same index via `play_index`, since the stopped local player makes the
+        // alignment fire unconditionally) must NOT record a spurious "previous"
+        // entry, or the current track shows up duplicated in the History tab.
+        // Matches `sync_current_to_id`'s `moved` guard.
         if let Some(curr_idx) = state.current_index {
-            state.history.push_back(curr_idx);
-            while state.history.len() > 50 {
-                state.history.pop_front();
+            if curr_idx != index {
+                state.history.push_back(curr_idx);
+                while state.history.len() > 50 {
+                    state.history.pop_front();
+                }
             }
         }
 
@@ -869,6 +1005,58 @@ impl QueueManager {
         (state.tracks.clone(), state.current_index)
     }
 
+    /// Get the full queue state without the upcoming/history caps applied by
+    /// `get_state()`. Used by clients that paginate the upcoming list (e.g.
+    /// the Queue sidebar's "UP NEXT" paginator) and need the complete history.
+    /// The `upcoming` ordering is shuffle-aware, matching `get_state()`.
+    pub fn get_state_full(&self) -> QueueState {
+        let state = self.state.lock().unwrap();
+
+        let current_track = state
+            .current_index
+            .and_then(|idx| state.tracks.get(idx).cloned());
+
+        // Full upcoming list (after current), shuffle-aware. No `take` cap.
+        let upcoming: Vec<QueueTrack> = if let Some(curr_idx) = state.current_index {
+            if state.shuffle {
+                state
+                    .shuffle_order
+                    .iter()
+                    .skip(state.shuffle_position + 1)
+                    .filter_map(|&idx| state.tracks.get(idx).cloned())
+                    .collect()
+            } else {
+                state
+                    .tracks
+                    .iter()
+                    .skip(curr_idx + 1)
+                    .cloned()
+                    .collect()
+            }
+        } else {
+            state.tracks.clone()
+        };
+
+        // Full history (recent first). No `take` cap.
+        let history_tracks: Vec<QueueTrack> = state
+            .history
+            .iter()
+            .rev()
+            .filter_map(|&idx| state.tracks.get(idx).cloned())
+            .collect();
+
+        QueueState {
+            current_track,
+            current_index: state.current_index,
+            upcoming,
+            history: history_tracks,
+            shuffle: state.shuffle,
+            repeat: state.repeat,
+            total_tracks: state.tracks.len(),
+            stop_after_track_id: state.stop_after_track_id,
+        }
+    }
+
     /// Regenerate shuffle order (internal, must be called with lock held)
     fn regenerate_shuffle_order_internal(state: &mut InternalState) {
         let mut order: Vec<usize> = (0..state.tracks.len()).collect();
@@ -1033,6 +1221,7 @@ mod tests {
             version: None,
             artist: "Artist".to_string(),
             album: "Album".to_string(),
+            album_version: None,
             duration_secs: 180,
             artwork_url: None,
             hires: false,
@@ -1100,6 +1289,110 @@ mod tests {
         assert_eq!(state.total_tracks, 0);
     }
 
+    // ===================================================================
+    // LANE C DIAGNOSTIC TESTS (B1 — sync_current_to_id pointer robustness)
+    // These reproduce concrete states where the QueueManager pointer ends
+    // up at a DIFFERENT track than the audio engine is actually playing.
+    // ===================================================================
+
+    /// B1 ROOT-CAUSE (a): live track id NOT present in `state.tracks`.
+    /// When the audio engine has gaplessly advanced into a track that is no
+    /// longer in the queue (e.g. the queue was replaced by a brand-new list
+    /// while the OLD track was still draining, or an infinite-radio / single-
+    /// track-replace), `sync_current_to_id` returns None and the pointer is
+    /// left untouched — pointing at the STALE old track. Both NPB and sidebar
+    /// then read the wrong `current_track`, and the poll loop never retries
+    /// (it updates `last_track_id` and `continue`s). This is the "cleared the
+    /// queue and it did NOT fix it" symptom.
+    #[test]
+    fn test_sync_current_to_id_unknown_id_leaves_pointer_stale() {
+        let queue = QueueManager::new();
+        queue.add_track(create_test_track(100)); // "Enjoy the Silence"
+        queue.add_track(create_test_track(101));
+        queue.play_index(0); // pointer = 0 -> track 100
+
+        // The audio engine is actually playing track 999 ("Beetlebum"), which
+        // is NOT in the queue (queue was replaced / radio handoff).
+        let result = queue.sync_current_to_id(999);
+
+        // Sync fails — pointer cannot be corrected.
+        assert!(result.is_none(), "sync should return None for unknown id");
+
+        // The pointer is STILL on the stale track 100, so the now-playing
+        // surfaces report the WRONG track while audio plays 999.
+        let state = queue.get_state_full();
+        assert_eq!(
+            state.current_track.unwrap().id,
+            100,
+            "pointer stays stale at the OLD track when sync_current_to_id can't find the live id"
+        );
+    }
+
+    /// B1 ROOT-CAUSE (a'): clear(keep_current) when the kept track is NOT the
+    /// audible one. The user clears the queue to "fix" the stale now-playing,
+    /// but clear keeps the track at the (already stale) `current_index`, so the
+    /// wrong track is now the SOLE entry — and because its id != the live audio
+    /// id, a subsequent sync_current_to_id STILL can't correct it. Reproduces
+    /// the user's "cleared the queue and it did NOT fix it".
+    #[test]
+    fn test_clear_keep_current_preserves_the_wrong_track() {
+        let queue = QueueManager::new();
+        queue.add_track(create_test_track(100)); // stale "now playing"
+        queue.add_track(create_test_track(101));
+        queue.play_index(0); // pointer stuck on 100 (audio actually plays 999)
+
+        queue.clear(true); // user hits "Clear Queue" to fix the stale row
+
+        let state = queue.get_state_full();
+        // The kept track is the WRONG one (100), not the audible 999.
+        assert_eq!(state.current_track.unwrap().id, 100);
+
+        // And sync still can't fix it: 999 isn't in the 1-track queue.
+        assert!(queue.sync_current_to_id(999).is_none());
+        assert_eq!(queue.get_state_full().current_track.unwrap().id, 100);
+    }
+
+    /// B1 ROOT-CAUSE (b): DUPLICATE track ids in the queue.
+    /// `sync_current_to_id` uses `position(|t| t.id == id)`, which returns the
+    /// FIRST match. If the same track id appears twice (very common: a track
+    /// added to a playlist twice, an album with a repeated bonus track, or a
+    /// QConnect queue echo), advancing the audio into the SECOND occurrence
+    /// resyncs the pointer to the FIRST occurrence — wrong index. The
+    /// now-playing track id is "right" but the upcoming list, position, and any
+    /// index-derived state are computed from the wrong slot.
+    #[test]
+    fn test_sync_current_to_id_duplicate_id_resyncs_to_first_occurrence() {
+        let queue = QueueManager::new();
+        queue.add_track(create_test_track(100)); // idx 0
+        queue.add_track(create_test_track(200)); // idx 1
+        queue.add_track(create_test_track(100)); // idx 2  (DUPLICATE of idx 0)
+        queue.add_track(create_test_track(300)); // idx 3
+        queue.play_index(1); // pointer = 1 (track 200)
+
+        // Audio gaplessly advanced into the SECOND copy of track 100 (idx 2).
+        let (_, moved) = queue
+            .sync_current_to_id(100)
+            .expect("id 100 is present, so sync succeeds");
+        assert!(moved, "pointer moved off track 200");
+
+        let state = queue.get_state_full();
+        // current_index resynced to the FIRST occurrence (idx 0), NOT idx 2.
+        assert_eq!(
+            state.current_index,
+            Some(0),
+            "sync_current_to_id resyncs to the FIRST id match (idx 0), not the actually-playing idx 2"
+        );
+        // Consequence: the UP-NEXT list is computed from the wrong slot. From
+        // idx 0 the upcoming is [200, 100, 300]; from the real idx 2 it should
+        // be [300]. The sidebar shows a wrong upcoming list.
+        let upcoming_ids: Vec<u64> = state.upcoming.iter().map(|t| t.id).collect();
+        assert_eq!(
+            upcoming_ids,
+            vec![200, 100, 300],
+            "upcoming is derived from the wrong (first-occurrence) index"
+        );
+    }
+
     #[test]
     fn test_clear_preserves_history() {
         let queue = QueueManager::new();
@@ -1119,6 +1412,29 @@ mod tests {
         let after = queue.get_state();
         assert_eq!(after.history.len(), 1);
         assert_eq!(after.history[0].id, 123);
+    }
+
+    #[test]
+    fn play_index_to_same_track_does_not_push_history() {
+        let queue = QueueManager::new();
+        queue.add_track(create_test_track(1));
+        queue.add_track(create_test_track(2));
+        queue.play_index(0); // current None -> 0, no push
+
+        // Re-align to the SAME index — the QConnect controller materialize path
+        // calls play_index with the index already current. It must NOT record a
+        // spurious "previous" entry (the track-shows-twice-in-History bug).
+        queue.play_index(0);
+        assert!(
+            queue.get_state().history.is_empty(),
+            "re-aligning to the current track must not add a history entry"
+        );
+
+        // A genuine move still records the outgoing track.
+        queue.play_index(1);
+        let history = queue.get_state().history;
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].id, 1);
     }
 
     #[test]
@@ -1818,6 +2134,86 @@ mod tests {
     }
 
     #[test]
+    fn test_remove_upcoming_after_linear() {
+        let queue = QueueManager::new();
+        // 101 playing, upcoming = [102, 103, 104, 105].
+        queue.set_queue(
+            (101..=105).map(create_test_track).collect(),
+            Some(0),
+        );
+
+        // Keep upcoming positions 0..=1 (102, 103); drop 2, 3 (104, 105).
+        let removed = queue.remove_upcoming_after(1);
+
+        assert_eq!(removed, 2);
+        let state = queue.get_state_full();
+        assert_eq!(state.current_track.map(|t| t.id), Some(101));
+        assert_eq!(
+            state.upcoming.iter().map(|t| t.id).collect::<Vec<_>>(),
+            vec![102, 103]
+        );
+    }
+
+    #[test]
+    fn test_remove_upcoming_after_on_last_upcoming_is_noop() {
+        let queue = QueueManager::new();
+        queue.set_queue((101..=103).map(create_test_track).collect(), Some(0));
+        // Upcoming = [102, 103]; position 1 is the last, nothing after it.
+        let removed = queue.remove_upcoming_after(1);
+        assert_eq!(removed, 0);
+        assert_eq!(queue.get_state().total_tracks, 3);
+    }
+
+    #[test]
+    fn test_remove_upcoming_after_no_current_track() {
+        let queue = QueueManager::new();
+        // No current index -> every track is upcoming.
+        queue.set_queue((101..=104).map(create_test_track).collect(), None);
+        let removed = queue.remove_upcoming_after(0);
+        assert_eq!(removed, 3);
+        let state = queue.get_state_full();
+        assert_eq!(
+            state.upcoming.iter().map(|t| t.id).collect::<Vec<_>>(),
+            vec![101]
+        );
+    }
+
+    #[test]
+    fn test_remove_upcoming_after_respects_shuffle_play_order() {
+        let queue = QueueManager::new();
+        // tracks: 101..105 at indices 0..4. Shuffle play order = [2,0,4,1,3]
+        // -> 103(current), then upcoming 101, 105, 102, 104.
+        queue.set_queue_with_order(
+            (101..=105).map(create_test_track).collect(),
+            Some(2),
+            true,
+            Some(vec![2, 0, 4, 1, 3]),
+        );
+
+        // Keep upcoming positions 0..=1 (101, 105); drop 2, 3 (102, 104).
+        let removed = queue.remove_upcoming_after(1);
+
+        assert_eq!(removed, 2);
+        let state = queue.get_state_full();
+        assert_eq!(state.current_track.map(|t| t.id), Some(103));
+        assert_eq!(
+            state.upcoming.iter().map(|t| t.id).collect::<Vec<_>>(),
+            vec![101, 105]
+        );
+    }
+
+    #[test]
+    fn test_remove_upcoming_after_invalidates_marker_in_removed_range() {
+        let queue = QueueManager::new();
+        queue.set_queue((101..=105).map(create_test_track).collect(), Some(0));
+        queue.set_stop_after(104); // upcoming position 2 -> removed by after(1)
+
+        queue.remove_upcoming_after(1);
+
+        assert_eq!(queue.get_stop_after(), None);
+    }
+
+    #[test]
     fn test_get_state_includes_stop_after() {
         let queue = QueueManager::new();
         queue.add_track(create_test_track(101));
@@ -1826,6 +2222,58 @@ mod tests {
         let state = queue.get_state();
 
         assert_eq!(state.stop_after_track_id, Some(101));
+    }
+
+    #[test]
+    fn test_get_state_full_returns_uncapped_upcoming() {
+        let queue = QueueManager::new();
+        // 50 tracks — more than get_state()'s 20-track upcoming cap.
+        for i in 1..=50 {
+            queue.add_track(create_test_track(i));
+        }
+        queue.play_index(0);
+
+        let capped = queue.get_state();
+        assert_eq!(capped.upcoming.len(), 20, "get_state caps upcoming at 20");
+
+        let full = queue.get_state_full();
+        assert_eq!(full.upcoming.len(), 49, "get_state_full returns all upcoming");
+        assert_eq!(full.total_tracks, 50);
+        assert_eq!(full.upcoming.first().unwrap().id, 2);
+        assert_eq!(full.upcoming.last().unwrap().id, 50);
+    }
+
+    #[test]
+    fn test_get_state_full_returns_uncapped_history() {
+        let queue = QueueManager::new();
+        for i in 1..=30 {
+            queue.add_track(create_test_track(i));
+        }
+        queue.play_index(0);
+        // Advance through 25 tracks — more than get_state()'s 10-entry cap.
+        for _ in 0..25 {
+            queue.next();
+        }
+
+        let capped = queue.get_state();
+        assert_eq!(capped.history.len(), 10, "get_state caps history at 10");
+
+        let full = queue.get_state_full();
+        assert_eq!(full.history.len(), 25, "get_state_full returns all history");
+        // Newest-first ordering: most recently played sits at the front.
+        assert_eq!(full.history.first().unwrap().id, 25);
+    }
+
+    #[test]
+    fn test_get_state_full_no_current_track_returns_all_as_upcoming() {
+        let queue = QueueManager::new();
+        for i in 1..=5 {
+            queue.add_track(create_test_track(i));
+        }
+
+        let full = queue.get_state_full();
+        assert!(full.current_track.is_none());
+        assert_eq!(full.upcoming.len(), 5);
     }
 
     #[test]

@@ -5,8 +5,10 @@
 //! to `QconnectServiceState` after a `runtime.check_requirements` gate.
 
 use qconnect_app::{
-    evaluate_remote_queue_admission, resolve_handoff_intent, QConnectQueueState,
-    QConnectRendererState, QueueCommandType, RendererReport, RendererReportType,
+    evaluate_remote_queue_admission, resolve_handoff_intent,
+    validate_track_origins_for_admission as validate_core_track_origins_for_admission,
+    AdmissionDecision, QConnectQueueState, QConnectRendererState, QconnectStartupMode,
+    QueueCommandType, RendererReport, RendererReportType,
 };
 use tauri::{AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
@@ -107,17 +109,34 @@ pub async fn v2_qconnect_connect(
         .await
         .map_err(RuntimeError::Internal)?;
 
-    service
+    let result = service
         .connect(app_handle, core_bridge.0.clone(), config)
         .await
-        .map_err(RuntimeError::Internal)
+        .map_err(RuntimeError::Internal);
+
+    // Write-through last_known_state when mode == RememberLast.
+    if result.is_ok()
+        && super::startup::load_startup_mode() == QconnectStartupMode::RememberLast
+    {
+        super::startup::save_last_known_state(true);
+    }
+
+    result
 }
 
 #[tauri::command]
 pub async fn v2_qconnect_disconnect(
     service: State<'_, QconnectServiceState>,
 ) -> Result<QconnectConnectionStatus, RuntimeError> {
-    service.disconnect().await.map_err(RuntimeError::Internal)
+    let result = service.disconnect().await.map_err(RuntimeError::Internal);
+
+    if result.is_ok()
+        && super::startup::load_startup_mode() == QconnectStartupMode::RememberLast
+    {
+        super::startup::save_last_known_state(false);
+    }
+
+    result
 }
 
 #[tauri::command]
@@ -164,6 +183,21 @@ pub async fn v2_qconnect_evaluate_queue_admission(
     })
 }
 
+/// Thin Tauri-side wrapper over the frontend-agnostic
+/// `qconnect_core::validate_track_origins_for_admission`: maps the wire
+/// `QconnectTrackOrigin`s to core `TrackOrigin`s and delegates. The pure
+/// per-track backstop logic (empty-list block, any-non-Qobuz block) lives in
+/// `qconnect-core` next to `evaluate_remote_queue_admission`.
+pub(super) fn validate_track_origins_for_admission(
+    origins: &[QconnectTrackOrigin],
+) -> AdmissionDecision {
+    let core_origins: Vec<_> = origins
+        .iter()
+        .map(|origin| origin.into_core_origin())
+        .collect();
+    validate_core_track_origins_for_admission(&core_origins)
+}
+
 #[tauri::command]
 pub async fn v2_qconnect_send_command_with_admission(
     request: QconnectSendCommandWithAdmissionRequest,
@@ -178,8 +212,24 @@ pub async fn v2_qconnect_send_command_with_admission(
 
     if request.command_type.requires_remote_queue_admission() {
         let core_origin = request.origin.into_core_origin();
-        let decision = evaluate_remote_queue_admission(core_origin);
-        if !decision.accepted {
+        let command_decision = evaluate_remote_queue_admission(core_origin);
+
+        // Per-track backstop: only enforced when the caller actually ships
+        // per-track origins (bulk queue loads). Single-track play-next/play-later
+        // legitimately carry no `track_origins` and gate on the command-level
+        // origin alone, so an empty list here must NOT over-block them.
+        let per_track_decision = if request.track_origins.is_empty() {
+            command_decision.clone()
+        } else {
+            validate_track_origins_for_admission(&request.track_origins)
+        };
+
+        if !command_decision.accepted || !per_track_decision.accepted {
+            let decision = if !per_track_decision.accepted {
+                per_track_decision
+            } else {
+                command_decision
+            };
             log::warn!(
                 "[QConnect] send_command_with_admission: BLOCKED reason={}",
                 decision.reason
@@ -355,6 +405,19 @@ pub async fn v2_qconnect_stop_if_remote(
 ) -> Result<bool, RuntimeError> {
     service
         .stop_if_remote(&app_handle)
+        .await
+        .map_err(RuntimeError::Internal)
+}
+
+#[tauri::command]
+#[allow(non_snake_case)]
+pub async fn v2_qconnect_set_position_if_remote(
+    positionMs: i64,
+    app_handle: AppHandle,
+    service: State<'_, QconnectServiceState>,
+) -> Result<bool, RuntimeError> {
+    service
+        .set_position_if_remote(positionMs, &app_handle)
         .await
         .map_err(RuntimeError::Internal)
 }
@@ -683,6 +746,22 @@ pub async fn v2_qconnect_report_playback_state(
         {
             log::warn!("[QConnect] Failed to report file audio quality: {err}");
         }
+
+        // P1-7: also report the actual DAC output format (DeviceAudioQualityChanged,
+        // tag 27). In QBZ's bit-perfect pipeline the output config matches the track
+        // under passthrough; the snapshot above already carries the real output
+        // stream sample_rate / bit_depth / channels.
+        if let Err(err) = service
+            .report_device_audio_quality_if_changed(
+                queue_version,
+                audio_quality.sampling_rate,
+                audio_quality.bit_depth,
+                audio_quality.nb_channels,
+            )
+            .await
+        {
+            log::warn!("[QConnect] Failed to report device audio quality: {err}");
+        }
     }
 
     if let Err(err) = app_handle.emit(
@@ -784,6 +863,34 @@ pub(super) fn should_report_queue_item_ids_for_renderer_state(
         || (local_renderer_active && resolved_current_qid.is_some())
 }
 
+/// Build a `CtrlSrvrSetPlayerState` request that seeks the remote renderer to
+/// `position_ms` for `current_queue_item_id` under optimistic concurrency.
+///
+/// `playing_state` is intentionally `None`: a seek must not toggle play/pause.
+pub(super) fn build_set_position_player_state_request(
+    position_ms: i64,
+    current_queue_item_id: Option<u64>,
+    queue_version: super::QconnectQueueVersionPayload,
+) -> super::QconnectSetPlayerStateRequest {
+    let current_position = i32::try_from(position_ms.max(0)).ok();
+    let current_queue_item = current_queue_item_id.and_then(|qid| {
+        i32::try_from(qid)
+            .ok()
+            .map(|id| super::QconnectSetPlayerStateQueueItemPayload {
+                queue_version: Some(super::QconnectQueueVersionPayload {
+                    major: queue_version.major,
+                    minor: queue_version.minor,
+                }),
+                id: Some(id),
+            })
+    });
+    super::QconnectSetPlayerStateRequest {
+        playing_state: None,
+        current_position,
+        current_queue_item,
+    }
+}
+
 /// Report volume change to QConnect server.
 #[tauri::command]
 pub async fn v2_qconnect_report_volume(
@@ -840,6 +947,19 @@ pub async fn v2_qconnect_set_device_name(
         *guard = Some(trimmed.clone());
         persist_device_name(Some(&trimmed));
     }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn v2_qconnect_get_startup_mode() -> Result<String, RuntimeError> {
+    Ok(super::startup::load_startup_mode().as_str().to_string())
+}
+
+#[tauri::command]
+pub async fn v2_qconnect_set_startup_mode(mode: String) -> Result<(), RuntimeError> {
+    let parsed = QconnectStartupMode::from_str(&mode)
+        .ok_or_else(|| RuntimeError::Internal(format!("invalid startup mode: {mode}")))?;
+    super::startup::save_startup_mode(parsed);
     Ok(())
 }
 

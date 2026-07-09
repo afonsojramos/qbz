@@ -12,7 +12,35 @@ use std::sync::atomic::AtomicBool;
 #[cfg(target_os = "linux")]
 use std::sync::{Arc, Mutex};
 
+/// Log a PCM recovery and record it as a network-throttle underrun signal.
+///
+/// Each call to ALSA's `pcm.recover()` that returns successfully indicates
+/// that the writer thread fell behind the kernel's playback buffer — i.e.
+/// an audio underrun. The network throttle treats this as the strongest
+/// possible "slow down" signal and immediately drops the prefetch cap to
+/// zero for `PANIC_WINDOW_SECS`, so the live stream gets the full pipe to
+/// recover.
+#[cfg(target_os = "linux")]
+fn log_pcm_recovery(suffix: &str) {
+    if suffix.is_empty() {
+        log::warn!("[ALSA Direct] Recovered from PCM error");
+    } else {
+        log::warn!("[ALSA Direct] Recovered from PCM error {}", suffix);
+    }
+    crate::network_throttle::state().record_underrun();
+}
+
 /// Direct ALSA PCM stream for hw: devices
+///
+/// Field order is significant: Rust drops struct fields top-to-bottom, so the
+/// `PCM` is dropped first (releasing the kernel-level exclusive grip on the
+/// `hw:` device) BEFORE `_reservation` drops (releasing the
+/// `org.freedesktop.ReserveDevice1.Audio<N>` bus name back to PipeWire).
+///
+/// Reversing this order would tell PipeWire "go ahead, take the device" while
+/// the kernel still has the FD open — guaranteed `EBUSY` ping-pong on the next
+/// stream open. `_reservation` is intentionally the last field for that
+/// reason; do not rearrange.
 #[cfg(target_os = "linux")]
 pub struct AlsaDirectStream {
     pcm: Arc<Mutex<PCM>>,
@@ -22,6 +50,11 @@ pub struct AlsaDirectStream {
     channels: u16,
     format: Format,
     device_id: String,
+    /// D-Bus device reservation held for the entire stream lifetime
+    /// (Lifetime A per the design spec). Acquired before `PCM::new()` in
+    /// `Self::new()`; released on `Drop` *after* the PCM closes (see field-order
+    /// note on the struct above).
+    _reservation: crate::DeviceReservation,
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -30,6 +63,15 @@ pub struct AlsaDirectStream {
     channels: u16,
     device_id: String,
 }
+
+/// Defensive settle delay between reservation acquisition and PCM open.
+///
+/// Only applied when the reservation actually transitioned ownership (i.e.
+/// `DeviceReservation::is_active()` is `true`). Sized conservatively; do not
+/// reduce without revisiting the Lifetime-A safety contract in
+/// `qbz-nix-docs/specs/2026-05-07-alsa-exclusive-hardening-design.md`.
+#[cfg(target_os = "linux")]
+const PIPEWIRE_VACATE_MARGIN: std::time::Duration = std::time::Duration::from_millis(50);
 
 #[cfg(target_os = "linux")]
 impl AlsaDirectStream {
@@ -41,6 +83,36 @@ impl AlsaDirectStream {
             sample_rate,
             channels
         );
+
+        // Acquire D-Bus device reservation BEFORE opening the PCM. This signals
+        // PipeWire/WirePlumber to release the device first if it currently
+        // holds it. Held for the entire `AlsaDirectStream` lifetime
+        // (Lifetime A per the design spec) and released on `Drop` after the
+        // PCM closes — see the field-order comment on the struct.
+        //
+        // This is the canonical Lifetime-A consumer the `acquire` doc-comment's
+        // tight-coupling rule allows: a `DeviceReservation` is created
+        // immediately before a real `PCM::new()` and held for as long as that
+        // PCM is open.
+        // TODO(Task 5): replace second arg with user-facing DAC name from settings.
+        let reservation =
+            crate::DeviceReservation::acquire(device_id, device_id).map_err(|e| {
+                format!(
+                    "Cannot acquire exclusive device '{}': {}",
+                    device_id, e
+                )
+            })?;
+
+        // Defensive margin only matters when the reservation actually displaced
+        // a holder (or could have). On the degraded D-Bus path the bus name is
+        // not held at all, so PipeWire's view of the device hasn't changed and
+        // no settle delay is needed. PIPEWIRE_VACATE_MARGIN is conservative;
+        // PipeWire-side release latency is typically much shorter, but this
+        // margin is part of the design spec's Lifetime-A safety contract — do
+        // not reduce without revisiting the spec.
+        if reservation.is_active() {
+            std::thread::sleep(PIPEWIRE_VACATE_MARGIN);
+        }
 
         // Open PCM device
         let pcm = PCM::new(device_id, Direction::Playback, false)
@@ -133,7 +205,201 @@ impl AlsaDirectStream {
             channels,
             format: selected_format,
             device_id: device_id.to_string(),
+            // Last field: drops after `pcm` so the kernel-level exclusive
+            // grip is released before the D-Bus bus name is freed.
+            _reservation: reservation,
         })
+    }
+
+    /// Create an ALSA direct stream for DoP (DSD over PCM) delivery.
+    ///
+    /// ADDITIVE to the protected PCM paths (DSD plan Phase 2, owner-approved
+    /// 2026-07-03): S32_LE ONLY — DoP words are pre-packed 24-bit frames
+    /// left-justified in S32 and must reach the device bit-exactly, so no
+    /// format fallback, no plughw, no float. If the device has no S32_LE at
+    /// the carrier rate the caller falls back to DSD→PCM conversion.
+    /// Mirrors `new()` for reservation / buffer sizing / field order.
+    pub fn new_dop(device_id: &str, carrier_rate: u32, channels: u16) -> Result<Self, String> {
+        log::info!(
+            "[ALSA Direct] Opening device for DoP: {} ({}Hz carrier, {}ch, S32_LE)",
+            device_id,
+            carrier_rate,
+            channels
+        );
+
+        let reservation = crate::DeviceReservation::acquire(device_id, device_id)
+            .map_err(|e| format!("Cannot acquire exclusive device '{}': {}", device_id, e))?;
+        if reservation.is_active() {
+            std::thread::sleep(PIPEWIRE_VACATE_MARGIN);
+        }
+
+        let pcm = PCM::new(device_id, Direction::Playback, false)
+            .map_err(|e| format!("Failed to open ALSA device '{}': {}", device_id, e))?;
+
+        {
+            let hwp =
+                HwParams::any(&pcm).map_err(|e| format!("Failed to get hardware params: {}", e))?;
+            hwp.set_access(Access::RWInterleaved)
+                .map_err(|e| format!("Failed to set access: {}", e))?;
+            hwp.set_format(Format::S32LE)
+                .map_err(|e| format!("Device has no S32_LE (required for DoP): {}", e))?;
+            hwp.set_channels(channels as u32)
+                .map_err(|e| format!("Failed to set channels: {}", e))?;
+            hwp.set_rate(carrier_rate, ValueOr::Nearest)
+                .map_err(|e| format!("Failed to set DoP carrier rate {}: {}", carrier_rate, e))?;
+            let buffer_size = if carrier_rate >= 192000 {
+                (carrier_rate / 2) as i64
+            } else if carrier_rate >= 96000 {
+                (carrier_rate / 4) as i64
+            } else {
+                (carrier_rate / 8) as i64
+            };
+            hwp.set_buffer_size_near(buffer_size)
+                .map_err(|e| format!("Failed to set buffer size: {}", e))?;
+            hwp.set_period_size_near(buffer_size / 10, ValueOr::Nearest)
+                .map_err(|e| format!("Failed to set period size: {}", e))?;
+            pcm.hw_params(&hwp)
+                .map_err(|e| format!("Failed to apply hardware params: {}", e))?;
+            log::info!(
+                "[ALSA Direct] DoP hardware configured: {}Hz, {}ch, S32_LE, buffer {} frames",
+                carrier_rate,
+                channels,
+                buffer_size
+            );
+        }
+
+        pcm.prepare()
+            .map_err(|e| format!("Failed to prepare PCM: {}", e))?;
+
+        Ok(Self {
+            pcm: Arc::new(Mutex::new(pcm)),
+            is_playing: Arc::new(AtomicBool::new(false)),
+            sample_rate: carrier_rate,
+            channels,
+            format: Format::S32LE,
+            device_id: device_id.to_string(),
+            // Last field: drops after `pcm` (see field-order note on the struct).
+            _reservation: reservation,
+        })
+    }
+
+    /// Create an ALSA direct stream for NATIVE DSD (DSD plan Phase 3).
+    ///
+    /// ADDITIVE like `new_dop`. Tries `DSD_U32_BE` first (what the kernel's
+    /// generic USB DSD quirk grants), then `DSD_U32_LE`. Frame rate =
+    /// dsd_rate / 32. Returns the stream plus `little_endian` so the packer
+    /// lays the 4 DSD bytes out correctly. Fails cleanly when the kernel
+    /// hasn't granted the device a DSD format (no quirk) — the caller falls
+    /// back to DoP/conversion.
+    pub fn new_native_dsd(
+        device_id: &str,
+        dsd_rate: u32,
+        channels: u16,
+    ) -> Result<(Self, bool), String> {
+        let rate = dsd_rate / 32;
+        log::info!(
+            "[ALSA Direct] Opening device for native DSD: {} ({} DSD bits/s → {} Hz U32, {}ch)",
+            device_id,
+            dsd_rate,
+            rate,
+            channels
+        );
+
+        let reservation = crate::DeviceReservation::acquire(device_id, device_id)
+            .map_err(|e| format!("Cannot acquire exclusive device '{}': {}", device_id, e))?;
+        if reservation.is_active() {
+            std::thread::sleep(PIPEWIRE_VACATE_MARGIN);
+        }
+
+        let pcm = PCM::new(device_id, Direction::Playback, false)
+            .map_err(|e| format!("Failed to open ALSA device '{}': {}", device_id, e))?;
+
+        let selected = {
+            let hwp =
+                HwParams::any(&pcm).map_err(|e| format!("Failed to get hardware params: {}", e))?;
+            hwp.set_access(Access::RWInterleaved)
+                .map_err(|e| format!("Failed to set access: {}", e))?;
+            let mut selected = None;
+            for (format, le) in [(Format::DSDU32BE, false), (Format::DSDU32LE, true)] {
+                if hwp.set_format(format).is_ok() {
+                    selected = Some((format, le));
+                    break;
+                }
+            }
+            let Some((format, le)) = selected else {
+                return Err(
+                    "Device has no native DSD format (kernel quirk missing?)".to_string()
+                );
+            };
+            hwp.set_channels(channels as u32)
+                .map_err(|e| format!("Failed to set channels: {}", e))?;
+            hwp.set_rate(rate, ValueOr::Nearest)
+                .map_err(|e| format!("Failed to set native DSD rate {}: {}", rate, e))?;
+            let buffer_size = (rate / 4) as i64; // 250 ms
+            hwp.set_buffer_size_near(buffer_size)
+                .map_err(|e| format!("Failed to set buffer size: {}", e))?;
+            hwp.set_period_size_near(buffer_size / 10, ValueOr::Nearest)
+                .map_err(|e| format!("Failed to set period size: {}", e))?;
+            pcm.hw_params(&hwp)
+                .map_err(|e| format!("Failed to apply hardware params: {}", e))?;
+            log::info!(
+                "[ALSA Direct] Native DSD configured: {:?} @ {} Hz, {}ch",
+                format,
+                rate,
+                channels
+            );
+            (format, le)
+        };
+
+        pcm.prepare()
+            .map_err(|e| format!("Failed to prepare PCM: {}", e))?;
+
+        Ok((
+            Self {
+                pcm: Arc::new(Mutex::new(pcm)),
+                is_playing: Arc::new(AtomicBool::new(false)),
+                sample_rate: rate,
+                channels,
+                format: selected.0,
+                device_id: device_id.to_string(),
+                // Last field: drops after `pcm` (see field-order note).
+                _reservation: reservation,
+            },
+            selected.1,
+        ))
+    }
+
+    /// Write pre-packed 32-bit direct words (DoP frames in S32, or native
+    /// DSD_U32 words) VERBATIM — no scaling, no conversion. Only valid on
+    /// streams created with [`Self::new_dop`] / [`Self::new_native_dsd`].
+    /// DSD_U32 formats fail alsa-rs's checked-format i32 IO, so they use the
+    /// unchecked accessor — sound because both layouts are exactly 32 bits
+    /// per channel per frame, same as S32.
+    pub fn write_dop_i32(&self, samples: &[i32]) -> Result<(), String> {
+        let pcm = self.pcm.lock().unwrap();
+        let frames = samples.len() / self.channels as usize;
+        let io = if self.format == Format::S32LE {
+            pcm.io_i32()
+                .map_err(|e| format!("Failed to get PCM I/O: {}", e))?
+        } else {
+            unsafe { pcm.io_unchecked::<i32>() }
+        };
+        match io.writei(samples) {
+            Ok(written) => {
+                if written != frames {
+                    log::warn!("[ALSA Direct] Partial DoP write: {} / {} frames", written, frames);
+                }
+                Ok(())
+            }
+            Err(e) => {
+                if let Err(recover_err) = pcm.recover(e.errno() as i32, false) {
+                    Err(format!("Failed to recover from error: {}", recover_err))
+                } else {
+                    log_pcm_recovery("(DoP)");
+                    Ok(())
+                }
+            }
+        }
     }
 
     /// Write audio samples to ALSA (auto-converts from i16 based on detected format)
@@ -166,7 +432,7 @@ impl AlsaDirectStream {
                         if let Err(recover_err) = pcm.recover(e.errno() as i32, false) {
                             Err(format!("Failed to recover from error: {}", recover_err))
                         } else {
-                            log::warn!("[ALSA Direct] Recovered from PCM error");
+                            log_pcm_recovery("");
                             Ok(())
                         }
                     }
@@ -195,7 +461,7 @@ impl AlsaDirectStream {
                         if let Err(recover_err) = pcm.recover(e.errno() as i32, false) {
                             Err(format!("Failed to recover from error: {}", recover_err))
                         } else {
-                            log::warn!("[ALSA Direct] Recovered from PCM error");
+                            log_pcm_recovery("");
                             Ok(())
                         }
                     }
@@ -222,7 +488,7 @@ impl AlsaDirectStream {
                         if let Err(recover_err) = pcm.recover(e.errno() as i32, false) {
                             Err(format!("Failed to recover from error: {}", recover_err))
                         } else {
-                            log::warn!("[ALSA Direct] Recovered from PCM error");
+                            log_pcm_recovery("");
                             Ok(())
                         }
                     }
@@ -261,7 +527,7 @@ impl AlsaDirectStream {
                         if let Err(recover_err) = pcm.recover(e.errno() as i32, false) {
                             Err(format!("Failed to recover from error: {}", recover_err))
                         } else {
-                            log::warn!("[ALSA Direct] Recovered from PCM error (S24_3LE)");
+                            log_pcm_recovery("(S24_3LE)");
                             Ok(())
                         }
                     }
@@ -291,7 +557,7 @@ impl AlsaDirectStream {
                         if let Err(recover_err) = pcm.recover(e.errno() as i32, false) {
                             Err(format!("Failed to recover from error: {}", recover_err))
                         } else {
-                            log::warn!("[ALSA Direct] Recovered from PCM error");
+                            log_pcm_recovery("");
                             Ok(())
                         }
                     }
@@ -331,7 +597,7 @@ impl AlsaDirectStream {
                         if let Err(recover_err) = pcm.recover(e.errno() as i32, false) {
                             Err(format!("Failed to recover from error: {}", recover_err))
                         } else {
-                            log::warn!("[ALSA Direct] Recovered from PCM error");
+                            log_pcm_recovery("");
                             Ok(())
                         }
                     }
@@ -363,7 +629,7 @@ impl AlsaDirectStream {
                         if let Err(recover_err) = pcm.recover(e.errno() as i32, false) {
                             Err(format!("Failed to recover from error: {}", recover_err))
                         } else {
-                            log::warn!("[ALSA Direct] Recovered from PCM error");
+                            log_pcm_recovery("");
                             Ok(())
                         }
                     }
@@ -399,7 +665,7 @@ impl AlsaDirectStream {
                         if let Err(recover_err) = pcm.recover(e.errno() as i32, false) {
                             Err(format!("Failed to recover from error: {}", recover_err))
                         } else {
-                            log::warn!("[ALSA Direct] Recovered from PCM error");
+                            log_pcm_recovery("");
                             Ok(())
                         }
                     }
@@ -436,7 +702,7 @@ impl AlsaDirectStream {
                         if let Err(recover_err) = pcm.recover(e.errno() as i32, false) {
                             Err(format!("Failed to recover from error: {}", recover_err))
                         } else {
-                            log::warn!("[ALSA Direct] Recovered from PCM error (S24_3LE)");
+                            log_pcm_recovery("(S24_3LE)");
                             Ok(())
                         }
                     }
@@ -466,7 +732,7 @@ impl AlsaDirectStream {
                         if let Err(recover_err) = pcm.recover(e.errno() as i32, false) {
                             Err(format!("Failed to recover from error: {}", recover_err))
                         } else {
-                            log::warn!("[ALSA Direct] Recovered from PCM error");
+                            log_pcm_recovery("");
                             Ok(())
                         }
                     }

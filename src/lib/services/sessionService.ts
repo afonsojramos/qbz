@@ -26,6 +26,12 @@ export interface PersistedQueueTrack {
   // v2_play_track (Qobuz) instead of v2_library_play_track. Backend also
   // keeps this in session_store; this interface just needs to carry it.
   source?: string | null;
+  // Round-tripped fields, previously hardcoded on load. Persisting them
+  // means a restored queue matches the live one for explicit-content
+  // badges, unstreamable visual state, and Mixtape source association.
+  streamable?: boolean;
+  parental_warning?: boolean;
+  source_item_id_hint?: string | null;
 }
 
 export interface PersistedSession {
@@ -149,31 +155,53 @@ export async function clearSession(): Promise<void> {
   }
 }
 
-// Debounce helper for position saves
+// Throttle helper for position saves. We THROTTLE (not debounce) because
+// position updates arrive continuously while a track plays — a true
+// debounce would reset the 5s timer on every update and the save would
+// never fire mid-playback, leaving the persisted position frozen at
+// whatever value got written during the first quiet window after track
+// start. (Real-world symptom: resume position always restored at ~2s,
+// no matter how far the user played.) Throttling fires the first call
+// immediately, then once per 5s window thereafter, with a tail call to
+// flush the latest position when the window ends.
 let positionSaveTimeout: ReturnType<typeof setTimeout> | null = null;
-const POSITION_SAVE_DEBOUNCE_MS = 5000; // Save position every 5 seconds max
+let lastSavedPositionMs = 0;
+let lastQueuedPositionSecs = 0;
+const POSITION_SAVE_THROTTLE_MS = 5000;
 
-/**
- * Debounced position save - call frequently, saves every 5 seconds
- */
 export function debouncedSavePosition(positionSecs: number): void {
-  if (positionSaveTimeout) {
-    clearTimeout(positionSaveTimeout);
-  }
-  positionSaveTimeout = setTimeout(() => {
+  lastQueuedPositionSecs = positionSecs;
+  const now = Date.now();
+  const elapsed = now - lastSavedPositionMs;
+  if (elapsed >= POSITION_SAVE_THROTTLE_MS) {
+    lastSavedPositionMs = now;
     saveSessionPosition(positionSecs);
+    if (positionSaveTimeout) {
+      clearTimeout(positionSaveTimeout);
+      positionSaveTimeout = null;
+    }
+    return;
+  }
+  if (positionSaveTimeout) return;
+  positionSaveTimeout = setTimeout(() => {
     positionSaveTimeout = null;
-  }, POSITION_SAVE_DEBOUNCE_MS);
+    lastSavedPositionMs = Date.now();
+    saveSessionPosition(lastQueuedPositionSecs);
+  }, POSITION_SAVE_THROTTLE_MS - elapsed);
 }
 
 /**
- * Force save position immediately (e.g., on pause or app close)
+ * Force save position immediately (e.g., on pause or app close).
+ * Resets throttle bookkeeping so the next debouncedSavePosition fires
+ * fresh.
  */
 export function flushPositionSave(positionSecs: number): void {
   if (positionSaveTimeout) {
     clearTimeout(positionSaveTimeout);
     positionSaveTimeout = null;
   }
+  lastSavedPositionMs = Date.now();
+  lastQueuedPositionSecs = positionSecs;
   saveSessionPosition(positionSecs);
 }
 

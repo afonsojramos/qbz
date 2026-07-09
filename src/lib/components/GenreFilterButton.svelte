@@ -22,11 +22,11 @@
     context?: GenreFilterContext;
     variant?: ButtonVariant;
     align?: DropdownAlign;
+    isOpen?: boolean;
   }
 
-  let { onFilterChange, context = 'home', variant = 'default', align = 'left' }: Props = $props();
+  let { onFilterChange, context = 'home', variant = 'default', align = 'left', isOpen = $bindable(false) }: Props = $props();
 
-  let isOpen = $state(false);
   let buttonEl = $state<HTMLButtonElement | null>(null);
   let hasFilter = $state(false);
   let selectedGenreName = $state<string | null>(null);
@@ -146,7 +146,7 @@
 
   .genre-filter-btn.active {
     background: var(--accent-primary);
-    color: white;
+    color: var(--btn-primary-text);
     border-color: var(--accent-primary);
   }
 

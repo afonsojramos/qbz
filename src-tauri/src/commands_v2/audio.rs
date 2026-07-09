@@ -138,6 +138,7 @@ pub async fn v2_set_audio_output_device(
     device: Option<String>,
     state: State<'_, AudioSettingsState>,
     bridge: State<'_, CoreBridgeState>,
+    app_state: State<'_, crate::AppState>,
 ) -> Result<(), RuntimeError> {
     let normalized_device = device
         .as_ref()
@@ -147,7 +148,7 @@ pub async fn v2_set_audio_output_device(
         device,
         normalized_device
     );
-    {
+    let lifetime_b_enabled = {
         let guard = state
             .store
             .lock()
@@ -158,8 +159,21 @@ pub async fn v2_set_audio_output_device(
         store
             .set_output_device(normalized_device.as_deref())
             .map_err(RuntimeError::Internal)?;
-    }
+        store
+            .get_settings()
+            .map_err(RuntimeError::Internal)?
+            .reserve_dac_while_running
+    };
     sync_audio_settings_to_player(&state, &bridge).await;
+
+    // Lifetime B: when the user changes DAC, drop the old reservation
+    // and reacquire on the new card. Pass `None` if the new device isn't
+    // card-specific (apply_dac_reservation will release without
+    // reacquiring) or if the toggle is off.
+    if lifetime_b_enabled {
+        app_state
+            .apply_dac_reservation(normalized_device.as_deref(), normalized_device.as_deref());
+    }
     Ok(())
 }
 
@@ -662,4 +676,145 @@ pub async fn v2_set_audio_alsa_hardware_volume(
     }
     sync_audio_settings_to_player(&state, &bridge).await;
     Ok(())
+}
+
+// ==================== DAC Reservation (Lifetime B) ====================
+//
+// See `qbz-nix-docs/specs/2026-05-07-alsa-exclusive-hardening-design.md`
+// for the protocol-level design. Lifetime B = a long-lived
+// `DeviceReservation` guard held in `AppState` for the QBZ process,
+// gated by the `reserve_dac_while_running` audio setting.
+
+/// Status payload returned by `v2_get_dac_reservation_status`.
+///
+/// `Inactive` covers the toggle-off and non-card-device cases. `Active`
+/// means we currently hold the bus name. `Contested` means the toggle is
+/// on but acquisition failed because another app holds the device at
+/// equal-or-higher priority. `Unavailable` means the runtime environment
+/// (no D-Bus session, sandbox without bus access) prevents any reservation
+/// from working — surfaces as a degraded guard.
+#[derive(Debug, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DacReservationStatus {
+    Inactive,
+    Active,
+    /// Reservation could not be acquired and the guard is currently None.
+    ///
+    /// **Known limitation (2026-05-07):** this variant is reported whenever
+    /// `apply_dac_reservation` failed to set the guard, regardless of why.
+    /// In practice it most commonly means another app holds the DAC at
+    /// higher priority (the spec's intended `Contested` semantic). It also
+    /// fires for transient D-Bus protocol errors (`DbusError`) and ALSA
+    /// enumeration errors (`AlsaError`) — those should ideally surface as
+    /// `Unavailable`, but distinguishing them at this layer requires
+    /// stashing the last `ReservationError` alongside the guard. Deferred
+    /// until Tasks 7-8 confirm the UI needs the distinction.
+    ///
+    /// `holder` and `holder_priority` are currently always `"unknown"` and
+    /// `0`. The real values come from `ReservationError::HigherPriorityHolder`
+    /// and require the same stash refactor to surface here.
+    Contested {
+        holder: String,
+        holder_priority: i32,
+    },
+    Unavailable {
+        reason: String,
+    },
+}
+
+/// Toggle the per-process DAC reservation (Lifetime B).
+///
+/// Persists the flag to `audio_settings` and applies it immediately:
+/// `enabled=true` acquires a reservation for the current output device
+/// (when it targets a single ALSA card); `enabled=false` releases the
+/// guard. Idempotent — re-calling with the same value drops and
+/// reacquires safely.
+#[tauri::command]
+pub async fn v2_set_reserve_dac_while_running(
+    enabled: bool,
+    state: State<'_, AudioSettingsState>,
+    app_state: State<'_, crate::AppState>,
+) -> Result<(), RuntimeError> {
+    log::info!("[V2] set_reserve_dac_while_running: {}", enabled);
+
+    // 1. Persist the flag in the audio_settings DB.
+    let output_device = {
+        let guard = state
+            .store
+            .lock()
+            .map_err(|e| RuntimeError::Internal(format!("Lock error: {}", e)))?;
+        let store = guard
+            .as_ref()
+            .ok_or(RuntimeError::UserSessionNotActivated)?;
+        store
+            .set_reserve_dac_while_running(enabled)
+            .map_err(RuntimeError::Internal)?;
+        // Re-read the current device while we hold the lock — avoids a
+        // TOCTOU window where the user could change DAC between this
+        // setter and our apply call.
+        store
+            .get_settings()
+            .map_err(RuntimeError::Internal)?
+            .output_device
+    };
+
+    // 2. Apply: take or release the guard. None on disable; current
+    //    output device on enable.
+    let device_for_apply = if enabled { output_device } else { None };
+    app_state.apply_dac_reservation(device_for_apply.as_deref(), device_for_apply.as_deref());
+    Ok(())
+}
+
+/// Snapshot the current Lifetime-B reservation state for the UI.
+///
+/// Reads both the persisted flag and the live guard so the UI can
+/// distinguish between "user hasn't enabled it" (`Inactive`), "we own
+/// it" (`Active`), "user enabled it but a higher-priority app holds the
+/// DAC" (`Contested`), and "D-Bus is unavailable in this environment"
+/// (`Unavailable`).
+#[tauri::command]
+pub fn v2_get_dac_reservation_status(
+    state: State<'_, AudioSettingsState>,
+    app_state: State<'_, crate::AppState>,
+) -> Result<DacReservationStatus, RuntimeError> {
+    let snapshot = {
+        let guard = state
+            .store
+            .lock()
+            .map_err(|e| RuntimeError::Internal(format!("Lock error: {}", e)))?;
+        let store = guard
+            .as_ref()
+            .ok_or(RuntimeError::UserSessionNotActivated)?;
+        store.get_settings().map_err(RuntimeError::Internal)?
+    };
+
+    if !snapshot.reserve_dac_while_running {
+        return Ok(DacReservationStatus::Inactive);
+    }
+    match snapshot.output_device.as_deref() {
+        None => return Ok(DacReservationStatus::Inactive),
+        Some(d) if !crate::is_card_specific_device(d) => {
+            return Ok(DacReservationStatus::Inactive);
+        }
+        _ => {}
+    }
+
+    let guard = app_state
+        .dac_reservation
+        .lock()
+        .map_err(|e| RuntimeError::Internal(format!("Lock error: {}", e)))?;
+    Ok(match guard.as_ref() {
+        Some(r) if r.is_active() => DacReservationStatus::Active,
+        Some(_) => DacReservationStatus::Unavailable {
+            reason: "D-Bus session bus unreachable or device not card-specific".to_string(),
+        },
+        None => {
+            // See DacReservationStatus::Contested for the known limitation
+            // about D-Bus / ALSA errors being misclassified as Contested.
+            DacReservationStatus::Contested {
+                holder: "unknown".to_string(),
+                holder_priority: 0,
+            }
+        }
+    })
 }

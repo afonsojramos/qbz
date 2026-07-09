@@ -19,29 +19,11 @@ pub struct QconnectConnectOptions {
 }
 
 /// Lifecycle state surfaced to the UI so the toggle can reflect what the user
-/// asked for (`running`) separately from what the transport currently has
-/// (`Connecting`/`Connected`/`Reconnecting`). Without this distinction the UI
-/// reads the toggle as "off" while the backend reconnect loop is alive,
-/// leaving the user unable to disable QConnect (issue #358).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum QconnectLifecycleState {
-    /// User has not enabled QConnect (or it has been fully torn down).
-    #[default]
-    Off,
-    /// `connect()` has been called; transport is establishing the WS but no
-    /// `SessionEstablished` yet.
-    Connecting,
-    /// Transport saw at least one `SESSION_STATE` frame on the active WS — the
-    /// session-level handshake completed.
-    Connected,
-    /// Transport disconnected after at least one successful connect; the
-    /// reconnect loop is running.
-    Reconnecting,
-    /// `MaxReconnectAttemptsExceeded` fired — runtime auto-stopped, last error
-    /// surfaced. User can re-enable from UI.
-    Exhausted,
-}
+/// asked for (`running`) separately from what the transport currently has.
+/// The enum now lives in `qconnect-app` (pure data, no Tauri dep) so the
+/// session layer can emit it via `QconnectAppEvent::LifecycleChanged`; it is
+/// re-exported here for the Tauri command surface (issue #358).
+pub use qconnect_app::QconnectLifecycleState;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct QconnectConnectionStatus {
@@ -182,6 +164,12 @@ pub struct QconnectAdmissionResult {
 pub struct QconnectSendCommandWithAdmissionRequest {
     pub command_type: QconnectOutboundCommandType,
     pub origin: QconnectTrackOrigin,
+    /// Per-track origins for the IDs in `payload.track_ids`. The server gate
+    /// re-validates EACH, independent of the command-level `origin`. Defaults
+    /// to empty for callers that legitimately carry no track payload (e.g.
+    /// single-track play-next/play-later that gate on the command-level origin).
+    #[serde(default)]
+    pub track_origins: Vec<QconnectTrackOrigin>,
     #[serde(default)]
     pub payload: Value,
 }
@@ -271,3 +259,8 @@ pub struct QconnectSetMaxAudioQualityRequest {
 pub struct QconnectAskForRendererStateRequest {
     pub renderer_id: Option<i32>,
 }
+
+/// Wire renderer status from `MESSAGE_TYPE_SRVR_CTRL_RENDERER_STATE_UPDATED`
+/// now lives in the frontend-agnostic `qconnect_app::session` module. Re-exported
+/// here so the command surface (`pub use types::*`) keeps exposing it unchanged.
+pub use qconnect_app::RendererStatus;

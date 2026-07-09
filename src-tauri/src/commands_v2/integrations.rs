@@ -552,7 +552,7 @@ pub async fn v2_musicbrainz_get_artist_metadata(
     drop(client);
 
     // Extract metadata using the location discovery module (now uses V2 types)
-    let mut metadata = crate::musicbrainz::location_discovery::extract_metadata(&artist);
+    let mut metadata = qbz_integrations::musicbrainz::location::extract_metadata(&artist);
 
     // Resolve real country from begin_area hierarchy (MB's "country" field is
     // where the artist is active, not where they were born/formed)
@@ -606,10 +606,10 @@ pub async fn v2_discover_artists_by_location(
     runtime: State<'_, RuntimeManagerState>,
     app: tauri::AppHandle,
 ) -> Result<qbz_integrations::musicbrainz::LocationDiscoveryResponse, RuntimeError> {
-    use crate::musicbrainz::genre_normalization::{
+    use qbz_integrations::musicbrainz::genre::{
         extract_affinity_seeds, genre_summary, is_broad_genre,
     };
-    use crate::musicbrainz::location_discovery::{build_scene_cache_key, compute_affinity_score};
+    use qbz_integrations::musicbrainz::location::{build_scene_cache_key, compute_affinity_score};
     use qbz_integrations::musicbrainz::{
         AffinitySeeds, LocationCandidate, LocationDiscoveryResponse, Tag,
     };

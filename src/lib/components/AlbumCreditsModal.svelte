@@ -173,7 +173,7 @@
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
   <div class="modal-overlay" onclick={onClose} role="presentation">
     <!-- svelte-ignore a11y_click_events_have_key_events -->
-    <div class="credits-modal" role="dialog" aria-modal="true" tabindex="-1" onclick={(e) => e.stopPropagation()}>
+    <div class="credits-modal selectable" role="dialog" aria-modal="true" tabindex="-1" onclick={(e) => e.stopPropagation()}>
       {#if loading}
         <div class="loading-state">
           <LoaderCircle size={32} class="spinner" />
@@ -635,10 +635,6 @@
     padding-right: 8px;
   }
 
-  .track-item {
-    /* No background */
-  }
-
   .track-divider {
     height: 1px;
     background: rgba(255, 255, 255, 0.06);
@@ -685,7 +681,7 @@
     background: var(--accent-primary);
     border: none;
     border-radius: 50%;
-    color: white;
+    color: var(--btn-primary-text);
     cursor: pointer;
     transition: transform 150ms ease, background 150ms ease;
   }

@@ -32,6 +32,9 @@ export type QconnectRendererInfo = {
   brand?: string | null;
   model?: string | null;
   device_type?: number | null;
+  // P1-5: capabilities.volume_remote_control. 1 == ALLOWED. null/undefined ==
+  // not advertised (treated as allowed). Any other value disables remote volume.
+  volume_remote_control?: number | null;
 };
 
 export type QconnectSessionSnapshot = {
@@ -333,4 +336,71 @@ export async function toggleQconnectConnection(toggleOn: boolean): Promise<void>
   }
 
   await invoke('v2_qconnect_connect', { options: null });
+}
+
+/**
+ * A user-issued remote transport intent we may want to replay after a
+ * reconnect (P1-11).
+ */
+export type QconnectTransportIntent = {
+  kind: 'play' | 'pause' | 'next' | 'previous' | 'set_track';
+  trackId?: number | null;
+  /** Epoch ms when the intent was issued. */
+  issuedAt: number;
+};
+
+export type QconnectReconnectAdvisory = {
+  shouldReplay: boolean;
+  shouldToast: boolean;
+  toastKey: string | null;
+};
+
+/**
+ * Pure decision helper (P1-11): on a `reconnecting -> connected` transition,
+ * decide whether to replay the last user transport intent or merely advise.
+ *
+ * - Idempotent intents (`play` / `pause` / `set_track`) issued recently are
+ *   safe to replay verbatim.
+ * - `next` / `previous` are NOT replayed — the action may already have applied
+ *   on the renderer before the drop, so replaying risks a double-skip; we only
+ *   surface an advisory toast instead.
+ * - Stale intents (older than `staleAfterMs`) and non-reconnect transitions are
+ *   no-ops.
+ *
+ * No side effects, no `invoke` — fully unit-testable.
+ */
+export function evaluateQconnectReconnectAdvisory(params: {
+  prevState: QconnectLifecycleState;
+  nextState: QconnectLifecycleState;
+  lastIntent: QconnectTransportIntent | null;
+  now: number;
+  staleAfterMs?: number;
+}): QconnectReconnectAdvisory {
+  const { prevState, nextState, lastIntent, now } = params;
+  const staleAfterMs = params.staleAfterMs ?? 15_000;
+  const noop: QconnectReconnectAdvisory = {
+    shouldReplay: false,
+    shouldToast: false,
+    toastKey: null
+  };
+  const reconnected = prevState === 'reconnecting' && nextState === 'connected';
+  if (!reconnected || !lastIntent) {
+    return noop;
+  }
+  if (now - lastIntent.issuedAt > staleAfterMs) {
+    return noop;
+  }
+  const idempotent =
+    lastIntent.kind === 'play' ||
+    lastIntent.kind === 'pause' ||
+    lastIntent.kind === 'set_track';
+  if (idempotent) {
+    return { shouldReplay: true, shouldToast: false, toastKey: null };
+  }
+  // next/previous: replaying risks a double-skip -> only advise.
+  return {
+    shouldReplay: false,
+    shouldToast: true,
+    toastKey: 'qconnect.lastActionMayNotHaveApplied'
+  };
 }

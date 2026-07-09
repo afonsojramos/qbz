@@ -28,6 +28,9 @@ pub enum CastError {
 
     #[error("Invalid request: {0}")]
     InvalidRequest(String),
+
+    #[error("Operation timed out: {0}")]
+    Timeout(String),
 }
 
 /// DLNA/UPnP casting errors
@@ -50,4 +53,7 @@ pub enum DlnaError {
 
     #[error("Device not found: {0}")]
     DeviceNotFound(String),
+
+    #[error("Operation timed out: {0}")]
+    Timeout(String),
 }

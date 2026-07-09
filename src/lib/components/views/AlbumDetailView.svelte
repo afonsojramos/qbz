@@ -11,11 +11,12 @@
     setCustomAlbumCover,
     removeCustomAlbumCover as removeCustomCoverFromStore
   } from '$lib/stores/customAlbumCoverStore';
-  import { ArrowLeft, Play, Shuffle, Heart, Radio, CloudDownload, ChevronLeft, ChevronRight, LoaderCircle, SquareCheckBig, BookOpen, Disc3, CassetteTape } from 'lucide-svelte';
+  import { ArrowLeft, Play, Shuffle, Heart, Radio, CloudDownload, ChevronLeft, ChevronRight, LoaderCircle, SquareCheckBig, BookOpen, Disc3, CassetteTape, Search, X } from 'lucide-svelte';
+  import QualityBadgeStatic from '../QualityBadgeStatic.svelte';
   import { openAddToMixtape } from '$lib/stores/addToMixtapeModalStore';
   import { formatTrackTitle } from '$lib/utils/trackTitle';
   import { cachedSrc } from '$lib/actions/cachedImage';
-  import AlbumCard from '../AlbumCard.svelte';
+  import AlbumCard from '$lib/discovery-v2/AlbumCardLite.svelte';
   import TrackRow from '../TrackRow.svelte';
   import AlbumMenu from '../AlbumMenu.svelte';
   import BulkActionBar from '../BulkActionBar.svelte';
@@ -30,10 +31,21 @@
     toggleAlbumFavorite
   } from '$lib/stores/albumFavoritesStore';
   import { isBlacklisted as isArtistBlacklisted } from '$lib/stores/artistBlacklistStore';
+  import {
+    isTrackRemovedFromQobuz,
+    subscribe as subscribeUnavailable
+  } from '$lib/stores/unavailableTracksStore';
   import ImageLightbox from '../ImageLightbox.svelte';
   import BookletViewer from '../BookletViewer.svelte';
   import type { QobuzGoody } from '$lib/types';
   import { applyShiftRange, isSelectAllShortcut } from '$lib/utils/multiSelect';
+  import { extractPalette, pickHeaderColor, type ArtworkPalette } from '$lib/utils/artworkPalette';
+  import { sanitizeHtml } from '$lib/utils/sanitize';
+  import {
+    subscribe as subscribeAppearance,
+    isAlbumHeaderGradientEnabled,
+  } from '$lib/stores/appearancePreferencesStore';
+  import { getCachedImageUrl } from '$lib/services/imageCacheService';
 
   interface Track {
     id: number;
@@ -51,6 +63,8 @@
     samplingRate?: number;
     isrc?: string;
     parental_warning?: boolean;
+    /** API streamable flag — false when the track has been removed from Qobuz. */
+    streamable?: boolean;
   }
 
   interface ArtistAlbum {
@@ -76,20 +90,27 @@
       title: string;
       artist: string;
       artistId?: number;
+      featuredArtists?: { id: number; name: string }[];
+      parentalWarning?: boolean;
       year: string;
       releaseDate?: string;
       label: string;
       labelId?: number;
       genre: string;
       quality: string;
+      bitDepth?: number;
+      samplingRate?: number;
       trackCount: number;
       duration: string;
+      durationSeconds?: number;
+      description?: string;
       tracks: Track[];
       goodies?: QobuzGoody[];
       awards?: Award[];
     };
     onBack: () => void;
     onArtistClick?: () => void;
+    onFeaturedArtistClick?: (artistId: number) => void;
     onLabelClick?: (labelId: number, labelName: string) => void;
     onAwardClick?: (awardId: string, awardName: string) => void;
     onTrackPlay?: (track: Track) => void;
@@ -140,6 +161,7 @@
     album,
     onBack,
     onArtistClick,
+    onFeaturedArtistClick,
     onLabelClick,
     onAwardClick,
     onTrackPlay,
@@ -187,8 +209,28 @@
 
   let isFavorite = $state(false);
   let isFavoriteLoading = $state(false);
+  // Counter incremented when the unavailable-tracks store mutates so reactive
+  // reads in {@const} blocks re-evaluate.
+  let unavailableVersion = $state(0);
+  // Reading `unavailableVersion` here registers the dependency so the {@const}
+  // calling this re-evaluates when the store changes.
+  function checkTrackUnavailable(track: { id: number; streamable?: boolean }): boolean {
+    void unavailableVersion;
+    return isTrackRemovedFromQobuz(track);
+  }
   let lightboxOpen = $state(false);
   let bookletOpen = $state(false);
+  let descriptionExpanded = $state(false);
+  let trackSearch = $state('');
+  const filteredTracks = $derived.by(() => {
+    if (!album.tracks) return [];
+    const q = trackSearch.trim().toLowerCase();
+    if (!q) return album.tracks;
+    return album.tracks.filter((track) =>
+      (track.title?.toLowerCase().includes(q)) ||
+      (track.artist?.toLowerCase().includes(q))
+    );
+  });
 
   // Booklet: find first PDF goody
   const bookletGoody = $derived(
@@ -201,6 +243,33 @@
   let hasCustomCover = $state(false);
   let coverOverride = $state<string | null>(null);
   let scrollContainer: HTMLDivElement | null = $state(null);
+
+  // Header gradient driven by extracted artwork palette.
+  let gradientEnabled = $state(isAlbumHeaderGradientEnabled());
+  let artworkPalette = $state<ArtworkPalette | null>(null);
+  let resolvedHeaderImageUrl = $state<string | null>(null);
+  $effect(() => {
+    const url = coverOverride ?? album.artwork ?? null;
+    artworkPalette = null;
+    resolvedHeaderImageUrl = null;
+    if (!url || !gradientEnabled) return;
+    const stillCurrent = () => (coverOverride ?? album.artwork ?? null) === url;
+    getCachedImageUrl(url).then((resolved) => {
+      if (stillCurrent()) resolvedHeaderImageUrl = resolved;
+    }).catch(() => {});
+    extractPalette(url).then((p) => {
+      if (stillCurrent()) artworkPalette = p;
+    });
+  });
+  const headerColor = $derived(gradientEnabled ? pickHeaderColor(artworkPalette) : null);
+  const headerStyle = $derived.by(() => {
+    if (!headerColor) return '';
+    const needsScrim = headerColor.luminance > 0.6;
+    const imageRule = resolvedHeaderImageUrl
+      ? `--art-image-url: url("${resolvedHeaderImageUrl.replace(/"/g, '\\"')}");`
+      : '';
+    return `--art-bg: ${headerColor.hex}; --art-scrim: ${needsScrim ? '0.55' : '0.3'}; ${imageRule}`;
+  });
 
   // Multi-select
   let multiSelectMode = $state(false);
@@ -375,6 +444,19 @@
     album.artist?.trim().toLowerCase() === 'various artists'
   );
 
+  /** Render a track-count duration as `Xh Ym Zs`, dropping leading zero
+   *  units (so `1h 4m 12s`, not `01h 04m 12s`). Empty input returns `0s`
+   *  as the safe fallback. */
+  function formatAlbumDuration(seconds: number): string {
+    const total = Math.max(0, Math.floor(seconds || 0));
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = total % 60;
+    if (h > 0) return `${h}h ${m}m ${s}s`;
+    if (m > 0) return `${m}m ${s}s`;
+    return `${s}s`;
+  }
+
   // Format release date nicely, fallback to year
   const formattedReleaseDate = $derived.by(() => {
     if (album.releaseDate) {
@@ -492,8 +574,18 @@
       }
     });
 
+    const unsubscribeAppearance = subscribeAppearance(() => {
+      gradientEnabled = isAlbumHeaderGradientEnabled();
+    });
+
+    const unsubscribeUnavailable = subscribeUnavailable(() => {
+      unavailableVersion++;
+    });
+
     return () => {
       unsubscribe?.();
+      unsubscribeAppearance();
+      unsubscribeUnavailable();
     };
   });
 
@@ -550,7 +642,7 @@
 </script>
 
 <ViewTransition duration={200} distance={12} direction="up">
-<div class="album-detail" bind:this={scrollContainer} onscroll={(e) => saveScrollPosition('album', (e.target as HTMLElement).scrollTop, album.id)}>
+<div class="album-detail" class:has-art-bg={!!headerColor} style={headerStyle} bind:this={scrollContainer} onscroll={(e) => saveScrollPosition('album', (e.target as HTMLElement).scrollTop, album.id)}>
   <!-- Back Navigation -->
   <button class="back-btn" onclick={onBack}>
     <ArrowLeft size={16} />
@@ -572,15 +664,32 @@
     </div>
 
     <!-- Album Metadata -->
-    <div class="metadata">
+    <div class="metadata selectable" class:no-description={!album.description}>
       <h1 class="album-title">{album.title}</h1>
-      {#if onArtistClick && !isVariousArtists}
-        <button class="artist-link" onclick={onArtistClick}>
-          {album.artist}
-        </button>
-      {:else}
-        <div class="artist-name">{album.artist}</div>
-      {/if}
+      <div class="artist-line">
+        {#if album.parentalWarning}
+          <span class="explicit-badge" title={$t('library.explicit')}></span>
+        {/if}
+        {#if onArtistClick && !isVariousArtists}
+          <button class="artist-link" onclick={onArtistClick}>
+            {album.artist}
+          </button>
+        {:else}
+          <span class="artist-name">{album.artist}</span>
+        {/if}
+        {#if album.featuredArtists && album.featuredArtists.length > 0}
+          {#each album.featuredArtists as featured (featured.id)}
+            <span class="featured-sep">•</span>
+            {#if onFeaturedArtistClick}
+              <button class="artist-link featured" onclick={() => onFeaturedArtistClick!(featured.id)}>
+                {featured.name}
+              </button>
+            {:else}
+              <span class="artist-name featured">{featured.name}</span>
+            {/if}
+          {/each}
+        {/if}
+      </div>
       <div class="album-info">
         {formattedReleaseDate} •
         {#if album.labelId && onLabelClick}
@@ -590,10 +699,21 @@
         {:else}
           {album.label}
         {/if}
-         • {album.genre}
+         • {album.genre} • {album.trackCount} {$t('album.tracks')} • {formatAlbumDuration(album.durationSeconds ?? 0)}
       </div>
-      <div class="album-quality">{album.quality}</div>
-      <div class="album-stats">{album.trackCount} {$t('album.tracks')} • {album.duration}</div>
+
+      {#if album.description}
+        <div class="album-description" class:expanded={descriptionExpanded}>
+          <div class="album-description-text">{@html sanitizeHtml(album.description)}</div>
+          <button
+            type="button"
+            class="description-toggle"
+            onclick={() => descriptionExpanded = !descriptionExpanded}
+          >
+            {descriptionExpanded ? $t('album.readLess') : $t('album.readMore')}
+          </button>
+        </div>
+      {/if}
 
       <!-- Action Buttons -->
       <div class="actions">
@@ -659,18 +779,6 @@
             <BookOpen size={18} />
           </button>
         {/if}
-        <AlbumMenu
-          onPlayNext={onPlayAllNext}
-          onPlayLater={onPlayAllLater}
-          onAddToPlaylist={onAddAlbumToPlaylist ? handleAddAlbumToPlaylist : undefined}
-          onAddToMixtape={handleAddToMixtape}
-          onShareQobuz={onShareAlbumQobuz}
-          onShareSonglink={onShareAlbumSonglink}
-          onDownload={onDownloadAlbum}
-          isAlbumFullyDownloaded={albumFullyDownloaded}
-          onOpenContainingFolder={onOpenAlbumFolder}
-          onReDownloadAlbum={onReDownloadAlbum}
-        />
         <button
           class="action-btn-circle"
           onclick={handleAddToMixtape}
@@ -686,11 +794,24 @@
         >
           <SquareCheckBig size={18} />
         </button>
+        <AlbumMenu
+          onPlayNext={onPlayAllNext}
+          onPlayLater={onPlayAllLater}
+          onAddToPlaylist={onAddAlbumToPlaylist ? handleAddAlbumToPlaylist : undefined}
+          onAddToMixtape={handleAddToMixtape}
+          onShareQobuz={onShareAlbumQobuz}
+          onShareSonglink={onShareAlbumSonglink}
+          onDownload={onDownloadAlbum}
+          isAlbumFullyDownloaded={albumFullyDownloaded}
+          onOpenContainingFolder={onOpenAlbumFolder}
+          onReDownloadAlbum={onReDownloadAlbum}
+        />
       </div>
     </div>
   </div>
 
-  <!-- Divider -->
+  <!-- Header / track list divider — hidden when the artwork gradient
+       provides its own visual demarcation. -->
   <div class="divider"></div>
 
   <!-- Track list + right-side metadata sidebar (label + awards) -->
@@ -698,18 +819,47 @@
   <!-- Track List -->
   <div class="track-list">
     <!-- Table Header -->
+    <div class="tracklist-toolbar" data-tauri-drag-region="deep">
+      <div class="tracklist-toolbar-left" data-tauri-drag-region="false">
+        <QualityBadgeStatic
+          bare
+          quality={album.quality}
+          bitDepth={album.bitDepth}
+          samplingRate={album.samplingRate}
+        />
+      </div>
+      <div class="tracklist-toolbar-search" data-tauri-drag-region="false">
+        <Search size={14} />
+        <input
+          type="text"
+          placeholder={$t('tracklist.searchPlaceholder')}
+          bind:value={trackSearch}
+          aria-label={$t('tracklist.searchPlaceholder')}
+        />
+        {#if trackSearch}
+          <button
+            type="button"
+            class="tracklist-search-clear"
+            onclick={() => trackSearch = ''}
+            aria-label={$t('actions.clear')}
+          >
+            <X size={14} />
+          </button>
+        {/if}
+      </div>
+    </div>
+
     <div class="table-header">
-      {#if multiSelectMode}
-        <div class="col-select-all">
-          <input
-            type="checkbox"
-            checked={selectAllState === 'all'}
-            indeterminate={selectAllState === 'partial'}
-            onchange={toggleSelectAll}
-            title={$t('actions.selectAll')}
-          />
-        </div>
-      {/if}
+      <div class="col-select-all" class:active={multiSelectMode}>
+        <input
+          type="checkbox"
+          checked={selectAllState === 'all'}
+          indeterminate={selectAllState === 'partial'}
+          onchange={toggleSelectAll}
+          title={$t('actions.selectAll')}
+          tabindex={multiSelectMode ? 0 : -1}
+        />
+      </div>
       <div class="col-number">#</div>
       <div class="col-title">{$t('tracklist.title')}</div>
       <div class="col-duration">{$t('tracklist.duration')}</div>
@@ -726,12 +876,17 @@
           <p>{$t('album.loadError')}</p>
           <button class="retry-btn" onclick={onBack}>{$t('actions.back')}</button>
         </div>
+      {:else if filteredTracks.length === 0}
+        <div class="empty-tracks-message">
+          <p>{$t('tracklist.noMatches')}</p>
+        </div>
       {:else}
-      {#each album.tracks as track, trackIndex (track.id)}
+      {#each filteredTracks as track, trackIndex (track.id)}
         {@const downloadInfo = getTrackOfflineCacheStatus?.(track.id) ?? { status: 'none' as const, progress: 0 }}
         {@const isTrackDownloaded = downloadInfo.status === 'ready'}
         {@const trackArtistId = track.artistId ?? album.artistId}
         {@const trackBlacklisted = trackArtistId ? isArtistBlacklisted(trackArtistId) : false}
+        {@const trackUnavailable = checkTrackUnavailable(track)}
         <TrackRow
           trackId={track.id}
           number={track.number}
@@ -743,6 +898,8 @@
           isPlaying={isPlaybackActive && activeTrackId === track.id}
           isActiveTrack={activeTrackId === track.id}
           isBlacklisted={trackBlacklisted}
+          isUnavailable={trackUnavailable}
+          unavailableTooltip={trackUnavailable ? $t('player.trackUnavailable') : undefined}
           selectable={multiSelectMode}
           selected={multiSelectedIds.has(track.id)}
           dragTrackIds={multiSelectMode && multiSelectedIds.has(track.id) ? [...multiSelectedIds] : undefined}
@@ -805,7 +962,7 @@
             disabled={!onLabelClick}
           >
             <div class="sidebar-entity-avatar label-avatar">
-              <Disc3 size={24} />
+              <Disc3 size={20} />
             </div>
             <div class="sidebar-entity-name">{album.label}</div>
           </button>
@@ -870,20 +1027,18 @@
                 artwork={relatedAlbum.artwork}
                 title={relatedAlbum.title}
                 artist={album.artist}
-                artistId={album.artistId}
-                onArtistClick={onTrackGoToArtist}
                 genre={relatedAlbum.genre}
-                releaseDate={relatedAlbum.releaseDate}
-                size="large"
+                releaseYear={Number(relatedAlbum.releaseDate?.slice(0, 4)) || undefined}
                 quality={relatedAlbum.quality}
-                onclick={() => onRelatedAlbumClick?.(relatedAlbum.id)}
+                isAlbumFullyDownloaded={isRelatedAlbumDownloaded(relatedAlbum.id)}
+                onArtistClick={album.artistId && onTrackGoToArtist ? () => onTrackGoToArtist(album.artistId!) : undefined}
+                onClick={() => onRelatedAlbumClick?.(relatedAlbum.id)}
                 onPlay={onRelatedAlbumPlay ? () => onRelatedAlbumPlay(relatedAlbum.id) : undefined}
                 onPlayNext={onRelatedAlbumPlayNext ? () => onRelatedAlbumPlayNext(relatedAlbum.id) : undefined}
                 onPlayLater={onRelatedAlbumPlayLater ? () => onRelatedAlbumPlayLater(relatedAlbum.id) : undefined}
                 onDownload={onRelatedAlbumDownload ? () => onRelatedAlbumDownload(relatedAlbum.id) : undefined}
                 onShareQobuz={onRelatedAlbumShareQobuz ? () => onRelatedAlbumShareQobuz(relatedAlbum.id) : undefined}
                 onShareSonglink={onRelatedAlbumShareSonglink ? () => onRelatedAlbumShareSonglink(relatedAlbum.id) : undefined}
-                isAlbumFullyDownloaded={isRelatedAlbumDownloaded(relatedAlbum.id)}
               />
             </div>
           {/each}
@@ -964,7 +1119,84 @@
     width: 100%;
     height: 100%;
     padding: 8px 8px 100px 18px;
+    overflow-x: hidden;
     overflow-y: auto;
+    position: relative;
+  }
+
+  /* Artwork-derived backdrop. ::before renders the actual cover heavily
+     blurred (Qobuz/Feishin-style) with a mask that fades it into the
+     theme bg toward the bottom; ::after lays a scrim on top for text
+     contrast on light artwork. The cost is one-shot — once the image
+     is rasterized into a layer the GPU just composites it. */
+  .album-detail.has-art-bg::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 280px;
+    background-color: var(--art-bg, transparent);
+    background-image: var(--art-image-url, none);
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    filter: blur(70px) saturate(1.3);
+    transform: scale(1.15);
+    transform-origin: center top;
+    z-index: 0;
+    pointer-events: none;
+    -webkit-mask-image: linear-gradient(180deg, #000 0%, #000 55%, transparent 100%);
+            mask-image: linear-gradient(180deg, #000 0%, #000 55%, transparent 100%);
+    transition: background-color 320ms ease;
+    will-change: transform, filter;
+  }
+
+  .album-detail.has-art-bg::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 280px;
+    background: linear-gradient(180deg, rgba(0, 0, 0, var(--art-scrim, 0.3)) 0%, rgba(0, 0, 0, 0) 80%);
+    z-index: 0;
+    pointer-events: none;
+  }
+
+  .album-detail > * {
+    position: relative;
+    z-index: 1;
+  }
+
+  /* Lift secondary text contrast over the colored backdrop. */
+  .album-detail.has-art-bg .back-btn,
+  .album-detail.has-art-bg .album-info {
+    color: rgba(255, 255, 255, 0.78);
+  }
+
+  .album-detail.has-art-bg .back-btn:hover {
+    color: #fff;
+  }
+
+  .album-detail.has-art-bg .artist-link {
+    color: #fff;
+  }
+
+  .album-detail.has-art-bg .artist-link:hover {
+    text-decoration: underline;
+  }
+
+  .album-detail.has-art-bg .album-description {
+    color: rgba(255, 255, 255, 0.78);
+  }
+
+  .album-detail.has-art-bg .description-toggle {
+    color: rgba(255, 255, 255, 0.78);
+  }
+
+  .album-detail.has-art-bg .description-toggle:hover {
+    color: #fff;
   }
 
   /* Custom scrollbar */
@@ -1006,7 +1238,7 @@
   .album-header {
     display: flex;
     gap: 32px;
-    margin-bottom: 32px;
+    margin-bottom: 8px;
   }
 
   .artwork {
@@ -1029,7 +1261,13 @@
     flex: 1;
     display: flex;
     flex-direction: column;
+    justify-content: flex-start;
+    padding-top: 4px;
+  }
+
+  .metadata.no-description {
     justify-content: center;
+    padding-top: 0;
   }
 
   .album-title {
@@ -1062,6 +1300,74 @@
     text-decoration: underline;
   }
 
+  .artist-line {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 8px;
+  }
+
+  .artist-line .artist-link,
+  .artist-line .artist-name {
+    margin-bottom: 0;
+  }
+
+  .artist-link.featured,
+  .artist-name.featured {
+    font-weight: 400;
+    color: var(--text-secondary);
+    font-size: 16px;
+  }
+
+  .album-detail.has-art-bg .artist-link.featured,
+  .album-detail.has-art-bg .artist-name.featured {
+    color: rgba(255, 255, 255, 0.78);
+  }
+
+  .featured-sep {
+    color: var(--text-muted);
+    font-size: 14px;
+  }
+
+  .album-detail.has-art-bg .featured-sep {
+    color: rgba(255, 255, 255, 0.6);
+  }
+
+  /* Action buttons reactive to gradient backdrop. */
+  .album-detail.has-art-bg :global(.action-btn-circle) {
+    color: rgba(255, 255, 255, 0.78);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35);
+  }
+
+  .album-detail.has-art-bg :global(.action-btn-circle:hover:not(:disabled)) {
+    color: #fff;
+    background: rgba(255, 255, 255, 0.12);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.7);
+  }
+
+  .album-detail.has-art-bg :global(.action-btn-circle.is-active) {
+    color: #fff;
+    background: rgba(255, 255, 255, 0.18);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.6);
+  }
+
+  .explicit-badge {
+    display: inline-block;
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+    opacity: 0.55;
+    background-color: var(--text-secondary);
+    -webkit-mask: url('/explicit.svg') center / contain no-repeat;
+    mask: url('/explicit.svg') center / contain no-repeat;
+  }
+
+  .album-detail.has-art-bg .explicit-badge {
+    background-color: rgba(255, 255, 255, 0.85);
+    opacity: 0.85;
+  }
+
   .label-link {
     background: none;
     border: none;
@@ -1080,19 +1386,135 @@
   .album-info {
     font-size: 14px;
     color: var(--text-muted);
-    margin-bottom: 4px;
+    margin-bottom: 12px;
   }
 
-  .album-quality {
-    font-size: 14px;
-    color: var(--text-muted);
-    margin-bottom: 4px;
+  .album-description {
+    margin: 0 0 16px 0;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--text-secondary);
+    max-width: 720px;
   }
 
-  .album-stats {
-    font-size: 14px;
+  .album-description-text {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  .album-description-text :global(p) {
+    margin: 0;
+  }
+
+  .album-description-text :global(p + p) {
+    margin-top: 8px;
+  }
+
+  .album-description.expanded .album-description-text {
+    -webkit-line-clamp: unset;
+    line-clamp: unset;
+    overflow: visible;
+  }
+
+  .tracklist-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 28px;
+    /* Asymmetric padding compensates for the table-header below: it has
+       40px height with text vertically centered, so visually the content
+       sits ~20px below the toolbar's bottom edge. We add the same offset
+       on top so the badge/search row reads as equidistant between the
+       divider above and the first track row below. */
+    padding: 20px 0 8px 0;
+    margin: 0;
+  }
+
+  .divider {
+    height: 1px;
+    background-color: var(--border-subtle);
+    margin: 14px 0 0 0;
+  }
+
+  /* Hide divider when the artwork gradient is active — the gradient
+     itself acts as the demarcation between header and tracklist. */
+  .album-detail.has-art-bg .divider {
+    background-color: transparent;
+  }
+
+  .tracklist-toolbar-left {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    min-height: 32px;
+    padding-left: 4px;
+  }
+
+  .tracklist-toolbar-search {
+    flex: 0 1 320px;
+    width: 320px;
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 10px;
+    min-height: 32px;
+    box-sizing: border-box;
+    background: none;
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
     color: var(--text-muted);
-    margin-bottom: 24px;
+    transition: border-color 150ms ease, color 150ms ease;
+  }
+
+  .tracklist-toolbar-search:focus-within {
+    border-color: var(--accent-primary);
+    color: var(--text-primary);
+  }
+
+  .tracklist-toolbar-search input {
+    flex: 1;
+    background: none;
+    border: none;
+    outline: none;
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 13px;
+    min-width: 0;
+  }
+
+  .tracklist-toolbar-search input::placeholder {
+    color: var(--text-muted);
+  }
+
+  .tracklist-search-clear {
+    background: none;
+    border: none;
+    padding: 0;
+    color: var(--text-muted);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+  }
+
+  .tracklist-search-clear:hover {
+    color: var(--text-primary);
+  }
+
+  .description-toggle {
+    background: none;
+    border: none;
+    padding: 4px 0 0 0;
+    font: inherit;
+    font-size: 12px;
+    color: var(--text-muted);
+    cursor: pointer;
+  }
+
+  .description-toggle:hover {
+    color: var(--text-secondary);
   }
 
   .actions {
@@ -1115,16 +1537,11 @@
     border-color: var(--text-primary);
   }
 
-  .divider {
-    height: 1px;
-    background-color: var(--bg-tertiary);
-    margin: 32px 0;
-  }
 
   .table-header {
     width: 100%;
     height: 40px;
-    padding: 0 16px;
+    padding: 0 16px 0 4px;
     display: flex;
     flex-direction: row;
     align-items: center;
@@ -1136,23 +1553,44 @@
     box-sizing: border-box;
   }
 
+  /* Match the track-row's left padding (overridden below) so the # column
+     and the quality badge above sit at the same x. */
+  .track-list :global(.track-row) {
+    padding-left: 4px;
+  }
+
+  .track-list :global(.track-row .track-number) {
+    justify-content: flex-start;
+  }
+
   .col-select-all {
-    width: 32px;
+    width: 0;
     display: flex;
     align-items: center;
     justify-content: center;
+    flex-shrink: 0;
+    overflow: hidden;
+    opacity: 0;
+    pointer-events: none;
+    transition: width 180ms ease, opacity 180ms ease;
+  }
+
+  .col-select-all.active {
+    width: 24px;
+    opacity: 1;
+    pointer-events: auto;
   }
 
   .col-select-all input[type="checkbox"] {
-    width: 16px;
-    height: 16px;
+    width: 15px;
+    height: 15px;
     accent-color: var(--accent-primary);
     cursor: pointer;
   }
 
   .col-number {
     width: 48px;
-    text-align: center;
+    text-align: left;
   }
 
   .col-title {
@@ -1412,20 +1850,20 @@
     min-width: 0;
   }
   .album-sidebar {
-    flex: 0 0 280px;
-    width: 280px;
+    flex: 0 0 254px;
+    width: 254px;
     display: flex;
     flex-direction: column;
     gap: 24px;
-    padding-top: 4px;
+    padding-top: 20px;
   }
   .sidebar-section {
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 10px;
   }
   .sidebar-section-title {
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 600;
     letter-spacing: 0.08em;
     text-transform: uppercase;
@@ -1440,8 +1878,8 @@
   .sidebar-entity-card {
     display: flex;
     align-items: center;
-    gap: 12px;
-    padding: 8px 10px;
+    gap: 10px;
+    padding: 6px 8px;
     background: transparent;
     border: none;
     border-radius: 8px;
@@ -1459,9 +1897,9 @@
     cursor: default;
   }
   .sidebar-entity-avatar {
-    flex: 0 0 44px;
-    width: 44px;
-    height: 44px;
+    flex: 0 0 36px;
+    width: 36px;
+    height: 36px;
     border-radius: 50%;
     display: flex;
     align-items: center;
@@ -1481,13 +1919,14 @@
     pointer-events: none;
   }
   .sidebar-entity-name {
-    font-size: 13px;
+    font-size: 11px;
     font-weight: 500;
     color: var(--text-primary);
     overflow: hidden;
     text-overflow: ellipsis;
     display: -webkit-box;
     -webkit-line-clamp: 2;
+    line-clamp: 2;
     -webkit-box-orient: vertical;
     line-height: 1.3;
     min-width: 0;

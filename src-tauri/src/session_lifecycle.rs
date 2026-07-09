@@ -61,6 +61,8 @@ pub async fn activate_session(app: &tauri::AppHandle, user_id: u64) -> Result<()
         app.state::<crate::config::playback_preferences::PlaybackPreferencesState>();
     let favorites_prefs =
         app.state::<crate::config::favorites_preferences::FavoritesPreferencesState>();
+    let library_prefs =
+        app.state::<crate::config::library_preferences::LibraryPreferencesState>();
     let download_settings = app.state::<crate::config::download_settings::DownloadSettingsState>();
     let audio_settings = app.state::<crate::config::audio_settings::AudioSettingsState>();
     let tray_settings = app.state::<crate::config::tray_settings::TraySettingsState>();
@@ -114,6 +116,7 @@ pub async fn activate_session(app: &tauri::AppHandle, user_id: u64) -> Result<()
     favorites_cache.init_at(&data_dir)?;
     playback_prefs.init_at(&data_dir)?;
     favorites_prefs.init_at(&data_dir)?;
+    library_prefs.init_at(&data_dir)?;
     audio_settings.init_at(&data_dir)?;
 
     // Sync per-user audio settings to CoreBridge player immediately.
@@ -184,8 +187,11 @@ pub async fn activate_session(app: &tauri::AppHandle, user_id: u64) -> Result<()
     listenbrainz_v2.init_from_cache().await;
     log::info!("[SessionLifecycle] ListenBrainz V2 state loaded from V2 cache");
 
-    musicbrainz_v2.init_from_cache(true).await;
-    log::info!("[SessionLifecycle] MusicBrainz V2 state loaded from V2 cache");
+    // use_proxy=false: hit MusicBrainz directly from the user's own IP so the
+    // per-IP 1 req/s budget is per-user, not shared across all users behind the
+    // proxy's Cloudflare egress IPs. See qbz-nix-docs MusicBrainz direct-mode plan.
+    musicbrainz_v2.init_from_cache(false).await;
+    log::info!("[SessionLifecycle] MusicBrainz V2 state loaded from V2 cache (direct mode)");
 
     // LastFm V2: no persistent cache yet, reset to clean state
     lastfm_v2.init_with_session(None).await;
@@ -210,6 +216,16 @@ pub async fn activate_session(app: &tauri::AppHandle, user_id: u64) -> Result<()
     // Cache-dir stores
     offline_cache.init_at(&cache_dir).await?;
     offline_cache.init_library_connection(&data_dir).await?;
+    // Apply user's persisted offline cache size limit (Fix #5c). Runs after
+    // both `offline.init_at` (above) and `offline_cache.init_at` so the DB
+    // handle is available. Falls back silently to the 5 GB default when
+    // unset.
+    let persisted_limit = offline.store.lock().ok().and_then(|guard| {
+        guard
+            .as_ref()
+            .and_then(|s| s.get_cache_limit_bytes().ok().flatten())
+    });
+    offline_cache.apply_persisted_limit(persisted_limit).await;
     lyrics.init_at(&cache_dir).await?;
 
     // Run deferred subscription purge check
@@ -232,7 +248,7 @@ pub async fn activate_session(app: &tauri::AppHandle, user_id: u64) -> Result<()
         log::warn!("[SessionLifecycle] Subscription invalid beyond the grace window. Purging offline cache.");
         if let Err(e) = crate::offline_cache::purge::purge_all_cached_files(
             offline_cache.inner(),
-            library.inner(),
+            &library.inner().db,
         )
         .await
         {
@@ -295,6 +311,8 @@ pub async fn deactivate_session(app: &tauri::AppHandle) -> Result<(), String> {
         app.state::<crate::config::playback_preferences::PlaybackPreferencesState>();
     let favorites_prefs =
         app.state::<crate::config::favorites_preferences::FavoritesPreferencesState>();
+    let library_prefs =
+        app.state::<crate::config::library_preferences::LibraryPreferencesState>();
     let download_settings = app.state::<crate::config::download_settings::DownloadSettingsState>();
     let audio_settings = app.state::<crate::config::audio_settings::AudioSettingsState>();
     let tray_settings = app.state::<crate::config::tray_settings::TraySettingsState>();
@@ -326,6 +344,7 @@ pub async fn deactivate_session(app: &tauri::AppHandle) -> Result<(), String> {
     favorites_cache.teardown()?;
     playback_prefs.teardown()?;
     favorites_prefs.teardown()?;
+    library_prefs.teardown()?;
     audio_settings.teardown()?;
     tray_settings.teardown()?;
     remote_control_settings.teardown()?;
@@ -345,7 +364,7 @@ pub async fn deactivate_session(app: &tauri::AppHandle) -> Result<(), String> {
     // Teardown V2 integration states (clear in-memory + close caches)
     listenbrainz_v2.clear_credentials().await;
     listenbrainz_v2.teardown().await;
-    musicbrainz_v2.init_with_config(true, true).await; // Reset to defaults
+    musicbrainz_v2.init_with_config(true, false).await; // Reset to defaults (direct mode)
     musicbrainz_v2.teardown().await;
     lastfm_v2.init_with_session(None).await; // Clear session
     log::info!("[SessionLifecycle] V2 integration states torn down");
@@ -418,6 +437,8 @@ pub async fn activate_offline_session(app: &tauri::AppHandle) -> Result<(), Stri
     let tray_settings = app.state::<crate::config::tray_settings::TraySettingsState>();
     let favorites_prefs =
         app.state::<crate::config::favorites_preferences::FavoritesPreferencesState>();
+    let library_prefs =
+        app.state::<crate::config::library_preferences::LibraryPreferencesState>();
 
     library.init_at(&data_dir).await?;
 
@@ -440,6 +461,7 @@ pub async fn activate_offline_session(app: &tauri::AppHandle) -> Result<(), Stri
     session_store.init_at(&data_dir)?;
     favorites_cache.init_at(&data_dir)?;
     favorites_prefs.init_at(&data_dir)?;
+    library_prefs.init_at(&data_dir)?;
     tray_settings.init_at(&data_dir)?;
 
     // Download settings — needed for "Show in Local Library" toggle

@@ -47,7 +47,7 @@ use qbz_audio::{
     BitPerfectMode, DiagnosticSource, DynamicAmplify, LoudnessAnalyzer, LoudnessCache,
     TappedSource, VisualizerTap,
 };
-use qbz_models::Quality;
+use qbz_models::{AssetOrigin, ExternalStreamAsset, Quality, StreamQualityInfo};
 use qbz_qobuz::QobuzClient;
 
 /// Commands sent to the audio thread
@@ -68,6 +68,13 @@ enum AudioCommand {
         sample_rate: u32,
         channels: u16,
         duration_secs: u64,
+        /// Resume offset in seconds (#315). When > 0, the audio thread
+        /// waits for enough buffer to cover the offset and pre-skips
+        /// decoder output up to that point before engaging audio.
+        start_position_secs: u64,
+        /// Total content length in bytes. Combined with `duration_secs`
+        /// to estimate bytes-per-second when sizing the resume buffer.
+        content_length: u64,
     },
     /// Pause playback
     Pause,
@@ -81,6 +88,11 @@ enum AudioCommand {
     Seek(u64),
     /// Reinitialize audio device (releases and re-acquires)
     ReinitDevice { device_name: Option<String> },
+    /// Release the output device WITHOUT reopening it: drops the active
+    /// stream (freeing an exclusive ALSA `hw:` grab + its D-Bus reservation)
+    /// and un-suspends / un-forces anything QBZ parked, so PipeWire can
+    /// reclaim a device QBZ was holding. User-triggered from settings.
+    ReleaseDevice,
     /// Append next track to current engine for gapless playback (Rodio only)
     PlayNext {
         data: Vec<u8>,
@@ -88,6 +100,17 @@ enum AudioCommand {
         sample_rate: u32,
         channels: u16,
     },
+    /// Play a local DSD file via DoP (DSD over PCM) on ALSA direct (DSD plan
+    /// Phase 2). The audio thread opens the demuxer + an S32 stream at the
+    /// DoP carrier rate and feeds pre-packed words through the DoP engine.
+    PlayDsdDop { path: std::path::PathBuf, track_id: u64 },
+    /// Play a local DSD file NATIVELY (ALSA DSD_U32, DSD plan Phase 3) —
+    /// requires the kernel to grant the device a DSD format (quirk table).
+    PlayDsdNative { path: std::path::PathBuf, track_id: u64 },
+    /// Queue the next DSD track on the ACTIVE DoP engine (gapless DSD).
+    /// Ignored (with gapless_ready reset) when the engine isn't DoP or the
+    /// carrier rate differs — the normal track-end advance then handles it.
+    PlayNextDsdDop { path: std::path::PathBuf, track_id: u64 },
 }
 
 /// Pending gapless track data (queued for seamless transition)
@@ -302,6 +325,27 @@ fn extract_audio_metadata_full(data: &[u8]) -> Result<AudioMetadata, String> {
     })
 }
 
+/// True when a cached FLAC is a lower quality than `requested`, so the
+/// cache entry should be bypassed and the track re-fetched. Ported from
+/// the Tauri `cached_quality_below_requested` helper: an unparseable
+/// buffer is assumed compatible.
+fn cached_quality_below_requested(data: &[u8], requested: Quality) -> bool {
+    let meta = match extract_audio_metadata_full(data) {
+        Ok(m) => m,
+        Err(_) => return false,
+    };
+    let sample_rate = meta.sample_rate;
+    let bit_depth = meta.bit_depth.unwrap_or(16);
+    match requested {
+        // Hi-Res+: expect 24-bit AND > 96 kHz.
+        Quality::UltraHiRes => bit_depth < 24 || sample_rate <= 96000,
+        // Hi-Res: expect 24-bit.
+        Quality::HiRes => bit_depth < 24,
+        // Lossless / Mp3: any FLAC satisfies the request.
+        _ => false,
+    }
+}
+
 fn decode_with_fallback(data: &[u8]) -> Result<Box<dyn Source<Item = f32> + Send>, String> {
     if is_isomp4(data) {
         return decode_with_symphonia(data).map(|specs| {
@@ -451,11 +495,299 @@ fn create_output_stream_with_config(
     }
 }
 
-/// Output stream type - either rodio or ALSA Direct
+/// Output stream type - either rodio or ALSA Direct.
+///
+/// On macOS, the Rodio variant carries an optional `exclusive_guard`
+/// whose `Drop` releases CoreAudio Hog Mode and is otherwise inert —
+/// so exclusive and shared modes share a single code path.
 enum StreamType {
-    Rodio(MixerDeviceSink),
+    Rodio {
+        sink: MixerDeviceSink,
+        /// Holds CoreAudio Hog Mode for the lifetime of the stream.
+        /// Load-bearing via `Drop`; reads happen through pattern matches
+        /// (e.g., `set_coreaudio_hardware_volume`).
+        #[cfg(target_os = "macos")]
+        exclusive_guard: Option<qbz_audio::CoreAudioExclusiveGuard>,
+    },
     #[cfg(target_os = "linux")]
     AlsaDirect(Arc<qbz_audio::AlsaDirectStream>),
+    /// Native JACK output (#263 Tier 3). QBZ as a JACK client with stable ports;
+    /// NOT bit-perfect (resampled to the graph rate).
+    #[cfg(target_os = "linux")]
+    Jack(Arc<qbz_audio::JackStream>),
+}
+
+impl StreamType {
+    /// Construct a shared-mode Rodio stream (no exclusive guard).
+    fn rodio(sink: MixerDeviceSink) -> Self {
+        StreamType::Rodio {
+            sink,
+            #[cfg(target_os = "macos")]
+            exclusive_guard: None,
+        }
+    }
+
+    /// Apply the volume to CoreAudio hardware if the device supports it.
+    ///
+    /// Returns `true` only when the hardware accepted the change so the
+    /// caller can pin the software stream to unity gain. Returns `false`
+    /// for shared mode and for knob-only DACs (no settable volume
+    /// property), letting the caller fall back to software volume.
+    #[cfg(target_os = "macos")]
+    fn set_coreaudio_hardware_volume(&self, volume: f32) -> bool {
+        match self {
+            StreamType::Rodio {
+                exclusive_guard: Some(guard),
+                ..
+            } => match guard.set_hardware_volume(volume) {
+                Ok(()) => true,
+                Err(e) => {
+                    log::warn!(
+                        "[CoreAudio] Hardware volume failed; falling back to software: {}",
+                        e
+                    );
+                    false
+                }
+            },
+            _ => false,
+        }
+    }
+
+    /// Actual output stream rate. On macOS shared mode this is the rate that
+    /// must match CoreAudio's current nominal device rate; decoded track rates
+    /// may differ and are resampled by Rodio.
+    #[cfg(target_os = "macos")]
+    fn output_sample_rate(&self) -> u32 {
+        match self {
+            StreamType::Rodio { sink, .. } => sink.config().sample_rate().get(),
+        }
+    }
+}
+
+fn apply_engine_volume(
+    #[cfg_attr(not(target_os = "macos"), allow(unused_variables))] stream_opt: &Option<StreamType>,
+    engine: &PlaybackEngine,
+    volume: f32,
+) {
+    #[cfg(target_os = "macos")]
+    if stream_opt
+        .as_ref()
+        .map(|stream| stream.set_coreaudio_hardware_volume(volume))
+        .unwrap_or(false)
+    {
+        engine.set_volume(1.0);
+        return;
+    }
+
+    engine.set_volume(volume);
+}
+
+#[cfg(target_os = "macos")]
+fn uses_coreaudio_system_default(settings: &AudioSettings) -> bool {
+    settings
+        .backend_type
+        .unwrap_or(AudioBackendType::SystemDefault)
+        == AudioBackendType::SystemDefault
+}
+
+/// `evaluate_stream_recreate` runs every track change on the audio thread,
+/// and `coreaudio_nominal_rate` issues two CoreAudio HAL queries per call
+/// (`resolve_output_device_id` + `get_nominal_sample_rate`). A short-lived
+/// cache absorbs the bulk of those repeats — long enough to skip duplicate
+/// queries within an album, short enough to notice when the user changes the
+/// system audio rate.
+#[cfg(target_os = "macos")]
+const COREAUDIO_RATE_CACHE_TTL: std::time::Duration = std::time::Duration::from_millis(750);
+
+#[cfg(target_os = "macos")]
+struct CachedNominalRate {
+    cached_at: std::time::Instant,
+    device_name: Option<String>,
+    rate: Option<u32>,
+}
+
+#[cfg(target_os = "macos")]
+std::thread_local! {
+    static COREAUDIO_NOMINAL_RATE_CACHE: std::cell::RefCell<Option<CachedNominalRate>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(target_os = "macos")]
+fn query_macos_nominal_rate(device_name: Option<&str>) -> Option<u32> {
+    let device_id = qbz_audio::coreaudio_direct::resolve_output_device_id(device_name)
+        .inspect_err(|e| {
+            log::warn!(
+                "[CoreAudio] Failed to resolve output device for rate check: {}",
+                e
+            )
+        })
+        .ok()?;
+
+    qbz_audio::coreaudio_direct::get_nominal_sample_rate(device_id)
+        .inspect_err(|e| log::warn!("[CoreAudio] Failed to query nominal rate: {}", e))
+        .ok()
+}
+
+#[cfg(target_os = "macos")]
+fn coreaudio_nominal_rate(settings: &AudioSettings) -> Option<u32> {
+    if !uses_coreaudio_system_default(settings) {
+        return None;
+    }
+
+    let device_name = settings.output_device.clone();
+    let now = std::time::Instant::now();
+
+    COREAUDIO_NOMINAL_RATE_CACHE.with(|cell| {
+        let mut cell = cell.borrow_mut();
+        if let Some(cached) = cell.as_ref() {
+            if cached.device_name == device_name
+                && now.duration_since(cached.cached_at) < COREAUDIO_RATE_CACHE_TTL
+            {
+                return cached.rate;
+            }
+        }
+        let rate = query_macos_nominal_rate(device_name.as_deref());
+        *cell = Some(CachedNominalRate {
+            cached_at: now,
+            device_name,
+            rate,
+        });
+        rate
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn coreaudio_shared_rate_mismatch(
+    settings: &AudioSettings,
+    stream_opt: &Option<StreamType>,
+) -> Option<(u32, u32)> {
+    if settings.exclusive_mode || !uses_coreaudio_system_default(settings) {
+        return None;
+    }
+
+    let stream_rate = stream_opt.as_ref().map(StreamType::output_sample_rate)?;
+    let nominal_rate = coreaudio_nominal_rate(settings)?;
+
+    (stream_rate != nominal_rate).then_some((stream_rate, nominal_rate))
+}
+
+/// Inputs needed by both `Play` and `Stream` handlers to decide whether the
+/// current output stream must be torn down and recreated.
+struct StreamRecreateDecision {
+    needs_new_stream: bool,
+    format_changed: bool,
+    dac_passthrough: bool,
+    using_alsa_direct: bool,
+    using_coreaudio_exclusive: bool,
+    coreaudio_shared_rate_mismatch: Option<(u32, u32)>,
+}
+
+/// Read settings once and evaluate every condition that forces a stream
+/// rebuild: any decoded-format change (sample rate / channels — the output
+/// stream must follow the track's native rate on every backend, #449) and
+/// CoreAudio shared-mode rate drift (CPAL caches the device rate at open
+/// time, so when the OS nominal rate moves we must rebuild or playback runs
+/// at the wrong speed).
+///
+/// `current_track_sample_rate` / `current_track_channels` describe the last
+/// *decoded source* format and are compared to the incoming `sample_rate` /
+/// `channels` — never to the output stream's hardware rate, which on macOS
+/// shared mode may differ and is tracked separately via Rodio's sink config.
+fn evaluate_stream_recreate(
+    thread_settings: &Arc<Mutex<AudioSettings>>,
+    stream_opt: &Option<StreamType>,
+    current_track_sample_rate: Option<u32>,
+    current_track_channels: Option<u16>,
+    sample_rate: u32,
+    channels: u16,
+    context: &str,
+) -> StreamRecreateDecision {
+    let format_changed =
+        current_track_sample_rate != Some(sample_rate) || current_track_channels != Some(channels);
+
+    let settings_guard = thread_settings.lock().ok();
+
+    let dac_passthrough = settings_guard
+        .as_ref()
+        .map(|s| cfg!(target_os = "linux") && s.dac_passthrough)
+        .unwrap_or(false);
+
+    let using_alsa_direct = settings_guard
+        .as_ref()
+        .and_then(|s| s.backend_type)
+        .map(|b| b == AudioBackendType::Alsa)
+        .unwrap_or(false);
+
+    let using_coreaudio_exclusive = settings_guard
+        .as_ref()
+        .map(|s| {
+            cfg!(target_os = "macos")
+                && s.backend_type.unwrap_or(AudioBackendType::SystemDefault)
+                    == AudioBackendType::SystemDefault
+                && s.exclusive_mode
+        })
+        .unwrap_or(false);
+
+    #[cfg(target_os = "macos")]
+    let coreaudio_shared_rate_mismatch = settings_guard
+        .as_ref()
+        .and_then(|s| coreaudio_shared_rate_mismatch(s, stream_opt))
+        .inspect(|(stream_rate, nominal_rate)| {
+            log::warn!(
+                "[CoreAudio] {} shared-mode output rate changed: stream {}Hz, device nominal {}Hz. Recreating stream to avoid wrong-speed playback.",
+                context,
+                stream_rate,
+                nominal_rate
+            );
+        });
+    #[cfg(not(target_os = "macos"))]
+    let coreaudio_shared_rate_mismatch: Option<(u32, u32)> = {
+        let _ = (stream_opt, context);
+        None
+    };
+
+    drop(settings_guard);
+
+    let needs_new_stream = compute_needs_new_stream(
+        stream_opt.is_some(),
+        format_changed,
+        dac_passthrough,
+        using_alsa_direct,
+        using_coreaudio_exclusive,
+        coreaudio_shared_rate_mismatch.is_some(),
+    );
+
+    StreamRecreateDecision {
+        needs_new_stream,
+        format_changed,
+        dac_passthrough,
+        using_alsa_direct,
+        using_coreaudio_exclusive,
+        coreaudio_shared_rate_mismatch,
+    }
+}
+
+/// Pure decision rule for whether the output stream must be rebuilt.
+///
+/// Split out so the truth table can be unit-tested without faking a real
+/// `MixerDeviceSink` or `AudioSettings` mutex.
+fn compute_needs_new_stream(
+    has_stream: bool,
+    format_changed: bool,
+    _dac_passthrough: bool,
+    _using_alsa_direct: bool,
+    _using_coreaudio_exclusive: bool,
+    coreaudio_shared_rate_mismatch: bool,
+) -> bool {
+    // A decoded-format change (sample rate or channel count) requires a fresh
+    // output stream on EVERY backend so the device follows the track's native
+    // rate (#449). The bit-perfect flags used to gate this, which was correct
+    // only while Stop dropped the stream; once that drop was deferred to avoid
+    // a track-change click (e93fcaec), the default/PipeWire path stopped
+    // switching rates and stayed locked to the first track. Same-rate tracks
+    // keep reusing the stream (format_changed == false), preserving the click
+    // fix.
+    !has_stream || format_changed || coreaudio_shared_rate_mismatch
 }
 
 /// Try to create output stream using the backend system (if configured)
@@ -468,16 +800,16 @@ fn try_init_stream_with_backend(
     channels: u16,
     state: &SharedState,
 ) -> Option<Result<StreamType, String>> {
-    // Check if backend system is configured.
-    // On non-Linux, default to SystemDefault when not explicitly set,
-    // so macOS gets CoreAudio device probing and sample rate switching.
-    let backend_type = audio_settings.backend_type.or_else(|| {
-        if cfg!(not(target_os = "linux")) {
-            Some(qbz_audio::AudioBackendType::SystemDefault)
-        } else {
-            None
-        }
-    })?;
+    // A None backend_type means "Auto" / unset. Resolve it to SystemDefault on
+    // every platform instead of returning None — returning None made the caller
+    // fall through to the legacy CPAL path, which forced the track rate onto the
+    // shared default device: that froze the seekbar with no audio AND left a
+    // process-wide stuck audio handle that survived Reset (#470). "Auto" is
+    // resolved to a concrete backend in the UI; this is the backend-side safety
+    // net for any remaining None (legacy installs, headless callers).
+    let backend_type = audio_settings
+        .backend_type
+        .unwrap_or(qbz_audio::AudioBackendType::SystemDefault);
 
     log::info!(
         "Using backend system: {:?} (device: {:?}, plugin: {:?})",
@@ -539,16 +871,42 @@ fn try_init_stream_with_backend(
         }
     }
 
+    // JACK (#263 Tier 3): create the JACK client/stream directly (not via the
+    // MixerDeviceSink trait). Opt-in routing-freedom mode, NOT bit-perfect.
+    #[cfg(target_os = "linux")]
+    if backend_type == AudioBackendType::Jack {
+        match qbz_audio::JackStream::new(config.channels) {
+            Ok(stream) => {
+                state.set_bit_perfect_mode(Some(qbz_audio::BitPerfectMode::Disabled));
+                return Some(Ok(StreamType::Jack(Arc::new(stream))));
+            }
+            Err(e) => return Some(Err(format!("JACK backend unavailable: {e}"))),
+        }
+    }
+
     // Fallback to regular rodio stream (PipeWire, Pulse, ALSA via CPAL)
-    match backend.create_output_stream(&config) {
-        Ok(mixer_sink) => {
+    match backend.create_output_stream_with_exclusive_guard(&config) {
+        Ok((mixer_sink, _exclusive_guard)) => {
+            let output_sample_rate = mixer_sink.config().sample_rate().get();
             log::info!(
-                "Stream created via {:?} backend at {}Hz",
+                "Stream created via {:?} backend (requested {}Hz, output {}Hz)",
                 backend_type,
-                sample_rate
+                sample_rate,
+                output_sample_rate
             );
             state.set_bit_perfect_mode(Some(BitPerfectMode::Disabled));
-            Some(Ok(StreamType::Rodio(mixer_sink)))
+            #[cfg(target_os = "macos")]
+            let stream = if backend_type == AudioBackendType::SystemDefault {
+                StreamType::Rodio {
+                    sink: mixer_sink,
+                    exclusive_guard: _exclusive_guard,
+                }
+            } else {
+                StreamType::rodio(mixer_sink)
+            };
+            #[cfg(not(target_os = "macos"))]
+            let stream = StreamType::rodio(mixer_sink);
+            Some(Ok(stream))
         }
         Err(e) => {
             log::error!("Backend stream creation failed: {}", e);
@@ -587,6 +945,10 @@ pub struct PlaybackEvent {
     /// (pipewire/pulse/cpal) where bit-perfect is not guaranteed.
     #[serde(default)]
     pub bit_perfect_mode: Option<BitPerfectMode>,
+    /// Streaming buffer progress (0.0..1.0). `None` when not streaming or
+    /// the track is fully buffered — drives the seek-bar cache overlay.
+    #[serde(default)]
+    pub buffer_progress: Option<f32>,
 }
 
 /// Shared state between main thread and audio thread
@@ -600,6 +962,10 @@ pub struct SharedState {
     duration: Arc<AtomicU64>,
     /// Current track ID
     current_track_id: Arc<AtomicU64>,
+    /// DSD-direct mode: 0 = none, 1 = DoP, 2 = native DSD_U32_BE,
+    /// 3 = native DSD_U32_LE. Non-zero means volume is fixed and seek is
+    /// unsupported; the gapless arm uses it to build the matching packing.
+    dsd_direct: Arc<std::sync::atomic::AtomicU8>,
     /// True when audio data/source is available for playback or resume
     has_loaded_audio: Arc<AtomicBool>,
     /// Volume (0.0 - 1.0 stored as 0-100)
@@ -612,6 +978,10 @@ pub struct SharedState {
     current_device: Arc<std::sync::RwLock<Option<String>>>,
     /// Stream error flag (set when ALSA/audio errors are detected)
     stream_error: Arc<AtomicBool>,
+    /// Optional user-readable explanation paired with `stream_error`.
+    /// Drained by the Tauri polling loop to emit a frontend toast and then
+    /// cleared, so the UI fires the notification exactly once per error.
+    stream_error_message: Arc<std::sync::RwLock<Option<String>>>,
     /// Actual sample rate of the current stream (Hz)
     sample_rate: Arc<AtomicU32>,
     /// Actual bit depth of the current stream
@@ -643,12 +1013,14 @@ impl SharedState {
             position: Arc::new(AtomicU64::new(0)),
             duration: Arc::new(AtomicU64::new(0)),
             current_track_id: Arc::new(AtomicU64::new(0)),
+            dsd_direct: Arc::new(std::sync::atomic::AtomicU8::new(0)),
             has_loaded_audio: Arc::new(AtomicBool::new(false)),
             volume: Arc::new(AtomicU64::new(75)),
             playback_start_millis: Arc::new(AtomicU64::new(0)),
             position_at_start: Arc::new(AtomicU64::new(0)),
             current_device: Arc::new(std::sync::RwLock::new(None)),
             stream_error: Arc::new(AtomicBool::new(false)),
+            stream_error_message: Arc::new(std::sync::RwLock::new(None)),
             sample_rate: Arc::new(AtomicU32::new(0)),
             bit_depth: Arc::new(AtomicU32::new(0)),
             normalization_gain: Arc::new(AtomicU32::new(0)),
@@ -659,12 +1031,56 @@ impl SharedState {
         }
     }
 
+    /// Clearing (`error = false`) also drops any pending
+    /// `stream_error_message`. This is intentional: if init recovers before
+    /// the Tauri polling loop drains the message, we'd rather swallow the
+    /// toast than surface a notification for a transient failure the user
+    /// never perceived. The trade-off is that a fast record→clear→drain
+    /// sequence loses the message — accepted because a recovered error is
+    /// not a user-actionable event.
+    /// 0 = none, 1 = DoP, 2 = native BE, 3 = native LE.
+    pub fn set_dsd_mode(&self, mode: u8) {
+        self.dsd_direct.store(mode, Ordering::SeqCst);
+    }
+
+    pub fn dsd_mode(&self) -> u8 {
+        self.dsd_direct.load(Ordering::SeqCst)
+    }
+
+    pub fn is_dsd_direct(&self) -> bool {
+        self.dsd_direct.load(Ordering::SeqCst) != 0
+    }
+
     pub fn set_stream_error(&self, error: bool) {
         self.stream_error.store(error, Ordering::SeqCst);
+        if !error {
+            if let Ok(mut m) = self.stream_error_message.write() {
+                *m = None;
+            }
+        }
     }
 
     pub fn has_stream_error(&self) -> bool {
         self.stream_error.load(Ordering::SeqCst)
+    }
+
+    /// Record a user-readable error explanation alongside `stream_error=true`.
+    /// The message is drained once via `take_stream_error_message` so the UI
+    /// fires the toast exactly once per error.
+    pub fn record_stream_error(&self, message: impl Into<String>) {
+        self.stream_error.store(true, Ordering::SeqCst);
+        if let Ok(mut m) = self.stream_error_message.write() {
+            *m = Some(message.into());
+        }
+    }
+
+    /// Atomically take the pending stream-error message (if any). Returns
+    /// `None` when no message is pending or has already been read.
+    pub fn take_stream_error_message(&self) -> Option<String> {
+        self.stream_error_message
+            .write()
+            .ok()
+            .and_then(|mut m| m.take())
     }
 
     pub fn set_stream_quality(&self, sample_rate: u32, bit_depth: u32) {
@@ -790,6 +1206,43 @@ impl SharedState {
         (position_at_start + elapsed_secs).min(duration)
     }
 
+    /// Millisecond-precision companion to [`Self::current_position`] — the
+    /// exact same derivation WITHOUT the whole-second truncation. READ-ONLY
+    /// state derivation from the existing anchors (`playback_start_millis`
+    /// is already epoch-ms; `position_at_start`/`position`/`duration` are
+    /// seconds): no stream, seek, format or device path is touched.
+    ///
+    /// Added for the lyrics sync engine (karaoke needs sub-second
+    /// resolution); semantics mirror `current_position` line by line:
+    /// paused / no anchor → stored coarse position ×1000; playing →
+    /// `position_at_start*1000 + (now_ms - start_millis)`, clamped to
+    /// `duration*1000`.
+    pub fn current_position_ms(&self) -> u64 {
+        if !self.is_playing.load(Ordering::SeqCst) {
+            return self.position.load(Ordering::SeqCst).saturating_mul(1000);
+        }
+
+        let start_millis = self.playback_start_millis.load(Ordering::SeqCst);
+        if start_millis == 0 {
+            return self.position.load(Ordering::SeqCst).saturating_mul(1000);
+        }
+
+        let now_millis = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+
+        let elapsed_ms = now_millis.saturating_sub(start_millis);
+        let position_at_start_ms = self
+            .position_at_start
+            .load(Ordering::SeqCst)
+            .saturating_mul(1000);
+        let duration_ms = self.duration.load(Ordering::SeqCst).saturating_mul(1000);
+
+        // Clamp to duration (same rule as current_position)
+        position_at_start_ms.saturating_add(elapsed_ms).min(duration_ms)
+    }
+
     /// Mark playback as started/resumed at current position
     fn start_playback_timer(&self, position: u64) {
         let now_millis = std::time::SystemTime::now()
@@ -852,6 +1305,9 @@ pub struct Player {
     visualizer_tap: Option<VisualizerTap>,
     /// Bit-depth diagnostic capture (always available, zero-cost when idle)
     pub diagnostic: AudioDiagnostic,
+    /// Two-level playback cache (L1 memory + optional L2 disk). A track is
+    /// cached after its first play so replays start instantly.
+    audio_cache: Arc<qbz_cache::AudioCache>,
 }
 
 impl Default for Player {
@@ -970,7 +1426,7 @@ impl Player {
              -> Option<StreamType> {
                 // Try backend system if configured
                 if let Ok(settings) = thread_settings.lock() {
-                    if settings.backend_type.is_some() {
+                    if settings.backend_type.is_some() || cfg!(target_os = "macos") {
                         // Use provided sample rate/channels to maintain DAC passthrough
                         log::info!(
                             "Initializing backend system with {}Hz/{}ch",
@@ -990,6 +1446,27 @@ impl Player {
                                 return Some(stream_type);
                             }
                             Some(Err(e)) => {
+                                // On macOS, the backend path is the only one that
+                                // understands CoreAudio ownership and nominal-rate
+                                // validation. Falling through to legacy CPAL can
+                                // create a stream at a stale/source rate; in
+                                // shared mode that can produce wrong-speed audio,
+                                // and in Exclusive Mode it would silently drop Hog
+                                // Mode. Surface the failure instead.
+                                #[cfg(target_os = "macos")]
+                                if settings
+                                    .backend_type
+                                    .unwrap_or(AudioBackendType::SystemDefault)
+                                    == AudioBackendType::SystemDefault
+                                {
+                                    log::error!(
+                                        "Could not start macOS audio output — {}. Not falling back to the legacy CPAL path because it would either play at the wrong speed (shared mode) or silently drop Exclusive Mode.",
+                                        e
+                                    );
+                                    state.set_current_device(None);
+                                    state.record_stream_error(e.clone());
+                                    return None;
+                                }
                                 log::warn!(
                                     "Backend system init failed: {}, falling back to legacy",
                                     e
@@ -1050,7 +1527,7 @@ impl Player {
                 {
                     Ok(mixer_sink) => {
                         log::info!("Audio output initialized successfully");
-                        Some(StreamType::Rodio(mixer_sink))
+                        Some(StreamType::rodio(mixer_sink))
                     }
                     Err(e) => {
                         log::error!(
@@ -1060,7 +1537,7 @@ impl Player {
                         match DeviceSinkBuilder::open_default_sink() {
                             Ok(mixer_sink) => {
                                 log::info!("Fallback to default audio output succeeded");
-                                Some(StreamType::Rodio(mixer_sink))
+                                Some(StreamType::rodio(mixer_sink))
                             }
                             Err(e2) => {
                                 log::error!("Failed to create default audio output: {}", e2);
@@ -1075,8 +1552,8 @@ impl Player {
             // Initialize audio device lazily on first playback to avoid idle CPU usage.
             let mut current_device_name = device_name.clone();
             let mut stream_opt: Option<StreamType> = None;
-            let mut current_sample_rate: Option<u32> = None;
-            let mut current_channels: Option<u16> = None;
+            let mut current_track_sample_rate: Option<u32> = None;
+            let mut current_track_channels: Option<u16> = None;
 
             #[allow(dead_code)]
             const MAX_INIT_RETRIES: u32 = 5;
@@ -1116,8 +1593,8 @@ impl Player {
                  current_device_name: &mut Option<String>,
                  consecutive_sink_failures: &mut u32,
                  pause_suspend_deadline: &mut Option<Instant>,
-                 current_sample_rate: &mut Option<u32>,
-                 current_channels: &mut Option<u16>,
+                 current_track_sample_rate: &mut Option<u32>,
+                 current_track_channels: &mut Option<u16>,
                  current_normalization_gain: &mut Option<f32>,
                  current_gain_atomic: &mut Option<Arc<AtomicU32>>,
                  gapless_pending: &mut Option<GaplessPending>,
@@ -1137,54 +1614,56 @@ impl Player {
                                 channels
                             );
                             *pause_suspend_deadline = None;
+                            thread_state.set_dsd_mode(0);
                             // Clear any pending gapless state (new Play supersedes queued gapless)
                             *gapless_pending = None;
                             *gapless_request_armed = false;
                             thread_state.set_gapless_ready(false);
                             thread_state.set_gapless_next_track_id(0);
 
-                            // Get DAC passthrough setting
-                            let dac_passthrough = thread_settings
-                                .lock()
-                                .ok()
-                                .map(|s| s.dac_passthrough)
-                                .unwrap_or(false);
-
-                            // Check if we need to recreate the stream
-                            // Recreate on format change if DAC passthrough OR ALSA Direct is enabled (both require bit-perfect)
-                            let format_changed = *current_sample_rate != Some(sample_rate)
-                                || *current_channels != Some(channels);
-
-                            // Check if using ALSA Direct backend
-                            let using_alsa_direct = thread_settings
-                                .lock()
-                                .ok()
-                                .and_then(|s| s.backend_type)
-                                .map(|b| b == AudioBackendType::Alsa)
-                                .unwrap_or(false);
-
-                            let needs_new_stream = stream_opt.is_none()
-                                || (dac_passthrough && format_changed)
-                                || (using_alsa_direct && format_changed);
+                            let StreamRecreateDecision {
+                                needs_new_stream,
+                                format_changed,
+                                dac_passthrough,
+                                using_alsa_direct,
+                                using_coreaudio_exclusive,
+                                coreaudio_shared_rate_mismatch,
+                            } = evaluate_stream_recreate(
+                                &thread_settings,
+                                stream_opt,
+                                *current_track_sample_rate,
+                                *current_track_channels,
+                                sample_rate,
+                                channels,
+                                "Play",
+                            );
 
                             if needs_new_stream {
                                 if stream_opt.is_some() {
-                                    if (dac_passthrough || using_alsa_direct) && format_changed {
-                                        let mode = if using_alsa_direct {
+                                    // CoreAudio rate-mismatch case already
+                                    // logged at warn level by
+                                    // `evaluate_stream_recreate`.
+                                    if coreaudio_shared_rate_mismatch.is_none()
+                                        && (dac_passthrough
+                                            || using_alsa_direct
+                                            || using_coreaudio_exclusive)
+                                        && format_changed
+                                    {
+                                        let mode = if using_coreaudio_exclusive {
+                                            "CoreAudio exclusive"
+                                        } else if using_alsa_direct {
                                             "ALSA Direct"
                                         } else {
                                             "DAC passthrough"
                                         };
                                         log::info!(
                                         "Sample rate/channels changed from {:?}Hz/{:?}ch to {}Hz/{}ch - recreating audio stream ({})",
-                                        *current_sample_rate,
-                                        *current_channels,
+                                        *current_track_sample_rate,
+                                        *current_track_channels,
                                         sample_rate,
                                         channels,
                                         mode
                                     );
-                                    } else {
-                                        log::info!("Creating initial audio stream");
                                     }
                                     // Stop engine FIRST so its writer thread releases its
                                     // Arc<AlsaDirectStream> reference before we drop the stream.
@@ -1201,9 +1680,10 @@ impl Player {
                                 }
 
                                 log::info!(
-                                    "DAC passthrough: {}, ALSA Direct: {}",
+                                    "DAC passthrough: {}, ALSA Direct: {}, CoreAudio exclusive: {}",
                                     dac_passthrough,
-                                    using_alsa_direct
+                                    using_alsa_direct,
+                                    using_coreaudio_exclusive
                                 );
 
                                 // Try backend system first (if configured), then fall back to legacy CPAL
@@ -1294,7 +1774,7 @@ impl Player {
                                                 channels,
                                                 dac_passthrough,
                                             )
-                                            .map(StreamType::Rodio)
+                                            .map(StreamType::rodio)
                                         }
                                     }
                                 } else {
@@ -1337,15 +1817,13 @@ impl Player {
                                         channels,
                                         dac_passthrough,
                                     )
-                                    .map(StreamType::Rodio)
+                                    .map(StreamType::rodio)
                                 };
 
                                 // Handle stream creation result
                                 match stream_result {
                                     Ok(stream) => {
                                         *stream_opt = Some(stream);
-                                        *current_sample_rate = Some(sample_rate);
-                                        *current_channels = Some(channels);
                                         thread_state.set_stream_error(false);
 
                                         // Set current device name from settings (for backend system)
@@ -1391,24 +1869,34 @@ impl Player {
                                 // Format changed but DAC passthrough is disabled - reuse existing stream
                                 log::info!(
                                 "Audio format changed from {:?}Hz/{:?}ch to {}Hz/{}ch - reusing audio stream (DAC passthrough disabled, gapless enabled)",
-                                *current_sample_rate,
-                                *current_channels,
+                                *current_track_sample_rate,
+                                *current_track_channels,
                                 sample_rate,
                                 channels
                             );
                             }
+
+                            // Track the decoded source format separately from
+                            // the OS output stream rate. In shared mode the
+                            // stream can stay at the CoreAudio nominal rate
+                            // while each track has its own decoded rate.
+                            *current_track_sample_rate = Some(sample_rate);
+                            *current_track_channels = Some(channels);
 
                             let Some(ref stream) = *stream_opt else {
                                 log::error!("Audio thread: no audio device available");
                                 return;
                             };
 
-                            // Stop previous engine and wait for sink to release resources
+                            // Stop previous engine and wait for sink to release resources.
+                            // The 50ms sleep is an ALSA-only workaround for snd_pcm_open()
+                            // racing the previous PCM handle's release. On CoreAudio (macOS)
+                            // and WASAPI (Windows) the host stream stays open across track
+                            // changes, so the sleep just feeds 50ms of silence into the
+                            // mixer — audible as a click at each end of the gap.
                             if let Some(engine) = current_engine.take() {
                                 engine.stop();
-                                // Small delay to allow the audio sink to fully release its
-                                // reference to the mixer before creating a new player.
-                                // This prevents "resource busy" errors on rapid track switches.
+                                #[cfg(target_os = "linux")]
                                 std::thread::sleep(Duration::from_millis(50));
                             }
 
@@ -1418,7 +1906,7 @@ impl Player {
 
                             // Create PlaybackEngine from StreamType
                             let mut engine = match stream {
-                                StreamType::Rodio(ref mixer_sink) => {
+                                StreamType::Rodio { sink: mixer_sink, .. } => {
                                     match PlaybackEngine::new_rodio(&mixer_sink.mixer()) {
                                         Ok(e) => {
                                             *consecutive_sink_failures = 0;
@@ -1444,8 +1932,8 @@ impl Player {
                                                 std::thread::sleep(Duration::from_millis(200));
 
                                                 // Use last known sample rate/channels to maintain DAC passthrough
-                                                let sr = current_sample_rate.unwrap_or(48000);
-                                                let ch = current_channels.unwrap_or(2);
+                                                let sr = current_track_sample_rate.unwrap_or(48000);
+                                                let ch = current_track_channels.unwrap_or(2);
                                                 *stream_opt = init_device(
                                                     current_device_name,
                                                     &thread_state,
@@ -1482,10 +1970,16 @@ impl Player {
                                         hardware_volume,
                                     )
                                 }
+                                #[cfg(target_os = "linux")]
+                                StreamType::Jack(jack_stream) => {
+                                    *consecutive_sink_failures = 0;
+                                    thread_state.set_stream_error(false);
+                                    PlaybackEngine::new_jack(jack_stream.clone())
+                                }
                             };
 
                             let volume = thread_state.volume.load(Ordering::SeqCst) as f32 / 100.0;
-                            engine.set_volume(volume);
+                            apply_engine_volume(&stream_opt, &engine, volume);
 
                             let source = match decode_with_fallback(&data) {
                                 Ok(s) => s,
@@ -1584,13 +2078,16 @@ impl Player {
                             sample_rate,
                             channels,
                             duration_secs,
+                            start_position_secs,
+                            content_length,
                         } => {
                             log::info!(
-                            "Audio thread: starting streaming playback for track {} ({}Hz, {} channels, {}s)",
+                            "Audio thread: starting streaming playback for track {} ({}Hz, {} channels, {}s, start={}s)",
                             track_id,
                             sample_rate,
                             channels,
-                            duration_secs
+                            duration_secs,
+                            start_position_secs
                         );
                             *pause_suspend_deadline = None;
 
@@ -1600,32 +2097,37 @@ impl Player {
                             *current_audio_data = None; // Clear regular audio data
                             thread_state.set_loaded_audio(true);
 
-                            // Get DAC passthrough setting
-                            let dac_passthrough = thread_settings
-                                .lock()
-                                .ok()
-                                .map(|s| s.dac_passthrough)
-                                .unwrap_or(false);
-
-                            // Check if we need to recreate the stream
-                            let format_changed = *current_sample_rate != Some(sample_rate)
-                                || *current_channels != Some(channels);
-
-                            let using_alsa_direct = thread_settings
-                                .lock()
-                                .ok()
-                                .and_then(|s| s.backend_type)
-                                .map(|b| b == AudioBackendType::Alsa)
-                                .unwrap_or(false);
-
-                            let needs_new_stream = stream_opt.is_none()
-                                || (dac_passthrough && format_changed)
-                                || (using_alsa_direct && format_changed);
+                            let StreamRecreateDecision {
+                                needs_new_stream,
+                                format_changed,
+                                dac_passthrough,
+                                using_alsa_direct,
+                                using_coreaudio_exclusive,
+                                coreaudio_shared_rate_mismatch,
+                            } = evaluate_stream_recreate(
+                                &thread_settings,
+                                stream_opt,
+                                *current_track_sample_rate,
+                                *current_track_channels,
+                                sample_rate,
+                                channels,
+                                "Streaming",
+                            );
 
                             if needs_new_stream {
                                 if stream_opt.is_some() {
-                                    if (dac_passthrough || using_alsa_direct) && format_changed {
-                                        let mode = if using_alsa_direct {
+                                    // CoreAudio rate-mismatch case already
+                                    // logged at warn level by
+                                    // `evaluate_stream_recreate`.
+                                    if coreaudio_shared_rate_mismatch.is_none()
+                                        && (dac_passthrough
+                                            || using_alsa_direct
+                                            || using_coreaudio_exclusive)
+                                        && format_changed
+                                    {
+                                        let mode = if using_coreaudio_exclusive {
+                                            "CoreAudio exclusive"
+                                        } else if using_alsa_direct {
                                             "ALSA Direct"
                                         } else {
                                             "DAC passthrough"
@@ -1708,7 +2210,7 @@ impl Player {
                                                 channels,
                                                 dac_passthrough,
                                             )
-                                            .map(StreamType::Rodio)
+                                            .map(StreamType::rodio)
                                         }
                                     }
                                 } else {
@@ -1726,14 +2228,12 @@ impl Player {
                                         channels,
                                         dac_passthrough,
                                     )
-                                    .map(StreamType::Rodio)
+                                    .map(StreamType::rodio)
                                 };
 
                                 match stream_result {
                                     Ok(stream) => {
                                         *stream_opt = Some(stream);
-                                        *current_sample_rate = Some(sample_rate);
-                                        *current_channels = Some(channels);
                                         thread_state.set_stream_error(false);
                                         log::info!(
                                             "Streaming audio stream ready at {}Hz",
@@ -1753,6 +2253,11 @@ impl Player {
                                 }
                             }
 
+                            // Keep decoded source format current even when
+                            // macOS shared mode reuses the same output stream.
+                            *current_track_sample_rate = Some(sample_rate);
+                            *current_track_channels = Some(channels);
+
                             let Some(ref stream) = *stream_opt else {
                                 log::error!(
                                     "Audio thread: no audio device available for streaming"
@@ -1760,15 +2265,18 @@ impl Player {
                                 return;
                             };
 
-                            // Stop previous engine
+                            // Stop previous engine. ALSA-only sleep — see Play handler
+                            // above for rationale (CoreAudio/WASAPI don't race here and the
+                            // 50ms gap is audible as a click).
                             if let Some(engine) = current_engine.take() {
                                 engine.stop();
+                                #[cfg(target_os = "linux")]
                                 std::thread::sleep(Duration::from_millis(50));
                             }
 
                             // Create PlaybackEngine
                             let mut engine = match stream {
-                                StreamType::Rodio(ref mixer_sink) => {
+                                StreamType::Rodio { sink: mixer_sink, .. } => {
                                     match PlaybackEngine::new_rodio(&mixer_sink.mixer()) {
                                         Ok(e) => {
                                             *consecutive_sink_failures = 0;
@@ -1796,17 +2304,53 @@ impl Player {
                                         hardware_volume,
                                     )
                                 }
+                                #[cfg(target_os = "linux")]
+                                StreamType::Jack(jack_stream) => {
+                                    PlaybackEngine::new_jack(jack_stream.clone())
+                                }
                             };
 
                             let volume = thread_state.volume.load(Ordering::SeqCst) as f32 / 100.0;
-                            engine.set_volume(volume);
+                            apply_engine_volume(&stream_opt, &engine, volume);
 
-                            // Wait for minimum buffer before starting playback
+                            // Wait for minimum buffer before starting playback.
+                            // When start_position_secs > 0 (session resume),
+                            // also wait for enough buffer to cover the resume
+                            // offset plus an 8s headroom — the eager pre-skip
+                            // below decodes-and-discards up to the offset and
+                            // needs the bytes available without blocking the
+                            // audio device on the first pull.
                             log::info!("Streaming: waiting for initial buffer...");
                             let start_wait = Instant::now();
-                            let max_wait = Duration::from_secs(30);
+                            let max_wait = Duration::from_secs(60);
 
-                            while !source.has_min_buffer() && start_wait.elapsed() < max_wait {
+                            let bytes_per_sec_estimate: u64 = if duration_secs > 0
+                                && content_length > 0
+                            {
+                                content_length / duration_secs
+                            } else {
+                                200_000
+                            };
+                            let resume_buffer_target: u64 = if start_position_secs > 0 {
+                                bytes_per_sec_estimate
+                                    .saturating_mul(start_position_secs.saturating_add(8))
+                            } else {
+                                0
+                            };
+
+                            let buffer_sufficient = |src: &Arc<BufferedMediaSource>| -> bool {
+                                if !src.has_min_buffer() {
+                                    return false;
+                                }
+                                if resume_buffer_target == 0 {
+                                    return true;
+                                }
+                                (src.buffer_size() as u64) >= resume_buffer_target
+                            };
+
+                            while !buffer_sufficient(&source)
+                                && start_wait.elapsed() < max_wait
+                            {
                                 std::thread::sleep(Duration::from_millis(50));
                             }
 
@@ -1814,11 +2358,20 @@ impl Player {
                                 log::error!("Streaming: timeout waiting for initial buffer");
                                 return;
                             }
+                            if resume_buffer_target > 0
+                                && (source.buffer_size() as u64) < resume_buffer_target
+                            {
+                                log::warn!(
+                                    "Streaming: timed out waiting for resume buffer (got {} bytes, wanted {}); pre-skip may underrun briefly",
+                                    source.buffer_size(),
+                                    resume_buffer_target
+                                );
+                            }
 
                             let buffer_wait_ms = start_wait.elapsed().as_millis();
                             log::info!(
-                            "Streaming: initial buffer ready in {}ms, creating incremental decoder...",
-                            buffer_wait_ms
+                            "Streaming: buffer ready in {}ms ({} bytes, target {}), creating incremental decoder...",
+                            buffer_wait_ms, source.buffer_size(), resume_buffer_target
                         );
 
                             // Create incremental streaming source - this starts playback IMMEDIATELY
@@ -1896,8 +2449,40 @@ impl Player {
                             thread_state.set_normalization_gain(normalization);
 
                             // Box the incremental source to match the expected type
-                            let source_to_play: Box<dyn Source<Item = f32> + Send> =
+                            let mut source_to_play: Box<dyn Source<Item = f32> + Send> =
                                 Box::new(incremental_source);
+
+                            // Eager pre-skip for session resume. Decode and
+                            // discard samples here so the engine's first pull
+                            // doesn't have to do the work synchronously, which
+                            // would underrun the audio device for multi-second
+                            // offsets. The buffer wait above guarantees
+                            // there's enough downloaded data to feed this loop.
+                            if start_position_secs > 0 {
+                                let target_samples: u64 = (start_position_secs)
+                                    .saturating_mul(actual_sr as u64)
+                                    .saturating_mul(actual_ch as u64);
+                                let skip_start = Instant::now();
+                                let mut skipped: u64 = 0;
+                                while skipped < target_samples {
+                                    if source_to_play.next().is_none() {
+                                        log::warn!(
+                                            "Resume: source ended before reaching {}s (pre-skipped {} samples)",
+                                            start_position_secs,
+                                            skipped
+                                        );
+                                        break;
+                                    }
+                                    skipped += 1;
+                                }
+                                log::info!(
+                                    "Resume: pre-skipped {} samples ({}s) in {}ms",
+                                    skipped,
+                                    start_position_secs,
+                                    skip_start.elapsed().as_millis()
+                                );
+                            }
+
                             // Wrap source with diagnostic, normalization, and visualizer
                             let source_to_play = wrap_source(
                                 source_to_play,
@@ -1911,18 +2496,341 @@ impl Player {
                                 return;
                             }
 
+                            thread_state.set_dsd_mode(0);
                             thread_state.is_playing.store(true, Ordering::SeqCst);
-                            thread_state.position.store(0, Ordering::SeqCst);
+                            thread_state
+                                .position
+                                .store(start_position_secs, Ordering::SeqCst);
                             thread_state
                                 .current_track_id
                                 .store(track_id, Ordering::SeqCst);
-                            thread_state.start_playback_timer(0);
+                            thread_state.start_playback_timer(start_position_secs);
 
                             *current_engine = Some(engine);
                             log::info!(
-                            "Audio thread: streaming playback STARTED in {}ms (incremental decode active)",
-                            start_wait.elapsed().as_millis()
+                            "Audio thread: streaming playback STARTED in {}ms at {}s (incremental decode active)",
+                            start_wait.elapsed().as_millis(),
+                            start_position_secs
                         );
+                        }
+                        AudioCommand::PlayDsdDop { path, track_id } => {
+                            #[cfg(target_os = "linux")]
+                            {
+                                log::info!(
+                                    "Audio thread: DoP playback for track {} ({})",
+                                    track_id,
+                                    path.display()
+                                );
+                                *pause_suspend_deadline = None;
+                                *gapless_pending = None;
+                                *gapless_request_armed = false;
+                                thread_state.set_gapless_ready(false);
+                                thread_state.set_gapless_next_track_id(0);
+
+                                let demux = match qbz_dsd::open_dsd(&path) {
+                                    Ok(d) => d,
+                                    Err(e) => {
+                                        log::error!("DoP: cannot open DSD file: {}", e);
+                                        thread_state.set_stream_error(true);
+                                        return;
+                                    }
+                                };
+                                let dop = match qbz_dsd::DopStream::new(demux) {
+                                    Ok(d) => d,
+                                    Err(e) => {
+                                        log::error!("DoP: cannot build DoP stream: {}", e);
+                                        thread_state.set_stream_error(true);
+                                        return;
+                                    }
+                                };
+                                let carrier = dop.carrier_rate();
+                                let dsd_rate = dop.dsd_rate();
+                                let duration =
+                                    dop.total_frames() / (carrier.max(1) as u64);
+
+                                // DoP always needs a fresh S32 stream at the
+                                // carrier rate — tear down whatever is open.
+                                if let Some(engine) = current_engine.take() {
+                                    engine.stop();
+                                    std::thread::sleep(Duration::from_millis(50));
+                                }
+                                drop(stream_opt.take());
+                                std::thread::sleep(Duration::from_millis(50));
+
+                                let device = thread_settings
+                                    .lock()
+                                    .ok()
+                                    .and_then(|s| s.output_device.clone());
+                                let Some(device) = device else {
+                                    log::error!("DoP: no output device configured");
+                                    thread_state.set_stream_error(true);
+                                    return;
+                                };
+                                let stream = match qbz_audio::alsa_backend::create_dop_stream(
+                                    &device, carrier, 2,
+                                ) {
+                                    Ok(st) => Arc::new(st),
+                                    Err(e) => {
+                                        log::error!("DoP: stream open failed: {}", e);
+                                        thread_state.set_stream_error(true);
+                                        thread_state.set_current_device(None);
+                                        return;
+                                    }
+                                };
+                                log::info!(
+                                    "DoP: {} locked at {} Hz carrier on {}",
+                                    qbz_dsd::dsd_label(dsd_rate),
+                                    carrier,
+                                    device
+                                );
+                                *stream_opt = Some(StreamType::AlsaDirect(stream.clone()));
+                                thread_state.set_current_device(Some(device));
+                                *current_track_sample_rate = Some(carrier);
+                                *current_track_channels = Some(2);
+                                *current_audio_data = None;
+                                *current_streaming_source = None;
+
+                                let mut engine = PlaybackEngine::new_alsa_dop(stream, false);
+                                if let Err(e) = engine.append_dop(Box::new(dop)) {
+                                    log::error!("DoP: append failed: {}", e);
+                                    thread_state.set_stream_error(true);
+                                    return;
+                                }
+                                *current_engine = Some(engine);
+                                thread_state.set_loaded_audio(true);
+                                thread_state.set_stream_error(false);
+                                thread_state.set_stream_quality(dsd_rate, 1);
+                                thread_state.duration.store(duration, Ordering::SeqCst);
+                                thread_state.set_dsd_mode(1);
+                                thread_state.is_playing.store(true, Ordering::SeqCst);
+                                thread_state.position.store(0, Ordering::SeqCst);
+                                thread_state
+                                    .current_track_id
+                                    .store(track_id, Ordering::SeqCst);
+                                thread_state.start_playback_timer(0);
+                                log::info!("Audio thread: DoP playback STARTED");
+                            }
+                            #[cfg(not(target_os = "linux"))]
+                            {
+                                let _ = (path, track_id);
+                                log::error!("DoP playback is Linux-only");
+                                thread_state.set_stream_error(true);
+                            }
+                        }
+                        AudioCommand::PlayDsdNative { path, track_id } => {
+                            #[cfg(target_os = "linux")]
+                            {
+                                log::info!(
+                                    "Audio thread: native DSD playback for track {} ({})",
+                                    track_id,
+                                    path.display()
+                                );
+                                *pause_suspend_deadline = None;
+                                *gapless_pending = None;
+                                *gapless_request_armed = false;
+                                thread_state.set_gapless_ready(false);
+                                thread_state.set_gapless_next_track_id(0);
+
+                                let info = match qbz_dsd::open_dsd(&path) {
+                                    Ok(d) => d.info().clone(),
+                                    Err(e) => {
+                                        log::error!("Native DSD: cannot open file: {}", e);
+                                        thread_state.set_stream_error(true);
+                                        return;
+                                    }
+                                };
+                                if info.channels != 2 {
+                                    log::error!("Native DSD: stereo only");
+                                    thread_state.set_stream_error(true);
+                                    return;
+                                }
+                                let rate = qbz_dsd::native_u32_rate(info.dsd_rate);
+                                let duration = (info.sample_count / 32) / (rate.max(1) as u64);
+
+                                if let Some(engine) = current_engine.take() {
+                                    engine.stop();
+                                    std::thread::sleep(Duration::from_millis(50));
+                                }
+                                drop(stream_opt.take());
+                                std::thread::sleep(Duration::from_millis(50));
+
+                                let device = thread_settings
+                                    .lock()
+                                    .ok()
+                                    .and_then(|s| s.output_device.clone());
+                                let Some(device) = device else {
+                                    log::error!("Native DSD: no output device configured");
+                                    thread_state.set_stream_error(true);
+                                    return;
+                                };
+                                let (stream, little_endian) =
+                                    match qbz_audio::alsa_backend::create_native_dsd_stream(
+                                        &device,
+                                        info.dsd_rate,
+                                        2,
+                                    ) {
+                                        Ok(pair) => pair,
+                                        Err(e) => {
+                                            log::error!("Native DSD: stream open failed: {}", e);
+                                            thread_state.set_stream_error(true);
+                                            thread_state.set_current_device(None);
+                                            return;
+                                        }
+                                    };
+                                let stream = Arc::new(stream);
+                                let native_src = match qbz_dsd::open_dsd(&path)
+                                    .map_err(|e| e.to_string())
+                                    .and_then(|d| {
+                                        qbz_dsd::NativeDsdStream::new(d, little_endian)
+                                            .map_err(|e| e.to_string())
+                                    }) {
+                                    Ok(n) => n,
+                                    Err(e) => {
+                                        log::error!("Native DSD: source build failed: {}", e);
+                                        thread_state.set_stream_error(true);
+                                        return;
+                                    }
+                                };
+                                log::info!(
+                                    "Native DSD: {} locked at {} Hz U32 ({}) on {}",
+                                    qbz_dsd::dsd_label(info.dsd_rate),
+                                    rate,
+                                    if little_endian { "LE" } else { "BE" },
+                                    device
+                                );
+                                *stream_opt = Some(StreamType::AlsaDirect(stream.clone()));
+                                thread_state.set_current_device(Some(device));
+                                *current_track_sample_rate = Some(rate);
+                                *current_track_channels = Some(2);
+                                *current_audio_data = None;
+                                *current_streaming_source = None;
+
+                                let mut engine = PlaybackEngine::new_alsa_dop(stream, true);
+                                if let Err(e) = engine.append_dop(Box::new(native_src)) {
+                                    log::error!("Native DSD: append failed: {}", e);
+                                    thread_state.set_stream_error(true);
+                                    return;
+                                }
+                                *current_engine = Some(engine);
+                                thread_state.set_loaded_audio(true);
+                                thread_state.set_stream_error(false);
+                                thread_state.set_stream_quality(info.dsd_rate, 1);
+                                thread_state.duration.store(duration, Ordering::SeqCst);
+                                thread_state.set_dsd_mode(if little_endian { 3 } else { 2 });
+                                thread_state.is_playing.store(true, Ordering::SeqCst);
+                                thread_state.position.store(0, Ordering::SeqCst);
+                                thread_state
+                                    .current_track_id
+                                    .store(track_id, Ordering::SeqCst);
+                                thread_state.start_playback_timer(0);
+                                log::info!("Audio thread: native DSD playback STARTED");
+                            }
+                            #[cfg(not(target_os = "linux"))]
+                            {
+                                let _ = (path, track_id);
+                                log::error!("Native DSD playback is Linux-only");
+                                thread_state.set_stream_error(true);
+                            }
+                        }
+                        AudioCommand::PlayNextDsdDop { path, track_id } => {
+                            #[cfg(target_os = "linux")]
+                            {
+                                let Some(engine) = current_engine.as_mut() else {
+                                    thread_state.set_gapless_ready(false);
+                                    return;
+                                };
+                                if !engine.is_dop() {
+                                    log::info!("Gapless DoP: engine is not DoP, ignoring");
+                                    thread_state.set_gapless_ready(false);
+                                    return;
+                                }
+                                // Build the packing matching the ACTIVE
+                                // direct mode (1 = DoP, 2/3 = native BE/LE).
+                                let mode = thread_state.dsd_mode();
+                                let built: Result<
+                                    (Box<dyn Iterator<Item = i32> + Send>, u32, u64),
+                                    String,
+                                > = qbz_dsd::open_dsd(&path)
+                                    .map_err(|e| e.to_string())
+                                    .and_then(|d| match mode {
+                                        1 => qbz_dsd::DopStream::new(d)
+                                            .map_err(|e| e.to_string())
+                                            .map(|st| {
+                                                let rate = st.carrier_rate();
+                                                let frames = st.total_frames();
+                                                (
+                                                    Box::new(st)
+                                                        as Box<
+                                                            dyn Iterator<Item = i32> + Send,
+                                                        >,
+                                                    rate,
+                                                    frames,
+                                                )
+                                            }),
+                                        2 | 3 => qbz_dsd::NativeDsdStream::new(d, mode == 3)
+                                            .map_err(|e| e.to_string())
+                                            .map(|st| {
+                                                let rate = st.rate();
+                                                let frames = st.total_frames();
+                                                (
+                                                    Box::new(st)
+                                                        as Box<
+                                                            dyn Iterator<Item = i32> + Send,
+                                                        >,
+                                                    rate,
+                                                    frames,
+                                                )
+                                            }),
+                                        _ => Err("no DSD-direct mode active".to_string()),
+                                    });
+                                let (src, rate, total_frames) = match built {
+                                    Ok(v) => v,
+                                    Err(e) => {
+                                        log::warn!("Gapless DSD: cannot open next track: {}", e);
+                                        thread_state.set_gapless_ready(false);
+                                        return;
+                                    }
+                                };
+                                if *current_track_sample_rate != Some(rate) {
+                                    log::info!(
+                                        "Gapless DSD: rate mismatch ({:?} vs {}), ignoring",
+                                        *current_track_sample_rate,
+                                        rate
+                                    );
+                                    thread_state.set_gapless_ready(false);
+                                    return;
+                                }
+                                let duration = total_frames / (rate.max(1) as u64);
+                                match engine.append_dop(src) {
+                                    Ok(()) => {
+                                        // data stays empty: the DoP engine never
+                                        // resumes from current_audio_data (the
+                                        // pause-suspend teardown is gated off in
+                                        // DoP mode).
+                                        *gapless_pending = Some(GaplessPending {
+                                            track_id,
+                                            duration_secs: duration,
+                                            data: Vec::new(),
+                                            normalization_gain: None,
+                                        });
+                                        thread_state.set_gapless_next_track_id(track_id);
+                                        thread_state.set_gapless_ready(false);
+                                        log::info!(
+                                            "Gapless DoP: queued track {} for seamless DSD transition",
+                                            track_id
+                                        );
+                                    }
+                                    Err(e) => {
+                                        log::warn!("Gapless DoP: append failed: {}", e);
+                                        thread_state.set_gapless_ready(false);
+                                    }
+                                }
+                            }
+                            #[cfg(not(target_os = "linux"))]
+                            {
+                                let _ = (path, track_id);
+                                thread_state.set_gapless_ready(false);
+                            }
                         }
                         AudioCommand::Pause => {
                             if let Some(ref engine) = *current_engine {
@@ -1975,8 +2883,8 @@ impl Player {
 
                                 if stream_opt.is_none() {
                                     // Use last known sample rate/channels to maintain DAC passthrough
-                                    let sr = current_sample_rate.unwrap_or(48000);
-                                    let ch = current_channels.unwrap_or(2);
+                                    let sr = current_track_sample_rate.unwrap_or(48000);
+                                    let ch = current_track_channels.unwrap_or(2);
                                     log::info!(
                                         "Resume: reinitializing stream at {}Hz/{}ch",
                                         sr,
@@ -1994,7 +2902,7 @@ impl Player {
                                 };
 
                                 let mut engine = match stream {
-                                    StreamType::Rodio(ref mixer_sink) => {
+                                    StreamType::Rodio { sink: mixer_sink, .. } => {
                                         match PlaybackEngine::new_rodio(&mixer_sink.mixer()) {
                                             Ok(e) => e,
                                             Err(e) => {
@@ -2018,11 +2926,15 @@ impl Player {
                                             hardware_volume,
                                         )
                                     }
+                                    #[cfg(target_os = "linux")]
+                                    StreamType::Jack(jack_stream) => {
+                                        PlaybackEngine::new_jack(jack_stream.clone())
+                                    }
                                 };
 
                                 let volume =
                                     thread_state.volume.load(Ordering::SeqCst) as f32 / 100.0;
-                                engine.set_volume(volume);
+                                apply_engine_volume(&stream_opt, &engine, volume);
 
                                 let source = match decode_with_fallback(&audio_data) {
                                     Ok(s) => s,
@@ -2092,20 +3004,23 @@ impl Player {
                                 .playback_start_millis
                                 .store(0, Ordering::SeqCst);
                             thread_state.position_at_start.store(0, Ordering::SeqCst);
-                            // Drop the stream to release the device and stop background CPU use.
-                            drop(stream_opt.take());
-                            *pause_suspend_deadline = None;
-                            // Reset PipeWire clock if bit-perfect was active
+                            // Defer dropping the stream so a Play immediately following Stop
+                            // (the frontend's track-change pattern is Stop → Play, not append)
+                            // can reuse the open device. Tearing CoreAudio down between every
+                            // track was producing the audible click on track change. The idle
+                            // loop's pause-suspend handler (below) drops the stream when this
+                            // deadline fires; Play / Resume / Seek / ReinitDevice all clear
+                            // the deadline so they reuse or replace the stream as needed.
+                            *pause_suspend_deadline = Some(
+                                Instant::now() + Duration::from_millis(PAUSE_SUSPEND_DELAY_MS),
+                            );
+                            // Reset the PipeWire clock if WE forced it. The call is
+                            // self-gating (reset_pipewire_clock no-ops unless QBZ set
+                            // the force), so it is now unconditional: the previous
+                            // pw_force_bitperfect gate missed plain (no-passthrough)
+                            // PipeWire users and leaked a forced rate after stop (#263).
                             #[cfg(target_os = "linux")]
-                            if thread_settings
-                                .lock()
-                                .ok()
-                                .map(|s| s.pw_force_bitperfect)
-                                .unwrap_or(false)
-                            {
-                                qbz_audio::pipewire_backend::PipeWireBackend::reset_pipewire_clock(
-                                );
-                            }
+                            qbz_audio::pipewire_backend::PipeWireBackend::reset_pipewire_clock();
                             log::info!("Audio thread: stopped");
                         }
                         AudioCommand::SetVolume(volume) => {
@@ -2113,11 +3028,21 @@ impl Player {
                                 .volume
                                 .store((volume * 100.0) as u64, Ordering::SeqCst);
                             if let Some(ref engine) = *current_engine {
-                                engine.set_volume(volume);
+                                apply_engine_volume(&stream_opt, &engine, volume);
                             }
-                            log::info!("Audio thread: volume set to {}", volume);
+                            // debug: a slider drag delivers dozens of these per
+                            // second — at info they dominated a field log (#555,
+                            // 758 of 1025 lines) and each one is a formatted
+                            // write from the AUDIO thread.
+                            log::debug!("Audio thread: volume set to {}", volume);
                         }
                         AudioCommand::Seek(position_secs) => {
+                            if current_engine.as_ref().map(|e| e.is_dop()).unwrap_or(false) {
+                                // v1 limitation: no seek inside a DoP stream
+                                // (demuxer-level seek + marker re-phase later).
+                                log::info!("Seek ignored during DoP playback ({}s)", position_secs);
+                                return;
+                            }
                             *pause_suspend_deadline = None;
                             // Cancel any pending gapless — seek creates a new engine
                             *gapless_pending = None;
@@ -2139,12 +3064,8 @@ impl Player {
                             //     playback reach this handler with
                             //     current_audio_data Some and skip the
                             //     streaming branch entirely (issue #335).
-                            if current_audio_data.is_none()
-                                && current_streaming_source.is_none()
-                            {
-                                log::warn!(
-                                    "Audio thread: cannot seek - no audio data available"
-                                );
+                            if current_audio_data.is_none() && current_streaming_source.is_none() {
+                                log::warn!("Audio thread: cannot seek - no audio data available");
                                 return;
                             }
                             if let Some(ref stream_src) = *current_streaming_source {
@@ -2197,7 +3118,7 @@ impl Player {
                             }
 
                             let mut engine = match stream {
-                                StreamType::Rodio(ref mixer_sink) => {
+                                StreamType::Rodio { sink: mixer_sink, .. } => {
                                     match PlaybackEngine::new_rodio(&mixer_sink.mixer()) {
                                         Ok(e) => e,
                                         Err(e) => {
@@ -2221,10 +3142,14 @@ impl Player {
                                         hardware_volume,
                                     )
                                 }
+                                #[cfg(target_os = "linux")]
+                                StreamType::Jack(jack_stream) => {
+                                    PlaybackEngine::new_jack(jack_stream.clone())
+                                }
                             };
 
                             let volume = thread_state.volume.load(Ordering::SeqCst) as f32 / 100.0;
-                            engine.set_volume(volume);
+                            apply_engine_volume(&stream_opt, &engine, volume);
 
                             // Build the decoded source for the seek. Both
                             // streaming and cached paths use Symphonia's native
@@ -2238,56 +3163,42 @@ impl Player {
                             // probe the format (e.g., rodio-only MP4/AAC),
                             // preserving existing behavior for those cases.
                             let skip_duration = Duration::from_secs(position_secs);
-                            let skipped_source: Box<dyn Source<Item = f32> + Send> =
-                                if let Some(ref stream_src) = *current_streaming_source {
-                                    match IncrementalStreamingSource::new(stream_src.clone()) {
-                                        Ok(mut s) => {
-                                            if let Err(e) = s.seek_to(skip_duration) {
-                                                log::error!(
-                                                    "Failed to native-seek streaming source: {}",
-                                                    e
-                                                );
-                                                return;
-                                            }
-                                            Box::new(s)
-                                        }
-                                        Err(e) => {
+                            let skipped_source: Box<dyn Source<Item = f32> + Send> = if let Some(
+                                ref stream_src,
+                            ) =
+                                *current_streaming_source
+                            {
+                                match IncrementalStreamingSource::new(stream_src.clone()) {
+                                    Ok(mut s) => {
+                                        if let Err(e) = s.seek_to(skip_duration) {
                                             log::error!(
-                                                "Failed to create streaming source for seek: {}",
+                                                "Failed to native-seek streaming source: {}",
                                                 e
                                             );
                                             return;
                                         }
+                                        Box::new(s)
                                     }
-                                } else {
-                                    let audio_data = current_audio_data
-                                        .as_ref()
-                                        .expect("current_audio_data was checked Some above");
-                                    match InMemorySource::new(audio_data.clone()) {
-                                        Ok(mut s) => match s.seek_to(skip_duration) {
-                                            Ok(()) => Box::new(s),
-                                            Err(e) => {
-                                                log::warn!(
+                                    Err(e) => {
+                                        log::error!(
+                                            "Failed to create streaming source for seek: {}",
+                                            e
+                                        );
+                                        return;
+                                    }
+                                }
+                            } else {
+                                let audio_data = current_audio_data
+                                    .as_ref()
+                                    .expect("current_audio_data was checked Some above");
+                                match InMemorySource::new(audio_data.clone()) {
+                                    Ok(mut s) => match s.seek_to(skip_duration) {
+                                        Ok(()) => Box::new(s),
+                                        Err(e) => {
+                                            log::warn!(
                                                     "Native seek on cached source failed ({}); falling back to skip_duration",
                                                     e
                                                 );
-                                                match decode_with_fallback(audio_data) {
-                                                    Ok(fb) => Box::new(fb.skip_duration(skip_duration)),
-                                                    Err(e) => {
-                                                        log::error!(
-                                                            "Failed to decode audio for seek: {}",
-                                                            e
-                                                        );
-                                                        return;
-                                                    }
-                                                }
-                                            }
-                                        },
-                                        Err(e) => {
-                                            log::warn!(
-                                                "InMemorySource probe failed ({}); falling back to skip_duration",
-                                                e
-                                            );
                                             match decode_with_fallback(audio_data) {
                                                 Ok(fb) => Box::new(fb.skip_duration(skip_duration)),
                                                 Err(e) => {
@@ -2299,8 +3210,25 @@ impl Player {
                                                 }
                                             }
                                         }
+                                    },
+                                    Err(e) => {
+                                        log::warn!(
+                                                "InMemorySource probe failed ({}); falling back to skip_duration",
+                                                e
+                                            );
+                                        match decode_with_fallback(audio_data) {
+                                            Ok(fb) => Box::new(fb.skip_duration(skip_duration)),
+                                            Err(e) => {
+                                                log::error!(
+                                                    "Failed to decode audio for seek: {}",
+                                                    e
+                                                );
+                                                return;
+                                            }
+                                        }
                                     }
-                                };
+                                }
+                            };
 
                             // Send Reset to analyzer (seek invalidates accumulated samples)
                             let _ = analyzer_tx.try_send(AnalyzerMessage::Reset);
@@ -2356,8 +3284,8 @@ impl Player {
 
                             *current_device_name = new_device;
                             // Use last known sample rate/channels to maintain DAC passthrough
-                            let sr = current_sample_rate.unwrap_or(48000);
-                            let ch = current_channels.unwrap_or(2);
+                            let sr = current_track_sample_rate.unwrap_or(48000);
+                            let ch = current_track_channels.unwrap_or(2);
                             log::info!("ReinitDevice: reinitializing at {}Hz/{}ch", sr, ch);
                             *stream_opt = init_device(current_device_name, &thread_state, sr, ch);
 
@@ -2375,6 +3303,30 @@ impl Player {
                             thread_state.is_playing.store(false, Ordering::SeqCst);
                             // Keep current_audio_data and current_streaming_source
                             // intact so Resume can recreate the engine and seek.
+                        }
+                        AudioCommand::ReleaseDevice => {
+                            log::info!("Audio thread: releasing output device (user-requested)");
+                            // Cancel any deferred drop and tear the stream down NOW so
+                            // the device is freed immediately (no warm-stream lingering).
+                            *pause_suspend_deadline = None;
+                            if let Some(engine) = current_engine.take() {
+                                engine.stop();
+                            }
+                            drop(stream_opt.take());
+                            // Undo anything QBZ parked so PipeWire / WirePlumber can
+                            // reclaim the device (e.g. a DAC left invisible to other
+                            // apps after bit-perfect ALSA Direct held it exclusively).
+                            // Both calls are self-gating no-ops if QBZ didn't set them.
+                            #[cfg(target_os = "linux")]
+                            {
+                                qbz_audio::alsa_backend::resume_suspended_sink();
+                                qbz_audio::pipewire_backend::PipeWireBackend::reset_pipewire_clock();
+                            }
+                            thread_state.pause_playback_timer();
+                            thread_state.is_playing.store(false, Ordering::SeqCst);
+                            // Keep current_audio_data / current_streaming_source intact
+                            // so a later Play / Resume reopens and continues.
+                            log::info!("Audio thread: output device released");
                         }
                         AudioCommand::PlayNext {
                             data,
@@ -2397,7 +3349,7 @@ impl Player {
 
                             // Verify format compatibility (same sample rate and channels)
                             if let (Some(cur_sr), Some(cur_ch)) =
-                                (*current_sample_rate, *current_channels)
+                                (*current_track_sample_rate, *current_track_channels)
                             {
                                 if sample_rate != cur_sr || channels != cur_ch {
                                     log::info!(
@@ -2513,8 +3465,8 @@ impl Player {
                             &mut current_device_name,
                             &mut consecutive_sink_failures,
                             &mut pause_suspend_deadline,
-                            &mut current_sample_rate,
-                            &mut current_channels,
+                            &mut current_track_sample_rate,
+                            &mut current_track_channels,
                             &mut current_normalization_gain,
                             &mut current_gain_atomic,
                             &mut gapless_pending,
@@ -2725,7 +3677,14 @@ impl Player {
                     }
                 } else {
                     if let Some(deadline) = pause_suspend_deadline {
-                        if stream_opt.is_some() {
+                        // DoP streams are NEVER suspended on pause: the writer
+                        // keeps the DAC locked in DSD mode with 0x69 silence,
+                        // and there is no current_audio_data to resume from.
+                        let dop_active = current_engine
+                            .as_ref()
+                            .map(|e| e.is_dop())
+                            .unwrap_or(false);
+                        if stream_opt.is_some() && !dop_active {
                             let now = Instant::now();
                             if now >= deadline {
                                 if let Some(engine) = current_engine.take() {
@@ -2733,16 +3692,17 @@ impl Player {
                                 }
                                 drop(stream_opt.take());
                                 pause_suspend_deadline = None;
-                                // Reset PipeWire clock if bit-perfect was active
+                                // Reset the PipeWire clock if WE forced it (self-gating;
+                                // see reset_pipewire_clock). Unconditional now — the
+                                // previous pw_force_bitperfect gate leaked a forced rate
+                                // for plain (no-passthrough) PipeWire users (#263).
                                 #[cfg(target_os = "linux")]
-                                if thread_settings
-                                    .lock()
-                                    .ok()
-                                    .map(|s| s.pw_force_bitperfect)
-                                    .unwrap_or(false)
-                                {
-                                    qbz_audio::pipewire_backend::PipeWireBackend::reset_pipewire_clock();
-                                }
+                                qbz_audio::pipewire_backend::PipeWireBackend::reset_pipewire_clock();
+                                // The exclusive device is now released (stream dropped
+                                // above), so resume any PipeWire sink we suspended for
+                                // exclusive access — self-gating no-op otherwise (#263).
+                                #[cfg(target_os = "linux")]
+                                qbz_audio::alsa_backend::resume_suspended_sink();
                                 log::info!("Audio thread: suspended stream after pause");
                                 continue;
                             }
@@ -2759,8 +3719,8 @@ impl Player {
                                     &mut current_device_name,
                                     &mut consecutive_sink_failures,
                                     &mut pause_suspend_deadline,
-                                    &mut current_sample_rate,
-                                    &mut current_channels,
+                                    &mut current_track_sample_rate,
+                                    &mut current_track_channels,
                                     &mut current_normalization_gain,
                                     &mut current_gain_atomic,
                                     &mut gapless_pending,
@@ -2787,8 +3747,8 @@ impl Player {
                             &mut current_device_name,
                             &mut consecutive_sink_failures,
                             &mut pause_suspend_deadline,
-                            &mut current_sample_rate,
-                            &mut current_channels,
+                            &mut current_track_sample_rate,
+                            &mut current_track_channels,
                             &mut current_normalization_gain,
                             &mut current_gain_atomic,
                             &mut gapless_pending,
@@ -2803,29 +3763,194 @@ impl Player {
             }
         });
 
+        // Two-level playback cache: L1 in memory (~400 MB), L2 on disk
+        // (~800 MB). A disk-cache failure degrades to L1-only rather than
+        // aborting player creation.
+        let audio_cache = match qbz_cache::PlaybackCache::new(800 * 1024 * 1024) {
+            Ok(pc) => Arc::new(qbz_cache::AudioCache::with_playback_cache(
+                400 * 1024 * 1024,
+                Arc::new(pc),
+            )),
+            Err(e) => {
+                log::warn!("Playback disk cache unavailable: {e}; memory cache only");
+                Arc::new(qbz_cache::AudioCache::new(400 * 1024 * 1024))
+            }
+        };
+
         Self {
             tx,
             state,
             audio_settings: settings,
             visualizer_tap,
             diagnostic,
+            audio_cache,
         }
     }
 
-    /// Play a track by ID (downloads audio)
+    /// Play a track by ID.
+    ///
+    /// First attempts the CMAF streaming pipeline (Akamai CDN, encrypted
+    /// segments): only the init segment is fetched synchronously to derive
+    /// stream parameters, playback starts immediately, and audio segments are
+    /// fetched + decrypted + pushed to the streaming buffer in a background
+    /// task. If the CMAF setup fails for any reason, falls back to the legacy
+    /// `/track/getFileUrl` path (full FLAC download, then `play_data`).
     pub async fn play_track(
         &self,
         client: &QobuzClient,
         track_id: u64,
         quality: Quality,
+        start_position_secs: u64,
     ) -> Result<(), String> {
         log::info!(
-            "Player: Starting playback for track {} with quality {:?}",
+            "Player: Starting playback for track {} with quality {:?} (start {}s)",
             track_id,
-            quality
+            quality,
+            start_position_secs
         );
 
-        // Get the stream URL
+        // Cache hit: replay instantly from L1/L2 unless the cached copy is
+        // a lower quality than now requested.
+        if let Some(cached) = self.audio_cache.get(track_id) {
+            if cached_quality_below_requested(&cached.data, quality) {
+                log::info!(
+                    "[CACHE] Track {} cached below requested {:?} — re-fetching",
+                    track_id,
+                    quality
+                );
+            } else {
+                log::info!(
+                    "[CACHE HIT] Track {} ({} bytes) — playing from cache",
+                    track_id,
+                    cached.size_bytes
+                );
+                let r = self.play_data(cached.data, track_id);
+                // Cached tracks play from in-memory data (no streaming resume
+                // offset); honor a session-resume position with a best-effort
+                // seek once playback has been handed to the audio thread.
+                if r.is_ok() && start_position_secs > 0 {
+                    let _ = self.seek(start_position_secs);
+                }
+                return r;
+            }
+        }
+
+        // `streaming_only` suppresses writing the track into the cache.
+        let skip_cache = self
+            .audio_settings
+            .lock()
+            .map(|s| s.streaming_only)
+            .unwrap_or(false);
+
+        // Try CMAF streaming pipeline first.
+        // Only the init segment is fetched synchronously; audio segments
+        // stream in a background task.
+        log::info!("[CMAF] Attempting CMAF streaming for track {}", track_id);
+        match qbz_qobuz::cmaf::setup_streaming(client, track_id, quality).await {
+            Ok(cmaf_info) => {
+                // Derive stream parameters from init segment metadata.
+                let sample_rate = cmaf_info.sampling_rate.unwrap_or(44100);
+                let channels = 2u16; // FLAC from Qobuz is always stereo
+                let bit_depth = cmaf_info.bit_depth.unwrap_or(16);
+                let total_flac_size = cmaf_info.flac_header.len() as u64
+                    + cmaf_info
+                        .segment_table
+                        .iter()
+                        .map(|s| s.byte_len as u64)
+                        .sum::<u64>();
+
+                // Track duration from the CMAF segment table. The streaming
+                // path's position timer clamps `current_position` to the
+                // duration it was given, so a zero here freezes the seek bar
+                // at 0:00 and blocks auto-advance — derive the real value
+                // from the per-segment sample counts.
+                let total_samples: u64 = cmaf_info
+                    .segment_table
+                    .iter()
+                    .map(|s| s.sample_count as u64)
+                    .sum();
+                let duration_secs = if sample_rate > 0 {
+                    total_samples / sample_rate as u64
+                } else {
+                    0
+                };
+
+                // Estimate speed from the init segment fetch (conservative:
+                // assume ~10 MB/s if init was too fast to measure reliably).
+                let speed_mbps = if cmaf_info.init_fetch_ms > 0 {
+                    let init_bytes = cmaf_info.flac_header.len() as f64 + 4096.0; // rough init size
+                    (init_bytes / (cmaf_info.init_fetch_ms as f64 / 1000.0))
+                        / (1024.0 * 1024.0)
+                } else {
+                    10.0
+                };
+
+                log::info!(
+                    "[CMAF] Streaming setup: {}Hz, {}-bit, {:.2} MB total, {:.1} MB/s est, {} segments",
+                    sample_rate,
+                    bit_depth,
+                    total_flac_size as f64 / (1024.0 * 1024.0),
+                    speed_mbps,
+                    cmaf_info.n_segments
+                );
+
+                // Create the streaming buffer and start playback immediately.
+                let buffer_writer = self.play_streaming_dynamic(
+                    track_id,
+                    sample_rate,
+                    channels,
+                    bit_depth,
+                    total_flac_size,
+                    speed_mbps,
+                    duration_secs,
+                    start_position_secs, // session-resume offset (0 = from start)
+                )?;
+
+                // Spawn the background task that fetches + decrypts + pushes
+                // audio segments to the buffer.
+                let url_template = cmaf_info.url_template.clone();
+                let content_key = cmaf_info.content_key;
+                let flac_header = cmaf_info.flac_header;
+                let n_segments = cmaf_info.n_segments;
+                let cache = self.audio_cache.clone();
+
+                tokio::spawn(async move {
+                    match Self::cmaf_stream_segments(
+                        &url_template,
+                        n_segments,
+                        content_key,
+                        flac_header,
+                        buffer_writer,
+                        track_id,
+                        cache,
+                        skip_cache,
+                    )
+                    .await
+                    {
+                        Ok(()) => log::info!(
+                            "[CMAF-STREAM COMPLETE] Track {}",
+                            track_id
+                        ),
+                        Err(e) => log::error!(
+                            "[CMAF-STREAM ERROR] Track {}: {}",
+                            track_id,
+                            e
+                        ),
+                    }
+                });
+
+                return Ok(());
+            }
+            Err(e) => {
+                log::warn!(
+                    "[CMAF] Streaming setup failed: {}, falling back to legacy download",
+                    e
+                );
+                // Fall through to the legacy download path.
+            }
+        }
+
+        // Legacy fallback: get the stream URL
         log::info!("Player: Getting stream URL...");
         let stream_url = client
             .get_stream_url_with_fallback(track_id, quality)
@@ -2849,8 +3974,415 @@ impl Player {
         })?;
         log::info!("Player: Cached {} bytes of audio data", audio_data.len());
 
+        // Store the legacy download in the cache for instant replay.
+        if !skip_cache {
+            self.audio_cache.insert(track_id, audio_data.clone());
+        }
+
         // Send to audio thread
-        self.play_data(audio_data, track_id)
+        let r = self.play_data(audio_data, track_id);
+        if r.is_ok() && start_position_secs > 0 {
+            let _ = self.seek(start_position_secs);
+        }
+        r
+    }
+
+    /// Download a track fully into the L1/L2 cache **without** starting
+    /// playback.
+    ///
+    /// Gapless playback requires upcoming tracks to be cache hits so they
+    /// play via `play_data` (fully in-memory) rather than the streaming
+    /// path — the audio engine's `PlayNext` handler ignores gapless
+    /// requests while a streaming source is active. This method is the
+    /// prefetch primitive the controller drives for the next 1-2 queue
+    /// tracks.
+    ///
+    /// Mirrors the Tauri V2 prefetch download: CMAF `download_full` first
+    /// (Akamai CDN), legacy `/track/getFileUrl` full download as fallback.
+    /// No-ops when `streaming_only` is set, when the track is already
+    /// cached, or when another fetch for the same id is in flight.
+    pub async fn prefetch_into_cache(
+        &self,
+        client: &QobuzClient,
+        track_id: u64,
+        quality: Quality,
+    ) -> Result<(), String> {
+        // Honor streaming_only — never warm the cache when the user has
+        // opted out of caching.
+        let skip_cache = self
+            .audio_settings
+            .lock()
+            .map(|s| s.streaming_only)
+            .unwrap_or(false);
+        if skip_cache {
+            log::debug!("[PREFETCH] Skipped track {track_id} — streaming_only mode active");
+            return Ok(());
+        }
+
+        // Already cached, or another prefetch for this id is already
+        // running — nothing to do.
+        if self.audio_cache.contains(track_id) {
+            log::debug!("[PREFETCH] Track {track_id} already cached");
+            return Ok(());
+        }
+        if self.audio_cache.is_fetching(track_id) {
+            log::debug!("[PREFETCH] Track {track_id} already being fetched");
+            return Ok(());
+        }
+
+        self.audio_cache.mark_fetching(track_id);
+        log::info!("[PREFETCH] Prefetching track {track_id} at {quality:?}");
+
+        // Try CMAF full download first (Akamai CDN), legacy full download
+        // as fallback (nginx CDN).
+        let result = match qbz_qobuz::cmaf::download_full(client, track_id, quality).await {
+            Ok(data) => Ok(data),
+            Err(e) => {
+                log::warn!(
+                    "[PREFETCH] CMAF failed for track {track_id}: {e}, trying legacy"
+                );
+                match client.get_stream_url_with_fallback(track_id, quality).await {
+                    Ok(stream_url) => self.download_audio(&stream_url.url).await,
+                    Err(e) => Err(format!("Failed to get stream URL: {e}")),
+                }
+            }
+        };
+
+        match result {
+            Ok(data) => {
+                // Brief delay before the cache write to avoid racing the
+                // audio thread, matching the Tauri prefetch path.
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                let len = data.len();
+                self.audio_cache.insert(track_id, data);
+                self.audio_cache.unmark_fetching(track_id);
+                log::info!("[PREFETCH] Complete for track {track_id} ({len} bytes)");
+                Ok(())
+            }
+            Err(e) => {
+                self.audio_cache.unmark_fetching(track_id);
+                log::warn!("[PREFETCH] Failed for track {track_id}: {e}");
+                Err(e)
+            }
+        }
+    }
+
+    /// True if `track_id` is present in the L1/L2 playback cache. Used by
+    /// the gapless controller to decide whether a track can be queued for
+    /// a seamless handoff.
+    pub fn is_track_cached(&self, track_id: u64) -> bool {
+        self.audio_cache.contains(track_id)
+    }
+
+    /// Fetch a track's audio bytes for a gapless handoff: L1 memory →
+    /// L2 disk → CMAF `download_full` (legacy full download as fallback).
+    /// Does not start playback — the caller passes the bytes to
+    /// `play_next`. Returns `None` only when every tier fails.
+    ///
+    /// Ports the L1/L2/CMAF tiers of Tauri's `v2_play_next_gapless`; the
+    /// ephemeral / offline-cache / local-library tiers are intentionally
+    /// omitted as they do not exist in the Slint MVP.
+    pub async fn fetch_for_gapless(
+        &self,
+        client: &QobuzClient,
+        track_id: u64,
+        quality: Quality,
+    ) -> Option<Vec<u8>> {
+        // L1: in-memory cache.
+        if let Some(cached) = self.audio_cache.get(track_id) {
+            log::info!(
+                "[GAPLESS] Track {track_id} from MEMORY cache ({} bytes)",
+                cached.size_bytes
+            );
+            return Some(cached.data);
+        }
+
+        // L2: on-disk plain-FLAC playback cache. Warm L1 on the way out.
+        if let Some(playback_cache) = self.audio_cache.get_playback_cache() {
+            if let Some(audio_data) = playback_cache.get(track_id) {
+                log::info!(
+                    "[GAPLESS] Track {track_id} from DISK cache ({} bytes)",
+                    audio_data.len()
+                );
+                self.audio_cache.insert(track_id, audio_data.clone());
+                return Some(audio_data);
+            }
+        }
+
+        // CMAF full download (Akamai CDN), legacy full download as
+        // fallback. Warm L1 so a re-gapless / replay skips the network.
+        let downloaded = match qbz_qobuz::cmaf::download_full(client, track_id, quality).await {
+            Ok(data) => Some(data),
+            Err(e) => {
+                log::warn!("[GAPLESS] CMAF failed for track {track_id}: {e}, trying legacy");
+                match client.get_stream_url_with_fallback(track_id, quality).await {
+                    Ok(stream_url) => match self.download_audio(&stream_url.url).await {
+                        Ok(data) => Some(data),
+                        Err(e) => {
+                            log::warn!("[GAPLESS] Legacy download failed for {track_id}: {e}");
+                            None
+                        }
+                    },
+                    Err(e) => {
+                        log::warn!("[GAPLESS] No stream URL for {track_id}: {e}");
+                        None
+                    }
+                }
+            }
+        };
+
+        if let Some(ref data) = downloaded {
+            log::info!(
+                "[GAPLESS] Track {track_id} downloaded for gapless ({} bytes)",
+                data.len()
+            );
+            self.audio_cache.insert(track_id, data.clone());
+        } else {
+            log::info!("[GAPLESS] Track {track_id} not available, gapless not possible");
+        }
+        downloaded
+    }
+
+    /// Resolve a fully-materialized audio asset for an EXTERNAL renderer
+    /// (Chromecast / DLNA), carrying the bytes verbatim plus the MIME and the
+    /// quality. Used by the Cast path through the local media server.
+    ///
+    /// Cache-first (P1, matches the fast Tauri cast path + consumes the gapless
+    /// prefetch): L1 in-memory -> L2 on-disk playback cache (both decrypted
+    /// FLAC) -> network. A prefetched/replayed track is served instantly; only a
+    /// cold track pays the CMAF download. On a cache hit the delivered quality is
+    /// not known here (no metadata stored with the bytes) — the caller derives
+    /// the quality label from the track's catalog metadata; the network path
+    /// returns the precise resolved tier.
+    pub async fn fetch_for_external_stream(
+        &self,
+        client: &QobuzClient,
+        track_id: u64,
+        quality: Quality,
+    ) -> Option<ExternalStreamAsset> {
+        // L1: in-memory cache (warmed by the gapless prefetch / a prior play).
+        if let Some(cached) = self.audio_cache.get(track_id) {
+            log::info!(
+                "[CAST-FETCH] Track {track_id} from MEMORY cache ({} bytes)",
+                cached.size_bytes
+            );
+            return Some(ExternalStreamAsset {
+                bytes: cached.data,
+                content_type: "audio/flac".to_string(),
+                quality: StreamQualityInfo::from_raw(0, None, None),
+                duration_secs: None,
+                origin: AssetOrigin::Cache,
+            });
+        }
+        // L2: on-disk plain-FLAC playback cache; warm L1 on the way out.
+        if let Some(playback_cache) = self.audio_cache.get_playback_cache() {
+            if let Some(audio_data) = playback_cache.get(track_id) {
+                log::info!(
+                    "[CAST-FETCH] Track {track_id} from DISK cache ({} bytes)",
+                    audio_data.len()
+                );
+                self.audio_cache.insert(track_id, audio_data.clone());
+                return Some(ExternalStreamAsset {
+                    bytes: audio_data,
+                    content_type: "audio/flac".to_string(),
+                    quality: StreamQualityInfo::from_raw(0, None, None),
+                    duration_secs: None,
+                    origin: AssetOrigin::Cache,
+                });
+            }
+        }
+
+        // Cold: CMAF full download (Akamai CDN) -> decrypted FLAC.
+        match qbz_qobuz::cmaf::download_full_with_quality(client, track_id, quality).await {
+            Ok((bytes, q)) => {
+                log::info!(
+                    "[CAST-FETCH] Track {track_id} via CMAF: {} bytes, format_id={}, {:?} kHz/{:?}-bit",
+                    bytes.len(),
+                    q.format_id,
+                    q.sampling_rate_khz,
+                    q.bit_depth
+                );
+                // Warm L1 so a subsequent local replay skips the network.
+                self.audio_cache.insert(track_id, bytes.clone());
+                return Some(ExternalStreamAsset {
+                    bytes,
+                    content_type: "audio/flac".to_string(),
+                    quality: q,
+                    duration_secs: None,
+                    origin: AssetOrigin::Network,
+                });
+            }
+            Err(e) => {
+                log::warn!("[CAST-FETCH] CMAF failed for track {track_id}: {e}, trying legacy");
+            }
+        }
+
+        // Fallback: legacy stream URL + plain HTTP download. Quality and MIME
+        // come from the resolved StreamUrl (which carries the granted tier).
+        match client.get_stream_url_with_fallback(track_id, quality).await {
+            Ok(stream_url) => {
+                let content_type =
+                    external_content_type(&stream_url.mime_type, stream_url.format_id);
+                let q = StreamQualityInfo::from_raw(
+                    stream_url.format_id,
+                    Some(stream_url.sampling_rate),
+                    stream_url.bit_depth,
+                );
+                match self.download_audio(&stream_url.url).await {
+                    Ok(bytes) => {
+                        log::info!(
+                            "[CAST-FETCH] Track {track_id} via legacy: {} bytes, format_id={}, ct={}",
+                            bytes.len(),
+                            q.format_id,
+                            content_type
+                        );
+                        self.audio_cache.insert(track_id, bytes.clone());
+                        Some(ExternalStreamAsset {
+                            bytes,
+                            content_type,
+                            quality: q,
+                            duration_secs: None,
+                            origin: AssetOrigin::Network,
+                        })
+                    }
+                    Err(e) => {
+                        log::warn!("[CAST-FETCH] Legacy download failed for {track_id}: {e}");
+                        None
+                    }
+                }
+            }
+            Err(e) => {
+                log::warn!("[CAST-FETCH] No stream URL for {track_id}: {e}");
+                None
+            }
+        }
+    }
+
+    /// Stream CMAF segments to the player's buffer, decrypting on the fly.
+    ///
+    /// Writes the FLAC header first so the decoder can identify the format,
+    /// then fetches each audio segment, decrypts encrypted frames, and pushes
+    /// the resulting FLAC frame data to the streaming buffer. The player
+    /// starts playing as soon as enough data is buffered.
+    async fn cmaf_stream_segments(
+        url_template: &str,
+        n_segments: u8,
+        content_key: [u8; 16],
+        flac_header: Vec<u8>,
+        writer: BufferWriter,
+        track_id: u64,
+        cache: Arc<qbz_cache::AudioCache>,
+        skip_cache: bool,
+    ) -> Result<(), String> {
+        let client = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .build()
+            .map_err(|e| format!("CMAF client error: {}", e))?;
+
+        // Write the FLAC header first so the decoder can identify the format.
+        if let Err(e) = writer.push_chunk(&flac_header) {
+            return Err(format!("Failed to write FLAC header to buffer: {}", e));
+        }
+
+        let mut total_written: u64 = flac_header.len() as u64;
+        // Accumulate the assembled FLAC (header + decrypted frames) so the
+        // finished track can be cached for instant replay. Empty when
+        // `skip_cache` (streaming_only) is set.
+        let mut cache_data: Vec<u8> = if skip_cache {
+            Vec::new()
+        } else {
+            flac_header.clone()
+        };
+        let start = Instant::now();
+
+        for seg_idx in 1..=n_segments {
+            let seg_url = url_template.replace("$SEGMENT$", &seg_idx.to_string());
+            let seg_data = client
+                .get(&seg_url)
+                .header("User-Agent", "Mozilla/5.0")
+                .send()
+                .await
+                .map_err(|e| format!("CMAF segment {} fetch: {}", seg_idx, e))?
+                .bytes()
+                .await
+                .map_err(|e| format!("CMAF segment {} read: {}", seg_idx, e))?;
+
+            let crypto = qbz_cmaf::parse_segment_crypto(&seg_data)
+                .map_err(|e| format!("CMAF segment {} parse: {}", seg_idx, e))?;
+
+            let mut data_pos = crypto.data_offset;
+            for entry in &crypto.entries {
+                let frame_end = data_pos + entry.size as usize;
+                if frame_end > seg_data.len() {
+                    let _ = writer.error(format!("CMAF segment {} frame overflow", seg_idx));
+                    return Err(format!("CMAF segment {} frame overflow", seg_idx));
+                }
+                let mut frame = seg_data[data_pos..frame_end].to_vec();
+                if entry.flags != 0 {
+                    qbz_cmaf::decrypt_frame(&content_key, &entry.iv, &mut frame);
+                }
+                // Write decrypted frame to the streaming buffer.
+                if let Err(e) = writer.push_chunk(&frame) {
+                    log::error!("[CMAF-STREAM] Failed to push frame: {}", e);
+                }
+                if !skip_cache {
+                    cache_data.extend_from_slice(&frame);
+                }
+                total_written += frame.len() as u64;
+                data_pos = frame_end;
+            }
+
+            // Trailing unencrypted data after all frame entries.
+            if data_pos < crypto.mdat_end && crypto.mdat_end <= seg_data.len() {
+                let trailing = &seg_data[data_pos..crypto.mdat_end];
+                if let Err(e) = writer.push_chunk(trailing) {
+                    log::error!("[CMAF-STREAM] Failed to push trailing data: {}", e);
+                }
+                if !skip_cache {
+                    cache_data.extend_from_slice(trailing);
+                }
+                total_written += trailing.len() as u64;
+            }
+
+            // Progress logging every 5 segments or on the last segment.
+            if seg_idx % 5 == 0 || seg_idx == n_segments {
+                let elapsed = start.elapsed().as_secs_f64();
+                log::info!(
+                    "[CMAF-STREAM] Segment {}/{} ({:.1} MB, {:.1} MB/s)",
+                    seg_idx,
+                    n_segments - 1,
+                    total_written as f64 / (1024.0 * 1024.0),
+                    if elapsed > 0.0 {
+                        total_written as f64 / (1024.0 * 1024.0) / elapsed
+                    } else {
+                        0.0
+                    }
+                );
+            }
+        }
+
+        // Signal end of stream.
+        if let Err(e) = writer.complete() {
+            log::error!("[CMAF-STREAM] Failed to mark buffer complete: {}", e);
+        }
+
+        log::info!(
+            "[CMAF-STREAM] Complete: {:.2} MB written in {:.1}s for track {}, segments fetched: 1..{}",
+            total_written as f64 / (1024.0 * 1024.0),
+            start.elapsed().as_secs_f64(),
+            track_id,
+            n_segments - 1
+        );
+
+        // Cache the assembled FLAC (header + decrypted frames) for instant
+        // replay on the next play of this track.
+        if !skip_cache && !cache_data.is_empty() {
+            let bytes = cache_data.len();
+            cache.insert(track_id, cache_data);
+            log::info!("[CMAF-STREAM] Track {} cached ({} bytes)", track_id, bytes);
+        }
+
+        Ok(())
     }
 
     /// Play from raw audio data (for cached tracks)
@@ -2925,8 +4457,183 @@ impl Player {
             })
     }
 
-    /// Play from streaming source (starts playback before full download)
-    /// Returns the BufferWriter so caller can push data as it downloads
+    /// Play a local DSD file (.dsf/.dff) by converting it on the fly to
+    /// 176.4 kHz / 24-bit PCM (qbz-dsd, Phase 1 of the DSD plan — see
+    /// qbz-nix-docs/dsd-support/). The converted stream rides the existing
+    /// `play_streaming` path as an ordinary finite WAV: a background thread
+    /// demuxes + decimates and pushes into the BufferWriter, so the whole
+    /// PCM pipeline (engines, bit-perfect ALSA at 176.4 kHz, volume,
+    /// normalization, seek-in-buffer) behaves exactly as for any hi-res
+    /// track. DST-compressed DFF and >2ch files are rejected with a
+    /// readable error before anything starts.
+    pub fn play_dsd_file(&self, path: std::path::PathBuf, track_id: u64) -> Result<(), String> {
+        let demux = qbz_dsd::open_dsd(&path).map_err(|e| e.to_string())?;
+        let dsd_rate = demux.info().dsd_rate;
+
+        // DoP resolution (Phase 2): user opt-in + ALSA direct backend +
+        // stereo + carrier rate supported by the device. Anything else falls
+        // through to the universal DSD→PCM conversion below.
+        #[cfg(target_os = "linux")]
+        {
+            let info = demux.info().clone();
+            let resolved = self
+                .audio_settings
+                .lock()
+                .ok()
+                .map(|s| {
+                    (
+                        s.dsd_mode.clone(),
+                        matches!(s.backend_type, Some(qbz_audio::AudioBackendType::Alsa)),
+                        s.output_device.clone(),
+                    )
+                })
+                .unwrap_or(("convert".to_string(), false, None));
+            if let (mode, true, Some(device)) = resolved {
+                if info.channels == 2 && mode != "convert" {
+                    if mode == "native" {
+                        // The open itself validates (kernel quirk / rates);
+                        // failure surfaces as a stream error toast.
+                        log::info!(
+                            "Player: DSD track {} — {} via NATIVE DSD",
+                            track_id,
+                            qbz_dsd::dsd_label(info.dsd_rate)
+                        );
+                        drop(demux);
+                        return self
+                            .tx
+                            .send(AudioCommand::PlayDsdNative { path, track_id })
+                            .map_err(|e| {
+                                format!("Failed to send native DSD play command: {}", e)
+                            });
+                    }
+                    let carrier = qbz_dsd::dop_carrier_rate(info.dsd_rate);
+                    let rate_ok =
+                        qbz_audio::alsa_backend::get_device_supported_rates(&device)
+                            .map(|r| r.contains(&carrier))
+                            .unwrap_or(true);
+                    if rate_ok {
+                        log::info!(
+                            "Player: DSD track {} — {} via DoP ({} Hz carrier)",
+                            track_id,
+                            qbz_dsd::dsd_label(info.dsd_rate),
+                            carrier
+                        );
+                        drop(demux);
+                        return self
+                            .tx
+                            .send(AudioCommand::PlayDsdDop { path, track_id })
+                            .map_err(|e| format!("Failed to send DoP play command: {}", e));
+                    }
+                    log::info!(
+                        "Player: DoP selected but device lacks the {} Hz carrier — converting to PCM",
+                        carrier
+                    );
+                } else if info.channels != 2 && mode != "convert" {
+                    log::info!(
+                        "Player: {} selected but track has {} channels — downmix-converting to PCM",
+                        mode,
+                        info.channels
+                    );
+                }
+            }
+        }
+        let mut conv = qbz_dsd::DsdPcmConverter::new(demux, qbz_dsd::DEFAULT_GAIN_DB)
+            .map_err(|e| e.to_string())?;
+        let channels = conv.channels();
+        let rate = conv.output_rate();
+        let total_frames = conv.total_frames();
+        let duration_secs = total_frames / rate as u64;
+        let content_length = qbz_dsd::wav_total_size(total_frames, channels);
+        log::info!(
+            "Player: DSD track {} — {} ({} Hz) → PCM {} Hz/24-bit, {}s, {} bytes WAV",
+            track_id,
+            qbz_dsd::dsd_label(dsd_rate),
+            dsd_rate,
+            rate,
+            duration_secs,
+            content_length
+        );
+        self.state.set_stream_quality(rate, 24);
+
+        let writer =
+            self.play_streaming(track_id, rate, channels, content_length, 3, duration_secs, 0)?;
+
+        std::thread::spawn(move || {
+            if writer
+                .push_chunk(&qbz_dsd::wav_header(total_frames, channels, rate))
+                .is_err()
+            {
+                return;
+            }
+            let mut pcm = Vec::new();
+            loop {
+                match conv.next_block() {
+                    Ok(Some(frames)) => {
+                        pcm.clear();
+                        qbz_dsd::frames_to_pcm24(&frames, &mut pcm);
+                        if writer.push_chunk(&pcm).is_err() {
+                            // Reader gone (track changed/stopped) — just stop.
+                            return;
+                        }
+                    }
+                    Ok(None) => {
+                        let _ = writer.complete();
+                        return;
+                    }
+                    Err(e) => {
+                        log::error!("Player: DSD conversion failed mid-track: {}", e);
+                        let _ = writer.error(format!("DSD conversion failed: {}", e));
+                        return;
+                    }
+                }
+            }
+        });
+        Ok(())
+    }
+
+    /// Whole-file DSD→PCM conversion into an in-memory WAV, for the gapless
+    /// prefetch path: the result feeds `play_next` like any cached track, so
+    /// consecutive converted-DSD tracks hand off seamlessly. CPU-bound
+    /// (~10-30x realtime) — call from a blocking context.
+    pub fn prepare_dsd_gapless_wav(path: &std::path::Path) -> Result<Vec<u8>, String> {
+        let demux = qbz_dsd::open_dsd(path).map_err(|e| e.to_string())?;
+        let mut conv = qbz_dsd::DsdPcmConverter::new(demux, qbz_dsd::DEFAULT_GAIN_DB)
+            .map_err(|e| e.to_string())?;
+        let channels = conv.channels();
+        let rate = conv.output_rate();
+        let total = conv.total_frames();
+        let mut out = qbz_dsd::wav_header(total, channels, rate);
+        out.reserve(total as usize * channels as usize * 3);
+        while let Some(frames) = conv.next_block().map_err(|e| e.to_string())? {
+            qbz_dsd::frames_to_pcm24(&frames, &mut out);
+        }
+        Ok(out)
+    }
+
+    /// Queue the next DSD track for a gapless transition: appends to the DoP
+    /// engine when one is active (seamless native DSD), otherwise converts to
+    /// an in-memory WAV and rides the normal `play_next` gapless path.
+    pub fn play_next_dsd(&self, path: std::path::PathBuf, track_id: u64) -> Result<(), String> {
+        if self.state.is_dsd_direct() {
+            return self
+                .tx
+                .send(AudioCommand::PlayNextDsdDop { path, track_id })
+                .map_err(|e| format!("Failed to send DoP gapless command: {}", e));
+        }
+        let wav = Self::prepare_dsd_gapless_wav(&path)?;
+        self.play_next(wav, track_id)
+    }
+
+    /// True while a DoP stream is active (volume fixed, seek unsupported).
+    pub fn is_dsd_direct_active(&self) -> bool {
+        self.state.is_dsd_direct()
+    }
+
+    /// Play from streaming source (starts playback before full download).
+    /// Returns the BufferWriter so caller can push data as it downloads.
+    /// `start_position_secs` > 0 turns this into a session-resume play
+    /// (#315): the audio thread waits for enough buffer to cover the
+    /// offset and pre-skips decoder output up to that point.
     pub fn play_streaming(
         &self,
         track_id: u64,
@@ -2935,14 +4642,16 @@ impl Player {
         content_length: u64,
         buffer_seconds: u8,
         duration_secs: u64,
+        start_position_secs: u64,
     ) -> Result<BufferWriter, String> {
         log::info!(
-            "Player: Starting streaming playback for track {} ({}Hz, {}ch, {} bytes total, {}s)",
+            "Player: Starting streaming playback for track {} ({}Hz, {}ch, {} bytes total, {}s, start={}s)",
             track_id,
             sample_rate,
             channels,
             content_length,
-            duration_secs
+            duration_secs,
+            start_position_secs
         );
 
         // Use StreamingConfig::from_seconds for proper buffer sizing
@@ -2958,6 +4667,8 @@ impl Player {
                 sample_rate,
                 channels,
                 duration_secs,
+                start_position_secs,
+                content_length,
             })
             .map_err(|e| {
                 log::error!("Player: Failed to send streaming command: {}", e);
@@ -2968,8 +4679,8 @@ impl Player {
         Ok(writer)
     }
 
-    /// Play from streaming source with dynamic buffer based on measured speed
-    /// Returns the BufferWriter so caller can push data as it downloads
+    /// Play from streaming source with dynamic buffer based on measured speed.
+    /// `start_position_secs` > 0 signals session resume (see `play_streaming`).
     pub fn play_streaming_dynamic(
         &self,
         track_id: u64,
@@ -2979,16 +4690,18 @@ impl Player {
         content_length: u64,
         speed_mbps: f64,
         duration_secs: u64,
+        start_position_secs: u64,
     ) -> Result<BufferWriter, String> {
         log::info!(
-            "Player: Starting dynamic streaming for track {} ({}Hz, {}ch, {}-bit, {:.2} MB, {:.1} MB/s, {}s)",
+            "Player: Starting dynamic streaming for track {} ({}Hz, {}ch, {}-bit, {:.2} MB, {:.1} MB/s, {}s, start={}s)",
             track_id,
             sample_rate,
             channels,
             bit_depth,
             content_length as f64 / (1024.0 * 1024.0),
             speed_mbps,
-            duration_secs
+            duration_secs,
+            start_position_secs
         );
 
         // Update shared state with actual stream quality
@@ -3007,6 +4720,8 @@ impl Player {
                 sample_rate,
                 channels,
                 duration_secs,
+                start_position_secs,
+                content_length,
             })
             .map_err(|e| {
                 log::error!("Player: Failed to send streaming command: {}", e);
@@ -3114,6 +4829,19 @@ impl Player {
             .map_err(|e| format!("Failed to send reinit command: {}", e))
     }
 
+    /// Release the output device without reopening it. Drops the active
+    /// stream — freeing an exclusive ALSA `hw:` grab and its D-Bus
+    /// reservation — and un-suspends / un-forces anything QBZ parked, so
+    /// PipeWire/WirePlumber can reclaim a device QBZ was holding (e.g. a DAC
+    /// left invisible to other apps after bit-perfect ALSA Direct). Pair
+    /// with a device re-enumeration in the UI to surface a freed or
+    /// hot-plugged DAC without restarting the app.
+    pub fn release_device(&self) -> Result<(), String> {
+        self.tx
+            .send(AudioCommand::ReleaseDevice)
+            .map_err(|e| format!("Failed to send release command: {}", e))
+    }
+
     /// Reload audio settings from fresh config (e.g., after database update)
     /// Call this before reinit_device() to ensure Player uses latest settings
     pub fn reload_settings(&self, settings: AudioSettings) -> Result<(), String> {
@@ -3158,6 +4886,7 @@ impl Player {
             gapless_ready: self.state.is_gapless_ready(),
             gapless_next_track_id: self.state.get_gapless_next_track_id(),
             bit_perfect_mode: self.state.get_bit_perfect_mode(),
+            buffer_progress: self.state.get_buffer_progress(),
         }
     }
 }
@@ -3170,4 +4899,178 @@ pub struct PlaybackState {
     pub duration: u64,
     pub track_id: u64,
     pub volume: f32,
+}
+
+/// Pick the MIME to advertise to an external renderer for a legacy stream-URL
+/// download. Prefer the server-provided `mime_type`; when it is empty (Qobuz
+/// can return `""`), fall back by format id so the renderer is never handed an
+/// empty content type (which some Chromecast/DLNA renderers reject).
+pub fn external_content_type(mime: &str, format_id: u32) -> String {
+    let trimmed = mime.trim();
+    if !trimmed.is_empty() {
+        return trimmed.to_string();
+    }
+    match qbz_models::Quality::from_id(format_id) {
+        Some(qbz_models::Quality::Mp3) => "audio/mpeg".to_string(),
+        // Lossless / HiRes / UltraHiRes are FLAC over the file/url path.
+        Some(_) => "audio/flac".to_string(),
+        None => "audio/flac".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compute_needs_new_stream;
+    use super::external_content_type;
+
+    #[test]
+    fn no_stream_always_needs_new() {
+        // Without an existing stream there is nothing to reuse — every
+        // other flag is irrelevant.
+        assert!(compute_needs_new_stream(
+            false, false, false, false, false, false
+        ));
+    }
+
+    #[test]
+    fn unchanged_format_on_default_backend_reuses_stream() {
+        // Default rodio backend resamples internally, so an unchanged
+        // decoded format on an existing stream needs no rebuild.
+        assert!(!compute_needs_new_stream(
+            true, false, false, false, false, false
+        ));
+    }
+
+    #[test]
+    fn format_change_on_default_backend_rebuilds_for_native_rate() {
+        // #449 regression guard: a decoded sample-rate/channel change must
+        // rebuild the output stream on EVERY backend, not just the bit-perfect
+        // ones, so the device follows the track's native rate. 1.2.10 got this
+        // "for free" because Stop dropped the stream; once that drop was
+        // deferred to avoid a track-change click (e93fcaec), reusing the stream
+        // on the default/PipeWire backend left the node locked to the first
+        // track's rate for every subsequent track. Same-rate tracks still
+        // reuse (format_changed == false), preserving the click fix.
+        assert!(compute_needs_new_stream(
+            true, true, false, false, false, false
+        ));
+    }
+
+    #[test]
+    fn format_change_with_dac_passthrough_rebuilds() {
+        assert!(compute_needs_new_stream(
+            true, true, true, false, false, false
+        ));
+    }
+
+    #[test]
+    fn format_change_with_alsa_direct_rebuilds() {
+        assert!(compute_needs_new_stream(
+            true, true, false, true, false, false
+        ));
+    }
+
+    #[test]
+    fn format_change_with_coreaudio_exclusive_rebuilds() {
+        assert!(compute_needs_new_stream(
+            true, true, false, false, true, false
+        ));
+    }
+
+    #[test]
+    fn bit_perfect_backends_without_format_change_reuse_stream() {
+        // Bit-perfect flags only force a rebuild *together with* a format
+        // change. On their own they should not.
+        assert!(!compute_needs_new_stream(
+            true, false, true, false, false, false
+        ));
+        assert!(!compute_needs_new_stream(
+            true, false, false, true, false, false
+        ));
+        assert!(!compute_needs_new_stream(
+            true, false, false, false, true, false
+        ));
+    }
+
+    #[test]
+    fn coreaudio_shared_rate_mismatch_rebuilds_regardless_of_format_change() {
+        // The CoreAudio shared-mode rate-drift case has nothing to do with
+        // track format; it must rebuild whenever detected.
+        assert!(compute_needs_new_stream(
+            true, false, false, false, false, true
+        ));
+    }
+
+    #[test]
+    fn current_position_ms_is_a_pure_anchor_derivation() {
+        use std::sync::atomic::Ordering;
+
+        let state = super::SharedState::new();
+        state.duration.store(300, Ordering::SeqCst);
+
+        // Paused: coarse stored position scaled to ms (current_position parity).
+        state.position.store(12, Ordering::SeqCst);
+        assert_eq!(state.current_position_ms(), 12_000);
+
+        // Playing without an anchor yet: same coarse fallback.
+        state.is_playing.store(true, Ordering::SeqCst);
+        assert_eq!(state.current_position_ms(), 12_000);
+
+        // Playing with anchors: position_at_start*1000 + wall-clock elapsed ms.
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        state
+            .playback_start_millis
+            .store(now_ms - 1_500, Ordering::SeqCst);
+        state.position_at_start.store(10, Ordering::SeqCst);
+        let pos = state.current_position_ms();
+        assert!(
+            (11_450..=11_900).contains(&pos),
+            "expected ~11500ms, got {pos}"
+        );
+
+        // Clamped to duration*1000 (same rule current_position applies).
+        state
+            .playback_start_millis
+            .store(now_ms - 10_000, Ordering::SeqCst);
+        state.position_at_start.store(299, Ordering::SeqCst);
+        assert_eq!(state.current_position_ms(), 300_000);
+    }
+
+    #[test]
+    fn external_content_type_prefers_server_mime() {
+        assert_eq!(external_content_type("audio/flac", 7), "audio/flac");
+        assert_eq!(external_content_type("audio/mpeg", 5), "audio/mpeg");
+        // Whitespace-only is treated as empty.
+        assert_eq!(external_content_type("  ", 6), "audio/flac");
+    }
+
+    #[test]
+    fn external_content_type_falls_back_by_format_id() {
+        // Empty MIME (Qobuz can return "") -> derive from format id.
+        assert_eq!(external_content_type("", 5), "audio/mpeg"); // Mp3
+        assert_eq!(external_content_type("", 6), "audio/flac"); // Lossless
+        assert_eq!(external_content_type("", 7), "audio/flac"); // HiRes
+        assert_eq!(external_content_type("", 27), "audio/flac"); // UltraHiRes
+        assert_eq!(external_content_type("", 999), "audio/flac"); // unknown -> flac
+    }
+
+    #[test]
+    fn stream_quality_normalizes_units() {
+        use qbz_models::StreamQualityInfo;
+        // kHz input stays kHz.
+        let khz = StreamQualityInfo::from_raw(7, Some(96.0), Some(24));
+        assert_eq!(khz.sampling_rate_khz, Some(96.0));
+        // Hz input is converted to kHz.
+        let hz = StreamQualityInfo::from_raw(27, Some(192000.0), Some(24));
+        assert_eq!(hz.sampling_rate_khz, Some(192.0));
+        // Zero / unknown -> None.
+        let zero = StreamQualityInfo::from_raw(6, Some(0.0), Some(16));
+        assert_eq!(zero.sampling_rate_khz, None);
+        // Tier label from format id.
+        assert_eq!(khz.tier_label(), "FLAC 24-bit/≤96kHz");
+        assert_eq!(hz.tier_label(), "FLAC 24-bit/>96kHz");
+    }
 }

@@ -1,0 +1,89 @@
+// Horizontal integer slider primitive — dark-themed, draggable.
+//
+// Like the other primitives it does not own its value: it emits
+// `changed(new-value)` and the caller updates the bound state. The thumb
+// position is derived from `value`, clamped to [minimum, maximum].
+
+import { Theme } from "../foundation/semantic-colors.slint";
+
+export component QbzSlider inherits Rectangle {
+    in property <int> minimum: 0;
+    in property <int> maximum: 10;
+    in property <int> value: 0;
+    callback changed(int);
+    // Fired once on pointer release (drag end) — for callers that want to
+    // commit/persist only the final value, not every intermediate `changed`.
+    callback released(int);
+
+    width: 200px;
+    height: 22px;
+
+    // Fraction of the track the current value sits at, clamped to [0, 1].
+    property <float> fraction: root.maximum > root.minimum
+        ? max(0.0, min(1.0, (root.value - root.minimum) / (root.maximum - root.minimum)))
+        : 0.0;
+    property <length> thumb-size: 16px;
+    // Travel range for the thumb centre.
+    property <length> travel: root.width - root.thumb-size;
+
+    // Track. HC-only outline so the rail stays visible when accent flattens.
+    Rectangle {
+        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+        height: 4px;
+        border-radius: 2px;
+        background: Theme.surface-elevated;
+        border-width: Theme.is-high-contrast ? 1px : 0px;
+        border-color: Theme.border-strong;
+    }
+
+    // Accent fill.
+    Rectangle {
+        x: 0;
+        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+        width: root.thumb-size / 2 + root.fraction * root.travel;
+        height: 4px;
+        border-radius: 2px;
+        background: Theme.accent;
+    }
+
+    // Thumb. HC-only border delineates the disc against the filled track.
+    Rectangle {
+        x: root.fraction * root.travel;
+        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+        width: root.thumb-size;
+        height: root.thumb-size;
+        border-radius: root.thumb-size / 2;
+        background: Theme.text-primary;
+        border-width: Theme.is-high-contrast ? 1px : 0px;
+        border-color: Theme.border-strong;
+    }
+
+    // Map a pointer x to a clamped, rounded integer value.
+    function value-from-x(px: length) -> int {
+        root.minimum + round(
+            max(0.0, min(1.0, (px - root.thumb-size / 2) / max(1px, root.travel)))
+            * (root.maximum - root.minimum)
+        )
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+
+        // Jump to the click point on press-down.
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down
+                && root.value-from-x(self.mouse-x) != root.value) {
+                root.changed(root.value-from-x(self.mouse-x));
+            }
+            if (e.kind == PointerEventKind.up) {
+                root.released(root.value);
+            }
+        }
+        // Continuous drag while held.
+        moved => {
+            if (root.value-from-x(self.mouse-x) != root.value) {
+                root.changed(root.value-from-x(self.mouse-x));
+            }
+        }
+    }
+}

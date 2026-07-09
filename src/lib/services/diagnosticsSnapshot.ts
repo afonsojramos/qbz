@@ -24,6 +24,7 @@ import type {
   QconnectConnectionStatus,
   QconnectSessionSnapshot,
 } from '$lib/services/qconnectRuntime';
+import type { PlaybackPreferences } from '$lib/stores/playbackPreferencesStore';
 
 function redactIdLike(value: string | null | undefined): string | null {
   if (!value) return null;
@@ -50,6 +51,27 @@ function snapshotPlayback(): Record<string, unknown> {
     trackIsLocal: track?.isLocal ?? null,
     trackSource: track?.source ?? null,
   };
+}
+
+/**
+ * Playback preferences relevant to session restore and autoplay. All
+ * non-sensitive booleans/enums — no IDs, paths, or account data. Surfaced
+ * here so a "restore session not working" report can be answered straight
+ * from the diagnostics block (issue #440: the terminal log never prints
+ * whether persist_session is on).
+ */
+async function snapshotPlaybackPreferences(): Promise<Record<string, unknown>> {
+  try {
+    const prefs = await invoke<PlaybackPreferences>('v2_get_playback_preferences');
+    return {
+      persistSession: prefs.persist_session,
+      resumePlaybackPosition: prefs.resume_playback_position,
+      autoplayMode: prefs.autoplay_mode,
+      showContextIcon: prefs.show_context_icon,
+    };
+  } catch {
+    return { unavailable: true };
+  }
 }
 
 async function snapshotQconnect(): Promise<Record<string, unknown>> {
@@ -135,11 +157,12 @@ export async function collectDiagnosticsText(opts: CollectOptions = {}): Promise
     ? scanCastDevices(opts.castScanMs ?? 10000)
     : Promise.resolve(null);
 
-  const [runtime, system, qconnect, cast] = await Promise.all([
+  const [runtime, system, qconnect, cast, playbackPreferences] = await Promise.all([
     invoke<unknown>('v2_get_runtime_diagnostics').catch((e) => ({ error: String(e) })),
     invoke<unknown>('v2_get_system_info').catch((e) => ({ error: String(e) })),
     snapshotQconnect(),
     castPromise,
+    snapshotPlaybackPreferences(),
   ]);
 
   const payload = {
@@ -147,6 +170,7 @@ export async function collectDiagnosticsText(opts: CollectOptions = {}): Promise
     runtime,
     system,
     playback: snapshotPlayback(),
+    playbackPreferences,
     qconnect,
     castScan: cast,
   };

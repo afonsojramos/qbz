@@ -71,7 +71,7 @@
   aria-labelledby="musician-modal-title"
   tabindex="-1"
 >
-  <div class="modal">
+  <div class="modal selectable">
     <!-- Header -->
     <div class="modal-header">
       <div class="musician-info">
@@ -309,7 +309,7 @@
     background: var(--accent-primary);
     border: none;
     border-radius: 10px;
-    color: white;
+    color: var(--btn-primary-text);
     font-size: 14px;
     font-weight: 600;
     cursor: pointer;

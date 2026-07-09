@@ -8,6 +8,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { skipIfRemote } from '$lib/services/commandRouter';
 import { getUserItem } from '$lib/utils/userStorage';
+import { isQconnectToggleOn, type QconnectConnectionStatus } from '$lib/services/qconnectRuntime';
 import {
   getCurrentTrack,
   getIsPlaying,
@@ -55,6 +56,28 @@ let state: CastState = {
 // Polling interval for DLNA position updates
 let positionPollInterval: ReturnType<typeof setInterval> | null = null;
 const POSITION_POLL_INTERVAL_MS = 1000;
+
+// Qobuz Connect renderer mode and casting are mutually exclusive output
+// modes (#439): while qbz is a QConnect renderer the cloud drives playback
+// and the cast device never plays. connectToDevice() suspends QConnect while
+// casting; disconnect() restores it. This flag remembers whether QConnect was
+// on, so the restore is conditional — if it was off, it stays off.
+let qconnectWasOnBeforeCast = false;
+
+/**
+ * Restore Qobuz Connect after a cast ends, if connectToDevice() suspended it.
+ * No-op when QConnect was already off before casting. Best-effort.
+ */
+async function restoreQconnectAfterCast(): Promise<void> {
+  if (!qconnectWasOnBeforeCast) return;
+  qconnectWasOnBeforeCast = false;
+  try {
+    await invoke('v2_qconnect_connect', { options: null });
+    console.log('[CastStore] Casting ended — Qobuz Connect restored');
+  } catch (err) {
+    console.warn('[CastStore] Could not restore Qobuz Connect after cast:', err);
+  }
+}
 
 // Callback for when track ends (for auto-advance)
 let onCastTrackEnded: (() => Promise<void>) | null = null;
@@ -146,6 +169,22 @@ export async function connectToDevice(device: CastDevice, protocol: CastProtocol
     }
   }
 
+  // Suspend Qobuz Connect for the duration of the cast (#439). While qbz is
+  // a QConnect renderer the cloud owns playback and the cast device never
+  // receives a LOAD. Best-effort: a QConnect status/disconnect failure must
+  // not block casting.
+  qconnectWasOnBeforeCast = false;
+  try {
+    const qcStatus = await invoke<QconnectConnectionStatus>('v2_qconnect_status');
+    if (isQconnectToggleOn(qcStatus)) {
+      qconnectWasOnBeforeCast = true;
+      await invoke('v2_qconnect_disconnect');
+      console.log('[CastStore] Qobuz Connect was on — suspended it for casting');
+    }
+  } catch (err) {
+    console.warn('[CastStore] Could not suspend Qobuz Connect before cast:', err);
+  }
+
   try {
     // Now establish the cast connection
     switch (protocol) {
@@ -201,6 +240,8 @@ export async function connectToDevice(device: CastDevice, protocol: CastProtocol
     }
   } catch (err) {
     console.error('[CastStore] Failed to connect:', err);
+    // Cast connection failed — undo the QConnect suspension.
+    await restoreQconnectAfterCast();
     throw err;
   }
 }
@@ -253,6 +294,9 @@ export async function disconnect(): Promise<void> {
     durationSecs: 0
   };
   notifyListeners();
+
+  // Cast ended — restore Qobuz Connect if it was on before casting started.
+  await restoreQconnectAfterCast();
 
   // If there was a track playing, ask user if they want to continue locally
   if (wasPlaying && currentTrack && !currentTrack.isLocal && onAskContinueLocally) {

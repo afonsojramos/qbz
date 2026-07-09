@@ -11,6 +11,7 @@ pub enum AudioFormat {
     Aiff,
     Ape,
     Mp3,
+    Dsd,
     Unknown,
 }
 
@@ -29,6 +30,7 @@ impl std::fmt::Display for AudioFormat {
             AudioFormat::Aiff => write!(f, "AIFF"),
             AudioFormat::Ape => write!(f, "APE"),
             AudioFormat::Mp3 => write!(f, "MP3"),
+            AudioFormat::Dsd => write!(f, "DSD"),
             AudioFormat::Unknown => write!(f, "Unknown"),
         }
     }
@@ -131,6 +133,15 @@ pub struct PlaylistLocalTrack {
     pub playlist_position: i32,
 }
 
+/// One page of metadata-grouped local albums plus the total count of
+/// albums matching the same filter (for scrollbar pre-allocation on the
+/// frontend). Returned by `Database::get_albums_metadata_page`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AlbumsMetadataPage {
+    pub albums: Vec<LocalAlbum>,
+    pub total: u64,
+}
+
 /// An album aggregated from local tracks
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LocalAlbum {
@@ -150,6 +161,13 @@ pub struct LocalAlbum {
     pub bit_depth: Option<u32>,
     pub sample_rate: f64, // Changed from u32 to f64 for decimal precision
     pub directory_path: String,
+    /// Comma-separated list of distinct folder keys that contributed
+    /// tracks to this album. Populated only by the metadata-grouped
+    /// Albums query (`get_albums_metadata_grouped`); `None` for folder-
+    /// grouped rows. The frontend uses this to render a tooltip when N
+    /// folders > 1.
+    #[serde(default)]
+    pub source_folders: Option<String>,
     /// Source of the album: "user" for local files, "qobuz_download" for offline cached
     #[serde(default = "default_source")]
     pub source: String,
@@ -238,6 +256,34 @@ impl AlbumSettings {
             updated_at: now,
         }
     }
+}
+
+/// A child entry within a folder of the local-library filesystem
+/// hierarchy. Used by the Folders-tab tree view to render one level at
+/// a time without preloading the entire tree.
+///
+/// The `kind` tag is serialised as `snake_case` so the frontend can
+/// discriminate via `entry.kind === 'folder' | 'track'`.
+///
+/// `path` is the absolute filesystem path of the entry. `segment` is
+/// the last path component for display. For folder rows,
+/// `track_count_under` is the recursive count of `local_tracks`
+/// matching `file_path LIKE path || '/%'`. `artwork` is an optional
+/// thumbnail path lifted from any track in the subtree (best-effort,
+/// not guaranteed to be the album cover).
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum FolderTreeEntry {
+    Folder {
+        path: String,
+        segment: String,
+        track_count_under: u32,
+        artwork: Option<String>,
+    },
+    Track {
+        path: String,
+        segment: String,
+    },
 }
 
 /// Information about an artist's image

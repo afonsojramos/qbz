@@ -63,6 +63,15 @@ export interface PlayingTrack {
   originalBitDepth?: number;
   originalSamplingRate?: number;
   parental_warning?: boolean;
+  /** Start of this track inside the underlying audio file (CUE virtual
+   * tracks). When set, the seekbar subtracts it from event.position so
+   * the displayed elapsed/remaining are relative to the virtual track,
+   * not the entire FLAC. */
+  cueStartSecs?: number;
+  /** End of this track inside the underlying audio file. When set with
+   * cueStartSecs, drives the seekbar's max (= end - start) instead of
+   * the full file duration. */
+  cueEndSecs?: number;
 }
 
 interface BackendPlaybackState {
@@ -72,6 +81,16 @@ interface BackendPlaybackState {
   track_id: number;
   volume: number;
 }
+
+// Mirrors EPHEMERAL_ID_FLOOR in src-tauri/src/ephemeral_library/mod.rs.
+// Track ids at or above this value are synthetic ids from the in-memory
+// ephemeral cache, not DB rows; the playback logic special-cases them
+// in a couple of places (gapless transition is_playing carve-out, CUE
+// virtual-track position translation).
+// 2 ** 48 (NOT 1 << 48 — JavaScript bitwise shift is 32-bit, 1 << 48
+// silently truncates to 65536 and every Qobuz track ends up classified
+// as ephemeral, suppressing favorites and breaking session save).
+const EPHEMERAL_ID_FLOOR = 2 ** 48;
 
 /**
  * Bit-perfect mode of the active audio stream, reported by the Rust backend.
@@ -149,6 +168,25 @@ let currentTrack: PlayingTrack | null = null;
 let isPlaying = false;
 let currentTime = 0;
 let duration = 0;
+
+// Wall-clock anchor for currentTime extrapolation. The Rust backend emits
+// position events at 250ms cadence — at 60Hz rAF, getCurrentTime() would
+// otherwise return a staircase that's frozen for ~15 frames between
+// updates, causing karaoke lyrics to start "midway" (detection lag) and
+// to end before the gradient reaches the end (final-segment cutoff).
+//
+// We anchor (audio position, wall clock) on every event-driven update,
+// then extrapolate forward at 1x while playing. Backend position is
+// already wall-clock-based on the Rust side (see lib.rs comment near the
+// 250ms emit loop), so JS extrapolation does the same math the backend
+// is doing — no semantic divergence, just finer time resolution.
+let positionAnchorWallClockMs = 0;
+let positionAnchorSecs = 0;
+
+function anchorPosition(secs: number): void {
+  positionAnchorSecs = secs;
+  positionAnchorWallClockMs = performance.now();
+}
 let volume = loadPersistedVolume();
 let preMuteVolume: number | null = null; // Volume before mute, null when not muted
 let isFavorite = false;
@@ -222,7 +260,15 @@ export function getIsPlaying(): boolean {
 }
 
 export function getCurrentTime(): number {
-  return currentTime;
+  // When paused or before the first anchor, return the stored value
+  // (which is what listeners last persisted). While playing, extrapolate
+  // from the anchor at 1x audio rate.
+  if (!isPlaying || positionAnchorWallClockMs === 0) return currentTime;
+  const elapsedSecs = (performance.now() - positionAnchorWallClockMs) / 1000;
+  // Cap extrapolation at 1s to bound drift if the backend stops emitting
+  // (network stall on cast, suspended audio thread). After the cap, we
+  // freeze at the last + cap rather than runway indefinitely.
+  return positionAnchorSecs + Math.min(elapsedSecs, 1);
 }
 
 export function getDuration(): number {
@@ -302,6 +348,43 @@ export function getPlayerState(): PlayerState {
 // ============ Track Actions ============
 
 /**
+ * Attach CUE virtual-track boundary info to the current track. Called
+ * by views that know about CUE structure (today: LocalLibraryView for
+ * ephemeral CUE folders) so the seekbar position/duration can be
+ * recomputed against the virtual track instead of the whole audio
+ * file. Pass `null` for both args to clear.
+ */
+export function patchCurrentTrackCueInfo(
+  startSecs: number | null,
+  endSecs: number | null
+): void {
+  if (!currentTrack) return;
+  const nextStart = startSecs != null ? startSecs : undefined;
+  const nextEnd = endSecs != null ? endSecs : undefined;
+  // Skip work if nothing changed; prevents unnecessary listener spam
+  // since the LocalLibraryView $effect that calls this fires on every
+  // activeTrackId tick.
+  if (currentTrack.cueStartSecs === nextStart && currentTrack.cueEndSecs === nextEnd) {
+    return;
+  }
+  currentTrack = {
+    ...currentTrack,
+    cueStartSecs: nextStart,
+    cueEndSecs: nextEnd,
+  };
+  // Recompute the displayed duration: virtual track length when both
+  // boundaries are known, otherwise fall back to the track's intrinsic
+  // duration field (which is already the CUE virtual duration coming
+  // from cue_to_tracks anyway, but keep the dual-source for robustness).
+  if (nextStart != null && nextEnd != null) {
+    duration = Math.max(0, nextEnd - nextStart);
+  } else {
+    duration = currentTrack.duration;
+  }
+  notifyListeners();
+}
+
+/**
  * Set the current track (called when starting playback)
  * Preserves original quality values for comparison with actual stream
  */
@@ -315,11 +398,13 @@ export function setCurrentTrack(track: PlayingTrack | null): void {
     };
     duration = track.duration;
     currentTime = 0;
+    anchorPosition(0);
     queueEnded = false;
   } else {
     currentTrack = null;
     duration = 0;
     currentTime = 0;
+    anchorPosition(0);
   }
   notifyListeners();
 }
@@ -356,6 +441,16 @@ export function setQueueEnded(ended: boolean): void {
  */
 export function setPendingSessionRestore(trackId: number, positionSecs?: number): void {
   pendingSessionRestore = { trackId, positionSecs };
+  // Pre-position the seekbar at the saved offset so the visual state
+  // reflects "paused at X" from the moment the app opens, instead of
+  // sitting at 0:00 until the user hits play. The backend hasn't
+  // loaded the track yet, but currentTime is the source for the
+  // seekbar render — when togglePlay eventually fires it'll already be
+  // anchored to the same position the backend resumes at.
+  if (positionSecs && positionSecs > 0) {
+    currentTime = positionSecs;
+    notifyListeners();
+  }
   console.log(
     '[Player] Set pending session restore:',
     trackId,
@@ -446,30 +541,57 @@ export async function togglePlay(): Promise<void> {
           if (result.bit_depth && result.bit_depth > 0) {
             currentTrack.bitDepth = result.bit_depth;
           }
+          // Plex loads via Symphonia just like a local file — Seek
+          // works once the engine is up.
+          if (restorePosition > 1) {
+            pendingSeekPosition = restorePosition;
+            void flushPendingSeek();
+          }
         } else if (currentTrack.isLocal || currentTrack.id < 0) {
-          // Local filesystem track
+          // Local filesystem track. Apply the user's saved playback
+          // position (#317 opt-in) via the seek path — local tracks
+          // load full audio data into the player, so Seek works as soon
+          // as the engine is up.
           const localTrackId = Math.abs(currentTrack.id);
           await invoke('v2_library_play_track', { trackId: localTrackId });
+          if (restorePosition > 1) {
+            pendingSeekPosition = restorePosition;
+            void flushPendingSeek();
+          }
         } else {
-          // Qobuz track - use v2_play_track. Pass duration so the
+          // Qobuz track session restore (#315 within-track resume).
+          // Play from the start: v2_play_track serves a cache hit
+          // instantly or streams from byte 0. Pass duration so the
           // streaming backend's current_position() doesn't clamp to 0
           // (the value flows into thread_state.duration and seekbar
           // progress is capped by .min(duration)).
-          await cmdPlayTrack(
+          //
+          // Resume the saved offset ONLY on a cache hit (format_id ===
+          // null): the audio is then a full in-memory buffer
+          // (current_audio_data) so the Seek handler lands, exactly
+          // like a local file. On a cache miss the track streams via
+          // CMAF — seeking mid-track would block on the buffer filling
+          // sequentially from byte 0, far too slow to feel like a
+          // feature, so we deliberately start fresh from 0:00.
+          const result = (await cmdPlayTrack(
             currentTrack.id,
             getStreamingQuality(),
             currentTrack.duration ? Math.round(currentTrack.duration) : null,
-          );
-        }
-
-        // Apply the user's saved playback position (#317 opt-in).
-        // Queue via the existing pendingSeekPosition / flushPendingSeek
-        // path so the seek runs against an already-loaded stream and
-        // honors the in-flight guard. If the position is at or near 0,
-        // skip — the load already starts there.
-        if (restorePosition > 1) {
-          pendingSeekPosition = restorePosition;
-          void flushPendingSeek();
+            null,
+            null,
+          )) as { format_id?: number | null } | null | undefined;
+          const servedFromCache = result != null && result.format_id === null;
+          if (restorePosition > 1 && servedFromCache) {
+            pendingSeekPosition = restorePosition;
+            void flushPendingSeek();
+          } else if (restorePosition > 1) {
+            // Cache miss — undo the seekbar pre-anchor (setPendingSessionRestore
+            // pre-set currentTime to the saved offset) so the bar matches
+            // the actual start at 0:00 instead of flashing the saved time.
+            currentTime = 0;
+            anchorPosition(0);
+            notifyListeners();
+          }
         }
 
       } else {
@@ -500,6 +622,7 @@ export function setIsPlaying(playing: boolean): void {
 export async function seek(position: number): Promise<void> {
   const clampedPosition = Math.max(0, Math.min(duration, position));
   currentTime = clampedPosition;
+  anchorPosition(clampedPosition);
   notifyListeners();
 
   try {
@@ -596,6 +719,7 @@ export async function stop(): Promise<void> {
     isPlaying = false;
     currentTrack = null;
     currentTime = 0;
+    anchorPosition(0);
     duration = 0;
     gaplessAttemptTrackId = null;
     gaplessRequestInFlight = false;
@@ -686,11 +810,22 @@ async function handlePlaybackEvent(event: PlaybackEvent): Promise<void> {
   // Skip when remote control mode is active — external service controls transitions.
   // Requires gaplessAttemptedForCurrent so external track changes fall through
   // to the "track changed externally" block (which actually updates currentTrack).
+  //
+  // Ephemeral tracks (id >= 2^48) skip the `event.is_playing` requirement.
+  // The audio engine briefly reports `is_playing=false` during the swap
+  // between two ephemeral file-data buffers, and that transient state
+  // arrives BEFORE the player can flip is_playing back to true. Without
+  // this carve-out the event misclassifies as an external change, the
+  // queue's current_index hasn't advanced (it's a separate state machine),
+  // and the UI freezes on the previous track. Qobuz/Plex tracks don't
+  // see this race because their playback path keeps is_playing pinned
+  // through the streaming buffer transition.
+  const isEphemeralTransition = event.track_id >= EPHEMERAL_ID_FLOOR;
   const isGaplessTransition = !remoteControlMode
     && event.track_id !== 0
     && currentTrack
     && event.track_id !== currentTrack.id
-    && event.is_playing
+    && (event.is_playing || isEphemeralTransition)
     && event.gapless_next_track_id === 0
     && gaplessAttemptedForCurrent
     && onGaplessTransition;
@@ -739,6 +874,7 @@ async function handlePlaybackEvent(event: PlaybackEvent): Promise<void> {
         duration = queueTrack.duration_secs;
         // Update playback state from event
         currentTime = event.position;
+        anchorPosition(event.position);
         isPlaying = event.is_playing;
         // Sync volume from backend
         volume = Math.round(event.volume * 100);
@@ -787,14 +923,35 @@ async function handlePlaybackEvent(event: PlaybackEvent): Promise<void> {
     return;
   }
 
+  // CUE virtual tracks share an underlying audio file with each other
+  // (one FLAC, multiple cue slices). After a boundary auto-advance, the
+  // player still emits events with the FIRST slice's track_id while the
+  // displayed currentTrack has moved on to a later virtual track. Accept
+  // those events as belonging to the same logical playback as long as
+  // both ids are in the ephemeral range — within a session that means
+  // they share the same source file, so position is meaningful when
+  // adjusted by the displayed virtual track's cueStartSecs.
+  const isCueVirtualUnderlying =
+    currentTrack.cueStartSecs != null
+    && event.track_id !== currentTrack.id
+    && event.track_id >= EPHEMERAL_ID_FLOOR
+    && currentTrack.id >= EPHEMERAL_ID_FLOOR;
+
   // Update playback state if track matches
-  if (event.track_id === currentTrack.id) {
+  if (event.track_id === currentTrack.id || isCueVirtualUnderlying) {
+    // Translate the player's absolute position into the displayed
+    // (virtual) position when the current track is a CUE virtual slice.
+    // Without the offset, a CUE track that lives at e.g. 7:26 inside the
+    // FLAC would surface 7:26 / 0:00 on the seekbar from frame zero.
+    const cueOffset = currentTrack.cueStartSecs ?? 0;
+    const toDisplayed = (raw: number) => Math.max(0, raw - cueOffset);
     const now = Date.now();
     const seekGuardActive = seekTargetPosition !== null && now < seekGuardUntilMs;
     if (seekGuardActive) {
       const target = seekTargetPosition;
       if (target === null) {
-        currentTime = event.position;
+        currentTime = toDisplayed(event.position);
+        anchorPosition(currentTime);
         isPlaying = event.is_playing;
         return;
       }
@@ -802,7 +959,8 @@ async function handlePlaybackEvent(event: PlaybackEvent): Promise<void> {
       if (delta <= SEEK_SETTLE_TOLERANCE_SECS) {
         seekTargetPosition = null;
         seekGuardUntilMs = 0;
-        currentTime = event.position;
+        currentTime = toDisplayed(event.position);
+        anchorPosition(currentTime);
       } else {
         // Ignore stale position updates briefly after seek to avoid UI snap-back.
       }
@@ -811,7 +969,8 @@ async function handlePlaybackEvent(event: PlaybackEvent): Promise<void> {
         seekTargetPosition = null;
         seekGuardUntilMs = 0;
       }
-      currentTime = event.position;
+      currentTime = toDisplayed(event.position);
+      anchorPosition(currentTime);
     }
     isPlaying = event.is_playing;
 
@@ -933,6 +1092,7 @@ export async function startPolling(): Promise<void> {
         const castPos = getCastPosition();
         if (castPos.positionSecs !== currentTime) {
           currentTime = castPos.positionSecs;
+          anchorPosition(castPos.positionSecs);
           notifyListeners();
         }
       }
@@ -983,6 +1143,7 @@ export function reset(): void {
   currentTrack = null;
   isPlaying = false;
   currentTime = 0;
+  anchorPosition(0);
   duration = 0;
   isFavorite = false;
   isAdvancingTrack = false;

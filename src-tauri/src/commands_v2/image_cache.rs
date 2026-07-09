@@ -1,4 +1,23 @@
+use std::sync::OnceLock;
 use tauri::State;
+
+/// Shared blocking HTTP client for image downloads.
+///
+/// Discover (and any grid view) loads dozens of images at once, each through
+/// `v2_get_cached_image`. Building a fresh `reqwest::blocking::Client` per image
+/// opens a new connection pool + file descriptors every time and exhausts the
+/// process fd limit — the `Os { code: 24, "Too many open files" }` (EMFILE)
+/// panic seen in `Client::new()`. One reused client fixes the leak and enables
+/// connection keep-alive across downloads.
+fn image_http_client() -> &'static reqwest::blocking::Client {
+    static CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::blocking::Client::builder()
+            .pool_max_idle_per_host(4)
+            .build()
+            .expect("failed to build shared image HTTP client")
+    })
+}
 
 /// Download an image via reqwest (rustls) and write to a temp file.
 /// Returns a file:// URL that WebKit can load without needing system TLS.
@@ -6,7 +25,7 @@ use tauri::State;
 async fn download_image_to_temp(url: &str) -> Result<String, String> {
     let url_owned = url.to_string();
     let bytes = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
-        let response = reqwest::blocking::Client::new()
+        let response = image_http_client()
             .get(&url_owned)
             .timeout(std::time::Duration::from_secs(10))
             .send()
@@ -110,7 +129,7 @@ pub async fn v2_get_cached_image(
     // Download the image via reqwest (uses rustls — own CA bundle)
     let url_clone = url.clone();
     let bytes = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
-        let response = reqwest::blocking::Client::new()
+        let response = image_http_client()
             .get(&url_clone)
             .timeout(std::time::Duration::from_secs(10))
             .send()

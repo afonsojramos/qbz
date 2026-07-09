@@ -9,8 +9,8 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use qconnect_app::{
-    QConnectQueueState, QConnectRendererState, QconnectApp, QueueCommandType, RendererReport,
-    RendererReportType,
+    QConnectQueueState, QConnectRendererState, QconnectApp, QconnectAppEvent, QconnectEventSink,
+    QueueCommandType, RendererReport, RendererReportType,
 };
 use qconnect_transport_ws::{NativeWsTransport, WsTransportConfig};
 use serde_json::{json, Value};
@@ -30,11 +30,10 @@ use super::queue_resolution::{
 use super::session::{
     build_effective_renderer_snapshot, build_visible_queue_projection,
     ensure_session_renderer_state, is_local_renderer_active, is_peer_renderer_active,
-    QconnectFileAudioQualitySnapshot,
+    renderer_allows_remote_volume, QconnectFileAudioQualitySnapshot,
 };
 use super::transport::{
-    default_qconnect_device_info, default_qconnect_device_info_with_name, hex_preview,
-    load_persisted_device_name,
+    default_qconnect_device_info, default_qconnect_device_info_with_name, load_persisted_device_name,
 };
 use super::{
     qconnect_now_ms, QconnectConnectionStatus, QconnectJoinSessionRequest,
@@ -45,7 +44,11 @@ use super::{
     PLAYING_STATE_STOPPED,
 };
 
-const JOIN_SESSION_REASON_CONTROLLER_REQUEST: i32 = 1;
+/// `deferred_join_reason` and `should_reask_queue_state` now live in the
+/// frontend-agnostic `qconnect_app::session` module; the session loop that
+/// consumed them now lives in `qconnect_app::QconnectApp::run_session_loop`
+/// (slice 5), so they are no longer referenced on the Tauri side.
+
 const QCONNECT_PLAY_TRACK_HANDOFF_WAIT_MS: u64 = 1_500;
 const QCONNECT_PLAY_TRACK_HANDOFF_POLL_MS: u64 = 50;
 
@@ -64,22 +67,10 @@ struct QconnectServiceInner {
     /// loop. See `QconnectLifecycleState` (issue #358).
     lifecycle_state: QconnectLifecycleState,
 }
-fn queue_payload_track_preview(payload: &Value, key: &str) -> Vec<i64> {
-    payload
-        .get(key)
-        .and_then(Value::as_array)
-        .map(|tracks| {
-            tracks
-                .iter()
-                .filter_map(|track| track.get("track_id").and_then(Value::as_i64))
-                .take(8)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default()
-}
+
 async fn update_lifecycle_state_if_running(
     inner: &Arc<Mutex<QconnectServiceInner>>,
-    app_handle: &AppHandle,
+    sink: &TauriQconnectEventSink,
     next: QconnectLifecycleState,
 ) {
     let mut guard = inner.lock().await;
@@ -91,16 +82,19 @@ async fn update_lifecycle_state_if_running(
     }
     guard.lifecycle_state = next;
     drop(guard);
-    let serialized = serde_json::to_value(next).unwrap_or_else(|_| json!("unknown"));
-    let _ = app_handle.emit(
-        "qconnect:status_changed",
-        json!({
-            "state": serialized,
-        }),
-    );
+    // Slice 3: route through the event sink. The sink's `LifecycleChanged` arm
+    // emits `qconnect:status_changed` with `{state}` — byte-identical to the
+    // prior raw emit here.
+    sink.on_event(QconnectAppEvent::LifecycleChanged { state: next })
+        .await;
 }
 
-fn emit_qconnect_diagnostic(app_handle: &AppHandle, channel: &str, level: &str, payload: Value) {
+pub(super) fn emit_qconnect_diagnostic(
+    app_handle: &AppHandle,
+    channel: &str,
+    level: &str,
+    payload: Value,
+) {
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis() as u64)
@@ -117,6 +111,82 @@ fn emit_qconnect_diagnostic(app_handle: &AppHandle, channel: &str, level: &str, 
         log::warn!("[QConnect] Failed to emit diagnostic {channel}: {err}");
     }
 }
+/// Tauri-side implementation of the shared session-loop seams (slice 5). Holds
+/// the adapter handles the loop reaches back into: the service runtime
+/// (lifecycle gating + reconnect-exhausted teardown), the sync accumulator +
+/// app_handle (renderer join + its CoreBridge duration read), and the sink
+/// (lifecycle emit). `QconnectApp::run_session_loop` owns the control flow.
+struct TauriSessionLoopHost {
+    app: Arc<QconnectApp<NativeWsTransport, TauriQconnectEventSink>>,
+    sync_state: Arc<Mutex<QconnectRemoteSyncState>>,
+    inner: Arc<Mutex<QconnectServiceInner>>,
+    sink: Arc<TauriQconnectEventSink>,
+    app_handle: AppHandle,
+}
+
+#[async_trait::async_trait]
+impl qconnect_app::SessionLoopHost for TauriSessionLoopHost {
+    async fn update_lifecycle(&self, state: QconnectLifecycleState) {
+        update_lifecycle_state_if_running(&self.inner, &self.sink, state).await;
+    }
+
+    async fn bootstrap_after_reconnect(&self) {
+        if let Err(err) = bootstrap_remote_presence(&self.app, None).await {
+            log::error!("[QConnect] Re-bootstrap after reconnect failed: {err}");
+        }
+    }
+
+    async fn deferred_renderer_join(&self, session_uuid: String, reason: i32) {
+        deferred_renderer_join(
+            &self.app,
+            &self.sync_state,
+            &self.app_handle,
+            &session_uuid,
+            reason,
+        )
+        .await;
+    }
+
+    async fn on_reconnect_exhausted(
+        &self,
+        attempts: u32,
+        last_reason: String,
+        idle_retry_active: bool,
+    ) -> bool {
+        // Surface the Exhausted lifecycle in both modes. The difference is what
+        // happens to the runtime + event loop afterwards.
+        {
+            let mut guard = self.inner.lock().await;
+            guard.lifecycle_state = QconnectLifecycleState::Exhausted;
+            guard.last_error = Some(format!(
+                "Reconnect attempts exhausted ({attempts}): {last_reason}"
+            ));
+            if !idle_retry_active {
+                // Legacy terminate path: take the runtime out so a fresh
+                // user-initiated connect() succeeds. Dropping it detaches this
+                // task's own JoinHandle (fine — the loop breaks right after) (#358).
+                guard.runtime = None;
+            }
+            // gap #7 (idle_retry_active): leave the runtime in place; the
+            // transport is idling and will re-arm, and the loop keeps consuming.
+        }
+        let _ = self.app_handle.emit(
+            "qconnect:status_changed",
+            json!({
+                "state": "exhausted",
+                "reason": "max_reconnect_attempts_exceeded",
+                "attempts": attempts,
+                "last_reason": last_reason,
+            }),
+        );
+        !idle_retry_active
+    }
+
+    async fn on_loop_error(&self, message: String) {
+        let _ = self.app_handle.emit("qconnect:error", &message);
+    }
+}
+
 pub struct QconnectServiceState {
     inner: Arc<Mutex<QconnectServiceInner>>,
     pub(super) custom_device_name: Arc<tokio::sync::RwLock<Option<String>>>,
@@ -164,8 +234,16 @@ impl QconnectServiceState {
             app_handle: app_handle.clone(),
             core_bridge,
             sync_state: Arc::clone(&sync_state),
+            app: Arc::new(std::sync::OnceLock::new()),
         });
-        let app = Arc::new(QconnectApp::new(transport, sink));
+        let app = Arc::new(QconnectApp::new(
+            transport,
+            Arc::clone(&sink),
+            Arc::clone(&sync_state),
+        ));
+        // P1-6: wire the owning app into the sink so it can emit reports
+        // (e.g. is_active=true after SetActive(true)).
+        sink.set_app(&app);
 
         if let Err(err) = app.connect(config.clone()).await {
             // Don't leak `lifecycle_state = Connecting` with `runtime = None`
@@ -178,250 +256,34 @@ impl QconnectServiceState {
             return Err(msg);
         }
 
-        let mut transport_rx = app.subscribe_transport_events();
+        // Subscribe to transport events SYNCHRONOUSLY here — after app.connect()
+        // returns and BEFORE the spawn / any further await — so the receiver is
+        // live before the WS handshake emits Connected / Subscribed /
+        // SessionEstablished / SESSION_STATE. NativeWsTransport::connect spawns
+        // the WS loop and returns without awaiting the handshake, and tokio
+        // broadcast has no replay, so a receiver created later inside the spawned
+        // loop would race those initial events and silently drop them (a lost
+        // SessionEstablished leaves the UI stuck Connecting; a lost SESSION_STATE
+        // skips the deferred renderer join).
+        let transport_rx = app.subscribe_transport_events();
+        let idle_retry_active = config.reconnect_idle_retry_ms > 0;
+        // The session/liveness/diagnostic emits route THROUGH the event sink
+        // (Slice 3); the adapter-coupled seams (lifecycle gating, reconnect-
+        // exhausted teardown, controller bootstrap, renderer join, raw error)
+        // go through the SessionLoopHost. The Svelte wire surface stays
+        // byte-identical. The shared loop lives in qconnect-app (slice 5).
+        let host: Arc<dyn qconnect_app::SessionLoopHost> = Arc::new(TauriSessionLoopHost {
+            app: Arc::clone(&app),
+            sync_state: Arc::clone(&sync_state),
+            inner: Arc::clone(&self.inner),
+            sink: Arc::clone(&sink),
+            app_handle: app_handle.clone(),
+        });
         let app_for_loop = Arc::clone(&app);
-        let app_for_errors = app_handle.clone();
-        let inner_for_loop = Arc::clone(&self.inner);
-        let app_handle_for_status = app_handle.clone();
-
         let event_loop = tauri::async_runtime::spawn(async move {
-            log::info!("[QConnect/EventLoop] Started listening for transport events");
-            let mut renderer_joined = false;
-            let mut has_disconnected = false;
-            loop {
-                match transport_rx.recv().await {
-                    Ok(event) => {
-                        // Check for SESSION_STATE to trigger deferred renderer join
-                        if !renderer_joined {
-                            if let qconnect_transport_ws::TransportEvent::InboundQueueServerEvent(
-                                ref evt,
-                            ) = event
-                            {
-                                if evt.message_type() == "MESSAGE_TYPE_SRVR_CTRL_SESSION_STATE" {
-                                    if let Some(session_uuid) =
-                                        evt.payload.get("session_uuid").and_then(|v| v.as_str())
-                                    {
-                                        renderer_joined = true;
-                                        deferred_renderer_join(&app_for_loop, session_uuid).await;
-                                    } else {
-                                        log::warn!("[QConnect] SESSION_STATE received but no session_uuid in payload: {}", evt.payload);
-                                    }
-                                }
-                            }
-                        }
-                        match &event {
-                            qconnect_transport_ws::TransportEvent::Connected => {
-                                log::info!("[QConnect/Transport] WebSocket connected");
-                            }
-                            qconnect_transport_ws::TransportEvent::Disconnected => {
-                                log::warn!("[QConnect/Transport] WebSocket disconnected — resetting renderer_joined flag");
-                                renderer_joined = false;
-                                has_disconnected = true;
-                                // Surface "Reconnecting" to the UI, but only if
-                                // we're not in a teardown path (Off/Exhausted).
-                                // The reconnect loop will keep retrying until
-                                // SessionEstablished or MaxReconnectAttemptsExceeded.
-                                update_lifecycle_state_if_running(
-                                    &inner_for_loop,
-                                    &app_handle_for_status,
-                                    QconnectLifecycleState::Reconnecting,
-                                )
-                                .await;
-                            }
-                            qconnect_transport_ws::TransportEvent::Authenticated => {
-                                log::info!("[QConnect/Transport] Authenticated with JWT");
-                            }
-                            qconnect_transport_ws::TransportEvent::Subscribed => {
-                                log::info!("[QConnect/Transport] Subscribed to channels");
-                                // Re-bootstrap only after a reconnection (not on initial connect,
-                                // where connect() already calls bootstrap_remote_presence).
-                                if has_disconnected {
-                                    log::info!("[QConnect] Re-bootstrapping after reconnect...");
-                                    if let Err(err) = bootstrap_remote_presence(&app_for_loop, None).await {
-                                        log::error!("[QConnect] Re-bootstrap after reconnect failed: {err}");
-                                    }
-                                }
-                            }
-                            qconnect_transport_ws::TransportEvent::KeepalivePingSent => {
-                                log::debug!("[QConnect/Transport] Keepalive ping sent");
-                            }
-                            qconnect_transport_ws::TransportEvent::KeepalivePongReceived => {
-                                log::debug!("[QConnect/Transport] Keepalive pong received");
-                            }
-                            qconnect_transport_ws::TransportEvent::ReconnectScheduled {
-                                attempt,
-                                backoff_ms,
-                                reason,
-                            } => {
-                                log::warn!("[QConnect/Transport] Reconnect scheduled: attempt={} backoff={}ms reason={}", attempt, backoff_ms, reason);
-                            }
-                            qconnect_transport_ws::TransportEvent::InboundQueueServerEvent(evt) => {
-                                log::info!(
-                                    "[QConnect] <-- Inbound queue event: {} payload={}",
-                                    evt.message_type(),
-                                    evt.payload
-                                );
-                                emit_qconnect_diagnostic(
-                                    &app_for_errors,
-                                    "qconnect:inbound_queue_event",
-                                    "info",
-                                    json!({
-                                        "message_type": evt.message_type(),
-                                        "action_uuid": evt.action_uuid.clone(),
-                                        "queue_version": evt.queue_version,
-                                        "track_count": evt.payload.get("tracks").and_then(|value| value.as_array()).map(|tracks| tracks.len()).unwrap_or(0),
-                                        "autoplay_track_count": evt.payload.get("autoplay_tracks").and_then(|value| value.as_array()).map(|tracks| tracks.len()).unwrap_or(0),
-                                        "preview_track_ids": queue_payload_track_preview(&evt.payload, "tracks"),
-                                        "preview_autoplay_track_ids": queue_payload_track_preview(&evt.payload, "autoplay_tracks"),
-                                    }),
-                                );
-                            }
-                            qconnect_transport_ws::TransportEvent::InboundRendererServerCommand(
-                                cmd,
-                            ) => {
-                                log::info!(
-                                    "[QConnect] <-- Inbound renderer command: {} payload={}",
-                                    cmd.message_type(),
-                                    cmd.payload
-                                );
-                            }
-                            qconnect_transport_ws::TransportEvent::InboundFrameDecoded {
-                                cloud_message_type,
-                                payload_size,
-                            } => {
-                                log::info!(
-                                    "[QConnect/Transport] <-- Frame decoded: cloud_type={} size={}",
-                                    cloud_message_type,
-                                    payload_size
-                                );
-                            }
-                            qconnect_transport_ws::TransportEvent::InboundPayloadBytes {
-                                cloud_message_type,
-                                payload,
-                            } => {
-                                log::info!("[QConnect/Transport] <-- Payload bytes: cloud_type={} len={} hex={}", cloud_message_type, payload.len(), hex_preview(payload, 64));
-                            }
-                            qconnect_transport_ws::TransportEvent::OutboundSent {
-                                message_type,
-                                action_uuid,
-                            } => {
-                                log::info!(
-                                    "[QConnect/Transport] --> Outbound sent: {} uuid={}",
-                                    message_type,
-                                    action_uuid
-                                );
-                            }
-                            qconnect_transport_ws::TransportEvent::TransportError {
-                                stage,
-                                message,
-                            } => {
-                                log::error!(
-                                    "[QConnect/Transport] Error: stage={} message={}",
-                                    stage,
-                                    message
-                                );
-                            }
-                            qconnect_transport_ws::TransportEvent::CloudError {
-                                msg_id,
-                                code,
-                                descr,
-                            } => {
-                                log::warn!(
-                                    "[QConnect/Transport] Cloud rejected session: msg_id={} code={} descr={:?} (issue #358)",
-                                    msg_id,
-                                    code,
-                                    descr
-                                );
-                                emit_qconnect_diagnostic(
-                                    &app_for_errors,
-                                    "qconnect:cloud_error",
-                                    "warning",
-                                    json!({
-                                        "msg_id": msg_id,
-                                        "code": code,
-                                        "descr": descr,
-                                    }),
-                                );
-                            }
-                            qconnect_transport_ws::TransportEvent::InboundReceived(_envelope) => {
-                                log::info!(
-                                    "[QConnect/Transport] <-- InboundReceived (JSON envelope)"
-                                );
-                            }
-                            qconnect_transport_ws::TransportEvent::SessionEstablished => {
-                                log::info!(
-                                    "[QConnect/Transport] Session established — backoff counters reset"
-                                );
-                                update_lifecycle_state_if_running(
-                                    &inner_for_loop,
-                                    &app_handle_for_status,
-                                    QconnectLifecycleState::Connected,
-                                )
-                                .await;
-                            }
-                            qconnect_transport_ws::TransportEvent::MaxReconnectAttemptsExceeded {
-                                attempts,
-                                last_reason,
-                            } => {
-                                log::error!(
-                                    "[QConnect/Transport] Max reconnect attempts exceeded: attempts={} last_reason={}",
-                                    attempts,
-                                    last_reason
-                                );
-                                emit_qconnect_diagnostic(
-                                    &app_for_errors,
-                                    "qconnect:max_reconnect_attempts_exceeded",
-                                    "error",
-                                    json!({
-                                        "attempts": attempts,
-                                        "last_reason": last_reason,
-                                    }),
-                                );
-                                // Auto-stop the runtime: the transport loop
-                                // already broke (Exhausted), so no more events
-                                // will fire. Take the runtime out so a fresh
-                                // user-initiated `connect()` succeeds, mark the
-                                // lifecycle as Exhausted with the cloud-side
-                                // reason, and exit the event loop. The runtime
-                                // we just dropped owns this very task's
-                                // JoinHandle — that's fine, dropping a handle
-                                // detaches; we then `break` so the task ends
-                                // naturally (issue #358).
-                                let mut guard = inner_for_loop.lock().await;
-                                guard.lifecycle_state = QconnectLifecycleState::Exhausted;
-                                guard.last_error = Some(format!(
-                                    "Reconnect attempts exhausted ({attempts}): {last_reason}"
-                                ));
-                                guard.runtime = None;
-                                drop(guard);
-                                let _ = app_handle_for_status.emit(
-                                    "qconnect:status_changed",
-                                    json!({
-                                        "state": "exhausted",
-                                        "reason": "max_reconnect_attempts_exceeded",
-                                        "attempts": attempts,
-                                        "last_reason": last_reason,
-                                    }),
-                                );
-                                break;
-                            }
-                        }
-                        if let Err(err) = app_for_loop.handle_transport_event(event).await {
-                            let message = format!("qconnect app transport handling error: {err}");
-                            log::error!("{message}");
-                            let _ = app_for_errors.emit("qconnect:error", &message);
-                        }
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                        log::warn!("[QConnect] Transport event lagged by {skipped} messages");
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                        log::warn!("[QConnect/EventLoop] Transport channel closed, stopping");
-                        break;
-                    }
-                }
-            }
-            log::info!("[QConnect/EventLoop] Stopped");
+            app_for_loop
+                .run_session_loop(host, transport_rx, idle_retry_active)
+                .await;
         });
 
         let runtime = QconnectRuntime {
@@ -733,40 +595,38 @@ impl QconnectServiceState {
         queue_version: qconnect_app::QueueVersion,
         audio_quality: QconnectFileAudioQualitySnapshot,
     ) -> Result<bool, String> {
-        let (app, sync_state) = {
+        let app = {
             let guard = self.inner.lock().await;
             let Some(runtime) = guard.runtime.as_ref() else {
                 return Err("QConnect service is not running".to_string());
             };
-            (Arc::clone(&runtime.app), Arc::clone(&runtime.sync_state))
+            Arc::clone(&runtime.app)
         };
-
-        {
-            let state = sync_state.lock().await;
-            if state.last_reported_file_audio_quality == Some(audio_quality) {
-                return Ok(false);
-            }
-        }
-
-        let report = RendererReport::new(
-            RendererReportType::RndrSrvrFileAudioQualityChanged,
-            Uuid::new_v4().to_string(),
-            queue_version,
-            serde_json::json!({
-                "sampling_rate": audio_quality.sampling_rate,
-                "bit_depth": audio_quality.bit_depth,
-                "nb_channels": audio_quality.nb_channels,
-                "audio_quality": audio_quality.audio_quality
-            }),
-        );
-
-        app.send_renderer_report_command(report)
+        // Dedup + report build + send live in qconnect-app (slice 6, step 7);
+        // `runtime.app` shares the very sync Mutex this used to lock directly.
+        app.report_file_audio_quality_if_changed(queue_version, audio_quality)
             .await
-            .map_err(|err| format!("send file audio quality report failed: {err}"))?;
+    }
 
-        let mut state = sync_state.lock().await;
-        state.last_reported_file_audio_quality = Some(audio_quality);
-        Ok(true)
+    /// Emit a RndrSrvrDeviceAudioQualityChanged(27) report describing the actual
+    /// DAC output format (sampling_rate / bit_depth / nb_channels), deduped against
+    /// the last reported value. Returns Ok(true) when a report was sent.
+    pub(super) async fn report_device_audio_quality_if_changed(
+        &self,
+        queue_version: qconnect_app::QueueVersion,
+        sampling_rate: i32,
+        bit_depth: i32,
+        nb_channels: i32,
+    ) -> Result<bool, String> {
+        let app = {
+            let guard = self.inner.lock().await;
+            let Some(runtime) = guard.runtime.as_ref() else {
+                return Err("QConnect service is not running".to_string());
+            };
+            Arc::clone(&runtime.app)
+        };
+        app.report_device_audio_quality_if_changed(queue_version, sampling_rate, bit_depth, nb_channels)
+            .await
     }
 
     /// Update the renderer's internal position from the frontend's actual playback position.
@@ -1337,6 +1197,24 @@ impl QconnectServiceState {
             return Ok(false);
         };
 
+        // P1-5: respect the active renderer's volume_remote_control capability.
+        // Absent => allowed. Only an explicit non-ALLOWED value disables.
+        if let Some(active_id) = session.active_renderer_id {
+            if let Some(info) = session
+                .renderers
+                .iter()
+                .find(|r| r.renderer_id == active_id)
+            {
+                if !renderer_allows_remote_volume(info) {
+                    log::info!(
+                        "[QConnect] set_volume_if_remote short-circuited: renderer {active_id} disallows remote volume"
+                    );
+                    // Handled (no-op): the frontend must NOT fall back to local.
+                    return Ok(true);
+                }
+            }
+        }
+
         let payload = serde_json::to_value(QconnectSetVolumeRequest {
             renderer_id: session.active_renderer_id,
             volume: Some(volume),
@@ -1510,6 +1388,53 @@ impl QconnectServiceState {
 
         Ok(true)
     }
+
+    pub(super) async fn set_position_if_remote(
+        &self,
+        position_ms: i64,
+        app_handle: &AppHandle,
+    ) -> Result<bool, String> {
+        let remote_context = self.effective_remote_renderer_snapshot().await?;
+        let Some((renderer, queue, session)) = remote_context else {
+            return Ok(false);
+        };
+
+        let current_queue_item_id = renderer
+            .current_track
+            .as_ref()
+            .map(|item| item.queue_item_id);
+
+        let request = super::commands::build_set_position_player_state_request(
+            position_ms,
+            current_queue_item_id,
+            QconnectQueueVersionPayload {
+                major: queue.version.major,
+                minor: queue.version.minor,
+            },
+        );
+        let payload = serde_json::to_value(request)
+            .map_err(|err| format!("serialize set_position request: {err}"))?;
+
+        self.send_command(QueueCommandType::CtrlSrvrSetPlayerState, payload)
+            .await?;
+
+        if position_ms >= 0 {
+            self.update_renderer_position(position_ms as u64).await;
+        }
+
+        emit_qconnect_diagnostic(
+            app_handle,
+            "qconnect:set_position_handoff",
+            "info",
+            json!({
+                "active_renderer_id": session.active_renderer_id,
+                "local_renderer_id": session.local_renderer_id,
+                "position_ms": position_ms,
+            }),
+        );
+
+        Ok(true)
+    }
 }
 
 
@@ -1542,7 +1467,7 @@ async fn bootstrap_remote_presence(
 
     // JoinSession typically responds with session/renderer controller events that are not part of
     // queue reducer correlation. Drop pending slot so queue operations are not blocked for 10s.
-    clear_pending_if_matches(app, &join_action_uuid).await;
+    app.clear_pending_if_matches(&join_action_uuid).await;
 
     // 2. Ask for current queue state from server
     let ask_queue_payload = serde_json::json!({});
@@ -1556,7 +1481,7 @@ async fn bootstrap_remote_presence(
         .send_queue_command(ask_queue_command)
         .await
         .map_err(|err| format!("send bootstrap ask_for_queue_state failed: {err}"))?;
-    clear_pending_if_matches(app, &ask_action_uuid).await;
+    app.clear_pending_if_matches(&ask_action_uuid).await;
 
     // NOTE: Renderer JoinSession requires a session_uuid from the server (type 81 SESSION_STATE).
     // It is sent as a deferred step from the event loop when SESSION_STATE arrives.
@@ -1568,8 +1493,30 @@ async fn bootstrap_remote_presence(
 /// Deferred renderer join: called from the event loop when we receive SESSION_STATE with a session_uuid.
 async fn deferred_renderer_join(
     app: &Arc<QconnectApp<NativeWsTransport, TauriQconnectEventSink>>,
+    sync_state: &Arc<Mutex<QconnectRemoteSyncState>>,
+    app_handle: &AppHandle,
     session_uuid: &str,
+    join_reason: i32,
 ) {
+    // P1-8: make the deferred join idempotent. If we already joined this exact
+    // session_uuid, skip re-sending the renderer-join reports (which would
+    // re-announce us) but still re-AskForRendererState so a Lagged-dropped
+    // renderer state is recovered.
+    let already_joined = {
+        let st = sync_state.lock().await;
+        st.last_joined_session_uuid.as_deref() == Some(session_uuid)
+    };
+    if already_joined {
+        log::info!(
+            "[QConnect] Deferred join skipped (already joined session_uuid={}); re-asking renderer state",
+            session_uuid
+        );
+        if let Err(err) = app.ask_for_active_renderer_state().await {
+            log::warn!("[QConnect] Idempotent-join AskForRendererState failed: {err}");
+        }
+        return;
+    }
+
     let device_info = default_qconnect_device_info();
     let queue_version_ref = app.queue_state_snapshot().await.version;
 
@@ -1583,7 +1530,7 @@ async fn deferred_renderer_join(
         "session_uuid": session_uuid,
         "device_info": serde_json::to_value(&device_info).unwrap_or_default(),
         "is_active": true,
-        "reason": JOIN_SESSION_REASON_CONTROLLER_REQUEST,
+        "reason": join_reason,
         "initial_state": {
             "playing_state": PLAYING_STATE_STOPPED,
             "buffer_state": BUFFER_STATE_OK,
@@ -1606,17 +1553,47 @@ async fn deferred_renderer_join(
         return;
     }
 
-    // 2. Send initial StateUpdated report
-    let state_report_payload = serde_json::json!({
+    // 2. Send initial StateUpdated report. At join time (e.g. reconnect
+    // mid-playback) we may already have a current track, so resolve the real
+    // duration + current/next queue_item_ids instead of hardcoding nulls.
+    let renderer = app.renderer_state_snapshot().await;
+    let queue = app.queue_state_snapshot().await;
+    let current_track_id = renderer.current_track.as_ref().map(|item| item.track_id);
+    let (current_qid, next_qid, _) = current_track_id
+        .map(|tid| resolve_queue_item_ids_from_queue_state(&queue, tid))
+        .unwrap_or((None, None, None));
+    let duration_secs = match current_track_id {
+        Some(track_id) => {
+            let mut resolved: u64 = 0;
+            if let Some(bridge_state) = app_handle.try_state::<CoreBridgeState>() {
+                if let Some(bridge) = bridge_state.try_get().await {
+                    resolved = bridge
+                        .get_track(track_id)
+                        .await
+                        .map(|track| u64::from(track.duration))
+                        .unwrap_or(0);
+                }
+            }
+            resolved
+        }
+        None => 0,
+    };
+    let mut state_report_payload = serde_json::json!({
         "playing_state": PLAYING_STATE_STOPPED,
         "buffer_state": BUFFER_STATE_OK,
         "current_position": 0,
-        "duration": 0,
+        "duration": duration_secs,
         "queue_version": {
             "major": queue_version_ref.major,
             "minor": queue_version_ref.minor
         }
     });
+    if let Some(qid) = current_qid {
+        state_report_payload["current_queue_item_id"] = serde_json::json!(qid);
+    }
+    if let Some(qid) = next_qid {
+        state_report_payload["next_queue_item_id"] = serde_json::json!(qid);
+    }
     let state_report = RendererReport::new(
         RendererReportType::RndrSrvrStateUpdated,
         Uuid::new_v4().to_string(),
@@ -1662,23 +1639,20 @@ async fn deferred_renderer_join(
         )
         .await;
     if let Ok(action_uuid) = app.send_queue_command(refresh_command).await {
-        clear_pending_if_matches(app, &action_uuid).await;
+        app.clear_pending_if_matches(&action_uuid).await;
         log::info!("[QConnect] Re-requested session state after renderer join");
     }
-}
 
-async fn clear_pending_if_matches(
-    app: &Arc<QconnectApp<NativeWsTransport, TauriQconnectEventSink>>,
-    action_uuid: &str,
-) {
-    let state_handle = app.state_handle();
-    let mut state = state_handle.lock().await;
-    let pending_matches = state
-        .pending
-        .current()
-        .map(|pending| pending.uuid == action_uuid)
-        .unwrap_or(false);
-    if pending_matches {
-        state.pending.clear();
+    // P1-8: also resync the active renderer's full state (not just the queue)
+    // right after the join, so a reconnect rejoin restores renderer state too.
+    if let Err(err) = app.ask_for_active_renderer_state().await {
+        log::warn!("[QConnect] Post-join AskForRendererState failed: {err}");
+    }
+
+    // Record this session_uuid so a subsequent SESSION_STATE with the same uuid
+    // takes the idempotent fast-path above instead of re-announcing us.
+    {
+        let mut st = sync_state.lock().await;
+        st.last_joined_session_uuid = Some(session_uuid.to_string());
     }
 }

@@ -96,6 +96,7 @@ export interface QobuzAlbum {
   title: string;
   description?: string;
   artist: { id?: number; name: string };
+  artists?: { id: number; name: string; roles?: string[] }[];
   image: QobuzImage;
   release_date_original?: string;
   hires_streamable?: boolean;
@@ -202,14 +203,28 @@ export interface AlbumDetail {
   title: string;
   artist: string;
   artistId?: number;
+  /** Featured artists (excluding the main artist), in API order. */
+  featuredArtists?: { id: number; name: string }[];
+  /** Parental advisory marker — show explicit badge next to artist line. */
+  parentalWarning?: boolean;
   year: string;
   releaseDate?: string; // Full date in YYYY-MM-DD format
   label: string;
   labelId?: number;
   genre: string;
   quality: string;
+  /** Numeric audio quality fields, used by inline QualityBadgeStatic in
+   *  the album-detail tracklist toolbar. */
+  bitDepth?: number;
+  samplingRate?: number;
   trackCount: number;
   duration: string;
+  /** Total duration in seconds, used to render Xh Ym Zs inline in the
+   *  metadata row. The pre-formatted `duration` string is kept for
+   *  back-compat with callers that still rely on it. */
+  durationSeconds?: number;
+  /** HTML/plain-text album description from Qobuz (label-supplied). */
+  description?: string;
   tracks: Track[];
   upc?: string; // Universal Product Code for album.link sharing
   goodies?: QobuzGoody[];
@@ -497,6 +512,26 @@ export interface FavoritesPreferences {
   icon_background: string | null;
   tab_order: string[];
 }
+
+export type LibraryPreferences = {
+  tab_order: string[];
+  hidden_tabs: string[];
+  /**
+   * View mode for the LocalLibrary Folders tab. `flat` (default) keeps the
+   * existing folder-grouped album list; `tree` opens the two-column
+   * filesystem-hierarchy view. Persisted via
+   * `v2_set_library_folders_view_mode`. Read from
+   * `library_preferences.folders_view_mode` on the backend.
+   */
+  folders_view_mode?: 'flat' | 'tree';
+  /**
+   * User-chosen width (CSS pixels) of the tree-mode left sidebar in the
+   * Folders tab. `null`/`undefined` means "use the frontend default"
+   * (currently 432px). Persisted via
+   * `v2_set_library_folders_tree_sidebar_width` on drag end.
+   */
+  folders_tree_sidebar_width?: number | null;
+};
 
 // ============ Discover API Types ============
 

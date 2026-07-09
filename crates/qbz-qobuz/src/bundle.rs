@@ -5,11 +5,21 @@
 
 use regex::Regex;
 use reqwest::Client;
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+use std::time::Duration;
 
 use super::error::{ApiError, Result};
 
 const LOGIN_PAGE_URL: &str = "https://play.qobuz.com/login";
 const BUNDLE_BASE_URL: &str = "https://play.qobuz.com";
+
+/// Per-request ceiling for the bundle fetch. The login page is tiny but the
+/// bundle.js is ~7 MB and served from a CDN that is sometimes very slow; without
+/// this, a stalled download blocks the entire app startup indefinitely.
+const BUNDLE_FETCH_TIMEOUT: Duration = Duration::from_secs(45);
+/// Extra attempts after the first on a failed/timed-out extraction.
+const BUNDLE_EXTRACTION_RETRIES: usize = 2;
 
 /// Extracted bundle tokens
 #[derive(Debug, Clone)]
@@ -21,16 +31,114 @@ pub struct BundleTokens {
     pub private_key: Option<String>,
 }
 
-/// Extract app_id, secrets, and OAuth private_key from Qobuz bundle
-pub async fn extract_bundle_tokens(client: &Client) -> Result<BundleTokens> {
-    // Step 1: Get login page to find bundle URL
-    let login_page = client.get(LOGIN_PAGE_URL).send().await?.text().await?;
+/// On-disk cache of the extracted tokens, keyed by the Qobuz bundle version
+/// (e.g. `8.1.0-b019`) so we can detect when Qobuz rotates the bundle and the
+/// secrets change. Lives in the regenerable cache dir, never in precious data.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CachedBundle {
+    pub bundle_version: String,
+    pub app_id: String,
+    pub secrets: Vec<String>,
+    #[serde(default)]
+    pub private_key: Option<String>,
+    /// Unix seconds when these tokens were fetched (freshness only; not a TTL).
+    pub fetched_at: i64,
+}
 
+impl From<CachedBundle> for BundleTokens {
+    fn from(c: CachedBundle) -> Self {
+        BundleTokens {
+            app_id: c.app_id,
+            secrets: c.secrets,
+            private_key: c.private_key,
+        }
+    }
+}
+
+fn cache_path() -> Option<PathBuf> {
+    Some(dirs::cache_dir()?.join("qbz").join("bundle_tokens.json"))
+}
+
+/// Load cached tokens if a valid cache file exists. Returns `None` on any error
+/// (missing file, malformed JSON, empty fields) so the caller falls back to a
+/// live fetch.
+pub fn load_cached_bundle() -> Option<CachedBundle> {
+    let path = cache_path()?;
+    let data = std::fs::read(&path).ok()?;
+    match serde_json::from_slice::<CachedBundle>(&data) {
+        Ok(c) if !c.app_id.is_empty() && !c.secrets.is_empty() => Some(c),
+        Ok(_) => {
+            log::warn!("[Bundle] Cached tokens missing app_id/secrets, ignoring");
+            None
+        }
+        Err(e) => {
+            log::warn!("[Bundle] Failed to parse token cache: {}", e);
+            None
+        }
+    }
+}
+
+fn save_cached_bundle(c: &CachedBundle) {
+    let Some(path) = cache_path() else {
+        log::warn!("[Bundle] No cache dir available, skipping token cache write");
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    match serde_json::to_vec_pretty(c) {
+        Ok(bytes) => match std::fs::write(&path, bytes) {
+            Ok(_) => log::info!("[Bundle] Cached tokens (version {})", c.bundle_version),
+            Err(e) => log::warn!("[Bundle] Failed to write token cache: {}", e),
+        },
+        Err(e) => log::warn!("[Bundle] Failed to serialize token cache: {}", e),
+    }
+}
+
+fn now_unix() -> i64 {
+    chrono::Utc::now().timestamp()
+}
+
+/// Parse the bundle version out of the `/resources/<version>/bundle.js` path,
+/// e.g. `/resources/8.1.0-b019/bundle.js` -> `8.1.0-b019`.
+fn bundle_version_from_url(bundle_url: &str) -> String {
+    bundle_url
+        .trim_start_matches("/resources/")
+        .trim_end_matches("/bundle.js")
+        .to_string()
+}
+
+/// Fetch the login page and return the current bundle URL + parsed version.
+/// Cheap (~small page); used both by the full extraction and the background
+/// version check.
+async fn fetch_bundle_url(client: &Client) -> Result<(String, String)> {
+    let login_page = client
+        .get(LOGIN_PAGE_URL)
+        .timeout(BUNDLE_FETCH_TIMEOUT)
+        .send()
+        .await?
+        .text()
+        .await?;
     let bundle_url = extract_bundle_url(&login_page)?;
+    let version = bundle_version_from_url(&bundle_url);
+    Ok((bundle_url, version))
+}
+
+/// Single network extraction attempt: fetch login page -> bundle.js -> parse.
+/// Returns the tokens together with the bundle version they came from.
+async fn extract_bundle_tokens_once(client: &Client) -> Result<(BundleTokens, String)> {
+    // Step 1: Get login page to find bundle URL + version
+    let (bundle_url, version) = fetch_bundle_url(client).await?;
     let full_bundle_url = format!("{}{}", BUNDLE_BASE_URL, bundle_url);
 
-    // Step 2: Fetch the bundle
-    let bundle_content = client.get(&full_bundle_url).send().await?.text().await?;
+    // Step 2: Fetch the bundle (large; bounded by BUNDLE_FETCH_TIMEOUT)
+    let bundle_content = client
+        .get(&full_bundle_url)
+        .timeout(BUNDLE_FETCH_TIMEOUT)
+        .send()
+        .await?
+        .text()
+        .await?;
 
     // Step 3: Extract app_id
     let app_id = extract_app_id(&bundle_content)?;
@@ -52,11 +160,82 @@ pub async fn extract_bundle_tokens(client: &Client) -> Result<BundleTokens> {
         log::debug!("OAuth private_key not found in bundle (older bundle version)");
     }
 
-    Ok(BundleTokens {
-        app_id,
-        secrets,
-        private_key,
-    })
+    Ok((
+        BundleTokens {
+            app_id,
+            secrets,
+            private_key,
+        },
+        version,
+    ))
+}
+
+/// Extract app_id, secrets, and OAuth private_key from the live Qobuz bundle,
+/// with a small retry loop, and persist the result to the on-disk cache.
+///
+/// This is the network ("cold") path. Prefer [`load_cached_bundle`] +
+/// [`refresh_bundle_if_changed`] on warm starts so the UI never blocks on the
+/// 7 MB download.
+pub async fn extract_and_cache_bundle_tokens(client: &Client) -> Result<BundleTokens> {
+    let mut last_err: Option<ApiError> = None;
+    let attempts = BUNDLE_EXTRACTION_RETRIES + 1;
+    for attempt in 1..=attempts {
+        match extract_bundle_tokens_once(client).await {
+            Ok((tokens, version)) => {
+                save_cached_bundle(&CachedBundle {
+                    bundle_version: version,
+                    app_id: tokens.app_id.clone(),
+                    secrets: tokens.secrets.clone(),
+                    private_key: tokens.private_key.clone(),
+                    fetched_at: now_unix(),
+                });
+                return Ok(tokens);
+            }
+            Err(e) => {
+                log::warn!(
+                    "[Bundle] Extraction attempt {}/{} failed: {}",
+                    attempt,
+                    attempts,
+                    e
+                );
+                last_err = Some(e);
+            }
+        }
+    }
+    Err(last_err
+        .unwrap_or_else(|| ApiError::BundleExtractionError("bundle extraction failed".into())))
+}
+
+/// Background refresh: cheaply re-check the current bundle version. If Qobuz
+/// rotated the bundle, re-extract (and re-cache) the new secrets and return
+/// them; if unchanged, just bump the cache freshness timestamp and return
+/// `None`. Never blocks the UI — call from a spawned task.
+pub async fn refresh_bundle_if_changed(
+    client: &Client,
+    cached_version: &str,
+) -> Option<BundleTokens> {
+    let (_, version) = fetch_bundle_url(client).await.ok()?;
+    if version == cached_version {
+        if let Some(mut c) = load_cached_bundle() {
+            c.fetched_at = now_unix();
+            save_cached_bundle(&c);
+        }
+        log::debug!("[Bundle] Background check: version {} unchanged", version);
+        return None;
+    }
+    log::info!(
+        "[Bundle] Background check: version changed {} -> {}, re-extracting",
+        cached_version,
+        version
+    );
+    extract_and_cache_bundle_tokens(client).await.ok()
+}
+
+/// Backwards-compatible one-shot extraction (no caching). Retained for callers
+/// that just want a live fetch; the app startup path uses
+/// [`extract_and_cache_bundle_tokens`] instead.
+pub async fn extract_bundle_tokens(client: &Client) -> Result<BundleTokens> {
+    extract_bundle_tokens_once(client).await.map(|(t, _)| t)
 }
 
 fn extract_bundle_url(html: &str) -> Result<String> {

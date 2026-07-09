@@ -255,44 +255,46 @@
 <div
   class="track-row"
   class:playing={isActiveTrack || isPlaying}
-  class:hovered={isHovered && !isActiveTrack && !isPlaying && !isBlacklisted}
+  class:hovered={isHovered && !isActiveTrack && !isPlaying && !isBlacklisted && !isUnavailable}
   class:compact
   class:blacklisted={isBlacklisted}
+  class:unavailable={isUnavailable}
   class:selected
   data-track-id={trackId ?? undefined}
-  draggable={!!trackId && !isBlacklisted}
+  draggable={!!trackId && !isBlacklisted && !isUnavailable}
   ondragstart={handleDragStart}
   onmouseenter={() => (isHovered = true)}
   onmouseleave={() => (isHovered = false)}
-  onclick={selectable ? onToggleSelect : (isBlacklisted ? undefined : onPlay)}
+  onclick={selectable ? onToggleSelect : (isBlacklisted || isUnavailable ? undefined : onPlay)}
   oncontextmenu={(e) => {
-    if (isBlacklisted || selectable) return;
+    if (isBlacklisted || isUnavailable || selectable) return;
     e.preventDefault();
     contextMenuPos = { x: e.clientX, y: e.clientY };
   }}
   role="button"
-  tabindex={isBlacklisted ? -1 : 0}
-  onkeydown={(e) => e.key === 'Enter' && !isBlacklisted && (selectable ? onToggleSelect?.(e as unknown as MouseEvent) : onPlay?.())}
+  tabindex={isBlacklisted || isUnavailable ? -1 : 0}
+  onkeydown={(e) => e.key === 'Enter' && !isBlacklisted && !isUnavailable && (selectable ? onToggleSelect?.(e as unknown as MouseEvent) : onPlay?.())}
 >
-  <!-- Checkbox (select mode) -->
-  {#if selectable}
-    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-    <div
-      class="track-checkbox"
-      onclick={(e) => {
-        e.stopPropagation();
-        onToggleSelect?.(e);
-      }}
-    >
-      <input
-        type="checkbox"
-        checked={selected}
-        tabindex={-1}
-        aria-label="Select track"
-        onclick={(e) => e.preventDefault()}
-      />
-    </div>
-  {/if}
+  <!-- Checkbox (select mode) — always rendered, animates in/out so the
+       column doesn't pop when select mode toggles. -->
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+  <div
+    class="track-checkbox"
+    class:active={selectable}
+    onclick={(e) => {
+      if (!selectable) return;
+      e.stopPropagation();
+      onToggleSelect?.(e);
+    }}
+  >
+    <input
+      type="checkbox"
+      checked={selected}
+      tabindex={-1}
+      aria-label="Select track"
+      style="pointer-events: none;"
+    />
+  </div>
 
   <!-- Track Number / Play Button / Unavailable Indicator -->
   <div class="track-number" class:unavailable={isUnavailable} class:blacklisted={isBlacklisted}>
@@ -515,19 +517,29 @@
   }
 
   .track-row.selected {
-    background-color: color-mix(in srgb, var(--accent-primary) 12%, transparent);
+    background-color: color-mix(in srgb, var(--accent-primary) 22%, transparent);
   }
 
   .track-row.selected.hovered {
-    background-color: color-mix(in srgb, var(--accent-primary) 20%, transparent);
+    background-color: color-mix(in srgb, var(--accent-primary) 30%, transparent);
   }
 
   .track-checkbox {
-    width: 24px;
+    width: 0;
     display: flex;
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
+    overflow: hidden;
+    opacity: 0;
+    pointer-events: none;
+    transition: width 180ms ease, opacity 180ms ease;
+  }
+
+  .track-checkbox.active {
+    width: 24px;
+    opacity: 1;
+    pointer-events: auto;
   }
 
   .track-checkbox input[type='checkbox'] {
@@ -639,6 +651,18 @@
     align-items: center;
     justify-content: center;
     color: var(--text-muted);
+  }
+
+  /* Unavailable track styles — mirrors blacklisted: dim the whole row, kill
+     hover background, kill pointer cursor. The track-number cell still shows
+     the red CircleAlert icon (handled by .track-number.unavailable). */
+  .track-row.unavailable {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  .track-row.unavailable:hover {
+    background: transparent;
   }
 
   .track-number :global(.play-icon) {

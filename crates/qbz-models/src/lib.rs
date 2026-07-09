@@ -31,20 +31,27 @@
 
 pub mod error;
 pub mod events;
+pub mod lenient;
 pub mod mixtape;
 pub mod playback;
+pub mod purchase_serde;
+pub mod source;
 pub mod traits;
 pub mod types;
 
 // Re-export commonly used types at crate root
 pub use error::{QbzError, QbzResult};
 pub use events::CoreEvent;
+pub use lenient::{parse_items_array, parse_items_lenient};
 pub use playback::{PlaybackState, PlaybackStatus, QueueState, QueueTrack, RepeatMode};
+pub use source::{plex_thumb_url, ArtworkRef, PlaybackSource, TrackOriginTag};
 pub use traits::{FrontendAdapter, LoggingAdapter, NoOpAdapter};
 pub use types::{
     Album,
+    AlbumSuggestResponse,
     AlbumSummary,
     Artist,
+    RadioResponse,
     ArtistAlbums,
     ArtistBiography,
     // Discover types
@@ -81,6 +88,10 @@ pub use types::{
     AwardPageData,
     AwardPageGenericList,
     // Artist page types
+    ArtistStoryResponse,
+    ArtistStoryItem,
+    ArtistStoryImage,
+    ArtistStoryAuthor,
     PageArtistAward,
     PageArtistBiography,
     PageArtistImages,
@@ -102,6 +113,12 @@ pub use types::{
     PageArtistTrack,
     PageArtistTrackAlbum,
     Playlist,
+    // Purchase types
+    PurchaseAlbum,
+    PurchaseFormatOption,
+    PurchaseIdsResponse,
+    PurchaseResponse,
+    PurchaseTrack,
     PlaylistDuplicateResult,
     PlaylistGenre,
     PlaylistOwner,
@@ -111,13 +128,19 @@ pub use types::{
     Quality,
     RawPlaylistTag,
     ReleasesGridResponse,
+    MostPopularItem,
+    SearchAllResults,
     SearchResults,
     SearchResultsPage,
     SessionStartResponse,
+    AssetOrigin,
+    ExternalStreamAsset,
+    StreamQualityInfo,
     StreamRestriction,
     StreamUrl,
     Track,
     TrackFileUrl,
+    TrackToAnalyse,
     TracksContainer,
     UserSession,
 };

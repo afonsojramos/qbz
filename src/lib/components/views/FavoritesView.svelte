@@ -7,7 +7,7 @@
   import { onMount, tick } from 'svelte';
   import { t } from '$lib/i18n';
   import { Play, Disc3, MicVocal, Music, Search, X, LayoutGrid, List, ChevronDown, ListMusic, PenLine, CloudDownload, Shuffle, Ellipsis, PanelLeftClose, LoaderCircle, ArrowLeft, SquareCheckBig } from 'lucide-svelte';
-  import AlbumCard from '../AlbumCard.svelte';
+  import AlbumCard from '$lib/discovery-v2/AlbumCardLite.svelte';
   import TrackRow from '../TrackRow.svelte';
   import QualityBadge from '../QualityBadge.svelte';
   import VirtualizedTrackList from '../VirtualizedTrackList.svelte';
@@ -140,6 +140,7 @@
     id: number;
     number: number;
     title: string;
+    version?: string | null; // Remix/edition subtitle (#360 / #452)
     artist?: string;
     album?: string;
     albumArt?: string;
@@ -201,6 +202,13 @@
   type TabType = 'tracks' | 'albums' | 'artists' | 'labels' | 'playlists';
   let activeTab = $state<TabType>('tracks');
   let preferencesLoaded = $state(false);
+
+  /** Bind an album's artistId into a no-arg callback for
+   *  AlbumCardLite's `onArtistClick: () => void`. */
+  function makeArtistClickHandler(artistId: number | undefined): (() => void) | undefined {
+    if (artistId === undefined || !onArtistClick) return undefined;
+    return () => onArtistClick(artistId);
+  }
 
   function getTabTranslationKey(tab: TabType): string {
     return `favorites.tabLabels.${tab}`;
@@ -362,15 +370,58 @@
   let albumViewMode = $state<'grid' | 'list'>('grid');
   type AlbumGroupMode = 'alpha' | 'artist';
   let albumGroupMode = $state<AlbumGroupMode>('alpha');
-  let showAlbumGroupMenu = $state(false);
   let albumGroupingEnabled = $state(false);
+
+  // Mutually-exclusive toolbar/section dropdown state. Only one menu is open at a time.
+  type OpenMenu =
+    | 'genre'
+    | 'genreTracks'
+    | 'albumGroup'
+    | 'albumSort'
+    | 'trackGroup'
+    | 'artistGroup'
+    | 'tracksContext'
+    | 'discographySort'
+    | 'epsSinglesSort'
+    | 'liveAlbumsSort'
+    | null;
+  let openMenu = $state<OpenMenu>(null);
+
+  // Close the open menu on clicks outside any toolbar control, dropdown, or
+  // section sort. Without this, the only way to dismiss a menu is to make a
+  // selection or click another peer dropdown.
+  $effect(() => {
+    if (openMenu === null) return;
+
+    function handleClickOutside(event: MouseEvent) {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      if (
+        target.closest('.control-btn') ||
+        target.closest('.dropdown-menu') ||
+        target.closest('.section-sort-btn') ||
+        target.closest('.section-sort-menu') ||
+        target.closest('.action-btn-circle') ||
+        target.closest('.context-menu') ||
+        target.closest('.genre-filter-wrapper')
+      ) return;
+      openMenu = null;
+    }
+
+    setTimeout(() => {
+      document.addEventListener('click', handleClickOutside);
+    }, 0);
+
+    return () => {
+      document.removeEventListener('click', handleClickOutside);
+    };
+  });
 
   // Album sorting
   type AlbumSortBy = 'default' | 'date' | 'title' | 'artist';
   type SortDirection = 'asc' | 'desc';
   let albumSortBy = $state<AlbumSortBy>('default');
   let albumSortDirection = $state<SortDirection>('desc'); // desc = newest first for date
-  let showAlbumSortMenu = $state(false);
 
   const albumSortOptions: { value: AlbumSortBy; label: string }[] = [
     { value: 'default', label: $t('sort.default') },
@@ -387,15 +438,13 @@
       // Default directions
       albumSortDirection = value === 'date' ? 'desc' : 'asc';
     }
-    showAlbumSortMenu = false;
+    openMenu = null;
   }
 
   type TrackGroupMode = 'album' | 'artist' | 'name';
   let trackGroupMode = $state<TrackGroupMode>('album');
-  let showTrackGroupMenu = $state(false);
   let trackGroupingEnabled = $state(false);
 
-  let showArtistGroupMenu = $state(false);
   let artistGroupingEnabled = $state(false);
 
   // Artist view mode: grid (cards) or sidepanel (two-column with albums)
@@ -447,9 +496,6 @@
   let discographySortMode = $state<AlbumSortMode>('default');
   let epsSinglesSortMode = $state<AlbumSortMode>('default');
   let liveAlbumsSortMode = $state<AlbumSortMode>('default');
-  let showDiscographySortMenu = $state(false);
-  let showEpsSinglesSortMenu = $state(false);
-  let showLiveAlbumsSortMenu = $state(false);
 
   function sortQobuzAlbums(albums: QobuzAlbum[], mode: AlbumSortMode): QobuzAlbum[] {
     if (mode === 'default') return albums;
@@ -489,8 +535,6 @@
     }
   }
 
-  let showTracksContextMenu = $state(false);
-
   async function scrollToTrack(trackId: number) {
     await tick();
     const target = scrollContainer?.querySelector<HTMLElement>(`[data-track-id="${trackId}"]`);
@@ -524,6 +568,25 @@
   let trackIndexMap = $derived.by(() => {
     return new Map(filteredTracks.map((track, index) => [track.id, index]));
   });
+
+  // Tri-state for the "Select All" checkbox shown next to the selection-
+  // mode toggle. 'all' / 'partial' / 'none' over the currently visible
+  // (filtered) tracks — same semantics as LocalLibraryView's track tab.
+  // Declared after `filteredTracks` because it reads from it.
+  const trackSelectAllState = $derived(
+    filteredTracks.length === 0 ? 'none' as const
+    : selectedTrackIds.size === 0 ? 'none' as const
+    : filteredTracks.every((trk) => selectedTrackIds.has(trk.id)) ? 'all' as const
+    : 'partial' as const
+  );
+
+  function toggleTrackSelectAll() {
+    if (trackSelectAllState === 'all') {
+      selectedTrackIds = new Set();
+    } else {
+      selectedTrackIds = new Set(filteredTracks.map((trk) => trk.id));
+    }
+  }
 
   // Genre filter version to trigger reactivity
   let genreFilterVersion = $state(0);
@@ -974,9 +1037,7 @@
 
   function handleTabChange(tab: TabType) {
     activeTab = tab;
-    showAlbumGroupMenu = false;
-    showTrackGroupMenu = false;
-    showArtistGroupMenu = false;
+    openMenu = null;
     onTabNavigate?.(tab);
     loadTabIfNeeded(tab);
   }
@@ -1215,6 +1276,7 @@
       id: track.id,
       number: index + 1,
       title: track.title,
+      version: track.version ?? null,
       artist: track.performer?.name,
       album: track.album?.title,
       albumArt: track.album?.image?.small || track.album?.image?.thumbnail || track.album?.image?.large,
@@ -1379,7 +1441,7 @@
 
 <ViewTransition duration={200} distance={12} direction="down">
 <div class="favorites-view" class:no-outer-scroll={(activeTab === 'tracks' && !loading && filteredTracks.length > 0) || (activeTab === 'albums' && !loading && filteredAlbums.length > 0) || (activeTab === 'artists' && !loading && filteredArtists.length > 0)} bind:this={scrollContainer} onscroll={handleFavoritesScroll}>
-  <div class="top-bar">
+  <div class="top-bar" data-tauri-drag-region="deep">
     {#if onBack}
       <button class="back-btn" onclick={onBack}>
         <ArrowLeft size={16} />
@@ -1391,10 +1453,10 @@
     </button>
   </div>
   <!-- Header -->
-  <div class="header">
+  <div class="header" data-tauri-drag-region="deep">
     <h1>{$t('favorites.title')}</h1>
     {#if activeTab === 'tracks' && !loading && filteredTracks.length > 0}
-      <div class="header-actions">
+      <div class="header-actions" data-tauri-drag-region="false">
         <button class="action-btn-circle" onclick={handlePlayAllTracks} title={$t('actions.playAll')}>
           <Play size={18} fill="currentColor" color="currentColor" />
         </button>
@@ -1404,18 +1466,17 @@
         <div class="context-menu-wrapper">
           <button
             class="action-btn-circle"
-            onclick={() => showTracksContextMenu = !showTracksContextMenu}
+            onclick={() => (openMenu = openMenu === 'tracksContext' ? null : 'tracksContext')}
             title={$t('actions.more')}
           >
             <Ellipsis size={18} />
           </button>
-          {#if showTracksContextMenu}
-            <div class="context-menu-backdrop" onclick={() => showTracksContextMenu = false} role="presentation"></div>
+          {#if openMenu === 'tracksContext'}
             <div class="context-menu">
-              <button class="context-menu-item" onclick={() => { handlePlayAllTracksNext(); showTracksContextMenu = false; }}>
+              <button class="context-menu-item" onclick={() => { handlePlayAllTracksNext(); openMenu = null; }}>
                 {$t('actions.playNext')}
               </button>
-              <button class="context-menu-item" onclick={() => { handlePlayAllTracksLater(); showTracksContextMenu = false; }}>
+              <button class="context-menu-item" onclick={() => { handlePlayAllTracksLater(); openMenu = null; }}>
                 {$t('actions.addToQueue')}
               </button>
             </div>
@@ -1424,20 +1485,20 @@
       </div>
     {/if}
     {#if activeTab === 'albums' && !loading && filteredAlbums.length > 0}
-      <div class="header-actions">
+      <div class="header-actions" data-tauri-drag-region="false">
         <button class="action-btn-circle" onclick={handleRandomAlbum} title={$t('favorites.randomAlbum')}>
           <Shuffle size={18} />
         </button>
       </div>
     {/if}
     {#if activeTab === 'artists' && !loading && filteredArtists.length > 0}
-      <div class="header-actions">
+      <div class="header-actions" data-tauri-drag-region="false">
         <button class="action-btn-circle" onclick={handleRandomArtist} title={$t('favorites.randomArtist')}>
           <Shuffle size={18} />
         </button>
       </div>
     {/if}
-    <div class="header-search">
+    <div class="header-search" data-tauri-drag-region="false">
       {#if !searchExpanded}
         <button class="search-icon-btn" onclick={() => searchExpanded = true} title={$t('nav.search')}>
           <Search size={16} />
@@ -1463,8 +1524,8 @@
   </div>
 
   <!-- Navigation Bar (Artist-style) -->
-  <div class="favorites-nav">
-    <div class="nav-left">
+  <div class="favorites-nav" data-tauri-drag-region="deep">
+    <div class="nav-left" data-tauri-drag-region="false">
       {#each favoritesPreferences.tab_order as tab}
         {@const Icon = getTabIcon(tab as TabType)}
         <button
@@ -1477,7 +1538,7 @@
         </button>
       {/each}
     </div>
-    <div class="nav-right">
+    <div class="nav-right" data-tauri-drag-region="false">
       <span class="results-count">
         {#if activeTab === 'tracks'}
           {filteredTracks.length}{trackSearch ? ` / ${favoriteTracks.length}` : ''} {$t('favorites.tracks').toLowerCase()}
@@ -1492,9 +1553,18 @@
         {/if}
       </span>
       {#if activeTab === 'albums'}
-        <GenreFilterButton context={GENRE_CONTEXT} variant="control" align="right" onFilterChange={handleGenreFilterChange} />
+        <GenreFilterButton
+          context={GENRE_CONTEXT}
+          variant="control"
+          align="right"
+          onFilterChange={handleGenreFilterChange}
+          bind:isOpen={
+            () => openMenu === 'genre',
+            (v: boolean) => openMenu = v ? 'genre' : (openMenu === 'genre' ? null : openMenu)
+          }
+        />
         <div class="dropdown-container">
-          <button class="control-btn" onclick={() => (showAlbumGroupMenu = !showAlbumGroupMenu)}>
+          <button class="control-btn" onclick={() => (openMenu = openMenu === 'albumGroup' ? null : 'albumGroup')}>
             <span>
               {albumGroupingEnabled
                 ? albumGroupMode === 'alpha'
@@ -1504,26 +1574,26 @@
             </span>
             <ChevronDown size={14} />
           </button>
-          {#if showAlbumGroupMenu}
+          {#if openMenu === 'albumGroup'}
             <div class="dropdown-menu">
               <button
                 class="dropdown-item"
                 class:selected={!albumGroupingEnabled}
-                onclick={() => { albumGroupingEnabled = false; showAlbumGroupMenu = false; }}
+                onclick={() => { albumGroupingEnabled = false; openMenu = null; }}
               >
                 {$t('purchases.group.optionOff')}
               </button>
               <button
                 class="dropdown-item"
                 class:selected={albumGroupingEnabled && albumGroupMode === 'alpha'}
-                onclick={() => { albumGroupMode = 'alpha'; albumGroupingEnabled = true; showAlbumGroupMenu = false; }}
+                onclick={() => { albumGroupMode = 'alpha'; albumGroupingEnabled = true; openMenu = null; }}
               >
                 {$t('purchases.group.optionAlpha')}
               </button>
               <button
                 class="dropdown-item"
                 class:selected={albumGroupingEnabled && albumGroupMode === 'artist'}
-                onclick={() => { albumGroupMode = 'artist'; albumGroupingEnabled = true; showAlbumGroupMenu = false; }}
+                onclick={() => { albumGroupMode = 'artist'; albumGroupingEnabled = true; openMenu = null; }}
               >
                 {$t('purchases.group.optionArtist')}
               </button>
@@ -1531,11 +1601,11 @@
           {/if}
         </div>
         <div class="dropdown-container">
-          <button class="control-btn" onclick={() => (showAlbumSortMenu = !showAlbumSortMenu)}>
+          <button class="control-btn" onclick={() => (openMenu = openMenu === 'albumSort' ? null : 'albumSort')}>
             <span>{$t('sort.sort')}: {albumSortOptions.find(o => o.value === albumSortBy)?.label}</span>
             <ChevronDown size={14} />
           </button>
-          {#if showAlbumSortMenu}
+          {#if openMenu === 'albumSort'}
             <div class="dropdown-menu">
               {#each albumSortOptions as option}
                 <button
@@ -1572,9 +1642,29 @@
         >
           <SquareCheckBig size={16} />
         </button>
-        <GenreFilterButton context={GENRE_CONTEXT_TRACKS} variant="control" align="right" onFilterChange={handleGenreFilterChange} />
+        {#if trackSelectMode}
+          <label class="select-all-checkbox" title={$t('actions.selectAll')}>
+            <input
+              type="checkbox"
+              checked={trackSelectAllState === 'all'}
+              indeterminate={trackSelectAllState === 'partial'}
+              onchange={toggleTrackSelectAll}
+            />
+            <span>{$t('actions.selectAll')}</span>
+          </label>
+        {/if}
+        <GenreFilterButton
+          context={GENRE_CONTEXT_TRACKS}
+          variant="control"
+          align="right"
+          onFilterChange={handleGenreFilterChange}
+          bind:isOpen={
+            () => openMenu === 'genreTracks',
+            (v: boolean) => openMenu = v ? 'genreTracks' : (openMenu === 'genreTracks' ? null : openMenu)
+          }
+        />
         <div class="dropdown-container">
-          <button class="control-btn" onclick={() => (showTrackGroupMenu = !showTrackGroupMenu)}>
+          <button class="control-btn" onclick={() => (openMenu = openMenu === 'trackGroup' ? null : 'trackGroup')}>
             <span>
               {trackGroupingEnabled
                 ? trackGroupMode === 'album'
@@ -1586,33 +1676,33 @@
             </span>
             <ChevronDown size={14} />
           </button>
-          {#if showTrackGroupMenu}
+          {#if openMenu === 'trackGroup'}
             <div class="dropdown-menu">
               <button
                 class="dropdown-item"
                 class:selected={!trackGroupingEnabled}
-                onclick={() => { trackGroupingEnabled = false; showTrackGroupMenu = false; }}
+                onclick={() => { trackGroupingEnabled = false; openMenu = null; }}
               >
                 {$t('purchases.group.optionOff')}
               </button>
               <button
                 class="dropdown-item"
                 class:selected={trackGroupingEnabled && trackGroupMode === 'album'}
-                onclick={() => { trackGroupMode = 'album'; trackGroupingEnabled = true; showTrackGroupMenu = false; }}
+                onclick={() => { trackGroupMode = 'album'; trackGroupingEnabled = true; openMenu = null; }}
               >
               {$t('purchases.group.optionAlbum')}
               </button>
               <button
                 class="dropdown-item"
                 class:selected={trackGroupingEnabled && trackGroupMode === 'artist'}
-                onclick={() => { trackGroupMode = 'artist'; trackGroupingEnabled = true; showTrackGroupMenu = false; }}
+                onclick={() => { trackGroupMode = 'artist'; trackGroupingEnabled = true; openMenu = null; }}
               >
                 {$t('purchases.group.optionArtist')}
               </button>
               <button
                 class="dropdown-item"
                 class:selected={trackGroupingEnabled && trackGroupMode === 'name'}
-                onclick={() => { trackGroupMode = 'name'; trackGroupingEnabled = true; showTrackGroupMenu = false; }}
+                onclick={() => { trackGroupMode = 'name'; trackGroupingEnabled = true; openMenu = null; }}
               >
                 {$t('purchases.group.optionAlpha')}
               </button>
@@ -1640,23 +1730,23 @@
         </button>
         {#if artistViewMode === 'grid'}
           <div class="dropdown-container">
-            <button class="control-btn" onclick={() => (showArtistGroupMenu = !showArtistGroupMenu)}>
+            <button class="control-btn" onclick={() => (openMenu = openMenu === 'artistGroup' ? null : 'artistGroup')}>
               <span>{artistGroupingEnabled ? $t('purchases.group.alpha') : $t('purchases.group.off')}</span>
               <ChevronDown size={14} />
             </button>
-            {#if showArtistGroupMenu}
+            {#if openMenu === 'artistGroup'}
               <div class="dropdown-menu">
                 <button
                   class="dropdown-item"
                   class:selected={!artistGroupingEnabled}
-                  onclick={() => { artistGroupingEnabled = false; showArtistGroupMenu = false; }}
+                  onclick={() => { artistGroupingEnabled = false; openMenu = null; }}
                 >
                   {$t('purchases.group.optionOff')}
                 </button>
                 <button
                   class="dropdown-item"
                   class:selected={artistGroupingEnabled}
-                  onclick={() => { artistGroupingEnabled = true; showArtistGroupMenu = false; }}
+                  onclick={() => { artistGroupingEnabled = true; openMenu = null; }}
                 >
                   {$t('purchases.group.optionAlpha')}
                 </button>
@@ -1939,18 +2029,18 @@
                       <div class="section-sort-wrapper">
                         <button
                           class="section-sort-btn"
-                          onclick={() => { showDiscographySortMenu = !showDiscographySortMenu; }}
+                          onclick={() => (openMenu = openMenu === 'discographySort' ? null : 'discographySort')}
                         >
                           {getSortLabel(discographySortMode)}
                           <ChevronDown size={14} />
                         </button>
-                        {#if showDiscographySortMenu}
+                        {#if openMenu === 'discographySort'}
                           <div class="section-sort-menu" role="menu">
                             {#each (['default', 'newest', 'oldest', 'title-asc', 'title-desc'] as const) as mode}
                               <button
                                 class="section-sort-option"
                                 class:selected={discographySortMode === mode}
-                                onclick={() => { discographySortMode = mode; showDiscographySortMenu = false; }}
+                                onclick={() => { discographySortMode = mode; openMenu = null; }}
                               >
                                 {getSortLabel(mode)}
                               </button>
@@ -1966,12 +2056,11 @@
                           artwork={getQobuzImage(album.image)}
                           title={album.title}
                           artist={album.artist.name}
-                          artistId={album.artist.id}
-                          onArtistClick={onArtistClick}
                           genre={album.genre?.name}
-                          releaseDate={album.release_date_original}
+                          releaseYear={Number(album.release_date_original?.slice(0, 4)) || undefined}
                           quality={formatQuality(album.hires_streamable, album.maximum_bit_depth, album.maximum_sampling_rate)}
-                          onclick={() => onAlbumClick?.(album.id)}
+                          onArtistClick={makeArtistClickHandler(album.artist.id)}
+                          onClick={() => onAlbumClick?.(album.id)}
                           onPlay={() => onAlbumPlay?.(album.id)}
                           onPlayNext={() => onAlbumPlayNext?.(album.id)}
                           onPlayLater={() => onAlbumPlayLater?.(album.id)}
@@ -1993,18 +2082,18 @@
                       <div class="section-sort-wrapper">
                         <button
                           class="section-sort-btn"
-                          onclick={() => { showEpsSinglesSortMenu = !showEpsSinglesSortMenu; }}
+                          onclick={() => (openMenu = openMenu === 'epsSinglesSort' ? null : 'epsSinglesSort')}
                         >
                           {getSortLabel(epsSinglesSortMode)}
                           <ChevronDown size={14} />
                         </button>
-                        {#if showEpsSinglesSortMenu}
+                        {#if openMenu === 'epsSinglesSort'}
                           <div class="section-sort-menu" role="menu">
                             {#each (['default', 'newest', 'oldest', 'title-asc', 'title-desc'] as const) as mode}
                               <button
                                 class="section-sort-option"
                                 class:selected={epsSinglesSortMode === mode}
-                                onclick={() => { epsSinglesSortMode = mode; showEpsSinglesSortMenu = false; }}
+                                onclick={() => { epsSinglesSortMode = mode; openMenu = null; }}
                               >
                                 {getSortLabel(mode)}
                               </button>
@@ -2020,12 +2109,11 @@
                           artwork={getQobuzImage(album.image)}
                           title={album.title}
                           artist={album.artist.name}
-                          artistId={album.artist.id}
-                          onArtistClick={onArtistClick}
                           genre={album.genre?.name}
-                          releaseDate={album.release_date_original}
+                          releaseYear={Number(album.release_date_original?.slice(0, 4)) || undefined}
                           quality={formatQuality(album.hires_streamable, album.maximum_bit_depth, album.maximum_sampling_rate)}
-                          onclick={() => onAlbumClick?.(album.id)}
+                          onArtistClick={makeArtistClickHandler(album.artist.id)}
+                          onClick={() => onAlbumClick?.(album.id)}
                           onPlay={() => onAlbumPlay?.(album.id)}
                           onPlayNext={() => onAlbumPlayNext?.(album.id)}
                           onPlayLater={() => onAlbumPlayLater?.(album.id)}
@@ -2047,18 +2135,18 @@
                       <div class="section-sort-wrapper">
                         <button
                           class="section-sort-btn"
-                          onclick={() => { showLiveAlbumsSortMenu = !showLiveAlbumsSortMenu; }}
+                          onclick={() => (openMenu = openMenu === 'liveAlbumsSort' ? null : 'liveAlbumsSort')}
                         >
                           {getSortLabel(liveAlbumsSortMode)}
                           <ChevronDown size={14} />
                         </button>
-                        {#if showLiveAlbumsSortMenu}
+                        {#if openMenu === 'liveAlbumsSort'}
                           <div class="section-sort-menu" role="menu">
                             {#each (['default', 'newest', 'oldest', 'title-asc', 'title-desc'] as const) as mode}
                               <button
                                 class="section-sort-option"
                                 class:selected={liveAlbumsSortMode === mode}
-                                onclick={() => { liveAlbumsSortMode = mode; showLiveAlbumsSortMenu = false; }}
+                                onclick={() => { liveAlbumsSortMode = mode; openMenu = null; }}
                               >
                                 {getSortLabel(mode)}
                               </button>
@@ -2074,12 +2162,11 @@
                           artwork={getQobuzImage(album.image)}
                           title={album.title}
                           artist={album.artist.name}
-                          artistId={album.artist.id}
-                          onArtistClick={onArtistClick}
                           genre={album.genre?.name}
-                          releaseDate={album.release_date_original}
+                          releaseYear={Number(album.release_date_original?.slice(0, 4)) || undefined}
                           quality={formatQuality(album.hires_streamable, album.maximum_bit_depth, album.maximum_sampling_rate)}
-                          onclick={() => onAlbumClick?.(album.id)}
+                          onArtistClick={makeArtistClickHandler(album.artist.id)}
+                          onClick={() => onAlbumClick?.(album.id)}
                           onPlay={() => onAlbumPlay?.(album.id)}
                           onPlayNext={() => onAlbumPlayNext?.(album.id)}
                           onPlayLater={() => onAlbumPlayLater?.(album.id)}
@@ -2272,6 +2359,27 @@
 />
 
 <style>
+  /* Select-all checkbox shown next to the selection-mode toggle in the
+     Tracks tab toolbar. Visual rhythm matches the LocalLibraryView
+     equivalent so the Qobuz favorites and local-library tracks views
+     read the same way side-by-side. */
+  .select-all-checkbox {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .select-all-checkbox input[type='checkbox'] {
+    width: 15px;
+    height: 15px;
+    accent-color: var(--accent-primary);
+    cursor: pointer;
+  }
+
   /* Exit animation for unfavorited tracks */
   :global(.track-removing) {
     animation: track-fade-out 300ms ease forwards;
@@ -2655,12 +2763,6 @@
     position: relative;
   }
 
-  .context-menu-backdrop {
-    position: fixed;
-    inset: 0;
-    z-index: 99;
-  }
-
   .context-menu {
     position: absolute;
     top: 100%;
@@ -2739,7 +2841,7 @@
     margin-top: 16px;
     padding: 8px 24px;
     background-color: var(--accent-primary);
-    color: white;
+    color: var(--btn-primary-text);
     border: none;
     border-radius: 8px;
     cursor: pointer;

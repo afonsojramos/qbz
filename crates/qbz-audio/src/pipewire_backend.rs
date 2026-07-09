@@ -15,6 +15,29 @@ use rodio::{
     DeviceSinkBuilder, MixerDeviceSink,
 };
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Set true whenever QBZ writes a global `clock.force-rate` to the PipeWire
+/// graph, so `reset_pipewire_clock` only resets a force WE applied and never
+/// clobbers another app's intentional forced rate (issue #263, leak fix).
+/// The force and the reset both run on the audio thread, so `Relaxed` is enough.
+static CLOCK_FORCE_APPLIED: AtomicBool = AtomicBool::new(false);
+
+/// Restores the `PIPEWIRE_NODE` env var to its previous value when dropped, so
+/// locked-mode sink targeting (Tier 2a, #263) does not leak into later stream
+/// opens. Edition 2021: `set_var`/`remove_var` are safe.
+#[cfg(target_os = "linux")]
+struct PwNodeEnvGuard(Option<String>);
+
+#[cfg(target_os = "linux")]
+impl Drop for PwNodeEnvGuard {
+    fn drop(&mut self) {
+        match self.0.take() {
+            Some(v) => std::env::set_var("PIPEWIRE_NODE", v),
+            None => std::env::remove_var("PIPEWIRE_NODE"),
+        }
+    }
+}
 
 pub struct PipeWireBackend {
     #[allow(dead_code)]
@@ -32,6 +55,15 @@ impl PipeWireBackend {
     /// Call this when playback stops so other apps aren't stuck at a forced rate.
     /// Quantum reset is kept for safety even though we no longer force it.
     pub fn reset_pipewire_clock() {
+        // Only reset a force WE applied — otherwise stopping QBZ would clobber
+        // another app's intentional clock.force-rate. This also makes the call
+        // safe to invoke unconditionally on every stop/suspend (issue #263 leak
+        // fix): previously the reset was gated on `pw_force_bitperfect`, but QBZ
+        // forces the clock for ANY non-locked PipeWire stream, so a plain
+        // PipeWire (no-passthrough) user left the graph force-clocked after stop.
+        if !CLOCK_FORCE_APPLIED.swap(false, Ordering::Relaxed) {
+            return;
+        }
         log::info!("[PipeWire Backend] Resetting clock.force-rate and clock.force-quantum to 0");
         let _ = Command::new("pw-metadata")
             .args(["-n", "settings", "0", "clock.force-rate", "0"])
@@ -291,6 +323,167 @@ impl PipeWireBackend {
 
         Ok(devices)
     }
+
+    /// Native-PipeWire enumeration via `pw-dump`.
+    ///
+    /// This talks to the PipeWire daemon over its own socket and needs ONLY
+    /// `pipewire-bin` (the `pw-*` tools) — it does NOT require `pipewire-pulse`
+    /// (the Pulse-protocol server `pactl` talks to) nor the `pipewire-alsa`
+    /// bridge PCM that CPAL relies on. On a PipeWire-only box missing those
+    /// packages (the reported Ubuntu "empty sink list" bug) the legacy `pactl`
+    /// and CPAL paths return nothing, but `pw-dump` still reports every sink —
+    /// and gives us the exact `alsa_output.*` `node.name` for free.
+    ///
+    /// Returns `None` when `pw-dump` is absent, fails, or finds no sink (so the
+    /// caller falls back to `pactl`). Discovery only — never touches the
+    /// stream-open path.
+    fn enumerate_via_pw_dump(&self) -> Option<Vec<AudioDevice>> {
+        let output = Command::new("pw-dump").output().ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let json = String::from_utf8_lossy(&output.stdout);
+        let devices = parse_pw_dump_sinks(&json);
+        if devices.is_empty() {
+            return None;
+        }
+        log::info!(
+            "[PipeWire Backend] Enumerated {} sink(s) via pw-dump (native, no pactl/pipewire-pulse needed)",
+            devices.len()
+        );
+        for (idx, dev) in devices.iter().enumerate() {
+            log::info!(
+                "  [{}] {} (id: {}, bus: {:?}, hw: {}, default: {})",
+                idx, dev.name, dev.id, dev.device_bus, dev.is_hardware, dev.is_default
+            );
+        }
+        Some(devices)
+    }
+}
+
+/// Parse `pw-dump` JSON into our `AudioDevice` list. Pure (no I/O) so it is
+/// unit-testable against a captured fixture.
+///
+/// Selects objects of `type == "PipeWire:Interface:Node"` whose
+/// `info.props["media.class"] == "Audio/Sink"`. The `node.name` is the id the
+/// HiFi wizard otherwise asks the user to paste by hand. `device.bus` is read
+/// from the node props (present in practice) and, when absent, cross-referenced
+/// via the node's `device.id` against the `PipeWire:Interface:Device` objects.
+/// `max_sample_rate` is intentionally left `None`: `pw-dump`'s `EnumFormat`
+/// reports the CURRENTLY negotiated rate, not the device maximum — the
+/// capability probe (`/proc/asound/.../stream0`) is the honest source for that.
+fn parse_pw_dump_sinks(json: &str) -> Vec<AudioDevice> {
+    let root: serde_json::Value = match serde_json::from_str(json) {
+        Ok(v) => v,
+        Err(e) => {
+            log::warn!("[PipeWire Backend] pw-dump JSON parse failed: {}", e);
+            return Vec::new();
+        }
+    };
+    let arr = match root.as_array() {
+        Some(a) => a,
+        None => return Vec::new(),
+    };
+
+    // Default sink name lives in the "default" Metadata object.
+    let mut default_sink: Option<String> = None;
+    for obj in arr {
+        let is_default_meta = obj.get("type").and_then(|v| v.as_str())
+            == Some("PipeWire:Interface:Metadata")
+            && obj
+                .get("props")
+                .and_then(|p| p.get("metadata.name"))
+                .and_then(|v| v.as_str())
+                == Some("default");
+        if !is_default_meta {
+            continue;
+        }
+        if let Some(entries) = obj.get("metadata").and_then(|m| m.as_array()) {
+            for entry in entries {
+                if entry.get("key").and_then(|v| v.as_str()) == Some("default.audio.sink") {
+                    if let Some(name) = entry
+                        .get("value")
+                        .and_then(|v| v.get("name"))
+                        .and_then(|v| v.as_str())
+                    {
+                        default_sink = Some(name.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    // device.id -> device.bus, used only when the bus is not on the node itself.
+    let mut device_bus: std::collections::HashMap<i64, String> = std::collections::HashMap::new();
+    for obj in arr {
+        if obj.get("type").and_then(|v| v.as_str()) != Some("PipeWire:Interface:Device") {
+            continue;
+        }
+        if let Some(id) = obj.get("id").and_then(|v| v.as_i64()) {
+            if let Some(bus) = obj
+                .get("info")
+                .and_then(|i| i.get("props"))
+                .and_then(|p| p.get("device.bus"))
+                .and_then(|v| v.as_str())
+            {
+                device_bus.insert(id, bus.to_string());
+            }
+        }
+    }
+
+    let mut devices = Vec::new();
+    for obj in arr {
+        if obj.get("type").and_then(|v| v.as_str()) != Some("PipeWire:Interface:Node") {
+            continue;
+        }
+        let props = match obj.get("info").and_then(|i| i.get("props")) {
+            Some(p) => p,
+            None => continue,
+        };
+        if props.get("media.class").and_then(|v| v.as_str()) != Some("Audio/Sink") {
+            continue;
+        }
+        let node_name = match props.get("node.name").and_then(|v| v.as_str()) {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+        let name = props
+            .get("node.description")
+            .and_then(|v| v.as_str())
+            .or_else(|| props.get("node.nick").and_then(|v| v.as_str()))
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| node_name.clone());
+        let bus = props
+            .get("device.bus")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .or_else(|| {
+                props
+                    .get("device.id")
+                    .and_then(|v| v.as_i64())
+                    .and_then(|did| device_bus.get(&did).cloned())
+            });
+        // A real ALSA-backed sink = hardware (USB/PCI DAC, internal card).
+        let is_hardware = props.get("device.api").and_then(|v| v.as_str()) == Some("alsa")
+            || props
+                .get("factory.name")
+                .and_then(|v| v.as_str())
+                .map(|f| f.contains("alsa"))
+                .unwrap_or(false);
+        let is_default = default_sink.as_deref() == Some(node_name.as_str());
+
+        devices.push(AudioDevice {
+            id: node_name,
+            name,
+            description: None,
+            is_default,
+            max_sample_rate: None,
+            supported_sample_rates: None,
+            device_bus: bus,
+            is_hardware,
+        });
+    }
+    devices
 }
 
 impl AudioBackend for PipeWireBackend {
@@ -299,6 +492,16 @@ impl AudioBackend for PipeWireBackend {
     }
 
     fn enumerate_devices(&self) -> BackendResult<Vec<AudioDevice>> {
+        // Primary: native PipeWire via `pw-dump`. Works on PipeWire-only systems
+        // that are missing `pipewire-alsa` / `pipewire-pulse` (the Ubuntu
+        // empty-list bug) and yields the exact `alsa_output.*` node.name.
+        if let Some(devices) = self.enumerate_via_pw_dump() {
+            return Ok(devices);
+        }
+        // Fallback: `pactl` (requires pipewire-pulse + pulseaudio-utils).
+        log::info!(
+            "[PipeWire Backend] pw-dump unavailable or empty — falling back to pactl enumeration"
+        );
         self.enumerate_pipewire_sinks()
     }
 
@@ -389,35 +592,55 @@ impl AudioBackend for PipeWireBackend {
             config.sample_rate
         };
 
-        // Force PipeWire to use the effective sample rate (for bit-perfect playback)
-        log::info!(
-            "[PipeWire Backend] Forcing sample rate to {}Hz via pw-metadata",
-            effective_rate
-        );
-        let metadata_result = Command::new("pw-metadata")
-            .args([
-                "-n",
-                "settings",
-                "0",
-                "clock.force-rate",
-                &effective_rate.to_string(),
-            ])
-            .output();
+        // Force PipeWire to use the effective sample rate (for bit-perfect playback).
+        //
+        // Tier 1 (issue #263): when skip_sink_switch ("Lock output device") is ON, the
+        // user has asked QBZ not to mutate GLOBAL graph state to preserve external
+        // routing (JACK/qjackctl/qpwgraph). So we skip the global `clock.force-rate`
+        // write too — not just `set-default-sink`. This trades device-native-rate
+        // playback for routing freedom (PipeWire resamples when track rate != graph
+        // rate). Safe: skip_sink_switch is transitively mutually exclusive with
+        // dac_passthrough / pw_force_bitperfect (the bit-perfect clock path), so this
+        // never collides with a forced-rate bit-perfect session.
+        if config.skip_sink_switch {
+            log::info!(
+                "[PipeWire Backend] Skipping clock.force-rate (skip_sink_switch enabled) — \
+                 external routing preserved; PipeWire may resample if graph rate differs"
+            );
+        } else {
+            log::info!(
+                "[PipeWire Backend] Forcing sample rate to {}Hz via pw-metadata",
+                effective_rate
+            );
+            let metadata_result = Command::new("pw-metadata")
+                .args([
+                    "-n",
+                    "settings",
+                    "0",
+                    "clock.force-rate",
+                    &effective_rate.to_string(),
+                ])
+                .output();
 
-        match metadata_result {
-            Ok(output) if output.status.success() => {
-                log::info!(
-                    "[PipeWire Backend] Sample rate forced to {}Hz",
-                    effective_rate
-                );
+            match metadata_result {
+                Ok(output) if output.status.success() => {
+                    log::info!(
+                        "[PipeWire Backend] Sample rate forced to {}Hz",
+                        effective_rate
+                    );
+                }
+                Ok(output) => {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    log::warn!("[PipeWire Backend] Failed to force sample rate: {}", stderr);
+                }
+                Err(e) => {
+                    log::warn!("[PipeWire Backend] Error executing pw-metadata: {}", e);
+                }
             }
-            Ok(output) => {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                log::warn!("[PipeWire Backend] Failed to force sample rate: {}", stderr);
-            }
-            Err(e) => {
-                log::warn!("[PipeWire Backend] Error executing pw-metadata: {}", e);
-            }
+            // Remember WE forced the clock so the stop/suspend reset undoes it
+            // (and only it). This runs for every non-locked PipeWire stream, so
+            // a plain no-passthrough user no longer leaks a forced rate on stop.
+            CLOCK_FORCE_APPLIED.store(true, Ordering::Relaxed);
         }
 
         // Note: clock.force-quantum is intentionally NOT set.
@@ -553,6 +776,26 @@ impl AudioBackend for PipeWireBackend {
         };
         log::info!("[PipeWire Backend] Buffer size: {:?}", cpal_buffer_size);
 
+        // Tier 2a (#263): in locked mode (skip_sink_switch) QBZ does NOT steal the
+        // system default sink, so route THIS stream to the selected sink via the
+        // pipewire-ALSA plugin's PIPEWIRE_NODE env — it targets that node WITHOUT
+        // changing the system default. The guard restores the prior env value
+        // after the PCM open (kept alive until the end of this function).
+        #[cfg(target_os = "linux")]
+        let _pw_node_guard = if config.skip_sink_switch {
+            target_sink.as_ref().map(|sink| {
+                let prev = std::env::var("PIPEWIRE_NODE").ok();
+                std::env::set_var("PIPEWIRE_NODE", sink);
+                log::info!(
+                    "[PipeWire Backend] Targeting sink '{}' via PIPEWIRE_NODE (locked mode, default unchanged)",
+                    sink
+                );
+                PwNodeEnvGuard(prev)
+            })
+        } else {
+            None
+        };
+
         // Create MixerDeviceSink with custom config
         let mixer_sink = DeviceSinkBuilder::from_device(device)
             .map_err(|e| format!("Failed to create device sink builder: {}", e))?
@@ -577,7 +820,11 @@ impl AudioBackend for PipeWireBackend {
         // The pre-stream force-rate can be ignored if no streams were active.
         // Re-applying now that the stream exists forces PipeWire to reconfigure
         // the graph at the correct rate.
-        if effective_rate != 44100 && effective_rate != 48000 {
+        //
+        // Tier 1 (issue #263): also gated by skip_sink_switch — in "Lock output
+        // device" mode QBZ never writes the global clock force (pre-stream OR
+        // re-apply), so the user's external routing/graph clock is left untouched.
+        if !config.skip_sink_switch && effective_rate != 44100 && effective_rate != 48000 {
             let _ = Command::new("pw-metadata")
                 .args([
                     "-n",
@@ -658,5 +905,92 @@ impl AudioBackend for PipeWireBackend {
 
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+}
+
+#[cfg(test)]
+mod pw_dump_tests {
+    use super::parse_pw_dump_sinks;
+
+    // Minimal fixture mirroring the real `pw-dump` shape (Cambridge USB DAC +
+    // internal PCI card + a capture source that must be filtered out).
+    const FIXTURE: &str = r#"[
+      {
+        "id": 30,
+        "type": "PipeWire:Interface:Metadata",
+        "props": { "metadata.name": "default" },
+        "metadata": [
+          { "subject": 0, "key": "default.audio.sink", "type": "Spa:String:JSON",
+            "value": { "name": "alsa_output.usb-Cambridge_Audio-00.analog-stereo" } }
+        ]
+      },
+      {
+        "id": 52, "type": "PipeWire:Interface:Device",
+        "info": { "props": { "device.bus": "usb", "device.api": "alsa" } }
+      },
+      {
+        "id": 53, "type": "PipeWire:Interface:Node",
+        "info": { "props": {
+          "media.class": "Audio/Sink",
+          "node.name": "alsa_output.usb-Cambridge_Audio-00.analog-stereo",
+          "node.description": "DacMagic Plus Analog Stereo",
+          "device.id": 52, "device.bus": "usb", "device.api": "alsa",
+          "factory.name": "api.alsa.pcm.sink"
+        } }
+      },
+      {
+        "id": 60, "type": "PipeWire:Interface:Device",
+        "info": { "props": { "device.bus": "pci", "device.api": "alsa" } }
+      },
+      {
+        "id": 61, "type": "PipeWire:Interface:Node",
+        "info": { "props": {
+          "media.class": "Audio/Sink",
+          "node.name": "alsa_output.pci-0000_00_1f.3.analog-stereo",
+          "node.description": "Built-in Audio Analog Stereo",
+          "device.id": 60, "device.api": "alsa",
+          "factory.name": "api.alsa.pcm.sink"
+        } }
+      },
+      {
+        "id": 70, "type": "PipeWire:Interface:Node",
+        "info": { "props": {
+          "media.class": "Audio/Source",
+          "node.name": "alsa_input.usb-Cambridge_Audio-00.analog-stereo"
+        } }
+      }
+    ]"#;
+
+    #[test]
+    fn parses_sinks_only_with_node_names_bus_and_default() {
+        let devs = parse_pw_dump_sinks(FIXTURE);
+        // The Audio/Source must be excluded.
+        assert_eq!(devs.len(), 2, "should parse exactly the two Audio/Sink nodes");
+
+        let usb = devs
+            .iter()
+            .find(|d| d.id == "alsa_output.usb-Cambridge_Audio-00.analog-stereo")
+            .expect("usb sink present");
+        assert_eq!(usb.name, "DacMagic Plus Analog Stereo");
+        assert_eq!(usb.device_bus.as_deref(), Some("usb")); // read from node props
+        assert!(usb.is_hardware);
+        assert!(usb.is_default, "usb sink is the default per Metadata");
+        assert!(usb.max_sample_rate.is_none(), "rate comes from the capability probe, not pw-dump");
+
+        let pci = devs
+            .iter()
+            .find(|d| d.id == "alsa_output.pci-0000_00_1f.3.analog-stereo")
+            .expect("pci sink present");
+        // Bus absent on the node -> cross-referenced via device.id 60.
+        assert_eq!(pci.device_bus.as_deref(), Some("pci"));
+        assert!(pci.is_hardware);
+        assert!(!pci.is_default);
+    }
+
+    #[test]
+    fn empty_or_garbage_json_yields_no_devices() {
+        assert!(parse_pw_dump_sinks("not json").is_empty());
+        assert!(parse_pw_dump_sinks("[]").is_empty());
+        assert!(parse_pw_dump_sinks("{}").is_empty());
     }
 }

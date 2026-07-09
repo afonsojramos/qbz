@@ -17,6 +17,28 @@ use tiny_http::{Header, Method, Response, Server, StatusCode};
 
 use crate::CastError;
 
+/// DLNA `contentFeatures.dlna.org` value advertised on GET/HEAD responses.
+///
+/// `DLNA.ORG_OP=01` = byte-range seek supported, no time-seek.
+/// `DLNA.ORG_FLAGS=01700000...` = streaming/interactive-transfer flags.
+/// No `DLNA.ORG_PN` — FLAC has no standard DLNA profile name.
+///
+/// Strict renderers (e.g. HQPlayer) HEAD-probe the URL and treat the stream as
+/// invalid/finished without these headers. Kept in sync with the DIDL
+/// `protocolInfo` in `dlna::device::build_didl_metadata`.
+pub const DLNA_CONTENT_FEATURES: &str =
+    "DLNA.ORG_OP=01;DLNA.ORG_FLAGS=01700000000000000000000000000000";
+
+/// Chunked-encoding threshold for media responses.
+///
+/// tiny_http 0.12.0 auto-selects `Transfer-Encoding: chunked` (dropping
+/// `Content-Length`) once a body reaches its default 32 KiB threshold. Strict
+/// DLNA renderers (e.g. HQPlayer) reject a chunked media body: they play the
+/// few seconds they buffer, then go STOPPED without range-continuing. Raising
+/// the threshold above any real file size forces Identity encoding with an
+/// explicit `Content-Length` on every media response (200, 206, and HEAD).
+const NO_CHUNK_THRESHOLD: usize = usize::MAX;
+
 #[derive(Clone)]
 struct MediaEntry {
     content_type: String,
@@ -26,7 +48,10 @@ struct MediaEntry {
 
 #[derive(Clone)]
 enum MediaSource {
-    Data(Vec<u8>),
+    // Arc so cloning an entry out of the map for an in-flight request never
+    // copies the whole track, and so eviction can't invalidate a response
+    // that is still being served (#550).
+    Data(std::sync::Arc<Vec<u8>>),
     File(PathBuf),
 }
 
@@ -34,6 +59,12 @@ enum MediaSource {
 pub struct MediaServer {
     port: u16,
     base_url: String,
+    /// Per-session random token embedded in the served path
+    /// (`/audio/<token>/<id>`). Raises the bar from "guess a small integer id"
+    /// to "guess a 128-bit token" for a LAN peer trying to pull buffered bytes.
+    /// Carried in the PATH (not a query string) because some DLNA renderers
+    /// drop query strings.
+    token: String,
     entries: Arc<Mutex<HashMap<u64, MediaEntry>>>,
     shutdown: Arc<AtomicBool>,
     handle: Option<JoinHandle<()>>,
@@ -69,9 +100,11 @@ impl MediaServer {
 
         let entries = Arc::new(Mutex::new(HashMap::new()));
         let shutdown = Arc::new(AtomicBool::new(false));
+        let token = generate_token();
 
         let entries_clone = entries.clone();
         let shutdown_clone = shutdown.clone();
+        let token_clone = token.clone();
         let port_for_log = port;
 
         let handle = thread::spawn(move || {
@@ -87,6 +120,7 @@ impl MediaServer {
                             request.url(),
                             &request,
                             &entries_clone,
+                            &token_clone,
                         );
                         let _ = request.respond(response);
                     }
@@ -103,6 +137,7 @@ impl MediaServer {
         Ok(Self {
             port,
             base_url,
+            token,
             entries,
             shutdown,
             handle: Some(handle),
@@ -118,27 +153,62 @@ impl MediaServer {
     }
 
     /// Get base URL (e.g., "http://192.168.1.100:8080")
+    /// Drop every registered entry (releases the full-track buffers). Called
+    /// on cast stop/disconnect so track bytes don't outlive the session (#550).
+    pub fn clear_entries(&self) {
+        if let Ok(mut entries) = self.entries.lock() {
+            entries.clear();
+        }
+    }
+
     pub fn base_url(&self) -> String {
         self.base_url.clone()
     }
 
-    /// Register audio data to serve (returns path like "/audio/123")
+    /// Relative served path for an id, including the session token.
+    fn audio_path(&self, id: u64) -> String {
+        format!("/audio/{}/{}", self.token, id)
+    }
+
+    /// Register audio data to serve (returns path like "/audio/<token>/123")
     pub fn register_audio(&mut self, id: u64, data: Vec<u8>, content_type: &str) -> String {
         let entry = MediaEntry {
             content_type: content_type.to_string(),
             size: data.len() as u64,
-            source: MediaSource::Data(data),
+            source: MediaSource::Data(std::sync::Arc::new(data)),
         };
 
         if let Ok(mut entries) = self.entries.lock() {
+            // Only the track being cast is servable — evict everything else.
+            // Entries held full track bytes and NOTHING ever removed them, so
+            // a DLNA session grew by one full track per auto-advance until app
+            // exit (#550: 50 MB -> 4.5 GB). An in-flight response keeps its
+            // own Arc, so eviction never truncates an ongoing range request.
+            entries.retain(|k, _| *k == id);
             entries.insert(id, entry);
         }
 
-        format!("/audio/{}", id)
+        self.audio_path(id)
     }
 
-    /// Register local file to serve
+    /// Register a local file to serve, inferring the content type from the
+    /// extension via [`content_type_for_path`].
     pub fn register_file(&mut self, id: u64, file_path: &str) -> Result<String, CastError> {
+        let path = Path::new(file_path);
+        let content_type = content_type_for_path(path);
+        self.register_file_with_content_type(id, file_path, &content_type)
+    }
+
+    /// Register a local file to serve with an explicit content type. Lets the
+    /// caller supply a richer MIME than extension-sniffing yields (e.g. from
+    /// decoded track metadata). Streams the file from disk (range-capable),
+    /// never reads the whole file into RAM.
+    pub fn register_file_with_content_type(
+        &mut self,
+        id: u64,
+        file_path: &str,
+        content_type: &str,
+    ) -> Result<String, CastError> {
         let path = Path::new(file_path);
         if !path.exists() {
             return Err(CastError::InvalidRequest(format!(
@@ -148,26 +218,28 @@ impl MediaServer {
         }
 
         let size = path.metadata().map_err(CastError::Io)?.len();
-        let content_type = content_type_for_path(path);
 
         let entry = MediaEntry {
-            content_type,
+            content_type: content_type.to_string(),
             size,
             source: MediaSource::File(path.to_path_buf()),
         };
 
         if let Ok(mut entries) = self.entries.lock() {
+            // Same eviction rule as register_audio (#550): switching to a
+            // local file must also release the previous track's bytes.
+            entries.retain(|k, _| *k == id);
             entries.insert(id, entry);
         }
 
-        Ok(format!("/audio/{}", id))
+        Ok(self.audio_path(id))
     }
 
     /// Get full URL for registered audio
     pub fn get_audio_url(&self, id: u64) -> Option<String> {
         let entries = self.entries.lock().ok()?;
         if entries.contains_key(&id) {
-            return Some(format!("{}/audio/{}", self.base_url, id));
+            return Some(format!("{}{}", self.base_url, self.audio_path(id)));
         }
         None
     }
@@ -183,7 +255,7 @@ impl MediaServer {
             .map(|ip| format_base_url(ip, self.port))
             .unwrap_or_else(|| self.base_url.clone());
 
-        Some(format!("{}/audio/{}", base_url, id))
+        Some(format!("{}{}", base_url, self.audio_path(id)))
     }
 
     /// Get server port
@@ -203,6 +275,7 @@ fn handle_request(
     url: &str,
     request: &tiny_http::Request,
     entries: &Arc<Mutex<HashMap<u64, MediaEntry>>>,
+    expected_token: &str,
 ) -> Response<std::io::Cursor<Vec<u8>>> {
     log::info!(
         "MediaServer: {} request from {:?} for {}",
@@ -211,21 +284,31 @@ fn handle_request(
         url
     );
 
-    if method != &Method::Get {
-        log::warn!("MediaServer: Rejected non-GET request: {}", method);
+    // Allow GET and HEAD. Strict DLNA renderers HEAD-probe the URL to validate
+    // the resource before playing; 405-rejecting HEAD makes them treat the
+    // stream as invalid and stop shortly after buffering.
+    let is_head = method == &Method::Head;
+    if method != &Method::Get && !is_head {
+        log::warn!("MediaServer: Rejected unsupported method: {}", method);
         return Response::from_data(Vec::new()).with_status_code(StatusCode(405));
     }
 
-    let id = match parse_audio_id(url) {
-        Some(id) => id,
+    let (token, id) = match parse_audio_request(url) {
+        Some(parsed) => parsed,
         None => {
             log::warn!(
-                "MediaServer: 404 - Could not parse audio ID from URL: {}",
+                "MediaServer: 404 - Could not parse audio request from URL: {}",
                 url
             );
             return Response::from_data(Vec::new()).with_status_code(StatusCode(404));
         }
     };
+
+    // Constant-ish token check — reject LAN peers that don't hold the token.
+    if token != expected_token {
+        log::warn!("MediaServer: 403 - token mismatch for URL: {}", url);
+        return Response::from_data(Vec::new()).with_status_code(StatusCode(403));
+    }
 
     let entry = match entries.lock().ok().and_then(|map| map.get(&id).cloned()) {
         Some(entry) => {
@@ -243,6 +326,26 @@ fn handle_request(
         }
     };
 
+    // HEAD: advertise the resource (type/size/DLNA features) without reading
+    // any bytes. tiny_http suppresses the body for HEAD while still emitting the
+    // advertised Content-Length.
+    if is_head {
+        let headers = vec![
+            header("Content-Type", &entry.content_type),
+            header("Accept-Ranges", "bytes"),
+            header("transferMode.dlna.org", "Streaming"),
+            header("contentFeatures.dlna.org", DLNA_CONTENT_FEATURES),
+        ];
+        return Response::new(
+            StatusCode(200),
+            headers,
+            std::io::Cursor::new(Vec::new()),
+            Some(entry.size as usize),
+            None,
+        )
+        .with_chunked_threshold(NO_CHUNK_THRESHOLD);
+    }
+
     let range_header = request
         .headers()
         .iter()
@@ -257,9 +360,12 @@ fn handle_request(
     };
 
     let mut response = Response::from_data(data)
+        .with_chunked_threshold(NO_CHUNK_THRESHOLD)
         .with_status_code(status_code)
         .with_header(header("Content-Type", &entry.content_type))
-        .with_header(header("Accept-Ranges", "bytes"));
+        .with_header(header("Accept-Ranges", "bytes"))
+        .with_header(header("transferMode.dlna.org", "Streaming"))
+        .with_header(header("contentFeatures.dlna.org", DLNA_CONTENT_FEATURES));
 
     if let Some(content_range) = content_range {
         response = response.with_header(header("Content-Range", &content_range));
@@ -299,13 +405,17 @@ fn read_range(
     Ok((buffer, status_code, content_range))
 }
 
-fn parse_audio_id(url: &str) -> Option<u64> {
+/// Parse `/audio/<token>/<id>` into `(token, id)`. The token is carried in the
+/// path (not a query string) so DLNA renderers that strip query strings still
+/// authenticate.
+fn parse_audio_request(url: &str) -> Option<(String, u64)> {
     let path = url.split('?').next().unwrap_or(url);
     let parts: Vec<&str> = path.trim_matches('/').split('/').collect();
-    if parts.len() != 2 || parts[0] != "audio" {
+    if parts.len() != 3 || parts[0] != "audio" {
         return None;
     }
-    parts[1].parse().ok()
+    let id = parts[2].parse().ok()?;
+    Some((parts[1].to_string(), id))
 }
 
 fn parse_range(header: &str, total: u64) -> Option<(u64, u64)> {
@@ -367,17 +477,81 @@ fn format_base_url(ip: IpAddr, port: u16) -> String {
     }
 }
 
+/// Map a local-file extension to a content type. Mirrors the rich map the
+/// Tauri local-cast path used (`local_track_content_type`) so casting a local
+/// file advertises the right MIME — the previous map here was poorer
+/// (`audio/ape`, no mp3/ogg/opus/aac, octet-stream gaps).
 fn content_type_for_path(path: &Path) -> String {
     match path
         .extension()
         .and_then(|e| e.to_str())
         .map(|s| s.to_lowercase())
+        .as_deref()
     {
-        Some(ext) if ext == "flac" => "audio/flac".to_string(),
-        Some(ext) if ext == "wav" => "audio/wav".to_string(),
-        Some(ext) if ext == "m4a" => "audio/mp4".to_string(),
-        Some(ext) if ext == "aiff" || ext == "aif" => "audio/aiff".to_string(),
-        Some(ext) if ext == "ape" => "audio/ape".to_string(),
+        Some("flac") => "audio/flac".to_string(),
+        Some("wav") => "audio/wav".to_string(),
+        Some("m4a") | Some("alac") | Some("mp4") => "audio/mp4".to_string(),
+        Some("aiff") | Some("aif") => "audio/aiff".to_string(),
+        Some("ape") => "audio/x-ape".to_string(),
+        Some("mp3") => "audio/mpeg".to_string(),
+        Some("ogg") | Some("oga") => "audio/ogg".to_string(),
+        Some("opus") => "audio/opus".to_string(),
+        Some("aac") => "audio/aac".to_string(),
         _ => "application/octet-stream".to_string(),
+    }
+}
+
+/// Generate a 128-bit hex session token seeded from OS entropy (via
+/// `RandomState`), without pulling in a `rand` dependency. Not cryptographic,
+/// but enough to stop a LAN peer from guessing `/audio/<id>`.
+fn generate_token() -> String {
+    use std::hash::BuildHasher;
+    let hi = std::collections::hash_map::RandomState::new().hash_one(0x9E37_79B9u64);
+    let lo = std::collections::hash_map::RandomState::new().hash_one(0x85EB_CA77u64);
+    format!("{:016x}{:016x}", hi, lo)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_audio_request_tokened_path() {
+        assert_eq!(
+            parse_audio_request("/audio/deadbeef/123"),
+            Some(("deadbeef".to_string(), 123))
+        );
+        // Query string is ignored.
+        assert_eq!(
+            parse_audio_request("/audio/tok/42?x=1"),
+            Some(("tok".to_string(), 42))
+        );
+        // Old un-tokened path no longer parses.
+        assert_eq!(parse_audio_request("/audio/123"), None);
+        assert_eq!(parse_audio_request("/other/tok/1"), None);
+        assert_eq!(parse_audio_request("/audio/tok/notanum"), None);
+    }
+
+    #[test]
+    fn content_type_map_is_rich() {
+        use std::path::Path;
+        assert_eq!(content_type_for_path(Path::new("a.flac")), "audio/flac");
+        assert_eq!(content_type_for_path(Path::new("a.ape")), "audio/x-ape");
+        assert_eq!(content_type_for_path(Path::new("a.mp3")), "audio/mpeg");
+        assert_eq!(content_type_for_path(Path::new("a.opus")), "audio/opus");
+        assert_eq!(content_type_for_path(Path::new("a.m4a")), "audio/mp4");
+        assert_eq!(
+            content_type_for_path(Path::new("a.xyz")),
+            "application/octet-stream"
+        );
+    }
+
+    #[test]
+    fn token_is_random_and_long() {
+        let a = generate_token();
+        let b = generate_token();
+        assert_eq!(a.len(), 32);
+        assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_ne!(a, b, "two tokens should differ");
     }
 }

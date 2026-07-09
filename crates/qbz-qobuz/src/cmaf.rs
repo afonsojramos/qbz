@@ -35,7 +35,7 @@
 
 use std::sync::Arc;
 
-use qbz_models::Quality;
+use qbz_models::{Quality, StreamQualityInfo};
 
 use crate::client::QobuzClient;
 use crate::error::Result;
@@ -144,15 +144,9 @@ pub async fn setup_streaming(
     let init_start = std::time::Instant::now();
 
     log::info!("[CMAF] Fetching init segment for track {}", track_id);
-    let init_data = http
-        .get(&init_url)
-        .header("User-Agent", "Mozilla/5.0")
-        .send()
+    let init_data = fetch_bytes_with_retry(&http, &init_url, "CMAF init")
         .await
-        .map_err(|e| format!("Failed to fetch init segment: {}", e))?
-        .bytes()
-        .await
-        .map_err(|e| format!("Failed to read init segment: {}", e))?;
+        .map_err(|e| format!("Failed to fetch init segment: {}", e))?;
 
     let init_fetch_ms = init_start.elapsed().as_millis() as u64;
 
@@ -211,6 +205,31 @@ pub async fn download_full_with_progress(
     quality: Quality,
     on_progress: Option<CmafProgressCallback>,
 ) -> std::result::Result<Vec<u8>, String> {
+    download_full_with_quality_progress(client, track_id, quality, on_progress)
+        .await
+        .map(|(bytes, _quality)| bytes)
+}
+
+/// Like [`download_full`] but also returns the quality actually resolved from
+/// the CMAF init segment (`format_id` / `sampling_rate` / `bit_depth`). Used
+/// by the external-stream (Cast / DLNA) path, which must surface the real
+/// delivered quality. The CMAF path always yields decrypted FLAC, so the
+/// caller's content type is `audio/flac`.
+pub async fn download_full_with_quality(
+    client: &QobuzClient,
+    track_id: u64,
+    quality: Quality,
+) -> std::result::Result<(Vec<u8>, StreamQualityInfo), String> {
+    download_full_with_quality_progress(client, track_id, quality, None).await
+}
+
+/// [`download_full_with_quality`] + a per-segment progress callback.
+pub async fn download_full_with_quality_progress(
+    client: &QobuzClient,
+    track_id: u64,
+    quality: Quality,
+    on_progress: Option<CmafProgressCallback>,
+) -> std::result::Result<(Vec<u8>, StreamQualityInfo), String> {
     let setup = setup_streaming(client, track_id, quality).await?;
     let http = build_cdn_client()?;
 
@@ -236,7 +255,14 @@ pub async fn download_full_with_progress(
         output.len() as f64 / (1024.0 * 1024.0),
         total_size as f64 / (1024.0 * 1024.0),
     );
-    Ok(output)
+
+    // `from_raw` normalizes the rate unit (kHz vs Hz) defensively.
+    let quality_info = StreamQualityInfo::from_raw(
+        setup.format_id,
+        setup.sampling_rate.map(|v| v as f64),
+        setup.bit_depth,
+    );
+    Ok((output, quality_info))
 }
 
 /// Download a track's complete CMAF stream and return it as a raw (still
@@ -350,6 +376,44 @@ fn build_cdn_client() -> std::result::Result<reqwest::Client, String> {
         .map_err(|e| format!("CMAF client error: {}", e))
 }
 
+/// Fetch a CDN URL into bytes, retrying transient failures (network blips,
+/// 5xx, 429) with exponential backoff. A terminal status (404/403) fails
+/// immediately. Without this a single transient segment failure aborted the
+/// whole track download and the frontend skipped it — issue #467.
+async fn fetch_bytes_with_retry(
+    http: &reqwest::Client,
+    url: &str,
+    log_tag: &str,
+) -> std::result::Result<Vec<u8>, String> {
+    use crate::retry::{
+        classify_reqwest, classify_status, retry_transient, FetchError, DEFAULT_MAX_ATTEMPTS,
+    };
+    retry_transient(
+        DEFAULT_MAX_ATTEMPTS,
+        log_tag,
+        FetchError::is_transient,
+        |_attempt| async move {
+            let response = http
+                .get(url)
+                .header("User-Agent", "Mozilla/5.0")
+                .send()
+                .await
+                .map_err(|e| classify_reqwest(&e, "fetch"))?;
+            let status = response.status();
+            if !status.is_success() {
+                return Err(classify_status(status, "fetch"));
+            }
+            response
+                .bytes()
+                .await
+                .map(|b| b.to_vec())
+                .map_err(|e| classify_reqwest(&e, "read"))
+        },
+    )
+    .await
+    .map_err(|e| e.to_string())
+}
+
 /// Fetch segments 1..=n_segments concurrently with a semaphore cap and a
 /// cooldown per slot to stay under CDN rate limits.
 ///
@@ -379,15 +443,10 @@ async fn fetch_all_segments(
 
         handles.push(tokio::spawn(async move {
             let permit = sem.acquire_owned().await.map_err(|e| format!("semaphore: {}", e))?;
-            let seg_data = http
-                .get(&seg_url)
-                .header("User-Agent", "Mozilla/5.0")
-                .send()
-                .await
-                .map_err(|e| format!("[{}] seg {} fetch: {}", log_tag, seg_idx, e))?
-                .bytes()
-                .await
-                .map_err(|e| format!("[{}] seg {} read: {}", log_tag, seg_idx, e))?;
+            let seg_data =
+                fetch_bytes_with_retry(&http, &seg_url, &format!("{} seg {}", log_tag, seg_idx))
+                    .await
+                    .map_err(|e| format!("[{}] seg {} fetch: {}", log_tag, seg_idx, e))?;
             let bytes_this_segment = seg_data.len() as u64;
             if let Some(cb) = progress {
                 let done = counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
@@ -401,7 +460,7 @@ async fn fetch_all_segments(
             // to stay under CDN rate limits (most use 1s windows)
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
             drop(permit);
-            Ok::<(u8, Vec<u8>), String>((seg_idx, seg_data.to_vec()))
+            Ok::<(u8, Vec<u8>), String>((seg_idx, seg_data))
         }));
     }
 

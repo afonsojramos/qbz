@@ -25,6 +25,8 @@ pub fn main_window_built_transparent() -> bool {
 }
 #[cfg(target_os = "linux")]
 pub mod autoconfig_graphics;
+pub mod boot_watchdog;
+pub mod graphics_detection;
 
 pub mod api;
 pub mod api_cache;
@@ -38,6 +40,8 @@ pub mod cast;
 pub mod config;
 pub mod credentials;
 pub mod discogs;
+pub mod discord_rpc;
+pub mod ephemeral_library;
 pub mod flatpak;
 #[cfg(target_os = "linux")]
 pub mod idle_inhibit;
@@ -73,10 +77,9 @@ pub mod tray_linux_ksni;
 pub mod updates;
 pub mod user_data;
 pub mod visualizer;
-pub mod qbzd_discovery;
 
 use rustls::crypto::{aws_lc_rs, CryptoProvider};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use tauri::{Emitter, Manager};
 use tokio::sync::{Mutex, RwLock};
 
@@ -86,6 +89,7 @@ use lastfm::LastFmClient;
 use media_controls::{MediaControlsManager, TrackInfo};
 use playback_context::ContextManager;
 use player::Player;
+use qbz_audio::DeviceReservation;
 use queue::QueueManager;
 use share::SongLinkClient;
 use visualizer::Visualizer;
@@ -103,6 +107,14 @@ pub struct AppState {
     pub visualizer: Visualizer,
     #[cfg(target_os = "linux")]
     pub idle_inhibitor: idle_inhibit::IdleInhibitor,
+    /// Long-lived per-process DAC reservation (Lifetime B from the
+    /// ALSA exclusive-hardening design spec). Held while the
+    /// `reserve_dac_while_running` audio setting is true and the
+    /// selected output device targets a single ALSA card.
+    /// Acquired at startup or via `v2_set_reserve_dac_while_running`,
+    /// dropped on toggle-off, DAC change to a non-card device, or
+    /// `AppState` drop.
+    pub dac_reservation: StdMutex<Option<DeviceReservation>>,
 }
 
 impl AppState {
@@ -165,6 +177,83 @@ impl AppState {
             visualizer,
             #[cfg(target_os = "linux")]
             idle_inhibitor: idle_inhibit::IdleInhibitor::new(),
+            dac_reservation: StdMutex::new(None),
+        }
+    }
+
+    /// Apply the `reserve_dac_while_running` setting (Lifetime B from the
+    /// ALSA exclusive-hardening design spec).
+    ///
+    /// Idempotent: drops any currently-held guard, then re-acquires for the
+    /// new device when both arguments make sense (Some + targets a single
+    /// ALSA card via a recognized plugin prefix). Passing `None` for
+    /// `hw_device`, or a device string the parser can't tie to one card
+    /// (`default`, `pulse`, etc.), releases the existing guard without
+    /// reacquiring.
+    ///
+    /// `app_device_name` is the user-facing DAC label that will be advertised
+    /// over D-Bus once QBZ publishes the `ReserveDevice1` interface as a
+    /// server (see the design spec's "Note on `ApplicationName`" — that path
+    /// is deferred). Today the value is captured for logging only; pass the
+    /// same `hw_device` string if no friendlier name is at hand.
+    ///
+    /// On acquisition failure (higher-priority holder, D-Bus error) the
+    /// guard is left as `None` and a warning is logged. Status is surfaced
+    /// to the UI via `v2_get_dac_reservation_status`.
+    pub fn apply_dac_reservation(
+        &self,
+        hw_device: Option<&str>,
+        app_device_name: Option<&str>,
+    ) {
+        let mut guard = match self.dac_reservation.lock() {
+            Ok(g) => g,
+            Err(poisoned) => {
+                log::warn!(
+                    "[reservation] dac_reservation mutex poisoned, recovering: {}",
+                    poisoned
+                );
+                poisoned.into_inner()
+            }
+        };
+        // Drop any existing guard FIRST so the bus name is released before
+        // we attempt to reacquire (idempotent re-apply). This matters when
+        // the user changes DACs: the old card's bus name must release
+        // before the new card's bus name is requested, otherwise PipeWire
+        // may not have moved off the old card yet.
+        *guard = None;
+
+        let Some(hw) = hw_device else {
+            return;
+        };
+        if !is_card_specific_device(hw) {
+            return;
+        }
+
+        let app_name = app_device_name.unwrap_or(hw);
+        match DeviceReservation::acquire(hw, app_name) {
+            Ok(r) => {
+                if r.is_active() {
+                    log::info!(
+                        "[reservation] persistent DAC reservation acquired for {}",
+                        hw
+                    );
+                } else {
+                    log::info!(
+                        "[reservation] persistent DAC reservation degraded for {} (D-Bus session bus unavailable)",
+                        hw
+                    );
+                }
+                *guard = Some(r);
+            }
+            Err(e) => {
+                log::warn!(
+                    "[reservation] persistent reservation failed for {}: {}",
+                    hw,
+                    e
+                );
+                // Leave guard as None; the v2_get_dac_reservation_status
+                // command surfaces the contended state to the UI.
+            }
         }
     }
 }
@@ -173,6 +262,24 @@ impl Default for AppState {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Whether an ALSA device id targets a single card (so its `ReserveDevice1`
+/// bus name has well-defined per-card semantics). Used by
+/// `AppState::apply_dac_reservation` and `v2_get_dac_reservation_status` to
+/// gate Lifetime-B reservation on devices the parser can map to one card.
+///
+/// Conservative allow-list: prefixes whose ALSA configurations all expand
+/// to a single card. `default`, `pulse`, `null`, etc. are intentionally
+/// excluded — they don't map to a single piece of hardware and a
+/// per-card reservation has no defined meaning.
+pub(crate) fn is_card_specific_device(s: &str) -> bool {
+    s.starts_with("hw:")
+        || s.starts_with("plughw:")
+        || s.starts_with("front:")
+        || s.starts_with("surround")
+        || s.starts_with("iec958:")
+        || s.starts_with("hdmi:")
 }
 
 /// Update MPRIS metadata when track changes
@@ -434,6 +541,31 @@ fn should_use_main_window_transparency() -> bool {
         return false;
     }
 
+    // Hardware-acceleration gate. A transparent main window forces GTK
+    // to re-paint the client-side decoration chrome (rounded corners +
+    // subtle edge) on every frame. Under GPU compositing the cost is
+    // imperceptible; under SW compositing it becomes the dominant frame-
+    // budget cost — modals, the splash spinner, and anything else that
+    // animates visibly drop frames. Force opaque whenever HW accel is
+    // off, regardless of the user's "match system window chrome"
+    // preference. The preference itself is preserved in the DB and
+    // reactivates automatically the next time HW accel is on.
+    //
+    // Resolution mirrors main.rs: env var QBZ_HARDWARE_ACCEL (0/1)
+    // overrides the DB; otherwise read the DB; otherwise assume on.
+    let hw_accel_enabled = match std::env::var("QBZ_HARDWARE_ACCEL").as_deref() {
+        Ok("0") => false,
+        Ok("1") => true,
+        _ => config::graphics_settings::GraphicsSettingsStore::new_readonly()
+            .ok()
+            .and_then(|s| s.get_settings().ok())
+            .map(|gs| gs.hardware_acceleration)
+            .unwrap_or(true),
+    };
+    if !hw_accel_enabled {
+        return false;
+    }
+
     // Opt-in via persisted settings: "match system window chrome" wants
     // rounded corners, which need a transparent window so the webview
     // background stops painting white outside the radius.
@@ -495,7 +627,7 @@ fn handle_qobuz_link(handle: &tauri::AppHandle, url: &str, delay: bool) {
     }
 }
 
-pub fn run() {
+pub fn run(qconnect_cli_override: Option<bool>) {
     // Load .env file if present (for development)
     // Silently ignore if not found (production builds use compile-time env vars)
     dotenvy::dotenv().ok();
@@ -698,6 +830,8 @@ pub fn run() {
     let playback_prefs_state = config::playback_preferences::PlaybackPreferencesState::new_empty();
     let favorites_prefs_state =
         config::favorites_preferences::FavoritesPreferencesState::new_empty();
+    let library_prefs_state =
+        config::library_preferences::LibraryPreferencesState::new_empty();
     let favorites_cache_state = config::favorites_cache::FavoritesCacheState::new_empty();
     let tray_settings_state = config::tray_settings::TraySettingsState::new_empty();
     let remote_control_settings_state =
@@ -799,16 +933,39 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init());
 
+    // Capture the bits we need to apply Lifetime-B DAC reservation before
+    // moving `audio_settings` into AppState. Reservation is opt-in via
+    // `reserve_dac_while_running` and only meaningful when the saved
+    // output device targets a single ALSA card (hw:/plughw:/front:/...).
+    let lifetime_b_enabled = audio_settings.reserve_dac_while_running;
+    let lifetime_b_device = if lifetime_b_enabled {
+        audio_settings.output_device.clone()
+    } else {
+        None
+    };
+
+    let app_state = AppState::with_device_and_settings(saved_device, audio_settings);
+    if lifetime_b_enabled {
+        if let Some(ref dev) = lifetime_b_device {
+            log::info!(
+                "[reservation] applying persisted Lifetime-B reservation at startup for {}",
+                dev
+            );
+            app_state.apply_dac_reservation(Some(dev), Some(dev));
+        } else {
+            log::info!(
+                "[reservation] reserve_dac_while_running is true but no output device is set; skipping startup reservation"
+            );
+        }
+    }
+
     builder
-        .manage(AppState::with_device_and_settings(
-            saved_device,
-            audio_settings,
-        ))
+        .manage(app_state)
         .manage(core_bridge::CoreBridgeState::new())
         .manage(commands_v2::OAuthCancelState::new())
-        .manage(qbzd_discovery::QbzdDiscoveryState::new())
         .manage(runtime::RuntimeManagerState::new())
         .manage(qconnect::QconnectServiceState::new())
+        .manage(qconnect::startup::QconnectCliOverride(qconnect_cli_override))
         .manage(user_data_paths)
         .setup(move |app| {
             log::info!(
@@ -1019,6 +1176,7 @@ pub fn run() {
                 let v2_viz_tap = qbz_audio::VisualizerTap {
                     ring_buffer: v1_viz_tap.ring_buffer.clone(),
                     enabled: v1_viz_tap.enabled.clone(),
+                    paused: v1_viz_tap.paused.clone(),
                     sample_rate: v1_viz_tap.sample_rate.clone(),
                 };
                 tauri::async_runtime::spawn(async move {
@@ -1087,6 +1245,31 @@ pub fn run() {
                 let mut last_track_id: u64 = 0;
 
                 loop {
+                    // Surface backend init failures from the V2 player to
+                    // the frontend exactly once. record_stream_error stores
+                    // the user-readable message; take_stream_error_message
+                    // drains it so we never re-emit the same toast on
+                    // subsequent ticks. Only the V2 (qbz-player) path
+                    // populates this — the legacy player's init failures
+                    // continue to surface via existing channels.
+                    let init_error: Option<String> = v2_player_state
+                        .read()
+                        .await
+                        .as_ref()
+                        .and_then(qbz_player::SharedState::take_stream_error_message);
+                    if let Some(message) = init_error {
+                        #[derive(serde::Serialize, Clone)]
+                        struct AudioInitFailedPayload {
+                            message: String,
+                        }
+                        if let Err(e) = app_handle.emit(
+                            "audio:init-failed",
+                            AudioInitFailedPayload { message },
+                        ) {
+                            log::warn!("Failed to emit audio:init-failed event: {}", e);
+                        }
+                    }
+
                     // Check V2 player state first (takes priority if active)
                     // V2 player is accessed via async lock, but we only need a clone
                     let v2_state_opt: Option<qbz_player::SharedState> =
@@ -1246,20 +1429,39 @@ pub fn run() {
                         }
                     }
 
-                    // Adaptive polling:
-                    // - fast (250ms) when playing - improves seekbar/lyrics sync
-                    // - slow (1000ms) when paused/stopped with a track loaded
-                    // - very slow (5000ms) when no track is loaded (idle)
-                    let sleep_duration = if is_playing {
-                        std::time::Duration::from_millis(250)
-                    } else if track_id == 0 {
-                        std::time::Duration::from_millis(5000)
-                    } else {
-                        std::time::Duration::from_millis(1000)
-                    };
-                    tokio::time::sleep(sleep_duration).await;
+                    // Uniform 250ms polling cadence regardless of state.
+                    //
+                    // The earlier adaptive scheme used 5s when idle and 1s when
+                    // paused-with-track to save power. In practice the savings
+                    // were imperceptible (the loop only does atomic reads when
+                    // there's no state change, since `should_emit` filters all
+                    // no-op iterations) and the cost was visible: when play
+                    // starts, `play_data` is asynchronous — the audio thread
+                    // sets `is_playing` / `current_position` only after decoder
+                    // and device init (~500-2000ms). A wakeup fired at the end
+                    // of `v2_play_track` reads stale state, so the loop falls
+                    // back to its long sleep and the first emit reflecting the
+                    // real position arrives much later. By the time it lands,
+                    // `current_position()` (wall-clock based) is already past
+                    // second 0-1, so the seekbar appears to jump straight to 2+.
+                    //
+                    // Polling uniformly at 250ms catches the async transition
+                    // within one cadence and keeps the seekbar showing 0:00 →
+                    // 0:01 → 0:02 from the start. PLAYBACK_STATE_WAKEUP is kept
+                    // as the fast path for synchronous V2 commands (pause/
+                    // resume/stop/seek) — it still gives them sub-50ms response.
+                    let sleep_duration = std::time::Duration::from_millis(250);
+                    tokio::select! {
+                        _ = tokio::time::sleep(sleep_duration) => {},
+                        _ = commands_v2::helpers::PLAYBACK_STATE_WAKEUP.notified() => {},
+                    }
                 }
             });
+
+            // QConnect auto-connect is now triggered from inside v2_runtime_bootstrap
+            // after OAuth restore + session activation, so the connect call runs against
+            // a fully initialized client. The CLI override is exposed via managed state
+            // (QconnectCliOverride) so bootstrap can read it.
 
             Ok(())
         })
@@ -1311,6 +1513,7 @@ pub fn run() {
             }
         })
         .manage(library_state)
+        .manage(ephemeral_library::EphemeralLibraryState::new())
         .manage(cast_state)
         .manage(dlna_state)
         .manage(offline_cache_state)
@@ -1325,6 +1528,7 @@ pub fn run() {
         .manage(offline_state)
         .manage(playback_prefs_state)
         .manage(favorites_prefs_state)
+        .manage(library_prefs_state)
         .manage(favorites_cache_state)
         .manage(tray_settings_state)
         .manage(remote_control_settings_state)
@@ -1346,6 +1550,7 @@ pub fn run() {
         .manage(listenbrainz_v2_state)
         .manage(musicbrainz_v2_state)
         .manage(lastfm_v2_state)
+        .manage(discord_rpc::DiscordRpcState::default())
         .invoke_handler(tauri::generate_handler![
             commands_v2::runtime_get_status,
             commands_v2::runtime_bootstrap,
@@ -1364,6 +1569,7 @@ pub fn run() {
             qconnect::v2_qconnect_set_volume_if_remote,
             qconnect::v2_qconnect_mute_if_remote,
             qconnect::v2_qconnect_stop_if_remote,
+            qconnect::v2_qconnect_set_position_if_remote,
             qconnect::v2_qconnect_toggle_shuffle_if_remote,
             qconnect::v2_qconnect_cycle_repeat_if_remote,
             qconnect::v2_qconnect_set_autoplay_mode_if_remote,
@@ -1381,6 +1587,8 @@ pub fn run() {
             qconnect::v2_qconnect_report_volume,
             qconnect::v2_qconnect_get_device_name,
             qconnect::v2_qconnect_set_device_name,
+            qconnect::v2_qconnect_get_startup_mode,
+            qconnect::v2_qconnect_set_startup_mode,
             qconnect::v2_get_hostname,
             commands_v2::v2_is_logged_in,
             commands_v2::v2_login,
@@ -1393,9 +1601,6 @@ pub fn run() {
             commands_v2::v2_start_system_browser_oauth,
             commands_v2::v2_cancel_oauth_login,
             commands_v2::v2_cancel_system_browser_oauth,
-            qbzd_discovery::v2_qbzd_start_discovery,
-            qbzd_discovery::v2_qbzd_stop_discovery,
-            qbzd_discovery::v2_qbzd_get_devices,
             commands_v2::v2_get_user_info,
             commands_v2::v2_save_credentials,
             commands_v2::v2_clear_saved_credentials,
@@ -1421,6 +1626,10 @@ pub fn run() {
             commands_v2::v2_get_playback_preferences,
             commands_v2::v2_get_favorites_preferences,
             commands_v2::v2_save_favorites_preferences,
+            commands_v2::v2_get_library_preferences,
+            commands_v2::v2_save_library_preferences,
+            commands_v2::v2_set_library_folders_view_mode,
+            commands_v2::v2_set_library_folders_tree_sidebar_width,
             commands_v2::v2_get_cache_stats,
             commands_v2::v2_get_available_backends,
             commands_v2::v2_get_devices_for_backend,
@@ -1446,6 +1655,13 @@ pub fn run() {
             commands_v2::v2_set_gdk_scale,
             commands_v2::v2_set_gdk_dpi_scale,
             commands_v2::v2_set_gsk_renderer,
+            commands_v2::v2_set_preferred_gpu,
+            commands_v2::v2_set_nvidia_compat_mode,
+            commands_v2::v2_get_graphics_recommendation,
+            commands_v2::v2_enumerate_gpus,
+            commands_v2::v2_mark_boot_succeeded,
+            commands_v2::v2_get_crash_flags,
+            commands_v2::v2_clear_crash_flag,
             commands_v2::v2_clear_cache,
             commands_v2::v2_clear_artist_cache,
             commands_v2::v2_get_vector_store_stats,
@@ -1507,6 +1723,9 @@ pub fn run() {
             commands_v2::v2_library_get_scan_progress,
             commands_v2::v2_library_get_tracks_by_ids,
             commands_v2::v2_library_play_track,
+            commands_v2::v2_ephemeral_open_folder,
+            commands_v2::v2_ephemeral_clear,
+            commands_v2::v2_ephemeral_get_track,
             commands_v2::v2_playlist_set_sort,
             commands_v2::v2_playlist_set_artwork,
             commands_v2::v2_playlist_get_all_settings,
@@ -1565,6 +1784,9 @@ pub fn run() {
             commands_v2::v2_delete_pending_playlist,
             commands_v2::v2_mark_scrobbles_sent,
             commands_v2::v2_remove_cached_track,
+            commands_v2::v2_remove_cached_album,
+            commands_v2::v2_redownload_cached_album,
+            commands_v2::v2_redownload_cached_track,
             commands_v2::v2_get_cached_tracks,
             commands_v2::v2_get_offline_cache_stats,
             commands_v2::v2_set_offline_cache_limit,
@@ -1596,14 +1818,21 @@ pub fn run() {
             commands_v2::v2_library_get_cache_stats,
             commands_v2::v2_library_get_stats,
             commands_v2::v2_library_get_albums,
+            commands_v2::v2_library_get_albums_metadata,
+            commands_v2::v2_library_get_albums_page,
             commands_v2::v2_library_get_folders,
             commands_v2::v2_library_get_folders_with_metadata,
+            commands_v2::v2_library_count_folder_tracks,
+            commands_v2::v2_library_list_folder_children,
+            commands_v2::v2_library_list_folder_tracks,
+            commands_v2::v2_library_list_folder_tracks_recursive,
             commands_v2::v2_library_add_folder,
             commands_v2::v2_library_cleanup_missing_files,
             commands_v2::v2_library_fetch_missing_artwork,
             commands_v2::v2_library_get_artists,
             commands_v2::v2_library_search,
             commands_v2::v2_library_get_album_tracks,
+            commands_v2::v2_library_get_album_tracks_metadata,
             commands_v2::v2_library_update_folder_path,
             commands_v2::v2_library_cache_artist_image,
             commands_v2::v2_library_set_custom_artist_image,
@@ -1736,6 +1965,7 @@ pub fn run() {
             commands_v2::v2_set_media_metadata,
             commands_v2::v2_play_next_gapless,
             commands_v2::v2_prefetch_track,
+            commands_v2::v2_is_track_cached,
             commands_v2::v2_reinit_audio_device,
             commands_v2::v2_check_audio_device_presence,
             commands_v2::v2_get_audio_output_status,
@@ -1763,6 +1993,8 @@ pub fn run() {
             commands_v2::v2_set_audio_stream_first_track,
             commands_v2::v2_set_audio_stream_buffer_seconds,
             commands_v2::v2_set_audio_alsa_hardware_volume,
+            commands_v2::v2_set_reserve_dac_while_running,
+            commands_v2::v2_get_dac_reservation_status,
             commands_v2::v2_listenbrainz_get_status,
             commands_v2::v2_listenbrainz_is_enabled,
             commands_v2::v2_listenbrainz_set_enabled,
@@ -1908,6 +2140,9 @@ pub fn run() {
             commands_v2::v2_collection_shuffle_tracks,
             commands_v2::v2_skip_to_next_item,
             commands_v2::v2_skip_to_previous_item,
+            discord_rpc::v2_discord_rpc_set_enabled,
+            discord_rpc::v2_discord_rpc_update,
+            discord_rpc::v2_discord_rpc_clear,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

@@ -5,12 +5,12 @@ use std::{
 
 use qconnect_core::{
     apply_event, apply_renderer_command, telemetry, PendingCorrelation, PendingQueueAction,
-    QConnectQueueState, QConnectRendererState, QueueEvent, QueueItem, RendererCommand,
+    QConnectQueueState, QConnectRendererState, QueueEvent, QueueItem, QueueVersion, RendererCommand,
 };
 use qconnect_protocol::{
     build_qconnect_outbound_envelope, build_qconnect_renderer_outbound_envelope,
-    parse_inbound_event, InboundEnvelope, QueueCommand, QueueCommandType, QueueEventType,
-    QueueServerEvent, RendererCommandType, RendererReport, RendererReportType,
+    decode_playback_error, parse_inbound_event, InboundEnvelope, QueueCommand, QueueCommandType,
+    QueueEventType, QueueServerEvent, RendererCommandType, RendererReport, RendererReportType,
     RendererServerCommand,
 };
 use qconnect_transport_ws::{TransportEvent, WsTransport, WsTransportConfig};
@@ -18,7 +18,20 @@ use serde_json::Value;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use crate::{QconnectAppError, QconnectAppEvent, QconnectEventSink, QconnectRuntimeState};
+use async_trait::async_trait;
+
+use crate::session::{
+    compute_connection_state, deferred_join_reason, is_local_renderer_active,
+    is_peer_renderer_active, normalize_active_renderer_id, refresh_local_renderer_id,
+    should_arm_renderer_watchdog, should_reask_queue_state, LocalIdentity,
+    QconnectFileAudioQualitySnapshot, QconnectLifecycleState, QconnectRendererInfo, RendererStatus,
+    ServerActiveState, PLAYING_STATE_PLAYING, PLAYING_STATE_UNKNOWN,
+    QCONNECT_RENDERER_LOST_TIMEOUT_MS,
+};
+use crate::{
+    ensure_session_renderer_state, sync_session_renderer_active_flags, QconnectAppError,
+    QconnectAppEvent, QconnectEventSink, QconnectRemoteSyncState, QconnectRuntimeState,
+};
 
 pub struct QconnectApp<TTransport, TSink>
 where
@@ -28,6 +41,15 @@ where
     transport: Arc<TTransport>,
     sink: Arc<TSink>,
     state: Arc<Mutex<QconnectRuntimeState>>,
+    /// Cross-frontend remote-sync accumulator (session topology, renderer-state
+    /// cache, materialization cache, load-attempt dedup, watchdog epoch). Held
+    /// behind its OWN Mutex, disjoint from `state`: the two are never co-locked,
+    /// so the renderer-report hot path never serializes against session/watchdog
+    /// work and there is no deadlock edge against `clear_pending_if_matches`
+    /// (which locks `state`). The session loop (slice 5) and the renderer engine
+    /// (slice 6) both lock THIS one, exactly as they share it today via the Tauri
+    /// adapter. See `MASTER-qconnect-to-slint-plan.md` §0 (one Mutex, not two).
+    sync: Arc<Mutex<QconnectRemoteSyncState>>,
 }
 
 impl<TTransport, TSink> Clone for QconnectApp<TTransport, TSink>
@@ -40,6 +62,7 @@ where
             transport: Arc::clone(&self.transport),
             sink: Arc::clone(&self.sink),
             state: Arc::clone(&self.state),
+            sync: Arc::clone(&self.sync),
         }
     }
 }
@@ -51,16 +74,32 @@ where
 {
     const PENDING_ACTION_TIMEOUT_MS: u64 = 10_000;
 
-    pub fn new(transport: Arc<TTransport>, sink: Arc<TSink>) -> Self {
+    /// Construct the app. `sync` is the shared remote-sync accumulator handle:
+    /// the Tauri adapter builds it, hands a clone to its event sink / service
+    /// loop, and passes the SAME `Arc` here so there is exactly one lock backing
+    /// the session/liveness/renderer paths. The Slint adapter will do the same.
+    pub fn new(
+        transport: Arc<TTransport>,
+        sink: Arc<TSink>,
+        sync: Arc<Mutex<QconnectRemoteSyncState>>,
+    ) -> Self {
         Self {
             transport,
             sink,
             state: Arc::new(Mutex::new(QconnectRuntimeState::default())),
+            sync,
         }
     }
 
     pub fn state_handle(&self) -> Arc<Mutex<QconnectRuntimeState>> {
         Arc::clone(&self.state)
+    }
+
+    /// Shared handle to the remote-sync accumulator. The adapter uses this so its
+    /// event sink, service loop, and CoreBridge helpers lock the very same Mutex
+    /// the app's own session/watchdog methods lock.
+    pub fn sync_handle(&self) -> Arc<Mutex<QconnectRemoteSyncState>> {
+        Arc::clone(&self.sync)
     }
 
     pub fn subscribe_transport_events(&self) -> tokio::sync::broadcast::Receiver<TransportEvent> {
@@ -134,6 +173,10 @@ where
                 command.command_type,
                 QueueCommandType::CtrlSrvrSetLoopMode
             ),
+            is_set_volume_action: matches!(
+                command.command_type,
+                QueueCommandType::CtrlSrvrSetVolume
+            ),
             is_set_active_renderer_action,
             expected_active_renderer_id: if is_set_active_renderer_action {
                 pending_active_renderer_id_from_payload(&command.payload)
@@ -170,6 +213,84 @@ where
         report: RendererReport,
     ) -> Result<(), QconnectAppError> {
         self.send_renderer_report(report).await
+    }
+
+    /// Emit a RndrSrvrFileAudioQualityChanged report describing the decoded file
+    /// format, deduped against the last reported value. Returns Ok(true) when a
+    /// report was sent. Frontend-agnostic (slice 6, step 7): both the Tauri and
+    /// Slint report loops feed this; the snapshot is produced from the engine's
+    /// `current_output_format()`.
+    pub async fn report_file_audio_quality_if_changed(
+        &self,
+        queue_version: QueueVersion,
+        audio_quality: QconnectFileAudioQualitySnapshot,
+    ) -> Result<bool, String> {
+        let sync_state = self.sync_handle();
+        {
+            let state = sync_state.lock().await;
+            if state.last_reported_file_audio_quality == Some(audio_quality) {
+                return Ok(false);
+            }
+        }
+
+        let report = RendererReport::new(
+            RendererReportType::RndrSrvrFileAudioQualityChanged,
+            Uuid::new_v4().to_string(),
+            queue_version,
+            serde_json::json!({
+                "sampling_rate": audio_quality.sampling_rate,
+                "bit_depth": audio_quality.bit_depth,
+                "nb_channels": audio_quality.nb_channels,
+                "audio_quality": audio_quality.audio_quality
+            }),
+        );
+
+        self.send_renderer_report_command(report)
+            .await
+            .map_err(|err| format!("send file audio quality report failed: {err}"))?;
+
+        let mut state = sync_state.lock().await;
+        state.last_reported_file_audio_quality = Some(audio_quality);
+        Ok(true)
+    }
+
+    /// Emit a RndrSrvrDeviceAudioQualityChanged(27) report describing the actual
+    /// DAC output format (sampling_rate / bit_depth / nb_channels), deduped against
+    /// the last reported value. Returns Ok(true) when a report was sent.
+    pub async fn report_device_audio_quality_if_changed(
+        &self,
+        queue_version: QueueVersion,
+        sampling_rate: i32,
+        bit_depth: i32,
+        nb_channels: i32,
+    ) -> Result<bool, String> {
+        let sync_state = self.sync_handle();
+        let key = (sampling_rate, bit_depth, nb_channels);
+        {
+            let state = sync_state.lock().await;
+            if state.last_reported_device_audio_quality == Some(key) {
+                return Ok(false);
+            }
+        }
+
+        let report = RendererReport::new(
+            RendererReportType::RndrSrvrDeviceAudioQualityChanged,
+            Uuid::new_v4().to_string(),
+            queue_version,
+            serde_json::json!({
+                "sampling_rate": sampling_rate,
+                "bit_depth": bit_depth,
+                "nb_channels": nb_channels
+            }),
+        );
+
+        self.send_renderer_report_command(report)
+            .await
+            .map_err(|err| format!("send device audio quality report failed: {err}"))?;
+
+        let mut state = sync_state.lock().await;
+        state.last_reported_device_audio_quality = Some(key);
+        Ok(true)
     }
 
     /// Update the renderer state's position from the frontend's playback position.
@@ -213,6 +334,20 @@ where
             TransportEvent::InboundRendererServerCommand(command) => {
                 self.apply_renderer_server_command(command).await?;
             }
+            TransportEvent::InboundPayloadBytes { payload, .. } => {
+                // The batch carries renderer per-track failures as a tag-3
+                // playback_error on a messages[] entry. The queue/renderer
+                // decoders ignore it, so decode it here off the raw batch bytes.
+                if let Some(error) = decode_playback_error(&payload) {
+                    self.sink
+                        .on_event(QconnectAppEvent::PlaybackError {
+                            queue_item_id: error.queue_item_id,
+                            error_type: error.error_type,
+                            queue_version: error.queue_version,
+                        })
+                        .await;
+                }
+            }
             TransportEvent::Authenticated
             | TransportEvent::Subscribed
             | TransportEvent::SessionEstablished
@@ -223,7 +358,6 @@ where
             | TransportEvent::TransportError { .. }
             | TransportEvent::CloudError { .. }
             | TransportEvent::InboundFrameDecoded { .. }
-            | TransportEvent::InboundPayloadBytes { .. }
             | TransportEvent::OutboundSent { .. } => {}
         }
         Ok(())
@@ -322,7 +456,16 @@ where
                     QueueEventType::SrvrCtrlShuffleModeSet
                         | QueueEventType::SrvrCtrlQueueTracksReordered
                         | QueueEventType::SrvrCtrlQueueTracksRemoved
+                        | QueueEventType::SrvrCtrlQueueTracksAddedFromAutoplay
                 ) {
+                    should_trigger_resync = true;
+                }
+
+                // queue_hash divergence seam. Inert today (local hash algorithm
+                // is a BLOCKING unknown -> compute_local_queue_hash returns None),
+                // so this never fires spurious resyncs. When the algorithm lands,
+                // a mismatch will pull the authoritative QueueState.
+                if queue_hashes_diverge(&state.queue) {
                     should_trigger_resync = true;
                 }
             }
@@ -373,17 +516,29 @@ where
         };
 
         // Detect echo SET_STATE commands: the server echoes every state report
-        // as a SET_STATE with only next_track (playing_state=None, current_track=None).
-        // These echoes must NOT trigger CoreBridge actions (align cursor, load track,
-        // resume/pause) or state reports, otherwise they destroy the local queue
-        // and cause feedback loops.
+        // as a SET_STATE with only next_track (playing_state=None,
+        // current_track=None, current_position_ms=None). These echoes must
+        // NOT trigger CoreBridge actions (align cursor, load track,
+        // resume/pause) or state reports, otherwise they destroy the local
+        // queue and cause feedback loops.
+        //
+        // Issue #387: a peer controller (e.g. official Qobuz mobile app)
+        // sends a SEEK as SET_STATE with only current_position_ms set
+        // (playing_state=None, current_track=None). The previous filter
+        // matched that shape and silently swallowed the command, so qbz
+        // never moved its audio thread when an external controller seeked.
+        // Treat current_position_ms.is_some() as the signal that the
+        // command carries real intent and must be propagated.
         let is_echo = matches!(
             &renderer_command,
             RendererCommand::SetState {
                 playing_state,
                 current_track,
+                current_position_ms,
                 ..
-            } if playing_state.is_none() && current_track.is_none()
+            } if playing_state.is_none()
+                && current_track.is_none()
+                && current_position_ms.is_none()
         );
 
         let (snapshot, queue_version) = {
@@ -598,6 +753,28 @@ fn infer_buffer_state(playing_state: Option<i32>) -> Option<i32> {
     }
 }
 
+/// BLOCKING OPEN QUESTION: the Qobuz `queue_hash` (field #100) algorithm is
+/// undocumented. Until it is verified, this returns `None`, which keeps
+/// `queue_hashes_diverge` inert so it can NOT fire spurious resyncs. Flipping
+/// this to a real implementation is the single switch that turns on divergence
+/// detection.
+fn compute_local_queue_hash(_queue: &QConnectQueueState) -> Option<Vec<u8>> {
+    None
+}
+
+/// Algorithm-agnostic divergence seam. Only reports divergence when BOTH a
+/// locally computed hash and a server-reported hash exist and differ. Because
+/// `compute_local_queue_hash` returns `None` today, this is always `false`.
+fn queue_hashes_diverge(queue: &QConnectQueueState) -> bool {
+    match (
+        compute_local_queue_hash(queue),
+        queue.last_server_queue_hash.as_ref(),
+    ) {
+        (Some(local), Some(server)) => &local != server,
+        _ => false,
+    }
+}
+
 fn map_server_event(event: &QueueServerEvent, current: &QConnectQueueState) -> QueueEvent {
     let version = event
         .queue_version
@@ -622,6 +799,12 @@ fn map_server_event(event: &QueueServerEvent, current: &QConnectQueueState) -> Q
                 };
             } else {
                 next.shuffle_order = None;
+            }
+
+            // Surface the server queue_hash (field #100). Only overwrite when the
+            // payload actually carries it, so an omitted hash leaves prior state.
+            if let Some(server_hash) = parse_bytes(&event.payload, "server_queue_hash") {
+                next.last_server_queue_hash = Some(server_hash);
             }
 
             QueueEvent::QueueStateReplaced {
@@ -814,6 +997,21 @@ fn parse_u64(payload: &Value, field: &str) -> Option<u64> {
     payload.get(field).and_then(value_as_u64)
 }
 
+/// Parse a JSON byte array (e.g. the server `queue_hash` field #100) into bytes.
+/// Returns `None` when absent/null so an omitted hash does not clobber state.
+fn parse_bytes(payload: &Value, field: &str) -> Option<Vec<u8>> {
+    payload
+        .get(field)
+        .and_then(Value::as_array)
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(value_as_u64)
+                .filter_map(|value| u8::try_from(value).ok())
+                .collect()
+        })
+}
+
 fn parse_bool(payload: &Value, field: &str, default: bool) -> bool {
     payload
         .get(field)
@@ -902,6 +1100,16 @@ fn session_management_event_completes_pending_action(
         return true;
     }
 
+    if pending.is_set_volume_action
+        && matches!(event_type, QueueEventType::SrvrCtrlVolumeChanged)
+    {
+        // Volume changes come back as session-management events without a
+        // stable action_uuid ack. Treat the first volume-changed echo as the
+        // completion signal so a rapid volume drag is not blocked behind the
+        // generic 10s pending timeout.
+        return true;
+    }
+
     if !pending.is_set_active_renderer_action {
         return false;
     }
@@ -922,6 +1130,998 @@ fn session_management_event_completes_pending_action(
     }
 }
 
+/// Post-lock work returned by [`QconnectApp::apply_session_management_event`].
+/// The adapter runs the CoreBridge side-effects (remote loop mode,
+/// local-playback handoff, projection alignment) from these flags in order,
+/// then drives the freeze + watchdog via
+/// [`QconnectApp::freeze_active_renderer_projection`] /
+/// [`QconnectApp::arm_renderer_watchdog`] — preserving the exact post-lock
+/// ordering of the prior inline Tauri implementation.
+#[derive(Debug, Default, Clone)]
+pub struct SessionApplyOutcome {
+    /// Active renderer whose remote projection should be re-aligned into CoreBridge.
+    pub remote_projection_renderer_id: Option<i32>,
+    /// Stop local playback because an active peer renderer now owns playback.
+    pub sync_local_playback: bool,
+    /// Apply this remote loop mode to CoreBridge.
+    pub apply_loop_mode: Option<i32>,
+    /// Active peer renderer left gracefully (ACTIVE_DISCONNECTED) — freeze it.
+    pub disconnected_renderer_id: Option<i32>,
+    /// Arm the 12s liveness watchdog for (renderer_id, generation).
+    pub watchdog_arm: Option<(i32, u64)>,
+}
+
+/// Bump the watchdog epoch, invalidating any in-flight 12s liveness task.
+/// Returns the new generation (captured when arming so the spawned task knows
+/// which epoch it belongs to). Relocated from the Tauri sink (slice 2+4).
+fn bump_watchdog_generation(state: &mut QconnectRemoteSyncState) -> u64 {
+    state.watchdog_generation = state.watchdog_generation.wrapping_add(1);
+    state.watchdog_generation
+}
+
+impl<TTransport, TSink> QconnectApp<TTransport, TSink>
+where
+    TTransport: WsTransport + 'static,
+    TSink: QconnectEventSink + 'static,
+{
+    /// Apply a server session-management event (types 81-87, 97-101) to the
+    /// shared remote-sync accumulator under ONE lock, returning the post-lock
+    /// work the adapter must drive.
+    ///
+    /// Relocated from the Tauri event sink (slice 2+4): the locked critical
+    /// section is byte-identical. The only differences are (a) the lock handle
+    /// is `self.sync`, (b) local identity is injected as `identity` so the crate
+    /// stays frontend-agnostic (`refresh_local_renderer_id` takes it instead of
+    /// resolving device-info itself), and (c) the post-lock dispatch is RETURNED
+    /// via [`SessionApplyOutcome`] rather than run inline — the CoreBridge
+    /// materialization stays adapter-side because it is the renderer-engine seam
+    /// (slice 6). The early `return`s (missing required fields) yield a default
+    /// outcome so the adapter's post-lock block does nothing, exactly as the
+    /// prior `return;` skipped it.
+    pub async fn apply_session_management_event(
+        &self,
+        message_type: &str,
+        payload: &Value,
+        identity: &LocalIdentity,
+    ) -> SessionApplyOutcome {
+        let mut remote_projection_renderer_id: Option<i32> = None;
+        let mut sync_local_playback = false;
+        let mut apply_loop_mode: Option<i32> = None;
+        let mut disconnected_renderer_id: Option<i32> = None;
+        let mut watchdog_arm: Option<(i32, u64)> = None;
+        let mut state = self.sync.lock().await;
+        match message_type {
+            "MESSAGE_TYPE_SRVR_CTRL_SESSION_STATE" => {
+                if let Some(uuid) = payload.get("session_uuid").and_then(Value::as_str) {
+                    state.session.session_uuid = Some(uuid.to_string());
+                }
+                state.session.active_renderer_id = normalize_active_renderer_id(
+                    payload.get("active_renderer_id").and_then(Value::as_i64),
+                );
+                if let Some(loop_mode) = payload
+                    .get("loop_mode")
+                    .and_then(Value::as_i64)
+                    .and_then(|value| i32::try_from(value).ok())
+                {
+                    state.session_loop_mode = Some(loop_mode);
+                    apply_loop_mode = Some(loop_mode);
+                }
+                if let (Some(active_renderer_id), Some(loop_mode)) =
+                    (state.session.active_renderer_id, state.session_loop_mode)
+                {
+                    let renderer_state =
+                        ensure_session_renderer_state(&mut state, active_renderer_id);
+                    renderer_state.loop_mode = Some(loop_mode);
+                    renderer_state.updated_at_ms = now_ms();
+                }
+                sync_session_renderer_active_flags(&mut state);
+                sync_local_playback = true;
+            }
+            "MESSAGE_TYPE_SRVR_CTRL_ADD_RENDERER" => {
+                if let Some(renderer_id) = payload.get("renderer_id").and_then(Value::as_i64) {
+                    let renderer_id = renderer_id as i32;
+                    // Don't add duplicates
+                    if !state
+                        .session
+                        .renderers
+                        .iter()
+                        .any(|r| r.renderer_id == renderer_id)
+                    {
+                        let device_info = payload.get("device_info");
+                        state.session.renderers.push(QconnectRendererInfo {
+                            renderer_id,
+                            device_uuid: device_info
+                                .and_then(|d| d.get("device_uuid"))
+                                .and_then(Value::as_str)
+                                .map(String::from),
+                            friendly_name: device_info
+                                .and_then(|d| d.get("friendly_name"))
+                                .and_then(Value::as_str)
+                                .map(String::from),
+                            brand: device_info
+                                .and_then(|d| d.get("brand"))
+                                .and_then(Value::as_str)
+                                .map(String::from),
+                            model: device_info
+                                .and_then(|d| d.get("model"))
+                                .and_then(Value::as_str)
+                                .map(String::from),
+                            device_type: device_info
+                                .and_then(|d| d.get("device_type"))
+                                .and_then(Value::as_i64)
+                                .map(|v| v as i32),
+                            volume_remote_control: device_info
+                                .and_then(|d| d.get("capabilities"))
+                                .and_then(|c| c.get("volume_remote_control"))
+                                .and_then(Value::as_i64)
+                                .map(|v| v as i32),
+                        });
+                        refresh_local_renderer_id(&mut state.session, identity);
+                    }
+                    let _ = ensure_session_renderer_state(&mut state, renderer_id);
+                    sync_session_renderer_active_flags(&mut state);
+                }
+            }
+            "MESSAGE_TYPE_SRVR_CTRL_UPDATE_RENDERER" => {
+                if let Some(renderer_id) = payload.get("renderer_id").and_then(Value::as_i64) {
+                    let renderer_id = renderer_id as i32;
+                    if let Some(existing) = state
+                        .session
+                        .renderers
+                        .iter_mut()
+                        .find(|r| r.renderer_id == renderer_id)
+                    {
+                        let device_info = payload.get("device_info");
+                        if let Some(device_uuid) = device_info
+                            .and_then(|d| d.get("device_uuid"))
+                            .and_then(Value::as_str)
+                        {
+                            existing.device_uuid = Some(device_uuid.to_string());
+                        }
+                        if let Some(name) = device_info
+                            .and_then(|d| d.get("friendly_name"))
+                            .and_then(Value::as_str)
+                        {
+                            existing.friendly_name = Some(name.to_string());
+                        }
+                        if let Some(brand) = device_info
+                            .and_then(|d| d.get("brand"))
+                            .and_then(Value::as_str)
+                        {
+                            existing.brand = Some(brand.to_string());
+                        }
+                        if let Some(model) = device_info
+                            .and_then(|d| d.get("model"))
+                            .and_then(Value::as_str)
+                        {
+                            existing.model = Some(model.to_string());
+                        }
+                        if let Some(device_type) = device_info
+                            .and_then(|d| d.get("device_type"))
+                            .and_then(Value::as_i64)
+                        {
+                            existing.device_type = Some(device_type as i32);
+                        }
+                        if let Some(vrc) = device_info
+                            .and_then(|d| d.get("capabilities"))
+                            .and_then(|c| c.get("volume_remote_control"))
+                            .and_then(Value::as_i64)
+                        {
+                            existing.volume_remote_control = Some(vrc as i32);
+                        }
+                        refresh_local_renderer_id(&mut state.session, identity);
+                    }
+                    let _ = ensure_session_renderer_state(&mut state, renderer_id);
+                    sync_session_renderer_active_flags(&mut state);
+                }
+            }
+            "MESSAGE_TYPE_SRVR_CTRL_REMOVE_RENDERER" => {
+                if let Some(renderer_id) = payload.get("renderer_id").and_then(Value::as_i64) {
+                    let renderer_id = renderer_id as i32;
+                    state
+                        .session
+                        .renderers
+                        .retain(|r| r.renderer_id != renderer_id);
+                    state.session_renderer_states.remove(&renderer_id);
+                    refresh_local_renderer_id(&mut state.session, identity);
+                    sync_session_renderer_active_flags(&mut state);
+                }
+            }
+            "MESSAGE_TYPE_SRVR_CTRL_ACTIVE_RENDERER_CHANGED" => {
+                state.session.active_renderer_id = normalize_active_renderer_id(
+                    payload.get("active_renderer_id").and_then(Value::as_i64),
+                );
+                if let (Some(active_renderer_id), Some(loop_mode)) =
+                    (state.session.active_renderer_id, state.session_loop_mode)
+                {
+                    let renderer_state =
+                        ensure_session_renderer_state(&mut state, active_renderer_id);
+                    renderer_state.loop_mode = Some(loop_mode);
+                    renderer_state.updated_at_ms = now_ms();
+                }
+                apply_loop_mode = state.session_loop_mode;
+                sync_session_renderer_active_flags(&mut state);
+                remote_projection_renderer_id = state.session.active_renderer_id;
+                sync_local_playback = true;
+                // P0-1: active-renderer change disarms any pending liveness task.
+                bump_watchdog_generation(&mut state);
+            }
+            "MESSAGE_TYPE_SRVR_CTRL_RENDERER_STATE_UPDATED" => {
+                let Some(renderer_id) = payload.get("renderer_id").and_then(Value::as_i64) else {
+                    return SessionApplyOutcome::default();
+                };
+                let player_state = payload.get("player_state");
+                let renderer_state = ensure_session_renderer_state(&mut state, renderer_id as i32);
+
+                if let Some(playing_state) = player_state
+                    .and_then(|value| value.get("playing_state"))
+                    .and_then(Value::as_i64)
+                    .and_then(|value| i32::try_from(value).ok())
+                {
+                    renderer_state.playing_state = Some(playing_state);
+                }
+
+                if let Some(current_position_ms) = player_state
+                    .and_then(|value| value.get("current_position"))
+                    .and_then(Value::as_i64)
+                    .and_then(|value| u64::try_from(value).ok())
+                {
+                    renderer_state.current_position_ms = Some(current_position_ms);
+                }
+
+                if let Some(current_queue_item_id) = player_state
+                    .and_then(|value| value.get("current_queue_item_id"))
+                    .and_then(Value::as_i64)
+                {
+                    renderer_state.current_queue_item_id =
+                        u64::try_from(current_queue_item_id).ok();
+                }
+
+                renderer_state.updated_at_ms = now_ms();
+                // Snapshot the just-written playing_state for the watchdog decision
+                // (the &mut borrow ends here so we can re-read state.session below).
+                let this_playing_state = renderer_state.playing_state;
+                remote_projection_renderer_id = Some(renderer_id as i32);
+                sync_local_playback = true;
+
+                let is_active_peer = state.session.active_renderer_id
+                    == Some(renderer_id as i32)
+                    && is_peer_renderer_active(&state.session)
+                    && renderer_id != -1;
+
+                // P0-2: graceful disconnect. status==ACTIVE_DISCONNECTED(2) for
+                // the active remote renderer (id != -1) means the renderer left
+                // cleanly — freeze the projection so the UI stops lying.
+                let status =
+                    RendererStatus::from_wire(payload.get("status").and_then(Value::as_i64));
+                if status == RendererStatus::ActiveDisconnected && is_active_peer {
+                    disconnected_renderer_id = Some(renderer_id as i32);
+                }
+
+                // P0-1 liveness watchdog. Any RENDERER_STATE_UPDATED for the
+                // active peer resets the timer (bump generation); arm a fresh 12s
+                // task only while PLAYING. A non-playing update disarms (bump
+                // only, no spawn).
+                let new_generation = bump_watchdog_generation(&mut state);
+                if should_arm_renderer_watchdog(this_playing_state, is_active_peer) {
+                    watchdog_arm = Some((renderer_id as i32, new_generation));
+                }
+            }
+            "MESSAGE_TYPE_SRVR_CTRL_VOLUME_CHANGED" => {
+                let Some(renderer_id) = payload.get("renderer_id").and_then(Value::as_i64) else {
+                    return SessionApplyOutcome::default();
+                };
+                let Some(volume) = payload
+                    .get("volume")
+                    .and_then(Value::as_i64)
+                    .and_then(|value| i32::try_from(value).ok())
+                else {
+                    return SessionApplyOutcome::default();
+                };
+
+                let renderer_state = ensure_session_renderer_state(&mut state, renderer_id as i32);
+                renderer_state.volume = Some(volume);
+                renderer_state.updated_at_ms = now_ms();
+            }
+            "MESSAGE_TYPE_SRVR_CTRL_VOLUME_MUTED" => {
+                let Some(renderer_id) = payload.get("renderer_id").and_then(Value::as_i64) else {
+                    return SessionApplyOutcome::default();
+                };
+                let Some(muted) = payload.get("value").and_then(Value::as_bool) else {
+                    return SessionApplyOutcome::default();
+                };
+
+                let renderer_state = ensure_session_renderer_state(&mut state, renderer_id as i32);
+                renderer_state.muted = Some(muted);
+                renderer_state.updated_at_ms = now_ms();
+            }
+            "MESSAGE_TYPE_SRVR_CTRL_MAX_AUDIO_QUALITY_CHANGED" => {
+                let Some(renderer_id) = payload.get("renderer_id").and_then(Value::as_i64) else {
+                    return SessionApplyOutcome::default();
+                };
+                let Some(max_audio_quality) = payload
+                    .get("max_audio_quality")
+                    .and_then(Value::as_i64)
+                    .and_then(|value| i32::try_from(value).ok())
+                else {
+                    return SessionApplyOutcome::default();
+                };
+
+                let renderer_state = ensure_session_renderer_state(&mut state, renderer_id as i32);
+                renderer_state.max_audio_quality = Some(max_audio_quality);
+                renderer_state.updated_at_ms = now_ms();
+            }
+            "MESSAGE_TYPE_SRVR_CTRL_LOOP_MODE_SET" => {
+                let Some(loop_mode) = payload
+                    .get("loop_mode")
+                    .and_then(Value::as_i64)
+                    .and_then(|value| i32::try_from(value).ok())
+                else {
+                    return SessionApplyOutcome::default();
+                };
+                state.session_loop_mode = Some(loop_mode);
+                apply_loop_mode = Some(loop_mode);
+                if let Some(active_renderer_id) = state.session.active_renderer_id {
+                    let renderer_state =
+                        ensure_session_renderer_state(&mut state, active_renderer_id);
+                    renderer_state.loop_mode = Some(loop_mode);
+                    renderer_state.updated_at_ms = now_ms();
+                }
+            }
+            _ => {}
+        }
+
+        SessionApplyOutcome {
+            remote_projection_renderer_id,
+            sync_local_playback,
+            apply_loop_mode,
+            disconnected_renderer_id,
+            watchdog_arm,
+        }
+    }
+
+    /// Arm the generation-guarded 12s renderer-liveness watchdog (P0-1). Spawns
+    /// a task holding a cheap clone of self. On wake it re-locks the sync
+    /// accumulator and no-ops unless its captured epoch is still current AND the
+    /// renderer is still the active peer AND still nominally PLAYING; only then
+    /// does it freeze the projection and emit `RendererUnreachable`. Modeled on
+    /// `watch_pending_action_timeout`; relocated from the Tauri sink (slice 2+4).
+    pub fn arm_renderer_watchdog(&self, renderer_id: i32, generation: u64) {
+        let app = self.clone();
+        tokio::spawn(async move {
+            app.run_renderer_watchdog(renderer_id, generation).await;
+        });
+    }
+
+    async fn run_renderer_watchdog(&self, renderer_id: i32, generation: u64) {
+        tokio::time::sleep(Duration::from_millis(QCONNECT_RENDERER_LOST_TIMEOUT_MS)).await;
+        let fire = {
+            let state = self.sync.lock().await;
+            state.watchdog_generation == generation
+                && state.session.active_renderer_id == Some(renderer_id)
+                && is_peer_renderer_active(&state.session)
+                && state
+                    .session_renderer_states
+                    .get(&renderer_id)
+                    .and_then(|r| r.playing_state)
+                    == Some(PLAYING_STATE_PLAYING)
+        };
+        if fire {
+            log::warn!(
+                "[QConnect] Renderer {renderer_id} silent for {}ms — marking unreachable",
+                QCONNECT_RENDERER_LOST_TIMEOUT_MS
+            );
+            self.freeze_active_renderer_projection(
+                renderer_id,
+                QconnectAppEvent::RendererUnreachable { renderer_id },
+            )
+            .await;
+        }
+    }
+
+    /// Force the active renderer's cached projection to UNKNOWN/stopped and emit
+    /// the freeze event through the sink. Shared by ACTIVE_DISCONNECTED (P0-2)
+    /// and the silence watchdog (P0-1). Relocated from the Tauri sink (slice
+    /// 2+4): the state mutation + `self.sink.on_event(freeze_event)` is
+    /// byte-identical. The sink's mapper arm for `RendererUnreachable` /
+    /// `RendererDisconnected` ONLY emits the dedicated channel (+ the blanket
+    /// event); it does NOT route back into apply or call this helper again, so it
+    /// cannot re-arm the watchdog or recurse.
+    pub async fn freeze_active_renderer_projection(
+        &self,
+        renderer_id: i32,
+        freeze_event: QconnectAppEvent,
+    ) {
+        {
+            let mut state = self.sync.lock().await;
+            let renderer_state = ensure_session_renderer_state(&mut state, renderer_id);
+            renderer_state.playing_state = Some(PLAYING_STATE_UNKNOWN);
+            renderer_state.updated_at_ms = now_ms();
+        }
+        self.sink.on_event(freeze_event).await;
+    }
+}
+
+/// Prior-state snapshot captured from the sync accumulator BEFORE a SESSION_STATE
+/// frame is applied, plus the server's classified active state derived from the
+/// incoming payload. Drives P1-3 takeover arbitration after the apply. Relocated
+/// from the Tauri adapter (slice 5) so the shared session loop owns it.
+#[derive(Debug, Clone, Copy)]
+pub struct SessionStateTakeoverInput {
+    pub was_active: bool,
+    pub was_playing: bool,
+    pub server: ServerActiveState,
+}
+
+/// Preview the first 8 `track_id`s under `payload[key]` for diagnostic emits.
+/// Pure; relocated from the Tauri adapter (slice 5).
+pub fn queue_payload_track_preview(payload: &Value, key: &str) -> Vec<i64> {
+    payload
+        .get(key)
+        .and_then(Value::as_array)
+        .map(|tracks| {
+            tracks
+                .iter()
+                .filter_map(|track| track.get("track_id").and_then(Value::as_i64))
+                .take(8)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+impl<TTransport, TSink> QconnectApp<TTransport, TSink>
+where
+    TTransport: WsTransport + 'static,
+    TSink: QconnectEventSink + 'static,
+{
+    /// Capture `was_active`/`was_playing` from the current (pre-apply) sync state
+    /// and classify the server's active-renderer state from the incoming
+    /// SESSION_STATE payload, relative to our local renderer id. Pure-ish read;
+    /// takes no decision. Relocated from the Tauri adapter (slice 5); locks
+    /// `self.sync` (the same accumulator the apply path mutates).
+    pub async fn capture_session_state_takeover_input(
+        &self,
+        payload: &Value,
+    ) -> SessionStateTakeoverInput {
+        let st = self.sync.lock().await;
+        let local_id = st.session.local_renderer_id;
+        let was_active = is_local_renderer_active(&st.session);
+        let was_playing = st.last_renderer_playing_state == Some(PLAYING_STATE_PLAYING);
+        // Normalize identically to the apply path (`normalize_active_renderer_id`):
+        // the cloud encodes "no active renderer" as `active_renderer_id: -1`, so a
+        // raw parse would classify -1 as `Some(-1)` and fall into the `Some(_)`
+        // peer-active arm — suppressing the idle auto-take. Filtering `>= 0` maps
+        // -1 (and any negative sentinel) to None, the genuine "session idle" state.
+        let incoming_active = normalize_active_renderer_id(
+            payload.get("active_renderer_id").and_then(Value::as_i64),
+        );
+        let server = match incoming_active {
+            None => ServerActiveState::None,
+            Some(id) if Some(id) == local_id => ServerActiveState::Me,
+            Some(_) => {
+                // Another renderer owns the slot. Classify playing vs paused from
+                // the last observed peer playing_state; default OtherPaused when unknown.
+                if st.last_renderer_playing_state == Some(PLAYING_STATE_PLAYING) {
+                    ServerActiveState::OtherPlaying
+                } else {
+                    ServerActiveState::OtherPaused
+                }
+            }
+        };
+        SessionStateTakeoverInput {
+            was_active,
+            was_playing,
+            server,
+        }
+    }
+
+    /// Clear the pending action slot iff it still matches `action_uuid`. Used for
+    /// replies that are not reducer-correlated (set-active, ask-for-state). Locks
+    /// `self.state` (NEVER co-locked with `self.sync`). Relocated from the Tauri
+    /// adapter (slice 5).
+    pub async fn clear_pending_if_matches(&self, action_uuid: &str) {
+        let mut state = self.state.lock().await;
+        let pending_matches = state
+            .pending
+            .current()
+            .map(|pending| pending.uuid == action_uuid)
+            .unwrap_or(false);
+        if pending_matches {
+            state.pending.clear();
+        }
+    }
+
+    /// Guarded `CtrlSrvrSetActiveRenderer` sender. No-ops when the target equals
+    /// the current active renderer or the id is invalid. Never resets reconnect
+    /// counters (#358 latch untouched). Relocated from the Tauri adapter's
+    /// `send_set_active_renderer_via_app` (slice 5); the request payload
+    /// `{ "renderer_id": <i32> }` is byte-identical to the prior
+    /// `QconnectSetActiveRendererRequest` serialization.
+    pub async fn send_set_active_renderer(&self, target_renderer_id: i32) -> Result<bool, String> {
+        if target_renderer_id < 0 {
+            return Ok(false);
+        }
+        {
+            let st = self.sync.lock().await;
+            if st.session.active_renderer_id == Some(target_renderer_id) {
+                return Ok(false);
+            }
+        }
+        let payload = serde_json::json!({ "renderer_id": target_renderer_id });
+        let command = self
+            .build_queue_command(QueueCommandType::CtrlSrvrSetActiveRenderer, payload)
+            .await;
+        let uuid = self
+            .send_queue_command(command)
+            .await
+            .map_err(|err| format!("send set_active_renderer failed: {err}"))?;
+        self.clear_pending_if_matches(&uuid).await;
+        Ok(true)
+    }
+
+    /// Ask the currently-active renderer for its full state (P1-8). No-op when no
+    /// active renderer is known. The reply is not reducer-correlated, so its
+    /// pending slot is cleared immediately. Relocated from the Tauri adapter
+    /// (slice 5); payload byte-identical to the prior
+    /// `QconnectAskForRendererStateRequest` serialization.
+    pub async fn ask_for_active_renderer_state(&self) -> Result<bool, String> {
+        let active_id = {
+            let st = self.sync.lock().await;
+            st.session.active_renderer_id
+        };
+        let Some(active_id) = active_id else {
+            return Ok(false);
+        };
+        let payload = serde_json::json!({ "renderer_id": active_id });
+        let cmd = self
+            .build_queue_command(QueueCommandType::CtrlSrvrAskForRendererState, payload)
+            .await;
+        let uuid = self
+            .send_queue_command(cmd)
+            .await
+            .map_err(|err| format!("send ask_for_renderer_state failed: {err}"))?;
+        self.clear_pending_if_matches(&uuid).await;
+        Ok(true)
+    }
+
+    /// Ask the server for the current queue state (P1-8 Lagged-recovery / generic
+    /// re-sync). The reply is not reducer-correlated, so its pending slot is
+    /// cleared. Relocated from the Tauri adapter (slice 5).
+    pub async fn ask_for_queue_state(&self) -> Result<(), String> {
+        let cmd = self
+            .build_queue_command(
+                QueueCommandType::CtrlSrvrAskForQueueState,
+                serde_json::json!({}),
+            )
+            .await;
+        let uuid = self
+            .send_queue_command(cmd)
+            .await
+            .map_err(|err| format!("send ask_for_queue_state failed: {err}"))?;
+        self.clear_pending_if_matches(&uuid).await;
+        Ok(())
+    }
+}
+
+/// Attempt budget for the Lagged-recovery re-AskForQueueState loop (P1-8).
+const QCONNECT_REASK_QUEUE_STATE_MAX_ATTEMPTS: u32 = 5;
+
+/// Adapter-provided seams for the shared session loop. `run_session_loop` is
+/// frontend-agnostic; it calls these for the bits that must stay adapter-side:
+/// the lifecycle gating (depends on the adapter's runtime ownership), the
+/// reconnect-exhausted teardown (R3), controller bootstrap, the renderer-join
+/// reports (which read the engine's track duration — R2), and the raw error
+/// surface. Both the Tauri adapter and a future Slint adapter implement this.
+#[async_trait]
+pub trait SessionLoopHost: Send + Sync {
+    /// Surface a lifecycle transition. The Tauri adapter gates + dedups this
+    /// (emits `qconnect:status_changed` via the sink only while a runtime is
+    /// still alive); a Slint adapter does its own.
+    async fn update_lifecycle(&self, state: QconnectLifecycleState);
+    /// Re-bootstrap controller presence after a reconnect (JoinSession + ask
+    /// queue state). Logs its own errors.
+    async fn bootstrap_after_reconnect(&self);
+    /// Renderer JoinSession + initial reports for `session_uuid` (R2: reads the
+    /// current track duration from the adapter's engine). Idempotent per uuid.
+    async fn deferred_renderer_join(&self, session_uuid: String, reason: i32);
+    /// Handle MaxReconnectAttemptsExceeded (R3): set Exhausted + last_error, drop
+    /// the runtime unless idle-retry is active, surface the terminal status.
+    /// Returns true if the loop should break (terminate), false to keep idling.
+    async fn on_reconnect_exhausted(
+        &self,
+        attempts: u32,
+        last_reason: String,
+        idle_retry_active: bool,
+    ) -> bool;
+    /// Surface a transport-handling error (the raw `qconnect:error` channel on Tauri).
+    async fn on_loop_error(&self, message: String);
+}
+
+/// Hex preview of up to `max_bytes` bytes for diagnostic logging. Mirrors the
+/// Tauri adapter's `hex_preview` (relocated with the loop, slice 5).
+fn hex_preview(data: &[u8], max_bytes: usize) -> String {
+    let take = data.len().min(max_bytes);
+    let hex: String = data[..take]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<Vec<_>>()
+        .join("");
+    if data.len() > max_bytes {
+        format!("{hex}...({}B total)", data.len())
+    } else {
+        hex
+    }
+}
+
+impl<TTransport, TSink> QconnectApp<TTransport, TSink>
+where
+    TTransport: WsTransport + 'static,
+    TSink: QconnectEventSink + 'static,
+{
+    /// The shared transport event loop. Relocated from the Tauri adapter (slice
+    /// 5): consumes transport events and drives takeover arbitration / deferred
+    /// renderer join / reconnect resync / Lagged re-ask, routing diagnostics +
+    /// lifecycle through `self.sink` + the injected `host`. Byte-identical to the
+    /// prior inline Tauri loop; the adapter-coupled seams (lifecycle gating,
+    /// teardown, bootstrap, renderer-join, raw error) go through `host` so both
+    /// frontends share this control flow.
+    pub async fn run_session_loop(
+        &self,
+        host: Arc<dyn SessionLoopHost>,
+        mut transport_rx: tokio::sync::broadcast::Receiver<TransportEvent>,
+        idle_retry_active: bool,
+    ) {
+        // NOTE: `transport_rx` is subscribed by the adapter SYNCHRONOUSLY before
+        // this task is spawned (and before any further await), so the receiver is
+        // live before the WS handshake can emit its initial events. tokio
+        // broadcast has no replay — subscribing here, inside the spawned task,
+        // would race those events and silently drop them.
+        log::info!("[QConnect/EventLoop] Started listening for transport events");
+        let mut renderer_joined = false;
+        let mut has_disconnected = false;
+        // One-shot latch: auto-take the render at most ONCE per fresh connect, on
+        // the first SESSION_STATE that reports no active renderer. Prevents
+        // re-grabbing after the user later gives the render to a peer (which makes
+        // the session go idle again). Reset on disconnect (a reconnect rejoins via
+        // the RECONNECTION reason, not via auto-take).
+        let mut auto_take_attempted = false;
+        // Set when we DECIDED to auto-take on a no-active SESSION_STATE but our
+        // local_renderer_id was not known yet (the cloud's ADD_RENDERER for our
+        // just-sent join lands a beat later). The per-iteration check below fires
+        // the SET_ACTIVE as soon as the id arrives — and ONLY if nobody else has
+        // become active meanwhile (anti-steal). Reset on disconnect.
+        let mut pending_auto_take = false;
+        // P1-8: budget for re-AskForQueueState after Lagged broadcast drops,
+        // until the session_uuid is confirmed. Reset on disconnect.
+        let mut lagged_reask_attempts: u32 = 0;
+        loop {
+            match transport_rx.recv().await {
+                Ok(event) => {
+                    // P1-3: on every SESSION_STATE, capture our prior active/playing
+                    // state + classify the server's active renderer BEFORE the sink
+                    // applies the new state, so takeover arbitration runs on the
+                    // prior snapshot once the apply lands below.
+                    let mut takeover_input: Option<SessionStateTakeoverInput> = None;
+                    if let TransportEvent::InboundQueueServerEvent(ref evt) = event {
+                        if evt.message_type() == "MESSAGE_TYPE_SRVR_CTRL_SESSION_STATE" {
+                            takeover_input =
+                                Some(self.capture_session_state_takeover_input(&evt.payload).await);
+                            if !renderer_joined {
+                                if let Some(session_uuid) =
+                                    evt.payload.get("session_uuid").and_then(|v| v.as_str())
+                                {
+                                    renderer_joined = true;
+                                    host.deferred_renderer_join(
+                                        session_uuid.to_string(),
+                                        deferred_join_reason(has_disconnected),
+                                    )
+                                    .await;
+                                } else {
+                                    log::warn!("[QConnect] SESSION_STATE received but no session_uuid in payload: {}", evt.payload);
+                                }
+                            }
+                        }
+                    }
+                    match &event {
+                        TransportEvent::Connected => {
+                            log::info!("[QConnect/Transport] WebSocket connected");
+                        }
+                        TransportEvent::Disconnected => {
+                            log::warn!("[QConnect/Transport] WebSocket disconnected — resetting renderer_joined flag");
+                            renderer_joined = false;
+                            has_disconnected = true;
+                            auto_take_attempted = false;
+                            pending_auto_take = false;
+                            lagged_reask_attempts = 0;
+                            // Surface "Reconnecting" to the UI, but only if we're
+                            // not in a teardown path (Off/Exhausted). The host gates
+                            // this on a live runtime.
+                            host.update_lifecycle(QconnectLifecycleState::Reconnecting)
+                                .await;
+                        }
+                        TransportEvent::Authenticated => {
+                            log::info!("[QConnect/Transport] Authenticated with JWT");
+                        }
+                        TransportEvent::Subscribed => {
+                            log::info!("[QConnect/Transport] Subscribed to channels");
+                            // Re-bootstrap only after a reconnection (not on initial
+                            // connect, where connect() already bootstraps).
+                            if has_disconnected {
+                                log::info!("[QConnect] Re-bootstrapping after reconnect...");
+                                host.bootstrap_after_reconnect().await;
+                                // P1-8: resync renderer state too, not just the queue.
+                                if let Err(err) = self.ask_for_active_renderer_state().await {
+                                    log::warn!("[QConnect] AskForRendererState after reconnect failed: {err}");
+                                }
+                                // P1-11: signal the frontend that the post-reconnect
+                                // resync has been issued.
+                                self.sink.on_event(QconnectAppEvent::ResyncComplete).await;
+                            }
+                        }
+                        TransportEvent::KeepalivePingSent => {
+                            log::debug!("[QConnect/Transport] Keepalive ping sent");
+                        }
+                        TransportEvent::KeepalivePongReceived => {
+                            log::debug!("[QConnect/Transport] Keepalive pong received");
+                        }
+                        TransportEvent::ReconnectScheduled {
+                            attempt,
+                            backoff_ms,
+                            reason,
+                        } => {
+                            log::warn!("[QConnect/Transport] Reconnect scheduled: attempt={} backoff={}ms reason={}", attempt, backoff_ms, reason);
+                        }
+                        TransportEvent::InboundQueueServerEvent(evt) => {
+                            log::info!(
+                                "[QConnect] <-- Inbound queue event: {} payload={}",
+                                evt.message_type(),
+                                evt.payload
+                            );
+                            self.sink
+                                .on_event(QconnectAppEvent::Diagnostic {
+                                    channel: "qconnect:inbound_queue_event".to_string(),
+                                    level: "info".to_string(),
+                                    payload: serde_json::json!({
+                                        "message_type": evt.message_type(),
+                                        "action_uuid": evt.action_uuid.clone(),
+                                        "queue_version": evt.queue_version,
+                                        "track_count": evt.payload.get("tracks").and_then(|value| value.as_array()).map(|tracks| tracks.len()).unwrap_or(0),
+                                        "autoplay_track_count": evt.payload.get("autoplay_tracks").and_then(|value| value.as_array()).map(|tracks| tracks.len()).unwrap_or(0),
+                                        "preview_track_ids": queue_payload_track_preview(&evt.payload, "tracks"),
+                                        "preview_autoplay_track_ids": queue_payload_track_preview(&evt.payload, "autoplay_tracks"),
+                                    }),
+                                })
+                                .await;
+                        }
+                        TransportEvent::InboundRendererServerCommand(cmd) => {
+                            log::info!(
+                                "[QConnect] <-- Inbound renderer command: {} payload={}",
+                                cmd.message_type(),
+                                cmd.payload
+                            );
+                        }
+                        TransportEvent::InboundFrameDecoded {
+                            cloud_message_type,
+                            payload_size,
+                        } => {
+                            log::info!(
+                                "[QConnect/Transport] <-- Frame decoded: cloud_type={} size={}",
+                                cloud_message_type,
+                                payload_size
+                            );
+                        }
+                        TransportEvent::InboundPayloadBytes {
+                            cloud_message_type,
+                            payload,
+                        } => {
+                            log::info!("[QConnect/Transport] <-- Payload bytes: cloud_type={} len={} hex={}", cloud_message_type, payload.len(), hex_preview(payload, 64));
+                        }
+                        TransportEvent::OutboundSent {
+                            message_type,
+                            action_uuid,
+                        } => {
+                            log::info!(
+                                "[QConnect/Transport] --> Outbound sent: {} uuid={}",
+                                message_type,
+                                action_uuid
+                            );
+                        }
+                        TransportEvent::TransportError { stage, message } => {
+                            log::error!(
+                                "[QConnect/Transport] Error: stage={} message={}",
+                                stage,
+                                message
+                            );
+                        }
+                        TransportEvent::CloudError {
+                            msg_id,
+                            code,
+                            descr,
+                        } => {
+                            log::warn!(
+                                "[QConnect/Transport] Cloud rejected session: msg_id={} code={} descr={:?} (issue #358)",
+                                msg_id,
+                                code,
+                                descr
+                            );
+                            self.sink
+                                .on_event(QconnectAppEvent::Diagnostic {
+                                    channel: "qconnect:cloud_error".to_string(),
+                                    level: "warning".to_string(),
+                                    payload: serde_json::json!({
+                                        "msg_id": msg_id,
+                                        "code": code,
+                                        "descr": descr,
+                                    }),
+                                })
+                                .await;
+                        }
+                        TransportEvent::InboundReceived(_envelope) => {
+                            log::info!("[QConnect/Transport] <-- InboundReceived (JSON envelope)");
+                        }
+                        TransportEvent::SessionEstablished => {
+                            log::info!(
+                                "[QConnect/Transport] Session established — backoff counters reset"
+                            );
+                            host.update_lifecycle(QconnectLifecycleState::Connected).await;
+                        }
+                        TransportEvent::MaxReconnectAttemptsExceeded {
+                            attempts,
+                            last_reason,
+                        } => {
+                            log::error!(
+                                "[QConnect/Transport] Max reconnect attempts exceeded: attempts={} last_reason={}",
+                                attempts,
+                                last_reason
+                            );
+                            self.sink
+                                .on_event(QconnectAppEvent::Diagnostic {
+                                    channel: "qconnect:max_reconnect_attempts_exceeded".to_string(),
+                                    level: "error".to_string(),
+                                    payload: serde_json::json!({
+                                        "attempts": attempts,
+                                        "last_reason": last_reason,
+                                    }),
+                                })
+                                .await;
+                            // R3: the adapter owns the runtime/teardown. It sets
+                            // Exhausted + last_error, drops the runtime unless idle-
+                            // retry is active, surfaces the terminal status, and tells
+                            // us whether to break (terminate) or keep idling.
+                            let should_break = host
+                                .on_reconnect_exhausted(
+                                    *attempts,
+                                    last_reason.clone(),
+                                    idle_retry_active,
+                                )
+                                .await;
+                            if should_break {
+                                break;
+                            }
+                            // gap #7 (idle_retry_active): keep the loop alive for the
+                            // re-armed transport; skip the reducer for this terminal
+                            // diagnostic and wait for the next event.
+                            continue;
+                        }
+                    }
+                    if let Err(err) = self.handle_transport_event(event).await {
+                        let message = format!("qconnect app transport handling error: {err}");
+                        log::error!("{message}");
+                        host.on_loop_error(message).await;
+                    }
+                    // P1-3: now that the sink has applied the SESSION_STATE, run
+                    // takeover arbitration on the prior snapshot captured above.
+                    // Only the claim-active path is wired here; never resets
+                    // reconnect counters (#358 latch untouched).
+                    if let Some(input) = takeover_input {
+                        // Auto-take the render only on a FRESH connect (never a
+                        // reconnect — that rejoins active via the RECONNECTION join
+                        // reason), only when the cloud reports nobody active, and
+                        // only ONCE per connect (the latch). This can never steal
+                        // from an active peer: an active peer classifies as
+                        // server==Other*/Me, not None.
+                        let auto_take_when_idle = !has_disconnected
+                            && matches!(input.server, ServerActiveState::None)
+                            && !auto_take_attempted
+                            && !pending_auto_take;
+                        let decision = compute_connection_state(
+                            input.was_active,
+                            input.was_playing,
+                            input.server,
+                            // queue_equal is not yet derivable here without a
+                            // controller/renderer queue diff; default false so the
+                            // reduced matrix never spuriously suppresses a push.
+                            false,
+                            auto_take_when_idle,
+                        );
+                        if decision.should_set_active_renderer {
+                            let local_id = {
+                                let st = self.sync.lock().await;
+                                st.session.local_renderer_id
+                            };
+                            match local_id {
+                                Some(local_id) => {
+                                    // Latch ONLY on an actual send (reconnect
+                                    // re-claim, or the idle auto-take when our
+                                    // ADD_RENDERER already landed).
+                                    auto_take_attempted = true;
+                                    if let Err(err) =
+                                        self.send_set_active_renderer(local_id).await
+                                    {
+                                        log::warn!(
+                                            "[QConnect] takeover set_active_renderer failed: {err}"
+                                        );
+                                    }
+                                }
+                                None if auto_take_when_idle => {
+                                    // Our just-sent join is not yet confirmed, so
+                                    // local_renderer_id is unknown. Defer to the
+                                    // per-iteration check below, which fires once
+                                    // the cloud's ADD_RENDERER for us lands.
+                                    pending_auto_take = true;
+                                }
+                                None => {}
+                            }
+                        }
+                    }
+
+                    // Fire a deferred idle auto-take as soon as our
+                    // local_renderer_id lands — but ONLY while the session is still
+                    // idle (no active renderer), so we never steal a peer that
+                    // became active while we waited for our id.
+                    if pending_auto_take {
+                        let (local_id, active_id) = {
+                            let st = self.sync.lock().await;
+                            (st.session.local_renderer_id, st.session.active_renderer_id)
+                        };
+                        if active_id.is_some() {
+                            // Someone is active now — abandon the auto-take.
+                            pending_auto_take = false;
+                            auto_take_attempted = true;
+                        } else if let Some(local_id) = local_id {
+                            pending_auto_take = false;
+                            auto_take_attempted = true;
+                            log::info!(
+                                "[QConnect] idle auto-take: claiming render (local_id={local_id})"
+                            );
+                            if let Err(err) = self.send_set_active_renderer(local_id).await {
+                                log::warn!(
+                                    "[QConnect] idle auto-take set_active_renderer failed: {err}"
+                                );
+                            }
+                        }
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                    log::warn!("[QConnect] Transport event lagged by {skipped} messages");
+                    // P1-8: a Lagged drop may have eaten the SESSION_STATE carrying
+                    // the session_uuid. Re-ask for queue state until the uuid is
+                    // confirmed or the attempt budget is spent.
+                    let session_uuid_known = {
+                        let st = self.sync.lock().await;
+                        st.session.session_uuid.is_some()
+                    };
+                    if should_reask_queue_state(
+                        session_uuid_known,
+                        lagged_reask_attempts,
+                        QCONNECT_REASK_QUEUE_STATE_MAX_ATTEMPTS,
+                    ) {
+                        lagged_reask_attempts = lagged_reask_attempts.saturating_add(1);
+                        if let Err(err) = self.ask_for_queue_state().await {
+                            log::warn!("[QConnect] Lagged-recovery AskForQueueState failed: {err}");
+                        }
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    log::warn!("[QConnect/EventLoop] Transport channel closed, stopping");
+                    break;
+                }
+            }
+        }
+        log::info!("[QConnect/EventLoop] Stopped");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -929,12 +2129,16 @@ mod tests {
     use async_trait::async_trait;
     use qconnect_core::QueueVersion;
     use qconnect_transport_ws::InMemoryWsTransport;
+
+    use crate::session::{LocalIdentity, QconnectRendererInfo, ServerActiveState};
+    use crate::QconnectRemoteSyncState;
     use serde_json::json;
     use tokio::sync::Mutex;
 
     use crate::{QconnectAppEvent, QconnectEventSink};
 
-    use super::QconnectApp;
+    use super::{queue_hashes_diverge, QconnectApp};
+    use qconnect_core::QConnectQueueState;
     use qconnect_protocol::{
         QueueCommandType, QueueEventType, QueueServerEvent, RendererCommandType,
         RendererServerCommand,
@@ -975,10 +2179,237 @@ mod tests {
     ) {
         let transport = Arc::new(InMemoryWsTransport::new());
         let sink = TestSink::default();
-        let app = QconnectApp::new(Arc::clone(&transport), Arc::new(sink.clone()));
+        let app = QconnectApp::new(
+            Arc::clone(&transport),
+            Arc::new(sink.clone()),
+            Arc::new(Mutex::new(QconnectRemoteSyncState::default())),
+        );
         let events_rx = app.subscribe_transport_events();
         app.connect(test_config()).await.expect("connect");
         (app, sink, transport, events_rx)
+    }
+
+    fn renderer_info(renderer_id: i32, device_uuid: &str) -> QconnectRendererInfo {
+        QconnectRendererInfo {
+            renderer_id,
+            device_uuid: Some(device_uuid.to_string()),
+            friendly_name: None,
+            brand: None,
+            model: None,
+            device_type: None,
+            volume_remote_control: None,
+        }
+    }
+
+    fn local_identity(device_uuid: &str) -> LocalIdentity {
+        LocalIdentity {
+            device_uuid: device_uuid.to_string(),
+            ..Default::default()
+        }
+    }
+
+    /// Seed a local(1) + peer(2) topology with the peer as the active renderer.
+    async fn seed_local_and_active_peer(app: &QconnectApp<InMemoryWsTransport, TestSink>) {
+        let handle = app.sync_handle();
+        let mut state = handle.lock().await;
+        state.session.local_renderer_id = Some(1);
+        state.session.active_renderer_id = Some(2);
+        state.session.renderers = vec![renderer_info(1, "local-uuid"), renderer_info(2, "peer-uuid")];
+    }
+
+    /// SESSION_STATE writes session topology under the sync lock and reports the
+    /// post-lock work (loop mode + local-playback handoff) in the outcome.
+    #[tokio::test]
+    async fn apply_session_state_sets_topology_and_returns_outcome() {
+        let (app, _sink, _transport, _rx) = build_connected_app().await;
+        let outcome = app
+            .apply_session_management_event(
+                "MESSAGE_TYPE_SRVR_CTRL_SESSION_STATE",
+                &json!({ "session_uuid": "sess-1", "active_renderer_id": 2, "loop_mode": 3 }),
+                &local_identity("local-uuid"),
+            )
+            .await;
+        assert!(outcome.sync_local_playback);
+        assert_eq!(outcome.apply_loop_mode, Some(3));
+        let handle = app.sync_handle();
+        let state = handle.lock().await;
+        assert_eq!(state.session.session_uuid.as_deref(), Some("sess-1"));
+        assert_eq!(state.session.active_renderer_id, Some(2));
+        assert_eq!(state.session_loop_mode, Some(3));
+    }
+
+    /// Regression (take-renderer-when-idle): the cloud encodes "no active
+    /// renderer" as `active_renderer_id: -1`. The takeover classifier must
+    /// normalize it to `ServerActiveState::None` — identical to the apply
+    /// path's `normalize_active_renderer_id` — so the idle auto-take fires on a
+    /// fresh connect. A raw parse mis-read -1 as `Some(-1)` (a peer is active),
+    /// classified it as `OtherPaused`, and silently suppressed the auto-take.
+    #[tokio::test]
+    async fn capture_takeover_treats_negative_active_renderer_as_none() {
+        let (app, _sink, _transport, _rx) = build_connected_app().await;
+        {
+            let handle = app.sync_handle();
+            let mut state = handle.lock().await;
+            state.session.local_renderer_id = Some(8);
+        }
+        let input = app
+            .capture_session_state_takeover_input(&json!({ "active_renderer_id": -1 }))
+            .await;
+        assert_eq!(input.server, ServerActiveState::None);
+    }
+
+    /// A real active peer (id >= 0, not us) still classifies as a peer, so the
+    /// auto-take never steals it.
+    #[tokio::test]
+    async fn capture_takeover_treats_active_peer_as_other() {
+        let (app, _sink, _transport, _rx) = build_connected_app().await;
+        {
+            let handle = app.sync_handle();
+            let mut state = handle.lock().await;
+            state.session.local_renderer_id = Some(8);
+        }
+        let input = app
+            .capture_session_state_takeover_input(&json!({ "active_renderer_id": 5 }))
+            .await;
+        assert!(matches!(
+            input.server,
+            ServerActiveState::OtherPlaying | ServerActiveState::OtherPaused
+        ));
+    }
+
+    /// A RENDERER_STATE_UPDATED for a PLAYING active peer arms the watchdog and
+    /// reports the renderer for projection.
+    #[tokio::test]
+    async fn renderer_state_updated_arms_watchdog_for_playing_active_peer() {
+        let (app, _sink, _transport, _rx) = build_connected_app().await;
+        seed_local_and_active_peer(&app).await;
+        let outcome = app
+            .apply_session_management_event(
+                "MESSAGE_TYPE_SRVR_CTRL_RENDERER_STATE_UPDATED",
+                &json!({ "renderer_id": 2, "player_state": { "playing_state": 2 } }),
+                &local_identity("local-uuid"),
+            )
+            .await;
+        let (renderer_id, _generation) = outcome
+            .watchdog_arm
+            .expect("watchdog should arm for a playing active peer");
+        assert_eq!(renderer_id, 2);
+        assert_eq!(outcome.remote_projection_renderer_id, Some(2));
+    }
+
+    /// The full arm -> 12s silence -> fire path: emits RendererUnreachable and
+    /// freezes the cached projection to UNKNOWN(0).
+    #[tokio::test(start_paused = true)]
+    async fn watchdog_fires_after_silence_and_freezes_projection() {
+        let (app, sink, _transport, _rx) = build_connected_app().await;
+        seed_local_and_active_peer(&app).await;
+        let outcome = app
+            .apply_session_management_event(
+                "MESSAGE_TYPE_SRVR_CTRL_RENDERER_STATE_UPDATED",
+                &json!({ "renderer_id": 2, "player_state": { "playing_state": 2 } }),
+                &local_identity("local-uuid"),
+            )
+            .await;
+        let (renderer_id, generation) = outcome.watchdog_arm.expect("arm");
+        app.arm_renderer_watchdog(renderer_id, generation);
+
+        tokio::task::yield_now().await;
+        tokio::time::advance(std::time::Duration::from_millis(12_000 + 10)).await;
+        tokio::task::yield_now().await;
+
+        let events = sink.snapshot().await;
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, QconnectAppEvent::RendererUnreachable { renderer_id: 2 })),
+            "expected RendererUnreachable for renderer 2"
+        );
+        let handle = app.sync_handle();
+        let state = handle.lock().await;
+        assert_eq!(
+            state
+                .session_renderer_states
+                .get(&2)
+                .and_then(|r| r.playing_state),
+            Some(0),
+            "frozen renderer playing_state must be UNKNOWN(0)"
+        );
+    }
+
+    /// Atomicity regression: a stale-epoch watchdog must no-op. A subsequent
+    /// non-playing update bumps the epoch (disarm) without arming a new task, so
+    /// the first task wakes to a superseded generation and does NOT fire.
+    #[tokio::test(start_paused = true)]
+    async fn watchdog_disarmed_by_epoch_bump_does_not_fire() {
+        let (app, sink, _transport, _rx) = build_connected_app().await;
+        seed_local_and_active_peer(&app).await;
+        let armed = app
+            .apply_session_management_event(
+                "MESSAGE_TYPE_SRVR_CTRL_RENDERER_STATE_UPDATED",
+                &json!({ "renderer_id": 2, "player_state": { "playing_state": 2 } }),
+                &local_identity("local-uuid"),
+            )
+            .await;
+        let (renderer_id, generation) = armed.watchdog_arm.expect("arm");
+        app.arm_renderer_watchdog(renderer_id, generation);
+
+        // A paused update bumps the watchdog epoch and does NOT arm a new task.
+        let disarm = app
+            .apply_session_management_event(
+                "MESSAGE_TYPE_SRVR_CTRL_RENDERER_STATE_UPDATED",
+                &json!({ "renderer_id": 2, "player_state": { "playing_state": 3 } }),
+                &local_identity("local-uuid"),
+            )
+            .await;
+        assert!(disarm.watchdog_arm.is_none());
+
+        tokio::task::yield_now().await;
+        tokio::time::advance(std::time::Duration::from_millis(12_000 + 10)).await;
+        tokio::task::yield_now().await;
+
+        let events = sink.snapshot().await;
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, QconnectAppEvent::RendererUnreachable { .. })),
+            "stale-epoch watchdog must not fire after a disarming bump"
+        );
+    }
+
+    /// ACTIVE_DISCONNECTED(status==2) for the active peer reports the
+    /// disconnected renderer; freezing emits RendererDisconnected + UNKNOWN(0).
+    #[tokio::test]
+    async fn active_disconnected_reports_id_and_freeze_emits() {
+        let (app, sink, _transport, _rx) = build_connected_app().await;
+        seed_local_and_active_peer(&app).await;
+        let outcome = app
+            .apply_session_management_event(
+                "MESSAGE_TYPE_SRVR_CTRL_RENDERER_STATE_UPDATED",
+                &json!({ "renderer_id": 2, "status": 2, "player_state": { "playing_state": 2 } }),
+                &local_identity("local-uuid"),
+            )
+            .await;
+        assert_eq!(outcome.disconnected_renderer_id, Some(2));
+
+        app.freeze_active_renderer_projection(
+            2,
+            QconnectAppEvent::RendererDisconnected { renderer_id: 2 },
+        )
+        .await;
+
+        let events = sink.snapshot().await;
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, QconnectAppEvent::RendererDisconnected { renderer_id: 2 })));
+        let handle = app.sync_handle();
+        let state = handle.lock().await;
+        assert_eq!(
+            state
+                .session_renderer_states
+                .get(&2)
+                .and_then(|r| r.playing_state),
+            Some(0)
+        );
     }
 
     #[tokio::test(start_paused = true)]
@@ -1149,6 +2580,117 @@ mod tests {
         assert!(
             !sent.is_empty(),
             "expected ask-for-state resync after remove"
+        );
+    }
+
+    #[test]
+    fn queue_hashes_diverge_is_inert_without_local_algorithm() {
+        let mut queue = QConnectQueueState::default();
+        queue.last_server_queue_hash = Some(vec![9, 9, 9]);
+        assert!(
+            !queue_hashes_diverge(&queue),
+            "divergence detection must stay inert until the local hash algorithm is known"
+        );
+    }
+
+    #[tokio::test]
+    async fn queue_state_event_surfaces_server_queue_hash() {
+        let (app, _sink, _transport, _events_rx) = build_connected_app().await;
+
+        app.apply_server_event(QueueServerEvent {
+            event_type: QueueEventType::SrvrCtrlQueueState,
+            action_uuid: None,
+            queue_version: Some(QueueVersion::new(1, 0)),
+            payload: json!({
+                "tracks": [],
+                "shuffle_mode": false,
+                "autoplay_tracks": [],
+                "server_queue_hash": [1, 2, 3, 4]
+            }),
+        })
+        .await
+        .expect("apply queue-state event");
+
+        let snap = app.queue_state_snapshot().await;
+        assert_eq!(
+            snap.last_server_queue_hash.as_deref(),
+            Some(&[1u8, 2, 3, 4][..])
+        );
+    }
+
+    #[tokio::test]
+    async fn inbound_playback_error_emits_playback_error_app_event() {
+        use prost::Message as _;
+        use qconnect_protocol::{
+            ErrorType, PlaybackErrorMessage, QConnectMessage, QConnectMessages, QueueVersionRef,
+        };
+        use qconnect_transport_ws::TransportEvent;
+
+        let (app, sink, _transport, _events_rx) = build_connected_app().await;
+
+        let batch = QConnectMessages {
+            messages_time: None,
+            messages_id: None,
+            messages: vec![QConnectMessage {
+                message_type: Some(2), // PLAYBACK_ERROR
+                playback_error: Some(PlaybackErrorMessage {
+                    queue_version: Some(QueueVersionRef {
+                        major: Some(4),
+                        minor: Some(2),
+                    }),
+                    queue_item_id: Some(77),
+                    error_type: Some(5), // NETWORK_ERROR
+                }),
+                ..Default::default()
+            }],
+        };
+
+        app.handle_transport_event(TransportEvent::InboundPayloadBytes {
+            cloud_message_type: 0,
+            payload: batch.encode_to_vec(),
+        })
+        .await
+        .expect("handle playback-error frame");
+
+        let events = sink.snapshot().await;
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                QconnectAppEvent::PlaybackError {
+                    queue_item_id: 77,
+                    error_type: ErrorType::NetworkError,
+                    ..
+                }
+            )),
+            "expected a PlaybackError app event for queue item 77 / NetworkError"
+        );
+    }
+
+    #[tokio::test]
+    async fn autoplay_growth_triggers_queue_state_resync() {
+        let (app, sink, transport, _events_rx) = build_connected_app().await;
+
+        app.apply_server_event(QueueServerEvent {
+            event_type: QueueEventType::SrvrCtrlQueueTracksAddedFromAutoplay,
+            action_uuid: None,
+            queue_version: Some(QueueVersion::new(2, 0)),
+            payload: json!({ "queue_item_ids": [101, 102] }),
+        })
+        .await
+        .expect("apply autoplay-growth event");
+
+        let events = sink.snapshot().await;
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, QconnectAppEvent::QueueResyncTriggered)),
+            "autoplay growth must force an AskForQueueState resync"
+        );
+
+        let sent = transport.sent_messages().await;
+        assert!(
+            !sent.is_empty(),
+            "expected ask-for-state resync after autoplay growth"
         );
     }
 

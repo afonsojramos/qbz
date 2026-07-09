@@ -48,6 +48,7 @@ pub enum RendererReportType {
     RndrSrvrVolumeChanged,
     RndrSrvrVolumeMuted,
     RndrSrvrFileAudioQualityChanged,
+    RndrSrvrDeviceAudioQualityChanged,
     RndrSrvrMaxAudioQualityChanged,
 }
 
@@ -61,6 +62,9 @@ impl RendererReportType {
             Self::RndrSrvrVolumeMuted => "MESSAGE_TYPE_RNDR_SRVR_VOLUME_MUTED",
             Self::RndrSrvrFileAudioQualityChanged => {
                 "MESSAGE_TYPE_RNDR_SRVR_FILE_AUDIO_QUALITY_CHANGED"
+            }
+            Self::RndrSrvrDeviceAudioQualityChanged => {
+                "MESSAGE_TYPE_RNDR_SRVR_DEVICE_AUDIO_QUALITY_CHANGED"
             }
             Self::RndrSrvrMaxAudioQualityChanged => {
                 "MESSAGE_TYPE_RNDR_SRVR_MAX_AUDIO_QUALITY_CHANGED"

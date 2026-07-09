@@ -288,8 +288,23 @@ fn main() {
             }
         };
 
-        // Developer settings: force_dmabuf override (from Settings > Developer Mode)
-        let dev_force_dmabuf =
+        // ---- Read remaining risky settings (no env vars set yet) ----
+        let preferred_gpu_raw_intended = graphics_db
+            .as_ref()
+            .map(|s| s.preferred_gpu.clone())
+            .unwrap_or_else(|| "auto".to_string());
+        let force_x11_db = graphics_db.as_ref().map(|s| s.force_x11).unwrap_or(false);
+        // NVIDIA Wayland compatibility opt-in: when ON, sets
+        // __NV_DISABLE_EXPLICIT_SYNC=1 to bypass libnvidia-egl-gbm's
+        // buggy implicit-sync paths AND lifts the defensive
+        // compositing-off shutdown that QBZ applies to NVIDIA-only
+        // Wayland sessions.
+        let nvidia_compat_mode = graphics_db
+            .as_ref()
+            .map(|s| s.nvidia_compat_mode)
+            .unwrap_or(false);
+
+        let dev_force_dmabuf_intended =
             match qbz_nix_lib::config::developer_settings::DeveloperSettingsStore::new() {
                 Ok(store) => match store.get_settings() {
                     Ok(settings) => settings.force_dmabuf,
@@ -309,6 +324,104 @@ fn main() {
                     false
                 }
             };
+
+        // ---- Boot watchdog: revert risky settings if previous boot crashed ----
+        // If a prior launch wrote a pending marker that never got cleared,
+        // those settings crashed WebKit before first paint. The watchdog
+        // returns the resolved values to actually use this boot (usually
+        // the intended ones, with revert flags set for any knob that
+        // matched the prior crash). It also writes a fresh pending marker
+        // for THIS boot; the frontend's first-paint hook clears it.
+        let watchdog_resolution = qbz_nix_lib::boot_watchdog::before_webkit_init(
+            qbz_nix_lib::boot_watchdog::BootAttempt {
+                hardware_acceleration: hardware_accel,
+                force_dmabuf: dev_force_dmabuf_intended,
+                preferred_gpu: preferred_gpu_raw_intended.clone(),
+                force_x11: force_x11_db,
+            },
+        );
+        let mut hardware_accel = watchdog_resolution.hardware_acceleration;
+        let mut dev_force_dmabuf = watchdog_resolution.force_dmabuf;
+        let preferred_gpu_raw = watchdog_resolution.preferred_gpu.clone();
+        for msg in &watchdog_resolution.recovery_messages {
+            eprintln!("[QBZ] {}", msg);
+            qbz_nix_lib::logging::log_startup(&format!("[QBZ] {}", msg));
+        }
+
+        // Software GPU choice (preferred_gpu=software) implies CPU mode:
+        // forcing Mesa llvmpipe AND keeping WebKit's GPU compositing on
+        // would just round-trip software pixels through a "GPU" path
+        // that has no GPU. Treat it as the nuclear "no HW" option and
+        // mirror it into hardware_acceleration so the WEBKIT_DISABLE_*
+        // env vars below also fire.
+        if preferred_gpu_raw == "software" {
+            if hardware_accel || dev_force_dmabuf {
+                qbz_nix_lib::logging::log_startup(
+                    "[QBZ] preferred_gpu=software → forcing hardware_acceleration=off + DMA-BUF=off (full CPU mode)",
+                );
+            }
+            hardware_accel = false;
+            dev_force_dmabuf = false;
+        }
+
+        // NVIDIA Wayland compatibility mode: opt-in toggle that says
+        // "I have libnvidia-egl-gbm installed, try the new path".
+        // Sets __NV_DISABLE_EXPLICIT_SYNC=1 to bypass the buggy implicit
+        // sync code that produces "Failed to create GBM buffer of size
+        // NxN: Invalid argument" under WebKit + NVIDIA + Wayland on
+        // driver 550+. Set unconditionally when the toggle is ON — the
+        // env var is a no-op when NVIDIA isn't in use.
+        if nvidia_compat_mode {
+            qbz_nix_lib::logging::log_startup(
+                "[QBZ] NVIDIA compatibility mode ON: setting __NV_DISABLE_EXPLICIT_SYNC=1",
+            );
+            std::env::set_var("__NV_DISABLE_EXPLICIT_SYNC", "1");
+        }
+
+        // ---- Apply preferred_gpu env vars (using watchdog-resolved value) ----
+        let preferred_gpu_choice =
+            qbz_nix_lib::graphics_detection::PreferredGpu::parse(&preferred_gpu_raw);
+        if !matches!(
+            preferred_gpu_choice,
+            qbz_nix_lib::graphics_detection::PreferredGpu::Auto
+        ) {
+            let detected = qbz_nix_lib::graphics_detection::enumerate_gpus();
+            let env_pairs = qbz_nix_lib::graphics_detection::env_vars_for_preferred_gpu(
+                &preferred_gpu_choice,
+                &detected,
+            );
+            if env_pairs.is_empty() {
+                qbz_nix_lib::logging::log_startup(&format!(
+                    "[QBZ] preferred_gpu={:?} could not be resolved (no matching detected GPU); falling back to system default",
+                    preferred_gpu_raw
+                ));
+            } else {
+                qbz_nix_lib::logging::log_startup(&format!(
+                    "[QBZ] preferred_gpu={:?}: applying GPU pin env vars",
+                    preferred_gpu_raw
+                ));
+                for action in &env_pairs {
+                    match action {
+                        qbz_nix_lib::graphics_detection::EnvAction::Set(name, value) => {
+                            qbz_nix_lib::logging::log_startup(&format!(
+                                "[QBZ]   set {}={}",
+                                name, value
+                            ));
+                            std::env::set_var(name, value);
+                        }
+                        qbz_nix_lib::graphics_detection::EnvAction::Unset(name) => {
+                            qbz_nix_lib::logging::log_startup(&format!(
+                                "[QBZ]   unset {}",
+                                name
+                            ));
+                            std::env::remove_var(name);
+                        }
+                    }
+                }
+            }
+        }
+
+        // ---- Apply dev_force_dmabuf env var (using watchdog-resolved value) ----
         if dev_force_dmabuf {
             std::env::set_var("QBZ_FORCE_DMABUF", "1");
             qbz_nix_lib::logging::log_startup(
@@ -321,8 +434,8 @@ fn main() {
         let force_dmabuf = std::env::var("QBZ_FORCE_DMABUF").as_deref() == Ok("1");
         let disable_dmabuf = std::env::var("QBZ_DISABLE_DMABUF").as_deref() == Ok("1");
 
-        // Force X11: persistent setting from DB, env var overrides (crash recovery)
-        let force_x11_db = graphics_db.as_ref().map(|s| s.force_x11).unwrap_or(false);
+        // Force X11: persistent setting from DB (read above for watchdog),
+        // env var overrides (crash recovery).
         let force_x11 = match std::env::var("QBZ_FORCE_X11").as_deref() {
             Ok("1") => {
                 qbz_nix_lib::logging::log_startup("[QBZ] Env override: QBZ_FORCE_X11=1");
@@ -453,18 +566,32 @@ fn main() {
         //
         // QBZ_HARDWARE_ACCEL=0 is the nuclear option: disables everything.
         // QBZ_HARDWARE_ACCEL=1 (explicit) bypasses ALL safety measures.
-        // Default (no env var): v1.1.9 targeted mitigations only.
+        // Default (no env var): GPU compositing on, DMA-BUF off (opt-in).
         //
-        // v1.1.9 defaults:
-        //   - Wayland: COMPOSITING off + DMABUF off (prevents EGL/protocol errors)
-        //   - X11 + NVIDIA: DMABUF off only (prevents Error 71)
-        //   - X11 + non-NVIDIA: nothing disabled (full GPU acceleration)
+        // Policy (since 1.2.13):
+        //   - GPU compositing: opt-out — on by default. User can disable in
+        //     Settings if their stack is broken. The CPU-mode lite path
+        //     covers the disabled case.
+        //   - DMA-BUF renderer: opt-in — off by default. The user has to
+        //     flip Settings > Developer > force_dmabuf to turn it on.
+        //     Rationale: DMA-BUF is the most fragile WebKitGTK feature on
+        //     Linux — NVIDIA+Wayland breaks reliably (EGL Error 71),
+        //     hybrid Intel+NVIDIA can flicker, and the failure mode is
+        //     catastrophic (black window, missing textures) rather than
+        //     degraded. The perf gain when it works is marginal (~5-10%
+        //     memory bandwidth on heavy compositing) and not worth the
+        //     rendering risk for a music app.
+        //   - Wayland+NVIDIA-only compositing: still gated off automatically
+        //     because the EGL protocol errors corrupt the whole window,
+        //     not just texture sharing. Separate axis from DMA-BUF.
         //
         // Override hierarchy (highest to lowest):
         //   1. QBZ_HARDWARE_ACCEL=0 → disable everything
-        //   2. QBZ_HARDWARE_ACCEL=1 → enable everything (bypass all safety)
-        //   3. QBZ_FORCE_DMABUF=1 / QBZ_DISABLE_DMABUF=1 → fine-grained DMA-BUF
-        //   4. Auto-detection (Wayland/NVIDIA)
+        //   2. QBZ_HARDWARE_ACCEL=1 → enable everything (bypass all safety,
+        //      including the DMA-BUF opt-in default)
+        //   3. QBZ_FORCE_DMABUF=1 / QBZ_DISABLE_DMABUF=1 → explicit override
+        //   4. force_dmabuf DB toggle → opt-in DMA-BUF
+        //   5. Default → DMA-BUF off, compositing on (except Wayland+NV-only)
         if !hardware_accel {
             // Nuclear opt-out: disable all GPU compositing and DMA-BUF
             qbz_nix_lib::logging::log_startup(
@@ -476,17 +603,27 @@ fn main() {
             std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
             std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
         } else if std::env::var("QBZ_HARDWARE_ACCEL").as_deref() == Ok("1") {
-            // Explicit full GPU: skip ALL safety measures
+            // Explicit full GPU: skip ALL safety measures, including the
+            // DMA-BUF opt-in default. Power-user escape hatch.
             qbz_nix_lib::logging::log_startup("[QBZ] Full GPU mode: all WebKit safety bypassed");
         } else {
-            // Default path: v1.1.9 targeted mitigations
+            // Default path: opt-in DMA-BUF, opt-out compositing
 
             // --- Compositing mode ---
             // NVIDIA-only on Wayland has protocol errors with compositing.
             // Hybrid Intel+NVIDIA and AMD systems can handle compositing fine
             // (WebKit uses the iGPU, not the dGPU).
             // If user forced DMA-BUF on, they want full GPU — skip compositing disable too.
-            if is_wayland && !force_x11 && has_nvidia && !has_amd && !has_intel && !force_dmabuf {
+            // NVIDIA Wayland compat mode also bypasses this safety —
+            // the user has the fix in place and wants the full path.
+            if is_wayland
+                && !force_x11
+                && has_nvidia
+                && !has_amd
+                && !has_intel
+                && !force_dmabuf
+                && !nvidia_compat_mode
+            {
                 std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
                 qbz_nix_lib::logging::log_startup(
                     "[QBZ] Wayland+NVIDIA-only: compositing mode disabled (prevents protocol errors)",
@@ -495,31 +632,21 @@ fn main() {
                 qbz_nix_lib::logging::log_startup("[QBZ] Wayland: compositing mode enabled");
             }
 
-            // --- DMA-BUF renderer control ---
+            // --- DMA-BUF renderer control (opt-in) ---
             if force_dmabuf {
                 qbz_nix_lib::logging::log_startup(
-                    "[QBZ] User override: DMA-BUF renderer forced ON (QBZ_FORCE_DMABUF=1)",
+                    "[QBZ] User opt-in: DMA-BUF renderer ON (Settings > Developer > force_dmabuf)",
                 );
             } else if disable_dmabuf {
                 qbz_nix_lib::logging::log_startup(
-                    "[QBZ] User override: DMA-BUF renderer forced OFF (QBZ_DISABLE_DMABUF=1)",
+                    "[QBZ] Env override: DMA-BUF renderer OFF (QBZ_DISABLE_DMABUF=1)",
                 );
-                std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
-            } else if is_wayland && !force_x11 && has_nvidia && !has_amd && !has_intel {
-                // NVIDIA-only on Wayland: disable DMA-BUF (Error 71 protocol error)
-                qbz_nix_lib::logging::log_startup(
-                    "[QBZ] Wayland+NVIDIA-only: DMA-BUF renderer disabled (prevents Error 71)",
-                );
-                std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
-            } else if has_nvidia && !has_intel && !has_amd && !is_wayland {
-                // X11 + NVIDIA: disable DMA-BUF only (keeps full compositing)
-                qbz_nix_lib::logging::log_startup("[QBZ] NVIDIA on X11: DMA-BUF renderer disabled");
                 std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
             } else {
-                // AMD/Intel on Wayland or X11: full GPU acceleration
                 qbz_nix_lib::logging::log_startup(
-                    "[QBZ] Using default WebKit renderer (full hardware acceleration)",
+                    "[QBZ] DMA-BUF renderer off by default (opt-in via Settings > Developer)",
                 );
+                std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
             }
         }
 
@@ -542,8 +669,23 @@ fn main() {
         qbz_nix_lib::logging::log_startup(&format!("[QBZ] GPU rendering: {}", gpu_status));
     }
 
+    // CLI flags: --enable-qconnect / --disable-qconnect (volatile per-launch override)
+    let qconnect_force_on = std::env::args().any(|a| a == "--enable-qconnect");
+    let qconnect_force_off = std::env::args().any(|a| a == "--disable-qconnect");
+    let qconnect_cli_override: Option<bool> = match (qconnect_force_on, qconnect_force_off) {
+        (true, false) => Some(true),
+        (false, true) => Some(false),
+        (true, true) => {
+            log::warn!(
+                "[QConnect] Both --enable-qconnect and --disable-qconnect provided; --enable-qconnect wins"
+            );
+            Some(true)
+        }
+        (false, false) => None,
+    };
+
     // Catch panics during startup and show a recovery message
-    let result = std::panic::catch_unwind(|| qbz_nix_lib::run());
+    let result = std::panic::catch_unwind(|| qbz_nix_lib::run(qconnect_cli_override));
 
     if let Err(panic_info) = result {
         let msg = if let Some(s) = panic_info.downcast_ref::<String>() {

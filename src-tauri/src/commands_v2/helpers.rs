@@ -10,9 +10,7 @@ use std::path::PathBuf;
 
 use md5::{Digest, Md5};
 
-use qbz_models::{
-    Album, Artist, Playlist, Quality, SearchResultsPage, StreamUrl, Track,
-};
+use qbz_models::{Quality, StreamUrl};
 
 use crate::audio::{AlsaPlugin, AudioBackendType};
 use crate::config::audio_settings::{AudioSettings, AudioSettingsState};
@@ -26,6 +24,17 @@ lazy_static::lazy_static! {
     /// Notify waiters when streaming download finishes.
     /// Prefetch waits on this if a streaming download is active.
     pub(crate) static ref CDN_STREAM_DONE: tokio::sync::Notify = tokio::sync::Notify::new();
+
+    /// Wakes the playback-state polling loop in `lib.rs` immediately after a
+    /// state-mutating V2 command (play, pause, resume, stop, seek). Without
+    /// this signal, the loop's idle/paused sleep (5s/1s) gates the first
+    /// `playback:state` emit on cold start, leaving the seekbar blank for
+    /// several seconds while audio is already playing.
+    ///
+    /// `notify_one` is used at the call site: it stores up to one permit if
+    /// no waiter is currently parked, so notifications are not lost between
+    /// loop iterations.
+    pub(crate) static ref PLAYBACK_STATE_WAKEUP: tokio::sync::Notify = tokio::sync::Notify::new();
 }
 
 /// Number of active streaming downloads (for the currently-playing track).
@@ -66,48 +75,18 @@ pub struct DacCapabilities {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(tag = "type", content = "content", rename_all = "lowercase")]
-pub enum V2MostPopularItem {
-    Tracks(Track),
-    Albums(Album),
-    Artists(Artist),
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct V2SearchAllResults {
-    pub albums: SearchResultsPage<Album>,
-    pub tracks: SearchResultsPage<Track>,
-    pub artists: SearchResultsPage<Artist>,
-    pub playlists: SearchResultsPage<Playlist>,
-    pub most_popular: Option<V2MostPopularItem>,
-}
+// Combined-search result types moved to qbz-models (single definition).
+// Aliases kept so command code and its response serialization are unchanged.
+pub use qbz_models::{
+    MostPopularItem as V2MostPopularItem,
+    SearchAllResults as V2SearchAllResults,
+};
 
 /// Convert config AudioSettings to qbz_audio::AudioSettings.
 /// Used by runtime_bootstrap (once at startup) and v2_reinit_audio_device
 /// to ensure the Player has fresh settings from the database.
 pub(crate) fn convert_to_qbz_audio_settings(settings: &AudioSettings) -> qbz_audio::AudioSettings {
-    qbz_audio::AudioSettings {
-        output_device: settings.output_device.clone(),
-        exclusive_mode: settings.exclusive_mode,
-        dac_passthrough: settings.dac_passthrough,
-        preferred_sample_rate: settings.preferred_sample_rate,
-        limit_quality_to_device: settings.limit_quality_to_device,
-        device_max_sample_rate: settings.device_max_sample_rate,
-        device_sample_rate_limits: settings.device_sample_rate_limits.clone(),
-        backend_type: settings.backend_type.clone(),
-        alsa_plugin: settings.alsa_plugin.clone(),
-        alsa_hardware_volume: settings.alsa_hardware_volume,
-        stream_first_track: settings.stream_first_track,
-        stream_buffer_seconds: settings.stream_buffer_seconds,
-        streaming_only: settings.streaming_only,
-        normalization_enabled: settings.normalization_enabled,
-        normalization_target_lufs: settings.normalization_target_lufs,
-        gapless_enabled: settings.gapless_enabled,
-        pw_force_bitperfect: settings.pw_force_bitperfect,
-        skip_sink_switch: settings.skip_sink_switch,
-        allow_quality_fallback: settings.allow_quality_fallback,
-    }
+    settings.clone()
 }
 
 /// Reload audio settings from the per-user store into the CoreBridge player.
@@ -969,17 +948,22 @@ pub async fn v2_cmaf_stream(
         // Progress logging every 5 segments or on last segment
         if seg_idx % 5 == 0 || seg_idx == n_segments {
             let elapsed = start.elapsed().as_secs_f64();
+            let mbps = if elapsed > 0.0 {
+                total_written as f64 / (1024.0 * 1024.0) / elapsed
+            } else {
+                0.0
+            };
             log::info!(
                 "[V2/CMAF-STREAM] Segment {}/{} ({:.1} MB, {:.1} MB/s)",
                 seg_idx,
                 n_segments - 1,
                 total_written as f64 / (1024.0 * 1024.0),
-                if elapsed > 0.0 {
-                    total_written as f64 / (1024.0 * 1024.0) / elapsed
-                } else {
-                    0.0
-                }
+                mbps
             );
+            // Feed the network-throttle state with the latest observed
+            // bandwidth so the prefetch scheduler can scale down on slow
+            // connections and stay out of the live stream's way.
+            qbz_audio::network_throttle::state().record_segment_bandwidth(mbps);
         }
     }
 
@@ -1043,6 +1027,21 @@ fn v2_resolve_local_artwork(url: &str) -> Option<PathBuf> {
     None
 }
 
+/// Shared blocking HTTP client for notification artwork downloads. Reused across
+/// track changes so a long listening session doesn't leak a file descriptor per
+/// track via a fresh `reqwest::blocking::Client::new()` (EMFILE — see the image
+/// cache for the same fix on the Discover grid).
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn notification_http_client() -> &'static reqwest::blocking::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::blocking::Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::blocking::Client::builder()
+            .pool_max_idle_per_host(2)
+            .build()
+            .expect("failed to build shared notification HTTP client")
+    })
+}
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub fn v2_cache_notification_artwork(url: &str) -> Result<PathBuf, String> {
     if let Some(local_path) = v2_resolve_local_artwork(url) {
@@ -1060,7 +1059,7 @@ pub fn v2_cache_notification_artwork(url: &str) -> Result<PathBuf, String> {
         return Ok(cache_path);
     }
 
-    let response = reqwest::blocking::Client::new()
+    let response = notification_http_client()
         .get(url)
         .header("User-Agent", "Mozilla/5.0")
         .timeout(std::time::Duration::from_secs(5))

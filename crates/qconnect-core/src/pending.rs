@@ -13,6 +13,8 @@ pub struct PendingQueueAction {
     #[serde(default)]
     pub is_set_loop_mode_action: bool,
     #[serde(default)]
+    pub is_set_volume_action: bool,
+    #[serde(default)]
     pub is_set_active_renderer_action: bool,
     #[serde(default)]
     pub expected_active_renderer_id: Option<i32>,

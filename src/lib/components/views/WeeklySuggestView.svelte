@@ -15,6 +15,10 @@
   import { showToast } from '$lib/stores/toastStore';
   import { setPlaybackContext } from '$lib/stores/playbackContextStore';
   import { isBlacklisted as isArtistBlacklisted } from '$lib/stores/artistBlacklistStore';
+  import {
+    isTrackRemovedFromQobuz,
+    subscribe as subscribeUnavailable
+  } from '$lib/stores/unavailableTracksStore';
   import { getUserItem, setUserItem } from '$lib/utils/userStorage';
   import { applyShiftRange, isSelectAllShortcut } from '$lib/utils/multiSelect';
   import type { OfflineCacheStatus } from '$lib/stores/offlineCacheState';
@@ -475,16 +479,28 @@
     return `${mins} ` + $t('time.minutes');
   });
 
+  // Unavailable-tracks reactivity
+  let unavailableVersion = $state(0);
+  let unsubscribeUnavailable: (() => void) | null = null;
+  function checkTrackUnavailable(track: { id: number; streamable?: boolean }): boolean {
+    void unavailableVersion;
+    return isTrackRemovedFromQobuz(track);
+  }
+
   onMount(() => {
     if (autoRunDone) return;
     autoRunDone = true;
     void generateDailyQ('read-write');
     document.addEventListener('click', handleGlobalClick);
+    unsubscribeUnavailable = subscribeUnavailable(() => {
+      unavailableVersion++;
+    });
   });
 
   onDestroy(() => {
     dismissAlgoTooltip();
     document.removeEventListener('click', handleGlobalClick);
+    unsubscribeUnavailable?.();
   });
 </script>
 
@@ -496,7 +512,7 @@
     </button>
   </div>
 
-  <div class="playlist-header">
+  <div class="playlist-header" data-tauri-drag-region="deep">
     <div class="artwork-container">
       <div class="artwork artwork-weekly"></div>
     </div>
@@ -573,7 +589,7 @@
     <div class="empty">{$t('qobuzMixes.result.empty')}</div>
   {:else if result}
     <div class="track-list">
-      <div class="track-list-header">
+      <div class="track-list-header" data-tauri-drag-region="deep">
         {#if multiSelectMode}
           <div class="col-select-all">
             <input
@@ -598,6 +614,7 @@
 
       {#each filteredTracks as track, index}
         {@const trackBlacklisted = track.performer?.id ? isArtistBlacklisted(track.performer.id) : false}
+        {@const trackUnavailable = checkTrackUnavailable(track)}
         {@const cacheStatus = getTrackOfflineCacheStatus?.(track.id) ?? { status: 'none' as const, progress: 0 }}
         {@const isTrackDownloaded = cacheStatus.status === 'ready'}
         {@const displayTrack = toDisplayTrack(track)}
@@ -614,6 +631,8 @@
           isPlaying={isPlaybackActive && activeTrackId === track.id}
           isActiveTrack={activeTrackId === track.id}
           isBlacklisted={trackBlacklisted}
+          isUnavailable={trackUnavailable}
+          unavailableTooltip={trackUnavailable ? $t('player.trackUnavailable') : undefined}
           selectable={multiSelectMode}
           selected={multiSelectedIds.has(track.id)}
           dragTrackIds={multiSelectMode && multiSelectedIds.has(track.id) ? [...multiSelectedIds] : undefined}

@@ -125,11 +125,15 @@ body:
     attributes:
       label: Logs
       description: |
-        Logs help us diagnose problems much faster.
+        **Sharing your logs when you open an issue helps me fix it much faster — please include them whenever you can.**
 
         1. Open **Settings > Developer Mode > View Logs**
         2. Click **Upload** on both the **Terminal** and **Console** tabs
         3. Paste both URLs here
+
+        Where to find the logs (click the image to enlarge):
+
+        [![Settings > Developer Mode > View Logs](https://raw.githubusercontent.com/vicrodh/qbz/main/docs/release-1.1.15/screenshots/log_access_for_bug_reporting.png)](https://raw.githubusercontent.com/vicrodh/qbz/main/docs/release-1.1.15/screenshots/log_access_for_bug_reporting.png)
 
         **If QBZ crashes on startup**, run from terminal:
         `flatpak run com.blitzfc.qbz 2>&1 | tee /tmp/qbz-crash.log`

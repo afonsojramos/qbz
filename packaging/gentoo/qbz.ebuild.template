@@ -17,14 +17,19 @@ KEYWORDS="~amd64 ~arm64"
 IUSE="pipewire pulseaudio"
 RESTRICT="mirror network-sandbox"
 
+# v2.0+ (Slint/winit binary): no webkit/gtk/appindicator/node.
 RDEPEND="
-	net-libs/webkit-gtk:4.1
-	x11-libs/gtk+:3
 	media-libs/alsa-lib
-	dev-libs/openssl
-	dev-libs/libayatana-appindicator
+	media-libs/fontconfig
+	media-libs/freetype
+	media-libs/libpng
+	app-arch/bzip2
+	dev-libs/expat
+	sys-libs/zlib
 	x11-libs/libxkbcommon
-	gnome-base/librsvg:2
+	dev-libs/wayland
+	media-libs/libglvnd
+	sys-apps/dbus
 	pipewire? (
 		media-video/pipewire[pipewire-alsa]
 	)
@@ -35,8 +40,8 @@ RDEPEND="
 
 BDEPEND="
 	dev-lang/rust
-	net-libs/nodejs[npm]
 	llvm-core/clang
+	dev-lang/nasm
 	virtual/pkgconfig
 "
 
@@ -47,30 +52,24 @@ PDEPEND="
 S="${WORKDIR}/qbz-${MY_PV}"
 
 src_compile() {
-	npm ci || die "npm ci failed"
-	npx tauri build --no-bundle || die "tauri build failed"
+	# Symbols stripped by the workspace [profile.release]. The qbz_ui rustc
+	# peaks ~30 GB RAM — single job keeps the footprint at its measured MIN.
+	CARGO_BUILD_JOBS=1 cargo build --release \
+		--manifest-path crates/Cargo.toml -p qbz || die "cargo build failed"
 }
 
 src_install() {
-	dobin "src-tauri/target/release/qbz"
+	dobin "crates/target/release/qbz"
 
 	insinto /usr/share/applications
-	newins packaging/arch/qbz.desktop qbz.desktop
+	newins packaging/linux/qbz.desktop qbz.desktop
 
 	local size
 	for size in 32 48 64 128 256; do
-		local src_icon="src-tauri/icons/${size}x${size}.png"
+		local src_icon="packaging/icons/${size}x${size}.png"
 		if [[ -f "${src_icon}" ]]; then
 			insinto "/usr/share/icons/hicolor/${size}x${size}/apps"
 			newins "${src_icon}" qbz.png
-		fi
-	done
-
-	local fallback="src-tauri/icons/128x128.png"
-	for size in 48 64; do
-		if [[ ! -f "src-tauri/icons/${size}x${size}.png" ]]; then
-			insinto "/usr/share/icons/hicolor/${size}x${size}/apps"
-			newins "${fallback}" qbz.png
 		fi
 	done
 }

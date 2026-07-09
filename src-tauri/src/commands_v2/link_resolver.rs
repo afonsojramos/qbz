@@ -816,6 +816,36 @@ pub fn v2_set_gsk_renderer(
 }
 
 #[tauri::command]
+pub fn v2_set_preferred_gpu(
+    value: String,
+    state: State<'_, GraphicsSettingsState>,
+) -> Result<(), String> {
+    let guard = state
+        .store
+        .lock()
+        .map_err(|e| format!("Lock error: {}", e))?;
+    let store = guard
+        .as_ref()
+        .ok_or("Graphics settings store not initialized")?;
+    store.set_preferred_gpu(&value)
+}
+
+#[tauri::command]
+pub fn v2_set_nvidia_compat_mode(
+    enabled: bool,
+    state: State<'_, GraphicsSettingsState>,
+) -> Result<(), String> {
+    let guard = state
+        .store
+        .lock()
+        .map_err(|e| format!("Lock error: {}", e))?;
+    let store = guard
+        .as_ref()
+        .ok_or("Graphics settings store not initialized")?;
+    store.set_nvidia_compat_mode(enabled)
+}
+
+#[tauri::command]
 pub fn v2_clear_cache(state: State<'_, AppState>) -> Result<(), String> {
     state.audio_cache.clear();
     Ok(())

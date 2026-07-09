@@ -1,5 +1,5 @@
 <script lang="ts">
-  import Modal from './Modal.svelte';
+  import Modal from '$lib/discovery-v2/ModalLite.svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { ask } from '@tauri-apps/plugin-dialog';
@@ -780,6 +780,7 @@ input[type="number"]::-webkit-inner-spin-button {
 
 input[type="number"] {
   -moz-appearance: textfield;
+  appearance: textfield;
 }
 
 .ref-inline {
@@ -953,6 +954,7 @@ input[type="number"] {
     line-height: 1.3;
     display: -webkit-box;
     -webkit-line-clamp: 2;
+    line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
   }

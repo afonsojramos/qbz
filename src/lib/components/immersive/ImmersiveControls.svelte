@@ -3,7 +3,7 @@
   import { t } from '$lib/i18n';
   import ProgressBar from './shared/ProgressBar.svelte';
   import VolumeSlider from './shared/VolumeSlider.svelte';
-  import QualityBadge from '../QualityBadge.svelte';
+  import QualityBadgeStatic from '../QualityBadgeStatic.svelte';
 
   interface Props {
     visible?: boolean;
@@ -30,6 +30,11 @@
     onToggleFavorite: () => void;
     onVolumeChange: (volume: number) => void;
     volumeLocked?: boolean;
+    /** Disable the favorite button when the active track lives outside
+     * the library (today: ephemeral folder playback). Heart stays visible
+     * but inert so the user understands the action exists; it just isn't
+     * meaningful for transient tracks. */
+    metadataActionsDisabled?: boolean;
   }
 
   let {
@@ -52,7 +57,8 @@
     onToggleRepeat,
     onToggleFavorite,
     onVolumeChange,
-    volumeLocked = false
+    volumeLocked = false,
+    metadataActionsDisabled = false
   }: Props = $props();
 </script>
 
@@ -121,13 +127,17 @@
   <div class="right-section">
     <button
       class="action-btn"
-      class:active={isFavorite}
-      onclick={onToggleFavorite}
-      title={isFavorite ? $t('actions.removeFromFavorites') : $t('actions.addToFavorites')}
+      class:active={isFavorite && !metadataActionsDisabled}
+      class:disabled={metadataActionsDisabled}
+      disabled={metadataActionsDisabled}
+      onclick={metadataActionsDisabled ? undefined : onToggleFavorite}
+      title={metadataActionsDisabled
+        ? $t('actions.unavailableForEphemeral')
+        : (isFavorite ? $t('actions.removeFromFavorites') : $t('actions.addToFavorites'))}
     >
       <Heart
         size={18}
-        fill={isFavorite ? 'currentColor' : 'none'}
+        fill={isFavorite && !metadataActionsDisabled ? 'currentColor' : 'none'}
       />
     </button>
 
@@ -137,7 +147,7 @@
 
     {#if quality}
       <div class="quality-wrapper">
-        <QualityBadge {quality} {bitDepth} {samplingRate} />
+        <QualityBadgeStatic {quality} {bitDepth} {samplingRate} />
       </div>
     {/if}
   </div>

@@ -3,6 +3,7 @@
     "attributions": {
       "lrclibDesc": "Provedor de letras sincronizadas",
       "lucideDesc": "Biblioteca de ícones",
+      "kawarpDesc": "Renderizador de fundos animados WebGL",
       "lyricsOVHDesc": "API de letras",
       "musicBrainzDesc": "Banco de dados de metadados musicais",
       "rodioSymphoniaDesc": "Mecanismo de reprodução de áudio",
@@ -34,10 +35,13 @@
     "shuffle": "Aleatório",
     "shuffleAll": "Aleatório Tudo",
     "playNext": "Reproduzir a Seguir",
+    "playLater": "Reproduzir Depois",
+    "download": "Baixar",
     "addToQueue": "Adicionar à Fila",
     "addToPlaylist": "Adicionar à Playlist",
     "addToFavorites": "Adicionar à biblioteca",
     "removeFromFavorites": "Remover da biblioteca",
+    "unavailableForEphemeral": "Indisponível para pastas efêmeras",
     "removeFromPlaylist": "Remover da Playlist",
     "selectedTracks": "{count, plural, one {# faixa selecionada} other {# faixas selecionadas}}",
     "select": "Selecionar",
@@ -50,6 +54,8 @@
     "goToAlbum": "Ir para Álbum",
     "trackInfo": "Informações da Faixa",
     "more": "Mais",
+    "toggleFavorite": "Alternar favorito",
+    "moreActions": "Mais ações",
     "back": "Voltar",
     "seeAll": "Ver Tudo",
     "cancel": "Cancelar",
@@ -67,6 +73,7 @@
     "clearAll": "Limpar Tudo",
     "confirm": "Confirmar",
     "copy": "Copiar",
+    "copiedToClipboard": "Copiado para a área de transferência",
     "yes": "Sim",
     "no": "Não",
     "ok": "OK",
@@ -79,6 +86,7 @@
     "expand": "Expandir barra lateral",
     "moreOptions": "Mais opções",
     "shareQobuz": "Compartilhar (Qobuz)",
+    "shareSonglink": "Compartilhar (Songlink)",
     "refreshOfflineCopy": "Atualizar cópia offline",
     "albumCredits": "Créditos do álbum",
     "startArtistRadio": "Iniciar Rádio do Artista",
@@ -155,6 +163,8 @@
     "bookletDownload": "Salvar encarte",
     "sameArtist": "Do mesmo artista",
     "seeFullDiscography": "Ver discografia completa",
+    "readMore": "Ler mais",
+    "readLess": "Mostrar menos",
     "releasedOn": "em",
     "releasedBy": "Lançado pela",
     "sidebar": {
@@ -685,6 +695,23 @@
     "expand": "Expandir",
     "clearFilter": "Limpar filtro"
   },
+  "discovery": {
+    "seeAll": "Ver tudo",
+    "similarAlbums": "Álbuns semelhantes",
+    "similarTo": "Semelhante a {seed}",
+    "rediscoverLibrary": "Redescubra sua biblioteca",
+    "essentialsByGenre": "Essenciais",
+    "essentialsIn": "Essenciais em {genre}",
+    "artistsToFollow": "Artistas para seguir",
+    "artistSpotlight": "Spotlight de artista",
+    "qobuzRadioStation": "Rádio Qobuz",
+    "customize": "Personalizar início",
+    "perfWarning": "Cada seção ativa aumenta o trabalho a cada rolagem. Ative o que realmente usar; deixe o resto desligado.",
+    "enabledCount": "{count} de {total} seções ativas",
+    "moveUp": "Subir",
+    "moveDown": "Descer",
+    "resetDefaults": "Restaurar padrão"
+  },
   "home": {
     "title": "Início",
     "featuredForYou": "Destaques para você",
@@ -889,7 +916,57 @@
     "albums": "Álbuns",
     "artists": "Artistas",
     "tracks": "Faixas",
-    "folders": "Pastas da Biblioteca",
+    "folders": "Pastas",
+    "foldersTree": {
+      "modeLabel": "Árvore",
+      "flatLabel": "Plano",
+      "selectAFolder": "Selecione uma pasta para ver o conteúdo.",
+      "treeFolderTracks": "{count, plural, one {# faixa} other {# faixas}}",
+      "treeLoading": "Carregando…",
+      "treeEmpty": "Esta pasta está vazia.",
+      "playAllRecursive": "Reproduzir todas as faixas desta pasta",
+      "resizeHandle": "Redimensionar barra lateral da árvore de pastas",
+      "searchTracksPlaceholder": "Buscar faixas…",
+      "searchTracksLabel": "Buscar faixas neste álbum",
+      "searchNoResults": "Nenhuma faixa corresponde à sua busca.",
+      "collapseAll": "Recolher todas as pastas",
+      "searchPlaceholder": "Buscar pastas…",
+      "searchAriaLabel": "Buscar pastas na árvore",
+      "searchAlbumsPlaceholder": "Buscar álbuns…",
+      "searchAlbumsLabel": "Buscar álbuns nesta pasta",
+      "viewModeLabel": "Modo de visualização",
+      "gridView": "Grade",
+      "listView": "Lista",
+      "viewArtwork": "Ver capa do álbum"
+    },
+    "ephemeralFolder": {
+      "buttonLabel": "Abrir pasta",
+      "tooltip": "Abre uma pasta de forma pontual — suas faixas são carregadas no painel e permanecem disponíveis até o app fechar. Nada é adicionado à sua biblioteca.",
+      "dialogTitle": "Selecione uma pasta para reproduzir",
+      "contextLabel": "Pasta aberta",
+      "subtitle": "{count, plural, one {# faixa} other {# faixas}} · {path}",
+      "playAll": "Reproduzir tudo",
+      "playAlbum": "Reproduzir álbum",
+      "trackCount": "{count, plural, one {# faixa} other {# faixas}}",
+      "scanning": "Escaneando pasta…",
+      "close": "Limpar sessão",
+      "empty": "Nenhum arquivo de áudio compatível encontrado nesta pasta.",
+      "opened": "{count, plural, one {# faixa} other {# faixas}} carregada(s)",
+      "openedWithSkips": "{count, plural, one {# faixa} other {# faixas}} carregada(s), {skipped, plural, one {# arquivo} other {# arquivos}} ignorado(s)",
+      "openFailed": "Não foi possível abrir a pasta: {error}",
+      "playFailed": "Falha na reprodução: {error}",
+      "gone": "A pasta não está mais disponível — sessão encerrada."
+    },
+    "folderListTitle": "Pastas da Biblioteca",
+    "editTabs": {
+      "title": "Editar abas da Library",
+      "help": "Arraste para reordenar. Alterne a visibilidade.",
+      "save": "Salvar",
+      "cancel": "Cancelar",
+      "reset": "Restaurar padrões",
+      "showTab": "Mostrar aba",
+      "hideTab": "Ocultar aba"
+    },
     "noAlbums": "Nenhum álbum na biblioteca",
     "noArtists": "Nenhum artista na biblioteca",
     "noTracks": "Nenhuma faixa na biblioteca",
@@ -1146,6 +1223,72 @@
     "showNetworkFoldersDesc": "Exibir conteúdo de pastas montadas em rede (NAS, Samba, etc.) no modo offline manual",
     "checkNow": "Verificar agora"
   },
+  "offlineManager": {
+    "title": "Cache offline",
+    "stats": {
+      "totals": "{tracks} faixas · {albums} álbuns · {artists} artistas",
+      "usage": "{used} de {limit}",
+      "unlimited": "{used} de ilimitado"
+    },
+    "sort": {
+      "label": "Ordenar",
+      "alpha": "A–Z",
+      "recent": "Mais recente",
+      "largest": "Maior tamanho primeiro",
+      "smallest": "Menor tamanho primeiro"
+    },
+    "filter": {
+      "showOnlyFailed": "Mostrar apenas falhas"
+    },
+    "row": {
+      "completeNTracks": "Completo · {count} faixas",
+      "partialNCached": "Parcial · {count} em cache",
+      "mixedQuality": "Misto",
+      "nFailed": "{count} falhas",
+      "actions": {
+        "redownloadAlbum": "Baixar todas as faixas novamente",
+        "removeAlbum": "Remover do offline",
+        "retryFailed": "Tentar falhas novamente",
+        "goToAlbum": "Ir ao álbum"
+      }
+    },
+    "track": {
+      "actions": {
+        "redownloadTrack": "Baixar faixa novamente",
+        "removeTrack": "Remover do offline"
+      }
+    },
+    "confirmRemoveAlbum": {
+      "title": "Remover do cache offline?",
+      "body": "Remover \"{album}\" do cache offline. Isso liberará {size}."
+    },
+    "confirmRemoveTrack": {
+      "title": "Remover faixa do cache offline?",
+      "body": "Remover \"{title}\" do cache offline."
+    },
+    "toast": {
+      "redownloadingAlbum": "Baixando {count} faixas novamente…",
+      "redownloadingTrack": "Baixando faixa novamente…",
+      "removedAlbum": "Álbum {album} removido ({size} liberado)",
+      "removedTrack": "Faixa removida",
+      "limitTooLow": "O limite deve ser de pelo menos 5 GB",
+      "limitSaved": "Limite do cache salvo"
+    },
+    "limitModal": {
+      "title": "Limite do cache",
+      "helper": "Mínimo de 5 GB. Faixas em alta qualidade exigem espaço.",
+      "inputLabel": "Limite (GB)",
+      "editAria": "Editar limite do cache"
+    },
+    "empty": {
+      "title": "Nenhum conteúdo offline ainda",
+      "body": "Marque faixas como disponíveis offline em qualquer álbum ou playlist.",
+      "cta": "Ir aos Favoritos"
+    },
+    "singlesPseudoAlbum": "Singles e faixas avulsas",
+    "discographyHeading": "Discografia",
+    "albumsCount": "{count} álbuns"
+  },
   "performerRoles": {
     "a&R": "Artistas e Repertório",
     "acousticGuitar": "Guitarra acústica",
@@ -1323,11 +1466,6 @@
   },
   "player": {
     "nowPlaying": "Tocando Agora",
-    "controllingRemote": "Controlando: {name}",
-    "noQbzdFound": "Nenhum daemon QBZ encontrado na sua rede",
-    "noQbzdFoundHint": "Certifique-se de que o qbzd esta em execucao no dispositivo alvo",
-    "recentDaemons": "Recentes",
-    "discoveredDaemons": "Descobertos na rede",
     "queue": "Fila",
     "upNext": "A Seguir",
     "ofTotal": "de",
@@ -1402,14 +1540,33 @@
     "volumeUp": "Aumentar volume",
     "volumeDown": "Diminuir volume",
     "volumeLockedHw": "Volume fixo em 100% — ALSA Direct hw: (ajuste no DAC/hardware)",
+    "volumeLockedRemote": "Controle de volume desativado pelo dispositivo de transmissão",
     "clearQueue": "Limpar Fila",
     "queueEmpty": "A fila está vazia",
     "queueEmptyDescription": "Pesquise músicas ou navegue pela sua biblioteca para adicionar faixas.",
     "playNext": "Reproduzir a Seguir",
+    "playLater": "Reproduzir Depois",
+    "download": "Baixar",
     "addToQueue": "Adicionar à Fila",
     "removeFromQueue": "Remover da Fila",
     "saveQueue": "Salvar como Playlist",
     "searchQueue": "Buscar na fila...",
+    "sleepTimer": {
+      "title": "Temporizador",
+      "tooltipIdle": "Temporizador de pausa",
+      "tooltipActive": "Temporizador · {remaining} restantes",
+      "stopAfter": "Parar reprodução após:",
+      "activeLabel": "Para em",
+      "set": "Ativar",
+      "edit": "Editar",
+      "cancel": "Cancelar temporizador",
+      "customMinutes": "Minutos",
+      "preset": {
+        "minutes": "{minutes} min",
+        "hours": "{hours} h",
+        "custom": "Personalizado…"
+      }
+    },
     "noTracksMatch": "Nenhuma faixa corresponde a \"{query}\"",
     "noTrackPlaying": "Nenhuma faixa em reprodução",
     "castToDevice": "Transmitir para dispositivo",
@@ -1647,6 +1804,7 @@
   },
   "qconnect": {
     "title": "Qobuz Connect",
+    "lastActionMayNotHaveApplied": "A última ação pode não ter sido aplicada. Verifique o estado atual.",
     "statusConnected": "Conectado",
     "statusDisconnected": "Desconectado",
     "turnOn": "Ligar",
@@ -1654,6 +1812,9 @@
     "endpointLabel": "Endpoint",
     "lastErrorLabel": "Último erro",
     "queueStateTitle": "Fila remota",
+    "mixedQueueNotCast": "Fila mista não enviada ao Qobuz Connect (contém faixas locais ou do Plex).",
+    "trackUnavailableSkipping": "Faixa indisponível no reprodutor, pulando para a próxima.",
+    "trackPlaybackError": "O reprodutor não conseguiu reproduzir esta faixa.",
     "queueVersionLabel": "Versão",
     "queueItemsLabel": "Itens da fila",
     "autoplayModeLabel": "Autoplay",
@@ -1682,6 +1843,11 @@
     "remoteQueuedNext": "Adicionado ao Qobuz Connect para reprodução seguinte.",
     "remoteQueuedLater": "Adicionado à fila do Qobuz Connect.",
     "remoteQueueFailed": "Falha ao atualizar a fila do Qobuz Connect.",
+    "remoteQueueReordered": "Reordenado no Qobuz Connect",
+    "remoteQueueRemoved": "Removido do Qobuz Connect",
+    "remoteQueueCleared": "Fila do Qobuz Connect esvaziada",
+    "rendererDisconnected": "O dispositivo remoto desconectou-se do Qobuz Connect.",
+    "rendererUnreachable": "O dispositivo remoto parou de responder.",
     "sessionTitle": "Sessão",
     "sessionUuid": "UUID da sessão",
     "activeRenderer": "Renderer ativo",
@@ -1959,6 +2125,11 @@
       "exclusiveModeDesc": "Bloquear dispositivo de áudio para uso exclusivo",
       "exclusiveModeNotAvailable": "O modo exclusivo só está disponível com o backend ALSA Direct. PipeWire e PulseAudio são servidores de áudio multiplexados e não podem fornecer acesso verdadeiramente exclusivo.",
       "exclusiveModeHelp": "Apenas ALSA Direct. Bloqueia o dispositivo de áudio para que nenhum outro aplicativo possa usá-lo. Não disponível com PipeWire/PulseAudio.",
+      "exclusiveModeMacosDesc": "Bloquear dispositivo de áudio para uso exclusivo e ajustar automaticamente a taxa de amostragem para reprodução bit-perfect",
+      "exclusiveModeMacosHelp": "Impede que sons do sistema ou outros apps interfiram na reprodução e altera a taxa de amostragem do dispositivo de saída para corresponder à reprodução usando CoreAudio.",
+      "exclusiveModeMacosAvailable": "O modo exclusivo está disponível com Áudio do Sistema no macOS.",
+      "exclusiveModeUnavailableMultiplexed": "O modo exclusivo só está disponível com ALSA Direct ou Áudio do Sistema no macOS. PipeWire e PulseAudio são servidores de áudio multiplexados e não podem fornecer acesso verdadeiramente exclusivo.",
+      "exclusiveModeUnavailableGeneric": "O modo exclusivo só está disponível com ALSA Direct ou Áudio do Sistema no macOS.",
       "dacPassthrough": "DAC Passthrough",
       "dacPassthroughDesc": "Ignorar mixer do sistema para saída bit-perfect",
       "dacPassthroughNote": "Refere-se ao conteúdo de áudio decodificado. Os displays do DAC podem mostrar o formato de transporte, não a resolução do conteúdo.",
@@ -1979,7 +2150,7 @@
       "syncAudioOnStartup": "Sincronizar configurações de áudio na inicialização",
       "syncAudioOnStartupDesc": "Recarregar configuração de áudio do banco de dados quando o app iniciar. Ative se o dispositivo ou configurações de áudio parecerem incorretos após o lançamento.",
       "audioBackend": "Backend de Áudio",
-      "audioBackendDesc": "Escolha o sistema de áudio: Auto (recomendado), PipeWire (moderno), ALSA Direct (bit-perfect, exclusivo) ou PulseAudio (legado).",
+      "audioBackendDesc": "Escolha o sistema de áudio: System (padrão — saída compartilhada como qualquer app, sem bit-perfect), Auto (recomendado — escolhe o melhor backend disponível; talvez ainda precise selecionar seu DAC), PipeWire (moderno), ALSA Direct (bit-perfect, exclusivo) ou PulseAudio (legado).",
       "currentSampleRate": "Taxa de Amostragem Atual",
       "noActivePlayback": "Nenhuma reprodução ativa",
       "loadingDevices": "Carregando dispositivos...",
@@ -2014,7 +2185,15 @@
       "resetConfirmDesc": "Isso irá redefinir todas as configurações de saída de áudio, backend e reprodução para os padrões. A reprodução será interrompida.",
       "resetSuccess": "Configurações de áudio e reprodução foram redefinidas para os padrões.",
       "resetError": "Falha ao redefinir configurações de áudio: {error}",
-      "noDevicesFound": "Nenhum dispositivo encontrado"
+      "noDevicesFound": "Nenhum dispositivo encontrado",
+      "reserveDac": {
+        "label": "Reservar o DAC para o QBZ enquanto estiver aberto",
+        "description": "Diz ao serviço de áudio do sistema para deixar este DAC em paz enquanto o QBZ estiver aberto. Recomendado se outros aplicativos interromperem ocasionalmente sua audição com sons de notificação. Desativado por padrão.",
+        "statusActive": "Ativo — o áudio do sistema está fora deste DAC.",
+        "statusContested": "Outro aplicativo está usando este DAC com prioridade maior. Tentaremos novamente quando ele liberar.",
+        "statusUnavailable": "D-Bus não está disponível neste ambiente. A reserva não pode ser aplicada.",
+        "wirePlumberNote": "Se o seu sistema tiver uma configuração personalizada do WirePlumber que ignora a reserva de dispositivos, esta opção pode não ter efeito."
+      }
     },
     "playback": {
       "title": "Reprodução",
@@ -2055,6 +2234,8 @@
     "appearance": {
       "title": "Aparência",
       "theme": "Tema",
+      "albumHeaderGradient": "Gradiente no cabeçalho do álbum",
+      "albumHeaderGradientDesc": "Usa a cor dominante da capa como fundo na visualização de detalhes do álbum.",
       "themes": {
         "dark": "Escuro",
         "light": "Claro",
@@ -2108,6 +2289,8 @@
       "uiScale": "Escala da Interface",
       "sidebarPlaylistCollage": "Mostrar colagens de capas das playlists na barra lateral",
       "sidebarPlaylistCollageDesc": "Renderiza uma miniatura 2×2 das capas das faixas ao lado de cada playlist. Desative em máquinas modestas para poupar as imagens extras.",
+      "localLibraryTrackArtwork": "Mostrar capa do álbum na lista de faixas da Biblioteca local",
+      "localLibraryTrackArtworkDesc": "Exibe a miniatura da capa do álbum ao lado de cada faixa nas visualizações de Faixas e Pastas. Desligado por padrão — bibliotecas grandes pagam um custo de decodificação de imagem por linha.",
       "inAppToasts": "Notificações internas do app",
       "systemNotifications": "Notificações do Sistema",
       "windowTitleShow": "Mostrar faixa no título",
@@ -2117,6 +2300,7 @@
       "useSystemTitleBarDesc": "Substituir a barra de título personalizada do QBZ pelas decorações de janela nativas do seu sistema. Alterar isso reiniciará o app.",
       "hideTitleBar": "Ocultar barra de título",
       "hideTitleBarDesc": "Ocultar completamente a barra de título (para usuários de gerenciadores de janela tiling)",
+      "matchSystemChromeCpuOverride": "Disponível apenas com aceleração GPU.",
       "searchInTitleBar": "Busca na barra de título",
       "searchInTitleBarDesc": "Mostrar o campo de busca na barra de título em vez da barra lateral",
       "navInTitleBar": "Navegação na barra de título",
@@ -2194,6 +2378,20 @@
         "perfDegraded": "O QBZ detectou problemas de desempenho com a visualização imersiva. Alguns efeitos foram temporariamente desativados. Você pode reativá-los em Configurações > Aparência.",
         "perfDontShowAgain": "Não mostrar novamente"
       },
+      "immersivePanels": {
+        "title": "Painéis imersivos",
+        "summary": "Ative ou desative painéis individuais da visualização imersiva",
+        "desc": "Painéis desativados são ocultados do menu do visualizador para que você não acabe neles por engano.",
+        "cpuWarning": "A aceleração de hardware está desligada. Painéis marcados como GPU usam shaders ou compositing 3D e ficarão lentos na sua configuração. Eles vêm desativados por padrão — só reative se souber que sua máquina aguenta.",
+        "heavyTooltip": "Requer compositing por GPU para desempenho utilizável",
+        "warningModal": {
+          "title": "A aceleração de hardware está desligada",
+          "body": "O QBZ detectou que o seu sistema está rodando sem compositing por GPU. Alguns painéis imersivos — Album Reactive, as três variantes Neon e Transient Pulse — dependem de shaders ou efeitos 3D que não são viáveis em renderização por software. Eles foram ocultados por padrão para você não acabar neles por acidente.",
+          "hint": "Para habilitar a aceleração de hardware, veja Configurações → Aparência → Compositing. Se você sabe que sua configuração aguenta efeitos por GPU, pode reativar painéis individuais em Configurações → Aparência → Painéis imersivos.",
+          "dontShowAgain": "Não mostrar novamente",
+          "acknowledge": "Entendi"
+        }
+      },
       "immersiveFps": {
         "title": "Taxa de Quadros da Animação",
         "summary": "Controle de FPS por animação no modo imersivo",
@@ -2259,50 +2457,6 @@
           "mono-dark": "Mono escuro",
           "color": "Cor"
         }
-      },
-      "composition": {
-        "title": "Composição",
-        "summary": "Configurações de renderização visual e aceleração por GPU",
-        "helpText": "Essas configurações controlam como o QBZ renderiza a interface. Configurações incorretas podem causar travamentos ou baixo desempenho. Todas as opções requerem reinicialização para entrar em vigor.",
-        "recoveryNote": "Se o QBZ travar após alterar essas configurações, inicie pelo terminal com:",
-        "recoveryCmd": "QBZ_HARDWARE_ACCEL=0 qbz",
-        "fallbackWarning": "Falha ao carregar configurações gráficas",
-        "fallbackDesc": "Usando padrões seguros. Isso pode causar desempenho reduzido. Para redefinir:",
-        "hardwareAcceleration": "Aceleração por Hardware",
-        "hardwareAccelerationDesc": "Ativar renderização por GPU. Desativar força renderização por software (apenas CPU). Desative se tiver travamentos ou artefatos visuais.",
-        "forceDmabuf": "Forçar Renderizador DMA-BUF",
-        "forceDmabufDesc": "Forçar compartilhamento de buffer DMA-BUF com o compositor. Pode melhorar o desempenho, mas pode travar em alguns sistemas (especialmente NVIDIA + Wayland).",
-        "forceX11": "Forçar backend X11 (Wayland)",
-        "forceX11Desc": "Usar XWayland em vez do Wayland nativo. Recomendado para GPUs NVIDIA que travam no Wayland.",
-        "gdkScale": "Escala de exibição (XWayland)",
-        "gdkScaleDesc": "Substituição de GDK_SCALE para XWayland. Deixe vazio para automático.",
-        "gdkDpiScale": "Escala de DPI (XWayland)",
-        "gdkDpiScaleDesc": "Substituição de GDK_DPI_SCALE para XWayland. Deixe vazio para automático.",
-        "gskRenderer": "Renderizador GTK",
-        "gskRendererDesc": "Substituição de GSK_RENDERER. Controla como o GTK4 renderiza a interface. Cairo é somente software (mais seguro). GL/NGL usam OpenGL. Vulkan usa a API Vulkan.",
-        "gskRendererAuto": "Automático (padrão do sistema)",
-        "gskRendererCairo": "Cairo (Software)",
-        "envVarsTitle": "Substituições de variáveis de ambiente",
-        "envVarsDesc": "Para usuários avançados. Defina antes de iniciar o QBZ para substituir qualquer configuração acima.",
-        "envVarHwAccel0": "Desativar toda renderização por GPU (máxima compatibilidade)",
-        "envVarHwAccel1": "Forçar renderização completa por GPU (ignorar todas as proteções)",
-        "envVarForceX11": "Forçar backend XWayland",
-        "envVarSoftwareRender": "Forçar renderização por software (Mesa llvmpipe)",
-        "envVarForceDmabuf": "Forçar renderizador DMA-BUF ativado (pode travar)",
-        "envVarDisableDmabuf": "Forçar renderizador DMA-BUF desativado",
-        "profiles": {
-          "title": "Perfis de renderização",
-          "helpText": "Presets rápidos para configurações de DPI misto e multi-monitor. Aplique um e reinicie o QBZ.",
-          "nativeWaylandLabel": "Wayland Nativo (Mais Nítido)",
-          "nativeWaylandDesc": "Usar renderização Wayland nativa. Melhor nitidez de texto, pode ser mais pesado em algumas combinações de GPU/compositor.",
-          "x11BalancedLabel": "Xwayland Equilibrado",
-          "x11BalancedDesc": "Forçar Xwayland com GDK_SCALE=1 e GDK_DPI_SCALE=1.1 para um equilíbrio entre tamanho e nitidez.",
-          "x11PerformanceLabel": "Xwayland Desempenho",
-          "x11PerformanceDesc": "Forçar Xwayland com escala neutra (1.0/1.0). Desfoque de fundo desativado para menor carga na GPU.",
-          "maxPerformanceLabel": "Desempenho Máximo",
-          "maxPerformanceDesc": "Renderização por software (Cairo) com desfoque desativado. Máxima compatibilidade, menor uso de GPU. Use se tiver engasgos ou travamentos.",
-          "applied": "Perfil aplicado: {profile}. Reinicie o QBZ para aplicar."
-        }
       }
     },
     "library": {
@@ -2319,6 +2473,13 @@
     },
     "integrations": {
       "title": "Integrações",
+      "discordRpc": {
+        "label": "Mostrar atividade no Discord",
+        "description": "Ao reproduzir música no QBZ, mostra a faixa atual no seu status do Discord. Desativado por padrão.",
+        "overrideHeader": "Se a atividade não aparecer no Discord (instalações em sandbox)",
+        "flatpakNote": "Flatpak: execute este comando uma vez e reinicie o QBZ.",
+        "snapNote": "Snap: sem suporte. Instale o .deb, .rpm ou .AppImage do GitHub Releases."
+      },
       "lastfm": "Last.fm",
       "spotify": "Spotify",
       "tidal": "Tidal",
@@ -2454,7 +2615,17 @@
       "qconnectDeviceName": "Nome do dispositivo",
       "qconnectDeviceNameDesc": "Nome exibido no Qobuz Connect",
       "noProtocolDeviceFound": "Nenhum dispositivo {protocol} encontrado",
-      "noProtocolDeviceFoundHint": "Certifique-se de que os dispositivos estejam na mesma rede"
+      "noProtocolDeviceFoundHint": "Certifique-se de que os dispositivos estejam na mesma rede",
+      "qconnect": {
+        "startupMode": {
+          "title": "Conectar Qobuz Connect automaticamente ao iniciar",
+          "description": "Escolha se o Qobuz Connect ativa automaticamente quando o QBZ abre.",
+          "off": "Desligado",
+          "on": "Sempre ligado",
+          "rememberLast": "Lembrar último estado",
+          "localLibraryNote": "Lembre-se: Qobuz Connect não é compatível com a biblioteca local."
+        }
+      }
     },
     "storage": {
       "title": "Armazenamento",
@@ -2554,12 +2725,12 @@
       "showInLibrary": "Mostrar na Biblioteca Local",
       "showInLibraryDesc": "Exibir faixas offline em cache na visualização da Biblioteca Local",
       "clearCache": "Limpar Tudo",
-      "openFolder": "Abrir Pasta",
+      "openFolder": "Gerenciar cache offline",
       "repair": "Reparar Cache Offline",
       "repairDesc": "Corrigir marcações offline perdidas durante varreduras da biblioteca",
       "manageCache": "Gerenciar Cache Offline",
-      "manageCacheDesc": "Abrir a pasta de cache no seu gerenciador de arquivos",
-      "openFolderDesc": "Abrir a pasta de cache no seu gerenciador de arquivos",
+      "manageCacheDesc": "Navegar e gerenciar faixas e álbuns baixados",
+      "openFolderDesc": "Navegar e gerenciar faixas e álbuns baixados",
       "sectionSummary": "Faixas em cache para reprodução offline",
       "repairing": "Reparando..."
     },
@@ -2613,7 +2784,85 @@
       "perfDegraded": "Desempenho degradado",
       "perfDontShowAgain": "Não mostre novamente"
     },
-    "noMatchesFound": "Nenhuma correspondência encontrada"
+    "noMatchesFound": "Nenhuma correspondência encontrada",
+    "graphics": {
+      "title": "Graficos",
+      "summary": "Aceleracao GPU e pipeline de renderizacao",
+      "helpText": "Essas configurações controlam como o QBZ renderiza a interface. Configurações incorretas podem causar travamentos ou baixo desempenho. Todas as opções requerem reinicialização para entrar em vigor.",
+      "recoveryNote": "Se o QBZ travar após alterar essas configurações, inicie pelo terminal com:",
+      "recoveryCmd": "QBZ_HARDWARE_ACCEL=0 qbz",
+      "fallbackWarning": "Falha ao carregar configurações gráficas",
+      "fallbackDesc": "Usando padrões seguros. Isso pode causar desempenho reduzido. Para redefinir:",
+      "hardwareAcceleration": "Aceleração por Hardware",
+      "hardwareAccelerationDesc": "Ativar renderização por GPU. Desativar força renderização por software (apenas CPU). Desative se tiver travamentos ou artefatos visuais.",
+      "forceDmabuf": "Forçar Renderizador DMA-BUF",
+      "forceDmabufDesc": "Forçar compartilhamento de buffer DMA-BUF com o compositor. Pode melhorar o desempenho, mas pode travar em alguns sistemas (especialmente NVIDIA + Wayland).",
+      "forceDmabufDescSafe": "Ativa o compartilhamento de buffers DMA-BUF com o compositor para uma renderização mais fluida. Seguro no seu hardware. Reinício necessário.",
+      "forceDmabufDescHybrid": "Sua GPU integrada faz a renderização, então é seguro ativar o DMA-BUF aqui. Melhora a fluidez da renderização. Reinício necessário.",
+      "forceDmabufDescNvidiaOnly": "Não recomendado em sistemas apenas com NVIDIA — o DMA-BUF pode causar instabilidade de renderização. Reinício necessário.",
+      "forceX11": "Forçar backend X11 (Wayland)",
+      "forceX11Desc": "Usar XWayland em vez do Wayland nativo. Recomendado para GPUs NVIDIA que travam no Wayland.",
+      "gdkScale": "Escala de exibição (XWayland)",
+      "gdkScaleDesc": "Substituição de GDK_SCALE para XWayland. Deixe vazio para automático.",
+      "gdkDpiScale": "Escala de DPI (XWayland)",
+      "gdkDpiScaleDesc": "Substituição de GDK_DPI_SCALE para XWayland. Deixe vazio para automático.",
+      "gskRenderer": "Renderizador GTK",
+      "gskRendererDesc": "Substituição de GSK_RENDERER. Controla como o GTK4 renderiza a interface. Cairo é somente software (mais seguro). GL/NGL usam OpenGL. Vulkan usa a API Vulkan.",
+      "gskRendererAuto": "Automático (padrão do sistema)",
+      "gskRendererCairo": "Cairo (Software)",
+      "envVarsTitle": "Substituições de variáveis de ambiente",
+      "envVarsDesc": "Para usuários avançados. Defina antes de iniciar o QBZ para substituir qualquer configuração acima.",
+      "envVarHwAccel0": "Desativar toda renderização por GPU (máxima compatibilidade)",
+      "envVarHwAccel1": "Forçar renderização completa por GPU (ignorar todas as proteções)",
+      "envVarForceX11": "Forçar backend XWayland",
+      "envVarSoftwareRender": "Forçar renderização por software (Mesa llvmpipe)",
+      "envVarForceDmabuf": "Forçar renderizador DMA-BUF ativado (pode travar)",
+      "envVarDisableDmabuf": "Forçar renderizador DMA-BUF desativado",
+      "profiles": {
+        "title": "Perfis de renderização",
+        "helpText": "Presets rápidos para configurações de DPI misto e multi-monitor. Aplique um e reinicie o QBZ.",
+        "nativeWaylandLabel": "Wayland Nativo (Mais Nítido)",
+        "nativeWaylandDesc": "Usar renderização Wayland nativa. Melhor nitidez de texto, pode ser mais pesado em algumas combinações de GPU/compositor.",
+        "x11BalancedLabel": "Xwayland Equilibrado",
+        "x11BalancedDesc": "Forçar Xwayland com GDK_SCALE=1 e GDK_DPI_SCALE=1.1 para um equilíbrio entre tamanho e nitidez.",
+        "x11PerformanceLabel": "Xwayland Desempenho",
+        "x11PerformanceDesc": "Forçar Xwayland com escala neutra (1.0/1.0). Desfoque de fundo desativado para menor carga na GPU.",
+        "maxPerformanceLabel": "Desempenho Máximo",
+        "maxPerformanceDesc": "Renderização por software (Cairo) com desfoque desativado. Máxima compatibilidade, menor uso de GPU. Use se tiver engasgos ou travamentos.",
+        "applied": "Perfil aplicado: {profile}. Reinicie o QBZ para aplicar."
+      },
+      "recommendation": {
+        "title": "Recomendado para o seu sistema",
+        "detected": "Detectado",
+        "dismiss": "Descartar",
+        "redetect": "Detectar configuracoes recomendadas",
+        "noChanges": "As configuracoes ja correspondem a recomendacao para este sistema."
+      },
+      "restartRequired": "Reinicie o QBZ para que a mudanca tenha efeito.",
+      "gpu": {
+        "label": "GPU de renderizacao",
+        "desc": "Fixar o WebKit em uma stack GPU especifica. Necessario reiniciar. Auto deixa o sistema decidir.",
+        "auto": "Auto (padrao do sistema)",
+        "autoWithTarget": "Auto ({name})",
+        "integrated": "Integrada — {name}",
+        "recommendedSuffix": "(recomendada)",
+        "discrete": "Dedicada — {name}",
+        "software": "Software (CPU, llvmpipe)"
+      },
+      "nvidiaCompatMode": "Compatibilidade NVIDIA Wayland (experimental)",
+      "nvidiaCompatModeDesc": "Ative se NVIDIA + Wayland renderiza errado com a configuração padrão. Define __NV_DISABLE_EXPLICIT_SYNC=1 e levanta o desligamento defensivo do compositing para que o WebKit use o caminho GPU completo. Requer libnvidia-egl-gbm instalado.",
+      "resetCmdTitle": "Se o app não iniciar",
+      "resetCmdDesc": "Execute este comando em um terminal para restaurar as configurações gráficas aos valores seguros. O watchdog de inicialização normalmente recupera sozinho, mas esta é a saída manual.",
+      "recovery": {
+        "title": "O ultimo arranque travou durante o init grafico",
+        "titleLocked": "Desativado apos travamentos graficos repetidos",
+        "hwAccelDisabled": "A aceleracao de hardware foi revertida.",
+        "dmabufDisabled": "O renderer DMA-BUF foi revertido.",
+        "gpuPinDisabled": "A preferencia de GPU foi resetada para Auto.",
+        "tryAgain": "Tentar novamente",
+        "cleared": "Sinalizador de travamento limpo. Reative a configuracao em Settings se quiser tentar novamente."
+      }
+    }
   },
   "sort": {
     "nameAZ": "Nome (A-Z)",
@@ -2662,6 +2911,7 @@
     "failedLoadMoreAlbums": "Falha ao carregar mais álbuns",
     "failedAddToQueue": "Falha ao adicionar à fila",
     "failedPlayTrack": "Falha ao reproduzir faixa",
+    "failedSelectFolderTracks": "Falha ao selecionar as faixas da pasta",
     "queueCleared": "Fila limpa",
     "queueEmpty": "A fila está vazia",
     "queueEnded": "Fila encerrada",
@@ -2772,6 +3022,7 @@
     "findingSimilarArtists": "Encontrando artistas semelhantes...",
     "awardUnavailable": "Detalhe não disponível para este prêmio.",
     "audioDeviceMissing": "Dispositivo '{device}' não está mais disponível. Usando o padrão do sistema.",
+    "audioInitFailed": "Não foi possível iniciar a saída de áudio: {reason}",
     "mixTrimmed": "{actual} músicas adicionadas à fila (pediste {requested}; algumas foram fundidas ou limitadas por álbum)."
   },
   "topMixes": {
@@ -2785,7 +3036,9 @@
     "album": "Álbum",
     "duration": "Duração",
     "quality": "Qualidade",
-    "title": "Título"
+    "title": "Título",
+    "searchPlaceholder": "Pesquisar faixas…",
+    "noMatches": "Nenhuma faixa corresponde à sua pesquisa."
   },
   "updates": {
     "snap": {

@@ -169,7 +169,7 @@
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
   <div class="modal-overlay" onclick={onClose} role="presentation">
     <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-    <div class="track-modal" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" tabindex="-1">
+    <div class="track-modal selectable" onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" tabindex="-1">
       {#if loading}
         <div class="loading-state">
           <LoaderCircle size={32} class="spinner" />

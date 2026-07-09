@@ -10,6 +10,7 @@ use crate::library::{
     get_artwork_cache_dir, thumbnails, AudioFormat, LibraryState, LocalAlbum, LocalTrack,
     MetadataExtractor, PlaylistLocalTrack, PlaylistSettings, PlaylistStats, ScanProgress,
 };
+use qbz_library::FolderTreeEntry;
 use crate::lyrics::LyricsState;
 use crate::offline::OfflineState;
 use crate::offline_cache::OfflineCacheState;
@@ -825,6 +826,7 @@ pub async fn v2_library_get_tracks_by_ids(
 pub async fn v2_library_play_track(
     track_id: i64,
     library_state: State<'_, LibraryState>,
+    ephemeral_state: State<'_, crate::ephemeral_library::EphemeralLibraryState>,
     bridge: State<'_, CoreBridgeState>,
     offline_cache: State<'_, crate::offline_cache::OfflineCacheState>,
     app_state: State<'_, AppState>,
@@ -836,6 +838,46 @@ pub async fn v2_library_play_track(
         .check_requirements(CommandRequirement::RequiresUserSession)
         .await
         .map_err(|e| e.to_string())?;
+
+    // Track ids at or above EPHEMERAL_ID_FLOOR belong to the ephemeral
+    // library (an ad-hoc folder the user opened without persisting it
+    // to local_tracks). Resolve to the in-memory cache and skip every
+    // DB-bound branch below — ephemeral tracks are never qobuz_download,
+    // never offline-cached, never have a CUE pointer. Just read the
+    // file and hand it to the player. The high-positive id range keeps
+    // the existing u64-typed queue/context commands happy while still
+    // being unambiguous (DB autoincrement ids never reach 2^48).
+    if track_id >= crate::ephemeral_library::EPHEMERAL_ID_FLOOR {
+        let track = ephemeral_state
+            .get_track(track_id)
+            .ok_or_else(|| format!("Ephemeral track {} not found (session may have been cleared)", track_id))?;
+        let file_path = std::path::Path::new(&track.file_path);
+        if !file_path.exists() {
+            return Err(format!("Ephemeral file not found: {}", track.file_path));
+        }
+        let audio_data =
+            std::fs::read(file_path).map_err(|e| format!("Failed to read ephemeral file: {}", e))?;
+        let bridge = bridge.get().await;
+        bridge
+            .player()
+            .play_data(audio_data, track_id as u64)
+            .map_err(|e| format!("Failed to play ephemeral track: {}", e))?;
+        // CUE-derived tracks share a single audio file (e.g. one big
+        // FLAC for the whole album); per-track playback works by
+        // seeking into the right offset after handing the data to the
+        // player. Mirrors the regular local-file branch below.
+        if let Some(start_secs) = track.cue_start_secs {
+            let start_pos = start_secs as u64;
+            if start_pos > 0 {
+                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                bridge
+                    .player()
+                    .seek(start_pos)
+                    .map_err(|e| format!("Failed to seek into CUE track: {}", e))?;
+            }
+        }
+        return Ok(());
+    }
 
     let track = {
         let guard = library_state.db.lock().await;
@@ -882,7 +924,7 @@ pub async fn v2_library_play_track(
                 // CMAF id = qobuz track id (what the bundle is keyed by).
                 let audio_data =
                     crate::offline_cache::playback::load_cmaf_bundle_with_ui_events(
-                        &app_handle,
+                        &crate::offline_cache::tauri_cache_sink(app_handle.clone()),
                         track_id as u64,
                         qobuz_track_id as u64,
                         row.clone(),
@@ -1148,6 +1190,9 @@ pub async fn v2_library_set_album_artwork(
         .ok_or_else(|| "Failed to cache artwork file".to_string())?;
     let guard = state.db.lock().await;
     let db = guard.as_ref().ok_or("No active session - please log in")?;
+    // User-initiated set-album-artwork command: writing one cover to all
+    // tracks in the group is the explicit user intent here.
+    #[allow(deprecated)]
     db.update_album_group_artwork(&album_group_key, &cached_path)
         .map_err(|e| e.to_string())?;
     Ok(cached_path)
@@ -1316,10 +1361,35 @@ pub async fn v2_get_offline_status(
         });
     }
 
-    // Check network connectivity
-    let has_network = crate::offline::check_network_connectivity().await;
+    // Fix E (issue #467): positive liveness override. If audio segments were
+    // flowing within the liveness window we are, by definition, online —
+    // regardless of what the connectivity probe says. Heavy Hi-Res tracks
+    // (long Dream Theater / Yes) saturate the link and can time the probe
+    // out; active streaming is the strongest possible "online" signal.
+    const LIVENESS_WINDOW_SECS: u64 = 45;
+    if let Some(secs) = qbz_audio::network_throttle::state().seconds_since_download() {
+        if secs <= LIVENESS_WINDOW_SECS {
+            crate::offline::reset_connectivity_failures();
+            return Ok(crate::offline::OfflineStatus {
+                is_offline: false,
+                reason: None,
+                manual_mode_enabled: false,
+            });
+        }
+    }
 
-    if !has_network {
+    // Check network connectivity (cheap concurrent probe) and apply
+    // consecutive-failure hysteresis (Fix A, issue #467): a single failed poll
+    // must not flip offline — only OFFLINE_FAILURE_THRESHOLD consecutive
+    // failures do.
+    let has_network = crate::offline::check_network_connectivity().await;
+    let failures = crate::offline::record_connectivity_result(has_network);
+
+    if !has_network && failures >= crate::offline::OFFLINE_FAILURE_THRESHOLD {
+        log::info!(
+            "[offline] Declaring offline after {} consecutive connectivity failures",
+            failures
+        );
         return Ok(crate::offline::OfflineStatus {
             is_offline: true,
             reason: Some(crate::offline::OfflineReason::NoNetwork),
@@ -1327,6 +1397,15 @@ pub async fn v2_get_offline_status(
         });
     }
 
+    if !has_network {
+        log::info!(
+            "[offline] Connectivity probe failed ({}/{}); staying online (hysteresis)",
+            failures,
+            crate::offline::OFFLINE_FAILURE_THRESHOLD
+        );
+    }
+
+    // Online, or a transient failure still under the threshold: stay online.
     Ok(crate::offline::OfflineStatus {
         is_offline: false,
         reason: None,
@@ -1587,8 +1666,24 @@ pub async fn v2_get_offline_cache_stats(
 pub async fn v2_set_offline_cache_limit(
     limit_mb: Option<u64>,
     cache_state: State<'_, OfflineCacheState>,
+    offline_state: State<'_, OfflineState>,
 ) -> Result<(), String> {
     let limit_bytes = limit_mb.map(|mb| mb * 1024 * 1024);
+
+    // Persist to offline_settings.db so the limit survives across restarts.
+    {
+        let store_guard = offline_state
+            .store
+            .lock()
+            .map_err(|e| format!("Lock error: {}", e))?;
+        let store = store_guard
+            .as_ref()
+            .ok_or("No active session - please log in")?;
+        store.set_cache_limit_bytes(limit_bytes)?;
+    }
+
+    // Update in-memory limit so subsequent reads / pre-flight checks see the
+    // new value without waiting for a session restart.
     let mut limit = cache_state.limit_bytes.lock().await;
     *limit = limit_bytes;
     Ok(())
@@ -2490,6 +2585,92 @@ pub async fn v2_library_get_albums(
     .map_err(|e| e.to_string())
 }
 
+/// V2 metadata-grouped albums for Local Library.
+#[tauri::command]
+pub async fn v2_library_get_albums_metadata(
+    include_hidden: Option<bool>,
+    exclude_network_folders: Option<bool>,
+    state: State<'_, LibraryState>,
+    download_settings_state: State<'_, DownloadSettingsState>,
+) -> Result<Vec<LocalAlbum>, String> {
+    let include_qobuz = download_settings_state
+        .lock()
+        .map_err(|e| format!("Failed to lock download settings: {}", e))?
+        .as_ref()
+        .and_then(|s| s.get_settings().ok())
+        .map(|s| s.show_in_library)
+        .unwrap_or(false);
+
+    let guard__ = state.db.lock().await;
+    let db = guard__
+        .as_ref()
+        .ok_or("No active session - please log in")?;
+
+    db.get_albums_metadata_grouped(
+        include_hidden.unwrap_or(false),
+        include_qobuz,
+        exclude_network_folders.unwrap_or(false),
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// V2 paginated metadata-grouped albums for Local Library. Backs the
+/// recycling-grid pool + chunked store on the frontend: caller asks for
+/// `[offset, offset+limit)` and receives that page plus the total count
+/// of albums matching the same filter (drives scrollbar pre-allocation).
+///
+/// When `include_plex` is true and the `plex_cache.db` cache file
+/// exists in the user's data dir, the result is the UNION of local and
+/// plex sources — sort, filter, and pagination apply to both at once.
+#[tauri::command]
+pub async fn v2_library_get_albums_page(
+    offset: u64,
+    limit: u64,
+    search: Option<String>,
+    sort_by: Option<String>,
+    sort_dir: Option<String>,
+    exclude_network_folders: Option<bool>,
+    include_plex: Option<bool>,
+    state: State<'_, LibraryState>,
+    download_settings_state: State<'_, DownloadSettingsState>,
+) -> Result<qbz_library::AlbumsMetadataPage, String> {
+    let include_qobuz = download_settings_state
+        .lock()
+        .map_err(|e| format!("Failed to lock download settings: {}", e))?
+        .as_ref()
+        .and_then(|s| s.get_settings().ok())
+        .map(|s| s.show_in_library)
+        .unwrap_or(false);
+
+    // Resolve the plex_cache.db path the same way `plex/mod.rs`
+    // does (`dirs::data_dir() + qbz/plex_cache.db`). The qbz-library
+    // crate doesn't know about Plex — passing `None` here keeps the
+    // local-only behavior; passing the path lets the SQL ATTACH + UNION
+    // light up.
+    let plex_path: Option<std::path::PathBuf> = if include_plex.unwrap_or(false) {
+        dirs::data_dir().map(|d| d.join("qbz").join("plex_cache.db"))
+    } else {
+        None
+    };
+
+    let guard__ = state.db.lock().await;
+    let db = guard__
+        .as_ref()
+        .ok_or("No active session - please log in")?;
+
+    db.get_albums_metadata_page(
+        offset,
+        limit,
+        search.as_deref(),
+        sort_by.as_deref().unwrap_or("artist"),
+        sort_dir.as_deref().unwrap_or("asc"),
+        include_qobuz,
+        exclude_network_folders.unwrap_or(false),
+        plex_path.as_deref(),
+    )
+    .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn v2_library_get_stats(
     state: State<'_, LibraryState>,
@@ -2577,6 +2758,90 @@ pub async fn v2_library_get_folders_with_metadata(
     }
 
     Ok(folders)
+}
+
+#[tauri::command]
+#[allow(non_snake_case)]
+pub async fn v2_library_list_folder_children(
+    parentPath: String,
+    excludeNetworkFolders: Option<bool>,
+    state: State<'_, LibraryState>,
+) -> Result<Vec<FolderTreeEntry>, String> {
+    log::info!(
+        "Command: v2_library_list_folder_children {} (exclude_network={:?})",
+        parentPath,
+        excludeNetworkFolders
+    );
+
+    let guard__ = state.db.lock().await;
+    let db = guard__
+        .as_ref()
+        .ok_or("No active session - please log in")?;
+    db.list_folder_children(&parentPath, excludeNetworkFolders.unwrap_or(false))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[allow(non_snake_case)]
+pub async fn v2_library_list_folder_tracks(
+    folderPath: String,
+    excludeNetworkFolders: Option<bool>,
+    state: State<'_, LibraryState>,
+) -> Result<Vec<LocalTrack>, String> {
+    log::info!(
+        "Command: v2_library_list_folder_tracks {} (exclude_network={:?})",
+        folderPath,
+        excludeNetworkFolders
+    );
+
+    let guard__ = state.db.lock().await;
+    let db = guard__
+        .as_ref()
+        .ok_or("No active session - please log in")?;
+    db.list_folder_tracks(&folderPath, excludeNetworkFolders.unwrap_or(false))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[allow(non_snake_case)]
+pub async fn v2_library_list_folder_tracks_recursive(
+    folderPath: String,
+    excludeNetworkFolders: Option<bool>,
+    state: State<'_, LibraryState>,
+) -> Result<Vec<LocalTrack>, String> {
+    log::info!(
+        "Command: v2_library_list_folder_tracks_recursive {} (exclude_network={:?})",
+        folderPath,
+        excludeNetworkFolders
+    );
+
+    let guard__ = state.db.lock().await;
+    let db = guard__
+        .as_ref()
+        .ok_or("No active session - please log in")?;
+    db.list_folder_tracks_recursive(&folderPath, excludeNetworkFolders.unwrap_or(false))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[allow(non_snake_case)]
+pub async fn v2_library_count_folder_tracks(
+    folderPath: String,
+    excludeNetworkFolders: Option<bool>,
+    state: State<'_, LibraryState>,
+) -> Result<u32, String> {
+    log::info!(
+        "Command: v2_library_count_folder_tracks {} (exclude_network={:?})",
+        folderPath,
+        excludeNetworkFolders
+    );
+
+    let guard__ = state.db.lock().await;
+    let db = guard__
+        .as_ref()
+        .ok_or("No active session - please log in")?;
+    db.count_folder_tracks_recursive(&folderPath, excludeNetworkFolders.unwrap_or(false))
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -2726,6 +2991,9 @@ pub async fn v2_library_fetch_missing_artwork(
             let db = guard__
                 .as_ref()
                 .ok_or("No active session - please log in")?;
+            // Backfill: only runs for albums with NO existing artwork, so there's
+            // nothing per-track to destroy. Group-level write is correct here.
+            #[allow(deprecated)]
             if db
                 .update_album_group_artwork(&group_key, &artwork_path)
                 .is_ok()
@@ -2833,6 +3101,23 @@ pub async fn v2_library_get_album_tracks(
         .as_ref()
         .ok_or("No active session - please log in")?;
     db.get_album_tracks(&albumGroupKey)
+        .map_err(|e| e.to_string())
+}
+
+/// V2 fetch of tracks for a metadata-grouped album.
+#[tauri::command]
+#[allow(non_snake_case)]
+pub async fn v2_library_get_album_tracks_metadata(
+    metadataKey: String,
+    state: State<'_, LibraryState>,
+) -> Result<Vec<crate::library::LocalTrack>, String> {
+    log::info!("Command: v2_library_get_album_tracks_metadata {}", metadataKey);
+
+    let guard__ = state.db.lock().await;
+    let db = guard__
+        .as_ref()
+        .ok_or("No active session - please log in")?;
+    db.get_album_tracks_metadata(&metadataKey)
         .map_err(|e| e.to_string())
 }
 

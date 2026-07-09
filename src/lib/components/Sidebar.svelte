@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tick } from 'svelte';
-  import { Search, Plus, RefreshCw, ChevronDown, ChevronUp, Heart, ListMusic, LibraryBig, Import, Settings, Ellipsis, ArrowUpDown, ChevronRight, ChevronLeft, X, User, Disc, Disc3, Music, ShoppingBag, Eye, EyeOff, Pencil } from 'lucide-svelte';
+  import { Search, Plus, RefreshCw, ChevronDown, ChevronUp, Heart, ListMusic, LibraryBig, Import, Settings, Ellipsis, ArrowUpDown, ChevronRight, ChevronLeft, X, User, Disc, Disc3, Music, ShoppingBag, Eye, EyeOff, Pencil, Folder } from 'lucide-svelte';
   import FolderGlyph from './icons/FolderGlyph.svelte';
   import type { FavoritesPreferences } from '$lib/types';
   import { invoke, convertFileSrc } from '@tauri-apps/api/core';
@@ -16,6 +16,12 @@
     setMyQbzExpanded,
     DEFAULT_ICON,
   } from '$lib/stores/myQbzNavStore';
+  import {
+    libraryPreferencesStore,
+    loadLibraryPreferences,
+    type LibraryTabType,
+  } from '$lib/stores/libraryPreferencesStore';
+  import { libraryTargetTab } from '$lib/stores/libraryTargetTabStore';
   import { t } from '$lib/i18n';
   import {
     getSearchQuery,
@@ -169,6 +175,27 @@
   function closeMyQbzContextMenu() {
     myQbzContextMenu = null;
   }
+
+  // Local Library nav state — collapsible parent that exposes the user's
+  // configured tabs (Albums / Artists / Tracks / Folders) as sub-items.
+  // Visibility + order come from the shared libraryPreferencesStore which
+  // LocalLibraryView pushes into on mount and on save.
+  let localLibraryExpanded = $state(false);
+
+  function toggleLocalLibraryExpanded() {
+    localLibraryExpanded = !localLibraryExpanded;
+  }
+
+  function handleLocalLibraryTabClick(tab: LibraryTabType) {
+    libraryTargetTab.set(tab);
+    handleViewChange('library');
+  }
+
+  const visibleLibraryTabs = $derived(
+    $libraryPreferencesStore.tab_order.filter(
+      (tab) => !$libraryPreferencesStore.hidden_tabs.includes(tab),
+    ),
+  );
 
   // Sidebar search state - synced with SearchView
   let sidebarSearchQuery = $state(getSearchQuery());
@@ -1047,11 +1074,24 @@
     }
   });
 
-  // Reload playlists when offline status changes
+  // Reload playlists when offline status changes.
+  // IMPORTANT: this $effect must NOT fire on initial mount — `onMount` already
+  // calls `loadSidebarData()` which loads playlists. If both fire, two
+  // concurrent `v2_get_user_playlists` invocations race and downstream
+  // per-playlist fetches double, surfacing as duplicated playlists in the UI
+  // (https://github.com/vicrodh/qbz issue: doubled sidebar playlists).
+  // Track previous value so we only reload on actual transitions.
+  let prevIsOffline: boolean | undefined = undefined;
   $effect(() => {
-    // Track isOffline to trigger reload when it changes
-    if (isOffline !== undefined) {
-      console.log('[Sidebar] Offline status changed, reloading playlists:', isOffline);
+    const current = isOffline;
+    if (prevIsOffline === undefined) {
+      // Initial subscription — onMount handles the first load.
+      prevIsOffline = current;
+      return;
+    }
+    if (prevIsOffline !== current) {
+      prevIsOffline = current;
+      console.log('[Sidebar] Offline status changed, reloading playlists:', current);
       loadUserPlaylists();
     }
   });
@@ -1130,6 +1170,7 @@
     loadFolders(); // Load playlist folders
     loadFavoritesPreferences(); // Load favorites tab order
     loadSidebarCollapseState(); // Load collapse states
+    void loadLibraryPreferences(); // Hydrate library tab dropdown for sidebar
 
     // SWR: try cache first for playlists/settings/counts
     const cacheStatus = getSidebarCacheStatus();
@@ -1609,9 +1650,14 @@
 
 <svelte:window onclick={handleGlobalClick} />
 
-<aside class="sidebar" class:collapsed={!isExpanded} class:no-titlebar={!showTitleBar}>
+<aside
+  class="sidebar"
+  class:collapsed={!isExpanded}
+  class:no-titlebar={!showTitleBar}
+  data-tauri-drag-region={!showTitleBar ? '' : undefined}
+>
   <!-- Scrollable Content Area -->
-  <div class="content">
+  <div class="content" data-tauri-drag-region="false">
     <!-- Search Bar (hidden when search is in titlebar) -->
     {#if !searchInTitlebar}
       <div
@@ -2138,17 +2184,74 @@
       {/if}
     </div>
 
-    <!-- Local Library (hidden when Library is in titlebar) -->
+    <!-- Local Library (hidden when Library is in titlebar). When the
+         sidebar is collapsed, render the legacy single NavigationItem so
+         the icon-only rail keeps its compact look. When expanded, mirror
+         the My QBZ pattern: a parent row that toggles a sub-list of the
+         user's configured tabs. The parent row itself still navigates to
+         the Library view (preserving the existing single-click landing). -->
     {#if !libraryInTitlebar}
     <nav class="nav-section local-library-section">
-      <NavigationItem
-        label={$t('library.title')}
-        active={activeView === 'library'}
-        onclick={() => handleViewChange('library')}
-        showLabel={isExpanded}
-      >
-        {#snippet icon()}<LibraryBig size={14} />{/snippet}
-      </NavigationItem>
+      {#if isExpanded}
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
+        <div
+          class="my-qbz-parent"
+          class:active={activeView === 'library' || activeView === 'library-album'}
+          onclick={() => handleViewChange('library')}
+        >
+          <div class="icon-container">
+            <LibraryBig size={14} />
+          </div>
+          <span class="label">{$t('library.title')}</span>
+          {#if visibleLibraryTabs.length > 0}
+            <button
+              type="button"
+              class="my-qbz-chevron local-library-chevron-btn"
+              class:expanded={localLibraryExpanded}
+              aria-label={localLibraryExpanded ? $t('actions.collapse') : $t('actions.expand')}
+              onclick={(e) => { e.stopPropagation(); toggleLocalLibraryExpanded(); }}
+            >
+              <ChevronRight size={12} />
+            </button>
+          {/if}
+        </div>
+
+        {#if localLibraryExpanded && visibleLibraryTabs.length > 0}
+          <div class="my-qbz-children">
+            {#each visibleLibraryTabs as tab (tab)}
+              <NavigationItem
+                label={$t(`library.${tab}`)}
+                active={false}
+                onclick={() => handleLocalLibraryTabClick(tab)}
+                showLabel={true}
+                indented={true}
+              >
+                {#snippet icon()}
+                  {#if tab === 'tracks'}
+                    <Music size={14} />
+                  {:else if tab === 'albums'}
+                    <Disc size={14} />
+                  {:else if tab === 'artists'}
+                    <User size={14} />
+                  {:else if tab === 'folders'}
+                    <Folder size={14} />
+                  {/if}
+                {/snippet}
+              </NavigationItem>
+            {/each}
+          </div>
+        {/if}
+      {:else}
+        <NavigationItem
+          label={$t('library.title')}
+          active={activeView === 'library'}
+          onclick={() => handleViewChange('library')}
+          showLabel={false}
+        >
+          {#snippet icon()}<LibraryBig size={14} />{/snippet}
+        </NavigationItem>
+      {/if}
     </nav>
     {/if}
   </div>
@@ -2158,6 +2261,7 @@
     class="toggle-btn"
     onclick={onToggle}
     title={isExpanded ? $t('actions.collapse') : $t('actions.expand')}
+    data-tauri-drag-region="false"
   >
     {#if isExpanded}
       <ChevronLeft size={16} />
@@ -2167,7 +2271,7 @@
   </button>
 
   <!-- Fixed User Profile at Bottom -->
-  <div class="user-section" class:collapsed={!isExpanded}>
+  <div class="user-section" class:collapsed={!isExpanded} data-tauri-drag-region="false">
     <UserCard
       username={userName}
       {subscription}
@@ -2417,7 +2521,12 @@
     height: calc(100vh - 104px); /* Only 104px NowPlayingBar, no title bar */
   }
 
-  /* macOS: pad top of sidebar to clear native traffic light buttons */
+  /* macOS: pad top of sidebar to clear native traffic light buttons.
+     This 32px band is also the only visible drag surface: the <aside>
+     carries `data-tauri-drag-region` (set in the template when there's
+     no custom titlebar), while each direct child carries
+     `data-tauri-drag-region="false"` so clicks inside .content / the
+     collapse toggle / the user section never start a window drag. */
   :global(html.macos) .sidebar.no-titlebar {
     padding-top: 32px;
   }
@@ -3389,7 +3498,6 @@
     color: var(--text-secondary);
     cursor: pointer;
     transition: color 150ms ease, background-color 150ms ease;
-    user-select: none;
   }
 
   .my-qbz-parent:hover {
@@ -3460,6 +3568,24 @@
 
   .my-qbz-chevron.expanded {
     transform: rotate(90deg);
+  }
+
+  /* Stand-alone chevron toggle button used by the Local Library section so
+     the parent row's click navigates to /library while only the chevron
+     toggles the sub-tab list. Reuses .my-qbz-chevron for the rotation
+     transition. */
+  .local-library-chevron-btn {
+    border: none;
+    background: transparent;
+    padding: 2px;
+    margin: 0;
+    color: inherit;
+    cursor: pointer;
+    border-radius: 4px;
+  }
+
+  .local-library-chevron-btn:hover {
+    background-color: var(--alpha-10);
   }
 
   .my-qbz-children {

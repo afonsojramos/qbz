@@ -65,7 +65,7 @@
   });
 </script>
 
-<div class="toast" class:success={type === 'success'} class:error={type === 'error'} class:info={type === 'info'} class:warning={type === 'warning'} class:buffering={type === 'buffering'} class:unlocking={type === 'buffering' && unlockActive}>
+<div class="toast selectable" class:success={type === 'success'} class:error={type === 'error'} class:info={type === 'info'} class:warning={type === 'warning'} class:buffering={type === 'buffering'} class:unlocking={type === 'buffering' && unlockActive}>
   <div class="icon">
     {#if type === 'success'}
       <CircleCheckBig size={20} />

@@ -6,7 +6,7 @@ use walkdir::WalkDir;
 use crate::LibraryError;
 
 /// Supported audio file extensions
-const SUPPORTED_AUDIO_EXTENSIONS: &[&str] = &["flac", "m4a", "wav", "aiff", "aif", "ape", "mp3"];
+const SUPPORTED_AUDIO_EXTENSIONS: &[&str] = &["flac", "m4a", "wav", "aiff", "aif", "ape", "mp3", "dsf", "dff"];
 
 /// CUE file extension
 const CUE_EXTENSION: &str = "cue";

@@ -10,6 +10,10 @@ qbz-models = { path = "../qbz-models" }
 qbz-audio = { path = "../qbz-audio" }
 qbz-player = { path = "../qbz-player" }
 qbz-qobuz = { path = "../qbz-qobuz" }
+qbz-radio = { path = "../qbz-radio" }
+qbz-integrations = { path = "../qbz-integrations" }
+qbz-offline-cache = { path = "../qbz-offline-cache" }
+qbz-reco = { path = "../qbz-reco" }
 
 # Async
 tokio = { workspace = true }
@@ -23,6 +27,7 @@ thiserror = { workspace = true }
 anyhow = { workspace = true }
 
 # Serialization
+serde = { workspace = true }
 serde_json = { workspace = true }
 
 [features]

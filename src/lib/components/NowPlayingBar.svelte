@@ -13,7 +13,6 @@
     Volume2,
     VolumeX,
     Volume1,
-    Monitor,
     Cast,
     MicVocal,
     Maximize2,
@@ -22,8 +21,6 @@
     MoreHorizontal
   } from 'lucide-svelte';
   import { t } from 'svelte-i18n';
-  import { isRemoteMode, playbackTarget } from '$lib/stores/playbackTargetStore';
-  import { disconnectFromRemote } from '$lib/stores/playbackTargetStore';
   import QualityBadge from './QualityBadge.svelte';
   import AudioOutputBadges from './AudioOutputBadges.svelte';
   import QconnectBadge from './QconnectBadge.svelte';
@@ -95,12 +92,23 @@
     normalizationGain?: number | null;
     onToggleNormalization?: () => void;
     controlsDisabled?: boolean;
+    /**
+     * Hide the favorite + add-to-playlist buttons when the active track
+     * can't be persisted to library structures (today: ephemeral folder
+     * playback). Playback controls stay enabled — the user can still
+     * play / pause / skip / seek / volume; only the metadata-bound
+     * actions disappear.
+     */
+    metadataActionsDisabled?: boolean;
     explicit?: boolean;
     qconnectSessionSnapshot?: QconnectSessionSnapshot | null;
     onToggleQconnectConnection?: () => void | Promise<void>;
     qconnectBusy?: boolean;
     showQconnectDevButton?: boolean;
     volumeLocked?: boolean;
+    // P1-5: distinguishes the hardware (ALSA Direct) lock from the remote
+    // renderer (cast device) lock so the tooltip can be specific.
+    volumeLockedReason?: 'hardware' | 'remote';
     bufferProgress?: number | null;
   }
 
@@ -150,12 +158,14 @@
     normalizationGain = null,
     onToggleNormalization,
     controlsDisabled = false,
+    metadataActionsDisabled = false,
     explicit = false,
     qconnectSessionSnapshot = null,
     onToggleQconnectConnection,
     qconnectBusy = false,
     showQconnectDevButton = false,
     volumeLocked = false,
+    volumeLockedReason = 'hardware',
     bufferProgress = null,
   }: Props = $props();
 
@@ -385,19 +395,12 @@
 
   // Set CSS variable for player bar height so page layout adjusts
   $effect(() => {
-    const barHeight = $isRemoteMode ? 128 : 104;
+    const barHeight = 104;
     document.documentElement.style.setProperty('--player-bar-height', `${barHeight}px`);
   });
 </script>
 
-<div class="now-playing-bar" class:has-remote-banner={$isRemoteMode} class:narrow={isNarrowBar} bind:this={barRef}>
-  {#if $isRemoteMode}
-    <div class="remote-indicator">
-      <Monitor size={14} />
-      <span>{$t('player.controllingRemote', { values: { name: $playbackTarget.name || 'Remote' } })}</span>
-      <button class="remote-disconnect" onclick={disconnectFromRemote}>{$t('settings.integrations.disconnect')}</button>
-    </div>
-  {/if}
+<div class="now-playing-bar" class:narrow={isNarrowBar} bind:this={barRef}>
   <!-- Top: Full-width Seekbar -->
   <div class="seekbar-container">
     <span class="time current">{formatTime(currentTime)}</span>
@@ -491,23 +494,25 @@
 
       <button
         class="control-btn"
-        class:disabled={controlsDisabled}
-        disabled={controlsDisabled}
-        onclick={controlsDisabled ? undefined : onAddToPlaylist}
-        title={$translateStore('actions.addToPlaylist')}
+        class:disabled={controlsDisabled || metadataActionsDisabled}
+        disabled={controlsDisabled || metadataActionsDisabled}
+        onclick={controlsDisabled || metadataActionsDisabled ? undefined : onAddToPlaylist}
+        title={metadataActionsDisabled ? $translateStore('actions.unavailableForEphemeral') : $translateStore('actions.addToPlaylist')}
       >
         <Plus size={16} />
       </button>
 
       <button
         class="control-btn"
-        class:active={isFavorite && !controlsDisabled}
-        class:disabled={controlsDisabled}
-        disabled={controlsDisabled}
-        onclick={controlsDisabled ? undefined : onToggleFavorite}
-        title={isFavorite ? $translateStore('actions.removeFromFavorites') : $translateStore('actions.addToFavorites')}
+        class:active={isFavorite && !controlsDisabled && !metadataActionsDisabled}
+        class:disabled={controlsDisabled || metadataActionsDisabled}
+        disabled={controlsDisabled || metadataActionsDisabled}
+        onclick={controlsDisabled || metadataActionsDisabled ? undefined : onToggleFavorite}
+        title={metadataActionsDisabled
+          ? $translateStore('actions.unavailableForEphemeral')
+          : (isFavorite ? $translateStore('actions.removeFromFavorites') : $translateStore('actions.addToFavorites'))}
       >
-        <Heart size={16} fill={isFavorite ? 'currentColor' : 'none'} />
+        <Heart size={16} fill={isFavorite && !metadataActionsDisabled ? 'currentColor' : 'none'} />
       </button>
     </div>
 
@@ -822,7 +827,9 @@
         {#if volumeLocked}
           <button
             class="control-btn volume-btn"
-            title={$translateStore('player.volumeLockedHw')}
+            title={volumeLockedReason === 'remote'
+              ? $translateStore('player.volumeLockedRemote')
+              : $translateStore('player.volumeLockedHw')}
             disabled
           >
             <Volume2 size={16} />
@@ -917,43 +924,10 @@
     right: 0;
     height: 104px;
     background: var(--bg-secondary);
-    backdrop-filter: blur(20px);
     border-top: 1px solid var(--border-subtle);
     z-index: 2001;
     display: flex;
     flex-direction: column;
-  }
-
-  .now-playing-bar.has-remote-banner {
-    height: 128px;
-  }
-
-  .remote-indicator {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    padding: 4px 12px;
-    background: var(--accent-primary);
-    color: white;
-    font-size: 12px;
-    font-weight: 500;
-    letter-spacing: 0.02em;
-  }
-
-  .remote-disconnect {
-    background: rgba(255, 255, 255, 0.2);
-    border: none;
-    color: white;
-    font-size: 11px;
-    padding: 2px 8px;
-    border-radius: 4px;
-    cursor: pointer;
-    margin-left: 4px;
-  }
-
-  .remote-disconnect:hover {
-    background: rgba(255, 255, 255, 0.35);
   }
 
   /* ===== Seekbar ===== */
@@ -1055,10 +1029,6 @@
     to {
       transform: translate(-50%, -50%) rotate(360deg);
     }
-  }
-
-  .seekbar:hover .seekbar-track {
-    /* keep both layers stable on hover */
   }
 
   /* ===== Controls Row ===== */

@@ -3,7 +3,7 @@
   import { onMount } from 'svelte';
   import { t } from 'svelte-i18n';
   import { ArrowLeft, Search, X, Disc3, LoaderCircle, ArrowUpDown, Funnel, ChevronDown, Users } from 'lucide-svelte';
-  import AlbumCard from '../AlbumCard.svelte';
+  import AlbumCard from '$lib/discovery-v2/AlbumCardLite.svelte';
   import type { QobuzAlbum, LabelDetail, LabelPageData } from '$lib/types';
   import type { OfflineCacheStatus } from '$lib/stores/offlineCacheState';
 
@@ -234,6 +234,15 @@
     await Promise.all(albumList.map(album => loadAlbumOfflineCacheStatus(album.id)));
   }
 
+  /** AlbumCardLite's `onArtistClick: () => void` doesn't take args.
+   *  This helper closes over the album's artist id so the right one
+   *  is captured per iteration. Returns undefined when there's no
+   *  artist id or no parent handler. */
+  function makeArtistClickHandler(artistId: number | undefined): (() => void) | undefined {
+    if (artistId === undefined || !onArtistClick) return undefined;
+    return () => onArtistClick(artistId);
+  }
+
   function isAlbumDownloaded(albumId: string): boolean {
     void downloadStateVersion;
     return albumOfflineCacheStatuses.get(albumId) || false;
@@ -336,7 +345,7 @@
 
 <div class="label-view" onscroll={handleScroll}>
   <!-- Back button -->
-  <div class="top-bar">
+  <div class="top-bar" data-tauri-drag-region="deep">
     <button class="back-btn" onclick={onBack}>
       <ArrowLeft size={16} />
       <span>{$t('actions.back')}</span>
@@ -344,7 +353,7 @@
   </div>
 
   <!-- Header -->
-  <header class="label-header">
+  <header class="label-header" data-tauri-drag-region="deep">
     <div class="label-image-wrapper">
       {#if getLabelImage()}
         <img src={getLabelImage()} alt={label?.name || labelName} class="label-image" loading="lazy" decoding="async" />
@@ -491,24 +500,20 @@
                 artwork={album.image?.small || album.image?.thumbnail || ''}
                 title={album.title}
                 artist={album.artist?.name || 'Unknown Artist'}
-                artistId={album.artist?.id}
-                onArtistClick={onArtistClick}
                 genre={getGenreLabel(album)}
-                releaseDate={album.release_date_original}
+                releaseYear={Number(album.release_date_original?.slice(0, 4)) || undefined}
                 quality={getQualityLabel(album)}
-                size="large"
-                onclick={() => onAlbumClick?.(album.id)}
+                isAlbumFullyDownloaded={isAlbumDownloaded(album.id)}
+                onArtistClick={makeArtistClickHandler(album.artist?.id)}
+                onClick={() => onAlbumClick?.(album.id)}
                 onPlay={onAlbumPlay ? () => onAlbumPlay(album.id) : undefined}
                 onPlayNext={onAlbumPlayNext ? () => onAlbumPlayNext(album.id) : undefined}
                 onPlayLater={onAlbumPlayLater ? () => onAlbumPlayLater(album.id) : undefined}
-                onAddAlbumToPlaylist={onAddAlbumToPlaylist ? () => onAddAlbumToPlaylist(album.id) : undefined}
+                onAddToPlaylist={onAddAlbumToPlaylist ? () => onAddAlbumToPlaylist(album.id) : undefined}
                 onShareQobuz={onAlbumShareQobuz ? () => onAlbumShareQobuz(album.id) : undefined}
                 onShareSonglink={onAlbumShareSonglink ? () => onAlbumShareSonglink(album.id) : undefined}
                 onDownload={onAlbumDownload ? () => onAlbumDownload(album.id) : undefined}
-                isAlbumFullyDownloaded={isAlbumDownloaded(album.id)}
-                onOpenContainingFolder={onOpenAlbumFolder ? () => onOpenAlbumFolder(album.id) : undefined}
                 onReDownloadAlbum={onReDownloadAlbum ? () => onReDownloadAlbum(album.id) : undefined}
-                {downloadStateVersion}
               />
             {/each}
           </div>
@@ -522,24 +527,20 @@
             artwork={album.image?.small || album.image?.thumbnail || ''}
             title={album.title}
             artist={album.artist?.name || 'Unknown Artist'}
-            artistId={album.artist?.id}
-            onArtistClick={onArtistClick}
             genre={getGenreLabel(album)}
-            releaseDate={album.release_date_original}
+            releaseYear={Number(album.release_date_original?.slice(0, 4)) || undefined}
             quality={getQualityLabel(album)}
-            size="large"
-            onclick={() => onAlbumClick?.(album.id)}
+            isAlbumFullyDownloaded={isAlbumDownloaded(album.id)}
+            onArtistClick={makeArtistClickHandler(album.artist?.id)}
+            onClick={() => onAlbumClick?.(album.id)}
             onPlay={onAlbumPlay ? () => onAlbumPlay(album.id) : undefined}
             onPlayNext={onAlbumPlayNext ? () => onAlbumPlayNext(album.id) : undefined}
             onPlayLater={onAlbumPlayLater ? () => onAlbumPlayLater(album.id) : undefined}
-            onAddAlbumToPlaylist={onAddAlbumToPlaylist ? () => onAddAlbumToPlaylist(album.id) : undefined}
+            onAddToPlaylist={onAddAlbumToPlaylist ? () => onAddAlbumToPlaylist(album.id) : undefined}
             onShareQobuz={onAlbumShareQobuz ? () => onAlbumShareQobuz(album.id) : undefined}
             onShareSonglink={onAlbumShareSonglink ? () => onAlbumShareSonglink(album.id) : undefined}
             onDownload={onAlbumDownload ? () => onAlbumDownload(album.id) : undefined}
-            isAlbumFullyDownloaded={isAlbumDownloaded(album.id)}
-            onOpenContainingFolder={onOpenAlbumFolder ? () => onOpenAlbumFolder(album.id) : undefined}
             onReDownloadAlbum={onReDownloadAlbum ? () => onReDownloadAlbum(album.id) : undefined}
-            {downloadStateVersion}
           />
         {/each}
       </div>
@@ -880,7 +881,7 @@
     margin-top: 16px;
     padding: 8px 24px;
     background-color: var(--accent-primary);
-    color: white;
+    color: var(--btn-primary-text);
     border: none;
     border-radius: 8px;
     cursor: pointer;

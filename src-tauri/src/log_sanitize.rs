@@ -40,6 +40,60 @@ pub fn mask_id(id: impl Display) -> String {
     }
 }
 
+/// Redact a URL for logging: keep the scheme/host/path and the query
+/// parameter *keys*, but replace every query value and any fragment with a
+/// placeholder. This keeps navigation logs useful for debugging the flow
+/// (which page was reached, which params were present) without exposing the
+/// values themselves — authorization codes, access tokens, encoded redirect
+/// targets, captcha tokens, etc.
+///
+/// `"https://play.qobuz.com/discover?code_autorisation=hg8mr52J"`
+/// → `"https://play.qobuz.com/discover?code_autorisation=<redacted>"`
+///
+/// Pure string manipulation so it never panics on malformed input:
+/// `"about:blank"` and other query-less URLs are returned unchanged.
+pub fn redact_url(raw: &str) -> String {
+    // Peel off the fragment first so a `#access_token=...` (implicit flow)
+    // can never survive in the output.
+    let (before_fragment, had_fragment) = match raw.split_once('#') {
+        Some((base, _)) => (base, true),
+        None => (raw, false),
+    };
+
+    let (base, query) = match before_fragment.split_once('?') {
+        Some((base, query)) => (base, Some(query)),
+        None => (before_fragment, None),
+    };
+
+    let mut out = String::from(base);
+
+    if let Some(query) = query {
+        let mut first = true;
+        for pair in query.split('&') {
+            if pair.is_empty() {
+                continue;
+            }
+            out.push(if first { '?' } else { '&' });
+            first = false;
+            // Key before the first '=' is kept; the value (and any further
+            // '=' inside it, e.g. base64 padding) is dropped.
+            let key = pair.split('=').next().unwrap_or("");
+            out.push_str(key);
+            out.push_str("=<redacted>");
+        }
+        if first {
+            // Query delimiter was present but empty (`...?`).
+            out.push('?');
+        }
+    }
+
+    if had_fragment {
+        out.push_str("#<redacted>");
+    }
+
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -80,5 +134,47 @@ mod tests {
     #[test]
     fn test_mask_id_five_digits() {
         assert_eq!(mask_id(10001), "1000****");
+    }
+
+    #[test]
+    fn test_redact_url_oauth_code() {
+        assert_eq!(
+            redact_url("https://play.qobuz.com/discover?code_autorisation=hg8mr52J"),
+            "https://play.qobuz.com/discover?code_autorisation=<redacted>"
+        );
+    }
+
+    #[test]
+    fn test_redact_url_multiple_params_and_base64_value() {
+        // Captcha-style URL: base64 values with '=' padding must be fully dropped.
+        assert_eq!(
+            redact_url("https://www.google.com/recaptcha/api2/anchor?ar=1&k=6LesW24a&co=aHR0cHM6Mw..&hl=en"),
+            "https://www.google.com/recaptcha/api2/anchor?ar=<redacted>&k=<redacted>&co=<redacted>&hl=<redacted>"
+        );
+    }
+
+    #[test]
+    fn test_redact_url_no_query() {
+        assert_eq!(redact_url("about:blank"), "about:blank");
+        assert_eq!(
+            redact_url("https://www.qobuz.com/signin/oauth"),
+            "https://www.qobuz.com/signin/oauth"
+        );
+    }
+
+    #[test]
+    fn test_redact_url_fragment() {
+        assert_eq!(
+            redact_url("https://example.com/cb#access_token=abc123&id=9"),
+            "https://example.com/cb#<redacted>"
+        );
+    }
+
+    #[test]
+    fn test_redact_url_query_and_fragment() {
+        assert_eq!(
+            redact_url("https://example.com/cb?code=xyz#access_token=abc"),
+            "https://example.com/cb?code=<redacted>#<redacted>"
+        );
     }
 }

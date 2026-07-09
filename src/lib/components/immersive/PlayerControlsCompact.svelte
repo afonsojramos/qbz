@@ -48,6 +48,10 @@
     onMinimize?: () => void;
     onToggleFullscreen?: () => void;
     onToggleMaximize?: () => void;
+    /** Disable favorite when active track lives outside the library
+     * (today: ephemeral folder playback). Heart stays visible but
+     * inert. */
+    metadataActionsDisabled?: boolean;
   }
 
   let {
@@ -76,7 +80,8 @@
     onClose,
     onMinimize,
     onToggleFullscreen,
-    onToggleMaximize
+    onToggleMaximize,
+    metadataActionsDisabled = false
   }: Props = $props();
 
   let progressRef: HTMLDivElement | null = $state(null);
@@ -220,11 +225,15 @@
       <div class="controls-group left">
         <button
           class="control-btn"
-          class:active={isFavorite}
-          onclick={onToggleFavorite}
-          title={isFavorite ? $t('actions.removeFromFavorites') : $t('actions.addToFavorites')}
+          class:active={isFavorite && !metadataActionsDisabled}
+          class:disabled={metadataActionsDisabled}
+          disabled={metadataActionsDisabled}
+          onclick={metadataActionsDisabled ? undefined : onToggleFavorite}
+          title={metadataActionsDisabled
+            ? $t('actions.unavailableForEphemeral')
+            : (isFavorite ? $t('actions.removeFromFavorites') : $t('actions.addToFavorites'))}
         >
-          <Heart size={12} fill={isFavorite ? 'currentColor' : 'none'} />
+          <Heart size={12} fill={isFavorite && !metadataActionsDisabled ? 'currentColor' : 'none'} />
         </button>
         <button
           class="control-btn"
@@ -428,6 +437,17 @@
     padding: 12px 24px;
     min-width: 670px;
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  }
+
+  /* CPU mode: 40px backdrop-filter blur on a full-width bar is the
+     single most expensive surface in immersive mode under software
+     compositing. Drop the filter and make the bar fully opaque so
+     it doesn't force per-frame recomposition against the animated
+     visualizer canvas behind it. */
+  :global(html.no-hwaccel) .player-bar {
+    background: #000;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
   }
 
   .controls-row {
@@ -639,6 +659,12 @@
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
     z-index: 50;
     animation: menuFadeIn 150ms ease-out;
+  }
+
+  :global(html.no-hwaccel) .window-menu {
+    background: #000;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
   }
 
   @keyframes menuFadeIn {

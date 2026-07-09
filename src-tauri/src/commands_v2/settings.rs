@@ -3,6 +3,7 @@ use tauri::State;
 use crate::audio::{AlsaPlugin, AudioBackendType, AudioDevice, BackendManager};
 use crate::cache::CacheStats;
 use crate::config::favorites_preferences::FavoritesPreferences;
+use crate::config::library_preferences::{FoldersViewMode, LibraryPreferences};
 use crate::config::playback_preferences::{
     AutoplayMode, PlaybackPreferences, PlaybackPreferencesState,
 };
@@ -73,13 +74,12 @@ pub fn v2_set_close_to_tray(
 }
 
 /// Update the tray icon variant ("auto" / "light" / "dark"). Persists
-/// the setting and pushes the change to the live SNI tray on Linux so
-/// it takes effect immediately — no restart required.
+/// the setting and pushes the change to the live tray handle when one is
+/// active, so it takes effect immediately — no restart required.
 #[tauri::command]
 pub fn v2_set_tray_icon_theme(
     value: String,
     state: State<'_, TraySettingsState>,
-    #[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
     app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
     let normalized = crate::config::tray_settings::normalize_tray_icon_theme(&value);
@@ -98,6 +98,14 @@ pub fn v2_set_tray_icon_theme(
         if let Some(tray) =
             app_handle.try_state::<crate::tray_linux_ksni::LinuxTrayHandle>()
         {
+            tray.set_icon_theme(normalized);
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        use tauri::Manager;
+        if let Some(tray) = app_handle.try_state::<crate::tray::NativeTrayHandle>() {
             tray.set_icon_theme(normalized);
         }
     }
@@ -169,6 +177,53 @@ pub fn v2_save_favorites_preferences(
 }
 
 #[tauri::command]
+pub fn v2_get_library_preferences(
+    state: State<'_, crate::config::library_preferences::LibraryPreferencesState>,
+) -> Result<LibraryPreferences, String> {
+    let guard = state
+        .store
+        .lock()
+        .map_err(|_| "Failed to lock library preferences store".to_string())?;
+    let store = guard.as_ref().ok_or("No active session - please log in")?;
+    store.get_preferences()
+}
+
+#[tauri::command]
+pub fn v2_save_library_preferences(
+    prefs: LibraryPreferences,
+    state: State<'_, crate::config::library_preferences::LibraryPreferencesState>,
+) -> Result<LibraryPreferences, String> {
+    crate::config::library_preferences::save_library_preferences(prefs, state)
+}
+
+#[tauri::command]
+pub fn v2_set_library_folders_view_mode(
+    mode: String,
+    state: State<'_, crate::config::library_preferences::LibraryPreferencesState>,
+) -> Result<(), String> {
+    let parsed = FoldersViewMode::from_str(&mode);
+    let guard = state
+        .store
+        .lock()
+        .map_err(|_| "Failed to lock library preferences store".to_string())?;
+    let store = guard.as_ref().ok_or("No active session - please log in")?;
+    store.set_folders_view_mode(parsed)
+}
+
+#[tauri::command]
+pub fn v2_set_library_folders_tree_sidebar_width(
+    width: u32,
+    state: State<'_, crate::config::library_preferences::LibraryPreferencesState>,
+) -> Result<(), String> {
+    let guard = state
+        .store
+        .lock()
+        .map_err(|_| "Failed to lock library preferences store".to_string())?;
+    let store = guard.as_ref().ok_or("No active session - please log in")?;
+    store.set_folders_tree_sidebar_width(width)
+}
+
+#[tauri::command]
 pub fn v2_get_cache_stats(state: State<'_, AppState>) -> CacheStats {
     state.audio_cache.stats()
 }
@@ -191,7 +246,8 @@ pub fn v2_get_available_backends() -> Result<Vec<BackendInfo>, String> {
                 AudioBackendType::PipeWire => "PipeWire",
                 AudioBackendType::Alsa => "ALSA Direct",
                 AudioBackendType::Pulse => "PulseAudio",
-                AudioBackendType::SystemDefault => "System Audio",
+                AudioBackendType::SystemDefault => "System",
+                AudioBackendType::Jack => "JACK",
             };
 
             BackendInfo {

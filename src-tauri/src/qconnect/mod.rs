@@ -13,28 +13,37 @@ mod event_sink;
 mod queue_resolution;
 mod service;
 mod session;
+pub mod startup;
 mod track_loading;
-mod transport;
+pub(crate) mod transport;
 mod types;
 
 pub use commands::*;
 pub use service::QconnectServiceState;
 pub use session::{QconnectRendererInfo, QconnectSessionState};
+// QconnectSessionRendererState is referenced via `super::…` only by the test
+// module now (the QconnectRemoteSyncState struct that consumed it in non-test
+// code moved to qconnect-app), so gate the re-export to test builds to avoid an
+// unused-import warning.
+#[cfg(test)]
+pub(super) use session::QconnectSessionRendererState;
 pub use types::*;
 
-use std::collections::HashMap;
+/// The renderer-side pure mappers now live in the frontend-agnostic
+/// `qconnect_app::renderer` module (slice 6). Re-exported here so existing
+/// `super::…` references inside this module compile unchanged.
+pub(super) use qconnect_app::renderer::{
+    PLAYING_STATE_PAUSED, PLAYING_STATE_PLAYING, PLAYING_STATE_STOPPED,
+};
 
-use qbz_models::{QueueTrack, RepeatMode, Track};
-use qconnect_app::QConnectQueueState;
+// Consumed only by the test module now (their non-test callers moved into
+// `qconnect_app::renderer` in slice 6); gate to avoid unused-import warnings in
+// lib builds.
+#[cfg(test)]
+pub(super) use qconnect_app::renderer::{
+    normalize_volume_to_fraction, qconnect_repeat_mode_from_loop_mode,
+};
 
-use session::{QconnectFileAudioQualitySnapshot, QconnectSessionRendererState};
-
-const QCONNECT_REMOTE_QUEUE_SOURCE: &str = "qobuz_connect_remote";
-
-pub(super) const PLAYING_STATE_UNKNOWN: i32 = 0;
-pub(super) const PLAYING_STATE_STOPPED: i32 = 1;
-pub(super) const PLAYING_STATE_PLAYING: i32 = 2;
-pub(super) const PLAYING_STATE_PAUSED: i32 = 3;
 pub(super) const BUFFER_STATE_OK: i32 = 2;
 
 // AudioQuality enum: 0=unknown, 1=mp3, 2=cd, 3=hires_l1, 4=hires_l2(192k), 5=hires_l3(384k)
@@ -46,34 +55,11 @@ pub(super) const AUDIO_QUALITY_HIRES_LEVEL2: i32 = 4;
 pub(super) const AUDIO_QUALITY_HIRES_LEVEL3: i32 = 5;
 pub(super) const DEFAULT_QCONNECT_CHANNEL_COUNT: i32 = 2;
 
-/// Cross-submodule accumulator: caches the cloud's renderer/queue
-/// snapshots, the most recent materialization, the topology of all
-/// renderers in the session, and the load-attempt dedup window. Mutated
-/// by event_sink (on inbound events), corebridge (on materialize/apply),
-/// track_loading (on load attempt), and service (on outbound report
-/// completions).
-#[derive(Debug, Default)]
-pub(super) struct QconnectRemoteSyncState {
-    pub(super) last_renderer_queue_item_id: Option<u64>,
-    pub(super) last_renderer_next_queue_item_id: Option<u64>,
-    pub(super) last_renderer_track_id: Option<u64>,
-    pub(super) last_renderer_next_track_id: Option<u64>,
-    pub(super) last_renderer_playing_state: Option<i32>,
-    pub(super) last_materialized_start_index: Option<usize>,
-    pub(super) last_materialized_core_shuffle_order: Option<Vec<usize>>,
-    pub(super) last_reported_file_audio_quality: Option<QconnectFileAudioQualitySnapshot>,
-    pub(super) last_applied_queue_state: Option<QConnectQueueState>,
-    pub(super) last_remote_queue_state: Option<QConnectQueueState>,
-    pub(super) session_loop_mode: Option<i32>,
-    /// Session topology — stored from session management events (types 81-87).
-    pub(super) session: QconnectSessionState,
-    pub(super) session_renderer_states: HashMap<i32, QconnectSessionRendererState>,
-    /// Track of the most recent load attempt across paths (V2 play
-    /// handoff and ensure_remote_track_loaded). Used to suppress
-    /// redundant reloads when an echo SetState arrives during the
-    /// in-progress buffer/decode window of a previously triggered load.
-    pub(super) last_load_attempt: Option<(u64, std::time::Instant)>,
-}
+/// The cross-submodule remote-sync accumulator now lives in the frontend-agnostic
+/// `qconnect_app::sync_state` module (slice 2+4) so both the Tauri and Slint
+/// adapters share one struct under one lock. Re-exported here so existing
+/// `super::QconnectRemoteSyncState` references compile unchanged.
+pub(super) use qconnect_app::QconnectRemoteSyncState;
 
 pub(super) fn qconnect_now_ms() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -81,66 +67,6 @@ pub(super) fn qconnect_now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis() as u64)
         .unwrap_or(0)
-}
-
-pub(super) fn qconnect_repeat_mode_from_loop_mode(loop_mode: i32) -> Option<RepeatMode> {
-    // QConnect protocol loop mode values: 1 = off, 2 = repeat one, 3 = repeat all.
-    match loop_mode {
-        0 | 1 => Some(RepeatMode::Off),
-        2 => Some(RepeatMode::One),
-        3 => Some(RepeatMode::All),
-        _ => None,
-    }
-}
-
-pub(super) fn normalize_volume_to_fraction(volume: i32) -> f32 {
-    volume.clamp(0, 100) as f32 / 100.0
-}
-
-pub(super) fn model_track_to_core_queue_track(track: &Track) -> QueueTrack {
-    let artwork_url = track
-        .album
-        .as_ref()
-        .and_then(|album| album.image.best().cloned());
-    let artist = track
-        .performer
-        .as_ref()
-        .map(|performer| performer.name.clone())
-        .unwrap_or_else(|| "Unknown Artist".to_string());
-    let album = track
-        .album
-        .as_ref()
-        .map(|album| album.title.clone())
-        .unwrap_or_else(|| "Unknown Album".to_string());
-    let album_id = track.album.as_ref().and_then(|album| {
-        let trimmed = album.id.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.to_string())
-        }
-    });
-    let artist_id = track.performer.as_ref().map(|performer| performer.id);
-
-    QueueTrack {
-        id: track.id,
-        title: track.title.clone(),
-        version: track.version.clone(),
-        artist,
-        album,
-        duration_secs: track.duration as u64,
-        artwork_url,
-        hires: track.hires,
-        bit_depth: track.maximum_bit_depth,
-        sample_rate: track.maximum_sampling_rate,
-        is_local: false,
-        album_id: album_id.clone(),
-        artist_id,
-        streamable: track.streamable,
-        source: Some(QCONNECT_REMOTE_QUEUE_SOURCE.to_string()),
-        parental_warning: track.parental_warning,
-        source_item_id_hint: album_id,
-    }
 }
 
 #[cfg(test)]

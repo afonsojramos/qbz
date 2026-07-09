@@ -1,6 +1,6 @@
 use super::commands::{
-    build_qconnect_file_audio_quality_snapshot, classify_qconnect_audio_quality,
-    determine_queue_lookup_report_strategy,
+    build_qconnect_file_audio_quality_snapshot, build_set_position_player_state_request,
+    classify_qconnect_audio_quality, determine_queue_lookup_report_strategy,
     should_skip_renderer_report_due_to_stale_snapshot,
 };
 use super::queue_resolution::{
@@ -8,14 +8,16 @@ use super::queue_resolution::{
     QconnectRemoteSkipDirection,
 };
 use super::session::{
-    find_unique_renderer_id, refresh_local_renderer_id, QconnectFileAudioQualitySnapshot,
+    find_unique_renderer_id, renderer_allows_remote_volume, resolve_local_identity,
+    QconnectFileAudioQualitySnapshot,
 };
 use super::transport::{
     decode_hex_channel, default_qconnect_device_info, parse_subscribe_channels,
 };
 use super::{
     normalize_volume_to_fraction, QconnectHandoffIntent, QconnectOutboundCommandType,
-    QconnectRendererInfo, QconnectSessionState, QconnectTrackOrigin, AUDIO_QUALITY_HIRES_LEVEL1,
+    QconnectQueueVersionPayload, QconnectRendererInfo, QconnectSessionState, QconnectTrackOrigin,
+    AUDIO_QUALITY_HIRES_LEVEL1,
 };
 use qbz_models::RepeatMode;
 use qconnect_app::{
@@ -46,6 +48,11 @@ fn normalizes_renderer_volume() {
     assert!((normalize_volume_to_fraction(-5) - 0.0).abs() < f32::EPSILON);
     assert!((normalize_volume_to_fraction(125) - 1.0).abs() < f32::EPSILON);
 }
+
+// `deferred_join_reason`, `should_reask_queue_state`, and
+// `compute_connection_state` are now pure functions in
+// `qconnect_app::session`; their unit tests live in that crate's `session`
+// test module.
 
 #[test]
 fn maps_outbound_command_type_to_protocol_command_type() {
@@ -98,6 +105,12 @@ fn maps_qconnect_track_origin_to_core_origin_and_handoff() {
     );
 }
 
+// The pure per-track admission backstop now lives in
+// `qconnect_core::validate_track_origins_for_admission`; its unit test lives in
+// that crate's `admission` test module. The thin Tauri wrapper
+// `commands::validate_track_origins_for_admission` only maps wire origins to
+// core origins.
+
 #[test]
 fn refreshes_local_renderer_id_from_exact_device_uuid_match() {
     let local_device_uuid = super::transport::resolve_qconnect_device_uuid();
@@ -110,6 +123,7 @@ fn refreshes_local_renderer_id_from_exact_device_uuid_match() {
                 brand: Some("Apple".to_string()),
                 model: Some("iPhone".to_string()),
                 device_type: Some(6),
+                volume_remote_control: None,
             },
             QconnectRendererInfo {
                 renderer_id: 6,
@@ -118,12 +132,13 @@ fn refreshes_local_renderer_id_from_exact_device_uuid_match() {
                 brand: Some("QBZ".to_string()),
                 model: Some("QBZ".to_string()),
                 device_type: Some(5),
+                volume_remote_control: None,
             },
         ],
         ..Default::default()
     };
 
-    refresh_local_renderer_id(&mut session);
+    qconnect_app::refresh_local_renderer_id(&mut session, &resolve_local_identity());
 
     assert_eq!(session.local_renderer_id, Some(6));
 }
@@ -142,6 +157,7 @@ fn refreshes_local_renderer_id_from_unique_fingerprint_when_uuid_missing() {
                 brand: Some("Apple".to_string()),
                 model: Some("iPhone".to_string()),
                 device_type: Some(6),
+                volume_remote_control: None,
             },
             QconnectRendererInfo {
                 renderer_id: 6,
@@ -150,12 +166,13 @@ fn refreshes_local_renderer_id_from_unique_fingerprint_when_uuid_missing() {
                 brand: local_device_info.brand.clone(),
                 model: local_device_info.model.clone(),
                 device_type: local_device_info.device_type,
+                volume_remote_control: None,
             },
         ],
         ..Default::default()
     };
 
-    refresh_local_renderer_id(&mut session);
+    qconnect_app::refresh_local_renderer_id(&mut session, &resolve_local_identity());
 
     assert_eq!(session.local_renderer_id, Some(6));
 }
@@ -171,6 +188,7 @@ fn does_not_guess_local_renderer_id_when_fingerprint_is_ambiguous() {
                 brand: Some("QBZ".to_string()),
                 model: Some("QBZ".to_string()),
                 device_type: Some(5),
+                volume_remote_control: None,
             },
             QconnectRendererInfo {
                 renderer_id: 9,
@@ -179,12 +197,13 @@ fn does_not_guess_local_renderer_id_when_fingerprint_is_ambiguous() {
                 brand: Some("QBZ".to_string()),
                 model: Some("QBZ".to_string()),
                 device_type: Some(5),
+                volume_remote_control: None,
             },
         ],
         ..Default::default()
     };
 
-    refresh_local_renderer_id(&mut session);
+    qconnect_app::refresh_local_renderer_id(&mut session, &resolve_local_identity());
 
     assert_eq!(session.local_renderer_id, None);
     assert_eq!(
@@ -1041,4 +1060,73 @@ fn resolves_remote_previous_to_prior_item_even_mid_track() {
             matched_queue_item_id: Some(0),
         }
     );
+}
+
+// The persistent device-uuid env override + persistence round-trip now live in
+// `qbz_app::qconnect_identity`; their unit tests live in that crate's test
+// module. The Tauri `transport::resolve_qconnect_device_uuid` is a one-line
+// delegate.
+
+// `RendererStatus::from_wire` and `should_arm_renderer_watchdog` are now in
+// `qconnect_app::session`; their unit tests live in that crate's `session` test
+// module.
+
+#[test]
+fn build_set_position_request_carries_position_and_queue_item_without_changing_play_state() {
+    let req = build_set_position_player_state_request(
+        42_000,
+        Some(7),
+        QconnectQueueVersionPayload { major: 3, minor: 1 },
+    );
+    assert_eq!(
+        req.playing_state, None,
+        "seek must not change play/pause state"
+    );
+    assert_eq!(req.current_position, Some(42_000));
+    let item = req.current_queue_item.expect("queue item present");
+    assert_eq!(item.id, Some(7));
+    let ver = item.queue_version.expect("queue version present");
+    assert_eq!((ver.major, ver.minor), (3, 1));
+}
+
+#[test]
+fn build_set_position_request_omits_queue_item_when_unknown() {
+    let req = build_set_position_player_state_request(
+        1_000,
+        None,
+        QconnectQueueVersionPayload { major: 1, minor: 0 },
+    );
+    assert!(req.current_queue_item.is_none());
+    assert_eq!(req.current_position, Some(1_000));
+}
+
+#[test]
+fn startup_retry_schedule_is_bounded_and_monotonic() {
+    let s = super::startup::startup_retry_schedule();
+    assert_eq!(s.len(), 4);
+    assert!(s.windows(2).all(|w| w[0] < w[1]));
+    assert_eq!(*s.last().unwrap(), 30_000);
+}
+
+// `quality_from_max_audio_quality` is now in `qconnect_app::session`; its unit
+// test lives in that crate's `session` test module.
+
+#[test]
+fn renderer_allows_remote_volume_defaults_allow_when_absent() {
+    let mut info = QconnectRendererInfo {
+        renderer_id: 7,
+        device_uuid: None,
+        friendly_name: None,
+        brand: None,
+        model: None,
+        device_type: None,
+        volume_remote_control: None,
+    };
+    assert!(renderer_allows_remote_volume(&info)); // absent => allowed
+    info.volume_remote_control = Some(1);
+    assert!(renderer_allows_remote_volume(&info)); // ALLOWED
+    info.volume_remote_control = Some(0);
+    assert!(!renderer_allows_remote_volume(&info)); // explicit non-allowed
+    info.volume_remote_control = Some(2);
+    assert!(!renderer_allows_remote_volume(&info)); // any other value
 }

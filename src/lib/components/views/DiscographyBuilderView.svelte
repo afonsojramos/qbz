@@ -567,7 +567,7 @@
 </script>
 
 <div class="builder-view">
-  <div class="builder-scroll">
+  <div class="builder-scroll" data-tauri-drag-region>
   {#if onBack}
     <button class="back-btn" onclick={() => onBack?.()}>
       <ArrowLeft size={16} />
@@ -575,7 +575,7 @@
     </button>
   {/if}
 
-  <header class="builder-header">
+  <header class="builder-header" data-tauri-drag-region="deep">
     {#if artistAvatarUrl}
       <img class="avatar" src={artistAvatarUrl} alt="" />
     {:else}
@@ -1054,7 +1054,7 @@
   }
   .segment.active {
     background: var(--accent-primary);
-    color: #fff;
+    color: var(--btn-primary-text);
   }
 
   /* ── State messages ── */
@@ -1157,7 +1157,6 @@
     color: var(--text-muted);
     font-size: 12px;
     line-height: 1;
-    user-select: none;
     flex-shrink: 0;
   }
 
@@ -1416,7 +1415,7 @@
   .primary-btn {
     padding: 10px 20px;
     background: var(--accent-primary);
-    color: #fff;
+    color: var(--btn-primary-text);
     border: none;
     border-radius: 8px;
     font-size: 13px;

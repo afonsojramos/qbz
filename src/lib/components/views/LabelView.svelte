@@ -8,7 +8,7 @@
   import BulkActionBar from '../BulkActionBar.svelte';
   import { openAddToMixtape } from '$lib/stores/addToMixtapeModalStore';
   import { t } from '$lib/i18n';
-  import AlbumCard from '../AlbumCard.svelte';
+  import AlbumCard from '$lib/discovery-v2/AlbumCardLite.svelte';
   import HorizontalScrollRow from '../HorizontalScrollRow.svelte';
   import QobuzPlaylistCard from '../QobuzPlaylistCard.svelte';
   import TrackMenu from '../TrackMenu.svelte';
@@ -141,6 +141,26 @@
   // Track expand state (like ArtistDetailView: 5 → 20 → 50)
   let visibleTracksCount = $state(5);
   let showTracksContextMenu = $state(false);
+
+  // Close the popular-tracks context menu on clicks outside its trigger or panel.
+  $effect(() => {
+    if (!showTracksContextMenu) return;
+
+    function handleClickOutside(event: MouseEvent) {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      if (target.closest('.action-btn-circle') || target.closest('.context-menu')) return;
+      showTracksContextMenu = false;
+    }
+
+    setTimeout(() => {
+      document.addEventListener('click', handleClickOutside);
+    }, 0);
+
+    return () => {
+      document.removeEventListener('click', handleClickOutside);
+    };
+  });
 
   // Description expand
   let descriptionExpanded = $state(false);
@@ -699,6 +719,13 @@
     await Promise.all(albumList.map(album => loadAlbumOfflineCacheStatus(album.id)));
   }
 
+  /** Bind an album's artistId into a no-arg callback for
+   *  AlbumCardLite's `onArtistClick: () => void`. */
+  function makeArtistClickHandler(artistId: number | undefined): (() => void) | undefined {
+    if (artistId === undefined || !onArtistClick) return undefined;
+    return () => onArtistClick(artistId);
+  }
+
   function isAlbumDownloaded(albumId: string): boolean {
     void downloadStateVersion;
     return albumOfflineCacheStatuses.get(albumId) || false;
@@ -835,7 +862,7 @@
   });
 </script>
 
-<div class="label-detail-view" bind:this={labelDetailEl}>
+<div class="label-detail-view" bind:this={labelDetailEl} data-tauri-drag-region>
   {#if loading}
     <div class="loading-state">
       <div class="spinner"></div>
@@ -855,7 +882,7 @@
     </button>
 
     <!-- Header -->
-    <header class="label-header section-anchor" bind:this={headerSection}>
+    <header class="label-header section-anchor" bind:this={headerSection} data-tauri-drag-region="deep">
       <div class="label-image-wrapper">
         {#if getLabelImage(pageData)}
           <img
@@ -948,7 +975,6 @@
                 <Ellipsis size={18} />
               </button>
               {#if showTracksContextMenu}
-                <div class="context-menu-backdrop" onclick={() => showTracksContextMenu = false} role="presentation"></div>
                 <div class="context-menu">
                   <button class="context-menu-item" onclick={() => { handlePlayAllTracksNext(); showTracksContextMenu = false; }}>
                     {$t('player.playNext')}
@@ -1164,22 +1190,18 @@
                 artwork={album.image?.small || album.image?.thumbnail || ''}
                 title={album.title}
                 artist={album.artist?.name || ''}
-                artistId={album.artist?.id}
-                onArtistClick={onArtistClick}
-                releaseDate={album.release_date_original}
-                size="large"
-                onclick={() => onAlbumClick?.(album.id)}
+                releaseYear={Number(album.release_date_original?.slice(0, 4)) || undefined}
+                isAlbumFullyDownloaded={isAlbumDownloaded(album.id)}
+                onArtistClick={makeArtistClickHandler(album.artist?.id)}
+                onClick={() => onAlbumClick?.(album.id)}
                 onPlay={onAlbumPlay ? () => onAlbumPlay(album.id) : undefined}
                 onPlayNext={onAlbumPlayNext ? () => onAlbumPlayNext(album.id) : undefined}
                 onPlayLater={onAlbumPlayLater ? () => onAlbumPlayLater(album.id) : undefined}
-                onAddAlbumToPlaylist={onAddAlbumToPlaylist ? () => onAddAlbumToPlaylist(album.id) : undefined}
+                onAddToPlaylist={onAddAlbumToPlaylist ? () => onAddAlbumToPlaylist(album.id) : undefined}
                 onShareQobuz={onAlbumShareQobuz ? () => onAlbumShareQobuz(album.id) : undefined}
                 onShareSonglink={onAlbumShareSonglink ? () => onAlbumShareSonglink(album.id) : undefined}
                 onDownload={onAlbumDownload ? () => onAlbumDownload(album.id) : undefined}
-                isAlbumFullyDownloaded={isAlbumDownloaded(album.id)}
-                onOpenContainingFolder={onOpenAlbumFolder ? () => onOpenAlbumFolder(album.id) : undefined}
                 onReDownloadAlbum={onReDownloadAlbum ? () => onReDownloadAlbum(album.id) : undefined}
-                {downloadStateVersion}
               />
             {/each}
             <div class="spacer"></div>
@@ -1199,18 +1221,15 @@
                 artwork={album.image?.small || album.image?.thumbnail || ''}
                 title={album.title}
                 artist={album.artist?.name || ''}
-                artistId={album.artist?.id}
-                onArtistClick={onArtistClick}
-                releaseDate={album.release_date_original}
-                size="large"
-                onclick={() => onAlbumClick?.(album.id)}
+                releaseYear={Number(album.release_date_original?.slice(0, 4)) || undefined}
+                onArtistClick={makeArtistClickHandler(album.artist?.id)}
+                onClick={() => onAlbumClick?.(album.id)}
                 onPlay={onAlbumPlay ? () => onAlbumPlay(album.id) : undefined}
                 onPlayNext={onAlbumPlayNext ? () => onAlbumPlayNext(album.id) : undefined}
                 onPlayLater={onAlbumPlayLater ? () => onAlbumPlayLater(album.id) : undefined}
-                onAddAlbumToPlaylist={onAddAlbumToPlaylist ? () => onAddAlbumToPlaylist(album.id) : undefined}
+                onAddToPlaylist={onAddAlbumToPlaylist ? () => onAddAlbumToPlaylist(album.id) : undefined}
                 onShareQobuz={onAlbumShareQobuz ? () => onAlbumShareQobuz(album.id) : undefined}
                 onShareSonglink={onAlbumShareSonglink ? () => onAlbumShareSonglink(album.id) : undefined}
-                {downloadStateVersion}
               />
             {/each}
             <div class="spacer"></div>
@@ -1371,7 +1390,7 @@
   @keyframes spin { to { transform: rotate(360deg); } }
   .retry-btn {
     margin-top: 16px; padding: 8px 24px;
-    background-color: var(--accent-primary); color: white;
+    background-color: var(--accent-primary); color: var(--btn-primary-text);
     border: none; border-radius: 8px; cursor: pointer;
   }
   .retry-btn:hover { opacity: 0.9; }
@@ -1529,7 +1548,6 @@
 
   /* Context menu */
   .context-menu-wrapper { position: relative; }
-  .context-menu-backdrop { position: fixed; inset: 0; z-index: 99; }
   .context-menu {
     position: absolute; top: 100%; right: 0; margin-top: 8px;
     min-width: 160px; background-color: var(--bg-tertiary);
@@ -1697,7 +1715,7 @@
     font-size: 14px; font-weight: 500; color: var(--text-primary);
     margin-bottom: 4px; width: 100%; overflow: hidden;
     text-overflow: ellipsis; display: -webkit-box;
-    -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.3;
+    -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.3;
   }
 
   /* Label cards (round) */

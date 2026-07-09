@@ -14,8 +14,6 @@ import { get } from 'svelte/store';
 import { t } from '$lib/i18n';
 import { formatTrackTitle } from '$lib/utils/trackTitle';
 import { cmdStop, cmdPlayTrack, skipIfRemote } from '$lib/services/commandRouter';
-import { getTarget } from '$lib/stores/playbackTargetStore';
-import { remotePost } from '$lib/services/remoteApi';
 import { getUserItem, setUserItem } from '$lib/utils/userStorage';
 import {
   isPlaybackSourceLocal,
@@ -171,9 +169,20 @@ async function handoffPlayTrackToRemoteRenderer(trackId: number): Promise<boolea
  * on one bad row. Returns true when a next track was dispatched,
  * false when the queue is empty.
  */
+// Bound the auto-skip cascade (issue #467): a run of failing tracks must not
+// walk the queue. The counter is reset by the next successful play.
+const MAX_CONSECUTIVE_SKIPS = 5;
+let consecutiveSkips = 0;
+
 async function autoSkipToNext(): Promise<boolean> {
+  if (consecutiveSkips >= MAX_CONSECUTIVE_SKIPS) {
+    console.warn(`[playback] Auto-skip cap (${MAX_CONSECUTIVE_SKIPS}) reached — stopping queue walk (#467)`);
+    showToast(get(t)('toast.noAvailableTracks'), 'info');
+    return false;
+  }
   const next = await nextTrack();
   if (!next) return false;
+  consecutiveSkips++;
   console.log('Auto-skipping to next track:', next.title);
   // Brief delay so the "unavailable" toast is readable before we
   // replace it with the next track's loading toast.
@@ -231,18 +240,6 @@ export async function playTrack(
 
   try {
     let handledRemotely = false;
-    const target = getTarget();
-
-    // When controlling a qbzd daemon, send play directly to daemon.
-    // No local stop, no QConnect, no metadata — daemon handles everything.
-    if (target.type === 'qbzd') {
-      await remotePost('/api/playback/play-track', {
-        track_id: track.id,
-        quality: effectiveQuality(track),
-      });
-      setIsPlaying(true);
-      return true;
-    }
 
     if (!gaplessTransition && !isLocal && source !== 'plex') {
       handledRemotely = await handoffPlayTrackToRemoteRenderer(track.id);
@@ -321,28 +318,19 @@ export async function playTrack(
         } else if (isLocal) {
           await invoke('v2_library_play_track', { trackId: track.id });
         } else {
-          // Route to daemon or local based on playback target
-          const target = getTarget();
-          if (target.type === 'qbzd') {
-            await remotePost('/api/playback/play-track', {
-              track_id: track.id,
-              quality: effectiveQuality(track),
-            });
-          } else {
-            const result = await invoke<PlayTrackResult>('v2_play_track', {
-              trackId: track.id,
-              quality: effectiveQuality(track),
-              durationSecs: track.duration ? Math.round(track.duration) : null,
-              forceLowestQuality: forceLowestQuality || null
-            });
+          const result = await invoke<PlayTrackResult>('v2_play_track', {
+            trackId: track.id,
+            quality: effectiveQuality(track),
+            durationSecs: track.duration ? Math.round(track.duration) : null,
+            forceLowestQuality: forceLowestQuality || null
+          });
 
-            // Update track format based on actual stream format_id from Qobuz
-            const actualFormat = formatIdToString(result.format_id);
-            if (actualFormat) {
-              track.format = actualFormat;
-              // Re-set current track to update the UI with actual format
-              setCurrentTrack(track);
-            }
+          // Update track format based on actual stream format_id from Qobuz
+          const actualFormat = formatIdToString(result.format_id);
+          if (actualFormat) {
+            track.format = actualFormat;
+            // Re-set current track to update the UI with actual format
+            setCurrentTrack(track);
           }
         }
       }
@@ -350,6 +338,8 @@ export async function playTrack(
 
     setIsPlaying(true);
     dismissBuffering();
+    // A track actually started playing — reset the auto-skip cascade guard (#467).
+    consecutiveSkips = 0;
     if (showSuccessToast) {
       showToast(`Playing: ${track.title}`, 'success');
     }
@@ -472,9 +462,16 @@ export async function playTrack(
         }, 500);
         return false;
       } else if (behavior === 'always_skip') {
+        if (consecutiveSkips >= MAX_CONSECUTIVE_SKIPS) {
+          console.warn(`[playback] Auto-skip cap (${MAX_CONSECUTIVE_SKIPS}) reached — stopping queue walk (#467)`);
+          showToast(get(t)('toast.noAvailableTracks'), 'info');
+          setIsPlaying(false);
+          return false;
+        }
         showToast(get(t)('qualityFallback.autoSkipping'), 'info');
         const next = await nextTrack();
         if (next) {
+          consecutiveSkips++;
           setTimeout(() => {
             const nextSource = resolvePlaybackSource(next);
             const nextIsLocal = isPlaybackSourceLocal(nextSource, next.is_local ?? false);

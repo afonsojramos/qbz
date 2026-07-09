@@ -6,7 +6,7 @@
   import { ArrowLeft, LoaderCircle, Music, Search, X, LayoutGrid, PanelLeftClose, MicVocal, Disc3, ChevronDown, Funnel, SlidersHorizontal, Globe, Share2 } from 'lucide-svelte';
   import VirtualizedFavoritesArtistGrid from '../VirtualizedFavoritesArtistGrid.svelte';
   import VirtualizedFavoritesArtistList from '../VirtualizedFavoritesArtistList.svelte';
-  import AlbumCard from '../AlbumCard.svelte';
+  import AlbumCard from '$lib/discovery-v2/AlbumCardLite.svelte';
   import { categorizeAlbum } from '$lib/adapters/qobuzAdapters';
   import { resolveArtistImage } from '$lib/stores/customArtistImageStore';
   import type { QobuzAlbum } from '$lib/types';
@@ -422,7 +422,7 @@
 <div class="scene-view">
   {#if !loading}
     <!-- Back button (always visible) -->
-    <div class="top-bar">
+    <div class="top-bar" data-tauri-drag-region="deep">
       <button class="back-btn" onclick={onBack}>
         <ArrowLeft size={16} />
         <span>{$t('actions.back')}</span>
@@ -431,7 +431,7 @@
 
     <!-- Compact sticky header (appears when hero scrolls out) -->
     {#if heroScrolledPast}
-      <div class="compact-header">
+      <div class="compact-header" data-tauri-drag-region="deep">
         {#if flagUrl}
           <img src={flagUrl} alt="" class="compact-flag" />
         {/if}
@@ -759,8 +759,8 @@
                         title={album.title}
                         artist={album.artist?.name || ''}
                         genre={album.genre?.name}
-                        releaseDate={album.release_date_original}
-                        onclick={() => onAlbumClick?.(album.id)}
+                        releaseYear={Number(album.release_date_original?.slice(0, 4)) || undefined}
+                        onClick={() => onAlbumClick?.(album.id)}
                         onPlay={() => onAlbumPlay?.(album.id)}
                       />
                     {/each}
@@ -781,8 +781,8 @@
                         title={album.title}
                         artist={album.artist?.name || ''}
                         genre={album.genre?.name}
-                        releaseDate={album.release_date_original}
-                        onclick={() => onAlbumClick?.(album.id)}
+                        releaseYear={Number(album.release_date_original?.slice(0, 4)) || undefined}
+                        onClick={() => onAlbumClick?.(album.id)}
                         onPlay={() => onAlbumPlay?.(album.id)}
                       />
                     {/each}
@@ -803,8 +803,8 @@
                         title={album.title}
                         artist={album.artist?.name || ''}
                         genre={album.genre?.name}
-                        releaseDate={album.release_date_original}
-                        onclick={() => onAlbumClick?.(album.id)}
+                        releaseYear={Number(album.release_date_original?.slice(0, 4)) || undefined}
+                        onClick={() => onAlbumClick?.(album.id)}
                         onPlay={() => onAlbumPlay?.(album.id)}
                       />
                     {/each}
@@ -1278,7 +1278,7 @@
   }
 
   .genre-card.selected .genre-name {
-    color: white;
+    color: var(--btn-primary-text);
   }
 
   .check-circle {
