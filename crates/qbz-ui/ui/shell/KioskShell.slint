@@ -1,0 +1,231 @@
+// KioskShell — small-panel touch shell (2.0.2 frente #3, Axis B).
+//
+// A SIBLING of AppShell inside the same AppWindow, mounted when
+// `AppScreen.kiosk` is active. It shares every `*State` global verbatim with the
+// desktop shell (no mirroring), so it re-hosts the SAME view components; the
+// only differences from AppShell are the chrome: a thin back bar + bottom
+// NavRail replace the HeaderBar + Sidebar, the transport is forced to
+// PlayerBarSmall, and there is no queue/lyrics side panel.
+//
+// P1 scope: the frame + NavRail + persistent transport + global back, routing
+// the reused Home/Album/Artist/Favorites/Search/Settings views. Remaining
+// ContentView routes (mix, playlist, purchases, local-library, detail views,
+// offline placeholder) are P2 — the view-mount block below is a verbatim subset
+// of AppShell's and grows there. NOTE: keeping this block in sync with AppShell
+// is temporary; a shared `ShellContent` extraction is the DRY follow-up once the
+// kiosk shell is build-verified (kept isolated here so the desktop shell is
+// untouched and cannot regress).
+import { Theme } from "../foundation/semantic-colors.slint";
+import { Layout } from "../foundation/layout.slint";
+import { Radius } from "../foundation/radius.slint";
+import { NavState, ContentView, OfflineState } from "../state.slint";
+import { PlayerBarSmall } from "PlayerBarSmall.slint";
+import { NavRail } from "NavRail.slint";
+import { HomeView } from "../discover/HomeView.slint";
+import { AlbumPageView } from "../album/AlbumPageView.slint";
+import { ArtistPageView } from "../artist/ArtistPageView.slint";
+import { FavoritesView } from "../favorites/FavoritesView.slint";
+import { SearchResultsView } from "../search/SearchResultsView.slint";
+import { SettingsView } from "../settings/SettingsView.slint";
+
+export component KioskShell inherits Rectangle {
+    // Public interface mirrors AppShell 1:1 (app.slint forwards these to the
+    // AppWindow root callbacks handled in Rust).
+    callback open-album(string);
+    callback open-artist(string);
+    callback open-purchase-album(string);
+    callback media-action(string, string, string);
+    callback header-menu-navigate(string);
+    callback discover-view-all(string, string);
+    callback settings-bool(string, bool);
+    callback settings-select(string, int);
+    callback settings-slider(string, int);
+    callback settings-string(string, string);
+    callback settings-reset();
+    callback settings-release-device();
+    callback logout();
+    callback close-app();
+    callback recovery-login();
+
+    // Kiosk chrome heights. Topbar + transport are one header-row tall each; the
+    // NavRail is a fat touch target.
+    property <length> navrail-height: 80px;
+
+    VerticalLayout {
+        spacing: 0px;
+
+        // --- Back bar (workstream B: the persistent global back affordance,
+        // wired to NavState history, honoring ADR-004). ------------------------
+        Rectangle {
+            height: Layout.header-height;
+            background: Theme.surface-card;
+            HorizontalLayout {
+                padding-left: 6px;
+                padding-right: 6px;
+                alignment: start;
+                back-btn := Rectangle {
+                    width: 44px;
+                    height: 44px;
+                    y: (parent.height - self.height) / 2;
+                    border-radius: Radius.sm;
+                    background: back-ta.has-hover && NavState.can-back ? Theme.alpha-8 : transparent;
+                    opacity: NavState.can-back ? 1.0 : 0.32;
+                    Image {
+                        source: @image-url("../assets/icons/chevron-left.svg");
+                        colorize: Theme.text-secondary;
+                        width: 22px;
+                        height: 22px;
+                    }
+                    back-ta := TouchArea {
+                        enabled: NavState.can-back;
+                        clicked => {
+                            NavState.request-back();
+                        }
+                    }
+                }
+            }
+        }
+
+        // --- Content frame (mirrors AppShell:237-279 arithmetic-height pattern).
+        // A conditionally-mounted view will not stretch to fill a layout cell, so
+        // the inner Rectangle takes an EXPLICIT height and the views fill it via
+        // clip — copy this rationale, it is the documented layout-collapse
+        // footgun. ------------------------------------------------------------
+        Rectangle {
+            vertical-stretch: 1;
+            background: Theme.surface-card;
+            VerticalLayout {
+                vertical-stretch: 1;
+                padding-left: 8px;
+                padding-right: 8px;
+                padding-top: 0px;
+                padding-bottom: 8px;
+
+                Rectangle {
+                    // window - back bar - transport(PlayerBarSmall = one header
+                    // row) - NavRail - this VL's bottom padding.
+                    height: root.height - Layout.header-height - Layout.header-height
+                        - root.navrail-height - 8px;
+                    vertical-stretch: 1;
+                    background: Theme.surface-main;
+                    border-radius: Radius.md;
+                    clip: true;
+
+                    // Verbatim subset of AppShell's view mounts — same conditions,
+                    // same callback wiring; the views read global state.
+                    if NavState.view == ContentView.home && !OfflineState.offline: HomeView {
+                        album-clicked(id) => {
+                            root.open-album(id);
+                        }
+                        open-artist(id) => {
+                            root.open-artist(id);
+                        }
+                        media-action(kind, id, action) => {
+                            root.media-action(kind, id, action);
+                        }
+                        discover-view-all(e, t) => {
+                            root.discover-view-all(e, t);
+                        }
+                    }
+                    if NavState.view == ContentView.album && !OfflineState.offline: AlbumPageView {
+                        open-artist(id) => {
+                            root.open-artist(id);
+                        }
+                        media-action(kind, id, action) => {
+                            root.media-action(kind, id, action);
+                        }
+                    }
+                    if NavState.view == ContentView.artist && !OfflineState.offline: ArtistPageView {
+                        open-album(id) => {
+                            root.open-album(id);
+                        }
+                        media-action(kind, id, action) => {
+                            root.media-action(kind, id, action);
+                        }
+                    }
+                    if NavState.view == ContentView.favorites && !OfflineState.offline: FavoritesView {
+                        open-album(id) => {
+                            root.open-album(id);
+                        }
+                        open-artist(id) => {
+                            root.open-artist(id);
+                        }
+                    }
+                    if NavState.view == ContentView.search && !OfflineState.offline: SearchResultsView {
+                        open-album(id) => {
+                            root.open-album(id);
+                        }
+                        open-artist(id) => {
+                            root.open-artist(id);
+                        }
+                        media-action(kind, id, action) => {
+                            root.media-action(kind, id, action);
+                        }
+                    }
+                    if NavState.view == ContentView.settings: SettingsView {
+                        settings-bool(k, v) => {
+                            root.settings-bool(k, v);
+                        }
+                        settings-select(k, i) => {
+                            root.settings-select(k, i);
+                        }
+                        settings-slider(k, v) => {
+                            root.settings-slider(k, v);
+                        }
+                        settings-string(k, s) => {
+                            root.settings-string(k, s);
+                        }
+                        settings-reset => {
+                            root.settings-reset();
+                        }
+                        settings-release-device => {
+                            root.settings-release-device();
+                        }
+                    }
+                }
+            }
+        }
+
+        // --- Persistent transport: force PlayerBarSmall (npb=2 seam). Reused
+        // verbatim; it self-heights to one header row and reads its own globals.
+        PlayerBarSmall {
+            height: Layout.header-height;
+            open-album(id) => {
+                root.open-album(id);
+            }
+            open-artist(id) => {
+                root.open-artist(id);
+            }
+            media-action(kind, id, action) => {
+                root.media-action(kind, id, action);
+            }
+            settings-bool(k, v) => {
+                root.settings-bool(k, v);
+            }
+        }
+
+        // --- Bottom NavRail (net-new). Maps each tile to the real route the
+        // Sidebar/Rust dispatcher already uses. -------------------------------
+        NavRail {
+            height: root.navrail-height;
+            discover => {
+                root.header-menu-navigate("discover-home");
+            }
+            library => {
+                root.header-menu-navigate("favorites-tracks");
+            }
+            search => {
+                NavState.view = ContentView.search;
+            }
+            playing => {
+                root.media-action("npb-view", "", "immersive");
+            }
+            visualizer => {
+                root.media-action("npb-view", "", "immersive");
+            }
+            menu => {
+                NavState.request-settings();
+            }
+        }
+    }
+}

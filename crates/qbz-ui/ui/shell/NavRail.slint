@@ -1,0 +1,127 @@
+// Bottom NavRail — small-panel touch navigation (2.0.2 frente #3, Axis B).
+//
+// Six ~80px icon+label tiles (Radius.sm rectangles, NO pills — ADR-008)
+// replacing the desktop Sidebar on the kiosk panel, driving the SAME NavState
+// routes. Net-new component; patterned after the Sidebar's nav rows and the
+// control-alignment standard: tokens/accent/radii only, no invented values,
+// icons from the existing `assets/icons` set. Labels reuse existing `@tr`
+// msgids (Discover/Library/Search/Now Playing/Visualizer/Settings) so no new
+// `.po` strings are introduced.
+import { Theme } from "../foundation/semantic-colors.slint";
+import { Radius } from "../foundation/radius.slint";
+import { NavState, ContentView, ImmersiveState } from "../state.slint";
+
+component NavTile inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    in property <bool> active;
+    callback clicked;
+
+    horizontal-stretch: 1;
+    border-radius: Radius.sm;
+    background: root.active
+        ? Theme.accent.with-alpha(0.12)
+        : ta.has-hover ? Theme.alpha-6 : transparent;
+    border-width: root.active ? 1px : 0px;
+    border-color: Theme.accent.with-alpha(0.30);
+
+    VerticalLayout {
+        alignment: center;
+        spacing: 5px;
+        Image {
+            source: root.icon;
+            colorize: root.active ? Theme.accent : Theme.text-muted;
+            width: 24px;
+            height: 24px;
+            horizontal-alignment: center;
+        }
+        Text {
+            text: root.label;
+            color: root.active ? Theme.accent : Theme.text-muted;
+            font-size: 11.5px;
+            font-weight: 600;
+            horizontal-alignment: center;
+            overflow: elide;
+        }
+    }
+
+    ta := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+export component NavRail inherits Rectangle {
+    // One callback per destination; KioskShell maps each to the real route.
+    callback discover();
+    callback library();
+    callback search();
+    callback playing();
+    callback visualizer();
+    callback menu();
+
+    background: Theme.surface-main;
+
+    VerticalLayout {
+        spacing: 0px;
+        // Top hairline separating the rail from the transport bar.
+        Rectangle {
+            height: 1px;
+            background: Theme.border-subtle;
+        }
+        HorizontalLayout {
+            padding: 8px;
+            spacing: 6px;
+
+            NavTile {
+                icon: @image-url("../assets/icons/compass.svg");
+                label: @tr("Discover");
+                active: NavState.view == ContentView.home;
+                clicked => {
+                    root.discover();
+                }
+            }
+            NavTile {
+                icon: @image-url("../assets/icons/library-big.svg");
+                label: @tr("Library");
+                active: NavState.view == ContentView.favorites;
+                clicked => {
+                    root.library();
+                }
+            }
+            NavTile {
+                icon: @image-url("../assets/icons/search.svg");
+                label: @tr("Search");
+                active: NavState.view == ContentView.search;
+                clicked => {
+                    root.search();
+                }
+            }
+            NavTile {
+                icon: @image-url("../assets/icons/play-fill.svg");
+                label: @tr("Now Playing");
+                active: ImmersiveState.open;
+                clicked => {
+                    root.playing();
+                }
+            }
+            NavTile {
+                icon: @image-url("../assets/icons/sliders-horizontal.svg");
+                label: @tr("Visualizer");
+                active: false;
+                clicked => {
+                    root.visualizer();
+                }
+            }
+            NavTile {
+                icon: @image-url("../assets/icons/settings.svg");
+                label: @tr("Settings");
+                active: NavState.view == ContentView.settings;
+                clicked => {
+                    root.menu();
+                }
+            }
+        }
+    }
+}

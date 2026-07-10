@@ -350,7 +350,7 @@ async fn enter_shell(
         // render loop has order/visibility data before the first apply_home.
         discover_prefs::seed(&w);
         w.global::<HomeState>().set_loading(true);
-        w.set_screen(AppScreen::Shell);
+        w.set_screen(resolved_shell_screen());
     });
 
     // Start the playback poll loop — it runs for the app lifetime,
@@ -633,7 +633,7 @@ async fn enter_shell_offline(
             discover_prefs::seed(&w);
             // No HomeState loading spinner: the discover load is skipped offline
             // (the gating slice adds the placeholder views).
-            w.set_screen(AppScreen::Shell);
+            w.set_screen(resolved_shell_screen());
             // D12: an offline session lands on LocalLibrary (Home is a blocked
             // placeholder offline). Root the nav history at it so back/forward
             // never lead to a phantom blocked Home.
@@ -6208,6 +6208,16 @@ fn kiosk_profile_active() -> bool {
         .profile
         .trim()
         .eq_ignore_ascii_case("kiosk")
+}
+
+/// The post-login screen: the kiosk touch shell (`AppScreen::Kiosk`) when the
+/// kiosk profile is active, else the desktop shell (2.0.2 frente #3, axis B).
+fn resolved_shell_screen() -> AppScreen {
+    if kiosk_profile_active() {
+        AppScreen::Kiosk
+    } else {
+        AppScreen::Shell
+    }
 }
 
 /// Resolve the persisted Settings>Appearance renderer key ("auto" | "wgpu" |
