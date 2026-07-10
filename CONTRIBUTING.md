@@ -2,6 +2,15 @@
 
 This project is actively evolving. Contributions are welcome, but we have a few rules to keep releases stable and avoid regressions (especially around audio output).
 
+## Where the code lives
+
+The live app is the Rust workspace under `crates/` — a single native process
+with a Slint UI. UI code is in `crates/qbz-ui` (`.slint` + generated bindings)
+and `crates/qbz` (the binary). The old Svelte `src/` and Tauri `src-tauri/`
+trees were **deleted in 2.0.2**; they survive only at the git tag
+`legacy-tauri-svelte` for reference. PRs against those paths cannot be merged —
+port the change to `crates/` instead.
+
 ## Quick rules
 
 - Write clear, concise English (no emojis in code, comments, or commit messages).
@@ -63,8 +72,9 @@ PRs targeting `main` will be closed and asked to retarget to `pre-release`.
    - `git checkout pre-release`
    - `git merge --no-ff <type>/external/<topic>`
 5. **Run checks**
-   - Frontend: `npm run build`
-   - Backend (when Rust changes): `cargo check` (run from `src-tauri/`)
+   - Build/validate a touched core crate: `cargo check -p <crate>` (run from
+     `crates/`). The full UI (`qbz`/`qbz-ui`) is a ~20–30 GB compile — see the
+     README "Building from Source" section before attempting it.
 6. **Push pre-release**
    - `git push origin pre-release`
 7. **Close the PR with a comment** explaining it was merged to `pre-release`.
@@ -106,91 +116,19 @@ Prefer:
 
 ## Internationalization (i18n)
 
-**All UI text must use the translation system.** No hardcoded strings in Svelte templates.
+QBZ ships 8 locales (`en es de fr pt ru ja nl`) as gettext `.po` files, bundled
+via the `qbz-i18n` crate. Rules:
 
-### Locale Files
-
-Translations are stored in:
-- `src/lib/i18n/locales/en.json` (English)
-- `src/lib/i18n/locales/es.json` (Spanish)
-
-### Before Adding New Text
-
-1. **Read the existing locale files first** to check if a translation already exists
-2. **Reuse existing keys** - avoid duplicating translations
-3. **Add to both files** - every new key must exist in en.json AND es.json
-
-### How to Use Translations
-
-Import and use the `t` store:
-
-```svelte
-<script lang="ts">
-  import { t } from '$lib/i18n';
-</script>
-
-<!-- In templates -->
-<button>{$t('actions.save')}</button>
-<span>{$t('settings.audio.title')}</span>
-```
-
-### Interpolation Format
-
-svelte-i18n requires a specific format for variable interpolation:
-
-```typescript
-// ❌ WRONG - will show {name} literally
-$t('greeting', { name: userName })
-
-// ✅ CORRECT - wrap in values object
-$t('greeting', { values: { name: userName } })
-```
-
-### Translation Key Naming
-
-Use dot notation for namespacing:
-
-```json
-{
-  "actions": {
-    "save": "Save",
-    "cancel": "Cancel",
-    "delete": "Delete"
-  },
-  "settings": {
-    "audio": {
-      "title": "Audio",
-      "streamingQuality": "Streaming Quality"
-    }
-  }
-}
-```
-
-Common top-level sections:
-- `actions` - Buttons and common actions
-- `toast` - Toast notification messages
-- `settings` - Settings view labels
-- `library` - Local library related text
-- `player` - Player controls and status
-- `errors` - Error messages
-- `empty` - Empty state messages
-
-### Using Translations in Script Context
-
-The `$t()` store can only be used in reactive contexts. In Svelte 5:
-
-```typescript
-// ❌ WRONG - breaks Svelte preprocessing
-const label = $t('some.key');
-
-// ✅ CORRECT - use $derived
-const label = $derived($t('some.key'));
-```
+- **No hardcoded UI strings in `.slint`** — every string goes through
+  `@tr("...")`.
+- Adding or changing a string means updating **all** locale `.po` files, not
+  just English.
+- `@tr` property defaults are not reactive — re-seed from Rust on language
+  change (see `crates/qbz-i18n` and `select_bundled_translation()`, called
+  after `AppWindow::new()`).
 
 ### Checklist for PRs with UI Text
 
-- [ ] No hardcoded strings in Svelte templates
-- [ ] New translation keys added to both en.json and es.json
-- [ ] Variable interpolation uses `{ values: { ... } }` format
-- [ ] Checked existing keys before creating new ones (no duplicates)
-- [ ] Keys follow naming conventions
+- [ ] No hardcoded strings in `.slint` — all text via `@tr`
+- [ ] Every new/changed string updated across all 8 `.po` locales
+- [ ] Reused an existing string where one already fit

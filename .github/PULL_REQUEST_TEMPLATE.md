@@ -4,7 +4,8 @@
 
 ## Checklist
 
-- [ ] My change does **not** touch `src/` or `src-tauri/` — those trees are the
-      retired pre-2.0 frontend, kept only as a porting reference. The live app
-      is the Slint UI under `crates/`. (If your fix targets the old tree, open
-      an issue instead and we'll help you port it.)
+- [ ] My change targets the `crates/` workspace. The Svelte `src/` and Tauri
+      `src-tauri/` trees were **removed in 2.0.2** (preserved only at git tag
+      `legacy-tauri-svelte` for reference); PRs against those paths can't be
+      merged. If your fix targets the old tree, open an issue instead and we'll
+      help you port it.
