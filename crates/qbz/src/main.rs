@@ -6192,6 +6192,24 @@ fn requested_renderer_tier() -> (RendererTier, String) {
     }
 }
 
+/// Resolve whether the kiosk profile is active (2.0.2 frente #3, axis A).
+/// `QBZ_PROFILE` env wins — the kiosk image sets it in the autostart, and a
+/// non-empty value lets the env also force `desktop` back on. When unset it
+/// falls back to the persisted `ui_prefs.profile` key. Anything other than
+/// `"kiosk"` (case-insensitive) is the default desktop profile.
+fn kiosk_profile_active() -> bool {
+    if let Ok(v) = std::env::var("QBZ_PROFILE") {
+        let v = v.trim();
+        if !v.is_empty() {
+            return v.eq_ignore_ascii_case("kiosk");
+        }
+    }
+    crate::ui_prefs::load()
+        .profile
+        .trim()
+        .eq_ignore_ascii_case("kiosk")
+}
+
 /// Resolve the persisted Settings>Appearance renderer key ("auto" | "wgpu" |
 /// "gl" | "software"). A non-auto override is wrapped in the startup sentinel:
 /// armed here (before the risky backend/window init), disarmed on the first
@@ -6660,12 +6678,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     window
         .global::<ImmersiveState>()
         .set_shader_scenes_available(use_gpu_renderer);
+    // Kiosk profile (2.0.2 frente #3, axis A): QBZ_PROFILE=kiosk (env wins,
+    // else the persisted ui_prefs.profile key). The small-panel touch appliance
+    // boots the main window fullscreen and forces reduce-motion; the kiosk image
+    // additionally pins QBZ_RENDERER=gl + the XS ui_scale preset via env. Never
+    // applies to the miniplayer window.
+    let kiosk_profile = !creating_mini && kiosk_profile_active();
     // Same tiers: every animation frame is a full-window femtovg repaint on a
     // weak GPU — step loading indicators / eq bars at ~8fps (coarse clock in
-    // AppShell) instead of display rate.
+    // AppShell) instead of display rate. Kiosk forces it on regardless of tier.
     window
         .global::<ShellState>()
-        .set_reduce_motion(!use_gpu_renderer);
+        .set_reduce_motion(kiosk_profile || !use_gpu_renderer);
+    // Fullscreen-at-boot is a kiosk behavior (no separate flag): the appliance
+    // owns the whole panel. Routed through slint::Window so realization
+    // reconciliation keeps it (see WindowControlActions on_toggle_fullscreen at
+    // ~1326); sync WindowControlActions.is-fullscreen so the titlebar control
+    // agrees with reality.
+    if kiosk_profile {
+        log::info!(
+            "[kiosk] profile active -> fullscreen-at-boot + forced reduce-motion"
+        );
+        window.window().set_fullscreen(true);
+        window
+            .global::<WindowControlActions>()
+            .set_is_fullscreen(true);
+    }
     // Interface-size preset: publish the factor so `.slint` bindings that must
     // stay physically constant (the window minimums) can divide it back out.
     // Extra small also gets the font compensation: a plain 0.8 drops body text

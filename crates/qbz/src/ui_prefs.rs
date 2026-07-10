@@ -550,6 +550,14 @@ pub struct UiPrefs {
     /// maps (winit reports the real compositor value there).
     #[serde(default = "default_last_dpr")]
     pub last_dpr: f32,
+    /// Startup profile: `"desktop"` (default) | `"kiosk"`. The kiosk profile
+    /// boots the main window fullscreen and forces reduce-motion — a small-
+    /// panel touch appliance (2.0.2 frente #3). `QBZ_PROFILE=kiosk` env
+    /// OVERRIDES this at startup (the kiosk image sets it in the autostart);
+    /// the image also pins `QBZ_RENDERER=gl` and the XS `ui_scale` preset via
+    /// env — those stay separate knobs, not forced by the profile.
+    #[serde(default = "default_profile")]
+    pub profile: String,
 }
 
 /// Sentinel for "no saved window position" (let the WM place the window).
@@ -577,6 +585,10 @@ fn default_renderer() -> String {
 
 fn default_ui_scale() -> String {
     "default".to_string()
+}
+
+fn default_profile() -> String {
+    "desktop".to_string()
 }
 
 fn default_last_dpr() -> f32 {
@@ -726,6 +738,7 @@ impl Default for UiPrefs {
             renderer_wgpu_alt: String::new(),
             ui_scale: default_ui_scale(),
             last_dpr: default_last_dpr(),
+            profile: default_profile(),
         }
     }
 }
