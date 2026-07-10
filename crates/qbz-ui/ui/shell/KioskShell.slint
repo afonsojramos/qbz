@@ -7,26 +7,50 @@
 // NavRail replace the HeaderBar + Sidebar, the transport is forced to
 // PlayerBarSmall, and there is no queue/lyrics side panel.
 //
-// P1 scope: the frame + NavRail + persistent transport + global back, routing
-// the reused Home/Album/Artist/Favorites/Search/Settings views. Remaining
-// ContentView routes (mix, playlist, purchases, local-library, detail views,
-// offline placeholder) are P2 — the view-mount block below is a verbatim subset
-// of AppShell's and grows there. NOTE: keeping this block in sync with AppShell
-// is temporary; a shared `ShellContent` extraction is the DRY follow-up once the
-// kiosk shell is build-verified (kept isolated here so the desktop shell is
-// untouched and cannot regress).
+// The content-mount block below is a VERBATIM copy of AppShell's (every
+// ContentView route + the offline placeholder), so navigation reaches the same
+// views by construction. Keeping it in sync with AppShell is temporary debt: a
+// shared `ShellContent` extraction is the DRY follow-up, deferred because the
+// content-height arithmetic references `root.height` (= the shell/window height)
+// and extracting it into a sub-component needs that height re-threaded — a
+// change worth doing only once the kiosk shell is build-verified. Kept isolated
+// here so the desktop shell is untouched and cannot regress.
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Layout } from "../foundation/layout.slint";
 import { Radius } from "../foundation/radius.slint";
-import { NavState, ContentView, OfflineState } from "../state.slint";
+import { NavState, ContentView, OfflineState, PlaylistState, PurchaseDetailState } from "../state.slint";
 import { PlayerBarSmall } from "PlayerBarSmall.slint";
 import { NavRail } from "NavRail.slint";
 import { HomeView } from "../discover/HomeView.slint";
+import { DiscoverBrowseView } from "../discover/DiscoverBrowseView.slint";
+import { RecentAlbumsView } from "../discover/RecentAlbumsView.slint";
 import { AlbumPageView } from "../album/AlbumPageView.slint";
+import { LocalAlbumView } from "../album/LocalAlbumView.slint";
 import { ArtistPageView } from "../artist/ArtistPageView.slint";
+import { ArtistReleasesView } from "../artist/ArtistReleasesView.slint";
+import { MusicianPageView } from "../musician/MusicianPageView.slint";
+import { LabelReleasesView } from "../label/LabelReleasesView.slint";
+import { LabelPageView } from "../label/LabelPageView.slint";
+import { AwardView } from "../award/AwardView.slint";
+import { AwardAlbumsView } from "../award/AwardAlbumsView.slint";
+import { PurchasesView } from "../purchases/PurchasesView.slint";
+import { PurchaseDetailView } from "../purchases/PurchaseDetailView.slint";
+import { ArtistsByLocationView } from "../location/ArtistsByLocationView.slint";
 import { FavoritesView } from "../favorites/FavoritesView.slint";
-import { SearchResultsView } from "../search/SearchResultsView.slint";
+import { FavoritesOfflineRail } from "../favorites/FavoritesOfflineRail.slint";
+import { MixView } from "../mix/MixView.slint";
+import { PlaylistView } from "../playlist/PlaylistView.slint";
+import { PlaylistManagerView } from "../playlist/PlaylistManagerView.slint";
+import { MixtapesView } from "../myqbz/MixtapesView.slint";
+import { CollectionsView } from "../myqbz/CollectionsView.slint";
+import { MixtapeDetailView } from "../myqbz/MixtapeDetailView.slint";
+import { DiscographyBuilderView } from "../myqbz/DiscographyBuilderView.slint";
+import { OfflineManagerView } from "../offline/OfflineManagerView.slint";
+import { BlacklistManagerView } from "../settings/BlacklistManagerView.slint";
+import { OfflinePlaceholder } from "../offline/OfflinePlaceholder.slint";
+import { LocalLibraryView } from "../locallibrary/LocalLibraryView.slint";
 import { SettingsView } from "../settings/SettingsView.slint";
+import { SearchResultsView } from "../search/SearchResultsView.slint";
 
 export component KioskShell inherits Rectangle {
     // Public interface mirrors AppShell 1:1 (app.slint forwards these to the
@@ -47,15 +71,38 @@ export component KioskShell inherits Rectangle {
     callback close-app();
     callback recovery-login();
 
-    // Kiosk chrome heights. Topbar + transport are one header-row tall each; the
-    // NavRail is a fat touch target.
+    // Kiosk chrome heights. The back bar + transport are one header-row tall
+    // each; the NavRail is a fat touch target.
     property <length> navrail-height: 80px;
+
+    // Offline gate (verbatim from AppShell:110-130): Qobuz-only views mount only
+    // online; local-DB views (LocalLibrary, local album, offline manager, My QBZ,
+    // Settings) keep mounting offline.
+    property <bool> qobuz-view-blocked: OfflineState.offline && (
+        NavState.view == ContentView.home
+        || NavState.view == ContentView.discover-browse
+        || NavState.view == ContentView.search
+        || NavState.view == ContentView.favorites
+        || NavState.view == ContentView.album
+        || NavState.view == ContentView.artist
+        || NavState.view == ContentView.artist-releases
+        || NavState.view == ContentView.musician
+        || NavState.view == ContentView.label
+        || NavState.view == ContentView.label-releases
+        || NavState.view == ContentView.award
+        || NavState.view == ContentView.award-albums
+        || NavState.view == ContentView.purchases
+        || NavState.view == ContentView.purchase-album
+        || NavState.view == ContentView.location
+        || NavState.view == ContentView.mix
+        || (NavState.view == ContentView.playlist
+            && !PlaylistState.is-local && !PlaylistState.offline-subset));
 
     VerticalLayout {
         spacing: 0px;
 
-        // --- Back bar (workstream B: the persistent global back affordance,
-        // wired to NavState history, honoring ADR-004). ------------------------
+        // --- Back bar (workstream B: persistent global back, wired to NavState
+        // history, honoring ADR-004). ----------------------------------------
         Rectangle {
             height: Layout.header-height;
             background: Theme.surface-card;
@@ -89,8 +136,7 @@ export component KioskShell inherits Rectangle {
         // --- Content frame (mirrors AppShell:237-279 arithmetic-height pattern).
         // A conditionally-mounted view will not stretch to fill a layout cell, so
         // the inner Rectangle takes an EXPLICIT height and the views fill it via
-        // clip — copy this rationale, it is the documented layout-collapse
-        // footgun. ------------------------------------------------------------
+        // clip — this is the documented layout-collapse footgun. --------------
         Rectangle {
             vertical-stretch: 1;
             background: Theme.surface-card;
@@ -111,8 +157,12 @@ export component KioskShell inherits Rectangle {
                     border-radius: Radius.md;
                     clip: true;
 
-                    // Verbatim subset of AppShell's view mounts — same conditions,
-                    // same callback wiring; the views read global state.
+                    // --- Verbatim copy of AppShell's view mounts (286-526). ---
+                    if root.qobuz-view-blocked && NavState.view != ContentView.favorites: OfflinePlaceholder { }
+                    if root.qobuz-view-blocked && NavState.view == ContentView.favorites: OfflinePlaceholder {
+                        FavoritesOfflineRail { }
+                    }
+
                     if NavState.view == ContentView.home && !OfflineState.offline: HomeView {
                         album-clicked(id) => {
                             root.open-album(id);
@@ -127,12 +177,39 @@ export component KioskShell inherits Rectangle {
                             root.discover-view-all(e, t);
                         }
                     }
+                    if NavState.view == ContentView.discover-browse && !OfflineState.offline: DiscoverBrowseView {
+                        open-album(id) => {
+                            root.open-album(id);
+                        }
+                        open-artist(id) => {
+                            root.open-artist(id);
+                        }
+                        media-action(kind, id, action) => {
+                            root.media-action(kind, id, action);
+                        }
+                    }
+                    if NavState.view == ContentView.recent-albums: RecentAlbumsView {
+                        open-album(id) => {
+                            root.open-album(id);
+                        }
+                        open-artist(id) => {
+                            root.open-artist(id);
+                        }
+                        media-action(kind, id, action) => {
+                            root.media-action(kind, id, action);
+                        }
+                    }
                     if NavState.view == ContentView.album && !OfflineState.offline: AlbumPageView {
                         open-artist(id) => {
                             root.open-artist(id);
                         }
                         media-action(kind, id, action) => {
                             root.media-action(kind, id, action);
+                        }
+                    }
+                    if NavState.view == ContentView.local-album: LocalAlbumView {
+                        open-artist(name) => {
+                            root.open-artist(name);
                         }
                     }
                     if NavState.view == ContentView.artist && !OfflineState.offline: ArtistPageView {
@@ -143,6 +220,71 @@ export component KioskShell inherits Rectangle {
                             root.media-action(kind, id, action);
                         }
                     }
+                    if NavState.view == ContentView.artist-releases && !OfflineState.offline: ArtistReleasesView {
+                        open-album(id) => {
+                            root.open-album(id);
+                        }
+                        open-artist(id) => {
+                            root.open-artist(id);
+                        }
+                        media-action(kind, id, action) => {
+                            root.media-action(kind, id, action);
+                        }
+                    }
+                    if NavState.view == ContentView.musician && !OfflineState.offline: MusicianPageView {
+                        open-album(id) => {
+                            root.open-album(id);
+                        }
+                    }
+                    if NavState.view == ContentView.label && !OfflineState.offline: LabelPageView {
+                        open-album(id) => {
+                            root.open-album(id);
+                        }
+                        open-artist(id) => {
+                            root.open-artist(id);
+                        }
+                        media-action(kind, id, action) => {
+                            root.media-action(kind, id, action);
+                        }
+                    }
+                    if NavState.view == ContentView.label-releases && !OfflineState.offline: LabelReleasesView {
+                        open-album(id) => {
+                            root.open-album(id);
+                        }
+                        open-artist(id) => {
+                            root.open-artist(id);
+                        }
+                        media-action(kind, id, action) => {
+                            root.media-action(kind, id, action);
+                        }
+                    }
+                    if NavState.view == ContentView.award && !OfflineState.offline: AwardView {
+                        open-album(id) => {
+                            root.open-album(id);
+                        }
+                        open-artist(id) => {
+                            root.open-artist(id);
+                        }
+                        media-action(kind, id, action) => {
+                            root.media-action(kind, id, action);
+                        }
+                    }
+                    if NavState.view == ContentView.award-albums && !OfflineState.offline: AwardAlbumsView {
+                        open-album(id) => {
+                            root.open-album(id);
+                        }
+                        open-artist(id) => {
+                            root.open-artist(id);
+                        }
+                        media-action(kind, id, action) => {
+                            root.media-action(kind, id, action);
+                        }
+                    }
+                    if NavState.view == ContentView.location && !OfflineState.offline: ArtistsByLocationView {
+                        open-artist(id) => {
+                            root.open-artist(id);
+                        }
+                    }
                     if NavState.view == ContentView.favorites && !OfflineState.offline: FavoritesView {
                         open-album(id) => {
                             root.open-album(id);
@@ -151,12 +293,63 @@ export component KioskShell inherits Rectangle {
                             root.open-artist(id);
                         }
                     }
-                    if NavState.view == ContentView.search && !OfflineState.offline: SearchResultsView {
+                    if NavState.view == ContentView.purchases && !OfflineState.offline: PurchasesView {
                         open-album(id) => {
-                            root.open-album(id);
+                            root.open-purchase-album(id);
                         }
                         open-artist(id) => {
                             root.open-artist(id);
+                        }
+                        media-action(kind, id, action) => {
+                            root.media-action(kind, id, action);
+                        }
+                    }
+                    if NavState.view == ContentView.purchase-album
+                        && !OfflineState.offline
+                        && PurchaseDetailState.album-id != "": PurchaseDetailView { }
+                    if NavState.view == ContentView.playlist-manager: PlaylistManagerView { }
+                    if NavState.view == ContentView.mixtapes: MixtapesView { }
+                    if NavState.view == ContentView.collections: CollectionsView { }
+                    if NavState.view == ContentView.mixtape-detail: MixtapeDetailView { }
+                    if NavState.view == ContentView.discography-builder: DiscographyBuilderView { }
+                    if NavState.view == ContentView.offline-manager: OfflineManagerView { }
+                    if NavState.view == ContentView.blacklist-manager: BlacklistManagerView { }
+                    if NavState.view == ContentView.local-library: LocalLibraryView { }
+                    if NavState.view == ContentView.mix && !OfflineState.offline: MixView {
+                        play-track(id) => {
+                            root.media-action("track", id, "play");
+                        }
+                        play-all => {
+                            root.media-action("mix", "", "play-all");
+                        }
+                        shuffle => {
+                            root.media-action("mix", "", "shuffle");
+                        }
+                        refresh => {
+                            root.media-action("mix", "", "refresh");
+                        }
+                        media-action(kind, id, action) => {
+                            root.media-action(kind, id, action);
+                        }
+                    }
+                    if NavState.view == ContentView.playlist
+                        && (!OfflineState.offline
+                            || PlaylistState.is-local
+                            || PlaylistState.offline-subset): PlaylistView {
+                        play-track(id) => {
+                            root.media-action("track", id, "play");
+                        }
+                        play-all => {
+                            root.media-action("playlist", "", "play-all");
+                        }
+                        shuffle => {
+                            root.media-action("playlist", "", "shuffle");
+                        }
+                        toggle-favorite => {
+                            root.media-action("playlist", "", "favorite");
+                        }
+                        edit => {
+                            root.media-action("playlist", "", "edit");
                         }
                         media-action(kind, id, action) => {
                             root.media-action(kind, id, action);
@@ -182,6 +375,17 @@ export component KioskShell inherits Rectangle {
                             root.settings-release-device();
                         }
                     }
+                    if NavState.view == ContentView.search && !OfflineState.offline: SearchResultsView {
+                        open-album(id) => {
+                            root.open-album(id);
+                        }
+                        open-artist(id) => {
+                            root.open-artist(id);
+                        }
+                        media-action(kind, id, action) => {
+                            root.media-action(kind, id, action);
+                        }
+                    }
                 }
             }
         }
@@ -204,8 +408,8 @@ export component KioskShell inherits Rectangle {
             }
         }
 
-        // --- Bottom NavRail (net-new). Maps each tile to the real route the
-        // Sidebar/Rust dispatcher already uses. -------------------------------
+        // --- Bottom NavRail (net-new). Each tile maps to the real route the
+        // Sidebar/Rust dispatcher already uses. ------------------------------
         NavRail {
             height: root.navrail-height;
             discover => {
