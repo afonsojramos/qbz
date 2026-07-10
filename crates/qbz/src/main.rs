@@ -6705,14 +6705,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // reconciliation keeps it (see WindowControlActions on_toggle_fullscreen at
     // ~1326); sync WindowControlActions.is-fullscreen so the titlebar control
     // agrees with reality.
+    // Fullscreen-at-boot, unless QBZ_KIOSK_NO_FULLSCREEN is set — a dev escape
+    // hatch to preview the kiosk layout in a normal window without the panel
+    // taking over the desktop (the kiosk shell exposes no titlebar control to
+    // leave fullscreen). reduce-motion above still applies either way.
     if kiosk_profile {
-        log::info!(
-            "[kiosk] profile active -> fullscreen-at-boot + forced reduce-motion"
-        );
-        window.window().set_fullscreen(true);
-        window
-            .global::<WindowControlActions>()
-            .set_is_fullscreen(true);
+        if std::env::var_os("QBZ_KIOSK_NO_FULLSCREEN").is_some() {
+            log::info!("[kiosk] profile active (reduce-motion on); fullscreen skipped (QBZ_KIOSK_NO_FULLSCREEN)");
+        } else {
+            log::info!("[kiosk] profile active -> fullscreen-at-boot + forced reduce-motion");
+            window.window().set_fullscreen(true);
+            window
+                .global::<WindowControlActions>()
+                .set_is_fullscreen(true);
+        }
     }
     // Interface-size preset: publish the factor so `.slint` bindings that must
     // stay physically constant (the window minimums) can divide it back out.
