@@ -6693,7 +6693,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // boots the main window fullscreen and forces reduce-motion; the kiosk image
     // additionally pins QBZ_RENDERER=gl + the XS ui_scale preset via env. Never
     // applies to the miniplayer window.
-    let kiosk_profile = !creating_mini && kiosk_profile_active();
+    let kiosk_profile = !crate::miniplayer::is_creating_mini() && kiosk_profile_active();
     // Same tiers: every animation frame is a full-window femtovg repaint on a
     // weak GPU — step loading indicators / eq bars at ~8fps (coarse clock in
     // AppShell) instead of display rate. Kiosk forces it on regardless of tier.
