@@ -1,9 +1,14 @@
 // Bottom NavRail — small-panel touch navigation (2.0.2 frente #3, Axis B).
 //
 // Six ~80px icon+label tiles (Radius.sm rectangles, NO pills — ADR-008)
-// replacing the desktop Sidebar on the kiosk panel, driving the SAME NavState
-// routes. Net-new component; tokens/accent/radii/icons from the existing set.
-// Labels reuse existing `@tr` msgids so no new `.po` strings are introduced.
+// replacing the desktop Sidebar, driving the SAME NavState routes.
+//
+// The tiles are positioned MANUALLY (absolute x + explicit width from
+// root.width) instead of a HorizontalLayout: every layout-based attempt left
+// them collapsed to icon width packed on the left (a stretch factor on a custom
+// component child was not honored / the nested layout took its preferred width).
+// Absolute positioning removes all of that ambiguity — width comes straight from
+// the rail width, which the KioskShell VerticalLayout stretches to the panel.
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Radius } from "../foundation/radius.slint";
 import { NavState, ContentView, ImmersiveState } from "../state.slint";
@@ -14,7 +19,6 @@ component NavTile inherits Rectangle {
     in property <bool> active;
     callback clicked;
 
-    horizontal-stretch: 1;
     border-radius: Radius.sm;
     background: root.active
         ? Theme.accent.with-alpha(0.12)
@@ -50,7 +54,6 @@ component NavTile inherits Rectangle {
 }
 
 export component NavRail inherits Rectangle {
-    // One callback per destination; KioskShell maps each to the real route.
     callback discover();
     callback library();
     callback search();
@@ -60,7 +63,11 @@ export component NavRail inherits Rectangle {
 
     background: Theme.surface-main;
 
-    // Top hairline (overlay — kept out of the tile row).
+    // 6 tiles, 8px outer padding, 6px gaps.
+    property <length> tw: (root.width - 16px - 5 * 6px) / 6;
+    property <length> th: root.height - 18px;
+
+    // Top hairline overlay.
     Rectangle {
         x: 0;
         y: 0;
@@ -69,71 +76,76 @@ export component NavRail inherits Rectangle {
         background: Theme.border-subtle;
     }
 
-    // Tile row. EXPLICIT `width: root.width` — a HorizontalLayout nested inside
-    // a VerticalLayout was not filling the rail width, so the tiles collapsed to
-    // icon width packed on the left. Pinning the row to the rail's full width
-    // lets each tile's horizontal-stretch distribute them evenly across it.
-    HorizontalLayout {
-        x: 0;
-        y: 1px;
-        width: root.width;
-        height: root.height - 1px;
-        padding: 8px;
-        spacing: 6px;
-
-        NavTile {
-            horizontal-stretch: 1;
-            icon: @image-url("../assets/icons/compass.svg");
-            label: @tr("Discover");
-            active: NavState.view == ContentView.home;
-            clicked => {
-                root.discover();
-            }
+    NavTile {
+        x: 8px + 0 * (root.tw + 6px);
+        y: 9px;
+        width: root.tw;
+        height: root.th;
+        icon: @image-url("../assets/icons/compass.svg");
+        label: @tr("Discover");
+        active: NavState.view == ContentView.home;
+        clicked => {
+            root.discover();
         }
-        NavTile {
-            horizontal-stretch: 1;
-            icon: @image-url("../assets/icons/library-big.svg");
-            label: @tr("Library");
-            active: NavState.view == ContentView.favorites;
-            clicked => {
-                root.library();
-            }
+    }
+    NavTile {
+        x: 8px + 1 * (root.tw + 6px);
+        y: 9px;
+        width: root.tw;
+        height: root.th;
+        icon: @image-url("../assets/icons/library-big.svg");
+        label: @tr("Library");
+        active: NavState.view == ContentView.favorites;
+        clicked => {
+            root.library();
         }
-        NavTile {
-            horizontal-stretch: 1;
-            icon: @image-url("../assets/icons/search.svg");
-            label: @tr("Search");
-            active: NavState.view == ContentView.search;
-            clicked => {
-                root.search();
-            }
+    }
+    NavTile {
+        x: 8px + 2 * (root.tw + 6px);
+        y: 9px;
+        width: root.tw;
+        height: root.th;
+        icon: @image-url("../assets/icons/search.svg");
+        label: @tr("Search");
+        active: NavState.view == ContentView.search;
+        clicked => {
+            root.search();
         }
-        NavTile {
-            horizontal-stretch: 1;
-            icon: @image-url("../assets/icons/play-fill.svg");
-            label: @tr("Now Playing");
-            active: ImmersiveState.open;
-            clicked => {
-                root.playing();
-            }
+    }
+    NavTile {
+        x: 8px + 3 * (root.tw + 6px);
+        y: 9px;
+        width: root.tw;
+        height: root.th;
+        icon: @image-url("../assets/icons/play-fill.svg");
+        label: @tr("Now Playing");
+        active: ImmersiveState.open;
+        clicked => {
+            root.playing();
         }
-        NavTile {
-            horizontal-stretch: 1;
-            icon: @image-url("../assets/icons/sliders-horizontal.svg");
-            label: @tr("Visualizer");
-            active: false;
-            clicked => {
-                root.visualizer();
-            }
+    }
+    NavTile {
+        x: 8px + 4 * (root.tw + 6px);
+        y: 9px;
+        width: root.tw;
+        height: root.th;
+        icon: @image-url("../assets/icons/sliders-horizontal.svg");
+        label: @tr("Visualizer");
+        active: false;
+        clicked => {
+            root.visualizer();
         }
-        NavTile {
-            horizontal-stretch: 1;
-            icon: @image-url("../assets/icons/settings.svg");
-            label: @tr("Settings");
-            active: NavState.view == ContentView.settings;
-            clicked => {
-                root.menu();
-            }
+    }
+    NavTile {
+        x: 8px + 5 * (root.tw + 6px);
+        y: 9px;
+        width: root.tw;
+        height: root.th;
+        icon: @image-url("../assets/icons/settings.svg");
+        label: @tr("Settings");
+        active: NavState.view == ContentView.settings;
+        clicked => {
+            root.menu();
         }
     }
 }
