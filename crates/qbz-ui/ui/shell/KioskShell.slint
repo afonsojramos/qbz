@@ -436,6 +436,12 @@ export component KioskShell inherits Rectangle {
             library => {
                 root.header-menu-navigate("favorites-tracks");
             }
+            local-library => {
+                root.header-menu-navigate("local-albums");
+            }
+            myqbz => {
+                root.header-menu-navigate("myqbz-mixtapes");
+            }
             search => {
                 NavState.view = ContentView.search;
             }

@@ -1,17 +1,14 @@
 // Bottom NavRail — small-panel touch navigation (2.0.2 frente #3, Axis B).
 //
-// Six ~80px icon+label tiles (Radius.sm rectangles, NO pills — ADR-008)
-// replacing the desktop Sidebar, driving the SAME NavState routes.
-//
-// The tiles are positioned MANUALLY (absolute x + explicit width from
-// root.width) instead of a HorizontalLayout: every layout-based attempt left
-// them collapsed to icon width packed on the left (a stretch factor on a custom
-// component child was not honored / the nested layout took its preferred width).
-// Absolute positioning removes all of that ambiguity — width comes straight from
-// the rail width, which the KioskShell VerticalLayout stretches to the panel.
+// Icon+label tiles (Radius.sm rectangles, NO pills — ADR-008) replacing the
+// desktop Sidebar, driving the SAME NavState routes. Tiles are positioned
+// MANUALLY (absolute x + explicit width from root.width) — every layout-based
+// attempt left them collapsed to icon width on the left; absolute positioning
+// takes the width straight from the rail (which KioskShell stretches to the
+// panel).
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Radius } from "../foundation/radius.slint";
-import { NavState, ContentView, ImmersiveState } from "../state.slint";
+import { NavState, ContentView, ImmersiveState, MyQbzBrandingState } from "../state.slint";
 
 component NavTile inherits Rectangle {
     in property <image> icon;
@@ -29,12 +26,16 @@ component NavTile inherits Rectangle {
     VerticalLayout {
         alignment: center;
         spacing: 5px;
-        Image {
-            source: root.icon;
-            colorize: root.active ? Theme.accent : Theme.text-muted;
-            width: 24px;
-            height: 24px;
-            horizontal-alignment: center;
+        // A fixed-size child does not center itself horizontally in a
+        // VerticalLayout — wrap the icon in a full-width centering row.
+        HorizontalLayout {
+            alignment: center;
+            Image {
+                source: root.icon;
+                colorize: root.active ? Theme.accent : Theme.text-muted;
+                width: 24px;
+                height: 24px;
+            }
         }
         Text {
             text: root.label;
@@ -56,6 +57,8 @@ component NavTile inherits Rectangle {
 export component NavRail inherits Rectangle {
     callback discover();
     callback library();
+    callback local-library();
+    callback myqbz();
     callback search();
     callback playing();
     callback visualizer();
@@ -63,11 +66,10 @@ export component NavRail inherits Rectangle {
 
     background: Theme.surface-main;
 
-    // 6 tiles, 8px outer padding, 6px gaps.
-    property <length> tw: (root.width - 16px - 5 * 6px) / 6;
+    // 8 tiles, 8px outer padding, 6px gaps (7 gaps).
+    property <length> tw: (root.width - 16px - 7 * 6px) / 8;
     property <length> th: root.height - 18px;
 
-    // Top hairline overlay.
     Rectangle {
         x: 0;
         y: 0;
@@ -105,6 +107,32 @@ export component NavRail inherits Rectangle {
         y: 9px;
         width: root.tw;
         height: root.th;
+        icon: @image-url("../assets/icons/hard-drive.svg");
+        label: @tr("Local Library");
+        active: NavState.view == ContentView.local-library || NavState.view == ContentView.local-album;
+        clicked => {
+            root.local-library();
+        }
+    }
+    NavTile {
+        x: 8px + 3 * (root.tw + 6px);
+        y: 9px;
+        width: root.tw;
+        height: root.th;
+        icon: @image-url("../assets/icons/music-library-2.svg");
+        label: MyQbzBrandingState.label;
+        active: NavState.view == ContentView.mixtapes
+            || NavState.view == ContentView.collections
+            || NavState.view == ContentView.mixtape-detail;
+        clicked => {
+            root.myqbz();
+        }
+    }
+    NavTile {
+        x: 8px + 4 * (root.tw + 6px);
+        y: 9px;
+        width: root.tw;
+        height: root.th;
         icon: @image-url("../assets/icons/search.svg");
         label: @tr("Search");
         active: NavState.view == ContentView.search;
@@ -113,7 +141,7 @@ export component NavRail inherits Rectangle {
         }
     }
     NavTile {
-        x: 8px + 3 * (root.tw + 6px);
+        x: 8px + 5 * (root.tw + 6px);
         y: 9px;
         width: root.tw;
         height: root.th;
@@ -125,7 +153,7 @@ export component NavRail inherits Rectangle {
         }
     }
     NavTile {
-        x: 8px + 4 * (root.tw + 6px);
+        x: 8px + 6 * (root.tw + 6px);
         y: 9px;
         width: root.tw;
         height: root.th;
@@ -137,7 +165,7 @@ export component NavRail inherits Rectangle {
         }
     }
     NavTile {
-        x: 8px + 5 * (root.tw + 6px);
+        x: 8px + 7 * (root.tw + 6px);
         y: 9px;
         width: root.tw;
         height: root.th;
