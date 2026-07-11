@@ -802,6 +802,13 @@ export component PlayerBarSmall inherits Rectangle {
                                             root.media-action("npb-view", "", "immersive");
                                         }
                                     }
+                                    ContextMenuItem {
+                                        icon: @image-url("../assets/icons/hard-drive.svg");
+                                        label: ShellState.kiosk-profile ? @tr("Desktop mode") : @tr("Kiosk mode");
+                                        clicked => {
+                                            root.media-action("npb-view", "", "toggle-profile");
+                                        }
+                                    }
                                 }
                             }
                         }

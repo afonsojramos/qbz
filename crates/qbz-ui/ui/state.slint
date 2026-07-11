@@ -3724,6 +3724,9 @@ export global UiScale {
 // Globals are imported directly by the shell components, so toggles
 // need no callback plumbing.
 export global ShellState {
+    // Kiosk profile active (2.0.2 frente #3). Seeded from Rust at startup and
+    // flipped by the NPB "Kiosk/Desktop mode" toggle; drives that toggle's label.
+    in-out property <bool> kiosk-profile: false;
     // --- Reduce motion (weak renderer tiers) -------------------------------
     // Seeded from Rust: true on the femtovg-GL / software tiers, where every
     // animation frame is a full-window repaint on a weak GPU. When set,

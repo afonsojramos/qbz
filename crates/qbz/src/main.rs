@@ -6700,6 +6700,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     window
         .global::<ShellState>()
         .set_reduce_motion(kiosk_profile || !use_gpu_renderer);
+    window.global::<ShellState>().set_kiosk_profile(kiosk_profile);
     // Fullscreen-at-boot is a kiosk behavior (no separate flag): the appliance
     // owns the whole panel. Routed through slint::Window so realization
     // reconciliation keeps it (see WindowControlActions on_toggle_fullscreen at
@@ -9703,6 +9704,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let mut prefs = crate::ui_prefs::load();
                         prefs.npb_mode = mode.to_string();
                         crate::ui_prefs::save(&prefs);
+                    }
+                }
+                // Kiosk <-> Desktop live toggle (2.0.2 frente #3). Based on the
+                // CURRENT screen, not kiosk_profile_active() — a QBZ_PROFILE env
+                // override would otherwise pin the reading. Persists the profile
+                // and swaps the shell in place (KioskShell/AppShell share state).
+                ("npb-view", "toggle-profile") => {
+                    if let Some(w) = weak.upgrade() {
+                        let to_kiosk = w.get_screen() != AppScreen::Kiosk;
+                        let mut prefs = crate::ui_prefs::load();
+                        prefs.profile = if to_kiosk { "kiosk" } else { "desktop" }.to_string();
+                        crate::ui_prefs::save(&prefs);
+                        w.global::<ShellState>().set_kiosk_profile(to_kiosk);
+                        w.set_screen(if to_kiosk {
+                            AppScreen::Kiosk
+                        } else {
+                            AppScreen::Shell
+                        });
                     }
                 }
                 // Large dock: visualizer on/off toggle (the cover's eye button).
