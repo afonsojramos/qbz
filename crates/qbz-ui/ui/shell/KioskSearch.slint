@@ -5,6 +5,7 @@
 // The query is entered in the KioskShell back-bar field (SearchActions.submit);
 // this view is the tabbed results. Covers are push-only, so binding the shared
 // arrays is enough.
+import { ListView } from "std-widgets.slint";
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Radius } from "../foundation/radius.slint";
 import { SearchState, SearchActions } from "../state.slint";
@@ -88,18 +89,12 @@ export component KioskSearch inherits Rectangle {
                 }
             }
 
-            // Tracks — simple vertical list.
-            if SearchState.tab == 2: Flickable {
-                viewport-width: self.width;
-                viewport-height: tracklist.preferred-height;
-                tracklist := VerticalLayout {
-                    padding: root.pad;
-                    spacing: 2px;
-                    for track in SearchState.tracks: KioskTrackRow {
-                        track: track;
-                        play(id) => {
-                            root.media-action("track", id, "play");
-                        }
+            // Tracks — windowed list (ListView mounts only the visible band).
+            if SearchState.tab == 2: ListView {
+                for track in SearchState.tracks: KioskTrackRow {
+                    track: track;
+                    play(id) => {
+                        root.media-action("track", id, "play");
                     }
                 }
             }

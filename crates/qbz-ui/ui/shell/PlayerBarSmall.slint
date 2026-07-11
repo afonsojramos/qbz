@@ -741,7 +741,7 @@ export component PlayerBarSmall inherits Rectangle {
                                 height: 215px;
                                 close-policy: close-on-click;
                                 ContextMenu {
-                                    ContextMenuItem {
+                                    if !ShellState.kiosk-profile: ContextMenuItem {
                                         icon: @image-url("../assets/icons/panel-left.svg");
                                         label: @tr("New");
                                         selected: ShellState.npb-mode == 0;
@@ -749,7 +749,7 @@ export component PlayerBarSmall inherits Rectangle {
                                             root.media-action("npb-view", "", "new");
                                         }
                                     }
-                                    ContextMenuItem {
+                                    if !ShellState.kiosk-profile: ContextMenuItem {
                                         icon: @image-url("../assets/icons/panel-right-close.svg");
                                         label: @tr("Classic");
                                         selected: ShellState.npb-mode == 1;
@@ -757,7 +757,7 @@ export component PlayerBarSmall inherits Rectangle {
                                             root.media-action("npb-view", "", "classic");
                                         }
                                     }
-                                    ContextMenuItem {
+                                    if !ShellState.kiosk-profile: ContextMenuItem {
                                         icon: @image-url("../assets/icons/rows-3.svg");
                                         label: @tr("Small");
                                         selected: ShellState.npb-mode == 2;
@@ -765,7 +765,7 @@ export component PlayerBarSmall inherits Rectangle {
                                             root.media-action("npb-view", "", "small");
                                         }
                                     }
-                                    ContextMenuItem {
+                                    if !ShellState.kiosk-profile: ContextMenuItem {
                                         icon: @image-url("../assets/icons/layout-grid.svg");
                                         label: @tr("Large");
                                         selected: ShellState.npb-mode == 3;
@@ -780,7 +780,7 @@ export component PlayerBarSmall inherits Rectangle {
                                             root.media-action("npb-view", "", "large");
                                         }
                                     }
-                                    Rectangle {
+                                    if !ShellState.kiosk-profile: Rectangle {
                                         height: 7px;
                                         Rectangle {
                                             height: 1px;

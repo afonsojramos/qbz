@@ -19,9 +19,10 @@ import { LineEdit } from "std-widgets.slint";
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Layout } from "../foundation/layout.slint";
 import { Radius } from "../foundation/radius.slint";
-import { NavState, ContentView, OfflineState, PlaylistState, PurchaseDetailState, SearchActions, UiFocusState } from "../state.slint";
+import { NavState, ContentView, OfflineState, PlaylistState, PurchaseDetailState, SearchActions, UiFocusState, AppearanceState } from "../state.slint";
 import { PlayerBarSmall } from "PlayerBarSmall.slint";
 import { NavRail } from "NavRail.slint";
+import { WindowControls } from "WindowControls.slint";
 import { KioskDiscover } from "KioskDiscover.slint";
 import { DiscoverBrowseView } from "../discover/DiscoverBrowseView.slint";
 import { RecentAlbumsView } from "../discover/RecentAlbumsView.slint";
@@ -108,15 +109,21 @@ export component KioskShell inherits Rectangle {
         // lives in the HeaderBar, which the kiosk drops, so a persistent search
         // field here is what makes Search functional; Enter submits through the
         // same SearchActions seam the header uses and lands on the results view.
-        Rectangle {
+        backbar := Rectangle {
             height: Layout.header-height;
             background: Theme.surface-card;
+            // The kiosk carries no HeaderBar, so it owns the window chrome too.
+            // macOS overlay leaves the native traffic-light inset; Linux frameless
+            // draws the custom WindowControls. OS-agnostic on purpose (the kiosk
+            // is not restricted to any platform).
+            property <length> mac-inset: AppearanceState.is-macos && !AppearanceState.system-title-bar-active ? 78px : 0px;
+            property <bool> lin-chrome: !AppearanceState.is-macos && !AppearanceState.system-title-bar-active && AppearanceState.show-window-controls;
             HorizontalLayout {
-                padding-left: 6px;
-                padding-right: 8px;
+                padding-left: 6px + backbar.mac-inset;
+                padding-right: backbar.lin-chrome ? 118px : 8px;
                 padding-top: 4px;
                 padding-bottom: 4px;
-                spacing: 8px;
+                spacing: 6px;
                 back-btn := Rectangle {
                     width: 44px;
                     border-radius: Radius.sm;
@@ -135,6 +142,24 @@ export component KioskShell inherits Rectangle {
                         }
                     }
                 }
+                fwd-btn := Rectangle {
+                    width: 44px;
+                    border-radius: Radius.sm;
+                    background: fwd-ta.has-hover && NavState.can-forward ? Theme.alpha-8 : transparent;
+                    opacity: NavState.can-forward ? 1.0 : 0.32;
+                    Image {
+                        source: @image-url("../assets/icons/chevron-right.svg");
+                        colorize: Theme.text-secondary;
+                        width: 22px;
+                        height: 22px;
+                    }
+                    fwd-ta := TouchArea {
+                        enabled: NavState.can-forward;
+                        clicked => {
+                            NavState.request-forward();
+                        }
+                    }
+                }
                 search-field := LineEdit {
                     horizontal-stretch: 1;
                     placeholder-text: @tr("Search");
@@ -149,6 +174,11 @@ export component KioskShell inherits Rectangle {
                         NavState.view = ContentView.search;
                     }
                 }
+            }
+            // Linux custom window controls at the right edge.
+            if backbar.lin-chrome: WindowControls {
+                x: backbar.width - self.preferred-width - 8px;
+                y: (backbar.height - self.preferred-height) / 2;
             }
         }
 

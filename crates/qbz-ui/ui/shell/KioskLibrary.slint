@@ -5,6 +5,7 @@
 // FavoritesActions.select-tab (Rust lazy-loads each tab). Covers are push-only
 // except album covers (windowed — v1 shows the first ~60; the window hook is a
 // follow-up).
+import { ListView } from "std-widgets.slint";
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Radius } from "../foundation/radius.slint";
 import { FavoritesState, FavoritesActions } from "../state.slint";
@@ -77,17 +78,14 @@ export component KioskLibrary inherits Rectangle {
             vertical-stretch: 1;
             clip: true;
 
-            if FavoritesState.active-tab == "tracks": Flickable {
-                viewport-width: self.width;
-                viewport-height: tracklist.preferred-height;
-                tracklist := VerticalLayout {
-                    padding: root.pad;
-                    spacing: 2px;
-                    for track in FavoritesState.tracks-visible: KioskTrackRow {
-                        track: track;
-                        play(id) => {
-                            FavoritesActions.play-track(id);
-                        }
+            // ListView windows the rows (only the visible band is mounted) — a
+            // plain VerticalLayout of every track spiked CPU on entry, which a Pi
+            // can't afford.
+            if FavoritesState.active-tab == "tracks": ListView {
+                for track in FavoritesState.tracks-visible: KioskTrackRow {
+                    track: track;
+                    play(id) => {
+                        FavoritesActions.play-track(id);
                     }
                 }
             }
