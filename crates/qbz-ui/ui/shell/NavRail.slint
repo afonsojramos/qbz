@@ -71,10 +71,16 @@ export component NavRail inherits Rectangle {
             background: Theme.border-subtle;
         }
         HorizontalLayout {
+            // Fill the height below the hairline so tiles are full-height touch
+            // targets, and stretch each tile at the MOUNT site (a stretch set
+            // only inside the child component's root is not honored by the
+            // parent layout — that was why the tiles collapsed to icon width).
+            vertical-stretch: 1;
             padding: 8px;
             spacing: 6px;
 
             NavTile {
+                horizontal-stretch: 1;
                 icon: @image-url("../assets/icons/compass.svg");
                 label: @tr("Discover");
                 active: NavState.view == ContentView.home;
@@ -83,6 +89,7 @@ export component NavRail inherits Rectangle {
                 }
             }
             NavTile {
+                horizontal-stretch: 1;
                 icon: @image-url("../assets/icons/library-big.svg");
                 label: @tr("Library");
                 active: NavState.view == ContentView.favorites;
@@ -91,6 +98,7 @@ export component NavRail inherits Rectangle {
                 }
             }
             NavTile {
+                horizontal-stretch: 1;
                 icon: @image-url("../assets/icons/search.svg");
                 label: @tr("Search");
                 active: NavState.view == ContentView.search;
@@ -99,6 +107,7 @@ export component NavRail inherits Rectangle {
                 }
             }
             NavTile {
+                horizontal-stretch: 1;
                 icon: @image-url("../assets/icons/play-fill.svg");
                 label: @tr("Now Playing");
                 active: ImmersiveState.open;
@@ -107,6 +116,7 @@ export component NavRail inherits Rectangle {
                 }
             }
             NavTile {
+                horizontal-stretch: 1;
                 icon: @image-url("../assets/icons/sliders-horizontal.svg");
                 label: @tr("Visualizer");
                 active: false;
@@ -115,6 +125,7 @@ export component NavRail inherits Rectangle {
                 }
             }
             NavTile {
+                horizontal-stretch: 1;
                 icon: @image-url("../assets/icons/settings.svg");
                 label: @tr("Settings");
                 active: NavState.view == ContentView.settings;
