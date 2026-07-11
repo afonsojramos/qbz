@@ -2,11 +2,8 @@
 //
 // Six ~80px icon+label tiles (Radius.sm rectangles, NO pills — ADR-008)
 // replacing the desktop Sidebar on the kiosk panel, driving the SAME NavState
-// routes. Net-new component; patterned after the Sidebar's nav rows and the
-// control-alignment standard: tokens/accent/radii only, no invented values,
-// icons from the existing `assets/icons` set. Labels reuse existing `@tr`
-// msgids (Discover/Library/Search/Now Playing/Visualizer/Settings) so no new
-// `.po` strings are introduced.
+// routes. Net-new component; tokens/accent/radii/icons from the existing set.
+// Labels reuse existing `@tr` msgids so no new `.po` strings are introduced.
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Radius } from "../foundation/radius.slint";
 import { NavState, ContentView, ImmersiveState } from "../state.slint";
@@ -63,75 +60,79 @@ export component NavRail inherits Rectangle {
 
     background: Theme.surface-main;
 
-    VerticalLayout {
-        spacing: 0px;
-        // Top hairline separating the rail from the transport bar.
-        Rectangle {
-            height: 1px;
-            background: Theme.border-subtle;
-        }
-        HorizontalLayout {
-            // Fill the height below the hairline so tiles are full-height touch
-            // targets, and stretch each tile at the MOUNT site (a stretch set
-            // only inside the child component's root is not honored by the
-            // parent layout — that was why the tiles collapsed to icon width).
-            vertical-stretch: 1;
-            padding: 8px;
-            spacing: 6px;
+    // Top hairline (overlay — kept out of the tile row).
+    Rectangle {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: 1px;
+        background: Theme.border-subtle;
+    }
 
-            NavTile {
-                horizontal-stretch: 1;
-                icon: @image-url("../assets/icons/compass.svg");
-                label: @tr("Discover");
-                active: NavState.view == ContentView.home;
-                clicked => {
-                    root.discover();
-                }
+    // Tile row. EXPLICIT `width: root.width` — a HorizontalLayout nested inside
+    // a VerticalLayout was not filling the rail width, so the tiles collapsed to
+    // icon width packed on the left. Pinning the row to the rail's full width
+    // lets each tile's horizontal-stretch distribute them evenly across it.
+    HorizontalLayout {
+        x: 0;
+        y: 1px;
+        width: root.width;
+        height: root.height - 1px;
+        padding: 8px;
+        spacing: 6px;
+
+        NavTile {
+            horizontal-stretch: 1;
+            icon: @image-url("../assets/icons/compass.svg");
+            label: @tr("Discover");
+            active: NavState.view == ContentView.home;
+            clicked => {
+                root.discover();
             }
-            NavTile {
-                horizontal-stretch: 1;
-                icon: @image-url("../assets/icons/library-big.svg");
-                label: @tr("Library");
-                active: NavState.view == ContentView.favorites;
-                clicked => {
-                    root.library();
-                }
+        }
+        NavTile {
+            horizontal-stretch: 1;
+            icon: @image-url("../assets/icons/library-big.svg");
+            label: @tr("Library");
+            active: NavState.view == ContentView.favorites;
+            clicked => {
+                root.library();
             }
-            NavTile {
-                horizontal-stretch: 1;
-                icon: @image-url("../assets/icons/search.svg");
-                label: @tr("Search");
-                active: NavState.view == ContentView.search;
-                clicked => {
-                    root.search();
-                }
+        }
+        NavTile {
+            horizontal-stretch: 1;
+            icon: @image-url("../assets/icons/search.svg");
+            label: @tr("Search");
+            active: NavState.view == ContentView.search;
+            clicked => {
+                root.search();
             }
-            NavTile {
-                horizontal-stretch: 1;
-                icon: @image-url("../assets/icons/play-fill.svg");
-                label: @tr("Now Playing");
-                active: ImmersiveState.open;
-                clicked => {
-                    root.playing();
-                }
+        }
+        NavTile {
+            horizontal-stretch: 1;
+            icon: @image-url("../assets/icons/play-fill.svg");
+            label: @tr("Now Playing");
+            active: ImmersiveState.open;
+            clicked => {
+                root.playing();
             }
-            NavTile {
-                horizontal-stretch: 1;
-                icon: @image-url("../assets/icons/sliders-horizontal.svg");
-                label: @tr("Visualizer");
-                active: false;
-                clicked => {
-                    root.visualizer();
-                }
+        }
+        NavTile {
+            horizontal-stretch: 1;
+            icon: @image-url("../assets/icons/sliders-horizontal.svg");
+            label: @tr("Visualizer");
+            active: false;
+            clicked => {
+                root.visualizer();
             }
-            NavTile {
-                horizontal-stretch: 1;
-                icon: @image-url("../assets/icons/settings.svg");
-                label: @tr("Settings");
-                active: NavState.view == ContentView.settings;
-                clicked => {
-                    root.menu();
-                }
+        }
+        NavTile {
+            horizontal-stretch: 1;
+            icon: @image-url("../assets/icons/settings.svg");
+            label: @tr("Settings");
+            active: NavState.view == ContentView.settings;
+            clicked => {
+                root.menu();
             }
         }
     }
