@@ -113,27 +113,6 @@ impl StreamFetcher {
         Err(last_error)
     }
 
-
-/// Validate downloaded byte count against optional Content-Length.
-/// Fail closed when length is known and mismatched, or when zero bytes.
-pub(crate) fn validate_download_size(
-    track_id: u64,
-    cached: u64,
-    content_length: Option<u64>,
-) -> Result<(), String> {
-    if let Some(expected) = content_length {
-        if cached != expected {
-            return Err(format!(
-                "Truncated download for track {track_id}: got {cached} bytes, Content-Length was {expected}"
-            ));
-        }
-    }
-    if cached == 0 {
-        return Err(format!("Empty download for track {track_id}"));
-    }
-    Ok(())
-}
-
     /// Single download attempt: stream response body to a temp file.
     async fn try_download(
         &self,
@@ -729,6 +708,27 @@ pub fn spawn_track_cache_download(
             }
         }
     });
+}
+
+
+/// Validate downloaded byte count against optional Content-Length.
+/// Fail closed when length is known and mismatched, or when zero bytes.
+pub(crate) fn validate_download_size(
+    track_id: u64,
+    cached: u64,
+    content_length: Option<u64>,
+) -> Result<(), String> {
+    if let Some(expected) = content_length {
+        if cached != expected {
+            return Err(format!(
+                "Truncated download for track {track_id}: got {cached} bytes, Content-Length was {expected}"
+            ));
+        }
+    }
+    if cached == 0 {
+        return Err(format!("Empty download for track {track_id}"));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
