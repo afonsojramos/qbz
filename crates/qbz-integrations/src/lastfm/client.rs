@@ -100,10 +100,9 @@ impl LastFmClient {
     ///
     /// Call this after the user has visited the auth_url from `get_token`.
     pub async fn get_session(&mut self, token: &str) -> IntegrationResult<LastFmSession> {
-        log::info!(
-            "Getting Last.fm session with token: {}...",
-            &token[..token.len().min(8)]
-        );
+        // Never log request-token material (even a prefix) — support log
+        // bundles must not carry auth substrings.
+        log::info!("Requesting Last.fm session");
 
         let url = format!("{}/auth.getSession", LASTFM_PROXY_URL);
 
