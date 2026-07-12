@@ -21,6 +21,28 @@ pub use dop::{dop_carrier_rate, DopPacker, DopStream};
 pub use native::{native_u32_rate, NativeDsdStream, NATIVE_DSD_SILENCE_U32};
 pub use wav::{frames_to_pcm24, wav_header, wav_total_size};
 
+/// Common surface of the boxed DSD word streams (DoP and native): an
+/// `Iterator<Item = i32>` that can also report a mid-stream demux I/O
+/// error once it ends, since the iterator surface itself can only express
+/// "no more items" and would otherwise make a read failure look like a
+/// clean end of track.
+pub trait DsdWordSource: Iterator<Item = i32> + Send {
+    /// Mid-stream demux I/O error, if any. Clean EOF leaves this `None`.
+    fn io_error(&self) -> Option<&str>;
+}
+
+impl DsdWordSource for DopStream {
+    fn io_error(&self) -> Option<&str> {
+        DopStream::io_error(self)
+    }
+}
+
+impl DsdWordSource for NativeDsdStream {
+    fn io_error(&self) -> Option<&str> {
+        NativeDsdStream::io_error(self)
+    }
+}
+
 /// DSD64 base rate (bits per second per channel). Multiples of this are the
 /// only valid DSD rates: DSD64/128/256/512.
 pub const DSD64_RATE: u32 = 2_822_400;
