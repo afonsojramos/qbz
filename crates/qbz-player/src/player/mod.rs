@@ -2349,13 +2349,22 @@ impl Player {
                             };
 
                             while !buffer_sufficient(&source)
+                                && source.download_error().is_none()
                                 && start_wait.elapsed() < max_wait
                             {
                                 std::thread::sleep(Duration::from_millis(50));
                             }
 
                             if !source.has_min_buffer() {
-                                log::error!("Streaming: timeout waiting for initial buffer");
+                                match source.download_error() {
+                                    Some(err) => log::error!(
+                                        "Streaming: feeder failed before initial buffer: {}",
+                                        err
+                                    ),
+                                    None => log::error!(
+                                        "Streaming: timeout waiting for initial buffer"
+                                    ),
+                                }
                                 return;
                             }
                             if resume_buffer_target > 0
@@ -4274,6 +4283,24 @@ impl Player {
         cache: Arc<qbz_cache::AudioCache>,
         skip_cache: bool,
     ) -> Result<(), String> {
+        struct FailGuard {
+            writer: BufferWriter,
+            armed: bool,
+        }
+        impl Drop for FailGuard {
+            fn drop(&mut self) {
+                if self.armed {
+                    let _ = self
+                        .writer
+                        .error("CMAF stream aborted before completion".into());
+                }
+            }
+        }
+        let mut guard = FailGuard {
+            writer,
+            armed: true,
+        };
+        let writer = &guard.writer;
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
             .build()
@@ -4281,7 +4308,9 @@ impl Player {
 
         // Write the FLAC header first so the decoder can identify the format.
         if let Err(e) = writer.push_chunk(&flac_header) {
-            return Err(format!("Failed to write FLAC header to buffer: {}", e));
+            let msg = format!("Failed to write FLAC header to buffer: {e}");
+            let _ = writer.error(msg.clone());
+            return Err(msg);
         }
 
         let mut total_written: u64 = flac_header.len() as u64;
@@ -4323,7 +4352,9 @@ impl Player {
                 }
                 // Write decrypted frame to the streaming buffer.
                 if let Err(e) = writer.push_chunk(&frame) {
-                    log::error!("[CMAF-STREAM] Failed to push frame: {}", e);
+                    let msg = format!("Failed to push frame: {e}");
+                    let _ = writer.error(msg.clone());
+                    return Err(msg);
                 }
                 if !skip_cache {
                     cache_data.extend_from_slice(&frame);
@@ -4336,7 +4367,9 @@ impl Player {
             if data_pos < crypto.mdat_end && crypto.mdat_end <= seg_data.len() {
                 let trailing = &seg_data[data_pos..crypto.mdat_end];
                 if let Err(e) = writer.push_chunk(trailing) {
-                    log::error!("[CMAF-STREAM] Failed to push trailing data: {}", e);
+                    let msg = format!("Failed to push trailing data: {e}");
+                    let _ = writer.error(msg.clone());
+                    return Err(msg);
                 }
                 if !skip_cache {
                     cache_data.extend_from_slice(trailing);
@@ -4361,9 +4394,12 @@ impl Player {
             }
         }
 
-        // Signal end of stream.
+        // Signal end of stream (disarm fail-guard so Drop does not error).
+        guard.armed = false;
         if let Err(e) = writer.complete() {
             log::error!("[CMAF-STREAM] Failed to mark buffer complete: {}", e);
+            let _ = writer.error(format!("Failed to mark buffer complete: {e}"));
+            return Err(format!("Failed to mark buffer complete: {e}"));
         }
 
         log::info!(
