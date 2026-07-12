@@ -12,6 +12,7 @@ import { SearchState, SearchActions } from "../state.slint";
 import { KioskAlbumGrid } from "KioskAlbumGrid.slint";
 import { KioskArtistCard } from "KioskArtistCard.slint";
 import { KioskTrackRow } from "KioskTrackRow.slint";
+import { KioskCard } from "KioskCard.slint";
 
 component SearchTab inherits Rectangle {
     in property <string> label;
@@ -40,6 +41,43 @@ component SearchTab inherits Rectangle {
     ta := TouchArea {
         clicked => {
             root.picked(root.index);
+        }
+    }
+}
+
+// Section header for the All dashboard — title on the left, an optional
+// "View all" affordance on the right that jumps to that type's tab.
+component SectionHeader inherits Rectangle {
+    in property <string> title;
+    in property <bool> show-all: true;
+    callback view-all;
+    height: 34px;
+    HorizontalLayout {
+        Text {
+            text: root.title;
+            color: Theme.text-primary;
+            font-size: 18px;
+            font-weight: 700;
+            vertical-alignment: center;
+        }
+        Rectangle {
+            horizontal-stretch: 1;
+        }
+        if root.show-all: Rectangle {
+            width: 74px;
+            Text {
+                text: @tr("View all");
+                color: Theme.accent;
+                font-size: 13px;
+                font-weight: 600;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+            }
+            va-ta := TouchArea {
+                clicked => {
+                    root.view-all();
+                }
+            }
         }
     }
 }
@@ -81,8 +119,245 @@ export component KioskSearch inherits Rectangle {
             vertical-stretch: 1;
             clip: true;
 
-            // Albums (All shares the album grid in v1).
-            if SearchState.tab == 0 || SearchState.tab == 1: KioskAlbumGrid {
+            // All — a dashboard (NOT a flat album grid): Most-popular hero +
+            // per-type previews, each with "View all" jumping to that tab.
+            // Mirrors the desktop SearchResultsView hierarchy; reads SearchState
+            // verbatim (no local re-ranking — the hero order is Qobuz's own
+            // most_popular block, same as desktop).
+            if SearchState.tab == 0: Flickable {
+                viewport-width: self.width;
+                viewport-height: dash.preferred-height;
+                dash := VerticalLayout {
+                    padding: root.pad;
+                    spacing: 26px;
+                    alignment: start;
+
+                    // Most-popular hero — polymorphic on most-popular-kind.
+                    if SearchState.most-popular-kind != "": VerticalLayout {
+                        spacing: 10px;
+                        HorizontalLayout {
+                            alignment: start;
+                            spacing: 8px;
+                            Image {
+                                source: @image-url("../assets/icons/crown.svg");
+                                colorize: #ffd24a;
+                                width: 18px;
+                                height: 18px;
+                            }
+                            Text {
+                                text: @tr("Most popular");
+                                color: Theme.text-secondary;
+                                font-size: 14px;
+                                font-weight: 700;
+                                vertical-alignment: center;
+                            }
+                        }
+                        HorizontalLayout {
+                            alignment: start;
+                            if SearchState.most-popular-kind == "artist": KioskArtistCard {
+                                size: 150px;
+                                id: SearchState.most-popular-artist.id;
+                                name: SearchState.most-popular-artist.title;
+                                avatar: SearchState.most-popular-artist.artwork;
+                                clicked(id) => {
+                                    root.open-artist(id);
+                                }
+                            }
+                            if SearchState.most-popular-kind == "album": KioskCard {
+                                art-size: 150px;
+                                album: SearchState.most-popular-album;
+                                clicked(id) => {
+                                    root.open-album(id);
+                                }
+                            }
+                            if SearchState.most-popular-kind == "track": Rectangle {
+                                width: 380px;
+                                height: 96px;
+                                border-radius: Radius.md;
+                                background: Theme.surface-card;
+                                HorizontalLayout {
+                                    padding: 8px;
+                                    spacing: 12px;
+                                    Rectangle {
+                                        width: 80px;
+                                        height: 80px;
+                                        border-radius: Radius.sm;
+                                        background: Theme.surface-elevated;
+                                        clip: true;
+                                        if SearchState.most-popular-track.artwork.width > 0: Image {
+                                            width: 100%;
+                                            height: 100%;
+                                            source: SearchState.most-popular-track.artwork;
+                                            image-fit: cover;
+                                        }
+                                    }
+                                    VerticalLayout {
+                                        alignment: center;
+                                        spacing: 3px;
+                                        Text {
+                                            text: SearchState.most-popular-track.title;
+                                            color: Theme.text-primary;
+                                            font-size: 16px;
+                                            font-weight: 700;
+                                            overflow: elide;
+                                            wrap: no-wrap;
+                                        }
+                                        Text {
+                                            text: SearchState.most-popular-track.artist;
+                                            color: Theme.text-secondary;
+                                            font-size: 13px;
+                                            overflow: elide;
+                                            wrap: no-wrap;
+                                        }
+                                        if SearchState.most-popular-quality-label != "": Text {
+                                            text: SearchState.most-popular-quality-label;
+                                            color: Theme.text-muted;
+                                            font-size: 11px;
+                                        }
+                                    }
+                                }
+                                hero-track-ta := TouchArea {
+                                    clicked => {
+                                        root.media-action("track", SearchState.most-popular-track.id, "play");
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Artists preview (hero-deduped list).
+                    if SearchState.artists-carousel.length > 0: VerticalLayout {
+                        spacing: 10px;
+                        SectionHeader {
+                            title: @tr("Artists");
+                            view-all => {
+                                SearchActions.tab-changed(3);
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: 0px;
+                            alignment: start;
+                            for artist[i] in SearchState.artists-carousel: HorizontalLayout {
+                                if i < 6: HorizontalLayout {
+                                    padding-right: 14px;
+                                    KioskArtistCard {
+                                        size: 120px;
+                                        id: artist.id;
+                                        name: artist.title;
+                                        avatar: artist.artwork;
+                                        clicked(id) => {
+                                            root.open-artist(id);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Albums preview.
+                    if SearchState.albums.length > 0: VerticalLayout {
+                        spacing: 10px;
+                        SectionHeader {
+                            title: @tr("Albums");
+                            view-all => {
+                                SearchActions.tab-changed(1);
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: 0px;
+                            alignment: start;
+                            for album[i] in SearchState.albums: HorizontalLayout {
+                                if i < 6: HorizontalLayout {
+                                    padding-right: 14px;
+                                    KioskCard {
+                                        art-size: 140px;
+                                        album: album;
+                                        clicked(id) => {
+                                            root.open-album(id);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Tracks preview (capped at 6).
+                    if SearchState.tracks.length > 0: VerticalLayout {
+                        spacing: 6px;
+                        SectionHeader {
+                            title: @tr("Tracks");
+                            show-all: SearchState.tracks-total > 6;
+                            view-all => {
+                                SearchActions.tab-changed(2);
+                            }
+                        }
+                        for track[i] in SearchState.tracks: VerticalLayout {
+                            if i < 6: KioskTrackRow {
+                                track: track;
+                                play(id) => {
+                                    root.media-action("track", id, "play");
+                                }
+                            }
+                        }
+                    }
+
+                    // Playlists preview.
+                    if SearchState.playlists.length > 0: VerticalLayout {
+                        spacing: 10px;
+                        SectionHeader {
+                            title: @tr("Playlists");
+                            view-all => {
+                                SearchActions.tab-changed(4);
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: 0px;
+                            alignment: start;
+                            for pl[i] in SearchState.playlists: HorizontalLayout {
+                                if i < 6: HorizontalLayout {
+                                    padding-right: 14px;
+                                    Rectangle {
+                                        width: 140px;
+                                        VerticalLayout {
+                                            alignment: start;
+                                            spacing: 7px;
+                                            Rectangle {
+                                                width: 140px;
+                                                height: 140px;
+                                                border-radius: Radius.sm;
+                                                background: Theme.surface-elevated;
+                                                clip: true;
+                                                Image {
+                                                    width: 100%;
+                                                    height: 100%;
+                                                    source: pl.cover1;
+                                                    image-fit: cover;
+                                                }
+                                            }
+                                            Text {
+                                                text: pl.title;
+                                                color: Theme.text-primary;
+                                                font-size: 13px;
+                                                font-weight: 600;
+                                                overflow: elide;
+                                                wrap: no-wrap;
+                                            }
+                                        }
+                                        pl-prev-ta := TouchArea {
+                                            clicked => {
+                                                root.media-action("playlist", pl.id, "open");
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Albums tab — full grid.
+            if SearchState.tab == 1: KioskAlbumGrid {
                 albums: SearchState.albums;
                 open(id) => {
                     root.open-album(id);
