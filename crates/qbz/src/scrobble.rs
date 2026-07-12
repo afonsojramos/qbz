@@ -406,17 +406,9 @@ pub struct ScrobbleMeta {
 /// `clearTimeout` equivalent). Like Tauri, pause/stop do NOT cancel it.
 static SCROBBLE_GEN: AtomicU64 = AtomicU64::new(0);
 
-/// `min(50% of duration, 240s)` in seconds — the Last.fm rule, applied to both
-/// services (matches the Svelte `Math.min(durationSecs * 0.5, 240) * 1000`).
-///
-/// Returns `None` when duration is unknown (`0`): callers must **not** scrobble
-/// immediately — that would pollute history for local/Plex metadata holes.
-fn scrobble_delay_secs(duration_secs: u64) -> Option<u64> {
-    if duration_secs == 0 {
-        return None;
-    }
-    Some((duration_secs / 2).min(240))
-}
+/// Pure arming rule lives in `qbz-app` so unit tests do not need the Slint
+/// binary compile (see `qbz_app::scrobble_timing`).
+use qbz_app::scrobble_timing::scrobble_delay_secs;
 
 /// Track-change entry point. Fires now-playing immediately for each enabled +
 /// authed service, then arms a delayed scrobble. No-op when no service is
@@ -781,23 +773,5 @@ async fn flush_listenbrainz_queue() {
         })
         .await;
         log::info!("[qbz-slint] ListenBrainz flush: {count} listen(s) sent");
-    }
-}
-
-#[cfg(test)]
-mod scrobble_delay_tests {
-    use super::scrobble_delay_secs;
-
-    #[test]
-    fn unknown_duration_skips_scrobble() {
-        assert_eq!(scrobble_delay_secs(0), None);
-    }
-
-    #[test]
-    fn half_duration_capped_at_240() {
-        assert_eq!(scrobble_delay_secs(100), Some(50));
-        assert_eq!(scrobble_delay_secs(600), Some(240));
-        // 1s track: half truncates to 0 — still Some, so we arm (immediate) rather than skip.
-        assert_eq!(scrobble_delay_secs(1), Some(0));
     }
 }
