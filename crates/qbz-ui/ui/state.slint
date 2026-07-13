@@ -979,7 +979,7 @@ export global DragActions {
 }
 
 // Which content view the shell shows.
-export enum ContentView { home, album, artist, artist-releases, settings, search, musician, label, label-releases, award, award-albums, location, favorites, mix, playlist, discover-browse, recent-albums, playlist-manager, offline-manager, blacklist-manager, local-library, local-album, mixtapes, collections, mixtape-detail, discography-builder, purchases, purchase-album }
+export enum ContentView { home, album, artist, artist-releases, settings, search, musician, label, label-releases, award, award-albums, location, favorites, mix, playlist, discover-browse, recent-albums, playlist-manager, offline-manager, blacklist-manager, local-library, local-album, mixtapes, collections, mixtape-detail, discography-builder, purchases, purchase-album, now-playing }
 
 // In-app toast (transient notification). Mirrors Tauri's toastStore:
 // a single toast at a time (a new one replaces the current), auto-hidden
@@ -3724,6 +3724,15 @@ export global UiScale {
 // Globals are imported directly by the shell components, so toggles
 // need no callback plumbing.
 export global ShellState {
+    // Kiosk profile active (2.0.2 frente #3). Seeded from Rust at startup and
+    // flipped by the NPB "Kiosk/Desktop mode" toggle; drives that toggle's label.
+    in-out property <bool> kiosk-profile: false;
+    // Set by the kiosk Now Playing while its Cover<->Lyrics toggle shows lyrics.
+    // The Rust lyrics-sync engine (lyrics_sync.rs `lyrics_surface_open`) polls
+    // this so the karaoke follow runs in the kiosk WITHOUT reusing the desktop
+    // `lyrics-open` (which also drives the compact drawer). Reset to false when
+    // showing the cover or leaving Now Playing.
+    in-out property <bool> kiosk-lyrics-follow: false;
     // --- Reduce motion (weak renderer tiers) -------------------------------
     // Seeded from Rust: true on the femtovg-GL / software tiers, where every
     // animation frame is a full-window repaint on a weak GPU. When set,
@@ -4211,6 +4220,12 @@ export global LyricsState {
     // 0 off · 1 soft · 2 strong (Tauri default 'strong').
     in-out property <int> dimming-mode: 2;
     in-out property <bool> uppercase: false;
+    // Lite fill (perf): when true, the active line is highlighted whole instead
+    // of the per-word karaoke sweep — no per-frame clip animation, so the lyrics
+    // surface stops driving continuous full-window repaints (~4% CPU -> idle
+    // between line changes). Default false (smooth karaoke). Kiosk / weak-GPU
+    // tiers force it on via ShellState.reduce-motion regardless of this pref.
+    in-out property <bool> lite-fill: false;
     // Active (karaoke fill) color. `use-custom-color: false` = follow the theme
     // accent (Tauri activeColor: ''). The palette swatches set both (deviation
     // D6: swatches instead of a native color input — Slint has none).

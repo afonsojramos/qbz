@@ -16,6 +16,7 @@ import { ThemeState } from "foundation/theme-state.slint";
 import { SplashScreen } from "splash/SplashScreen.slint";
 import { LoginScreen } from "login/LoginScreen.slint";
 import { AppShell } from "shell/AppShell.slint";
+import { KioskShell } from "shell/KioskShell.slint";
 import { Toast } from "primitives/Toast.slint";
 import { ShellState, MiniPlayerState, NowPlayingState, AppearanceState, UiScale, WindowControlActions } from "state.slint";
 import { MiniShell } from "miniplayer/MiniShell.slint";
@@ -33,7 +34,7 @@ export { HomeState, HomeActions, RecentAlbumsState, DiscoverState, DiscoverActio
 
 // Which top-level screen is shown. The app starts on `splash` while it
 // restores a saved session, then resolves to `shell` or `login`.
-export enum AppScreen { splash, login, shell }
+export enum AppScreen { splash, login, shell, kiosk }
 
 export component AppWindow inherits Window {
     // "Show track in window title" (Appearance settings): when enabled and a
@@ -130,6 +131,60 @@ export component AppWindow inherits Window {
         // they became conditional, with both closed the shell collapsed to the
         // top with dead space below. Bind to the real window size (`root` here is
         // the AppWindow); `100%` did not pin it.
+        width: root.width;
+        height: root.height;
+        open-album(id) => {
+            root.open-album(id);
+        }
+        open-artist(id) => {
+            root.open-artist(id);
+        }
+        open-purchase-album(id) => {
+            root.open-purchase-album(id);
+        }
+        media-action(kind, id, action) => {
+            root.media-action(kind, id, action);
+        }
+        header-menu-navigate(route) => {
+            root.header-menu-navigate(route);
+        }
+        discover-view-all(e, t) => {
+            root.discover-view-all(e, t);
+        }
+        settings-bool(k, v) => {
+            root.settings-bool(k, v);
+        }
+        settings-select(k, i) => {
+            root.settings-select(k, i);
+        }
+        settings-slider(k, v) => {
+            root.settings-slider(k, v);
+        }
+        settings-string(k, s) => {
+            root.settings-string(k, s);
+        }
+        settings-reset => {
+            root.settings-reset();
+        }
+        settings-release-device => {
+            root.settings-release-device();
+        }
+        logout => {
+            root.logout();
+        }
+        close-app => {
+            root.close-app();
+        }
+        recovery-login => {
+            root.recovery-login();
+        }
+    }
+
+    // Kiosk touch shell — a sibling of AppShell (small-panel profile). Same
+    // conditional-mount geometry pin as AppShell (a conditional child sizes to
+    // preferred size, so width/height are bound explicitly). Forwards the same
+    // callbacks to the AppWindow root.
+    if root.screen == AppScreen.kiosk: KioskShell {
         width: root.width;
         height: root.height;
         open-album(id) => {

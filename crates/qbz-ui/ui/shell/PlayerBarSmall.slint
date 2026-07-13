@@ -717,9 +717,18 @@ export component PlayerBarSmall inherits Rectangle {
                                 icon: @image-url("../assets/icons/layout-grid.svg");
                                 icon-size: 16px;
                                 btn-width: 32px;
-                                tooltip: @tr("Now Playing view");
+                                tooltip: ShellState.kiosk-profile ? @tr("Desktop mode") : @tr("Now Playing view");
                                 clicked => {
-                                    layout-menu.show();
+                                    // In kiosk the flyout would carry a single
+                                    // "Desktop mode" row, which the fixed-height
+                                    // popup floats high above the button — so the
+                                    // button toggles straight back to Desktop mode
+                                    // instead of opening a one-item menu.
+                                    if (ShellState.kiosk-profile) {
+                                        root.media-action("npb-view", "", "toggle-profile");
+                                    } else {
+                                        layout-menu.show();
+                                    }
                                 }
                             }
                             layout-menu := PopupWindow {
@@ -741,7 +750,7 @@ export component PlayerBarSmall inherits Rectangle {
                                 height: 215px;
                                 close-policy: close-on-click;
                                 ContextMenu {
-                                    ContextMenuItem {
+                                    if !ShellState.kiosk-profile: ContextMenuItem {
                                         icon: @image-url("../assets/icons/panel-left.svg");
                                         label: @tr("New");
                                         selected: ShellState.npb-mode == 0;
@@ -749,7 +758,7 @@ export component PlayerBarSmall inherits Rectangle {
                                             root.media-action("npb-view", "", "new");
                                         }
                                     }
-                                    ContextMenuItem {
+                                    if !ShellState.kiosk-profile: ContextMenuItem {
                                         icon: @image-url("../assets/icons/panel-right-close.svg");
                                         label: @tr("Classic");
                                         selected: ShellState.npb-mode == 1;
@@ -757,7 +766,7 @@ export component PlayerBarSmall inherits Rectangle {
                                             root.media-action("npb-view", "", "classic");
                                         }
                                     }
-                                    ContextMenuItem {
+                                    if !ShellState.kiosk-profile: ContextMenuItem {
                                         icon: @image-url("../assets/icons/rows-3.svg");
                                         label: @tr("Small");
                                         selected: ShellState.npb-mode == 2;
@@ -765,7 +774,7 @@ export component PlayerBarSmall inherits Rectangle {
                                             root.media-action("npb-view", "", "small");
                                         }
                                     }
-                                    ContextMenuItem {
+                                    if !ShellState.kiosk-profile: ContextMenuItem {
                                         icon: @image-url("../assets/icons/layout-grid.svg");
                                         label: @tr("Large");
                                         selected: ShellState.npb-mode == 3;
@@ -780,7 +789,7 @@ export component PlayerBarSmall inherits Rectangle {
                                             root.media-action("npb-view", "", "large");
                                         }
                                     }
-                                    Rectangle {
+                                    if !ShellState.kiosk-profile: Rectangle {
                                         height: 7px;
                                         Rectangle {
                                             height: 1px;
@@ -788,18 +797,25 @@ export component PlayerBarSmall inherits Rectangle {
                                             background: Theme.border-subtle;
                                         }
                                     }
-                                    ContextMenuItem {
+                                    if !ShellState.kiosk-profile: ContextMenuItem {
                                         icon: @image-url("../assets/icons/picture-in-picture-2.svg");
                                         label: @tr("Miniplayer");
                                         clicked => {
                                             root.media-action("npb-view", "", "miniplayer");
                                         }
                                     }
-                                    ContextMenuItem {
+                                    if !ShellState.kiosk-profile: ContextMenuItem {
                                         icon: @image-url("../assets/icons/maximize-2.svg");
                                         label: @tr("Immersive");
                                         clicked => {
                                             root.media-action("npb-view", "", "immersive");
+                                        }
+                                    }
+                                    ContextMenuItem {
+                                        icon: @image-url("../assets/icons/hard-drive.svg");
+                                        label: ShellState.kiosk-profile ? @tr("Desktop mode") : @tr("Kiosk mode");
+                                        clicked => {
+                                            root.media-action("npb-view", "", "toggle-profile");
                                         }
                                     }
                                 }
@@ -807,8 +823,9 @@ export component PlayerBarSmall inherits Rectangle {
                         }
                     }
 
-                    // Lyrics — toggles the lyrics panel (1:1 with PlayerBar:765).
-                    VerticalLayout {
+                    // Lyrics — desktop-only. In kiosk the panel isn't mounted and
+                    // the Playing view carries a Cover<->Lyrics toggle instead.
+                    if !ShellState.kiosk-profile: VerticalLayout {
                         alignment: center;
                         IconButton {
                             icon: @image-url("../assets/icons/mic-vocal.svg");
@@ -938,8 +955,9 @@ export component PlayerBarSmall inherits Rectangle {
 
                     Rectangle { width: 4px; }
 
-                    // Queue panel toggle — same ShellState.queue-open flip as New.
-                    VerticalLayout {
+                    // Queue panel toggle — desktop-only. The kiosk Playing view
+                    // integrates the queue (Up Next / History), so hide it here.
+                    if !ShellState.kiosk-profile: VerticalLayout {
                         alignment: center;
                         IconButton {
                             icon: @image-url("../assets/icons/list-ordered.svg");

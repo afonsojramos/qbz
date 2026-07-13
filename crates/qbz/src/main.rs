@@ -350,7 +350,7 @@ async fn enter_shell(
         // render loop has order/visibility data before the first apply_home.
         discover_prefs::seed(&w);
         w.global::<HomeState>().set_loading(true);
-        w.set_screen(AppScreen::Shell);
+        w.set_screen(resolved_shell_screen());
     });
 
     // Start the playback poll loop — it runs for the app lifetime,
@@ -633,7 +633,7 @@ async fn enter_shell_offline(
             discover_prefs::seed(&w);
             // No HomeState loading spinner: the discover load is skipped offline
             // (the gating slice adds the placeholder views).
-            w.set_screen(AppScreen::Shell);
+            w.set_screen(resolved_shell_screen());
             // D12: an offline session lands on LocalLibrary (Home is a blocked
             // placeholder offline). Root the nav history at it so back/forward
             // never lead to a phantom blocked Home.
@@ -6192,6 +6192,34 @@ fn requested_renderer_tier() -> (RendererTier, String) {
     }
 }
 
+/// Resolve whether the kiosk profile is active (2.0.2 frente #3, axis A).
+/// `QBZ_PROFILE` env wins — the kiosk image sets it in the autostart, and a
+/// non-empty value lets the env also force `desktop` back on. When unset it
+/// falls back to the persisted `ui_prefs.profile` key. Anything other than
+/// `"kiosk"` (case-insensitive) is the default desktop profile.
+fn kiosk_profile_active() -> bool {
+    if let Ok(v) = std::env::var("QBZ_PROFILE") {
+        let v = v.trim();
+        if !v.is_empty() {
+            return v.eq_ignore_ascii_case("kiosk");
+        }
+    }
+    crate::ui_prefs::load()
+        .profile
+        .trim()
+        .eq_ignore_ascii_case("kiosk")
+}
+
+/// The post-login screen: the kiosk touch shell (`AppScreen::Kiosk`) when the
+/// kiosk profile is active, else the desktop shell (2.0.2 frente #3, axis B).
+fn resolved_shell_screen() -> AppScreen {
+    if kiosk_profile_active() {
+        AppScreen::Kiosk
+    } else {
+        AppScreen::Shell
+    }
+}
+
 /// Resolve the persisted Settings>Appearance renderer key ("auto" | "wgpu" |
 /// "gl" | "software"). A non-auto override is wrapped in the startup sentinel:
 /// armed here (before the risky backend/window init), disarmed on the first
@@ -6660,12 +6688,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     window
         .global::<ImmersiveState>()
         .set_shader_scenes_available(use_gpu_renderer);
+    // Kiosk profile (2.0.2 frente #3, axis A): QBZ_PROFILE=kiosk (env wins,
+    // else the persisted ui_prefs.profile key). The small-panel touch appliance
+    // boots the main window fullscreen and forces reduce-motion; the kiosk image
+    // additionally pins QBZ_RENDERER=gl + the XS ui_scale preset via env. Never
+    // applies to the miniplayer window.
+    let kiosk_profile = !crate::miniplayer::is_creating_mini() && kiosk_profile_active();
     // Same tiers: every animation frame is a full-window femtovg repaint on a
     // weak GPU — step loading indicators / eq bars at ~8fps (coarse clock in
-    // AppShell) instead of display rate.
+    // AppShell) instead of display rate. Kiosk forces it on regardless of tier.
     window
         .global::<ShellState>()
-        .set_reduce_motion(!use_gpu_renderer);
+        .set_reduce_motion(kiosk_profile || !use_gpu_renderer);
+    window.global::<ShellState>().set_kiosk_profile(kiosk_profile);
+    // Fullscreen-at-boot is OPT-IN (QBZ_KIOSK_FULLSCREEN=1) — a real appliance
+    // image sets it so the panel owns the whole screen. We must NOT fullscreen
+    // just because the persisted profile is kiosk: a user who toggles kiosk on
+    // the desktop and restarts would be TRAPPED — the kiosk shell has no
+    // titlebar control and neither Esc nor F11 leave fullscreen (incident
+    // 2026-07-11). Windowed by default keeps the OS titlebar reachable; routed
+    // through slint::Window so realization reconciliation keeps it (see
+    // WindowControlActions on_toggle_fullscreen ~1326). reduce-motion above
+    // applies either way.
+    if kiosk_profile {
+        if std::env::var_os("QBZ_KIOSK_FULLSCREEN").is_some() {
+            log::info!("[kiosk] profile active -> fullscreen-at-boot (QBZ_KIOSK_FULLSCREEN) + forced reduce-motion");
+            window.window().set_fullscreen(true);
+            window
+                .global::<WindowControlActions>()
+                .set_is_fullscreen(true);
+        } else {
+            log::info!("[kiosk] profile active (reduce-motion on); windowed — set QBZ_KIOSK_FULLSCREEN=1 for appliance boot");
+        }
+    }
     // Interface-size preset: publish the factor so `.slint` bindings that must
     // stay physically constant (the window minimums) can divide it back out.
     // Extra small also gets the font compensation: a plain 0.8 drops body text
@@ -9649,6 +9704,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let mut prefs = crate::ui_prefs::load();
                         prefs.npb_mode = mode.to_string();
                         crate::ui_prefs::save(&prefs);
+                    }
+                }
+                // Kiosk <-> Desktop live toggle (2.0.2 frente #3). Based on the
+                // CURRENT screen, not kiosk_profile_active() — a QBZ_PROFILE env
+                // override would otherwise pin the reading. Persists the profile
+                // and swaps the shell in place (KioskShell/AppShell share state).
+                ("npb-view", "toggle-profile") => {
+                    if let Some(w) = weak.upgrade() {
+                        let to_kiosk = w.get_screen() != AppScreen::Kiosk;
+                        let mut prefs = crate::ui_prefs::load();
+                        prefs.profile = if to_kiosk { "kiosk" } else { "desktop" }.to_string();
+                        crate::ui_prefs::save(&prefs);
+                        w.global::<ShellState>().set_kiosk_profile(to_kiosk);
+                        w.set_screen(if to_kiosk {
+                            AppScreen::Kiosk
+                        } else {
+                            AppScreen::Shell
+                        });
                     }
                 }
                 // Large dock: visualizer on/off toggle (the cover's eye button).
