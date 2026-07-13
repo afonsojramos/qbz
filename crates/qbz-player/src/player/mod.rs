@@ -2687,7 +2687,10 @@ impl Player {
                                 *current_streaming_source = None;
 
                                 let mut engine = PlaybackEngine::new_alsa_dop(stream, false);
-                                if let Err(e) = engine.append_dop(Box::new(dop)) {
+                                if let Err(e) = engine.append_dop(Box::new(DsdErrorReport::new(
+                                    dop,
+                                    thread_state.clone(),
+                                ))) {
                                     log::error!("DoP: append failed: {}", e);
                                     thread_state.set_stream_error(true);
                                     return;
@@ -2802,7 +2805,10 @@ impl Player {
                                 *current_streaming_source = None;
 
                                 let mut engine = PlaybackEngine::new_alsa_dop(stream, true);
-                                if let Err(e) = engine.append_dop(Box::new(native_src)) {
+                                if let Err(e) = engine.append_dop(Box::new(DsdErrorReport::new(
+                                    native_src,
+                                    thread_state.clone(),
+                                ))) {
                                     log::error!("Native DSD: append failed: {}", e);
                                     thread_state.set_stream_error(true);
                                     return;
@@ -2855,7 +2861,10 @@ impl Player {
                                                 let rate = st.carrier_rate();
                                                 let frames = st.total_frames();
                                                 (
-                                                    Box::new(st)
+                                                    Box::new(DsdErrorReport::new(
+                                                        st,
+                                                        thread_state.clone(),
+                                                    ))
                                                         as Box<
                                                             dyn Iterator<Item = i32> + Send,
                                                         >,
@@ -2869,7 +2878,10 @@ impl Player {
                                                 let rate = st.rate();
                                                 let frames = st.total_frames();
                                                 (
-                                                    Box::new(st)
+                                                    Box::new(DsdErrorReport::new(
+                                                        st,
+                                                        thread_state.clone(),
+                                                    ))
                                                         as Box<
                                                             dyn Iterator<Item = i32> + Send,
                                                         >,
@@ -5146,6 +5158,44 @@ pub struct PlaybackState {
     pub volume: f32,
 }
 
+/// Surfaces a DSD stream's mid-file demux I/O error as a stream error when
+/// the stream runs out. The DoP writer consumes these streams as boxed
+/// `Iterator<Item = i32>`, which can only say "no more words", so without
+/// this wrapper a read failure is indistinguishable from a clean end of
+/// track and the user gets a silent early stop.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+struct DsdErrorReport<S: qbz_dsd::DsdWordSource> {
+    inner: S,
+    state: Arc<SharedState>,
+    reported: bool,
+}
+
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+impl<S: qbz_dsd::DsdWordSource> DsdErrorReport<S> {
+    fn new(inner: S, state: Arc<SharedState>) -> Self {
+        Self {
+            inner,
+            state,
+            reported: false,
+        }
+    }
+}
+
+impl<S: qbz_dsd::DsdWordSource> Iterator for DsdErrorReport<S> {
+    type Item = i32;
+    fn next(&mut self) -> Option<i32> {
+        let item = self.inner.next();
+        if item.is_none() && !self.reported {
+            self.reported = true;
+            if let Some(e) = self.inner.io_error() {
+                self.state
+                    .record_stream_error(format!("DSD playback failed: {e}"));
+            }
+        }
+        item
+    }
+}
+
 /// Pick the MIME to advertise to an external renderer for a legacy stream-URL
 /// download. Prefer the server-provided `mime_type`; when it is empty (Qobuz
 /// can return `""`), fall back by format id so the renderer is never handed an
@@ -5167,6 +5217,60 @@ pub fn external_content_type(mime: &str, format_id: u32) -> String {
 mod tests {
     use super::compute_needs_new_stream;
     use super::external_content_type;
+    use super::{DsdErrorReport, SharedState};
+    use std::sync::Arc;
+
+    struct FakeDsdSource {
+        words: std::vec::IntoIter<i32>,
+        error: Option<String>,
+    }
+
+    impl Iterator for FakeDsdSource {
+        type Item = i32;
+        fn next(&mut self) -> Option<i32> {
+            self.words.next()
+        }
+    }
+
+    impl qbz_dsd::DsdWordSource for FakeDsdSource {
+        fn io_error(&self) -> Option<&str> {
+            self.error.as_deref()
+        }
+    }
+
+    #[test]
+    fn dsd_error_report_surfaces_io_error_at_stream_end() {
+        let state = Arc::new(SharedState::new());
+        let source = FakeDsdSource {
+            words: vec![1, 2].into_iter(),
+            error: Some("read failed".to_string()),
+        };
+        let mut wrapped = DsdErrorReport::new(source, state.clone());
+        assert_eq!(wrapped.next(), Some(1));
+        assert!(!state.has_stream_error());
+        assert_eq!(wrapped.next(), Some(2));
+        assert_eq!(wrapped.next(), None);
+        assert!(state.has_stream_error());
+        let msg = state.take_stream_error_message().unwrap();
+        assert!(msg.contains("read failed"));
+        // Repeated polls after exhaustion must not re-record the message.
+        assert_eq!(wrapped.next(), None);
+        assert_eq!(state.take_stream_error_message(), None);
+    }
+
+    #[test]
+    fn dsd_error_report_clean_eof_is_not_an_error() {
+        let state = Arc::new(SharedState::new());
+        let source = FakeDsdSource {
+            words: vec![1].into_iter(),
+            error: None,
+        };
+        let mut wrapped = DsdErrorReport::new(source, state.clone());
+        assert_eq!(wrapped.next(), Some(1));
+        assert_eq!(wrapped.next(), None);
+        assert!(!state.has_stream_error());
+        assert_eq!(state.take_stream_error_message(), None);
+    }
 
     #[test]
     fn no_stream_always_needs_new() {

@@ -82,6 +82,8 @@ pub struct DopStream {
     buf: Vec<i32>,
     idx: usize,
     done: bool,
+    /// Set when demux I/O fails mid-stream (not clean EOF).
+    io_error: Option<String>,
 }
 
 /// DSD bytes pulled from the demuxer per refill, per channel.
@@ -102,7 +104,13 @@ impl DopStream {
             buf: Vec::new(),
             idx: 0,
             done: false,
+            io_error: None,
         })
+    }
+
+    /// Mid-stream demux I/O error, if any. Clean EOF leaves this `None`.
+    pub fn io_error(&self) -> Option<&str> {
+        self.io_error.as_deref()
     }
 
     pub fn carrier_rate(&self) -> u32 {
@@ -119,7 +127,13 @@ impl DopStream {
     fn refill(&mut self) -> bool {
         let mut planar: Vec<Vec<u8>> = vec![Vec::new(), Vec::new()];
         match self.demux.read_planar(&mut planar, REFILL_BYTES_PER_CH) {
-            Ok(0) | Err(_) => {
+            Ok(0) => {
+                self.done = true;
+                false
+            }
+            Err(e) => {
+                log::error!("[DSD/DoP] demux I/O error (not clean EOF): {e}");
+                self.io_error = Some(e.to_string());
                 self.done = true;
                 false
             }
@@ -186,5 +200,67 @@ mod tests {
         p.silence(2, 2, &mut out);
         assert_eq!(out[0], ((0x05 << 16) | 0x6969) << 8);
         assert_eq!(out[2], ((0xFA << 16) | 0x6969) << 8);
+    }
+}
+
+#[cfg(test)]
+mod io_error_tests {
+    use super::*;
+    use crate::demux::{DsdDemuxer, DsdError, DsdStreamInfo};
+    use std::io;
+
+    struct FailAfter {
+        left: usize,
+        info: DsdStreamInfo,
+    }
+
+    impl DsdDemuxer for FailAfter {
+        fn info(&self) -> &DsdStreamInfo {
+            &self.info
+        }
+        fn read_planar(
+            &mut self,
+            out: &mut [Vec<u8>],
+            max_bytes_per_ch: usize,
+        ) -> Result<usize, DsdError> {
+            if self.left == 0 {
+                return Err(DsdError::Io(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "simulated mid-file I/O error",
+                )));
+            }
+            self.left -= 1;
+            let n = max_bytes_per_ch.min(4);
+            for ch in out.iter_mut().take(2) {
+                ch.extend(std::iter::repeat(0x69).take(n));
+            }
+            Ok(n)
+        }
+    }
+
+    #[test]
+    fn demux_io_error_sets_sticky_flag_not_clean_eof() {
+        let info = DsdStreamInfo {
+            channels: 2,
+            dsd_rate: 2_822_400,
+            sample_count: 1_000_000,
+            lsb_first: false,
+            tags: Default::default(),
+        };
+        let demux = FailAfter { left: 1, info };
+        let mut stream = DopStream::new(Box::new(demux)).unwrap();
+        // First refill succeeds; drain some samples.
+        let _ = stream.next();
+        // Force more refills until error.
+        for _ in 0..100_000 {
+            if stream.next().is_none() {
+                break;
+            }
+        }
+        assert!(stream.io_error().is_some(), "I/O error must be sticky");
+        assert!(stream
+            .io_error()
+            .unwrap()
+            .contains("simulated mid-file I/O error"));
     }
 }
