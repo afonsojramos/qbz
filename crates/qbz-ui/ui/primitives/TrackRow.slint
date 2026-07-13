@@ -34,11 +34,10 @@ export component TrackRow inherits Rectangle {
     // single shared interaction gate every blacklist surface reuses.
     property <bool> row-inert: root.track.is-blacklisted;
     // Fade out when the row is being removed (favorites un-favorite); a
-    // blacklisted row that isn't fading dims to 0.4, and so does the row
-    // currently being drag-reordered (queue-drag parity).
+    // blacklisted row that isn't fading dims to 0.4.
     opacity: root.track.removing
         ? 0.0
-        : ((root.row-inert || root.reorder-source) ? 0.4 : 1.0);
+        : (root.row-inert ? 0.4 : 1.0);
     animate opacity { duration: 250ms; }
     in property <int> index;
     in property <bool> show-artwork: true;
@@ -87,17 +86,16 @@ export component TrackRow inherits Rectangle {
     // Custom-order reorder controls (up/down chevrons) at the leading
     // edge — used by the playlist custom sort.
     in property <bool> show-reorder: false;
-    // Drag-reorder (custom-order lists, issue #589). Mirrors QueueRow's
-    // drag contract: the grip handle in the reorder gutter reports the
-    // gesture in WINDOW coords; the parent view owns the list-level state.
-    // NOT the row-body drag (ta + DragActions = drag onto sidebar
-    // playlists) — the handle has its OWN TouchArea.
-    in property <int> reorder-index;
-    in property <bool> reorder-source: false;   // this row is being dragged
-    callback reorder-begin(int /* visible index */, length /* row window-top */,
-        length /* pointer window-x */, length /* pointer window-y */);
-    callback reorder-update(length /* pointer window-x */, length /* pointer window-y */);
-    callback reorder-end();
+    // Drag-reorder (custom-order lists, issue #589) RIDES the normal
+    // row-body drag (ta + DragActions — the same gesture that drags a
+    // track onto a sidebar playlist; there is NO separate reorder
+    // gesture/grip). On a reorderable surface (show-reorder) the row
+    // reports which visible index the drag left from, right before
+    // DragActions.start; the parent view then reads the drag from
+    // DragState (the Rust-fed window-coord pointer the shared DragGhost
+    // uses) — a drop inside the list reorders, a drop on a sidebar
+    // playlist stays the unchanged add-to-playlist path.
+    callback body-drag-started(int /* visible index */);
     // Whether the row can be dragged onto sidebar playlists.
     in property <bool> draggable: true;
     callback media-action(string, string, string);
@@ -225,6 +223,13 @@ export component TrackRow inherits Rectangle {
                     && (Math.abs(root.absolute-position.x - root.x + ta.mouse-x - ta.down-x) > 6px
                      || Math.abs(root.absolute-position.y - root.y + ta.mouse-y - ta.down-y) > 6px)) {
                     ta.dragging = true;
+                    // Reorderable surface: tell the parent view which row
+                    // this drag left from BEFORE the shared drag starts
+                    // (issue #589 — see body-drag-started above). The
+                    // DragActions call itself is untouched.
+                    if (root.show-reorder) {
+                        root.body-drag-started(root.index);
+                    }
                     DragActions.start(
                         root.track.id,
                         root.track.title,
@@ -248,115 +253,45 @@ export component TrackRow inherits Rectangle {
         padding-right: 12px;
         spacing: 14px;
 
-        // Reorder gutter (custom-order mode) — leading edge: a drag GRIP
-        // handle next to the up/down chevrons. The grip's TouchArea is
-        // deliberately separate from the row-body `ta` (which drives the
-        // drag-onto-sidebar-playlists ghost via DragActions) — this one
-        // implements the queue's drag-reorder gesture (QueueRow) and
-        // reports in window coords via the reorder-* callbacks.
-        if root.show-reorder: HorizontalLayout {
-            spacing: 2px;
-            VerticalLayout {
-                alignment: center;
-                Rectangle {
-                    width: 18px;
-                    height: 36px;
-                    border-radius: Radius.sm;
-                    background: grip-ta.has-hover ? Theme.surface-elevated : transparent;
-                    QbzIcon {
-                        source: @image-url("../assets/icons/grip-vertical.svg");
-                        width: 14px;
-                        height: 14px;
-                        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
-                        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
-                        tint: grip-ta.has-hover ? Theme.text-primary : Theme.text-muted;
-                    }
-                    grip-ta := TouchArea {
-                        mouse-cursor: grab;
-                        property <length> down-y;
-                        property <bool> dragging: false;
-                        pointer-event(e) => {
-                            if (e.kind == PointerEventKind.down) {
-                                // absolute-position double-counts the ROW's own
-                                // layout offset inside the ListView; subtracting
-                                // root.{y} recovers true window coords — and the
-                                // correction propagates unchanged to this nested
-                                // element (if/for offsets are exact). See
-                                // reference_slint_absolute_position_flickable.
-                                self.down-y = self.absolute-position.y - root.y + self.mouse-y;
-                                self.dragging = false;
-                            }
-                            if (e.kind == PointerEventKind.up && self.dragging) {
-                                root.reorder-end();
-                                self.dragging = false;
-                            }
-                        }
-                        // Safety net: the playlist ListView stays scrollable, so
-                        // it can steal the grab mid-drag and `up` never arrives.
-                        // `pressed` flips false on release AND grab-cancel.
-                        changed pressed => {
-                            if (!self.pressed && self.dragging) {
-                                root.reorder-end();
-                                self.dragging = false;
-                            }
-                        }
-                        moved => {
-                            if (self.pressed) {
-                                if (!self.dragging
-                                    && Math.abs(self.absolute-position.y - root.y + self.mouse-y - self.down-y) > 6px) {
-                                    self.dragging = true;
-                                    root.reorder-begin(root.reorder-index,
-                                        root.absolute-position.y - root.y,
-                                        self.absolute-position.x - root.x + self.mouse-x,
-                                        self.absolute-position.y - root.y + self.mouse-y);
-                                }
-                                if (self.dragging) {
-                                    root.reorder-update(
-                                        self.absolute-position.x - root.x + self.mouse-x,
-                                        self.absolute-position.y - root.y + self.mouse-y);
-                                }
-                            }
-                        }
+        // Reorder gutter (custom-order mode) — leading edge: the up/down
+        // chevrons. Drag-reorder needs no control here — it rides the
+        // row-body drag (see body-drag-started above).
+        if root.show-reorder: VerticalLayout {
+            alignment: center;
+            spacing: 0px;
+            Rectangle {
+                width: 22px;
+                height: 18px;
+                QbzIcon {
+                    source: @image-url("../assets/icons/chevron-up.svg");
+                    width: 14px;
+                    height: 14px;
+                    x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                    y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+                    tint: up-ta.has-hover ? Theme.text-primary : Theme.text-muted;
+                }
+                up-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.media-action("track", root.track.id, "move-up");
                     }
                 }
             }
-            VerticalLayout {
-                alignment: center;
-                spacing: 0px;
-                Rectangle {
-                    width: 22px;
-                    height: 18px;
-                    QbzIcon {
-                        source: @image-url("../assets/icons/chevron-up.svg");
-                        width: 14px;
-                        height: 14px;
-                        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
-                        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
-                        tint: up-ta.has-hover ? Theme.text-primary : Theme.text-muted;
-                    }
-                    up-ta := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => {
-                            root.media-action("track", root.track.id, "move-up");
-                        }
-                    }
+            Rectangle {
+                width: 22px;
+                height: 18px;
+                QbzIcon {
+                    source: @image-url("../assets/icons/chevron-down.svg");
+                    width: 14px;
+                    height: 14px;
+                    x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                    y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+                    tint: down-ta.has-hover ? Theme.text-primary : Theme.text-muted;
                 }
-                Rectangle {
-                    width: 22px;
-                    height: 18px;
-                    QbzIcon {
-                        source: @image-url("../assets/icons/chevron-down.svg");
-                        width: 14px;
-                        height: 14px;
-                        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
-                        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
-                        tint: down-ta.has-hover ? Theme.text-primary : Theme.text-muted;
-                    }
-                    down-ta := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => {
-                            root.media-action("track", root.track.id, "move-down");
-                        }
+                down-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.media-action("track", root.track.id, "move-down");
                     }
                 }
             }

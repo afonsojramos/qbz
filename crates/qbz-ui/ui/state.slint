@@ -968,12 +968,6 @@ export global DragState {
     in-out property <length> pointer-y;
     // The sidebar playlist id currently under the pointer (drop target).
     in-out property <string> over-playlist-id;
-    // WITHIN-LIST reorder drag (playlist custom order, issue #589): the
-    // gesture reuses this global purely for the floating ghost (DragGhost's
-    // window-coord positioning), driven from .slint only — DragActions is
-    // never called, so the Rust add-to-playlist drop path never runs.
-    // Sidebar rows skip drop-target detection while this is set.
-    in-out property <bool> reorder: false;
 }
 
 export global DragActions {
