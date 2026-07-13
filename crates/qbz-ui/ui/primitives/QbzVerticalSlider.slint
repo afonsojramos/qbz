@@ -25,10 +25,18 @@ export component QbzVerticalSlider inherits Rectangle {
     // Travel range for the thumb centre (top..bottom of the column).
     property <length> travel: root.height - root.thumb-size;
 
-    // Live drag: while held, the thumb tracks the POINTER directly.
+    // Live drag: the thumb tracks `drag-fraction`, which follows the POINTER
+    // while held and STAYS PUT on release (no snap-back to the async round-
+    // tripped value = the rubberband); it re-syncs to the external value only
+    // when that value changes on its own while not dragging.
     property <bool> dragging: false;
-    property <float> live-fraction: 0.0;
-    property <float> shown-fraction: root.dragging ? root.live-fraction : root.fraction;
+    property <float> drag-fraction: root.fraction;
+    property <float> shown-fraction: root.drag-fraction;
+    changed fraction => {
+        if (!root.dragging) {
+            root.drag-fraction = root.fraction;
+        }
+    }
 
     // Track (the full vertical rail). HC-only outline keeps the rail visible
     // when accent flattens.
@@ -81,7 +89,7 @@ export component QbzVerticalSlider inherits Rectangle {
         pointer-event(e) => {
             if (e.kind == PointerEventKind.down) {
                 root.dragging = true;
-                root.live-fraction = root.fraction-from-y(self.mouse-y);
+                root.drag-fraction = root.fraction-from-y(self.mouse-y);
                 if (root.value-from-y(self.mouse-y) != root.value) {
                     root.changed(root.value-from-y(self.mouse-y));
                 }
@@ -93,7 +101,7 @@ export component QbzVerticalSlider inherits Rectangle {
         // Continuous drag while held — thumb follows the pointer every frame.
         moved => {
             if (root.dragging) {
-                root.live-fraction = root.fraction-from-y(self.mouse-y);
+                root.drag-fraction = root.fraction-from-y(self.mouse-y);
                 if (root.value-from-y(self.mouse-y) != root.value) {
                     root.changed(root.value-from-y(self.mouse-y));
                 }

@@ -28,11 +28,19 @@ export component QbzSlider inherits Rectangle {
     // Travel range for the thumb centre.
     property <length> travel: root.width - root.thumb-size;
 
-    // Live drag: while held, the thumb tracks the POINTER (continuous, no round-
-    // trip through the bound value) so it never visibly steps between levels.
+    // Live drag: the thumb tracks `drag-fraction`, which follows the POINTER
+    // while held and STAYS PUT on release — it never snaps back to the async
+    // round-tripped bound value (that snap-back was the rubberband). It re-syncs
+    // to the external value only when the value changes on its own (MPRIS /
+    // keyboard) while not dragging.
     property <bool> dragging: false;
-    property <float> live-fraction: 0.0;
-    property <float> shown-fraction: root.dragging ? root.live-fraction : root.fraction;
+    property <float> drag-fraction: root.fraction;
+    property <float> shown-fraction: root.drag-fraction;
+    changed fraction => {
+        if (!root.dragging) {
+            root.drag-fraction = root.fraction;
+        }
+    }
 
     // Track. HC-only outline so the rail stays visible when accent flattens.
     Rectangle {
@@ -82,7 +90,7 @@ export component QbzSlider inherits Rectangle {
         pointer-event(e) => {
             if (e.kind == PointerEventKind.down) {
                 root.dragging = true;
-                root.live-fraction = root.fraction-from-x(self.mouse-x);
+                root.drag-fraction = root.fraction-from-x(self.mouse-x);
                 if (root.value-from-x(self.mouse-x) != root.value) {
                     root.changed(root.value-from-x(self.mouse-x));
                 }
@@ -95,7 +103,7 @@ export component QbzSlider inherits Rectangle {
         // Continuous drag while held — thumb follows the pointer every frame.
         moved => {
             if (root.dragging) {
-                root.live-fraction = root.fraction-from-x(self.mouse-x);
+                root.drag-fraction = root.fraction-from-x(self.mouse-x);
                 if (root.value-from-x(self.mouse-x) != root.value) {
                     root.changed(root.value-from-x(self.mouse-x));
                 }
