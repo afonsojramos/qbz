@@ -155,7 +155,13 @@ fn parse_init_uuid_payload(payload: &[u8]) -> Result<InitInfo, CmafError> {
     let raw_len = u16::from_be_bytes([payload[a], payload[a + 1]]) as usize;
     a += 2;
 
-    let raw_data = &payload[a..a + raw_len.min(payload.len() - a)];
+    if a + raw_len > payload.len() {
+        return Err(CmafError::ParseError(format!(
+            "init UUID payload truncated: need {raw_len} raw bytes, have {}",
+            payload.len().saturating_sub(a)
+        )));
+    }
+    let raw_data = &payload[a..a + raw_len];
     a += raw_len;
 
     let flac_pos = raw_data
@@ -277,5 +283,28 @@ fn read_box_size(data: &[u8], pos: usize) -> usize {
         0 => data.len() - pos,
         1..=7 => 0,
         s => s as usize,
+    }
+}
+
+#[cfg(test)]
+mod parse_truncation_tests {
+    use super::*;
+
+    #[test]
+    fn truncated_raw_len_is_error() {
+        // Build a minimal payload that claims more raw bytes than available:
+        // raw_len sits at bytes 26..28, raw data starts at 28, so a 30-byte
+        // payload with raw_len=100 must fail.
+        let mut p = vec![0u8; 30];
+        // set raw_len = 100 at bytes 26..28
+        p[26] = 0;
+        p[27] = 100;
+        match parse_init_uuid_payload(&p) {
+            Ok(_) => panic!("expected truncation error"),
+            Err(e) => {
+                let msg = format!("{e}");
+                assert!(msg.contains("truncated") || msg.contains("raw"), "{msg}");
+            }
+        }
     }
 }
