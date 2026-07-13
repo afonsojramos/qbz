@@ -361,6 +361,52 @@ impl PipeWireBackend {
     }
 }
 
+/// Runs `program args...` with all stdio discarded and reports whether it
+/// exited successfully within `timeout`. Availability probing only — a missing
+/// binary, a failing exit, or a timeout all mean "not available". Bounded so
+/// the audio thread can never hang on a wedged daemon (#591/#592: playback
+/// start must fail fast and fall back, not sit behind the 45s UI watchdog).
+fn probe_command_ok(program: &str, args: &[&str], timeout: std::time::Duration) -> bool {
+    use std::process::Stdio;
+    let mut child = match Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(_) => return false, // binary not present (sandbox / not installed)
+    };
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status.success(),
+            Ok(None) => {
+                if start.elapsed() >= timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    log::warn!(
+                        "[PipeWire Backend] availability probe `{}` timed out after {:?}",
+                        program,
+                        timeout
+                    );
+                    return false;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+            Err(e) => {
+                log::warn!(
+                    "[PipeWire Backend] availability probe `{}` failed: {}",
+                    program,
+                    e
+                );
+                return false;
+            }
+        }
+    }
+}
+
 /// Parse `pw-dump` JSON into our `AudioDevice` list. Pure (no I/O) so it is
 /// unit-testable against a captured fixture.
 ///
@@ -891,12 +937,22 @@ impl AudioBackend for PipeWireBackend {
     }
 
     fn is_available(&self) -> bool {
-        // Check if pactl is available (PipeWire/PulseAudio)
-        Command::new("pactl")
-            .arg("info")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+        // #591/#592: this probe used to require `pactl` (pulseaudio-utils +
+        // pipewire-pulse). Sandboxed and minimal installs (Snap, Flatpak, .deb
+        // without pulseaudio-utils) can lack it even though PipeWire itself is
+        // up — device enumeration already succeeds natively via `pw-dump` on
+        // those systems, so the availability probe must accept the same proof.
+        // Order: native socket (no subprocess) → pw-dump → pactl (kept as the
+        // fallback for PulseAudio-only systems, preserving pre-2.0 behavior).
+        // Subprocess probes are time-bounded so a wedged daemon can never
+        // stall stream init on the audio thread.
+        if let Some(runtime_dir) = std::env::var_os("XDG_RUNTIME_DIR") {
+            if std::path::Path::new(&runtime_dir).join("pipewire-0").exists() {
+                return true;
+            }
+        }
+        probe_command_ok("pw-dump", &[], std::time::Duration::from_secs(3))
+            || probe_command_ok("pactl", &["info"], std::time::Duration::from_secs(3))
     }
 
     fn description(&self) -> &'static str {

@@ -2159,6 +2159,45 @@ impl Player {
                                     std::thread::sleep(Duration::from_millis(50));
                                 }
 
+                                // Legacy CPAL path for streaming, shared by the
+                                // "backend not configured" and "backend init failed"
+                                // arms below. Uses the track's native rate/channels
+                                // unchanged — no resampling is introduced here.
+                                let legacy_stream = || -> Result<StreamType, String> {
+                                    let device = if let Some(ref name) = *current_device_name {
+                                        host.output_devices()
+                                            .ok()
+                                            .and_then(|mut devices| {
+                                                devices.find(|d| {
+                                                    cpal_device_name(d).as_deref()
+                                                        == Some(name.as_str())
+                                                })
+                                            })
+                                            .or_else(|| host.default_output_device())
+                                    } else {
+                                        host.default_output_device()
+                                    };
+
+                                    let Some(device) = device else {
+                                        return Err(
+                                            "No audio output device available for streaming"
+                                                .to_string(),
+                                        );
+                                    };
+
+                                    if let Some(name) = cpal_device_name(&device) {
+                                        thread_state.set_current_device(Some(name));
+                                    }
+
+                                    create_output_stream_with_config(
+                                        device,
+                                        sample_rate,
+                                        channels,
+                                        dac_passthrough,
+                                    )
+                                    .map(StreamType::rodio)
+                                };
+
                                 let stream_result = if let Some(settings) =
                                     thread_settings.lock().ok()
                                 {
@@ -2168,55 +2207,41 @@ impl Player {
                                         channels,
                                         &thread_state,
                                     ) {
-                                        Some(result) => {
+                                        Some(Ok(stream)) => {
                                             // Set device name from settings for backend system
-                                            if result.is_ok() {
-                                                let device_name = settings
-                                                    .output_device
-                                                    .clone()
-                                                    .unwrap_or_else(|| "Default".to_string());
-                                                log::info!(
-                                                    "Streaming backend using device: {}",
-                                                    device_name
-                                                );
-                                                thread_state.set_current_device(Some(device_name));
-                                            }
-                                            result
+                                            let device_name = settings
+                                                .output_device
+                                                .clone()
+                                                .unwrap_or_else(|| "Default".to_string());
+                                            log::info!(
+                                                "Streaming backend using device: {}",
+                                                device_name
+                                            );
+                                            thread_state.set_current_device(Some(device_name));
+                                            Ok(stream)
+                                        }
+                                        // macOS: the backend path is authoritative
+                                        // (CoreAudio ownership + nominal-rate handling);
+                                        // surface the failure unchanged — see init_device
+                                        // for the rationale.
+                                        #[cfg(target_os = "macos")]
+                                        Some(Err(e)) => Err(e),
+                                        // Linux/other: a backend init failure must not
+                                        // leave the track never-starting (#591/#592 — the
+                                        // 45s loading watchdog was the only exit). Fall
+                                        // back to the legacy CPAL path immediately, same
+                                        // as the Play/Resume paths do via init_device.
+                                        #[cfg(not(target_os = "macos"))]
+                                        Some(Err(e)) => {
+                                            log::warn!(
+                                                "Backend system init failed for streaming: {}, falling back to legacy",
+                                                e
+                                            );
+                                            legacy_stream()
                                         }
                                         None => {
                                             log::info!("Backend system not configured, using legacy CPAL path");
-                                            let device =
-                                                if let Some(ref name) = *current_device_name {
-                                                    host.output_devices()
-                                                        .ok()
-                                                        .and_then(|mut devices| {
-                                                            devices.find(|d| {
-                                                                cpal_device_name(d).as_deref()
-                                                                    == Some(name.as_str())
-                                                            })
-                                                        })
-                                                        .or_else(|| host.default_output_device())
-                                                } else {
-                                                    host.default_output_device()
-                                                };
-
-                                            let Some(device) = device else {
-                                                log::error!("No audio output device available for streaming");
-                                                thread_state.set_stream_error(true);
-                                                return;
-                                            };
-
-                                            if let Some(name) = cpal_device_name(&device) {
-                                                thread_state.set_current_device(Some(name));
-                                            }
-
-                                            create_output_stream_with_config(
-                                                device,
-                                                sample_rate,
-                                                channels,
-                                                dac_passthrough,
-                                            )
-                                            .map(StreamType::rodio)
+                                            legacy_stream()
                                         }
                                     }
                                 } else {
