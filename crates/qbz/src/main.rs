@@ -6413,9 +6413,21 @@ fn detect_hardware_gpu() -> RendererTier {
     // driver is the mature path on that hardware). `hasvk` is Mesa's legacy
     // Intel gen7/7.5 (Ivy Bridge / Haswell) Vulkan driver — same story: GL is
     // the fast path there. llvmpipe normally reports DeviceType::Cpu and is
-    // skipped above, listed only as a belt-and-braces.
-    const WEAK_GPU_MARKERS: [&str; 8] =
-        ["v3dv", "hasvk", "panfrost", "panvk", "lima", "mali", "videocore", "llvmpipe"];
+    // skipped above, listed only as a belt-and-braces. Intel UHD 600 (Gemini
+    // Lake) flickers on the wgpu tier — GL is the stable path there (#578);
+    // both name spellings covered since Mesa reports "UHD Graphics 600".
+    const WEAK_GPU_MARKERS: [&str; 10] = [
+        "v3dv",
+        "hasvk",
+        "panfrost",
+        "panvk",
+        "lima",
+        "mali",
+        "videocore",
+        "llvmpipe",
+        "uhd graphics 600",
+        "uhd 600",
+    ];
     let mut best = RendererTier::Software;
     let mut adapter_summary: Vec<String> = Vec::new();
     let mut topo = GpuTopology::default();
