@@ -5,6 +5,14 @@
 
 use crate::OfflineCacheState;
 
+/// Directory names under the offline cache root that purge may remove entirely.
+const PURGEABLE_CACHE_DIRS: &[&str] = &["tracks", "tracks-cmaf", "artwork"];
+
+/// True when `name` is a known QBZ offline-cache layout directory.
+pub(crate) fn is_purgeable_cache_dir_name(name: &str) -> bool {
+    PURGEABLE_CACHE_DIRS.contains(&name)
+}
+
 /// Clear entire offline cache (internal helper).
 ///
 /// `library_db` is the (locked-on-demand) main library connection — the
@@ -49,40 +57,25 @@ pub async fn purge_all_cached_files(
         let _ = std::fs::remove_file(p);
     }
 
-    // Also clear the tracks directory (legacy unorganized files)
+    // Clear only known layout directories under the cache root (allowlist).
+    // Never recursive-delete arbitrary siblings — offline root may be a shared
+    // mount and non-QBZ folders must survive purge.
     let cache_dir = cache_state.cache_dir.read().unwrap().clone();
-    let tracks_dir = cache_dir.join("tracks");
-    if tracks_dir.exists() {
-        if let Ok(entries) = std::fs::read_dir(&tracks_dir) {
-            for entry in entries.flatten() {
-                let _ = std::fs::remove_file(entry.path());
-            }
-        }
-    }
-
-    // And the tracks-cmaf directory (v2 bundles) — belt-and-suspenders
-    // so orphan bundles from corrupt DB rows get cleaned up too.
-    let tracks_cmaf_dir = cache_dir.join("tracks-cmaf");
-    if tracks_cmaf_dir.exists() {
-        let _ = std::fs::remove_dir_all(&tracks_cmaf_dir);
-        log::info!("[OfflineCache/Purge] Removed tracks-cmaf/ directory");
-    }
-
-    // Clear organized artist/album folders
-    // Look for any subdirectories in cache_dir that are not "tracks" or system files
     if let Ok(entries) = std::fs::read_dir(&cache_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("");
+            if !is_purgeable_cache_dir_name(name) {
+                continue;
+            }
             if path.is_dir() {
-                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                // Skip the tracks directory and database files
-                if name != "tracks" && !name.ends_with(".db") && !name.ends_with(".db-journal") {
-                    // This is likely an artist folder, delete it recursively
-                    if let Err(e) = std::fs::remove_dir_all(&path) {
-                        log::warn!("Failed to remove folder {:?}: {}", path, e);
-                    } else {
-                        log::info!("Removed artist folder: {:?}", path);
-                    }
+                if let Err(e) = std::fs::remove_dir_all(&path) {
+                    log::warn!("[OfflineCache/Purge] Failed to remove {path:?}: {e}");
+                } else {
+                    log::info!("[OfflineCache/Purge] Removed allowlisted dir {name}");
                 }
             }
         }
@@ -99,4 +92,19 @@ pub async fn purge_all_cached_files(
     log::info!("Removed {} Qobuz cached tracks from library", removed_count);
 
     Ok(())
+}
+
+#[cfg(test)]
+mod purge_allowlist_tests {
+    use super::is_purgeable_cache_dir_name;
+
+    #[test]
+    fn only_known_layout_dirs_are_purgeable() {
+        assert!(is_purgeable_cache_dir_name("tracks"));
+        assert!(is_purgeable_cache_dir_name("tracks-cmaf"));
+        assert!(is_purgeable_cache_dir_name("artwork"));
+        assert!(!is_purgeable_cache_dir_name("Music"));
+        assert!(!is_purgeable_cache_dir_name("Artist Name"));
+        assert!(!is_purgeable_cache_dir_name(".."));
+    }
 }
