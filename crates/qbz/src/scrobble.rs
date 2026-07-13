@@ -406,11 +406,9 @@ pub struct ScrobbleMeta {
 /// `clearTimeout` equivalent). Like Tauri, pause/stop do NOT cancel it.
 static SCROBBLE_GEN: AtomicU64 = AtomicU64::new(0);
 
-/// `min(50% of duration, 240s)` in seconds — the Last.fm rule, applied to both
-/// services (matches the Svelte `Math.min(durationSecs * 0.5, 240) * 1000`).
-fn scrobble_delay_secs(duration_secs: u64) -> u64 {
-    (duration_secs / 2).min(240)
-}
+/// Pure arming rule lives in `qbz-app` so unit tests do not need the Slint
+/// binary compile (see `qbz_app::scrobble_timing`).
+use qbz_app::scrobble_timing::scrobble_delay_secs;
 
 /// Track-change entry point. Fires now-playing immediately for each enabled +
 /// authed service, then arms a delayed scrobble. No-op when no service is
@@ -434,8 +432,15 @@ pub fn on_track_changed(meta: ScrobbleMeta) {
             send_now_playing(&meta, &cfg).await;
         }
 
-        // Delayed scrobble at min(dur/2, 240s).
-        let wait = scrobble_delay_secs(meta.duration_secs);
+        // Delayed scrobble at min(dur/2, 240s). Unknown duration: skip scrobble
+        // (still sent now-playing above when online).
+        let Some(wait) = scrobble_delay_secs(meta.duration_secs) else {
+            log::debug!(
+                "[scrobble] skip delayed scrobble: unknown duration for '{}'",
+                meta.track
+            );
+            return;
+        };
         if wait > 0 {
             tokio::time::sleep(Duration::from_secs(wait)).await;
         }

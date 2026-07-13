@@ -4,6 +4,7 @@ pub mod graphics_autoconfig;
 pub mod playback_context;
 pub mod qconnect_identity;
 pub mod runtime;
+pub mod scrobble_timing;
 pub mod session_store;
 pub mod shell;
 pub mod settings;
