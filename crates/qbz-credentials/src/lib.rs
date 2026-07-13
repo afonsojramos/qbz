@@ -26,7 +26,8 @@ use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::mpsc;
 use std::thread;
@@ -39,6 +40,107 @@ const LEGACY_FALLBACK_FILE_NAME: &str = ".qbz-auth.legacy";
 const OAUTH_TOKEN_FILE_NAME: &str = ".qbz-oauth-token";
 const INSTALLATION_SALT_FILE_NAME: &str = ".qbz-cred-salt";
 const MACHINE_ID_FALLBACK_FILE_NAME: &str = ".qbz-machine-id";
+
+/// Write secret-adjacent bytes with restrictive permissions on Unix (`0o600`).
+fn write_private_file(path: &Path, bytes: impl AsRef<[u8]>) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create directory {}: {e}", parent.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Err(e) = fs::set_permissions(parent, fs::Permissions::from_mode(0o700)) {
+                log::warn!(
+                    "[Credentials] Failed to tighten permissions on {}: {}",
+                    parent.display(),
+                    e
+                );
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let mut opts = fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true).mode(0o600);
+        let mut f = opts
+            .open(path)
+            .map_err(|e| format!("Failed to open {}: {e}", path.display()))?;
+        f.write_all(bytes.as_ref())
+            .map_err(|e| format!("Failed to write {}: {e}", path.display()))?;
+        if let Err(e) = fs::set_permissions(path, fs::Permissions::from_mode(0o600)) {
+            log::warn!(
+                "[Credentials] Failed to tighten permissions on {}: {}",
+                path.display(),
+                e
+            );
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        fs::write(path, bytes.as_ref())
+            .map_err(|e| format!("Failed to write {}: {e}", path.display()))?;
+    }
+    Ok(())
+}
+
+/// Tighten permissions of a pre-existing secret file on Unix.
+///
+/// Files created by older installs were written with the default umask and
+/// can be group or world readable. They are created once and only read
+/// afterwards, so `write_private_file` never gets a chance to fix them.
+/// Calling this on the load paths migrates them to `0o600` (and the parent
+/// config directory to `0o700`) on the next read.
+#[cfg(unix)]
+fn tighten_private_file_mode(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    if let Some(parent) = path.parent() {
+        match fs::metadata(parent) {
+            Ok(meta) if meta.permissions().mode() & 0o077 != 0 => {
+                if let Err(e) = fs::set_permissions(parent, fs::Permissions::from_mode(0o700)) {
+                    log::warn!(
+                        "[Credentials] Failed to tighten permissions on {}: {}",
+                        parent.display(),
+                        e
+                    );
+                }
+            }
+            Ok(_) => {}
+            Err(e) => {
+                log::warn!(
+                    "[Credentials] Failed to inspect permissions of {}: {}",
+                    parent.display(),
+                    e
+                );
+            }
+        }
+    }
+
+    match fs::metadata(path) {
+        Ok(meta) if meta.permissions().mode() & 0o077 != 0 => {
+            if let Err(e) = fs::set_permissions(path, fs::Permissions::from_mode(0o600)) {
+                log::warn!(
+                    "[Credentials] Failed to tighten permissions on {}: {}",
+                    path.display(),
+                    e
+                );
+            }
+        }
+        Ok(_) => {}
+        Err(e) => {
+            log::warn!(
+                "[Credentials] Failed to inspect permissions of {}: {}",
+                path.display(),
+                e
+            );
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn tighten_private_file_mode(_path: &Path) {}
 
 // Legacy XOR key for migration (only used for reading old format)
 const LEGACY_OBFUSCATION_KEY: &[u8] = b"QbzNixAudiophile2024";
@@ -86,6 +188,7 @@ fn load_or_create_installation_salt() -> Result<Vec<u8>, String> {
         get_installation_salt_path().ok_or("Could not determine config directory for salt")?;
 
     if path.exists() {
+        tighten_private_file_mode(&path);
         let encoded =
             fs::read_to_string(&path).map_err(|e| format!("Failed to read salt file: {}", e))?;
         let decoded = BASE64
@@ -104,8 +207,7 @@ fn load_or_create_installation_salt() -> Result<Vec<u8>, String> {
 
     let mut salt = [0u8; 32];
     rand::rng().fill(&mut salt);
-    fs::write(&path, BASE64.encode(salt))
-        .map_err(|e| format!("Failed to write installation salt: {}", e))?;
+    write_private_file(&path, BASE64.encode(salt))?;
 
     Ok(salt.to_vec())
 }
@@ -116,6 +218,7 @@ fn load_or_create_machine_id_fallback() -> Result<Vec<u8>, String> {
         .ok_or("Could not determine config directory for machine fallback id")?;
 
     if path.exists() {
+        tighten_private_file_mode(&path);
         let encoded = fs::read_to_string(&path)
             .map_err(|e| format!("Failed to read machine fallback id: {}", e))?;
         let decoded = BASE64
@@ -134,8 +237,7 @@ fn load_or_create_machine_id_fallback() -> Result<Vec<u8>, String> {
 
     let mut machine_fallback = [0u8; 32];
     rand::rng().fill(&mut machine_fallback);
-    fs::write(&path, BASE64.encode(machine_fallback))
-        .map_err(|e| format!("Failed to write machine fallback id: {}", e))?;
+    write_private_file(&path, BASE64.encode(machine_fallback))?;
 
     Ok(machine_fallback.to_vec())
 }
@@ -328,7 +430,7 @@ fn save_to_fallback(credentials: &QobuzCredentials) -> Result<(), String> {
 
     let encrypted = encrypt_credentials(credentials)?;
 
-    fs::write(&path, encrypted).map_err(|e| format!("Failed to write credentials file: {}", e))?;
+    write_private_file(&path, encrypted)?;
 
     log::info!("Credentials saved to encrypted fallback file");
     Ok(())
@@ -386,6 +488,7 @@ fn load_from_fallback() -> Result<Option<QobuzCredentials>, String> {
         return Ok(None);
     }
 
+    tighten_private_file_mode(&path);
     let content =
         fs::read_to_string(&path).map_err(|e| format!("Failed to read credentials file: {}", e))?;
 
@@ -701,11 +804,7 @@ pub fn save_oauth_token(token: &str) -> Result<(), String> {
     let encrypted = encrypt_credentials(&placeholder)?;
 
     let path = get_oauth_token_path().ok_or("Could not determine config directory")?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create config directory: {}", e))?;
-    }
-    fs::write(&path, &encrypted).map_err(|e| format!("Failed to write OAuth token file: {}", e))?;
+    write_private_file(&path, &encrypted)?;
     log::info!("[Credentials] OAuth token saved to encrypted file");
 
     if keyring_set(OAUTH_TOKEN_KEY, &encrypted) {
@@ -753,6 +852,7 @@ pub fn load_oauth_token_from_file() -> Result<Option<String>, String> {
         return Ok(None);
     }
 
+    tighten_private_file_mode(&path);
     let content =
         fs::read_to_string(&path).map_err(|e| format!("Failed to read OAuth token file: {}", e))?;
     if content.trim().is_empty() {
@@ -872,5 +972,40 @@ mod tests {
         // Verify cleared
         let after_clear = load_qobuz_credentials().expect("Failed to check");
         assert!(after_clear.is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_private_file_is_owner_rw_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("qbz-cred-mode-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("secret.bin");
+        write_private_file(&path, b"secret-bytes").unwrap();
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "expected 0o600, got {mode:o}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tighten_private_file_mode_fixes_loose_existing_files() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("qbz-cred-tighten-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+        let path = dir.join("legacy-secret");
+        fs::write(&path, b"legacy-bytes").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+
+        tighten_private_file_mode(&path);
+
+        let file_mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(file_mode, 0o600, "expected 0o600, got {file_mode:o}");
+        let dir_mode = fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(dir_mode, 0o700, "expected 0o700, got {dir_mode:o}");
+        let _ = fs::remove_dir_all(&dir);
     }
 }
