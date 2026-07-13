@@ -158,6 +158,18 @@ export component AlbumPageView inherits Rectangle {
             ? AlbumState.description-shorter
             : AlbumState.description-short;
 
+    // Header text colors: the ImmersiveAtmosphere behind the header is
+    // always dark, so when the gradient setting is ON the header text must
+    // be light regardless of theme (light themes' Theme.text-* are dark and
+    // vanish on the atmosphere). With the gradient OFF the header sits on
+    // Theme.surface-main and keeps the normal theme colors.
+    property <color> hdr-strong: AppearanceState.album-header-gradient
+        ? #ffffff : Theme.text-primary;
+    property <color> hdr-body: AppearanceState.album-header-gradient
+        ? #ffffff.with-alpha(0.88) : Theme.text-secondary;
+    property <color> hdr-muted: AppearanceState.album-header-gradient
+        ? #ffffff.with-alpha(0.62) : Theme.text-muted;
+
     background: Theme.surface-main;
 
     flick := Flickable {
@@ -194,7 +206,7 @@ export component AlbumPageView inherits Rectangle {
             x: 0;
             y: 0;
             width: parent.width;
-            height: 360px;
+            height: 440px;
             source-image: AlbumState.header-atmosphere;
             fallback-image: AlbumState.artwork;
             animated: false;
@@ -206,7 +218,7 @@ export component AlbumPageView inherits Rectangle {
             x: 0;
             y: 0;
             width: parent.width;
-            height: 360px;
+            height: 440px;
             background: @linear-gradient(180deg,
                 AlbumState.header-color 0%,
                 AlbumState.header-color 16%,
@@ -216,10 +228,10 @@ export component AlbumPageView inherits Rectangle {
             x: 0;
             y: 0;
             width: parent.width;
-            height: 360px;
+            height: 440px;
             background: @linear-gradient(180deg,
                 transparent 0%,
-                transparent 58%,
+                transparent 74%,
                 Theme.surface-main 100%);
         }
 
@@ -345,7 +357,7 @@ export component AlbumPageView inherits Rectangle {
 
                     Text {
                         text: AlbumState.title;
-                        color: Theme.text-primary;
+                        color: root.hdr-strong;
                         font-size: Typography.section;
                         font-weight: Typography.bold;
                         overflow: elide;
@@ -360,7 +372,7 @@ export component AlbumPageView inherits Rectangle {
                         for credit[idx] in AlbumState.artists: HorizontalLayout {
                             if idx > 0: Text {
                                 text: "  •  ";
-                                color: Theme.text-secondary;
+                                color: root.hdr-body;
                                 font-size: Typography.heading;
                                 font-weight: Typography.bold;
                                 vertical-alignment: center;
@@ -376,15 +388,15 @@ export component AlbumPageView inherits Rectangle {
                                 credit-text := Text {
                                     text: credit.name;
                                     color: credit-area.has-hover && credit.id != ""
-                                        ? Theme.text-primary
-                                        : Theme.text-secondary;
+                                        ? root.hdr-strong
+                                        : root.hdr-body;
                                     font-size: Typography.heading;
                                     font-weight: Typography.bold;
                                 }
                             }
                             if credit.role != "": Text {
                                 text: " (" + credit.role + ")";
-                                color: Theme.text-secondary;
+                                color: root.hdr-body;
                                 font-size: Typography.heading;
                                 font-weight: 400;
                                 vertical-alignment: center;
@@ -401,7 +413,7 @@ export component AlbumPageView inherits Rectangle {
                         spacing: 0px;
                         Text {
                             text: AlbumState.meta-pre != "" ? AlbumState.meta-pre + "   •   " : "";
-                            color: Theme.text-secondary;
+                            color: root.hdr-body;
                             font-size: Typography.body;
                             vertical-alignment: center;
                         }
@@ -414,21 +426,21 @@ export component AlbumPageView inherits Rectangle {
                             }
                             label-text := Text {
                                 text: AlbumState.label;
-                                color: label-area.has-hover ? Theme.accent : Theme.text-secondary;
+                                color: label-area.has-hover ? Theme.accent : root.hdr-body;
                                 font-size: Typography.body;
                                 vertical-alignment: center;
                             }
                         }
                         Text {
                             text: AlbumState.meta-post != "" ? "   •   " + AlbumState.meta-post : "";
-                            color: Theme.text-secondary;
+                            color: root.hdr-body;
                             font-size: Typography.body;
                             vertical-alignment: center;
                         }
                     }
                     if AlbumState.label-id == "" || AlbumState.label == "": Text {
                         text: AlbumState.info-line;
-                        color: Theme.text-secondary;
+                        color: root.hdr-body;
                         font-size: Typography.body;
                         overflow: elide;
                     }
@@ -445,7 +457,7 @@ export component AlbumPageView inherits Rectangle {
                         // page padding 32+32, artwork 224, header gap 32.
                         width: root.width - 320px;
                         text: root.desc-display;
-                        color: Theme.text-secondary;
+                        color: root.hdr-body;
                         font-size: Typography.legal;
                         wrap: word-wrap;
                     }
