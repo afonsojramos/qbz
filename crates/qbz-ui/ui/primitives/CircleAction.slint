@@ -27,6 +27,14 @@ export component CircleAction inherits Rectangle {
     in property <bool> enabled: true;
     // Optional hover tooltip (empty = none), using the global TooltipOverlay.
     in property <string> tooltip;
+    // Theme-aware variant for header rows rendered WITHOUT the dark
+    // atmosphere (album-header-gradient OFF): the default light-on-dark
+    // palette (white fills/rings/icons) vanishes on light themes' plain
+    // surface. `on-surface: true` swaps to the app's standard on-page
+    // circular look (MixView pattern): accent play disc with a white glyph,
+    // elevated-surface ghost buttons with a themed ring and text-primary
+    // icon. Additive — every existing caller keeps the overlay palette.
+    in property <bool> on-surface: false;
     callback clicked();
 
     width: root.diameter;
@@ -34,12 +42,18 @@ export component CircleAction inherits Rectangle {
     border-radius: root.diameter / 2;
     opacity: root.enabled ? 1.0 : 0.4;
     // Overlay-matched contrast: solid white for the primary play, semi-
-    // transparent white fill + bright 1.5px ring otherwise.
-    background: root.primary
-        ? (ta.has-hover ? #ffffffd6 : #ffffff)
-        : ((ta.has-hover || root.active) ? #ffffff3d : #ffffff24);
+    // transparent white fill + bright 1.5px ring otherwise. The on-surface
+    // variant mirrors the theme-aware circular buttons used on plain page
+    // backgrounds instead.
+    background: root.on-surface
+        ? (root.primary
+            ? (ta.has-hover ? Theme.accent-hover : Theme.accent)
+            : ((ta.has-hover || root.active) ? Theme.surface-hover : Theme.surface-elevated))
+        : (root.primary
+            ? (ta.has-hover ? #ffffffd6 : #ffffff)
+            : ((ta.has-hover || root.active) ? #ffffff3d : #ffffff24));
     border-width: root.primary ? 0px : 1.5px;
-    border-color: #ffffffcc;
+    border-color: root.on-surface ? Theme.border-strong : #ffffffcc;
 
     if !root.loading: QbzIcon {
         source: root.icon;
@@ -51,13 +65,18 @@ export component CircleAction inherits Rectangle {
         y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
         tint: root.active
             ? Theme.accent
-            : (root.primary ? #000000 : #ffffff);
+            : root.on-surface
+                ? (root.primary ? #ffffff : Theme.text-primary)
+                : (root.primary ? #000000 : #ffffff);
     }
 
     if root.loading: LoadingSpinner {
         size: root.diameter * 0.45;
-        // Dark on the solid white primary disc, white on the ghost variant.
-        tint: root.primary ? #000000 : #ffffff;
+        // Dark on the solid white primary disc, white on the ghost variant;
+        // themed tints for the on-surface variant.
+        tint: root.primary
+            ? (root.on-surface ? #ffffff : #000000)
+            : (root.on-surface ? Theme.text-primary : #ffffff);
         x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
         y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
     }
