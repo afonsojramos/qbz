@@ -152,7 +152,7 @@ async fn kick_prefetch(runtime: &Runtime) {
             };
             let player = runtime.core().player();
             if let Err(e) = player
-                .prefetch_into_cache(client, track_id, PLAYBACK_QUALITY)
+                .prefetch_into_cache(client, track_id, playback_quality())
                 .await
             {
                 log::debug!("[qbz-slint] prefetch: track {track_id} failed: {e}");
@@ -161,9 +161,15 @@ async fn kick_prefetch(runtime: &Runtime) {
     }
 }
 
-/// Streaming quality used for all playback in the MVP — highest tier,
-/// the player falls back internally when it is not available.
-const PLAYBACK_QUALITY: Quality = Quality::UltraHiRes;
+/// Streaming quality for playback, resolved at playback time from the
+/// persisted Settings preference (`ui_prefs.streaming_quality`, the
+/// Settings > Audio dropdown). Unset/unknown keys fall back to the
+/// highest tier (Hi-Res+ = `Quality::UltraHiRes`, the previous hardcoded
+/// behavior); the player still falls back internally when the requested
+/// tier is not available (#590).
+fn playback_quality() -> Quality {
+    crate::ui_prefs::streaming_quality_for_key(&crate::ui_prefs::load().streaming_quality)
+}
 
 /// Convenience alias for the runtime handle threaded through every call.
 type Runtime = Arc<AppRuntime<SlintAdapter>>;
@@ -587,7 +593,7 @@ async fn play_audible(runtime: &Runtime, weak: &slint::Weak<AppWindow>, track_id
         .core()
         .play_track_resolved(
             track_id,
-            PLAYBACK_QUALITY,
+            playback_quality(),
             offline.as_deref(),
             Some(&sink),
             start_position_secs,
@@ -4275,7 +4281,7 @@ pub fn start_poll_loop(
                                 .core()
                                 .fetch_for_gapless_resolved(
                                     next_id,
-                                    PLAYBACK_QUALITY,
+                                    playback_quality(),
                                     offline.as_deref(),
                                     Some(&sink),
                                 )

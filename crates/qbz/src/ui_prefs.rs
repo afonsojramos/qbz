@@ -12,6 +12,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use qbz_models::Quality;
 use serde::{Deserialize, Serialize};
 
 /// Streaming-quality tiers, mirroring the Tauri app's dropdown. The
@@ -815,6 +816,19 @@ pub fn save(prefs: &UiPrefs) {
     }
 }
 
+/// Map a persisted streaming-quality key to the Qobuz format id the
+/// request layer expects (`Quality`). Unknown/unset keys fall back to the
+/// default tier (`Hi-Res+` = `Quality::UltraHiRes`), mirroring
+/// `streaming_quality_index`.
+pub fn streaming_quality_for_key(key: &str) -> Quality {
+    match key {
+        "mp3" => Quality::Mp3,
+        "cd" => Quality::Lossless,
+        "hires" => Quality::HiRes,
+        _ => Quality::UltraHiRes, // "hires_plus" + unknown keys
+    }
+}
+
 /// Index of `key` in `STREAMING_QUALITIES`, falling back to the default
 /// (`Hi-Res+`) when the stored key is unknown.
 pub fn streaming_quality_index(key: &str) -> usize {
@@ -846,6 +860,17 @@ mod tests {
         assert_eq!(streaming_quality_index("bogus"), 3);
         assert_eq!(streaming_quality_index("mp3"), 0);
         assert_eq!(streaming_quality_index("cd"), 1);
+    }
+
+    #[test]
+    fn quality_key_maps_to_qobuz_format_id() {
+        assert_eq!(streaming_quality_for_key("mp3"), Quality::Mp3);
+        assert_eq!(streaming_quality_for_key("cd"), Quality::Lossless);
+        assert_eq!(streaming_quality_for_key("hires"), Quality::HiRes);
+        assert_eq!(streaming_quality_for_key("hires_plus"), Quality::UltraHiRes);
+        // Unknown/unset keys fall back to the default tier.
+        assert_eq!(streaming_quality_for_key("bogus"), Quality::UltraHiRes);
+        assert_eq!(streaming_quality_for_key(""), Quality::UltraHiRes);
     }
 
     #[test]
