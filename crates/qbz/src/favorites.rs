@@ -237,8 +237,23 @@ where
         let fav_ids =
             crate::library_db::with_db(|db| db.get_favorite_playlist_ids()).unwrap_or_default();
         let by_id: HashMap<u64, &Playlist> = all.iter().map(|p| (p.id, p)).collect();
-        let mut favorites: Vec<PlaylistRow> = Vec::with_capacity(fav_ids.len());
+        // The user's OWNED playlists belong in their Library sub-tab. They don't
+        // come back from SQLite as "favorites" unless manually hearted, and the
+        // Following list above explicitly excludes them (owner.id != uid), so
+        // without seeding them here they appear NOWHERE (bug: only followed
+        // playlists showed). Owned first, then hearted-but-not-owned (dedup).
+        let mut favorites: Vec<PlaylistRow> = Vec::new();
+        let mut seen: std::collections::HashSet<u64> = std::collections::HashSet::new();
+        if let Some(uid) = uid {
+            for p in all.iter().filter(|p| p.owner.id == uid) {
+                seen.insert(p.id);
+                favorites.push(search::map_playlist(p.clone()));
+            }
+        }
         for fid in fav_ids {
+            if !seen.insert(fid) {
+                continue;
+            }
             if let Some(p) = by_id.get(&fid) {
                 favorites.push(search::map_playlist((**p).clone()));
             } else if let Ok(p) = runtime.core().get_playlist(fid).await {
