@@ -129,12 +129,16 @@ export component KioskNowPlaying inherits Rectangle {
         Rectangle {
             horizontal-stretch: 1;
             VerticalLayout {
-                padding: 26px;
-                spacing: 16px;
+                padding: 18px;
+                spacing: 12px;
 
                 // Cover / Lyrics toggle — pinned to the TOP so it lines up with
-                // the Up Next / History tabs on the right panel.
+                // the Up Next / History tabs on the right panel. vertical-stretch:0
+                // is REQUIRED — a nested layout defaults to greedy stretch in
+                // Slint, so without it the tabs row eats vertical space and pushes
+                // the cover down (dead space above it).
                 HorizontalLayout {
+                    vertical-stretch: 0;
                     alignment: start;
                     spacing: 18px;
                     QueueTab {
@@ -158,98 +162,94 @@ export component KioskNowPlaying inherits Rectangle {
                     }
                 }
 
-                // Cover/lyrics + metadata + transport fill the rest, vertically
-                // centered — the stretch absorbs the slack so the toggle above
-                // stays pinned to the top (no dead space over it).
-                VerticalLayout {
+                // Flexible art/lyrics area — takes the slack (pins the toggle
+                // above and the transport below) and CLIPS, so on a short window
+                // (e.g. 1080x600) the cover shrinks instead of pushing the
+                // controls off-screen.
+                art-area := Rectangle {
                     vertical-stretch: 1;
-                    alignment: center;
-                    spacing: 16px;
+                    clip: true;
 
-                    if !root.show-lyrics: HorizontalLayout {
-                        alignment: center;
-                        Rectangle {
-                            width: 240px;
-                            height: 240px;
-                            border-radius: Radius.lg;
-                            background: Theme.surface-elevated;
-                            clip: true;
-                            if NowPlayingState.artwork-large.width > 0: Image {
-                                width: 100%;
-                                height: 100%;
-                                source: NowPlayingState.artwork-large;
-                                image-fit: cover;
-                            }
-                        }
+                    // Cover: contained so it is as large as fits and scales with
+                    // the window WITHOUT reading parent geometry (the old
+                    // Math.min(art-area.height) collapsed it to ~55px). Fills the
+                    // dominant area — big on tall windows, shrinks on short ones.
+                    if !root.show-lyrics: Image {
+                        width: 100%;
+                        height: 100%;
+                        source: NowPlayingState.artwork-large;
+                        image-fit: contain;
                     }
 
-                    if root.show-lyrics: HorizontalLayout {
-                        alignment: center;
-                        Rectangle {
-                            width: 420px;
-                            height: 320px;
-                            // Ask Rust for this track's lyrics when the surface
-                            // appears (global callback — no geometry read, safe).
-                            // Mount the karaoke view ONLY when lyrics are READY
-                            // (status 2 + lines) and inside a FIXED-size box:
-                            // instantiating LyricsLinesView against empty/loading
-                            // state or a still-resolving stretch width trips its
-                            // geometry FOOTGUN (properties.rs:583 "Recursion
-                            // detected" — crash on tap 2026-07-12). status==2 lands
-                            // async in a clean turn; the fixed width keeps
-                            // `changed width` reading a constant. Mirrors the
-                            // desktop LyricsSidebar gate.
-                            init => {
-                                LyricsState.panel-opened();
-                            }
-                            if LyricsState.status == 2 && LyricsState.lines.length > 0: LyricsLinesView {
-                                width: 100%;
-                                height: 100%;
-                                side-padding: 10px;
-                                line-gap: 14px;
-                                size-inactive: 20px;
-                                size-active: 25px;
-                                dimming-mode: LyricsState.dimming-mode;
-                                auto-follow: true;
-                                uppercase: LyricsState.uppercase;
-                                show-attribution: false;
-                                font-name: LyricsState.font-index == 1 ? "LINE Seed JP"
-                                    : LyricsState.font-index == 2 ? "Montserrat"
-                                    : LyricsState.font-index == 3 ? "Noto Sans"
-                                    : LyricsState.font-index == 4 ? "Source Sans 3"
-                                    : "";
-                                active-color: Theme.accent;
-                            }
-                            if !(LyricsState.status == 2 && LyricsState.lines.length > 0): Text {
-                                width: 100%;
-                                height: 100%;
-                                text: LyricsState.status == 5 ? @tr("Lyrics unavailable offline")
-                                    : (LyricsState.status == 3 || LyricsState.status == 4) ? @tr("No lyrics available")
-                                    : @tr("Fetching lyrics...");
-                                color: Theme.text-muted;
-                                font-size: 14px;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
-                            }
+                    // Lyrics fill the panel width (no more right-edge clipping) and
+                    // the flexible height. Mount the karaoke view ONLY when lyrics
+                    // are READY (status 2 + lines): instantiating LyricsLinesView
+                    // against empty/loading state during the tap's own relayout
+                    // trips its geometry FOOTGUN (properties.rs:583 "Recursion
+                    // detected"). status==2 lands async in a settled layout.
+                    if root.show-lyrics: Rectangle {
+                        width: 100%;
+                        height: 100%;
+                        init => {
+                            LyricsState.panel-opened();
+                        }
+                        if LyricsState.status == 2 && LyricsState.lines.length > 0: LyricsLinesView {
+                            width: 100%;
+                            height: 100%;
+                            side-padding: 8px;
+                            line-gap: 13px;
+                            size-inactive: 19px;
+                            size-active: 23px;
+                            dimming-mode: LyricsState.dimming-mode;
+                            auto-follow: true;
+                            uppercase: LyricsState.uppercase;
+                            show-attribution: false;
+                            font-name: LyricsState.font-index == 1 ? "LINE Seed JP"
+                                : LyricsState.font-index == 2 ? "Montserrat"
+                                : LyricsState.font-index == 3 ? "Noto Sans"
+                                : LyricsState.font-index == 4 ? "Source Sans 3"
+                                : "";
+                            active-color: Theme.accent;
+                        }
+                        if !(LyricsState.status == 2 && LyricsState.lines.length > 0): Text {
+                            width: 100%;
+                            height: 100%;
+                            text: LyricsState.status == 5 ? @tr("Lyrics unavailable offline")
+                                : (LyricsState.status == 3 || LyricsState.status == 4) ? @tr("No lyrics available")
+                                : @tr("Fetching lyrics...");
+                            color: Theme.text-muted;
+                            font-size: 14px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
                         }
                     }
+                }
+
+                // Pinned metadata + transport — always on screen even when the
+                // art area is squeezed on a short window. vertical-stretch:0 keeps
+                // it natural-height at the bottom (nested layouts stretch greedily
+                // by default) so ALL slack goes to the art area above.
+                VerticalLayout {
+                    vertical-stretch: 0;
+                    spacing: 8px;
 
                     Text {
                         text: NowPlayingState.title;
                         color: Theme.text-primary;
-                        font-size: 24px;
+                        font-size: 20px;
                         font-weight: 700;
                         horizontal-alignment: center;
-                        wrap: word-wrap;
+                        overflow: elide;
+                        wrap: no-wrap;
                     }
                     artist-row := Rectangle {
-                        height: 24px;
+                        height: 18px;
                         HorizontalLayout {
                             alignment: center;
                             Text {
                                 text: NowPlayingState.artist;
                                 color: Theme.text-secondary;
-                                font-size: 16px;
+                                font-size: 14px;
                                 vertical-alignment: center;
                             }
                         }
@@ -258,11 +258,6 @@ export component KioskNowPlaying inherits Rectangle {
                                 root.open-artist(NowPlayingState.artist-id);
                             }
                         }
-                    }
-
-                    HorizontalLayout {
-                        alignment: center;
-                        AudioStamp { }
                     }
 
                     SeekBar {
@@ -278,13 +273,27 @@ export component KioskNowPlaying inherits Rectangle {
                         }
                     }
 
-                    HorizontalLayout {
-                        alignment: center;
-                        TransportControls {
-                            play-circle: true;
-                            classic-actions: true;
-                            media-action(k, i, a) => {
-                                root.media-action(k, i, a);
+                    // Transport centered; the quality stamp floats at the right of
+                    // the same row instead of owning a whole line (saves vertical
+                    // space on short windows).
+                    Rectangle {
+                        height: 46px;
+                        HorizontalLayout {
+                            alignment: center;
+                            TransportControls {
+                                play-circle: true;
+                                classic-actions: true;
+                                media-action(k, i, a) => {
+                                    root.media-action(k, i, a);
+                                }
+                            }
+                        }
+                        HorizontalLayout {
+                            alignment: end;
+                            padding-right: 2px;
+                            VerticalLayout {
+                                alignment: center;
+                                AudioStamp { }
                             }
                         }
                     }
