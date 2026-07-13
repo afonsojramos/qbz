@@ -24,7 +24,7 @@ use std::time::Duration;
 use slint::{ComponentHandle, Model, Timer, TimerMode, Weak};
 
 use crate::plex_settings;
-use crate::{AppWindow, PlexSectionItem, PlexSettingsState, SettingsState};
+use crate::{AppWindow, LocalLibraryState, PlexSectionItem, PlexSettingsState, SettingsState};
 
 // ----------------------------------------------------------------------------
 // Status helper — Slint uses inline @tr, so we resolve the (key,args) status
@@ -205,9 +205,21 @@ fn refresh_gates(w: &AppWindow) {
     let token = s.get_token().to_string();
     let local = is_local_address(&server_url);
     let base = resolve_base_url(&server_url);
+    let usable = enabled && local && !base.is_empty() && !token.trim().is_empty();
     s.set_is_local_address(local);
     s.set_base_url(base.clone().into());
-    s.set_can_use(enabled && local && !base.is_empty() && !token.trim().is_empty());
+    s.set_can_use(usable);
+    // Keep the Local Library header's Sync button (#573) in step with the
+    // connection state (seeded at startup from the store in main.rs).
+    w.global::<LocalLibraryState>().set_plex_available(usable);
+}
+
+/// Whether the persisted store holds a usable Plex connection (enabled +
+/// local resolved base_url + token) — the startup seed for the Local Library
+/// header Sync button (#573), independent of the Settings panel ever opening.
+pub fn is_configured() -> bool {
+    let cfg = plex_settings::get();
+    can_use(cfg.enabled, &cfg.base_url, &cfg.token)
 }
 
 // ----------------------------------------------------------------------------
@@ -739,6 +751,38 @@ pub fn load_sections(weak: Weak<AppWindow>, handle: tokio::runtime::Handle) {
     let handle2 = handle.clone();
     handle.spawn(async move {
         load_sections_inner(weak, handle2, base, token).await;
+    });
+}
+
+/// Manual re-sync from the Local Library header Sync button (#573): the same
+/// sections-fetch + per-section track sync as the Settings panel's background
+/// refresh, but gated on the PERSISTED store (the panel may never have been
+/// opened this session, so the UI-side `server-url` field can be unseeded).
+/// `on_done` runs after the sync finishes — success or not — so the caller
+/// can reload the Local Library browse models in place.
+pub fn sync_now(
+    weak: Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+    on_done: impl FnOnce() + Send + 'static,
+) {
+    let cfg = plex_settings::get();
+    // `base_url` is already resolved (`proto://host:port`) — it passes
+    // through `can_use`'s resolve + LAN checks unchanged (port preserved).
+    if !can_use(cfg.enabled, &cfg.base_url, &cfg.token) {
+        return;
+    }
+    let base = cfg.base_url.clone();
+    let token = cfg.token.clone();
+    let _ = weak.upgrade_in_event_loop(|w| {
+        w.global::<LocalLibraryState>().set_plex_syncing(true);
+    });
+    let handle2 = handle.clone();
+    handle.spawn(async move {
+        load_sections_inner(weak.clone(), handle2, base, token).await;
+        let _ = weak.upgrade_in_event_loop(|w| {
+            w.global::<LocalLibraryState>().set_plex_syncing(false);
+        });
+        on_done();
     });
 }
 

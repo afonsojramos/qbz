@@ -15610,6 +15610,45 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             });
     }
+    // Local Library header — manual Plex re-sync (#573). Runs the same
+    // sections+tracks refresh as the Settings panel's background pass, then
+    // drops the browse models and reloads the current tab in place so the
+    // fresh Plex rows show without a restart.
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
+        window
+            .global::<LocalLibraryActions>()
+            .on_sync_plex(move || {
+                let runtime = runtime.clone();
+                let nav_weak = weak.clone();
+                let handle2 = handle.clone();
+                let image_cache = image_cache.clone();
+                let refresh_weak = weak.clone();
+                plex_auth::sync_now(weak.clone(), handle.clone(), move || {
+                    let _ = refresh_weak.upgrade_in_event_loop(move |w| {
+                        local_library::reset_browse_models(&w);
+                        if w.global::<NavState>().get_view() == ContentView::LocalLibrary {
+                            let tab = local_library::LibTab::from_tab_id(
+                                &w.global::<LocalLibraryState>().get_active_tab(),
+                            )
+                            .unwrap_or(local_library::LibTab::Albums);
+                            navigate_local_library(
+                                runtime, nav_weak, &handle2, image_cache, tab,
+                            );
+                        }
+                    });
+                });
+            });
+    }
+    // Seed the Sync button's visibility from the persisted Plex store (the
+    // Settings panel may never be opened this session; plex_auth's
+    // refresh_gates keeps the flag fresh once it is).
+    window
+        .global::<LocalLibraryState>()
+        .set_plex_available(plex_auth::is_configured());
 
     // Settings > Local Library — folder management + maintenance + danger.
     // (Scan callbacks scan-all/scan-folder/stop-scan are wired with Slice B.)

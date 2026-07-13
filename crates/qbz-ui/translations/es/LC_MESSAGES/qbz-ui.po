@@ -4526,3 +4526,7 @@ msgstr "Fuente: {}"
 
 msgid "Output: {}"
 msgstr "Salida: {}"
+
+# Local Library header Plex sync button (#573)
+msgid "Sync Plex library"
+msgstr "Sincronizar biblioteca de Plex"

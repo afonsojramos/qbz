@@ -4485,3 +4485,7 @@ msgstr "ソース: {}"
 
 msgid "Output: {}"
 msgstr "出力: {}"
+
+# Local Library header Plex sync button (#573)
+msgid "Sync Plex library"
+msgstr "Plexライブラリを同期"

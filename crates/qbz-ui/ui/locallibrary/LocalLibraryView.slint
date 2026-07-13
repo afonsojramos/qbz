@@ -307,12 +307,15 @@ component EphemeralPane inherits Rectangle {
 // Used for the "Local Library settings" gear (management lives in Settings).
 component CircleIconBtn inherits Rectangle {
     in property <image> icon;
+    in property <string> tooltip;          // "" = no tooltip
+    in property <bool> busy: false;        // spinner replaces the icon; clicks ignored
     callback clicked();
     width: 28px;
     height: 28px;
     border-radius: 14px;
     background: ta.has-hover ? Theme.surface-hover : Theme.surface-elevated;
     QbzIcon {
+        visible: !root.busy;
         source: root.icon;
         width: 15px;
         height: 15px;
@@ -320,10 +323,27 @@ component CircleIconBtn inherits Rectangle {
         y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
         tint: Theme.text-primary;
     }
+    if root.busy: LoadingSpinner {
+        size: 15px;
+        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+    }
     ta := TouchArea {
         mouse-cursor: pointer;
         clicked => {
-            root.clicked();
+            if (!root.busy) {
+                root.clicked();
+            }
+        }
+        changed has-hover => {
+            if (self.has-hover && root.tooltip != "") {
+                TooltipState.text = root.tooltip;
+                TooltipState.anchor-x = root.absolute-position.x + root.width / 2;
+                TooltipState.anchor-y = root.absolute-position.y;
+                TooltipState.show = true;
+            } else if (!self.has-hover) {
+                TooltipState.show = false;
+            }
         }
     }
 }
@@ -707,6 +727,19 @@ export component LocalLibraryView inherits Rectangle {
                     icon: @image-url("../assets/icons/settings.svg");
                     clicked => {
                         LocalLibraryActions.open-settings();
+                    }
+                }
+            }
+            // Plex sync (#573) — manual re-sync of the Plex cache without a
+            // restart. Visible only when Plex is enabled + authenticated.
+            if LocalLibraryState.plex-available: VerticalLayout {
+                alignment: center;
+                CircleIconBtn {
+                    icon: @image-url("../assets/icons/refresh-cw.svg");
+                    tooltip: @tr("Sync Plex library");
+                    busy: LocalLibraryState.plex-syncing;
+                    clicked => {
+                        LocalLibraryActions.sync-plex();
                     }
                 }
             }
