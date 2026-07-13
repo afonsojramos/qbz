@@ -158,6 +158,34 @@ export component AlbumPageView inherits Rectangle {
             ? AlbumState.description-shorter
             : AlbumState.description-short;
 
+    // Header text colors: the ImmersiveAtmosphere behind the header is
+    // always dark, so when the gradient setting is ON the header text must
+    // be light regardless of theme (light themes' Theme.text-* are dark and
+    // vanish on the atmosphere). With the gradient OFF the header sits on
+    // Theme.surface-main and keeps the normal theme colors.
+    property <color> hdr-strong: AppearanceState.album-header-gradient
+        ? #ffffff : Theme.text-primary;
+    property <color> hdr-body: AppearanceState.album-header-gradient
+        ? #ffffff.with-alpha(0.88) : Theme.text-secondary;
+    property <color> hdr-muted: AppearanceState.album-header-gradient
+        ? #ffffff.with-alpha(0.62) : Theme.text-muted;
+
+    // With the gradient OFF the header's CircleActions sit on the plain
+    // theme surface — switch them to the theme-aware on-surface variant so
+    // they stay visible on light themes (their default palette is white-on-
+    // dark, tuned for the atmosphere).
+    property <bool> hdr-on-surface: !AppearanceState.album-header-gradient;
+
+    // Atmosphere/gradient extent: the background blocks must end EXACTLY at
+    // the header/track-list divider — the header height varies (long
+    // editorial descriptions), so a fixed px either overshoots into the
+    // track list or fades early. `header-divider.y` is the divider's offset
+    // within `page`, and the backgrounds share the page's top origin inside
+    // the Flickable viewport (page.y = its own offset there, normally 0).
+    // The backgrounds are absolutely positioned and don't participate in
+    // the page layout, so this cannot form a binding loop.
+    property <length> atmo-height: page.y + header-divider.y;
+
     background: Theme.surface-main;
 
     flick := Flickable {
@@ -194,7 +222,7 @@ export component AlbumPageView inherits Rectangle {
             x: 0;
             y: 0;
             width: parent.width;
-            height: 360px;
+            height: root.atmo-height;
             source-image: AlbumState.header-atmosphere;
             fallback-image: AlbumState.artwork;
             animated: false;
@@ -206,7 +234,7 @@ export component AlbumPageView inherits Rectangle {
             x: 0;
             y: 0;
             width: parent.width;
-            height: 360px;
+            height: root.atmo-height;
             background: @linear-gradient(180deg,
                 AlbumState.header-color 0%,
                 AlbumState.header-color 16%,
@@ -216,10 +244,13 @@ export component AlbumPageView inherits Rectangle {
             x: 0;
             y: 0;
             width: parent.width;
-            height: 360px;
+            height: root.atmo-height;
+            // Fade start sits proportionally near the bottom so the blend
+            // to surface-main always COMPLETES right at the divider,
+            // whatever height the header resolved to.
             background: @linear-gradient(180deg,
                 transparent 0%,
-                transparent 58%,
+                transparent 82%,
                 Theme.surface-main 100%);
         }
 
@@ -345,7 +376,7 @@ export component AlbumPageView inherits Rectangle {
 
                     Text {
                         text: AlbumState.title;
-                        color: Theme.text-primary;
+                        color: root.hdr-strong;
                         font-size: Typography.section;
                         font-weight: Typography.bold;
                         overflow: elide;
@@ -360,7 +391,7 @@ export component AlbumPageView inherits Rectangle {
                         for credit[idx] in AlbumState.artists: HorizontalLayout {
                             if idx > 0: Text {
                                 text: "  •  ";
-                                color: Theme.text-secondary;
+                                color: root.hdr-body;
                                 font-size: Typography.heading;
                                 font-weight: Typography.bold;
                                 vertical-alignment: center;
@@ -376,15 +407,15 @@ export component AlbumPageView inherits Rectangle {
                                 credit-text := Text {
                                     text: credit.name;
                                     color: credit-area.has-hover && credit.id != ""
-                                        ? Theme.text-primary
-                                        : Theme.text-secondary;
+                                        ? root.hdr-strong
+                                        : root.hdr-body;
                                     font-size: Typography.heading;
                                     font-weight: Typography.bold;
                                 }
                             }
                             if credit.role != "": Text {
                                 text: " (" + credit.role + ")";
-                                color: Theme.text-secondary;
+                                color: root.hdr-body;
                                 font-size: Typography.heading;
                                 font-weight: 400;
                                 vertical-alignment: center;
@@ -401,7 +432,7 @@ export component AlbumPageView inherits Rectangle {
                         spacing: 0px;
                         Text {
                             text: AlbumState.meta-pre != "" ? AlbumState.meta-pre + "   •   " : "";
-                            color: Theme.text-secondary;
+                            color: root.hdr-body;
                             font-size: Typography.body;
                             vertical-alignment: center;
                         }
@@ -414,21 +445,21 @@ export component AlbumPageView inherits Rectangle {
                             }
                             label-text := Text {
                                 text: AlbumState.label;
-                                color: label-area.has-hover ? Theme.accent : Theme.text-secondary;
+                                color: label-area.has-hover ? Theme.accent : root.hdr-body;
                                 font-size: Typography.body;
                                 vertical-alignment: center;
                             }
                         }
                         Text {
                             text: AlbumState.meta-post != "" ? "   •   " + AlbumState.meta-post : "";
-                            color: Theme.text-secondary;
+                            color: root.hdr-body;
                             font-size: Typography.body;
                             vertical-alignment: center;
                         }
                     }
                     if AlbumState.label-id == "" || AlbumState.label == "": Text {
                         text: AlbumState.info-line;
-                        color: Theme.text-secondary;
+                        color: root.hdr-body;
                         font-size: Typography.body;
                         overflow: elide;
                     }
@@ -445,7 +476,7 @@ export component AlbumPageView inherits Rectangle {
                         // page padding 32+32, artwork 224, header gap 32.
                         width: root.width - 320px;
                         text: root.desc-display;
-                        color: Theme.text-secondary;
+                        color: root.hdr-body;
                         font-size: Typography.legal;
                         wrap: word-wrap;
                     }
@@ -474,6 +505,7 @@ export component AlbumPageView inherits Rectangle {
                         CircleAction {
                             icon: @image-url("../assets/icons/play-fill.svg");
                             primary: true;
+                            on-surface: root.hdr-on-surface;
                             // Spin only while THIS album's first track is fetching.
                             loading: NowPlayingState.loading
                                 && NowPlayingState.album-id == AlbumState.id;
@@ -485,6 +517,7 @@ export component AlbumPageView inherits Rectangle {
                             alignment: center;
                             CircleAction {
                                 icon: @image-url("../assets/icons/shuffle.svg");
+                                on-surface: root.hdr-on-surface;
                                 clicked => {
                                     root.media-action("album", AlbumState.id, "shuffle");
                                 }
@@ -496,6 +529,7 @@ export component AlbumPageView inherits Rectangle {
                             alignment: center;
                             CircleAction {
                                 icon: @image-url("../assets/icons/pencil.svg");
+                                on-surface: root.hdr-on-surface;
                                 clicked => {
                                     root.media-action("album", AlbumState.id, "edit");
                                 }
@@ -511,6 +545,7 @@ export component AlbumPageView inherits Rectangle {
                                 icon: AlbumState.is-favorite
                                     ? @image-url("../assets/icons/heart-filled.svg")
                                     : @image-url("../assets/icons/heart.svg");
+                                on-surface: root.hdr-on-surface;
                                 active: AlbumState.is-favorite;
                                 loading: AlbumState.favorite-loading;
                                 clicked => {
@@ -522,6 +557,7 @@ export component AlbumPageView inherits Rectangle {
                             alignment: center;
                             CircleAction {
                                 icon: @image-url("../assets/icons/radio.svg");
+                                on-surface: root.hdr-on-surface;
                                 clicked => {
                                     root.media-action("album", AlbumState.id, "radio");
                                 }
@@ -531,6 +567,7 @@ export component AlbumPageView inherits Rectangle {
                             alignment: center;
                             CircleAction {
                                 icon: @image-url("../assets/icons/book-open.svg");
+                                on-surface: root.hdr-on-surface;
                                 clicked => {
                                     root.media-action("album", AlbumState.id, "booklet");
                                 }
@@ -540,6 +577,7 @@ export component AlbumPageView inherits Rectangle {
                             alignment: center;
                             CircleAction {
                                 icon: @image-url("../assets/icons/cassette-tape.svg");
+                                on-surface: root.hdr-on-surface;
                                 clicked => {
                                     root.media-action("album", AlbumState.id, "add-to-mixtape");
                                 }
@@ -552,6 +590,7 @@ export component AlbumPageView inherits Rectangle {
                             alignment: center;
                             CircleAction {
                                 icon: @image-url("../assets/icons/info.svg");
+                                on-surface: root.hdr-on-surface;
                                 clicked => {
                                     root.media-action("album", AlbumState.id, "info");
                                 }
@@ -564,6 +603,7 @@ export component AlbumPageView inherits Rectangle {
                                 height: 32px;
                                 CircleAction {
                                     icon: @image-url("../assets/icons/ellipsis.svg");
+                                    on-surface: root.hdr-on-surface;
                                     clicked => {
                                         album-menu.show();
                                     }
@@ -588,7 +628,9 @@ export component AlbumPageView inherits Rectangle {
             }
 
             Rectangle { height: 20px; }
-            Rectangle {
+            // The atmosphere/fade blocks above size themselves to this
+            // divider (root.atmo-height) so the gradient ends exactly here.
+            header-divider := Rectangle {
                 height: 1px;
                 background: Theme.border-subtle;
             }

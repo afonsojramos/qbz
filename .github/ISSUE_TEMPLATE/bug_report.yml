@@ -3,6 +3,32 @@ description: Report something that is not working as expected
 title: "[Bug] "
 labels: ["bug"]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        ## ⚠️ Bug reports need logs
+        Without logs I am debugging blind, and the report will almost certainly
+        stall waiting on `needs: info` instead of getting fixed.
+
+        **Please attach your logs in the Logs section below** — it is the single
+        most useful thing you can do to get this fixed fast
+        (**Settings → Developer Mode → View Logs → Upload** the Terminal *and*
+        Console tabs, then paste both URLs). If the app crashes before the UI
+        opens, use the terminal fallback described in that section.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Before submitting
+      description: A bug report without these is much harder to act on.
+      options:
+        - label: I have attached my logs below (Terminal + Console), or explained why I cannot get them.
+          required: true
+        - label: I searched the existing issues and this is not a duplicate.
+          required: true
+        - label: I included concrete steps to reproduce.
+          required: true
+
   - type: dropdown
     id: platform
     attributes:

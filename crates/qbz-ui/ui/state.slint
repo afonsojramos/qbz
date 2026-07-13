@@ -1056,6 +1056,11 @@ export global LocalLibraryState {
     in-out property <string> active-tab: "albums";
     in property <bool> loading: false;
     in property <string> load-error: "";
+    // Plex manual sync (#573): `plex-available` gates the header Sync button
+    // (Plex enabled + authenticated — seeded at startup from the store, kept
+    // fresh by plex_auth's gate refresh); `plex-syncing` drives its spinner.
+    in property <bool> plex-available: false;
+    in property <bool> plex-syncing: false;
     // Header stats / per-tab badge counts.
     in property <int> album-count: 0;
     in property <int> artist-count: 0;
@@ -1197,6 +1202,10 @@ export global LocalLibraryActions {
     callback select-tab(string /* "albums"|"artists"|"folders"|"tracks" */);
     // Open Settings > Local Library (the gear button — management lives there).
     callback open-settings();
+    // Manual Plex re-sync (#573) — the header Sync button, visible only when
+    // Plex is configured. Re-fetches sections + tracks, then the Rust side
+    // reloads the browse models in place.
+    callback sync-plex();
 
     // --- Albums tab ---
     // Re-query page 1 with the current search text (server-side LIKE).
@@ -1994,6 +2003,11 @@ export global PlaylistActions {
     callback search(string);
     // Sort by a field (re-selecting the active field toggles asc/desc).
     callback set-sort(string);
+    // Drag-reorder commit (custom-order list, issue #589): move the row at
+    // visible index `from` to insertion slot `to` (0..N; slots `from` and
+    // `from+1` are the no-op gaps and never fire). Complements the
+    // single-step ("track","move-up"/"move-down") chevron arms.
+    callback reorder-track(int /* from */, int /* to */);
 }
 
 // "Edit playlist" modal state (rename + description + delete).
@@ -4048,6 +4062,17 @@ export global NowPlayingState {
     // Nyquist). 0 = unknown.
     in property <int> sample-rate-hz: 0;
     in property <int> bit-depth: 0;
+
+    // EFFECTIVE (delivered) stream quality — what the engine is actually
+    // decoding after the streaming-quality setting downgrade (#590 follow-up).
+    // The badge keeps showing the catalog MAX (quality-tier/detail above);
+    // when the delivered stream is below it, `quality-downgraded` turns on
+    // the AudioStamp's downgrade arrow and `quality-true-detail` carries the
+    // true "16-bit / 44.1 kHz" line for the hover tooltip. 0 / "" = unknown.
+    in property <int> effective-sample-rate-hz: 0;
+    in property <int> effective-bit-depth: 0;
+    in property <bool> quality-downgraded: false;
+    in property <string> quality-true-detail;
 
     // Output backend + mode LEDs (Mode C "Small" bar reads these). Mirror of
     // the same four on SettingsState (:2154-2157) — surfaced here so the

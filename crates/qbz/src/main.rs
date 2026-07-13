@@ -6413,9 +6413,21 @@ fn detect_hardware_gpu() -> RendererTier {
     // driver is the mature path on that hardware). `hasvk` is Mesa's legacy
     // Intel gen7/7.5 (Ivy Bridge / Haswell) Vulkan driver — same story: GL is
     // the fast path there. llvmpipe normally reports DeviceType::Cpu and is
-    // skipped above, listed only as a belt-and-braces.
-    const WEAK_GPU_MARKERS: [&str; 8] =
-        ["v3dv", "hasvk", "panfrost", "panvk", "lima", "mali", "videocore", "llvmpipe"];
+    // skipped above, listed only as a belt-and-braces. Intel UHD 600 (Gemini
+    // Lake) flickers on the wgpu tier — GL is the stable path there (#578);
+    // both name spellings covered since Mesa reports "UHD Graphics 600".
+    const WEAK_GPU_MARKERS: [&str; 10] = [
+        "v3dv",
+        "hasvk",
+        "panfrost",
+        "panvk",
+        "lima",
+        "mali",
+        "videocore",
+        "llvmpipe",
+        "uhd graphics 600",
+        "uhd 600",
+    ];
     let mut best = RendererTier::Software;
     let mut adapter_summary: Vec<String> = Vec::new();
     let mut topo = GpuTopology::default();
@@ -15598,6 +15610,45 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             });
     }
+    // Local Library header — manual Plex re-sync (#573). Runs the same
+    // sections+tracks refresh as the Settings panel's background pass, then
+    // drops the browse models and reloads the current tab in place so the
+    // fresh Plex rows show without a restart.
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
+        window
+            .global::<LocalLibraryActions>()
+            .on_sync_plex(move || {
+                let runtime = runtime.clone();
+                let nav_weak = weak.clone();
+                let handle2 = handle.clone();
+                let image_cache = image_cache.clone();
+                let refresh_weak = weak.clone();
+                plex_auth::sync_now(weak.clone(), handle.clone(), move || {
+                    let _ = refresh_weak.upgrade_in_event_loop(move |w| {
+                        local_library::reset_browse_models(&w);
+                        if w.global::<NavState>().get_view() == ContentView::LocalLibrary {
+                            let tab = local_library::LibTab::from_tab_id(
+                                &w.global::<LocalLibraryState>().get_active_tab(),
+                            )
+                            .unwrap_or(local_library::LibTab::Albums);
+                            navigate_local_library(
+                                runtime, nav_weak, &handle2, image_cache, tab,
+                            );
+                        }
+                    });
+                });
+            });
+    }
+    // Seed the Sync button's visibility from the persisted Plex store (the
+    // Settings panel may never be opened this session; plex_auth's
+    // refresh_gates keeps the flag fresh once it is).
+    window
+        .global::<LocalLibraryState>()
+        .set_plex_available(plex_auth::is_configured());
 
     // Settings > Local Library — folder management + maintenance + danger.
     // (Scan callbacks scan-all/scan-folder/stop-scan are wired with Slice B.)
@@ -17996,6 +18047,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 playlist::apply_custom_order(&w, orders);
                             });
                         });
+                    }
+                }
+            });
+    }
+    // Drag-reorder within the custom-order track list (issue #589): the
+    // drop commits ONE from->to move. Routes like the move-up/move-down
+    // chevron arms: LOCAL playlists write the repo position order directly
+    // (repo::reorder, B2); Qobuz playlists rebuild the custom-order sidecar
+    // optimistically and persist the full order off-thread.
+    {
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<PlaylistActions>()
+            .on_reorder_track(move |from, to| {
+                let Some(w) = weak.upgrade() else { return; };
+                if from < 0 || to < 0 || to == from || to == from + 1 {
+                    return;
+                }
+                let (from, to) = (from as usize, to as usize);
+                let pid = w.global::<PlaylistState>().get_id().to_string();
+                if local_playlist::is_local_id(&pid) {
+                    local_playlist::reorder_row(&w, &handle, from, to);
+                } else {
+                    let orders = playlist::reorder_track(&w, from, to);
+                    if !orders.is_empty() {
+                        if let Ok(pid) = pid.parse::<u64>() {
+                            handle.spawn(async move {
+                                tokio::task::spawn_blocking(move || {
+                                    playlist::persist_custom(pid, orders);
+                                })
+                                .await
+                                .ok();
+                            });
+                        }
                     }
                 }
             });

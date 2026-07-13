@@ -337,6 +337,87 @@ export component PlaylistView inherits Rectangle {
         : PlaylistState.sort-field == "custom" ? @tr("Custom")
         : @tr("Default");
 
+    // --- Custom-order drag-reorder state (issue #589) -------------------
+    // Reorder RIDES the normal row-body drag (TrackRow's `ta` +
+    // DragActions — the same gesture that drags a track onto a sidebar
+    // playlist; no separate grip/gesture). TrackRow reports the source
+    // index via body-drag-started right as the shared drag starts; from
+    // there this view reads everything off DragState — the Rust-fed
+    // WINDOW-coord pointer the app-wide DragGhost is positioned with (no
+    // per-row absolute-position math). Releasing inside the track list
+    // reorders; releasing on a sidebar playlist is the unchanged Rust
+    // add-to-playlist drop (DragActions.end).
+    // All indices are VISIBLE-list indices into PlaylistState.tracks.
+    property <int> reorder-from: -1;   // source row; -1 = this drag is not a reorder
+    property <int> reorder-over: -1;   // insertion slot 0..N; -1 = pointer outside the list
+    // Sidebar drop target captured WHILE the drag is active. Rust's
+    // DragActions.end clears over-playlist-id in the same turn it clears
+    // `active`, and `changed` callbacks run deferred — by the time the
+    // drag-active handler below fires, over-playlist-id always reads "".
+    // This guarded mirror keeps the value the drop actually saw.
+    property <string> reorder-drop-playlist: "";
+    // DragState mirrors — a `changed` callback needs a component-local
+    // property (same pattern as Sidebar's drop detection).
+    property <bool> drag-active: DragState.active;
+    property <length> drag-px: DragState.pointer-x;
+    property <length> drag-py: DragState.pointer-y;
+    property <string> drag-over-id: DragState.over-playlist-id;
+
+    // True while the drag pointer sits inside the track list's rect.
+    // track-list is a regular element (NOT a row inside the ListView), so
+    // its absolute-position is exact — no row double-count. Only called
+    // from event handlers (reading absolute-position in a declarative
+    // binding is a layout recursion).
+    function pointer-in-list() -> bool {
+        return DragState.pointer-x >= track-list.absolute-position.x
+            && DragState.pointer-x <= track-list.absolute-position.x + track-list.width
+            && DragState.pointer-y >= track-list.absolute-position.y
+            && DragState.pointer-y <= track-list.absolute-position.y + track-list.height;
+    }
+    // DragState.pointer-y -> insertion slot [0..N]. Rows are a fixed 50px
+    // stacked with 0 spacing; round() lands boundaries on row centers
+    // (top half of row k -> slot k, bottom half -> slot k+1). viewport-y
+    // (<= 0) folds the scroll back in, so the math stays scroll-aware.
+    function slot-from-pointer() -> int {
+        return Math.max(0, Math.min(PlaylistState.tracks.length,
+            Math.round((DragState.pointer-y - track-list.absolute-position.y
+                - track-list.viewport-y) / 50px)));
+    }
+    function update-reorder-slot() {
+        if (root.reorder-from >= 0 && DragState.active) {
+            root.reorder-over = root.pointer-in-list() ? root.slot-from-pointer() : -1;
+        }
+    }
+    changed drag-px => { root.update-reorder-slot(); }
+    changed drag-py => { root.update-reorder-slot(); }
+    changed drag-over-id => {
+        // Only while active — see the reorder-drop-playlist doc above.
+        if (DragState.active) {
+            root.reorder-drop-playlist = root.drag-over-id;
+        }
+    }
+    changed drag-active => {
+        if (root.drag-active) {
+            return;
+        }
+        // Drag ended (the Rust DragActions.end already ran — it handled a
+        // sidebar-playlist drop, if any). A reorder drag released INSIDE
+        // the list and NOT on a sidebar playlist moves the track; the slot
+        // is recomputed here from the FINAL pointer (the deferred drag-py
+        // handler may not have run for the last move). `slot == from` and
+        // `slot == from + 1` are the two gaps around the source row (no-op).
+        if (root.reorder-from >= 0
+            && root.reorder-drop-playlist == ""
+            && root.pointer-in-list()
+            && root.slot-from-pointer() != root.reorder-from
+            && root.slot-from-pointer() != root.reorder-from + 1) {
+            PlaylistActions.reorder-track(root.reorder-from, root.slot-from-pointer());
+        }
+        root.reorder-from = -1;
+        root.reorder-over = -1;
+        root.reorder-drop-playlist = "";
+    }
+
     background: Theme.surface-main;
 
     page := VerticalLayout {
@@ -989,6 +1070,18 @@ export component PlaylistView inherits Rectangle {
                             local-goto-actions: (track.source == "local" || track.source == "plex")
                                 && track.id.is-float();
                             multi-select-mode: PlaylistState.multi-select-mode;
+                            // Drag-reorder (issue #589): rides the normal
+                            // row-body drag — the row only reports the
+                            // source index as the shared drag starts; the
+                            // view-level DragState handlers above do the rest.
+                            // TODO: auto-scroll during drag when the pointer
+                            // nears the list's top/bottom edge (the drag
+                            // currently reorders within the visible viewport).
+                            body-drag-started(idx) => {
+                                root.reorder-from = idx;
+                                root.reorder-over = -1;
+                                root.reorder-drop-playlist = "";
+                            }
                             media-action(kind, id, action) => {
                                 if (action == "play") {
                                     root.play-track(id);
@@ -998,6 +1091,26 @@ export component PlaylistView inherits Rectangle {
                             }
                         }
                     }
+                }
+                // Drop indicator: a 2px accent line at the insertion slot,
+                // hidden while the pointer is outside the list (slot -1 —
+                // e.g. over the sidebar, where the drop ADDS instead) and
+                // on the two no-op slots (from, from+1). The slot's
+                // content-space position folds back through viewport-y;
+                // clamped to the list rect so a slot scrolled out of view
+                // never paints outside it. Width stops before the 14px
+                // scrollbar gutter.
+                if root.reorder-from >= 0
+                    && root.reorder-over >= 0
+                    && root.reorder-over != root.reorder-from
+                    && root.reorder-over != root.reorder-from + 1: Rectangle {
+                    x: 0;
+                    y: Math.max(0px, Math.min(parent.height - 2px,
+                        root.reorder-over * 50px + track-list.viewport-y - 1px));
+                    width: parent.width - 14px;
+                    height: 2px;
+                    background: Theme.accent;
+                    border-radius: 1px;
                 }
                 ListScrollbar {
                     // Anchor to the VIEW's right edge like LocalLibrary > Tracks:
@@ -1355,4 +1468,9 @@ export component PlaylistView inherits Rectangle {
             }
         }
     }
+
+    // The floating reorder ghost is the app-wide DragGhost (AppShell): the
+    // reorder IS the normal row-body drag, so the ghost is positioned by
+    // the proven Rust DragActions window coords — no component-local ghost,
+    // no row absolute-position math.
 }

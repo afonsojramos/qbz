@@ -35,7 +35,9 @@ export component TrackRow inherits Rectangle {
     property <bool> row-inert: root.track.is-blacklisted;
     // Fade out when the row is being removed (favorites un-favorite); a
     // blacklisted row that isn't fading dims to 0.4.
-    opacity: root.track.removing ? 0.0 : (root.row-inert ? 0.4 : 1.0);
+    opacity: root.track.removing
+        ? 0.0
+        : (root.row-inert ? 0.4 : 1.0);
     animate opacity { duration: 250ms; }
     in property <int> index;
     in property <bool> show-artwork: true;
@@ -84,6 +86,16 @@ export component TrackRow inherits Rectangle {
     // Custom-order reorder controls (up/down chevrons) at the leading
     // edge — used by the playlist custom sort.
     in property <bool> show-reorder: false;
+    // Drag-reorder (custom-order lists, issue #589) RIDES the normal
+    // row-body drag (ta + DragActions — the same gesture that drags a
+    // track onto a sidebar playlist; there is NO separate reorder
+    // gesture/grip). On a reorderable surface (show-reorder) the row
+    // reports which visible index the drag left from, right before
+    // DragActions.start; the parent view then reads the drag from
+    // DragState (the Rust-fed window-coord pointer the shared DragGhost
+    // uses) — a drop inside the list reorders, a drop on a sidebar
+    // playlist stays the unchanged add-to-playlist path.
+    callback body-drag-started(int /* visible index */);
     // Whether the row can be dragged onto sidebar playlists.
     in property <bool> draggable: true;
     callback media-action(string, string, string);
@@ -211,6 +223,13 @@ export component TrackRow inherits Rectangle {
                     && (Math.abs(root.absolute-position.x - root.x + ta.mouse-x - ta.down-x) > 6px
                      || Math.abs(root.absolute-position.y - root.y + ta.mouse-y - ta.down-y) > 6px)) {
                     ta.dragging = true;
+                    // Reorderable surface: tell the parent view which row
+                    // this drag left from BEFORE the shared drag starts
+                    // (issue #589 — see body-drag-started above). The
+                    // DragActions call itself is untouched.
+                    if (root.show-reorder) {
+                        root.body-drag-started(root.index);
+                    }
                     DragActions.start(
                         root.track.id,
                         root.track.title,
@@ -234,7 +253,9 @@ export component TrackRow inherits Rectangle {
         padding-right: 12px;
         spacing: 14px;
 
-        // Reorder chevrons (custom-order mode) — leading edge.
+        // Reorder gutter (custom-order mode) — leading edge: the up/down
+        // chevrons. Drag-reorder needs no control here — it rides the
+        // row-body drag (see body-drag-started above).
         if root.show-reorder: VerticalLayout {
             alignment: center;
             spacing: 0px;

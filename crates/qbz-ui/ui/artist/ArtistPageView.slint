@@ -112,6 +112,31 @@ export component ArtistPageView inherits Rectangle {
     // needs to shrink for the sidebar — it always uses the full
     // window width minus the page padding + portrait + header gap.
     property <length> content-width: root.width;
+
+    // Header text colors (same rule as AlbumPageView): the
+    // ImmersiveAtmosphere behind the header is always dark, so when the
+    // gradient setting is ON the header text must be light regardless of
+    // theme (light themes' Theme.text-* are dark and vanish on the
+    // atmosphere). With the gradient OFF the header sits on
+    // Theme.surface-main and keeps the normal theme colors.
+    property <color> hdr-strong: AppearanceState.album-header-gradient
+        ? #ffffff : Theme.text-primary;
+    property <color> hdr-body: AppearanceState.album-header-gradient
+        ? #ffffff.with-alpha(0.88) : Theme.text-secondary;
+
+    // With the gradient OFF the header's CircleActions sit on the plain
+    // theme surface — switch them to the theme-aware on-surface variant so
+    // they stay visible on light themes.
+    property <bool> hdr-on-surface: !AppearanceState.album-header-gradient;
+
+    // Atmosphere/gradient extent: end EXACTLY at the header/content
+    // boundary — `body-row.y` is where the body content starts within
+    // `page` (the header height varies with the bio length, so a fixed px
+    // either overshoots into the content or fades early). The backgrounds
+    // share the page's top origin inside the Flickable viewport and are
+    // absolutely positioned (not part of the page layout), so this cannot
+    // form a binding loop.
+    property <length> atmo-height: page.y + body-row.y;
     // Popular Tracks shows the first 5; Load more expands to all.
     property <bool> top-tracks-expanded: false;
     property <int> top-tracks-preview: 5;
@@ -181,7 +206,7 @@ export component ArtistPageView inherits Rectangle {
             x: 0;
             y: 0;
             width: parent.width;
-            height: 360px;
+            height: root.atmo-height;
             source-image: ArtistState.header-atmosphere;
             fallback-image: ArtistState.artwork;
             animated: false;
@@ -193,7 +218,7 @@ export component ArtistPageView inherits Rectangle {
             x: 0;
             y: 0;
             width: parent.width;
-            height: 360px;
+            height: root.atmo-height;
             background: @linear-gradient(180deg,
                 ArtistState.header-color 0%,
                 ArtistState.header-color 16%,
@@ -203,10 +228,13 @@ export component ArtistPageView inherits Rectangle {
             x: 0;
             y: 0;
             width: parent.width;
-            height: 360px;
+            height: root.atmo-height;
+            // Fade start sits proportionally near the bottom so the blend
+            // to surface-main always COMPLETES right at the header/content
+            // boundary, whatever height the header resolved to.
             background: @linear-gradient(180deg,
                 transparent 0%,
-                transparent 58%,
+                transparent 82%,
                 Theme.surface-main 100%);
         }
 
@@ -325,7 +353,7 @@ export component ArtistPageView inherits Rectangle {
 
                     Text {
                         text: ArtistState.name;
-                        color: Theme.text-primary;
+                        color: root.hdr-strong;
                         font-size: Typography.section;
                         font-weight: Typography.bold;
                         overflow: elide;
@@ -341,7 +369,7 @@ export component ArtistPageView inherits Rectangle {
                     if ArtistState.bio != "": Text {
                         width: root.content-width - 296px;
                         text: ArtistState.bio-short;
-                        color: Theme.text-secondary;
+                        color: root.hdr-body;
                         font-size: Typography.legal;
                         wrap: word-wrap;
                     }
@@ -379,6 +407,7 @@ export component ArtistPageView inherits Rectangle {
                         spacing: 12px;
                         CircleAction {
                             icon: @image-url("../assets/icons/heart.svg");
+                            on-surface: root.hdr-on-surface;
                             active: ArtistState.is-following;
                             clicked => {
                                 root.media-action("artist", ArtistState.id, "follow");
@@ -392,6 +421,7 @@ export component ArtistPageView inherits Rectangle {
                             height: 32px;
                             CircleAction {
                                 icon: @image-url("../assets/icons/radio.svg");
+                                on-surface: root.hdr-on-surface;
                                 clicked => {
                                     radio-popup.show();
                                 }
@@ -424,6 +454,7 @@ export component ArtistPageView inherits Rectangle {
                         // is open, matching Tauri's `.network-btn.active`.
                         CircleAction {
                             icon: @image-url("../assets/icons/element-connect.svg");
+                            on-surface: root.hdr-on-surface;
                             active: NetworkSidebarState.open;
                             clicked => {
                                 NetworkSidebarState.open = !NetworkSidebarState.open;
@@ -439,6 +470,7 @@ export component ArtistPageView inherits Rectangle {
                             height: 32px;
                             CircleAction {
                                 icon: @image-url("../assets/icons/ellipsis.svg");
+                                on-surface: root.hdr-on-surface;
                                 clicked => {
                                     artist-overflow-menu.show();
                                 }
