@@ -58,7 +58,8 @@ impl DiscoveryTab {
 // Section ids
 // ---------------------------------------------------------------------------
 
-/// The 19-member `DiscoverySectionId` union (`sectionPrefs.ts`). `editorPicks`
+/// The 20-member `DiscoverySectionId` union (`sectionPrefs.ts` + the local
+/// `mostPlayedAlbums` addition). `editorPicks`
 /// is BOTH a tab and a section id (the "Albums of the Week" section).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DiscoverySectionId {
@@ -81,6 +82,9 @@ pub enum DiscoverySectionId {
     EssentialsByGenre,
     ArtistsToFollow,
     ArtistSpotlight,
+    /// "Most Played Albums" — top albums by local play count
+    /// (`qbz_app::settings::album_play_history`). Home + For You, default off.
+    MostPlayedAlbums,
 }
 
 impl DiscoverySectionId {
@@ -106,6 +110,7 @@ impl DiscoverySectionId {
             EssentialsByGenre => "essentialsByGenre",
             ArtistsToFollow => "artistsToFollow",
             ArtistSpotlight => "artistSpotlight",
+            MostPlayedAlbums => "mostPlayedAlbums",
         }
     }
 
@@ -131,6 +136,7 @@ impl DiscoverySectionId {
             "essentialsByGenre" => EssentialsByGenre,
             "artistsToFollow" => ArtistsToFollow,
             "artistSpotlight" => ArtistSpotlight,
+            "mostPlayedAlbums" => MostPlayedAlbums,
             _ => return None,
         })
     }
@@ -169,10 +175,11 @@ pub struct DiscoverPrefs {
 pub fn default_prefs() -> DiscoverPrefs {
     use DiscoverySectionId::*;
     DiscoverPrefs {
-        // home: first 7 ON, last 6 OFF (1:1 with Tauri sectionPrefs.ts:63-77).
-        // All 13 ids render on Home since #566 completed the port: qobuzMixes
-        // / releaseWatch / topArtists / favoriteAlbums were genuine Tauri-Home
-        // sections whose Slint render arms + data pipelines were missing.
+        // home: first 7 ON, the rest OFF. The first 13 are 1:1 with Tauri
+        // sectionPrefs.ts:63-77 (all render since #566 completed the port:
+        // qobuzMixes / releaseWatch / topArtists / favoriteAlbums were genuine
+        // Tauri-Home sections whose Slint arms + pipelines were missing).
+        // mostPlayedAlbums (#14) is a local addition — top albums by play count.
         home: vec![
             pref(NewReleases, true),
             pref(PressAwards, true),
@@ -187,6 +194,7 @@ pub fn default_prefs() -> DiscoverPrefs {
             pref(Qobuzissimes, false),
             pref(TopArtists, false),
             pref(FavoriteAlbums, false),
+            pref(MostPlayedAlbums, false),
         ],
         // editorPicks: all ON.
         editor_picks: vec![
@@ -212,6 +220,7 @@ pub fn default_prefs() -> DiscoverPrefs {
             pref(EssentialsByGenre, true),
             pref(ArtistsToFollow, true),
             pref(ArtistSpotlight, true),
+            pref(MostPlayedAlbums, false),
         ],
         show_recommendations: true,
         reco_cache_ttl_hours: 48,
@@ -506,13 +515,15 @@ mod tests {
     #[test]
     fn defaults_match_spec_exactly() {
         let d = default_prefs();
-        // home: 13 entries, first 7 ON (1:1 Tauri sectionPrefs.ts).
+        // home: 14 entries, first 7 ON (first 13 = 1:1 Tauri sectionPrefs.ts,
+        // + the local mostPlayedAlbums, default off).
         assert_eq!(
             ids(&d.home),
             vec![
                 NewReleases, PressAwards, QobuzPlaylists, RecentlyPlayedAlbums,
                 ContinueListening, IdealDiscography, MostStreamed, QobuzMixes,
                 ReleaseWatch, EditorPicks, Qobuzissimes, TopArtists, FavoriteAlbums,
+                MostPlayedAlbums,
             ]
         );
         assert_eq!(d.enabled_count(DiscoveryTab::Home), 7);
@@ -524,9 +535,11 @@ mod tests {
             vec![NewReleases, EditorPicks, Qobuzissimes, PressAwards, MostStreamed, IdealDiscography, QobuzPlaylists]
         );
         assert_eq!(d.enabled_count(DiscoveryTab::EditorPicks), 7);
-        // forYou: 12 entries, all ON, qobuzMixes first.
-        assert_eq!(d.for_you.len(), 12);
+        // forYou: 13 entries, qobuzMixes first; the 12 Tauri ones ON,
+        // mostPlayedAlbums (local addition) OFF.
+        assert_eq!(d.for_you.len(), 13);
         assert_eq!(d.for_you[0].id, QobuzMixes);
+        assert_eq!(d.for_you[12].id, MostPlayedAlbums);
         assert_eq!(d.enabled_count(DiscoveryTab::ForYou), 12);
     }
 

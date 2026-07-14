@@ -6,6 +6,7 @@ pub mod favorites_cache;
 pub mod graphics;
 pub mod playback;
 pub mod plex;
+pub mod album_play_history;
 pub mod reco_store;
 pub mod remote_control;
 pub mod scrobblers;
