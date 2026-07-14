@@ -100,7 +100,7 @@ fn resolve_token(target: &Target, roots: &ProfileRoots) -> Option<String> {
     }
     if target.is_local {
         if let Ok((cfg, _)) = QbzdConfig::load(&roots.config.join("qbzd.toml")) {
-            return cfg.server.token;
+            return cfg.server.token.filter(|t| !t.trim().is_empty());
         }
     }
     None

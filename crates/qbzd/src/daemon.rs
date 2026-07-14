@@ -104,7 +104,7 @@ pub async fn run(roots: ProfileRoots, cfg: QbzdConfig, warns: Vec<String>) -> Re
             runtime: booted.runtime.clone(),
             shared: booted.shared.clone(),
             roots: roots.clone(),
-            token: cfg.server.token.clone(),
+            token: cfg.server.token.filter(|t| !t.trim().is_empty()),
             bind: bind_addr.to_string(),
             rt: tokio::runtime::Handle::current(),
             audio: api_audio,

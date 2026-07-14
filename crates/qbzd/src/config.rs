@@ -151,4 +151,18 @@ mod tests {
         assert_eq!(secured.server.token.as_deref(), Some("s3cret"));
         assert!(warns.is_empty(), "known key must not warn: {warns:?}");
     }
+    #[test]
+    fn server_token_empty_string_parses_as_present_but_filtering_gates_it() {
+        // Empty or whitespace-only tokens in the config file parse successfully,
+        // but are filtered to None by daemon.rs and client.rs to prevent
+        // enabling auth with an empty secret.
+        let (cfg, warns) = QbzdConfig::from_str("[server]\ntoken = \"\"\n").unwrap();
+        assert_eq!(cfg.server.token, Some("".to_string()));
+        assert!(warns.is_empty());
+
+        let (cfg_ws, warns) =
+            QbzdConfig::from_str("[server]\ntoken = \"   \"\n").unwrap();
+        assert_eq!(cfg_ws.server.token, Some("   ".to_string()));
+        assert!(warns.is_empty());
+    }
 }
