@@ -50,9 +50,27 @@ pub async fn run(roots: ProfileRoots, cfg: QbzdConfig, warns: Vec<String>) -> Re
     //    not the port, protects the single-device_uuid / single-session.db
     //    invariants. A second daemon on the same root is diagnosed → exit 3.
     let _lock = InstanceLock::acquire(&roots.data).map_err(diagnose_lock)?;
-    // 5. port bind + foreign-occupant diagnosis (probe with GET /api/ping) is a
-    //    stateless step that lands in T6 (api::bind); serving starts at step 11.
-    //    Until T6 the daemon runs API-less.
+    // 5. port bind + foreign-occupant diagnosis — STATELESS, so it runs BEFORE
+    //    stores (6) and runtime composition (7) per the §8.1 order. On a bind
+    //    conflict the occupant is probed with GET /api/ping: a qbzd answer means
+    //    a stale foreign root (the lock said this root was free), anything else
+    //    the §2.2 "another process" copy. The socket is bound here but not served
+    //    until step 11 — connections queue in the listen backlog through boot.
+    let bind_addr = resolve_bind_addr(&cfg)?;
+    let bound = match crate::api::bind(bind_addr) {
+        Ok(b) => b,
+        Err(crate::api::BindError::AddrInUse(addr)) => return Err(diagnose_port_conflict(addr)),
+        Err(crate::api::BindError::Other(msg)) => {
+            return Err(format!(
+                "error: could not bind the control API on {bind_addr}: {msg}\n  → check [server] bind/port in ~/.config/qbzd/qbzd.toml"
+            ));
+        }
+    };
+    if !bind_addr.ip().is_loopback() {
+        // §6.3 verbatim — reachable-from-LAN warning (also shown by the TUI).
+        eprintln!("{}", crate::cli::copy::lan_bind_warning(&bind_addr.to_string()));
+        log::warn!("control API bound to non-loopback {bind_addr}");
+    }
 
     // 6.-9. compose stores + runtime + restore credentials + restore session.
     let mut booted = boot(&roots, &cfg, warns.len()).await?;
@@ -73,6 +91,27 @@ pub async fn run(roots: ProfileRoots, cfg: QbzdConfig, warns: Vec<String>) -> Re
         deps,
         shutdown_rx,
     ));
+
+    // 11. HTTP serve (02 §3) on the already-bound socket. `ApiState` carries a
+    //     second read-only audio-store connection (WAL) for the status audio
+    //     block, the tokio handle for the async queue read, and the opt-in
+    //     [server] token (None = open). 12. QConnect (T9/T10) splices after this.
+    let api_audio = qbz_audio::settings::AudioSettingsStore::new_at(&roots.data)
+        .map_err(|e| format!("error: could not open the audio settings store for the API: {e}"))?;
+    let api = crate::api::serve(
+        bound,
+        crate::api::ApiState {
+            runtime: booted.runtime.clone(),
+            shared: booted.shared.clone(),
+            roots: roots.clone(),
+            token: cfg.server.token.clone(),
+            bind: bind_addr.to_string(),
+            rt: tokio::runtime::Handle::current(),
+            audio: api_audio,
+            devices: std::sync::Mutex::new(crate::api::DeviceCache::default()),
+        },
+    );
+    log::info!("control API listening on {bind_addr}");
 
     // 13. park on SIGTERM/SIGINT. NO startup audio "hygiene": both candidate
     //     fns are verified no-ops from a fresh process and re-adding them is the
@@ -97,6 +136,11 @@ pub async fn run(roots: ProfileRoots, cfg: QbzdConfig, warns: Vec<String>) -> Re
         retry.abort();
         let _ = retry.await;
     }
+    // Stop the API thread and JOIN it: its `ApiState` holds an `Arc<AppRuntime>`
+    // clone, which must drop before `drop(booted)` releases the audio device
+    // ahead of the #521 pair — the same ordering constraint as the driver and
+    // auth-retry tasks (§8.2).
+    api.shutdown();
     // Release the audio device by dropping the runtime (its Player) BEFORE the
     // #521 pair (§8.2 step 3 precedes step 4).
     drop(booted);
@@ -368,6 +412,32 @@ fn spawn_auth_retry(
             SCHEDULE_SECS.len()
         );
     })
+}
+
+/// Resolve `[server] bind:port` to a `SocketAddr` (01 §10.1). A malformed value
+/// is a fatal boot error that names the fix (exit 1).
+fn resolve_bind_addr(cfg: &QbzdConfig) -> Result<std::net::SocketAddr, String> {
+    use std::net::ToSocketAddrs;
+    let hostport = format!("{}:{}", cfg.server.bind, cfg.server.port);
+    hostport
+        .to_socket_addrs()
+        .map_err(|e| {
+            format!("error: invalid [server] bind/port '{hostport}': {e}\n  → set a valid ip and port in ~/.config/qbzd/qbzd.toml")
+        })?
+        .next()
+        .ok_or_else(|| {
+            format!("error: [server] '{hostport}' resolved to no address\n  → set a valid ip and port in ~/.config/qbzd/qbzd.toml")
+        })
+}
+
+/// The step-5 bind-conflict diagnosis (02 §8.1-5 / §2.2): a qbzd occupant on a
+/// different data root vs. an unrelated process on the port.
+fn diagnose_port_conflict(addr: std::net::SocketAddr) -> String {
+    if crate::api::probe_is_qbzd(addr) {
+        crate::cli::copy::foreign_qbzd(&addr.to_string())
+    } else {
+        crate::cli::copy::port_in_use(addr.port())
+    }
 }
 
 /// Render an [`InstanceLock`] failure. For the already-running case this prints

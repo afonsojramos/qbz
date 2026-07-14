@@ -39,3 +39,92 @@ pub fn logout_success(daemon_nudged: bool) -> String {
         "logged out".to_string()
     }
 }
+
+// ============================ error voice (02 §1.4) ============================
+// Verbatim §1.4 / §2.2 / §6.3 copy — "modulo interpolated values". Every message
+// ends in one to three `→` fix lines; changing the wording is a spec violation.
+
+/// Daemon unreachable — exit 3 (02 §1.4). `host` is the target `ip:port`.
+pub fn daemon_down(host: &str) -> String {
+    format!(
+        "error: daemon not reachable at {host}
+  → is it running?    systemctl --user status qbzd
+  → just installed?   systemctl --user enable --now qbzd
+  → different host?   qbzd --host <ip>:<port> ...  or  export QBZD_HOST=<ip>:<port>"
+    )
+}
+
+/// Daemon up but not logged in — exit 4 (02 §1.4). The down-vs-unhealthy
+/// distinction: the daemon answered, the Qobuz session is what's missing.
+/// Consumed by the T7 transport verbs that hit a NeedsAuth daemon; `status`
+/// renders the composite block instead.
+#[allow(dead_code)] // wired by the T7 verbs (now/play/…) that refuse on NeedsAuth
+pub fn daemon_up_needs_auth() -> String {
+    "error: daemon is running but not logged in to Qobuz
+  → log in:           qbzd login
+  → have a bundle?    qbzd settings import qbz-settings-20260714.qbzb --include-auth"
+        .to_string()
+}
+
+/// Linger-off warning (02 §1.4; NOT an error) — printed by `qbzd status` on the
+/// daemon box when `loginctl show-user $USER -p Linger` reports `Linger=no`.
+pub fn linger_off(user: &str) -> String {
+    format!(
+        "warning: linger is off for user '{user}' — the daemon stops when you log out
+  → keep it running:  sudo loginctl enable-linger {user}"
+    )
+}
+
+/// Volume fixed under DSD-direct — exit 5 (02 §1.4). Consumed by the T7
+/// `volume`/`mute` verbs; defined here so all four §1.4 blocks live in one place.
+#[allow(dead_code)] // wired by the T7 volume/mute verbs
+pub fn volume_fixed_dsd() -> String {
+    "error: volume is fixed in DSD-direct mode (bit-perfect passthrough)
+  → to get software volume, set DSD mode to \"convert\":  qbzd setup  (Audio screen)"
+        .to_string()
+}
+
+/// Foreign occupant on the control port that is NOT qbzd — printed by the daemon
+/// at boot step 5 (02 §2.2, verbatim). `port` is interpolated.
+pub fn port_in_use(port: u16) -> String {
+    format!(
+        "error: port {port} is in use by another process (not qbzd)
+  → change the port:  edit [server].port in ~/.config/qbzd/qbzd.toml"
+    )
+}
+
+/// A DIFFERENT qbzd already answering on the port while our instance lock is on
+/// another data root (a stale foreign root). Boot step 5 (02 §8.1-5).
+pub fn foreign_qbzd(addr: &str) -> String {
+    format!(
+        "error: another qbzd is already answering on {addr} (the instance lock said this root is free — stale foreign root?)
+  → find it:          ss -ltnp | grep {addr}
+  → or change the port:  edit [server].port in ~/.config/qbzd/qbzd.toml"
+    )
+}
+
+/// LAN-exposure warning (02 §6.3, verbatim) — printed by the daemon at boot when
+/// bound to a non-loopback address, and by the TUI Network screen (T13).
+pub fn lan_bind_warning(addr: &str) -> String {
+    format!(
+        "warning: control API is bound to {addr} — reachable from your network
+  anyone on your LAN can control playback (like Sonos or Chromecast)
+  → set [server] token in qbzd.toml to require a shared secret"
+    )
+}
+
+/// Version skew — daemon and CLI run different bin semvers (02 §1.6). A warning:
+/// `status` still renders. `daemon`/`cli` are the two `version` strings.
+pub fn version_skew(daemon: &str, cli: &str) -> String {
+    format!(
+        "warning: daemon runs {daemon}, this CLI is {cli}
+  → restart the daemon:  systemctl --user restart qbzd"
+    )
+}
+
+/// Breaking api_version skew (02 §1.6) — the verb refuses politely, exit 1.
+pub fn api_version_skew(daemon: u32, cli: u32) -> String {
+    format!(
+        "error: daemon speaks api v{daemon}, this CLI speaks v{cli} — update so both ends run the same package version"
+    )
+}

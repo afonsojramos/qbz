@@ -19,9 +19,6 @@ struct Cli {
     /// Target daemon (default 127.0.0.1:8182; env QBZD_HOST)
     #[arg(long, global = true)]
     host: Option<String>,
-    /// API token (default: auto-read ~/.config/qbzd/api_token; env QBZD_TOKEN)
-    #[arg(long, global = true)]
-    token: Option<String>,
     #[arg(short, long, global = true)]
     quiet: bool,
     #[command(subcommand)]
@@ -92,8 +89,10 @@ enum SettingsCmd {
 #[derive(Subcommand)]
 enum QconnectCmd { Enable, Disable, Name { name: String } }
 
+// The tokenless default has no rotation verb (02 §3.1.2): `config` is just
+// path|show. Rotating the opt-in [server] token = edit qbzd.toml + restart.
 #[derive(Subcommand)]
-enum ConfigCmd { Path, Show { #[arg(long)] json: bool }, RegenToken }
+enum ConfigCmd { Path, Show { #[arg(long)] json: bool } }
 
 #[tokio::main]
 async fn main() {
@@ -178,6 +177,16 @@ async fn main() {
                     1
                 }
             }
+        }
+        Cmd::Status { json } => {
+            // The CLI reads only local qbzd.toml (for the opt-in token); the
+            // config root is always at its XDG default.
+            let roots = paths::ProfileRoots::resolve(None, None);
+            cli::status::status(cli.host, json, &roots).await
+        }
+        Cmd::Ping { json } => {
+            let roots = paths::ProfileRoots::resolve(None, None);
+            cli::status::ping(cli.host, json, &roots).await
         }
         _ => { eprintln!("not implemented yet"); 1 } // burned down task by task
     };

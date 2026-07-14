@@ -18,6 +18,12 @@ pub struct QbzdConfig {
 pub struct ServerCfg {
     pub bind: String,
     pub port: u16,
+    /// Opt-in shared secret (02 §3.1.2). Default `None` = the control plane is
+    /// UNAUTHENTICATED (loopback and LAN alike). When set, every route except
+    /// `GET /api/ping` requires `Authorization: Bearer <token>`; a mismatch is
+    /// `401 invalid_token`. A plain config value the user writes — there is no
+    /// generated file and no rotation verb (rotate = edit this + restart).
+    pub token: Option<String>,
 }
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(default)]
@@ -35,6 +41,7 @@ impl Default for ServerCfg {
         Self {
             bind: "127.0.0.1".into(),
             port: 8182,
+            token: None, // open by default (02 §3.1.2)
         }
     }
 }
@@ -69,6 +76,7 @@ const KNOWN: &[(&str, &str)] = &[
     ("", "data_root"),
     ("server", "bind"),
     ("server", "port"),
+    ("server", "token"),
     ("log", "level"),
     ("mpris", "enabled"),
 ];
@@ -129,5 +137,18 @@ mod tests {
         // D14 / operator §5.4 (J5 silent-revert guard)
         let (_c, warns) = QbzdConfig::from_str("[server]\nbindd = \"0.0.0.0\"\n").unwrap();
         assert_eq!(warns, vec!["[server].bindd".to_string()]);
+    }
+    #[test]
+    fn server_token_defaults_none_and_parses_when_set() {
+        // 02-cli-and-api.md §3.1.2: `[server] token` is opt-in — absent = None
+        // (open control plane); present = the shared secret, no warning.
+        let (open, warns) = QbzdConfig::from_str("").unwrap();
+        assert_eq!(open.server.token, None);
+        assert!(warns.is_empty());
+
+        let (secured, warns) =
+            QbzdConfig::from_str("[server]\ntoken = \"s3cret\"\n").unwrap();
+        assert_eq!(secured.server.token.as_deref(), Some("s3cret"));
+        assert!(warns.is_empty(), "known key must not warn: {warns:?}");
     }
 }
