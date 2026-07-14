@@ -44,16 +44,28 @@ pub async fn list(host: Option<String>, json: bool, roots: &ProfileRoots) -> i32
 /// `artist`@47, `len` right-aligned in the trailing 4-wide field).
 const HEADER: &str = "    #  track                                   artist            len";
 
-/// The §2.2 `queue list` table. `current_track` + `upcoming` are the ONLY
-/// track objects `GET /api/queue` returns (`history_len` is a bare count, no
-/// track objects, §3.3.13) — rows before the current track are therefore not
-/// rendered (there is no title/artist to print for them); the table starts
-/// at the current track (marked `->`) and lists `upcoming` below it, both
-/// numbered with the true 1-based absolute queue position via
-/// `cli_position`. When nothing is current (`current_index: null`),
-/// `upcoming` already holds the ENTIRE queue
-/// (`QueueManager::get_state_full`, qbz-player/src/queue.rs:1036-1082) and
-/// numbering starts at 1.
+/// How many played rows render above the current track. A render cap only —
+/// the wire `history` field is the full list (the §2.2 example shows one
+/// played row; three keeps a long session's table from being mostly past).
+const HISTORY_RENDER_CAP: usize = 3;
+
+/// The §2.2 `queue list` table: up to [`HISTORY_RENDER_CAP`] played rows
+/// (from the response's additive `history` field, recent-first on the wire,
+/// rendered oldest-first), the current track marked `->`, then `upcoming` —
+/// all numbered with the 1-based display position via `cli_position`.
+///
+/// History-row numbering is the linear-play reconstruction: positions count
+/// back from the current track (`current - 1`, `current - 2`, …), which is
+/// exact in the §2.2 example's sequential case. Under shuffle or after
+/// index jumps a played track's TRUE absolute position is not derivable
+/// from the wire shape (history entries carry no index), so those rows'
+/// numbers are best-effort context — `queue remove` against them stays
+/// safe: the daemon re-validates every index server-side (§3.3.15).
+///
+/// When nothing is current (`current_index: null`), `upcoming` already
+/// holds the ENTIRE queue (`QueueManager::get_state_full`,
+/// qbz-player/src/queue.rs:1036-1082), numbering starts at 1, and no
+/// history rows render (there is no current row to anchor them to).
 fn render_queue_list(v: &Value) -> String {
     let current_index = v.get("current_index").and_then(|i| i.as_u64()).map(|i| i as usize);
     let total = v.get("total_tracks").and_then(|t| t.as_u64()).unwrap_or(0);
@@ -66,7 +78,17 @@ fn render_queue_list(v: &Value) -> String {
 
     let current_track = v.get("current_track").filter(|t| !t.is_null());
     if let (Some(idx), Some(track)) = (current_index, current_track) {
-        out.push_str(&render_row(true, cli_position(idx), track));
+        let cur_pos = cli_position(idx);
+        // Played rows: the `take` most recent history entries, printed
+        // oldest-first so the most recent lands directly above the current
+        // row, numbered backwards from it (never below position 1).
+        if let Some(history) = v.get("history").and_then(|h| h.as_array()) {
+            let take = HISTORY_RENDER_CAP.min(cur_pos.saturating_sub(1)).min(history.len());
+            for (i, played) in history[..take].iter().rev().enumerate() {
+                out.push_str(&render_row(false, cur_pos - take + i, played));
+            }
+        }
+        out.push_str(&render_row(true, cur_pos, track));
     }
 
     let upcoming_start = current_index.map(|i| cli_position(i) + 1).unwrap_or(1);
@@ -261,24 +283,77 @@ mod tests {
     // -------------------------- queue list rendering --------------------------
 
     #[test]
-    fn render_queue_list_marks_the_current_track_and_numbers_absolutely() {
-        // 02 §2.2's documented state: current_index=1 (0-based) -> "Spain" at
-        // row #2 with the `->` marker; "500 Miles High" (the sole `upcoming`
-        // entry) at row #3.
+    fn render_queue_list_reproduces_the_documented_example_byte_exact() {
+        // 02 §2.2's documented state, verbatim: current_index=1 (0-based) ->
+        // "Spain" at row #2 with the `->` marker; the played "Captain
+        // Marvel" (from the additive `history` field, recent-first) at row
+        // #1 above it; "500 Miles High" (the sole `upcoming` entry) at #3.
+        // Every byte, including column padding, is the spec's.
         let v = serde_json::json!({
             "current_track": {"id": 176544871, "title": "Spain", "artist": "Chick Corea", "duration_secs": 581},
             "current_index": 1,
             "upcoming": [
                 {"id": 176544872, "title": "500 Miles High", "artist": "Chick Corea", "duration_secs": 547}
             ],
+            "history": [
+                {"id": 176544870, "title": "Captain Marvel", "artist": "Chick Corea", "duration_secs": 293}
+            ],
             "history_len": 1, "shuffle": false, "repeat": "off",
             "total_tracks": 14, "stop_after_track_id": null, "offset": 0, "limit": 100
         });
+        let expected = concat!(
+            "    #  track                                   artist            len\n",
+            "    1  Captain Marvel                          Chick Corea      4:53\n",
+            "->  2  Spain                                   Chick Corea      9:41\n",
+            "    3  500 Miles High                          Chick Corea      9:07\n",
+            "14 tracks · shuffle off · repeat off\n",
+        );
+        assert_eq!(render_queue_list(&v), expected);
+    }
+
+    #[test]
+    fn render_queue_list_caps_history_rows_and_never_goes_below_position_one() {
+        // 5 history entries, current at position 6 -> only the 3 most recent
+        // render (positions 3, 4, 5 — oldest of the three first).
+        let history: Vec<_> = (0..5)
+            .map(|i| serde_json::json!({"id": i, "title": format!("H{i}"), "artist": "X", "duration_secs": 60}))
+            .collect();
+        let v = serde_json::json!({
+            "current_track": {"id": 99, "title": "Cur", "artist": "X", "duration_secs": 60},
+            "current_index": 5,
+            "upcoming": [],
+            "history": history,
+            "history_len": 5, "shuffle": false, "repeat": "off",
+            "total_tracks": 6, "stop_after_track_id": null, "offset": 0, "limit": 100
+        });
         let rendered = render_queue_list(&v);
-        assert!(rendered.starts_with(HEADER), "{rendered}");
-        assert!(rendered.contains("->  2  Spain"), "{rendered}");
-        assert!(rendered.contains("    3  500 Miles High"), "{rendered}");
-        assert!(rendered.ends_with("14 tracks · shuffle off · repeat off\n"), "{rendered}");
+        // history is recent-first: H0 is the most recent -> directly above
+        // the current row at position 5; H2 the oldest rendered at 3.
+        assert!(rendered.contains("    3  H2"), "{rendered}");
+        assert!(rendered.contains("    4  H1"), "{rendered}");
+        assert!(rendered.contains("    5  H0"), "{rendered}");
+        assert!(!rendered.contains("H3"), "{rendered}");
+        assert!(!rendered.contains("H4"), "{rendered}");
+        assert!(rendered.contains("->  6  Cur"), "{rendered}");
+
+        // Current at position 2 with 3 history entries -> only 1 row fits
+        // above it (positions never go below 1).
+        let clipped = serde_json::json!({
+            "current_track": {"id": 99, "title": "Cur", "artist": "X", "duration_secs": 60},
+            "current_index": 1,
+            "upcoming": [],
+            "history": [
+                {"id": 0, "title": "H0", "artist": "X", "duration_secs": 60},
+                {"id": 1, "title": "H1", "artist": "X", "duration_secs": 60},
+                {"id": 2, "title": "H2", "artist": "X", "duration_secs": 60}
+            ],
+            "history_len": 3, "shuffle": false, "repeat": "off",
+            "total_tracks": 2, "stop_after_track_id": null, "offset": 0, "limit": 100
+        });
+        let rendered = render_queue_list(&clipped);
+        assert!(rendered.contains("    1  H0"), "{rendered}");
+        assert!(!rendered.contains("H1"), "{rendered}");
+        assert!(rendered.contains("->  2  Cur"), "{rendered}");
     }
 
     #[test]
