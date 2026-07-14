@@ -38,6 +38,7 @@ members = [
     "qbz-reco",
     "qbz-external-reco",
     "qbz-log",
+    "qbzd",
 ]
 
 [workspace.package]

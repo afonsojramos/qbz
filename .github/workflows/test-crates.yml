@@ -94,3 +94,12 @@ jobs:
           ./scripts/cargo-test.sh
           END=$(date +%s)
           echo "cargo test wall time: $((END - START))s"
+
+      - name: qbzd slint-free dep-graph gate (01-architecture.md §1.2)
+        run: |
+          set -euo pipefail
+          hits=$(cargo tree --manifest-path crates/Cargo.toml -p qbzd -e normal \
+                 | grep -E '\b(slint|qbz-ui|qbz-slint-common|qbz-dac-wizard) v' || true)
+          if [ -n "$hits" ]; then
+            echo "::error::qbzd graph resolves Slint crates:"; echo "$hits"; exit 1
+          fi

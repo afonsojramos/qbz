@@ -1,0 +1,44 @@
+[package]
+name = "qbzd"
+version.workspace = true
+edition = "2021"
+description = "QBZ headless Qobuz playback daemon (daemon + CLI + setup TUI in one binary)"
+license = "MIT"
+
+[[bin]]
+name = "qbzd"
+path = "src/main.rs"
+
+[dependencies]
+# workspace crates — the slint-free column ONLY (01-architecture.md §1.2)
+qbz-models = { path = "../qbz-models" }
+qbz-app = { path = "../qbz-app" }
+qbz-core = { path = "../qbz-core" }
+qbz-player = { path = "../qbz-player" }
+qbz-audio = { path = "../qbz-audio" }          # PROTECTED — read-only consumer
+qbz-qobuz = { path = "../qbz-qobuz" }
+qbz-credentials = { path = "../qbz-credentials" }
+qbz-log = { path = "../qbz-log" }
+qconnect-core = { path = "../qconnect-core" }
+qconnect-protocol = { path = "../qconnect-protocol" }
+qconnect-transport-ws = { path = "../qconnect-transport-ws" }
+qconnect-app = { path = "../qconnect-app" }
+# runtime / wire
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+reqwest = { workspace = true }
+dirs = "6"
+rand = { workspace = true }
+log = { workspace = true }
+async-trait = { workspace = true }
+# new direct deps (versions already in lock where noted)
+tiny_http = "0.12"           # in lock via qbz-cast
+toml = "0.9"                 # in lock transitively
+libc = "0.2"                 # flock
+clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
+# ratatui arrives in T13 — do NOT add it here
+
+[dev-dependencies]
+tempfile = "3"
