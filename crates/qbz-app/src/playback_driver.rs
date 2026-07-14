@@ -870,4 +870,12 @@ mod tests {
         );
         assert!(a.contains(&DriverAction::LatchError("ALSA device disappeared".into())));
     }
+
+    #[test]
+    fn duration_zero_never_advances() {
+        let s = DriverState::after(&ev(1, true, 580, 581));
+        let a = plan_tick(&s, &ev(1, false, 580, 0), &q(1, &[(2, true)], "off", None), None);
+        assert!(!a.contains(&DriverAction::AdvanceAndPlay));
+        assert!(a.contains(&DriverAction::ReportEdge)); // play-state edge
+    }
 }
