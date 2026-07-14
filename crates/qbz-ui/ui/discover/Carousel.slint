@@ -10,6 +10,7 @@ import { Typography } from "../foundation/typography.slint";
 import { DiscoverSection } from "../state.slint";
 import { AlbumCard } from "AlbumCard.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
+import { QbzSelect } from "../primitives/QbzSelect.slint";
 
 component NavButton inherits Rectangle {
     in property <image> icon;
@@ -71,6 +72,14 @@ export component Carousel inherits VerticalLayout {
     in property <bool> show-view-all: false;
     // Optional refresh affordance in the row header (recently-played rows).
     in property <bool> show-refresh: false;
+    // Optional sort dropdown in the row header, above/left of the page
+    // chevrons (Library Albums #566). `sort-options` are the localized
+    // labels; `sort-index` is the current selection; `sort-changed(i)` fires
+    // when the user picks another option.
+    in property <bool> show-sort: false;
+    in property <[string]> sort-options: [];
+    in property <int> sort-index: 0;
+    callback sort-changed(int);
     callback album-clicked(string);
     callback media-action(string, string, string);
     callback view-all-clicked();
@@ -182,6 +191,21 @@ export component Carousel inherits VerticalLayout {
         }
         HorizontalLayout {
             spacing: 4px;
+            // Sort dropdown (Library Albums): sits left of the page chevrons,
+            // a compact toolbar-style select. Picking an option fires
+            // sort-changed(i); the host re-orders the row's data in Rust.
+            if root.show-sort: VerticalLayout {
+                alignment: center;
+                QbzSelect {
+                    sm: true;
+                    menu-width: 170px;
+                    options: root.sort-options;
+                    current-index: root.sort-index;
+                    selected(i) => {
+                        root.sort-changed(i);
+                    }
+                }
+            }
             // "View all" sits to the LEFT of the carousel page chevrons,
             // matching the Tauri DiscoverySection header.
             if root.show-view-all: VerticalLayout {

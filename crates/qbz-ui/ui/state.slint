@@ -175,6 +175,10 @@ export global HomeState {
     // top-artists' title is @tr in the view arm (bare list, like For You).
     // (qobuzMixes, the fourth ported section, is static tiles — no state.)
     in property <DiscoverSection> favorite-albums;
+    // Library Albums (favoriteAlbums) sort order: 0 = Recently added
+    // (default), 1 = First added (reverse), 2 = Random (shuffled). Rust
+    // reorders HomeState.favorite-albums in place when this changes.
+    in-out property <int> library-albums-sort: 0;
     in property <DiscoverSection> release-watch;
     in property <[SlimItem]> top-artists: [];
     // Qobuz Playlists row (Home + Editor's Picks). Single-cover cards; the
@@ -209,9 +213,12 @@ export global HomeActions {
     // Home was off-screen (dirty-flag gated in Rust — a no-op otherwise, so
     // mounting Home stays free).
     callback home-mounted();
-    // Manual refresh (the toolbar button next to the nav cluster):
-    // unconditionally re-read the local recently-played rails.
+    // Manual refresh (the row-header button next to the Recently Played
+    // Albums nav chevrons): unconditionally re-read the local rails.
     callback refresh-recent();
+    // Library Albums sort changed (see HomeState.library-albums-sort). Rust
+    // reorders the cached base list and re-pushes favorite-albums + artwork.
+    callback set-library-albums-sort(int);
 }
 
 // RecentAlbumsView — the full "Recently Played Albums" page opened from the

@@ -4500,3 +4500,14 @@ msgstr "Saída: {}"
 # Local Library header Plex sync button (#573)
 msgid "Sync Plex library"
 msgstr "Sincronizar biblioteca do Plex"
+
+# Library Albums sort options (#566)
+msgid "Recently added"
+msgstr "Adicionados recentemente"
+
+msgid "First added"
+msgstr "Adicionados primeiro"
+
+msgid "Random"
+msgstr "Aleatório"
+

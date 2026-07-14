@@ -4513,3 +4513,14 @@ msgstr "Вывод: {}"
 # Local Library header Plex sync button (#573)
 msgid "Sync Plex library"
 msgstr "Синхронизировать библиотеку Plex"
+
+# Library Albums sort options (#566)
+msgid "Recently added"
+msgstr "Недавно добавленные"
+
+msgid "First added"
+msgstr "Добавленные первыми"
+
+msgid "Random"
+msgstr "Случайно"
+

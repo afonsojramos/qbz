@@ -4489,3 +4489,14 @@ msgstr "出力: {}"
 # Local Library header Plex sync button (#573)
 msgid "Sync Plex library"
 msgstr "Plexライブラリを同期"
+
+# Library Albums sort options (#566)
+msgid "Recently added"
+msgstr "最近追加した順"
+
+msgid "First added"
+msgstr "追加が古い順"
+
+msgid "Random"
+msgstr "ランダム"
+

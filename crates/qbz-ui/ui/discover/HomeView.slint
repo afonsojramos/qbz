@@ -121,9 +121,10 @@ component GenreButton inherits Rectangle {
     }
 }
 
-// Manual refresh for the recently-played rails — sits in the toolbar next
-// to the nav cluster. Same 32px icon-button form as GearButton, plus the
-// global hover tooltip (TooltipState — the TransportControls pattern).
+// Settings/config gear for the Home configurator, anchored in the toolbar's
+// right controls. (The recently-played refresh is NOT here — it lives in each
+// recently-played row header, left of the page chevrons; see Carousel
+// `show-refresh`.)
 component GearButton inherits Rectangle {
     callback clicked();
 
@@ -461,6 +462,18 @@ export component HomeView inherits Rectangle {
                     if desc.id == "favoriteAlbums"
                         && HomeState.favorite-albums.albums.length > 0: Carousel {
                         section: HomeState.favorite-albums;
+                        // Sort dropdown left of the page chevrons (#566).
+                        show-sort: true;
+                        sort-options: [
+                            @tr("Recently added"),
+                            @tr("First added"),
+                            @tr("Random"),
+                        ];
+                        sort-index: HomeState.library-albums-sort;
+                        sort-changed(i) => {
+                            HomeState.library-albums-sort = i;
+                            HomeActions.set-library-albums-sort(i);
+                        }
                         album-clicked(id) => {
                             root.album-clicked(id);
                         }

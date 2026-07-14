@@ -1084,6 +1084,11 @@ pub fn apply_home(window: &AppWindow, data: HomeData) {
     // For You twins (foryou::apply_favorite_albums / apply_release_watch /
     // apply_top_artists), separate lifecycles. Top Artists' title lives in
     // the HomeView arm (@tr, like ForYouView's) — its model is a bare list.
+    // Cache the base (Recently-added) order so the header sort dropdown can
+    // reorder without a re-fetch, and reset the selection to the default on
+    // every fresh load (the load-time artwork dispatch is in base order).
+    *crate::LIB_ALBUMS_BASE.lock().unwrap() = data.favorite_albums.clone();
+    state.set_library_albums_sort(0);
     state.set_favorite_albums(crate::foryou::section(
         &qbz_i18n::t("Library Albums"),
         &data.favorite_albums,

@@ -4512,3 +4512,14 @@ msgstr "Uitvoer: {}"
 # Local Library header Plex sync button (#573)
 msgid "Sync Plex library"
 msgstr "Plex-bibliotheek synchroniseren"
+
+# Library Albums sort options (#566)
+msgid "Recently added"
+msgstr "Recent toegevoegd"
+
+msgid "First added"
+msgstr "Eerst toegevoegd"
+
+msgid "Random"
+msgstr "Willekeurig"
+

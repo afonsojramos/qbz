@@ -3004,6 +3004,57 @@ fn refresh_recent_rails(
     });
 }
 
+/// Base ("Recently added") order of the Home "Library Albums" rail
+/// (`favoriteAlbums`, #566), cached on every home load so the header sort
+/// dropdown can reorder without a re-fetch. Read by `apply_library_albums_sort`.
+pub(crate) static LIB_ALBUMS_BASE: std::sync::Mutex<Vec<crate::foryou::AlbumCard>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// Reorder the cached Library-Albums base list per the sort selection.
+/// `mode`: 0 = Recently added (base), 1 = First added (reverse), 2 = Random.
+fn library_albums_sorted(mode: i32) -> Vec<crate::foryou::AlbumCard> {
+    let mut cards = LIB_ALBUMS_BASE.lock().unwrap().clone();
+    match mode {
+        1 => cards.reverse(),
+        2 => {
+            use rand::seq::SliceRandom;
+            cards.shuffle(&mut rand::rng());
+        }
+        _ => {}
+    }
+    cards
+}
+
+/// Re-push the Home "Library Albums" rail in the chosen sort order + re-fire
+/// its artwork by the new index. No re-fetch — reorders the cached base list
+/// (mirrors `refresh_recent_rails`' local re-apply). Runs on the UI thread
+/// (Slint callback); `spawn_loads` does its own threading and the covers are
+/// cache-served, so a reorder is near-instant.
+fn apply_library_albums_sort(
+    weak: slint::Weak<AppWindow>,
+    mode: i32,
+    image_cache: artwork::ImageCache,
+) {
+    let cards = library_albums_sorted(mode);
+    if let Some(w) = weak.upgrade() {
+        w.global::<HomeState>().set_favorite_albums(crate::foryou::section(
+            &qbz_i18n::t("Library Albums"),
+            &cards,
+        ));
+    }
+    let jobs: Vec<artwork::ArtworkJob> = cards
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, card)| {
+            (!card.artwork_url.is_empty()).then(|| artwork::ArtworkJob {
+                target: artwork::ArtworkTarget::HomeFavoriteAlbum { idx },
+                url: card.artwork_url.clone(),
+            })
+        })
+        .collect();
+    artwork::spawn_loads(jobs, weak, image_cache);
+}
+
 /// Playback hook: a play was just recorded in the recently-played store
 /// (`playback::record_recent`). Marks the Home rails stale and — when the
 /// Home view is currently showing — refreshes them immediately, so the rails
@@ -15220,6 +15271,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let image_cache = image_cache.clone();
         window.global::<HomeActions>().on_refresh_recent(move || {
             refresh_recent_rails(weak.clone(), &handle, image_cache.clone());
+        });
+    }
+    // Library Albums (#566) header sort: reorder the cached favorite-albums
+    // base list (0 recent / 1 first / 2 random) and re-push it + its covers.
+    {
+        let weak = window.as_weak();
+        let image_cache = image_cache.clone();
+        window.global::<HomeActions>().on_set_library_albums_sort(move |mode| {
+            apply_library_albums_sort(weak.clone(), mode, image_cache.clone());
         });
     }
 
