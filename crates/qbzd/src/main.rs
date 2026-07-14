@@ -228,6 +228,19 @@ async fn main() {
             let roots = paths::ProfileRoots::resolve(None, None);
             cli::transport::mute(cli.host, &roots, state).await
         }
+        Cmd::Queue { cmd } => {
+            let roots = paths::ProfileRoots::resolve(None, None);
+            match cmd {
+                QueueCmd::List { json } => cli::queue::list(cli.host, json, &roots).await,
+                QueueCmd::Add { track_id, next } => {
+                    cli::queue::add(cli.host, &roots, track_id, next).await
+                }
+                QueueCmd::Remove { index } => cli::queue::remove(cli.host, &roots, index).await,
+                QueueCmd::Clear { keep_current } => {
+                    cli::queue::clear(cli.host, &roots, keep_current).await
+                }
+            }
+        }
         _ => { eprintln!("not implemented yet"); 1 } // burned down task by task
     };
     std::process::exit(code);

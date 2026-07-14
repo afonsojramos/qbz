@@ -15,6 +15,7 @@
 // diagnosis runs BEFORE the stores/runtime exist), `serve` at boot step 11 — is
 // what keeps the 01-architecture.md §8.1 boot order honest.
 pub mod playback;
+pub mod queue;
 pub mod status;
 
 use std::io::Cursor;
@@ -31,11 +32,11 @@ use qbz_app::shell::AppRuntime;
 use qbz_audio::settings::AudioSettingsStore;
 
 /// The counted P0 route table (02 §3.2). A route exists only iff a shipped
-/// client calls it (§3.1.4). T1-T6 landed the first 3; T7 (this task) adds the
-/// 9 playback + now-playing routes (rows 4-12); T8 adds the 4 queue routes,
-/// T11 `/api/settings/reload` — the inline `route_table_matches_spec_count`
-/// test pins the number so the 68-routes failure shape (a route with no
-/// caller) cannot creep back in.
+/// client calls it (§3.1.4). T1-T6 landed the first 3; T7 added the 9
+/// playback + now-playing routes (rows 4-12); T8 (this task) adds the 4 queue
+/// routes (rows 13-16); T11 adds `/api/settings/reload` (row 17) — the inline
+/// `route_table_matches_spec_count` test pins the number so the 68-routes
+/// failure shape (a route with no caller) cannot creep back in.
 pub const P0_ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/ping"),
     ("GET", "/api/info"),
@@ -49,6 +50,10 @@ pub const P0_ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/playback/previous"),
     ("POST", "/api/playback/seek"),
     ("POST", "/api/playback/volume"),
+    ("GET", "/api/queue"),
+    ("POST", "/api/queue/add"),
+    ("POST", "/api/queue/remove"),
+    ("POST", "/api/queue/clear"),
 ];
 
 /// A socket bound at boot step 5, not yet serving. Wraps the tiny_http server
@@ -191,7 +196,10 @@ pub fn serve(server: BoundServer, state: ApiState) -> ApiHandle {
 
 fn route(state: &ApiState, req: &mut Request) -> Response<Cursor<Vec<u8>>> {
     let method = req.method().as_str().to_owned();
-    let path = req.url().split('?').next().unwrap_or("").to_owned();
+    let url = req.url().to_owned();
+    let mut url_parts = url.splitn(2, '?');
+    let path = url_parts.next().unwrap_or("").to_owned();
+    let query = url_parts.next().unwrap_or("").to_owned();
     let has_origin = req.headers().iter().any(|h| h.field.equiv("Origin"));
     let auth_header = req
         .headers()
@@ -228,7 +236,20 @@ fn route(state: &ApiState, req: &mut Request) -> Response<Cursor<Vec<u8>>> {
             let body = read_json_body(req);
             playback::volume(state, &body)
         }
-        // T8: 4 queue routes · T11: /api/settings/reload.
+        ("GET", "/api/queue") => queue::list(state, &query),
+        ("POST", "/api/queue/add") => {
+            let body = read_json_body(req);
+            queue::add(state, &body)
+        }
+        ("POST", "/api/queue/remove") => {
+            let body = read_json_body(req);
+            queue::remove(state, &body)
+        }
+        ("POST", "/api/queue/clear") => {
+            let body = read_json_body(req);
+            queue::clear(state, &body)
+        }
+        // T11: /api/settings/reload.
         _ => err_json(404, "not_found", "unknown route", "see qbzd --help"),
     }
 }
@@ -354,8 +375,8 @@ mod tests {
     #[test]
     fn route_table_matches_spec_count() {
         // 02-cli-and-api.md §3.2 — P0 = exactly 17 routes; grows ONLY with a
-        // shipped client. T1-T6 landed 3; T7 (this task) +9 = 12; T8 +4; T11 +1.
-        assert_eq!(P0_ROUTES.len(), 12);
+        // shipped client. T1-T6 landed 3; T7 +9 = 12; T8 (this task) +4 = 16; T11 +1 = 17.
+        assert_eq!(P0_ROUTES.len(), 16);
         assert!(P0_ROUTES.contains(&("GET", "/api/ping")));
         assert!(P0_ROUTES.contains(&("GET", "/api/info")));
         assert!(P0_ROUTES.contains(&("GET", "/api/status")));
@@ -368,6 +389,10 @@ mod tests {
         assert!(P0_ROUTES.contains(&("POST", "/api/playback/previous")));
         assert!(P0_ROUTES.contains(&("POST", "/api/playback/seek")));
         assert!(P0_ROUTES.contains(&("POST", "/api/playback/volume")));
+        assert!(P0_ROUTES.contains(&("GET", "/api/queue")));
+        assert!(P0_ROUTES.contains(&("POST", "/api/queue/add")));
+        assert!(P0_ROUTES.contains(&("POST", "/api/queue/remove")));
+        assert!(P0_ROUTES.contains(&("POST", "/api/queue/clear")));
     }
 
     #[test]
