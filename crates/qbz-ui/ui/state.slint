@@ -34,6 +34,8 @@ export struct AlbumCardItem {
     quality-detail: string,// "24-bit / 96 kHz" — bare detail for QualityBadgeFull
     track-count: string,   // "12" — TRACKS column
     plain-year: string,    // "1973" — bare year for the list-row YEAR column
+    plays: int,            // play count — shown ONLY in the Most Played Albums
+                           // View-all (0 elsewhere, so no count is drawn).
 }
 
 // One entry in an A-Z jump strip (favorites tracks name-group / albums
@@ -211,6 +213,9 @@ export global HomeActions {
     // "View all" on the Recently Played Albums rail -> the full-page listing
     // (RecentAlbumsView), fed from the local play-history store.
     callback open-recent-albums();
+    // Opens the full "Most Played Albums" page (MostPlayedAlbumsView), fed
+    // from the local play-count store.
+    callback open-most-played-albums();
     // Fired by HomeView's init on every (re)mount. Rust re-reads the LOCAL
     // recently-played store into the two rails IF a play was recorded while
     // Home was off-screen (dirty-flag gated in Rust — a no-op otherwise, so
@@ -231,6 +236,21 @@ export global HomeActions {
 export global RecentAlbumsState {
     in property <[AlbumCardItem]> albums: [];
     in property <bool> loading: false;
+}
+
+// MostPlayedAlbumsView — the full "Most Played Albums" page opened from the
+// rail's "View all". Ranked by local play count; each item carries its
+// `plays`. `search` filters title/artist client-side (visibility only).
+export global MostPlayedAlbumsState {
+    in property <[AlbumCardItem]> albums: [];
+    in property <bool> loading: false;
+    in-out property <string> search: "";
+}
+
+export global MostPlayedAlbumsActions {
+    // Filter the loaded page by title/artist. Rust re-sets `albums` to the
+    // matches and re-fires their artwork (mirrors the Qobuz-playlists filter).
+    callback filter(string);
 }
 
 // ---------------------------------------------------------------------------
@@ -1000,7 +1020,7 @@ export global DragActions {
 }
 
 // Which content view the shell shows.
-export enum ContentView { home, album, artist, artist-releases, settings, search, musician, label, label-releases, award, award-albums, location, favorites, mix, playlist, discover-browse, recent-albums, playlist-manager, offline-manager, blacklist-manager, local-library, local-album, mixtapes, collections, mixtape-detail, discography-builder, purchases, purchase-album, now-playing }
+export enum ContentView { home, album, artist, artist-releases, settings, search, musician, label, label-releases, award, award-albums, location, favorites, mix, playlist, discover-browse, recent-albums, most-played-albums, playlist-manager, offline-manager, blacklist-manager, local-library, local-album, mixtapes, collections, mixtape-detail, discography-builder, purchases, purchase-album, now-playing }
 
 // In-app toast (transient notification). Mirrors Tauri's toastStore:
 // a single toast at a time (a new one replaces the current), auto-hidden

@@ -487,6 +487,10 @@ export component HomeView inherits Rectangle {
                     if desc.id == "mostPlayedAlbums"
                         && HomeState.most-played-albums.albums.length > 0: Carousel {
                         section: HomeState.most-played-albums;
+                        show-view-all: true;
+                        view-all-clicked => {
+                            HomeActions.open-most-played-albums();
+                        }
                         album-clicked(id) => {
                             root.album-clicked(id);
                         }

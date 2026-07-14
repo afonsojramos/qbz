@@ -55,6 +55,9 @@ pub enum NavEntry {
     /// store (crate::recently), reloaded on every navigation, so the entry
     /// carries no payload.
     RecentAlbums,
+    /// MostPlayedAlbumsView — the full "Most Played Albums" listing, ranked by
+    /// local play count (album_play_history), reloaded on every navigation.
+    MostPlayedAlbums,
     /// A Qobuz mix detail page ("daily" | "weekly" | "fav" | "top").
     Mix {
         kind: String,

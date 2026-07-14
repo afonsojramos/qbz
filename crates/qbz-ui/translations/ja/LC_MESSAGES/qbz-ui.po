@@ -4512,3 +4512,7 @@ msgstr "キャッシュを削除できませんでした"
 # Most Played Albums rail title
 msgid "Most Played Albums"
 msgstr "最も再生したアルバム"
+
+# Most Played Albums View-all — per-card play count
+msgid "{} plays"
+msgstr "{} 回再生"

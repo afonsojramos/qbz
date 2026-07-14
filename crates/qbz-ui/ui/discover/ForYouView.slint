@@ -17,7 +17,7 @@
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
-import { ForYouState, RadioStationItem, DiscoverState } from "../state.slint";
+import { ForYouState, RadioStationItem, DiscoverState, HomeActions } from "../state.slint";
 import { Carousel } from "Carousel.slint";
 import { SlimCarousel } from "SlimCarousel.slint";
 import { ArtistCarousel } from "ArtistCarousel.slint";
@@ -132,6 +132,10 @@ export component ForYouView inherits VerticalLayout {
         // mostPlayedAlbums — album carousel ranked by local play count.
         if desc.id == "mostPlayedAlbums" && ForYouState.most-played-albums.albums.length > 0: Carousel {
             section: ForYouState.most-played-albums;
+            show-view-all: true;
+            view-all-clicked => {
+                HomeActions.open-most-played-albums();
+            }
             album-clicked(id) => {
                 root.open-album(id);
             }

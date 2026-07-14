@@ -4523,3 +4523,7 @@ msgstr "Não foi possível limpar o cache"
 # Most Played Albums rail title
 msgid "Most Played Albums"
 msgstr "Álbuns mais tocados"
+
+# Most Played Albums View-all — per-card play count
+msgid "{} plays"
+msgstr "{} reproduções"

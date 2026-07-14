@@ -295,3 +295,7 @@ msgstr "Couldn't clear the cache"
 # Most Played Albums rail title
 msgid "Most Played Albums"
 msgstr "Most Played Albums"
+
+# Most Played Albums View-all — per-card play count
+msgid "{} plays"
+msgstr "{} plays"
