@@ -291,3 +291,7 @@ msgstr "Cache cleared"
 msgid "Couldn't clear the cache"
 msgstr "Couldn't clear the cache"
 
+
+# Most Played Albums rail title
+msgid "Most Played Albums"
+msgstr "Most Played Albums"

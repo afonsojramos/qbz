@@ -4519,3 +4519,7 @@ msgstr "Libera dados em cache. Seus álbuns baixados são mantidos — remova-os
 msgid "Couldn't clear the cache"
 msgstr "Não foi possível limpar o cache"
 
+
+# Most Played Albums rail title
+msgid "Most Played Albums"
+msgstr "Álbuns mais tocados"

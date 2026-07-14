@@ -129,6 +129,17 @@ export component ForYouView inherits VerticalLayout {
             }
         }
 
+        // mostPlayedAlbums — album carousel ranked by local play count.
+        if desc.id == "mostPlayedAlbums" && ForYouState.most-played-albums.albums.length > 0: Carousel {
+            section: ForYouState.most-played-albums;
+            album-clicked(id) => {
+                root.open-album(id);
+            }
+            media-action(kind, id, action) => {
+                root.media-action(kind, id, action);
+            }
+        }
+
         // similarAlbums — "More From Your Library" album carousel.
         if desc.id == "similarAlbums" && ForYouState.more-from-library.albums.length > 0: Carousel {
             section: ForYouState.more-from-library;

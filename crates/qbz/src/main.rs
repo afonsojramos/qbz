@@ -753,6 +753,12 @@ async fn reload_home(
                     url: card.artwork_url.clone(),
                 })
             }));
+            jobs.extend(data.most_played_albums.iter().enumerate().filter_map(|(idx, card)| {
+                (!card.artwork_url.is_empty()).then(|| artwork::ArtworkJob {
+                    target: artwork::ArtworkTarget::HomeMostPlayedAlbum { idx },
+                    url: card.artwork_url.clone(),
+                })
+            }));
             jobs.extend(data.release_watch.iter().enumerate().filter_map(|(idx, card)| {
                 (!card.artwork_url.is_empty()).then(|| artwork::ArtworkJob {
                     target: artwork::ArtworkTarget::HomeReleaseWatchAlbum { idx },

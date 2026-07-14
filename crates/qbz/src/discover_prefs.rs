@@ -151,9 +151,8 @@ pub fn render_kind(id: DiscoverySectionId) -> &'static str {
         RadioStations => "radio",
         TopArtists | ArtistsToFollow => "artistCarousel",
         ArtistSpotlight => "spotlight",
-        ReleaseWatch | FavoriteAlbums | SimilarAlbums | RediscoverLibrary | EssentialsByGenre => {
-            "albumCarousel"
-        }
+        ReleaseWatch | FavoriteAlbums | MostPlayedAlbums | SimilarAlbums | RediscoverLibrary
+        | EssentialsByGenre => "albumCarousel",
     }
 }
 
@@ -189,6 +188,7 @@ pub fn label_for(id: DiscoverySectionId) -> &'static str {
         EssentialsByGenre => qbz_i18n::mark("Essentials by Genre"), // discovery.essentialsByGenre
         ArtistsToFollow => qbz_i18n::mark("Artists to Follow"), // discovery.artistsToFollow
         ArtistSpotlight => qbz_i18n::mark("Artist Spotlight"), // discovery.artistSpotlight
+        MostPlayedAlbums => qbz_i18n::mark("Most Played Albums"), // local: most-played rail
     }
 }
 

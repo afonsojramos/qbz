@@ -4519,3 +4519,7 @@ msgstr "Gibt zwischengespeicherte Daten frei. Deine heruntergeladenen Alben blei
 msgid "Couldn't clear the cache"
 msgstr "Cache konnte nicht geleert werden"
 
+
+# Most Played Albums rail title
+msgid "Most Played Albums"
+msgstr "Meistgespielte Alben"

@@ -4508,3 +4508,7 @@ msgstr "キャッシュデータを解放します。ダウンロード済みの
 msgid "Couldn't clear the cache"
 msgstr "キャッシュを削除できませんでした"
 
+
+# Most Played Albums rail title
+msgid "Most Played Albums"
+msgstr "最も再生したアルバム"

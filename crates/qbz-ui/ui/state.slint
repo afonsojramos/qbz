@@ -180,6 +180,9 @@ export global HomeState {
     // reorders HomeState.favorite-albums in place when this changes.
     in-out property <int> library-albums-sort: 0;
     in property <DiscoverSection> release-watch;
+    // Most Played Albums rail — top albums by local play count (title set by
+    // Rust from `album_play_history::top_albums`). Self-hides while empty.
+    in property <DiscoverSection> most-played-albums;
     in property <[SlimItem]> top-artists: [];
     // Qobuz Playlists row (Home + Editor's Picks). Single-cover cards; the
     // active tab's set is swapped in by crate::home::select_tab.
@@ -344,6 +347,9 @@ export global ForYouState {
     in property <DiscoverSection> recent-albums;
     // Favorite Albums — the user's favorited albums (For You #6).
     in property <DiscoverSection> favorite-albums;
+    // Most Played Albums — top albums by local play count (same data as
+    // HomeState.most-played-albums; local, not tab-specific).
+    in property <DiscoverSection> most-played-albums;
     in property <[SlimItem]> recent-tracks: [];
     in property <[SlimItem]> top-artists: [];
     in property <[SlimItem]> artists-to-follow: [];

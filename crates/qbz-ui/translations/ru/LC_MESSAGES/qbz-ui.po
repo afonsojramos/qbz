@@ -4532,3 +4532,7 @@ msgstr "Освобождает кэшированные данные. Загру
 msgid "Couldn't clear the cache"
 msgstr "Не удалось очистить кэш"
 
+
+# Most Played Albums rail title
+msgid "Most Played Albums"
+msgstr "Самые прослушиваемые альбомы"

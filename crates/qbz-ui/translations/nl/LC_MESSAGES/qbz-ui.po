@@ -4531,3 +4531,7 @@ msgstr "Maakt cachegegevens vrij. Je gedownloade albums blijven behouden — ver
 msgid "Couldn't clear the cache"
 msgstr "Kan de cache niet wissen"
 
+
+# Most Played Albums rail title
+msgid "Most Played Albums"
+msgstr "Meest afgespeelde albums"
