@@ -1,7 +1,9 @@
 use clap::{Parser, Subcommand};
 
+mod adapter;
 mod api;
 mod config;
+mod daemon;
 mod lock;
 mod paths;
 mod state;
@@ -109,6 +111,34 @@ async fn main() {
             clap_complete::generate(shell, &mut Cli::command(), "qbzd",
                                     &mut std::io::stdout());
             0
+        }
+        Cmd::Run => {
+            // Phase 1: resolve the config root and load qbzd.toml. The config's
+            // `data_root` (a container override) can redirect the data/cache
+            // roots, so resolve those in phase 2 once it is known.
+            let bootstrap = paths::ProfileRoots::resolve(None, None);
+            let cfg_path = bootstrap.config.join("qbzd.toml");
+            let (cfg, warns) = match config::QbzdConfig::load(&cfg_path) {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    eprintln!("  → fix or remove the config:  {}", cfg_path.display());
+                    std::process::exit(1);
+                }
+            };
+            // Phase 2: honor an explicit `data_root` container override.
+            let data_root = cfg.data_root.clone();
+            let roots = paths::ProfileRoots::resolve(
+                None,
+                data_root.as_deref().map(std::path::Path::new),
+            );
+            match daemon::run(roots, cfg, warns).await {
+                Ok(code) => code,
+                Err(e) => {
+                    eprintln!("{e}");
+                    1
+                }
+            }
         }
         _ => { eprintln!("not implemented yet"); 1 } // burned down task by task
     };

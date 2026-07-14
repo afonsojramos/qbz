@@ -172,20 +172,36 @@ fn get_legacy_fallback_path() -> Option<PathBuf> {
     dirs::config_dir().map(|p| p.join("qbz").join(LEGACY_FALLBACK_FILE_NAME))
 }
 
-/// Get the per-installation salt file path used for key derivation.
-fn get_installation_salt_path() -> Option<PathBuf> {
-    dirs::config_dir().map(|p| p.join("qbz").join(INSTALLATION_SALT_FILE_NAME))
+// ─── Path-parameterized roots (daemon support, 01-architecture.md §6.3) ────────
+//
+// The desktop hardcodes `~/.config/qbz` for its secret files. The daemon owns a
+// SEPARATE profile (`~/.config/qbzd`, §4) so a desktop logout can never silently
+// de-auth the daemon. These helpers resolve the salt / machine-id-fallback /
+// OAuth-token files directly under a caller-supplied root. Crypto, format and
+// the KDF are unchanged — only the base directory is parameterized. The desktop
+// fns below are thin wrappers that pass `~/.config/qbz` as the root, so their
+// behaviour (including the keyring accelerator) is identical to before.
+
+/// The desktop credential root: `~/.config/qbz`.
+fn config_qbz_root() -> Option<PathBuf> {
+    dirs::config_dir().map(|p| p.join("qbz"))
 }
 
-/// Get path for persistent fallback machine identifier.
-fn get_machine_id_fallback_path() -> Option<PathBuf> {
-    dirs::config_dir().map(|p| p.join("qbz").join(MACHINE_ID_FALLBACK_FILE_NAME))
+fn installation_salt_path_at(root: &Path) -> PathBuf {
+    root.join(INSTALLATION_SALT_FILE_NAME)
 }
 
-/// Load a persistent installation salt, or create one on first use.
-fn load_or_create_installation_salt() -> Result<Vec<u8>, String> {
-    let path =
-        get_installation_salt_path().ok_or("Could not determine config directory for salt")?;
+fn machine_id_fallback_path_at(root: &Path) -> PathBuf {
+    root.join(MACHINE_ID_FALLBACK_FILE_NAME)
+}
+
+fn oauth_token_path_at(root: &Path) -> PathBuf {
+    root.join(OAUTH_TOKEN_FILE_NAME)
+}
+
+/// Load a persistent installation salt under `root`, or create one on first use.
+fn load_or_create_installation_salt_at(root: &Path) -> Result<Vec<u8>, String> {
+    let path = installation_salt_path_at(root);
 
     if path.exists() {
         tighten_private_file_mode(&path);
@@ -212,10 +228,9 @@ fn load_or_create_installation_salt() -> Result<Vec<u8>, String> {
     Ok(salt.to_vec())
 }
 
-/// Load a persistent machine identifier fallback, or create one on first use.
-fn load_or_create_machine_id_fallback() -> Result<Vec<u8>, String> {
-    let path = get_machine_id_fallback_path()
-        .ok_or("Could not determine config directory for machine fallback id")?;
+/// Load a persistent machine identifier fallback under `root`, or create one.
+fn load_or_create_machine_id_fallback_at(root: &Path) -> Result<Vec<u8>, String> {
+    let path = machine_id_fallback_path_at(root);
 
     if path.exists() {
         tighten_private_file_mode(&path);
@@ -242,32 +257,42 @@ fn load_or_create_machine_id_fallback() -> Result<Vec<u8>, String> {
     Ok(machine_fallback.to_vec())
 }
 
-/// Get machine-specific identifier for key derivation
-fn get_machine_id() -> Result<Vec<u8>, String> {
+/// Probe for a stable, root-independent machine identifier. Returns `None`
+/// when none of `/etc/machine-id`, `$HOSTNAME`, `$USER` yields a value (the
+/// caller then falls back to a persisted random id under its config root).
+fn machine_id_stable_source() -> Option<Vec<u8>> {
     // Try /etc/machine-id first (Linux)
     if let Ok(id) = fs::read_to_string("/etc/machine-id") {
         let trimmed = id.trim();
         if !trimmed.is_empty() {
-            return Ok(trimmed.as_bytes().to_vec());
+            return Some(trimmed.as_bytes().to_vec());
         }
     }
 
     // Fallback to hostname
     if let Ok(hostname) = std::env::var("HOSTNAME") {
         if !hostname.trim().is_empty() {
-            return Ok(hostname.as_bytes().to_vec());
+            return Some(hostname.as_bytes().to_vec());
         }
     }
 
-    // Last resort: use username
+    // Last resort before the persisted fallback: use username
     if let Ok(user) = std::env::var("USER") {
         if !user.trim().is_empty() {
-            return Ok(user.as_bytes().to_vec());
+            return Some(user.as_bytes().to_vec());
         }
     }
 
-    // Persisted random fallback for environments without stable machine/user IDs.
-    load_or_create_machine_id_fallback()
+    None
+}
+
+/// Get machine-specific identifier for key derivation, resolving the persisted
+/// random fallback (when needed) under `root`.
+fn get_machine_id_at(root: &Path) -> Result<Vec<u8>, String> {
+    if let Some(id) = machine_id_stable_source() {
+        return Ok(id);
+    }
+    load_or_create_machine_id_fallback_at(root)
 }
 
 /// Retrieve per-app secret from XDG Desktop Portal (cached for session lifetime).
@@ -301,9 +326,13 @@ fn get_portal_secret() -> Option<Vec<u8>> {
 
 /// Derive encryption key from XDG portal secret + machine ID + installation salt.
 /// Portal secret adds DE-agnostic, Flatpak-safe entropy when available.
-fn derive_key() -> Result<[u8; 32], String> {
-    let machine_id = get_machine_id()?;
-    let installation_salt = load_or_create_installation_salt()?;
+/// Derive the encryption key with the machine-id fallback and installation salt
+/// resolved under `root`. The KDF (machine-id + installation salt + optional
+/// portal secret) is unchanged — only where the salt / machine-id-fallback
+/// files live is parameterized.
+fn derive_key_at(root: &Path) -> Result<[u8; 32], String> {
+    let machine_id = get_machine_id_at(root)?;
+    let installation_salt = load_or_create_installation_salt_at(root)?;
 
     #[cfg(target_os = "linux")]
     let portal_secret = get_portal_secret();
@@ -324,9 +353,15 @@ fn derive_key() -> Result<[u8; 32], String> {
     Ok(key)
 }
 
-/// Encrypt credentials using AES-256-GCM
+/// Encrypt credentials using AES-256-GCM (desktop root).
 fn encrypt_credentials(credentials: &QobuzCredentials) -> Result<String, String> {
-    let key = derive_key()?;
+    let root = config_qbz_root().ok_or("Could not determine config directory")?;
+    encrypt_credentials_at(&root, credentials)
+}
+
+/// Encrypt credentials using AES-256-GCM, deriving the key under `root`.
+fn encrypt_credentials_at(root: &Path, credentials: &QobuzCredentials) -> Result<String, String> {
+    let key = derive_key_at(root)?;
     let cipher =
         Aes256Gcm::new_from_slice(&key).map_err(|e| format!("Failed to create cipher: {}", e))?;
 
@@ -353,8 +388,14 @@ fn encrypt_credentials(credentials: &QobuzCredentials) -> Result<String, String>
         .map_err(|e| format!("Failed to serialize encrypted data: {}", e))
 }
 
-/// Decrypt credentials using AES-256-GCM
+/// Decrypt credentials using AES-256-GCM (desktop root).
 fn decrypt_credentials(encrypted_json: &str) -> Result<QobuzCredentials, String> {
+    let root = config_qbz_root().ok_or("Could not determine config directory")?;
+    decrypt_credentials_at(&root, encrypted_json)
+}
+
+/// Decrypt credentials using AES-256-GCM, deriving the key under `root`.
+fn decrypt_credentials_at(root: &Path, encrypted_json: &str) -> Result<QobuzCredentials, String> {
     let encrypted: EncryptedCredentials = serde_json::from_str(encrypted_json)
         .map_err(|e| format!("Failed to parse encrypted data: {}", e))?;
 
@@ -365,7 +406,7 @@ fn decrypt_credentials(encrypted_json: &str) -> Result<QobuzCredentials, String>
         ));
     }
 
-    let key = derive_key()?;
+    let key = derive_key_at(root)?;
     let cipher =
         Aes256Gcm::new_from_slice(&key).map_err(|e| format!("Failed to create cipher: {}", e))?;
 
@@ -782,11 +823,88 @@ pub fn clear_qobuz_credentials() -> Result<(), String> {
 // `X-User-Auth-Token` header. If it has expired Qobuz returns a 4xx and
 // we clear the stored token so the user sees the login screen normally.
 
-fn get_oauth_token_path() -> Option<PathBuf> {
-    dirs::config_dir().map(|p| p.join("qbz").join(OAUTH_TOKEN_FILE_NAME))
+const OAUTH_TOKEN_KEY: &str = "qobuz-oauth-token";
+
+// ─── Shared OAuth-token file operations (root-parameterized) ──────────────────
+//
+// The encrypted file is the authoritative store for both the desktop and the
+// daemon. These helpers do the file work under a caller-supplied root; the
+// keyring accelerator (desktop only) is layered on top by the fixed-path
+// `save/load/clear_oauth_token` wrappers below. The daemon `_at` fns skip the
+// keyring entirely (01 §6.3: file-first is authoritative; the keyring stays a
+// desktop-only accelerator).
+
+/// Encrypt `token` and write it to `<root>/.qbz-oauth-token` (0600). Returns the
+/// encrypted blob so the caller can also mirror it into the keyring if desired.
+fn write_oauth_token_file(root: &Path, token: &str) -> Result<String, String> {
+    let placeholder = QobuzCredentials {
+        email: token.to_string(),
+        password: String::new(),
+    };
+    let encrypted = encrypt_credentials_at(root, &placeholder)?;
+    write_private_file(&oauth_token_path_at(root), &encrypted)?;
+    Ok(encrypted)
 }
 
-const OAUTH_TOKEN_KEY: &str = "qobuz-oauth-token";
+/// Read and decrypt the OAuth token from `<root>/.qbz-oauth-token`, or `None`
+/// when the file is absent/empty/undecryptable.
+fn read_oauth_token_file(root: &Path) -> Result<Option<String>, String> {
+    let path = oauth_token_path_at(root);
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    tighten_private_file_mode(&path);
+    let content =
+        fs::read_to_string(&path).map_err(|e| format!("Failed to read OAuth token file: {}", e))?;
+    if content.trim().is_empty() {
+        return Ok(None);
+    }
+
+    match decrypt_credentials_at(root, &content) {
+        Ok(placeholder) => {
+            log::debug!("[Credentials] OAuth token loaded from encrypted file");
+            Ok(Some(placeholder.email))
+        }
+        Err(e) => {
+            log::warn!("[Credentials] Failed to decrypt OAuth token file: {}", e);
+            Ok(None)
+        }
+    }
+}
+
+/// Remove `<root>/.qbz-oauth-token` if present.
+fn remove_oauth_token_file(root: &Path) -> Result<(), String> {
+    let path = oauth_token_path_at(root);
+    if path.exists() {
+        fs::remove_file(&path)
+            .map_err(|e| format!("Failed to remove OAuth token file: {}", e))?;
+    }
+    Ok(())
+}
+
+/// Persist the OAuth `user_auth_token` under `root` (daemon path, file-only).
+///
+/// File is authoritative; no keyring write-through (01 §6.3 — the keyring
+/// accelerator stays desktop-only, so a daemon runs with no Secret Service).
+pub fn save_oauth_token_at(root: &Path, token: &str) -> Result<(), String> {
+    write_oauth_token_file(root, token)?;
+    log::info!("[Credentials] OAuth token saved to encrypted file (daemon root)");
+    Ok(())
+}
+
+/// Load a previously saved OAuth `user_auth_token` from under `root`, or `None`.
+/// File-only (no keyring), the authoritative daemon path.
+pub fn load_oauth_token_at(root: &Path) -> Result<Option<String>, String> {
+    read_oauth_token_file(root)
+}
+
+/// Delete the stored OAuth token under `root` (daemon path, file-only).
+pub fn clear_oauth_token_at(root: &Path) -> Result<(), String> {
+    remove_oauth_token_file(root)?;
+    log::info!("[Credentials] OAuth token file cleared (daemon root)");
+    Ok(())
+}
 
 /// Persist the OAuth `user_auth_token`.
 ///
@@ -797,14 +915,8 @@ const OAUTH_TOKEN_KEY: &str = "qobuz-oauth-token";
 /// previous keyring-first ordering, which forced a prompt on every login
 /// for users with a broken Secret Service collection (issue #329).
 pub fn save_oauth_token(token: &str) -> Result<(), String> {
-    let placeholder = QobuzCredentials {
-        email: token.to_string(),
-        password: String::new(),
-    };
-    let encrypted = encrypt_credentials(&placeholder)?;
-
-    let path = get_oauth_token_path().ok_or("Could not determine config directory")?;
-    write_private_file(&path, &encrypted)?;
+    let root = config_qbz_root().ok_or("Could not determine config directory")?;
+    let encrypted = write_oauth_token_file(&root, token)?;
     log::info!("[Credentials] OAuth token saved to encrypted file");
 
     if keyring_set(OAUTH_TOKEN_KEY, &encrypted) {
@@ -844,30 +956,9 @@ pub fn load_oauth_token() -> Result<Option<String>, String> {
 /// keyring-sourced token fail authentication (and diagnostic tooling) can
 /// use this to read the authoritative copy directly.
 pub fn load_oauth_token_from_file() -> Result<Option<String>, String> {
-    let path = match get_oauth_token_path() {
-        Some(p) => p,
-        None => return Ok(None),
-    };
-    if !path.exists() {
-        return Ok(None);
-    }
-
-    tighten_private_file_mode(&path);
-    let content =
-        fs::read_to_string(&path).map_err(|e| format!("Failed to read OAuth token file: {}", e))?;
-    if content.trim().is_empty() {
-        return Ok(None);
-    }
-
-    match decrypt_credentials(&content) {
-        Ok(placeholder) => {
-            log::debug!("[Credentials] OAuth token loaded from encrypted file");
-            Ok(Some(placeholder.email))
-        }
-        Err(e) => {
-            log::warn!("[Credentials] Failed to decrypt OAuth token file: {}", e);
-            Ok(None)
-        }
+    match config_qbz_root() {
+        Some(root) => read_oauth_token_file(&root),
+        None => Ok(None),
     }
 }
 
@@ -875,12 +966,9 @@ pub fn load_oauth_token_from_file() -> Result<Option<String>, String> {
 pub fn clear_oauth_token() -> Result<(), String> {
     keyring_delete(OAUTH_TOKEN_KEY);
 
-    if let Some(path) = get_oauth_token_path() {
-        if path.exists() {
-            fs::remove_file(&path)
-                .map_err(|e| format!("Failed to remove OAuth token file: {}", e))?;
-            log::info!("[Credentials] OAuth token file cleared");
-        }
+    if let Some(root) = config_qbz_root() {
+        remove_oauth_token_file(&root)?;
+        log::info!("[Credentials] OAuth token file cleared");
     }
     Ok(())
 }
@@ -888,6 +976,21 @@ pub fn clear_oauth_token() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn oauth_token_roundtrip_at_root() {
+        let dir = tempfile::tempdir().unwrap();
+        save_oauth_token_at(dir.path(), "tok_abc123").unwrap();
+        assert_eq!(
+            load_oauth_token_at(dir.path()).unwrap().as_deref(),
+            Some("tok_abc123")
+        );
+        clear_oauth_token_at(dir.path()).unwrap();
+        assert_eq!(load_oauth_token_at(dir.path()).unwrap(), None);
+        // isolation: nothing may touch the fixed ~/.config/qbz path — the salt and
+        // token files must exist under the given root
+        assert!(dir.path().join(".qbz-cred-salt").exists());
+    }
 
     /// Returns true if the config directory is writable (required for encryption salt).
     /// NixOS sandbox builds and CI environments lack a writable HOME.
