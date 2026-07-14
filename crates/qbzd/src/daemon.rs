@@ -6,10 +6,13 @@
 // parks on signals — API-less but fully diagnosable in-process.
 use std::sync::{Arc, Mutex};
 
+use qbz_app::settings::daemon_prefs;
 use qbz_app::shell::AppRuntime;
+use qbz_app::playback_driver::{self, DriverDeps};
 use qbz_core::CoreError;
 use qbz_models::{CoreEvent, UserSession};
 use tokio::sync::broadcast;
+use tokio::task::JoinHandle;
 
 use crate::adapter::DaemonAdapter;
 use crate::config::QbzdConfig;
@@ -21,11 +24,16 @@ use crate::state::{AuthState, DaemonShared, LatchedErrors, QconnectStatus};
 /// tasks: T4 spawns the playback driver on `runtime` + `shared`, T6 serves
 /// `bus` over HTTP/SSE, T9/T10 wire QConnect. Held alive by [`run`] through the
 /// signal park so the core stays up.
-#[allow(dead_code)] // fields are the seam later tasks (T4/T6/T9/T10) read.
+#[allow(dead_code)] // fields are the seam later tasks (T6/T9/T10) read.
 pub struct BootedRuntime {
     pub runtime: Arc<AppRuntime<DaemonAdapter>>,
     pub shared: Arc<Mutex<DaemonShared>>,
     pub bus: broadcast::Sender<CoreEvent>,
+    /// Background session-restore retry (network-class boot failure only). Held
+    /// so shutdown can abort+join it BEFORE releasing the audio device: it holds
+    /// an `Arc<AppRuntime>` clone, so leaving it running would keep the Player
+    /// alive past `drop(booted)` and break the #521 clock-release ordering (§8.2).
+    pub auth_retry: Option<JoinHandle<()>>,
 }
 
 /// `qbzd run` — boot the daemon in the foreground, park on signals, shut down
@@ -46,21 +54,51 @@ pub async fn run(roots: ProfileRoots, cfg: QbzdConfig, warns: Vec<String>) -> Re
     //    stateless step that lands in T6 (api::bind); serving starts at step 11.
     //    Until T6 the daemon runs API-less.
 
-    // 6.-9. compose stores + runtime + restore credentials.
-    let booted = boot(&roots, &cfg, warns.len()).await?;
+    // 6.-9. compose stores + runtime + restore credentials + restore session.
+    let mut booted = boot(&roots, &cfg, warns.len()).await?;
 
-    // 10. playback driver (T4) · 11. HTTP serve (T6) · 12. QConnect (T9/T10)
-    //     all splice here, reading `booted`.
+    // 10. playback driver (T4). Spawn the 450 ms headless orchestrator on the
+    //     booted runtime + shared state. It runs safely regardless of auth: with
+    //     no session the queue is empty and each tick is a near-no-op. The
+    //     streaming quality is resolved from daemon_prefs through the SAME key
+    //     contract the desktop uses (playback_quality(), playback.rs:170-172),
+    //     so hi-res never silently downgrades. 11. HTTP serve (T6) · 12. QConnect
+    //     (T9/T10) splice after this, reading `booted`.
+    let prefs = daemon_prefs::load_at(&roots.data);
+    let quality = playback_driver::quality_from_key(&prefs.streaming_quality);
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let deps = build_driver_deps(quality, booted.shared.clone());
+    let driver = tokio::spawn(playback_driver::run_driver(
+        booted.runtime.clone(),
+        deps,
+        shutdown_rx,
+    ));
 
     // 13. park on SIGTERM/SIGINT. NO startup audio "hygiene": both candidate
     //     fns are verified no-ops from a fresh process and re-adding them is the
     //     documented skeptic-correction #1 trap (§8.1).
     wait_for_signal().await;
 
-    // ── Shutdown (§8.2, ordered). HTTP intake stop / QConnect disconnect /
-    //    playback stop / final save_session+save_position arrive with their
-    //    producing tasks (T4/T6/T9). Release the audio device by dropping the
-    //    runtime (its Player) BEFORE the #521 pair (§8.2 step 3 precedes step 4).
+    // ── Shutdown (§8.2, ordered). Stop the playback driver FIRST: it holds an
+    //    Arc<AppRuntime> clone, so its task must finish (dropping that Arc)
+    //    before `drop(booted)` can release the audio device ahead of the #521
+    //    pair. Signal, then join.
+    let _ = shutdown_tx.send(true);
+    if let Err(e) = driver.await {
+        log::warn!("driver task join failed: {e:?}");
+    }
+    // Final full session save (queue + position) now that playback is quiesced.
+    playback_driver::save_session_now(booted.runtime.as_ref()).await;
+    // The background auth-retry task also holds an Arc<AppRuntime> clone — abort
+    // AND join it so its Arc is dropped before `drop(booted)`; otherwise the
+    // ordering claim below (drop releases the device) breaks once playback has
+    // engaged a real device.
+    if let Some(retry) = booted.auth_retry.take() {
+        retry.abort();
+        let _ = retry.await;
+    }
+    // Release the audio device by dropping the runtime (its Player) BEFORE the
+    // #521 pair (§8.2 step 3 precedes step 4).
     drop(booted);
     //    THE #521 PAIR runs unconditionally on Linux — exactly the desktop quit
     //    choke-point (crates/qbz/src/main.rs:20393): a forced PipeWire clock left
@@ -112,36 +150,75 @@ async fn boot(roots: &ProfileRoots, cfg: &QbzdConfig, warn_count: usize) -> Resu
     //    215-230): clear the token ONLY on explicit auth rejection; KEEP it on
     //    every network-class failure (clearing on transient errors is the
     //    documented boot-token-loss bug class).
-    match qbz_credentials::load_oauth_token_at(&roots.config)? {
-        None => set_needs_auth(&shared, None),
+    let auth_retry = match qbz_credentials::load_oauth_token_at(&roots.config)? {
+        None => {
+            set_needs_auth(&shared, None);
+            None
+        }
         Some(token) => {
             // Register before the token can reach any log line (§6.3).
             qbz_log::register_secret(token.clone());
             match runtime.core().login_with_token(&token).await {
                 Ok(session) => {
                     restore_activate(&runtime, &shared, roots, session).await?;
-                    // 9. session restore (queue/position) PAUSED — T4 wires
-                    //    SessionStore::load_session here.
+                    // 9½. session restore (queue/position) PAUSED: the daemon's
+                    //     session store IS its queue persistence, so a restart
+                    //     comes back with the queue armed but not auto-playing.
+                    playback_driver::restore_session_paused(runtime.as_ref()).await;
+                    None
                 }
                 Err(e) if is_auth_rejection(&e) => {
                     qbz_credentials::clear_oauth_token_at(&roots.config)?;
                     latch_auth_error(&shared, &e);
                     set_needs_auth(&shared, Some(e));
+                    None
                 }
                 Err(e) => {
                     // network-class: KEEP token, stay Restoring, retry w/ backoff.
                     log::warn!("session restore deferred (network-class): {e}");
-                    spawn_auth_retry(runtime.clone(), shared.clone(), roots.clone());
+                    Some(spawn_auth_retry(
+                        runtime.clone(),
+                        shared.clone(),
+                        roots.clone(),
+                    ))
                 }
             }
         }
-    }
+    };
 
     Ok(BootedRuntime {
         runtime,
         shared,
         bus,
+        auth_retry,
     })
+}
+
+/// Assemble the driver's host side channels: the streaming-quality resolver and
+/// the daemon-shared latching / tick-timestamping hooks. `on_edge` is a no-op
+/// until T10 wires the outbound QConnect renderer report.
+fn build_driver_deps(quality: qbz_models::Quality, shared: Arc<Mutex<DaemonShared>>) -> DriverDeps {
+    let latch_shared = shared.clone();
+    let tick_shared = shared;
+    DriverDeps {
+        quality: Arc::new(move || quality),
+        on_edge: Arc::new(|| {}),
+        on_latch: Arc::new(move |category, message| {
+            if let Ok(mut s) = latch_shared.lock() {
+                match category {
+                    "stream" => s.last_errors.stream = Some(message),
+                    "transport" => s.last_errors.transport = Some(message),
+                    "auth" => s.last_errors.auth = Some(message),
+                    _ => {}
+                }
+            }
+        }),
+        on_tick: Arc::new(move || {
+            if let Ok(mut s) = tick_shared.lock() {
+                s.driver_last_tick = Some(std::time::Instant::now());
+            }
+        }),
+    }
 }
 
 /// Activate the per-user session against DAEMON paths (§8.1-9): inject the
@@ -252,7 +329,7 @@ fn spawn_auth_retry(
     runtime: Arc<AppRuntime<DaemonAdapter>>,
     shared: Arc<Mutex<DaemonShared>>,
     roots: ProfileRoots,
-) {
+) -> JoinHandle<()> {
     const SCHEDULE_SECS: [u64; 4] = [2, 5, 15, 30];
     tokio::spawn(async move {
         let token = match qbz_credentials::load_oauth_token_at(&roots.config) {
@@ -290,7 +367,7 @@ fn spawn_auth_retry(
             "session restore gave up after {} network-class attempts — token KEPT",
             SCHEDULE_SECS.len()
         );
-    });
+    })
 }
 
 /// Render an [`InstanceLock`] failure. For the already-running case this prints
