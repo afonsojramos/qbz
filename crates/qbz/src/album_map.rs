@@ -195,6 +195,7 @@ pub fn classify_release_type(track_count: Option<u32>) -> &'static str {
 /// (single-source Qobuz context — hide the column with `show-source: false`).
 pub fn to_item(card: AlbumCard) -> AlbumCardItem {
     AlbumCardItem {
+        plays: 0,
         // Favorite heart state from the login-seeded cache, so every card
         // surface fed by this funnel (album suggestions, label, awards, …)
         // renders the filled heart in sync with the album-detail header.
