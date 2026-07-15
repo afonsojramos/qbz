@@ -322,34 +322,39 @@ impl PlaybackState {
     // -------------------------- render --------------------------
 
     pub fn draw(&self, f: &mut Frame, area: Rect, _ctx: &DrawCtx) {
+        let width = area.width.saturating_sub(2); // section inner width
         let fields = visible_fields(&self.staged);
         let focused_field = fields.get(self.focus).copied();
         let active = |members: &[PField]| {
             focused_field.map(|ff| members.contains(&ff)).unwrap_or(false)
         };
+        // ONE control column for the whole screen (owner's "misma área de columna").
+        let labels: Vec<&str> = fields.iter().map(|f| self.field_display(*f).0).collect();
+        let ctrl_col = widgets::control_column(&labels, width);
 
         use PField::*;
         let mut secs: Vec<widgets::Section> = Vec::new();
+        let mut anchor: Option<widgets::FocusAnchor> = None;
 
         let quality: &[PField] = &[Quality, Limit, MaxRate, AllowFallback, RetryFail];
-        let q_lines = self.group_lines(&fields, quality);
+        let (q_lines, q_a) = self.group_block(&fields, quality, focused_field, ctrl_col, width);
         if !q_lines.is_empty() {
-            secs.push(widgets::Section::new(s::PLAYBACK_GROUP_QUALITY, active(quality), q_lines));
+            widgets::push_section(&mut secs, &mut anchor, s::PLAYBACK_GROUP_QUALITY, active(quality), q_lines, q_a);
         }
 
         let behavior: &[PField] = &[Continue, Gapless];
-        let b_lines = self.group_lines(&fields, behavior);
+        let (b_lines, b_a) = self.group_block(&fields, behavior, focused_field, ctrl_col, width);
         if !b_lines.is_empty() {
-            secs.push(widgets::Section::new(s::PLAYBACK_GROUP_BEHAVIOR, active(behavior), b_lines));
+            widgets::push_section(&mut secs, &mut anchor, s::PLAYBACK_GROUP_BEHAVIOR, active(behavior), b_lines, b_a);
         }
 
         let session: &[PField] = &[Restore, Resume];
-        let sess_lines = self.group_lines(&fields, session);
+        let (sess_lines, sess_a) = self.group_block(&fields, session, focused_field, ctrl_col, width);
         if !sess_lines.is_empty() {
-            secs.push(widgets::Section::new(s::PLAYBACK_GROUP_SESSION, active(session), sess_lines));
+            widgets::push_section(&mut secs, &mut anchor, s::PLAYBACK_GROUP_SESSION, active(session), sess_lines, sess_a);
         }
 
-        widgets::sections(f, area, &secs);
+        widgets::sections_scroll(f, area, &secs, anchor);
 
         match &self.editor {
             Some(Editor::Quality(p)) | Some(Editor::MaxRate(p)) | Some(Editor::Retry(p)) => {
@@ -359,22 +364,46 @@ impl PlaybackState {
         }
     }
 
-    /// The field rows of one group, in declared order (skipping hidden fields).
-    fn group_lines(&self, fields: &[PField], members: &[PField]) -> Vec<Line<'static>> {
+    /// The field blocks of one group, in declared order (skipping hidden fields).
+    /// Returns the flattened lines plus, when the focused field is in this group,
+    /// its (first-line, height) inside the group for follow-focus scrolling.
+    fn group_block(
+        &self,
+        fields: &[PField],
+        members: &[PField],
+        focused_field: Option<PField>,
+        ctrl_col: u16,
+        width: u16,
+    ) -> (Vec<Line<'static>>, Option<(u16, u16)>) {
         let mut lines = Vec::new();
+        let mut within = None;
         for gf in members {
             if let Some(pos) = fields.iter().position(|x| x == gf) {
-                lines.push(self.field_line(*gf, pos));
+                let start = lines.len() as u16;
+                let block = self.field_block(*gf, pos, ctrl_col, width);
+                if focused_field == Some(*gf) {
+                    within = Some((start, block.len() as u16));
+                }
+                lines.extend(block);
             }
         }
-        lines
+        (lines, within)
     }
 
-    fn field_line(&self, field: PField, focus_pos: usize) -> Line<'static> {
+    fn field_block(&self, field: PField, focus_pos: usize, ctrl_col: u16, width: u16) -> Vec<Line<'static>> {
         let (_, enabled, reason) = row_state(field, &self.staged);
         let focused = focus_pos == self.focus && self.editor.is_none();
         let (label, value, widget) = self.field_display(field);
-        widgets::field_line(label, &value, focused, enabled, reason, widget)
+        let f = widgets::Field {
+            label,
+            value,
+            widget,
+            focused,
+            enabled,
+            reason,
+            description: None,
+        };
+        widgets::field_block(&f, ctrl_col, width)
     }
 
     fn field_display(&self, field: PField) -> (&'static str, String, &'static str) {

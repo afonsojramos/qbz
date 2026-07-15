@@ -71,11 +71,9 @@ pub const SCREENS: [Screen; 7] = [
     Screen::Wizard,
 ];
 
-/// Sidebar width (columns, incl. border). 14 keeps the content frame at 64 inner
-/// columns on the 80-col floor — wide enough that the common field lines do NOT
-/// clip their `[toggle]`/`[select]` hints; the inner 12 fits every sidebar label
-/// (dirty-capable ones ≤ 8, so `▸ Name *` lands exactly).
-const SIDEBAR_W: u16 = 14;
+// Sidebar width is now responsive (FB5): `widgets::sidebar_width(term_width)` —
+// 28 cols at ≥ 100 (roomy: spelled-out labels + a dim summary line), 14 below so
+// the 80×24 floor keeps its 64-col content frame.
 
 /// Which pane holds the keyboard focus. The frames shell has two: the persistent
 /// left navigation sidebar and the right content frame (FB3).
@@ -1131,11 +1129,13 @@ impl App {
         self.draw_header(f, rows[0]);
         self.draw_breadcrumb(f, rows[1]);
 
+        let sidebar_w = widgets::sidebar_width(area.width);
+        let wide = widgets::sidebar_is_wide(area.width);
         let body = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(SIDEBAR_W), Constraint::Min(0)])
+            .constraints([Constraint::Length(sidebar_w), Constraint::Min(0)])
             .split(rows[2]);
-        self.draw_sidebar(f, body[0]);
+        self.draw_sidebar(f, body[0], wide);
 
         // Content frame: accent border when the content owns focus, dim otherwise
         // (its title is gone — the breadcrumb names the section now).
@@ -1225,10 +1225,12 @@ impl App {
         f.render_widget(Paragraph::new(line), area);
     }
 
-    /// Persistent left navigation: the six sections by name. The active one gets
+    /// Persistent left navigation: the sections by name. The active one gets
     /// `▸` + accent; a dirty active section gets a warn `*`. When the nav owns
-    /// focus, the highlighted row reverses (serial-safe) and the border accents.
-    fn draw_sidebar(&self, f: &mut Frame, area: Rect) {
+    /// focus, the highlighted NAME row reverses (serial-safe) and the border
+    /// accents. In the wide tier (FB5) the labels spell out (`Import / Export`)
+    /// and each name carries a dim static summary line beneath it.
+    fn draw_sidebar(&self, f: &mut Frame, area: Rect, wide: bool) {
         let border = if self.focus == Focus::Nav {
             theme::accent()
         } else {
@@ -1247,7 +1249,7 @@ impl App {
             let is_active = *screen == self.active_section;
             let dirty = sidebar_dirty_marker(*screen, self.active_section, active_dirty);
             let highlighted = self.focus == Focus::Nav && i == self.nav_cursor;
-            let label = s::SIDEBAR_LABELS[i];
+            let label = if wide { s::SIDEBAR_LABELS_WIDE[i] } else { s::SIDEBAR_LABELS[i] };
             let marker = if is_active { "▸ " } else { "  " };
 
             if highlighted {
@@ -1272,6 +1274,13 @@ impl App {
                     spans.push(Span::styled(" *".to_string(), theme::warn()));
                 }
                 lines.push(Line::from(spans));
+            }
+            // Wide tier: a dim static summary under each name (never live state).
+            if wide {
+                lines.push(Line::from(Span::styled(
+                    format!("    {}", s::SIDEBAR_SUMMARIES[i]),
+                    theme::dim(),
+                )));
             }
         }
         f.render_widget(Paragraph::new(lines), inner);
@@ -1812,6 +1821,40 @@ mod tests {
         let app = bare_app(Screen::Audio, Focus::Content);
         let out = render(&app, 79, 24);
         assert!(out.contains("terminal too small"));
+    }
+
+
+    // ---- 120×30 wide: the roomy sidebar tier + every section still renders (FB5) ----
+
+    #[test]
+    fn every_section_fits_the_120x30_wide() {
+        for screen in SCREENS {
+            for focus in [Focus::Nav, Focus::Content] {
+                let app = bare_app(screen, focus);
+                let out = render(&app, 120, 30);
+                assert!(out.contains("QBZ Daemon Setup"), "header missing {screen:?}/{focus:?}");
+                assert!(
+                    !out.contains("terminal too small"),
+                    "120x30 must not trip the resize guard for {screen:?}"
+                );
+                // Wide tier: labels spell out and each name carries a dim summary.
+                assert!(out.contains("Import / Export"), "wide sidebar label missing {screen:?}");
+                assert!(
+                    out.contains("output · bit-perfect"),
+                    "wide sidebar summary missing {screen:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn sidebar_is_compact_at_the_floor_and_wide_above_100() {
+        // At the 80-col floor the compact label is used, not the spelled-out one.
+        let floor = render(&bare_app(Screen::Audio, Focus::Nav), 80, 24);
+        assert!(floor.contains("Import/Exp"), "compact label at the floor");
+        assert!(!floor.contains("Import / Export"), "no wide label at the floor");
+        // The 28-col sidebar is at least double the 14-col compact one.
+        assert!(widgets::sidebar_width(120) >= 2 * widgets::sidebar_width(80));
     }
 
     #[test]

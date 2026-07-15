@@ -27,11 +27,11 @@ pub const HELP_TITLE: &str = "Help";
 /// while editing, the field label) carries the accent.
 pub const BREADCRUMB_ROOT: &str = "Setup";
 
-/// Persistent left-nav labels (fixed order). NAME only; the old menu's live
-/// summaries are dropped — the content is the detail. Dirty-capable sections
-/// (Audio/Playback/QConnect/Network) stay ≤ 8 chars so a trailing `*` fits the
-/// 14-col sidebar; Account/Import/Wizard are never dirty. Seven since FB4 added
-/// the HiFi Wizard (owner-sanctioned cap break over the old six-screen D7 cap).
+/// Persistent left-nav labels (fixed order), COMPACT tier (< 100 cols). NAME
+/// only; Dirty-capable sections (Audio/Playback/QConnect/Network) stay ≤ 8 chars
+/// so a trailing `*` fits the 14-col sidebar; Account/Import/Wizard are never
+/// dirty. Seven since FB4 added the HiFi Wizard (owner-sanctioned cap break over
+/// the old six-screen D7 cap).
 pub const SIDEBAR_LABELS: [&str; 7] = [
     "Account",
     "Audio",
@@ -40,6 +40,31 @@ pub const SIDEBAR_LABELS: [&str; 7] = [
     "Network",
     "Import/Exp",
     "Wizard",
+];
+
+/// Left-nav labels, WIDE tier (≥ 100 cols → the 28-col sidebar, FB5). The extra
+/// room lets `Import / Export` spell itself out; everything else is already whole.
+pub const SIDEBAR_LABELS_WIDE: [&str; 7] = [
+    "Account",
+    "Audio",
+    "Playback",
+    "QConnect",
+    "Network",
+    "Import / Export",
+    "Wizard",
+];
+
+/// A terse, static one-line summary shown dim UNDER each name in the wide sidebar
+/// only (FB5). Static (not live device state) — it names what the section is for
+/// so the roomy sidebar reads intentionally; it never needs the section loaded.
+pub const SIDEBAR_SUMMARIES: [&str; 7] = [
+    "sign in",
+    "output · bit-perfect",
+    "quality · behavior",
+    "cast target",
+    "http control",
+    "settings bundle",
+    "DAC setup",
 ];
 
 // Global help-bar hints (context-sensitive; assembled per focus + screen).

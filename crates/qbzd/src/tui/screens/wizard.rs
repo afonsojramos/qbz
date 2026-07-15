@@ -654,8 +654,15 @@ impl WizardState {
             Line::from(Span::styled(s::WIZ_WELCOME_TITLE, theme::accent_bold())),
             widgets::blank(),
         ];
-        for l in s::WIZ_WELCOME_BODY.lines() {
-            lines.push(Line::from(l.to_string()));
+        // Word-wrap the body, preserving intentional paragraph breaks (FB5).
+        for l in s::WIZ_WELCOME_BODY.split('\n') {
+            if l.trim().is_empty() {
+                lines.push(widgets::blank());
+            } else {
+                for wl in widgets::wrap(l, area.width.max(1) as usize) {
+                    lines.push(Line::from(wl));
+                }
+            }
         }
         lines.push(widgets::blank());
         lines.push(Line::from(widgets::help_spans(s::WIZ_WELCOME_CTA)));
@@ -665,11 +672,12 @@ impl WizardState {
     fn draw_check(&self, f: &mut Frame, area: Rect) {
         let distro = Distro::ALL.get(self.distro_index).copied().unwrap_or(Distro::Other);
         let init = InitSystem::ALL.get(self.init_index).copied().unwrap_or(InitSystem::Unknown);
+        let width = area.width;
         let mut lines: Vec<Line> = Vec::new();
 
         // Health verdict (blind inside a sandbox — show reference commands only).
         if self.sandbox != Sandbox::None {
-            lines.push(widgets::warn_line(&s::wiz_sandbox_note(sandbox_name(self.sandbox))));
+            lines.extend(widgets::wrapped_note(&s::wiz_sandbox_note(sandbox_name(self.sandbox)), width, theme::warn()));
         } else if let Some(h) = &self.health {
             if h.is_ready() {
                 lines.push(Line::from(Span::styled(s::WIZ_HEALTH_READY, theme::ok())));
@@ -681,9 +689,10 @@ impl WizardState {
         }
         lines.push(widgets::blank());
 
-        // The two overrides (focusable rows).
-        lines.push(self.check_row(0, s::WIZ_DISTRO, distro.label()));
-        lines.push(self.check_row(1, s::WIZ_INIT, init.label()));
+        // The two overrides (focusable rows), sharing one control column.
+        let ctrl_col = widgets::control_column(&[s::WIZ_DISTRO, s::WIZ_INIT], width);
+        lines.extend(self.check_block(0, s::WIZ_DISTRO, distro.label(), ctrl_col, width));
+        lines.extend(self.check_block(1, s::WIZ_INIT, init.label(), ctrl_col, width));
         lines.push(widgets::blank());
 
         // Remediation / reference commands.
@@ -695,10 +704,13 @@ impl WizardState {
             Vec::new()
         };
         if rows.is_empty() && self.sandbox == Sandbox::None && self.health.is_some() {
-            lines.push(widgets::note_line(s::WIZ_NO_REMEDIATION));
+            lines.extend(widgets::wrapped_note(s::WIZ_NO_REMEDIATION, width, theme::dim()));
         }
         for (caption, command) in &rows {
-            lines.push(Line::from(Span::styled(format!("  • {caption}"), Style::default())));
+            // Captions are prose → wrap; commands are copy-paste → never wrap.
+            for cl in widgets::wrap(caption, width.saturating_sub(4).max(1) as usize) {
+                lines.push(Line::from(Span::styled(format!("  • {cl}"), Style::default())));
+            }
             for cmd_line in command.lines() {
                 lines.push(Line::from(Span::styled(format!("      {cmd_line}"), theme::dim())));
             }
@@ -706,9 +718,21 @@ impl WizardState {
         f.render_widget(Paragraph::new(lines), area);
     }
 
-    fn check_row(&self, idx: usize, label: &str, value: &str) -> Line<'static> {
+    fn check_block(&self, idx: usize, label: &'static str, value: &str, ctrl_col: u16, width: u16) -> Vec<Line<'static>> {
         let focused = self.check_focus == idx && self.check_editor.is_none();
-        widgets::field_line(label, value, focused, true, None, "[select]")
+        widgets::field_block(
+            &widgets::Field {
+                label,
+                value: value.to_string(),
+                widget: "[select]",
+                focused,
+                enabled: true,
+                reason: None,
+                description: None,
+            },
+            ctrl_col,
+            width,
+        )
     }
 
     fn draw_select(&self, f: &mut Frame, area: Rect) {
@@ -716,11 +740,9 @@ impl WizardState {
         if self.detecting {
             lines.push(Line::from(Span::styled(s::WIZ_DETECTING, theme::dim())));
         } else if self.candidates.is_empty() {
-            for l in s::WIZ_NO_DACS.lines() {
-                lines.push(widgets::warn_line(l));
-            }
+            lines.extend(widgets::wrapped_note(s::WIZ_NO_DACS, area.width, theme::warn()));
         } else {
-            lines.push(Line::from(Span::styled(s::WIZ_SELECT_INTRO, theme::dim())));
+            lines.extend(widgets::wrapped_note(s::WIZ_SELECT_INTRO, area.width, theme::dim()));
             lines.push(widgets::blank());
             for (i, c) in self.candidates.iter().enumerate() {
                 let mark = if c.checked { "[x]" } else { "[ ]" };
@@ -787,9 +809,7 @@ impl WizardState {
 
     fn draw_test(&self, f: &mut Frame, area: Rect) {
         let mut lines: Vec<Line> = Vec::new();
-        for l in s::WIZ_TEST_INTRO.lines() {
-            lines.push(widgets::note_line(l));
-        }
+        lines.extend(widgets::wrapped_note(s::WIZ_TEST_INTRO, area.width, theme::dim()));
         lines.push(widgets::blank());
 
         if let Some(note) = &self.test_note {
@@ -857,11 +877,11 @@ impl WizardState {
             widgets::blank(),
         ];
         let selected = self.configs.len();
-        lines.push(Line::from(s::wiz_done_summary(selected)));
-        lines.push(widgets::blank());
-        for l in s::WIZ_DONE_REMINDER.lines() {
-            lines.push(widgets::warn_line(l));
+        for wl in widgets::wrap(&s::wiz_done_summary(selected), area.width.max(1) as usize) {
+            lines.push(Line::from(wl));
         }
+        lines.push(widgets::blank());
+        lines.extend(widgets::wrapped_note(s::WIZ_DONE_REMINDER, area.width, theme::warn()));
         // The init-aware "(re)start the audio services" command for this box.
         let init = InitSystem::ALL.get(self.init_index).copied().unwrap_or(InitSystem::Unknown);
         lines.push(widgets::blank());
@@ -1102,10 +1122,13 @@ mod tests {
     }
 
     fn render_step(w: &WizardState) -> String {
+        render_step_sized(w, 80, 24)
+    }
+
+    fn render_step_sized(w: &WizardState, width: u16, height: u16) -> String {
         use ratatui::backend::TestBackend;
         use ratatui::Terminal;
-        // Mirror the App's content-frame inner rect on the 80×24 floor.
-        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         let ctx = DrawCtx { status: None };
         terminal
             .draw(|f| {
@@ -1115,8 +1138,8 @@ mod tests {
             .unwrap();
         let buf = terminal.backend().buffer().clone();
         let mut out = String::new();
-        for y in 0..24 {
-            for x in 0..80 {
+        for y in 0..height {
+            for x in 0..width {
                 out.push_str(buf[(x, y)].symbol());
             }
             out.push('\n');
@@ -1145,5 +1168,26 @@ mod tests {
         let review = render_step(&w);
         assert!(review.contains("→ ~/.config"), "review shows the target file paths");
         assert!(review.contains("NEVER"), "review footer states the wizard never writes files");
+    }
+
+    #[test]
+    fn every_wizard_step_renders_at_120x30_wide() {
+        // The wizard body draws into the content frame (no sidebar of its own);
+        // this mirrors it at a comfortable wide size and asserts each step's
+        // content survives the word-wrap rework without a panic (FB5).
+        let mut w = populated();
+        let expect: [(WStep, &str); 6] = [
+            (WStep::Welcome, "HiFi"),
+            (WStep::Check, "ready"),
+            (WStep::SelectDacs, "Cambridge"),
+            (WStep::Review, "Cambridge"),
+            (WStep::Test, "DAC:"),
+            (WStep::Done, "All set"),
+        ];
+        for (step, needle) in expect {
+            w.step = step;
+            let out = render_step_sized(&w, 120, 30);
+            assert!(out.contains(needle), "wide step {step:?} should render {needle:?}");
+        }
     }
 }

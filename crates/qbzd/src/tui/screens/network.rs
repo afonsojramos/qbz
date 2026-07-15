@@ -16,6 +16,7 @@ use ratatui::Frame;
 use crate::config::QbzdConfig;
 use crate::tui::app::{DrawCtx, ScreenAction};
 use crate::tui::strings as s;
+use crate::tui::theme;
 use crate::tui::widgets::{self, InputOutcome, TextInput};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -155,7 +156,19 @@ impl NetworkState {
     // -------------------------- render --------------------------
 
     pub fn draw(&self, f: &mut Frame, area: Rect, _ctx: &DrawCtx) {
+        let width = area.width.saturating_sub(2); // section inner width
+        let labels: Vec<&str> = FIELDS
+            .iter()
+            .map(|f| match f {
+                NField::Bind => s::N_BIND,
+                NField::Port => s::N_PORT,
+                NField::Token => s::N_TOKEN,
+            })
+            .collect();
+        let ctrl_col = widgets::control_column(&labels, width);
+
         let mut lines: Vec<Line> = Vec::new();
+        let mut within: Option<(u16, u16)> = None;
         for (i, field) in FIELDS.iter().enumerate() {
             let focused = i == self.focus && self.editor.is_none();
             let editing = self.editor.as_ref().map(|(nf, _)| *nf == *field).unwrap_or(false);
@@ -173,17 +186,25 @@ impl NetworkState {
                     (s::N_TOKEN, v, "[input]")
                 }
             };
-            lines.push(widgets::field_line(label, &value, focused, true, None, widget));
+            let start = lines.len() as u16;
+            let block = widgets::field_block(
+                &widgets::Field { label, value, widget, focused, enabled: true, reason: None, description: None },
+                ctrl_col,
+                width,
+            );
+            if focused {
+                within = Some((start, block.len() as u16));
+            }
+            lines.extend(block);
         }
 
-        // Field-level validation notes (§4.2): errors in red, exposure in yellow.
+        // Field-level validation notes (§4.2): the short errors stay one line; the
+        // long exposure/preservation copy is now WORD-WRAPPED so it never clips.
         if self.staged.bind.parse::<IpAddr>().is_err() {
             lines.push(widgets::err_line(s::N_BAD_IP));
         } else if self.bind_is_lan() {
             lines.push(widgets::blank());
-            for l in s::NETWORK_LAN_POSTURE.lines() {
-                lines.push(widgets::note_line(l));
-            }
+            lines.extend(widgets::wrapped_note(s::NETWORK_LAN_POSTURE, width, theme::dim()));
         }
         if self.port_invalid() {
             lines.push(widgets::err_line(s::N_BAD_PORT));
@@ -192,12 +213,14 @@ impl NetworkState {
         // Pre-save unknown-key warning (§3.5).
         if !self.unknown_keys.is_empty() {
             lines.push(widgets::blank());
-            lines.push(widgets::warn_line(s::N_DROP_UNKNOWN));
-            lines.push(widgets::warn_line(&format!("  {}", self.unknown_keys.join(", "))));
+            lines.extend(widgets::wrapped_note(s::N_DROP_UNKNOWN, width, theme::warn()));
+            lines.extend(widgets::wrapped_note(&self.unknown_keys.join(", "), width, theme::warn()));
         }
 
-        let secs = [widgets::Section::new(s::NETWORK_SECTION, true, lines)];
-        widgets::sections(f, area, &secs);
+        let mut secs: Vec<widgets::Section> = Vec::new();
+        let mut anchor: Option<widgets::FocusAnchor> = None;
+        widgets::push_section(&mut secs, &mut anchor, s::NETWORK_SECTION, true, lines, within);
+        widgets::sections_scroll(f, area, &secs, anchor);
 
         if let Some((field, input)) = &self.editor {
             let title = match field {

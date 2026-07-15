@@ -15,6 +15,7 @@ use serde_json::Value;
 use crate::qconnect::transport as qconnect_kv;
 use crate::tui::app::{DrawCtx, ScreenAction};
 use crate::tui::strings as s;
+use crate::tui::theme;
 use crate::tui::widgets::{self, InputOutcome, SelectOutcome, SelectPopup, TextInput};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -176,14 +177,19 @@ impl QConnectState {
     // -------------------------- render --------------------------
 
     pub fn draw(&self, f: &mut Frame, area: Rect, ctx: &DrawCtx) {
+        let width = area.width.saturating_sub(2); // section inner width
+        let ctrl_col =
+            widgets::control_column(&[s::QC_ENABLE, s::QC_DEVICE_NAME, s::QC_VOLUME_MODE], width);
         let mut lines: Vec<Line> = Vec::new();
+        let mut within: Option<(u16, u16)> = None;
         for (i, field) in FIELDS.iter().enumerate() {
             let focused = i == self.focus && self.editor.is_none();
-            match field {
-                QField::Enable => {
-                    let v = if self.staged.enable { "on" } else { "off" }.to_string();
-                    lines.push(widgets::field_line(s::QC_ENABLE, &v, focused, true, None, "[toggle]"));
-                }
+            let (label, value, widget) = match field {
+                QField::Enable => (
+                    s::QC_ENABLE,
+                    if self.staged.enable { "on" } else { "off" }.to_string(),
+                    "[toggle]",
+                ),
                 QField::DeviceName => {
                     let shown = if let Some(Editor::Name(input)) = &self.editor {
                         input.display()
@@ -192,31 +198,37 @@ impl QConnectState {
                     } else {
                         self.staged.device_name.clone()
                     };
-                    lines.push(widgets::field_line(s::QC_DEVICE_NAME, &shown, focused, true, None, "[input]"));
-                    lines.push(widgets::note_line(&s::qc_preview(&self.effective_name())));
-                    lines.push(widgets::note_line(s::QC_APPLIES_NEXT));
+                    (s::QC_DEVICE_NAME, shown, "[input]")
                 }
-                QField::VolumeMode => {
-                    lines.push(widgets::field_line(
-                        s::QC_VOLUME_MODE,
-                        &self.staged.volume_mode,
-                        focused,
-                        true,
-                        None,
-                        "[select]",
-                    ));
-                }
+                QField::VolumeMode => (s::QC_VOLUME_MODE, self.staged.volume_mode.clone(), "[select]"),
+            };
+            let start = lines.len() as u16;
+            let mut block = widgets::field_block(
+                &widgets::Field { label, value, widget, focused, enabled: true, reason: None, description: None },
+                ctrl_col,
+                width,
+            );
+            // The device-name field carries a live preview + applies-next note.
+            if *field == QField::DeviceName {
+                block.extend(widgets::wrapped_note(&s::qc_preview(&self.effective_name()), width, theme::dim()));
+                block.extend(widgets::wrapped_note(s::QC_APPLIES_NEXT, width, theme::dim()));
             }
+            if focused {
+                within = Some((start, block.len() as u16));
+            }
+            lines.extend(block);
         }
 
         // Live status line (§3.4) — from GET /api/status when the daemon runs.
         if let Some(live) = ctx.status.and_then(qconnect_live_line) {
             lines.push(widgets::blank());
-            lines.push(widgets::note_line(&live));
+            lines.extend(widgets::wrapped_note(&live, width, theme::dim()));
         }
 
-        let secs = [widgets::Section::new(s::QCONNECT_SECTION, true, lines)];
-        widgets::sections(f, area, &secs);
+        let mut secs: Vec<widgets::Section> = Vec::new();
+        let mut anchor: Option<widgets::FocusAnchor> = None;
+        widgets::push_section(&mut secs, &mut anchor, s::QCONNECT_SECTION, true, lines, within);
+        widgets::sections_scroll(f, area, &secs, anchor);
 
         match &self.editor {
             Some(Editor::Volume(p)) => p.draw(f, area),

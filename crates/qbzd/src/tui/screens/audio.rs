@@ -20,6 +20,7 @@ use ratatui::Frame;
 
 use crate::tui::app::{DrawCtx, ScreenAction};
 use crate::tui::strings as s;
+use crate::tui::theme;
 use crate::tui::widgets::{self, SelectOutcome, SelectPopup};
 
 // ============================ staged form ============================
@@ -664,37 +665,42 @@ impl AudioState {
     // -------------------------- render --------------------------
 
     pub fn draw(&self, f: &mut Frame, area: Rect, _ctx: &DrawCtx) {
+        let width = area.width.saturating_sub(2); // section inner width
         let fields = visible_fields(&self.staged);
         let focused_field = fields.get(self.focus).copied();
         let active = |members: &[AField]| {
             focused_field.map(|ff| members.contains(&ff)).unwrap_or(false)
         };
+        // ONE control column for the whole screen (owner's "misma área de columna").
+        let labels: Vec<&str> = fields.iter().map(|f| self.field_display(*f).0).collect();
+        let ctrl_col = widgets::control_column(&labels, width);
 
         use AField::*;
         let mut secs: Vec<widgets::Section> = Vec::new();
+        let mut anchor: Option<widgets::FocusAnchor> = None;
 
         let out_members: &[AField] = &[Backend, Device, AlsaPlugin, HwVolume, Dsd];
-        let mut out_lines = self.group_lines(&fields, out_members);
+        let (mut out_lines, out_a) = self.group_block(&fields, out_members, focused_field, ctrl_col, width);
         if self.staged.backend == AudioBackendType::Jack {
-            out_lines.push(widgets::warn_line(s::JACK_WARNING));
+            out_lines.extend(widgets::wrapped_note(s::JACK_WARNING, width, theme::warn()));
         }
         if !out_lines.is_empty() {
-            secs.push(widgets::Section::new(s::AUDIO_GROUP_OUTPUT, active(out_members), out_lines));
+            widgets::push_section(&mut secs, &mut anchor, s::AUDIO_GROUP_OUTPUT, active(out_members), out_lines, out_a);
         }
 
         let bp_members: &[AField] = &[Exclusive, Reserve, Passthrough, ForceBp, LockOutput];
-        let bp_lines = self.group_lines(&fields, bp_members);
+        let (bp_lines, bp_a) = self.group_block(&fields, bp_members, focused_field, ctrl_col, width);
         if !bp_lines.is_empty() {
-            secs.push(widgets::Section::new(s::AUDIO_GROUP_BITPERFECT, active(bp_members), bp_lines));
+            widgets::push_section(&mut secs, &mut anchor, s::AUDIO_GROUP_BITPERFECT, active(bp_members), bp_lines, bp_a);
         }
 
         let tr_members: &[AField] = &[StreamUncached, Buffer, StreamingOnly];
-        let tr_lines = self.group_lines(&fields, tr_members);
+        let (tr_lines, tr_a) = self.group_block(&fields, tr_members, focused_field, ctrl_col, width);
         if !tr_lines.is_empty() {
-            secs.push(widgets::Section::new(s::AUDIO_GROUP_TRANSPORT, active(tr_members), tr_lines));
+            widgets::push_section(&mut secs, &mut anchor, s::AUDIO_GROUP_TRANSPORT, active(tr_members), tr_lines, tr_a);
         }
 
-        widgets::sections(f, area, &secs);
+        widgets::sections_scroll(f, area, &secs, anchor);
 
         // Overlays.
         match &self.editor {
@@ -718,22 +724,46 @@ impl AudioState {
         }
     }
 
-    /// The field rows of one group, in declared order (skipping hidden fields).
-    fn group_lines(&self, fields: &[AField], members: &[AField]) -> Vec<Line<'static>> {
+    /// The field blocks of one group, in declared order (skipping hidden fields).
+    /// Returns the flattened lines plus, when the focused field is in this group,
+    /// its (first-line, height) inside the group for follow-focus scrolling.
+    fn group_block(
+        &self,
+        fields: &[AField],
+        members: &[AField],
+        focused_field: Option<AField>,
+        ctrl_col: u16,
+        width: u16,
+    ) -> (Vec<Line<'static>>, Option<(u16, u16)>) {
         let mut lines = Vec::new();
+        let mut within = None;
         for gf in members {
             if let Some(pos) = fields.iter().position(|x| x == gf) {
-                lines.push(self.field_line(*gf, pos));
+                let start = lines.len() as u16;
+                let block = self.field_block(*gf, pos, ctrl_col, width);
+                if focused_field == Some(*gf) {
+                    within = Some((start, block.len() as u16));
+                }
+                lines.extend(block);
             }
         }
-        lines
+        (lines, within)
     }
 
-    fn field_line(&self, field: AField, focus_pos: usize) -> Line<'static> {
+    fn field_block(&self, field: AField, focus_pos: usize, ctrl_col: u16, width: u16) -> Vec<Line<'static>> {
         let (_, enabled, reason) = row_state(field, &self.staged);
         let focused = focus_pos == self.focus && self.editor.is_none();
         let (label, value, widget) = self.field_display(field);
-        widgets::field_line(label, &value, focused, enabled, reason, widget)
+        let f = widgets::Field {
+            label,
+            value,
+            widget,
+            focused,
+            enabled,
+            reason,
+            description: None,
+        };
+        widgets::field_block(&f, ctrl_col, width)
     }
 
     fn field_display(&self, field: AField) -> (&'static str, String, &'static str) {

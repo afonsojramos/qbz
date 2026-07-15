@@ -5,11 +5,12 @@
 // bottom help bar, centered modals, spinner). No screen logic lives here —
 // screens own their staged state and drive these.
 
+use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Clear, Paragraph, Wrap};
+use ratatui::widgets::{Block, BorderType, Clear, Paragraph, Widget, Wrap};
 use ratatui::Frame;
 
 use super::theme;
@@ -26,56 +27,179 @@ pub fn mask(s: &str) -> String {
     "•".repeat(s.chars().count())
 }
 
-// ============================ field rows ============================
+// ============================ sidebar width (FB5) ============================
 
-/// A single label/value row rendered as three aligned spans (label · value ·
-/// widget hint). When `focused` the whole row becomes one accent bar (the reverse
-/// bar wins over per-value tone so it reads uniformly). Otherwise: a disabled row
-/// dims and appends `(reason)`; an enabled `[toggle]` value is tinted ok (on) or
-/// dim (off); the `widget` hint is always dim. Meaning never rides on color alone
-/// — the on/off text, `(reason)` and hint all stay legible without it.
-pub fn field_line(
-    label: &str,
-    value: &str,
-    focused: bool,
-    enabled: bool,
-    reason: Option<&str>,
-    widget: &str,
-) -> Line<'static> {
-    let shown_value = match reason {
-        Some(r) if !enabled => format!("{value}  ({r})"),
-        _ => value.to_string(),
-    };
-    // Fixed gutters so labels/values line up regardless of per-span styling.
-    let label_txt = format!("  {label:<20} ");
-    let value_txt = format!("{:<32} ", truncate(&shown_value, 32));
-    let widget_txt = widget.to_string();
+/// The left-nav sidebar width in columns (incl. border), a pure function of the
+/// terminal width so the 80×24 floor keeps working (FB5). At ≥ 100 cols the
+/// operator gets the roomy 28-col sidebar the owner asked for (labels spelled
+/// out, room for a dim summary line); below that we fall back to the compact
+/// 14-col rendering so the content frame never starves at the floor.
+pub fn sidebar_width(term_width: u16) -> u16 {
+    if term_width >= 100 {
+        28
+    } else {
+        14
+    }
+}
 
-    if focused {
+/// True when `sidebar_width` is in its roomy tier (spelled-out labels + summary).
+pub fn sidebar_is_wide(term_width: u16) -> bool {
+    sidebar_width(term_width) >= 28
+}
+
+// ============================ word wrap (FB5) ============================
+
+/// Word-boundary wrap `text` to `width` columns, no new dependency (FB5). Splits
+/// on ASCII whitespace; a word longer than `width` is hard-split (the only place
+/// a word is broken mid-word). Blank/whitespace-only input yields no lines. Each
+/// embedded `\n` in the source is honored as a hard break first, then each
+/// segment is word-wrapped, so pre-formatted copy keeps its intentional breaks.
+pub fn wrap(text: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return text.lines().map(str::to_string).collect();
+    }
+    let mut out: Vec<String> = Vec::new();
+    for segment in text.split('\n') {
+        if segment.trim().is_empty() {
+            continue;
+        }
+        let mut cur = String::new();
+        for word in segment.split_whitespace() {
+            if word.chars().count() > width {
+                if !cur.is_empty() {
+                    out.push(std::mem::take(&mut cur));
+                }
+                let mut chunk = String::new();
+                for ch in word.chars() {
+                    if chunk.chars().count() == width {
+                        out.push(std::mem::take(&mut chunk));
+                    }
+                    chunk.push(ch);
+                }
+                cur = chunk;
+                continue;
+            }
+            let extra = usize::from(!cur.is_empty());
+            if cur.chars().count() + extra + word.chars().count() > width {
+                out.push(std::mem::take(&mut cur));
+                cur.push_str(word);
+            } else {
+                if !cur.is_empty() {
+                    cur.push(' ');
+                }
+                cur.push_str(word);
+            }
+        }
+        if !cur.is_empty() {
+            out.push(cur);
+        }
+    }
+    out
+}
+
+// ============================ field blocks (FB5) ============================
+
+/// One field to render as a block. Row 1 is `label` + the CONTROL (value +
+/// right-aligned widget marker) anchored at a screen-consistent column; rows
+/// 2..n are the wrapped, dim DESCRIPTION under the label — the disabled `reason`
+/// takes precedence over the static `description`.
+pub struct Field<'a> {
+    pub label: &'a str,
+    pub value: String,
+    /// `[select]`/`[toggle]`/`[input]`/`[slider]`, or `""` for a plain value.
+    pub widget: &'a str,
+    pub focused: bool,
+    pub enabled: bool,
+    /// Why the field is inert (only meaningful when `!enabled`).
+    pub reason: Option<&'a str>,
+    /// Static one-line help; wrapped under the label when present.
+    pub description: Option<&'a str>,
+}
+
+/// The column (0-based, from the section inner edge) where every field's control
+/// starts — the owner's "misma área de columna". ONE mechanism, applied on every
+/// screen: `2` (indent) + the longest label + `2` (gap), clamped so the control
+/// still has room. Pure so each screen derives an identical column for its own
+/// label set.
+pub fn control_column(labels: &[&str], width: u16) -> u16 {
+    let max_label = labels
+        .iter()
+        .map(|l| l.chars().count())
+        .max()
+        .unwrap_or(0) as u16;
+    let ceiling = width.saturating_sub(12).max(14);
+    (2 + max_label + 2).clamp(14, ceiling)
+}
+
+/// Render a field as a block of lines (FB5). `ctrl_col` is the shared control
+/// column; `width` is the section inner width. The value is truncated with `…`
+/// (values never wrap — the control stays one line); the widget marker is
+/// right-aligned so the marker column reads cleanly too. When `focused` the whole
+/// control row is one accent-reverse bar (serial-safe, §1.2).
+pub fn field_block(field: &Field, ctrl_col: u16, width: u16) -> Vec<Line<'static>> {
+    let width = width.max(ctrl_col + 4) as usize;
+    let ctrl = ctrl_col as usize;
+    let widget_len = field.widget.chars().count();
+    // Reserve the widget + a one-column gap on the right; the rest is the value.
+    let reserved = if widget_len == 0 { 0 } else { widget_len + 1 };
+    let value_space = width.saturating_sub(ctrl + reserved);
+    let value = truncate(&field.value, value_space);
+    let value_len = value.chars().count();
+
+    let label_piece = pad_to(&format!("  {}", field.label), ctrl);
+    let mid_pad = width.saturating_sub(ctrl + value_len + widget_len);
+    let value_piece = format!("{value}{}", " ".repeat(mid_pad));
+    let widget_piece = field.widget.to_string();
+
+    let row1 = if field.focused {
         let mut sel = focus_style();
-        if !enabled {
+        if !field.enabled {
             sel = sel.patch(theme::dim());
         }
-        return Line::from(vec![
-            Span::styled(label_txt, sel),
-            Span::styled(value_txt, sel),
-            Span::styled(widget_txt, sel),
-        ]);
-    }
-
-    let label_style = if enabled { Style::default() } else { theme::dim() };
-    let value_style = if !enabled {
-        theme::dim()
-    } else if widget == "[toggle]" {
-        toggle_tone(value)
+        Line::from(vec![
+            Span::styled(label_piece, sel),
+            Span::styled(value_piece, sel),
+            Span::styled(widget_piece, sel),
+        ])
     } else {
-        Style::default()
+        let label_style = if field.enabled { Style::default() } else { theme::dim() };
+        let value_style = if !field.enabled {
+            theme::dim()
+        } else if field.widget == "[toggle]" {
+            toggle_tone(&field.value)
+        } else {
+            Style::default()
+        };
+        Line::from(vec![
+            Span::styled(label_piece, label_style),
+            Span::styled(value_piece, value_style),
+            Span::styled(widget_piece, theme::dim()),
+        ])
     };
-    Line::from(vec![
-        Span::styled(label_txt, label_style),
-        Span::styled(value_txt, value_style),
-        Span::styled(widget_txt, theme::dim()),
-    ])
+
+    let mut out = vec![row1];
+    // Disabled reason wins over the static description; both wrap under the label.
+    let desc = if !field.enabled {
+        field.reason.or(field.description)
+    } else {
+        field.description
+    };
+    if let Some(text) = desc {
+        for wl in wrap(text, width.saturating_sub(4)) {
+            out.push(Line::from(Span::styled(format!("    {wl}"), theme::dim())));
+        }
+    }
+    out
+}
+
+/// Pad `s` with spaces to `n` columns, or truncate it (with `…`) if it is longer.
+fn pad_to(s: &str, n: usize) -> String {
+    let len = s.chars().count();
+    if len >= n {
+        truncate(s, n)
+    } else {
+        format!("{s}{}", " ".repeat(n - len))
+    }
 }
 
 /// ok for an on/enabled toggle, dim for off — the text ("on"/"off") carries the
@@ -120,6 +244,17 @@ pub fn warn_line(text: &str) -> Line<'static> {
 /// An error-tinted note (rejected bind/port). Same rule: the text stands alone.
 pub fn err_line(text: &str) -> Line<'static> {
     Line::from(Span::styled(format!("    {text}"), theme::err()))
+}
+
+/// A multi-line note WORD-WRAPPED to `width` (FB5) — the long LAN/auth/export
+/// copy no longer clips at the frame edge. `style` picks the tone (dim note,
+/// warn, err). The 4-space indent matches `note_line`.
+pub fn wrapped_note(text: &str, width: u16, style: Style) -> Vec<Line<'static>> {
+    let inner = (width as usize).saturating_sub(4).max(1);
+    wrap(text, inner)
+        .into_iter()
+        .map(|l| Line::from(Span::styled(format!("    {l}"), style)))
+        .collect()
 }
 
 // ============================ section boxes ============================
@@ -167,6 +302,143 @@ pub fn sections(f: &mut Frame, area: Rect, secs: &[Section]) {
         let inner = block.inner(chunks[i]);
         f.render_widget(block, chunks[i]);
         f.render_widget(Paragraph::new(sec.lines.clone()), inner);
+    }
+}
+
+// ============================ follow-focus scroll (FB5) ============================
+
+/// The virtual-line span of the focused field block inside a stacked-sections
+/// render, so the viewport can scroll to keep it fully visible.
+pub struct FocusAnchor {
+    /// Index into the `secs` slice of the section that owns the focused block.
+    pub section: usize,
+    /// Line index of the block's first row WITHIN that section's `lines`.
+    pub inner_line: u16,
+    /// Rows the focused block occupies (control row + wrapped description).
+    pub height: u16,
+}
+
+/// The minimal vertical scroll (in rows) that keeps `[focus_top, focus_top +
+/// focus_height)` inside a `viewport`-tall window over `total` rows (FB5). Pure so
+/// the follow-focus math is unit-tested independent of any buffer.
+pub fn follow_scroll(focus_top: u16, focus_height: u16, viewport: u16, total: u16) -> u16 {
+    if total <= viewport || viewport == 0 {
+        return 0;
+    }
+    let max_scroll = total - viewport;
+    let mut scroll = 0u16;
+    let focus_bottom = focus_top.saturating_add(focus_height.max(1));
+    if focus_bottom > viewport {
+        scroll = focus_bottom - viewport;
+    }
+    // A block taller than the viewport (or above the current offset): pin its top.
+    if focus_top < scroll {
+        scroll = focus_top;
+    }
+    scroll.min(max_scroll)
+}
+
+/// Push a section and, if `within` names the focused block's (line, height)
+/// inside it, record the screen-wide [`FocusAnchor`] (FB5). Keeps every screen's
+/// section assembly a one-liner instead of hand-tracking section indices.
+pub fn push_section(
+    secs: &mut Vec<Section>,
+    anchor: &mut Option<FocusAnchor>,
+    title: impl Into<String>,
+    active: bool,
+    lines: Vec<Line<'static>>,
+    within: Option<(u16, u16)>,
+) {
+    if let Some((inner_line, height)) = within {
+        *anchor = Some(FocusAnchor { section: secs.len(), inner_line, height });
+    }
+    secs.push(Section::new(title, active, lines));
+}
+
+/// Total rows the stacked section boxes need (each box = its lines + 2 borders).
+fn sections_height(secs: &[Section]) -> u16 {
+    secs.iter().map(|s| s.lines.len() as u16 + 2).sum()
+}
+
+/// Stack section boxes like [`sections`], but follow-focus SCROLL when the
+/// content is taller than `area` (FB5). When everything fits, it defers to
+/// `sections` verbatim (top-aligned, no indicator). When it overflows, the boxes
+/// render into a virtual buffer of the full height, the window that keeps the
+/// focused block visible is blitted into `area`, and dim `▲`/`▼` indicators mark
+/// hidden content above/below.
+pub fn sections_scroll(f: &mut Frame, area: Rect, secs: &[Section], focus: Option<FocusAnchor>) {
+    if secs.is_empty() {
+        return;
+    }
+    let total = sections_height(secs);
+    if total <= area.height {
+        sections(f, area, secs);
+        return;
+    }
+
+    let scroll = match &focus {
+        Some(a) => {
+            let mut y = 0u16;
+            for s in secs.iter().take(a.section) {
+                y = y.saturating_add(s.lines.len() as u16 + 2);
+            }
+            let focus_top = y + 1 + a.inner_line; // +1 for the box top border
+            follow_scroll(focus_top, a.height, area.height, total)
+        }
+        None => 0,
+    };
+
+    // Render the stacked boxes into a full-height off-screen buffer.
+    let mut buf = Buffer::empty(Rect { x: 0, y: 0, width: area.width, height: total });
+    let mut y = 0u16;
+    for sec in secs {
+        let h = sec.lines.len() as u16 + 2;
+        let rect = Rect { x: 0, y, width: area.width, height: h };
+        let (border_style, title_style) = if sec.active {
+            (theme::accent(), theme::accent_bold())
+        } else {
+            (theme::dim(), theme::dim())
+        };
+        let block = Block::bordered()
+            .border_type(BorderType::Rounded)
+            .border_style(border_style)
+            .title(Line::from(Span::styled(format!(" {} ", sec.title), title_style)));
+        let inner = block.inner(rect);
+        Widget::render(block, rect, &mut buf);
+        Widget::render(Paragraph::new(sec.lines.clone()), inner, &mut buf);
+        y = y.saturating_add(h);
+    }
+
+    // Blit the visible window into the frame.
+    let fb = f.buffer_mut();
+    for row in 0..area.height {
+        let sy = scroll + row;
+        if sy >= total {
+            break;
+        }
+        for col in 0..area.width {
+            if let Some(src) = buf.cell((col, sy)) {
+                let cell = src.clone();
+                if let Some(dst) = fb.cell_mut((area.x + col, area.y + row)) {
+                    *dst = cell;
+                }
+            }
+        }
+    }
+
+    // Dim scroll indicators at the right edge (content hidden above / below).
+    let right = area.x + area.width.saturating_sub(1);
+    if scroll > 0 {
+        if let Some(c) = fb.cell_mut((right, area.y)) {
+            c.set_symbol("▲");
+            c.set_style(theme::dim());
+        }
+    }
+    if scroll + area.height < total {
+        if let Some(c) = fb.cell_mut((right, area.y + area.height.saturating_sub(1))) {
+            c.set_symbol("▼");
+            c.set_style(theme::dim());
+        }
     }
 }
 
@@ -542,6 +814,195 @@ impl TextInput {
             mask(&self.buf)
         } else {
             self.buf.clone()
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---- sidebar_width: 28 wide, 14 compact, with the 100-col boundary ----
+
+    #[test]
+    fn sidebar_width_doubles_only_at_and_above_100_cols() {
+        assert_eq!(sidebar_width(80), 14, "the 80x24 floor keeps the compact sidebar");
+        assert_eq!(sidebar_width(99), 14, "just below the boundary stays compact");
+        assert_eq!(sidebar_width(100), 28, "at 100 the sidebar at least doubles");
+        assert_eq!(sidebar_width(120), 28);
+        assert!(sidebar_is_wide(120) && !sidebar_is_wide(80));
+        // The wide sidebar is at least double the compact one (owner's ask).
+        assert!(sidebar_width(120) >= 2 * sidebar_width(80));
+    }
+
+    // ---- wrap(): word boundaries, hard-split, edges ----
+
+    #[test]
+    fn wrap_empty_and_whitespace_yield_no_lines() {
+        assert!(wrap("", 10).is_empty());
+        assert!(wrap("   ", 10).is_empty());
+        assert!(wrap("\n\n", 10).is_empty());
+    }
+
+    #[test]
+    fn wrap_keeps_short_text_on_one_line() {
+        assert_eq!(wrap("short note", 20), vec!["short note".to_string()]);
+        // Exact-fit boundary: width == text length stays one line.
+        assert_eq!(wrap("exactly ten", 11), vec!["exactly ten".to_string()]);
+    }
+
+    #[test]
+    fn wrap_breaks_on_word_boundaries_not_mid_word() {
+        // "anyone on your network" at width 12 wraps between words.
+        let out = wrap("anyone on your network can control playback", 12);
+        assert!(out.iter().all(|l| l.chars().count() <= 12), "no line exceeds width: {out:?}");
+        // No word is split (every input word survives intact somewhere).
+        for word in "anyone on your network can control playback".split(' ') {
+            assert!(out.iter().any(|l| l.split(' ').any(|w| w == word)), "word {word:?} intact");
+        }
+    }
+
+    #[test]
+    fn wrap_hard_splits_a_word_longer_than_width() {
+        // A 20-char token at width 8 is the only case a word breaks.
+        let out = wrap("supercalifragilistic", 8);
+        assert!(out.len() >= 3);
+        assert!(out.iter().all(|l| l.chars().count() <= 8));
+        assert_eq!(out.concat(), "supercalifragilistic", "no characters are lost");
+    }
+
+    #[test]
+    fn wrap_honors_embedded_newlines_as_hard_breaks() {
+        let out = wrap("line one\nline two", 40);
+        assert_eq!(out, vec!["line one".to_string(), "line two".to_string()]);
+    }
+
+    // ---- control_column: one mechanism, consistent + clamped ----
+
+    #[test]
+    fn control_column_is_longest_label_plus_gutter_clamped() {
+        // 2 indent + 17-char label + 2 gap = 21.
+        assert_eq!(control_column(&["Streaming quality", "Gapless"], 62), 21);
+        // A short label set still lands at the floor of 14.
+        assert_eq!(control_column(&["Port"], 62), 14);
+        // A pathological label is clamped so the control keeps room.
+        let ceiling = 30u16.saturating_sub(12).max(14);
+        assert_eq!(control_column(&["a very very very long label here"], 30), ceiling);
+    }
+
+    // ---- follow_scroll: keep the focused block visible, minimally ----
+
+    #[test]
+    fn follow_scroll_no_scroll_when_everything_fits() {
+        assert_eq!(follow_scroll(0, 3, 18, 12), 0);
+        assert_eq!(follow_scroll(9, 3, 18, 12), 0);
+    }
+
+    #[test]
+    fn follow_scroll_brings_a_block_below_the_fold_into_view() {
+        // total 30, viewport 18. A block at [20,23) needs scroll so its bottom (23)
+        // sits at the viewport bottom: 23 - 18 = 5.
+        assert_eq!(follow_scroll(20, 3, 18, 30), 5);
+        // Clamped to max_scroll = 30 - 18 = 12.
+        assert_eq!(follow_scroll(29, 3, 18, 30), 12);
+    }
+
+    #[test]
+    fn follow_scroll_pins_top_of_a_block_taller_than_the_viewport() {
+        // A 25-row block starting at 4, viewport 18 → pin to the block top (4).
+        assert_eq!(follow_scroll(4, 25, 18, 40), 4);
+    }
+
+    #[test]
+    fn sections_scroll_indicates_and_brings_the_focused_block_into_view() {
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+        // Four 4-line boxes = 4 * (4 + 2) = 24 rows into a 12-row area → overflow.
+        let mk = |t: &str| {
+            Section::new(t, false, (0..4).map(|i| Line::from(format!("{t}-{i}"))).collect())
+        };
+        let secs = vec![mk("A"), mk("B"), mk("C"), mk("D")];
+        // Focus the LAST box's first line — it starts well below the fold.
+        let anchor = Some(FocusAnchor { section: 3, inner_line: 0, height: 1 });
+        let mut term = Terminal::new(TestBackend::new(30, 12)).unwrap();
+        term.draw(|f| sections_scroll(f, Rect::new(0, 0, 30, 12), &secs, anchor))
+            .unwrap();
+        let buf = term.backend().buffer().clone();
+        let mut out = String::new();
+        for y in 0..12 {
+            for x in 0..30 {
+                out.push_str(buf[(x, y)].symbol());
+            }
+            out.push('\n');
+        }
+        assert!(out.contains('▲'), "content hidden above → up indicator: \n{out}");
+        assert!(out.contains('▼'), "content hidden below → down indicator");
+        assert!(out.contains("D-0"), "the focused block is scrolled into view");
+        assert!(!out.contains("A-0"), "the top box scrolled out of view");
+    }
+
+    // ---- field_block: fixed column, truncation, wrapped description ----
+
+    fn cells(line: &Line) -> String {
+        line.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn field_block_anchors_the_control_and_right_aligns_the_widget() {
+        let f = Field {
+            label: "Backend",
+            value: "PipeWire".to_string(),
+            widget: "[select]",
+            focused: false,
+            enabled: true,
+            reason: None,
+            description: None,
+        };
+        let block = field_block(&f, 21, 62);
+        assert_eq!(block.len(), 1, "no description → just the control row");
+        let row = cells(&block[0]);
+        assert_eq!(row.chars().count(), 62, "the row spans the full width");
+        // Label indented by 2, value starts at the control column.
+        assert!(row.starts_with("  Backend"));
+        assert_eq!(&row[21..29], "PipeWire", "value begins exactly at the control column");
+        assert!(row.trim_end().ends_with("[select]"), "widget marker right-aligned");
+    }
+
+    #[test]
+    fn field_block_truncates_a_long_value_with_ellipsis() {
+        let f = Field {
+            label: "Output device",
+            value: "a-really-long-alsa-hardware-device-identifier-that-overflows".to_string(),
+            widget: "[select]",
+            focused: false,
+            enabled: true,
+            reason: None,
+            description: None,
+        };
+        let block = field_block(&f, 21, 40); // narrow → must truncate
+        let row = cells(&block[0]);
+        assert_eq!(row.chars().count(), 40);
+        assert!(row.contains('…'), "the overflowing value is truncated with an ellipsis");
+    }
+
+    #[test]
+    fn field_block_wraps_the_disabled_reason_under_the_label() {
+        let f = Field {
+            label: "Gapless playback",
+            value: "off".to_string(),
+            widget: "[toggle]",
+            focused: false,
+            enabled: false,
+            reason: Some("off while Audio > Streaming only on"),
+            description: None,
+        };
+        let block = field_block(&f, 21, 40);
+        assert!(block.len() >= 2, "the reason wraps onto its own dim row(s)");
+        // Every description row is indented and within the width.
+        for row in &block[1..] {
+            let t = cells(row);
+            assert!(t.starts_with("    "), "description indented under the label");
+            assert!(t.chars().count() <= 40);
         }
     }
 }

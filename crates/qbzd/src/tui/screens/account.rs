@@ -138,6 +138,8 @@ impl AccountState {
     // -------------------------- render --------------------------
 
     pub fn draw(&self, f: &mut Frame, area: Rect, _ctx: &DrawCtx) {
+        let width = area.width.saturating_sub(2); // section inner width
+        let ctrl_col = widgets::control_column(&[s::ACCOUNT_STATUS], width);
         let mut lines: Vec<Line> = Vec::new();
 
         // Status row — never fabricates a name (§3.1).
@@ -152,16 +154,32 @@ impl AccountState {
         } else {
             s::ACCOUNT_NOT_LOGGED_IN.to_string()
         };
-        lines.push(widgets::field_line(s::ACCOUNT_STATUS, &status, false, true, None, ""));
+        lines.extend(widgets::field_block(
+            &widgets::Field {
+                label: s::ACCOUNT_STATUS,
+                value: status,
+                widget: "",
+                focused: false,
+                enabled: true,
+                reason: None,
+                description: None,
+            },
+            ctrl_col,
+            width,
+        ));
         lines.push(widgets::blank());
 
+        let mut anchor: Option<widgets::FocusAnchor> = None;
         for (i, action) in self.actions().iter().enumerate() {
             let focused = i == self.focus && !self.is_editing();
+            if focused {
+                anchor = Some(widgets::FocusAnchor { section: 0, inner_line: lines.len() as u16, height: 1 });
+            }
             lines.push(widgets::action_line(&format!("> {action}"), focused, true));
         }
 
         let secs = [widgets::Section::new(s::ACCOUNT_SECTION, true, lines)];
-        widgets::sections(f, area, &secs);
+        widgets::sections_scroll(f, area, &secs, anchor);
 
         if let Some(input) = &self.token_input {
             widgets::modal(f, area, s::ACCOUNT_PASTE_TOKEN, &input.display(), s::HELP_INPUT);
