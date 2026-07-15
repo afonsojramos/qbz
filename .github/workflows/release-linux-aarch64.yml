@@ -157,6 +157,13 @@ jobs:
         with:
           name: qbz-linux-aarch64
 
+      # T14: the slint-free qbzd binary, produced by T15's build job — see
+      # release-linux.yml's matching step for the rationale.
+      - name: Download qbzd binary
+        uses: actions/download-artifact@v4
+        with:
+          name: qbzd-linux-aarch64
+
       - name: Install nfpm
         run: |
           echo 'deb [trusted=yes] https://repo.goreleaser.com/apt/ /' | \
@@ -172,6 +179,7 @@ jobs:
           QBZ_BINARY: ./qbz
         run: |
           chmod +x qbz
+          chmod +x qbzd
           mkdir -p dist
           nfpm package -f packaging/nfpm/nfpm.yaml -p deb \
             -t "dist/QBZ_${VERSION}_arm64.deb"
@@ -220,6 +228,15 @@ jobs:
           cp packaging/icons/128x128.png "tarball-staging/${TARBALL_DIR}/icons/hicolor/128x128/apps/qbz.png"
           cp packaging/icons/256x256.png "tarball-staging/${TARBALL_DIR}/icons/hicolor/256x256/apps/qbz.png"
           cp packaging/linux/qbz.desktop "tarball-staging/${TARBALL_DIR}/qbz.desktop"
+          # Additive (T14) — see release-linux.yml's matching block for the
+          # layout-contract rationale.
+          cp qbzd "tarball-staging/${TARBALL_DIR}/qbzd"
+          chmod +x "tarball-staging/${TARBALL_DIR}/qbzd"
+          cp crates/qbzd/service/qbzd.service "tarball-staging/${TARBALL_DIR}/qbzd.service"
+          mkdir -p "tarball-staging/${TARBALL_DIR}/completions"
+          ./qbzd completions bash > "tarball-staging/${TARBALL_DIR}/completions/qbzd.bash"
+          ./qbzd completions zsh  > "tarball-staging/${TARBALL_DIR}/completions/qbzd.zsh"
+          ./qbzd completions fish > "tarball-staging/${TARBALL_DIR}/completions/qbzd.fish"
           tar -czvf "dist/qbz_${VERSION}_aarch64.tar.gz" -C tarball-staging "${TARBALL_DIR}"
           ls -la dist
 

@@ -35,6 +35,16 @@ contents:
     dst: /usr/bin/qbz
     file_info:
       mode: 0755
+  # qbzd (T14): same literal-path rule as ./qbz above — the workflow stages
+  # the slint-free daemon binary at ./qbzd before invoking nfpm. Ships
+  # disabled (no scripts: postinstall) — integrations strictly opt-in; the
+  # unit's own header carries the `loginctl enable-linger` requirement.
+  - src: ./qbzd
+    dst: /usr/bin/qbzd
+    file_info:
+      mode: 0755
+  - src: crates/qbzd/service/qbzd.service
+    dst: /usr/lib/systemd/user/qbzd.service
   # Installed as com.blitzfc.qbz.desktop so the AppStream metainfo's
   # <launchable> and the MPRIS DesktopEntry both resolve (review fix).
   - src: packaging/linux/qbz.desktop
