@@ -14,7 +14,7 @@ pub const NON_TTY_ERROR: &str = "error: 'qbzd setup' needs an interactive termin
 
 /// Terminal-too-small line (03 §5.4). `w`/`h` are the current dimensions.
 pub fn too_small(w: u16, h: u16) -> String {
-    format!("terminal too small — 80x24 minimum (current: {w}x{h})")
+    format!("terminal too small — 80×24 minimum (current: {w}×{h})")
 }
 
 // ============================ shell / navigation ============================

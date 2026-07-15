@@ -63,6 +63,28 @@ pub const SCREENS: [Screen; 6] = [
     Screen::Bundle,
 ];
 
+/// Construct the path to the OAuth token file in the config root.
+fn cred_file_path(config_root: &PathBuf) -> PathBuf {
+    config_root.join(".qbz-oauth-token")
+}
+
+/// Determine the initial landing screen at startup (03 §2.2).
+///
+/// Landing rules:
+/// - Credential file present → None (land on Menu)
+/// - Credential file absent → Some(Screen::Account) (land on Account setup)
+///
+/// The decision is based on credential-file presence, not live daemon auth state.
+/// The `logged_in` parameter is passed for test clarity (three cases) but does not
+/// affect the decision.
+fn initial_screen(cred_file_present: bool, _logged_in: bool) -> Option<Screen> {
+    if cred_file_present {
+        None  // land on Menu
+    } else {
+        Some(Screen::Account)  // land on Account
+    }
+}
+
 /// The intent a screen's key handler returns to the App.
 pub enum ScreenAction {
     Consumed,
@@ -156,7 +178,7 @@ impl App {
     pub fn new(roots: ProfileRoots, handle: Handle) -> Self {
         let (tx, rx) = std::sync::mpsc::channel();
         let mut app = App {
-            roots,
+            roots: roots.clone(),
             handle,
             tx,
             rx,
@@ -173,9 +195,12 @@ impl App {
             leave_after_save: None,
         };
         app.refresh_status();
-        // Unauthenticated → land on Account (03 §2.2); else the menu.
-        if !app.auth.logged_in {
-            app.enter_screen(Screen::Account);
+        // Determine landing screen per spec (03 §2.2):
+        // - Credential file exists (any state) → land on Menu (user has auth credentials)
+        // - No credential file → land on Account (needs auth setup)
+        let cred_file_exists = cred_file_path(&roots.config).exists();
+        if let Some(screen) = initial_screen(cred_file_exists, app.auth.logged_in) {
+            app.enter_screen(screen);
         } else {
             app.refresh_menu();
         }
@@ -1158,4 +1183,28 @@ fn expand_tilde(path: &str) -> PathBuf {
         }
     }
     PathBuf::from(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_initial_screen_no_cred_file() {
+        // No credential file → land on Account
+        assert_eq!(initial_screen(false, false), Some(Screen::Account));
+        assert_eq!(initial_screen(false, true), Some(Screen::Account));
+    }
+
+    #[test]
+    fn test_initial_screen_cred_file_present() {
+        // Credential file present (daemon down) → land on Menu
+        assert_eq!(initial_screen(true, false), None);
+    }
+
+    #[test]
+    fn test_initial_screen_cred_file_and_logged_in() {
+        // Credential file present and logged in (daemon up) → land on Menu
+        assert_eq!(initial_screen(true, true), None);
+    }
 }
