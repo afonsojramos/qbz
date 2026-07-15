@@ -89,6 +89,14 @@ fn latch_lifecycle_into_shared(shared: &SharedState, state: QconnectLifecycleSta
         if matches!(state, QconnectLifecycleState::Reconnecting) {
             s.qconnect.last_transport_reconnect = Some(unix_seconds_string());
         }
+        // 01 §9.3: a live QConnect session (fresh connect OR post-reconnect
+        // recovery) is a real network-reachable outcome — latch it true. The
+        // reconnect-EXHAUSTED failure side latches false in
+        // `session::DaemonSessionLoopHost::on_reconnect_exhausted` (it does
+        // not route through this helper — see there).
+        if matches!(state, QconnectLifecycleState::Connected) {
+            s.set_network_online(true);
+        }
     }
 }
 

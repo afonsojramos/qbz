@@ -111,7 +111,7 @@ pub fn status(state: &super::ApiState) -> Response<Cursor<Vec<u8>>> {
 fn assemble_live(state: &super::ApiState) -> StatusDoc {
     // 1. snapshot DaemonShared, then DROP the guard before any block_on so the
     //    mutex is never held across an await point.
-    let (auth, user_id, subscription, last_errors, qconnect, tick_age, muted, uptime) =
+    let (auth, user_id, subscription, last_errors, qconnect, tick_age, muted, uptime, network_online) =
         match state.shared.lock() {
             Ok(s) => (
                 s.auth,
@@ -122,6 +122,7 @@ fn assemble_live(state: &super::ApiState) -> StatusDoc {
                 s.driver_last_tick.map(|t| t.elapsed().as_millis() as u64),
                 s.muted,
                 s.started_at.elapsed().as_secs(),
+                s.network_online(),
             ),
             Err(_) => (
                 AuthState::Restoring,
@@ -132,6 +133,7 @@ fn assemble_live(state: &super::ApiState) -> StatusDoc {
                 None,
                 false,
                 0,
+                true,
             ),
         };
 
@@ -201,7 +203,7 @@ fn assemble_live(state: &super::ApiState) -> StatusDoc {
             queue_len: queue.total_tracks,
         },
         qconnect,
-        network: NetworkStatus { online: true },
+        network: NetworkStatus { online: network_online },
         last_errors,
     }
 }

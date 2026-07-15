@@ -285,6 +285,11 @@ async fn boot(roots: &ProfileRoots, cfg: &QbzdConfig, warn_count: usize) -> Resu
                 Err(e) => {
                     // network-class: KEEP token, stay Restoring, retry w/ backoff.
                     log::warn!("session restore deferred (network-class): {e}");
+                    // 01 §9.3: a real network-class outcome — latch `network.online`
+                    // false so `/api/status` reflects it until a retry succeeds.
+                    if let Ok(s) = shared.lock() {
+                        s.set_network_online(false);
+                    }
                     Some(spawn_auth_retry(
                         runtime.clone(),
                         shared.clone(),
@@ -414,6 +419,10 @@ pub(crate) async fn restore_activate(
     // skip a redundant re-login on every unrelated settings nudge.
     if let Ok(mut s) = shared.lock() {
         s.credential_fingerprint = Some(crate::state::token_fingerprint(token));
+        // 01 §9.3: a real login/restore success (boot, background auth-retry,
+        // or a reload's credential re-validation — every caller of this fn)
+        // means the network is reachable — latch `network.online` back true.
+        s.set_network_online(true);
     }
     Ok(())
 }
@@ -434,6 +443,7 @@ fn new_shared(cfg: &QbzdConfig) -> Arc<Mutex<DaemonShared>> {
         startup_warnings: 0,
         qconnect: QconnectStatus::default(),
         credential_fingerprint: None,
+        network_online: std::sync::atomic::AtomicBool::new(true),
     }))
 }
 
@@ -529,13 +539,21 @@ fn spawn_auth_retry(
                     set_needs_auth(&shared, Some(e));
                     return;
                 }
-                Err(e) => log::warn!("session restore retry {} failed (network-class): {e}", i + 1),
+                Err(e) => {
+                    log::warn!("session restore retry {} failed (network-class): {e}", i + 1);
+                    // 01 §9.3: latch `network.online` false on every real
+                    // network-class outcome, not just the first.
+                    if let Ok(s) = shared.lock() {
+                        s.set_network_online(false);
+                    }
+                }
             }
         }
         // Schedule exhausted with only network-class failures: KEEP the token,
         // surface NeedsAuth, latch the reason for `qbzd status`.
         if let Ok(mut s) = shared.lock() {
             s.auth = AuthState::NeedsAuth;
+            s.set_network_online(false);
             s.last_errors.auth = Some(
                 "could not reach Qobuz to restore the saved session — token kept, retry with 'qbzd login' or 'qbzd settings reload'".into(),
             );
@@ -840,6 +858,10 @@ pub(crate) async fn reload_credentials(
                 }
                 Err(e) => {
                     log::warn!("[reload] session restore deferred (network-class): {e}");
+                    // 01 §9.3: real network-class outcome — latch it false.
+                    if let Ok(s) = shared.lock() {
+                        s.set_network_online(false);
+                    }
                 }
             }
         }

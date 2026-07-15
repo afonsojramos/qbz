@@ -37,6 +37,31 @@ pub struct DaemonShared {
     /// `None` whenever the daemon is not LoggedIn against a known token
     /// (cleared alongside every `set_needs_auth`).
     pub credential_fingerprint: Option<u64>,
+    /// Coarse network-reachability signal for `/api/status`'s `network.online`
+    /// (01 §9.3). Latched ONLY from real network-class outcomes — never active
+    /// probing: false on an auth-retry/credential-reload network-class failure
+    /// or a QConnect reconnect-exhausted, true on a successful login/restore
+    /// (`restore_activate`, which reload's own credential validation also
+    /// funnels through) or a successful QConnect (re)connect. Defaults true
+    /// (optimistic) until the first outcome latches it.
+    pub network_online: std::sync::atomic::AtomicBool,
+}
+
+impl DaemonShared {
+    /// Read the latched network-reachability signal (§9.3). `Relaxed` is
+    /// sufficient — this is a coarse status flag read under the same
+    /// `Mutex<DaemonShared>` guard as every other field here, not a
+    /// synchronization primitive of its own.
+    pub fn network_online(&self) -> bool {
+        self.network_online.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Latch the network-reachability signal. See the field doc for exactly
+    /// which call sites are allowed to call this.
+    pub fn set_network_online(&self, online: bool) {
+        self.network_online
+            .store(online, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 /// A non-reversible-in-practice fingerprint of a credential token (SipHash via
@@ -115,9 +140,38 @@ mod tests {
             startup_warnings: 0,
             qconnect: QconnectStatus::default(),
             credential_fingerprint: None,
+            network_online: std::sync::atomic::AtomicBool::new(true),
         };
         assert_eq!(shared.auth, AuthState::LoggedIn);
         assert_eq!(shared.user_id, Some(1234567));
+    }
+
+    #[test]
+    fn network_online_latches_false_then_true() {
+        // Pure latch semantics (01 §9.3): a real network-class failure flips
+        // it false, a real success flips it back true — the exact two
+        // transitions every call site above drives. Defaults true.
+        let shared = DaemonShared {
+            auth: AuthState::Restoring,
+            user_id: None,
+            subscription: None,
+            last_errors: LatchedErrors::default(),
+            driver_last_tick: None,
+            muted: false,
+            premute_volume: 1.0,
+            started_at: std::time::Instant::now(),
+            startup_warnings: 0,
+            qconnect: QconnectStatus::default(),
+            credential_fingerprint: None,
+            network_online: std::sync::atomic::AtomicBool::new(true),
+        };
+        assert!(shared.network_online(), "defaults true (optimistic)");
+
+        shared.set_network_online(false);
+        assert!(!shared.network_online(), "set false -> reads back false");
+
+        shared.set_network_online(true);
+        assert!(shared.network_online(), "set true -> reads back true");
     }
 
     #[test]
