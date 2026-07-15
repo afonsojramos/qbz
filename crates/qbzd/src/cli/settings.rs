@@ -337,68 +337,198 @@ fn read_all(roots: &ProfileRoots) -> Result<Vec<(&'static str, String)>, String>
     Ok(out)
 }
 
+/// The two exit-code classes a [`write_one`] failure can fall into (02 §1.3,
+/// the frozen exit-code table: 2 is reserved for USAGE mistakes only). An
+/// unknown key or an invalid value for a known key never touches a store —
+/// that is `Usage` (exit 2). A key that classified and parsed fine but whose
+/// backing store then failed to open or write — a disk-full/permissions/
+/// corrupt-file problem — is not a usage mistake: that is `Io` (exit 1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SetError {
+    Usage(String),
+    Io(String),
+}
+
+impl SetError {
+    fn message(&self) -> &str {
+        match self {
+            SetError::Usage(m) | SetError::Io(m) => m,
+        }
+    }
+}
+
+impl std::fmt::Display for SetError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.message())
+    }
+}
+
 /// Validate + write ONE canonical key. Returns its [`ApplyClass`] on success
 /// (the CLI's own success-line hint — see module doc). `pub(crate)` so the T13
 /// setup TUI persists every screen through this SAME validated writer (03 §6 —
-/// the TUI adds no persistence of its own).
-pub(crate) fn write_one(roots: &ProfileRoots, key: &str, raw: &str) -> Result<ApplyClass, String> {
+/// the TUI adds no persistence of its own). Every arm parses (`Usage` on
+/// failure) BEFORE it opens/writes a store (`Io` on failure) — see [`SetError`].
+pub(crate) fn write_one(roots: &ProfileRoots, key: &str, raw: &str) -> Result<ApplyClass, SetError> {
     let Some(class) = classify(key) else {
-        return Err(unknown_key_error(key));
+        return Err(SetError::Usage(unknown_key_error(key)));
     };
     match key {
-        "audio.backend" => open_audio(roots)?.set_backend_type(parse_backend(raw)?)?,
-        "audio.device" => open_audio(roots)?.set_output_device(parse_output_device(raw).as_deref())?,
-        "audio.alsa_plugin" => open_audio(roots)?.set_alsa_plugin(parse_alsa_plugin(raw)?)?,
+        "audio.backend" => {
+            let v = parse_backend(raw).map_err(SetError::Usage)?;
+            open_audio(roots).map_err(SetError::Io)?.set_backend_type(v).map_err(SetError::Io)?
+        }
+        "audio.device" => {
+            let v = parse_output_device(raw);
+            open_audio(roots)
+                .map_err(SetError::Io)?
+                .set_output_device(v.as_deref())
+                .map_err(SetError::Io)?
+        }
+        "audio.alsa_plugin" => {
+            let v = parse_alsa_plugin(raw).map_err(SetError::Usage)?;
+            open_audio(roots).map_err(SetError::Io)?.set_alsa_plugin(v).map_err(SetError::Io)?
+        }
         "audio.alsa_hardware_volume" => {
-            open_audio(roots)?.set_alsa_hardware_volume(parse_bool(raw)?)?
+            let v = parse_bool(raw).map_err(SetError::Usage)?;
+            open_audio(roots)
+                .map_err(SetError::Io)?
+                .set_alsa_hardware_volume(v)
+                .map_err(SetError::Io)?
         }
-        "audio.exclusive_mode" => open_audio(roots)?.set_exclusive_mode(parse_bool(raw)?)?,
-        "audio.dac_passthrough" => open_audio(roots)?.set_dac_passthrough(parse_bool(raw)?)?,
-        "audio.skip_sink_switch" => open_audio(roots)?.set_skip_sink_switch(parse_bool(raw)?)?,
-        "audio.dsd_mode" => open_audio(roots)?.set_dsd_mode(&parse_dsd_mode(raw)?)?,
+        "audio.exclusive_mode" => {
+            let v = parse_bool(raw).map_err(SetError::Usage)?;
+            open_audio(roots).map_err(SetError::Io)?.set_exclusive_mode(v).map_err(SetError::Io)?
+        }
+        "audio.dac_passthrough" => {
+            let v = parse_bool(raw).map_err(SetError::Usage)?;
+            open_audio(roots).map_err(SetError::Io)?.set_dac_passthrough(v).map_err(SetError::Io)?
+        }
+        "audio.skip_sink_switch" => {
+            let v = parse_bool(raw).map_err(SetError::Usage)?;
+            open_audio(roots)
+                .map_err(SetError::Io)?
+                .set_skip_sink_switch(v)
+                .map_err(SetError::Io)?
+        }
+        "audio.dsd_mode" => {
+            let v = parse_dsd_mode(raw).map_err(SetError::Usage)?;
+            open_audio(roots).map_err(SetError::Io)?.set_dsd_mode(&v).map_err(SetError::Io)?
+        }
         "audio.device_max_sample_rate" => {
-            open_audio(roots)?.set_device_max_sample_rate(parse_opt_u32(raw)?)?
+            let v = parse_opt_u32(raw).map_err(SetError::Usage)?;
+            open_audio(roots)
+                .map_err(SetError::Io)?
+                .set_device_max_sample_rate(v)
+                .map_err(SetError::Io)?
         }
-        "audio.stream_first_track" => open_audio(roots)?.set_stream_first_track(parse_bool(raw)?)?,
+        "audio.stream_first_track" => {
+            let v = parse_bool(raw).map_err(SetError::Usage)?;
+            open_audio(roots)
+                .map_err(SetError::Io)?
+                .set_stream_first_track(v)
+                .map_err(SetError::Io)?
+        }
         "audio.stream_buffer_seconds" => {
-            open_audio(roots)?.set_stream_buffer_seconds(parse_stream_buffer_seconds(raw)?)?
+            let v = parse_stream_buffer_seconds(raw).map_err(SetError::Usage)?;
+            open_audio(roots)
+                .map_err(SetError::Io)?
+                .set_stream_buffer_seconds(v)
+                .map_err(SetError::Io)?
         }
-        "audio.streaming_only" => open_audio(roots)?.set_streaming_only(parse_bool(raw)?)?,
+        "audio.streaming_only" => {
+            let v = parse_bool(raw).map_err(SetError::Usage)?;
+            open_audio(roots).map_err(SetError::Io)?.set_streaming_only(v).map_err(SetError::Io)?
+        }
         "audio.limit_quality_to_device" => {
-            open_audio(roots)?.set_limit_quality_to_device(parse_bool(raw)?)?
+            let v = parse_bool(raw).map_err(SetError::Usage)?;
+            open_audio(roots)
+                .map_err(SetError::Io)?
+                .set_limit_quality_to_device(v)
+                .map_err(SetError::Io)?
         }
         "audio.allow_quality_fallback" => {
-            open_audio(roots)?.set_allow_quality_fallback(parse_bool(raw)?)?
+            let v = parse_bool(raw).map_err(SetError::Usage)?;
+            open_audio(roots)
+                .map_err(SetError::Io)?
+                .set_allow_quality_fallback(v)
+                .map_err(SetError::Io)?
         }
         "audio.quality_fallback_behavior" => {
-            open_audio(roots)?.set_quality_fallback_behavior(&parse_quality_fallback_behavior(raw)?)?
+            let v = parse_quality_fallback_behavior(raw).map_err(SetError::Usage)?;
+            open_audio(roots)
+                .map_err(SetError::Io)?
+                .set_quality_fallback_behavior(&v)
+                .map_err(SetError::Io)?
         }
-        "audio.gapless_enabled" => open_audio(roots)?.set_gapless_enabled(parse_bool(raw)?)?,
+        "audio.gapless_enabled" => {
+            let v = parse_bool(raw).map_err(SetError::Usage)?;
+            open_audio(roots).map_err(SetError::Io)?.set_gapless_enabled(v).map_err(SetError::Io)?
+        }
         "audio.normalization_enabled" => {
-            open_audio(roots)?.set_normalization_enabled(parse_bool(raw)?)?
+            let v = parse_bool(raw).map_err(SetError::Usage)?;
+            open_audio(roots)
+                .map_err(SetError::Io)?
+                .set_normalization_enabled(v)
+                .map_err(SetError::Io)?
         }
         "audio.normalization_target_lufs" => {
-            open_audio(roots)?.set_normalization_target_lufs(parse_f32(raw)?)?
+            let v = parse_f32(raw).map_err(SetError::Usage)?;
+            open_audio(roots)
+                .map_err(SetError::Io)?
+                .set_normalization_target_lufs(v)
+                .map_err(SetError::Io)?
         }
-        "audio.pw_force_bitperfect" => open_audio(roots)?.set_pw_force_bitperfect(parse_bool(raw)?)?,
+        "audio.pw_force_bitperfect" => {
+            let v = parse_bool(raw).map_err(SetError::Usage)?;
+            open_audio(roots)
+                .map_err(SetError::Io)?
+                .set_pw_force_bitperfect(v)
+                .map_err(SetError::Io)?
+        }
         "audio.reserve_dac_while_running" => {
-            open_audio(roots)?.set_reserve_dac_while_running(parse_bool(raw)?)?
+            let v = parse_bool(raw).map_err(SetError::Usage)?;
+            open_audio(roots)
+                .map_err(SetError::Io)?
+                .set_reserve_dac_while_running(v)
+                .map_err(SetError::Io)?
         }
         "audio.sync_audio_on_startup" => {
-            open_audio(roots)?.set_sync_audio_on_startup(parse_bool(raw)?)?
+            let v = parse_bool(raw).map_err(SetError::Usage)?;
+            open_audio(roots)
+                .map_err(SetError::Io)?
+                .set_sync_audio_on_startup(v)
+                .map_err(SetError::Io)?
         }
         "playback.quality" => {
+            let v = parse_streaming_quality(raw).map_err(SetError::Usage)?;
             let mut prefs = daemon_prefs::load_at(&roots.data);
-            prefs.streaming_quality = parse_streaming_quality(raw)?;
-            daemon_prefs::save_at(&prefs, &roots.data)?;
+            prefs.streaming_quality = v;
+            daemon_prefs::save_at(&prefs, &roots.data).map_err(SetError::Io)?;
         }
-        "playback.autoplay" => open_playback(roots)?.set_autoplay_mode(parse_autoplay(raw)?)?,
-        "playback.persist_session" => open_playback(roots)?.set_persist_session(parse_bool(raw)?)?,
+        "playback.autoplay" => {
+            let v = parse_autoplay(raw).map_err(SetError::Usage)?;
+            open_playback(roots).map_err(SetError::Io)?.set_autoplay_mode(v).map_err(SetError::Io)?
+        }
+        "playback.persist_session" => {
+            let v = parse_bool(raw).map_err(SetError::Usage)?;
+            open_playback(roots)
+                .map_err(SetError::Io)?
+                .set_persist_session(v)
+                .map_err(SetError::Io)?
+        }
         "playback.resume_playback_position" => {
-            open_playback(roots)?.set_resume_playback_position(parse_bool(raw)?)?
+            let v = parse_bool(raw).map_err(SetError::Usage)?;
+            open_playback(roots)
+                .map_err(SetError::Io)?
+                .set_resume_playback_position(v)
+                .map_err(SetError::Io)?
         }
         "playback.show_context_icon" => {
-            open_playback(roots)?.set_show_context_icon(parse_bool(raw)?)?
+            let v = parse_bool(raw).map_err(SetError::Usage)?;
+            open_playback(roots)
+                .map_err(SetError::Io)?
+                .set_show_context_icon(v)
+                .map_err(SetError::Io)?
         }
         "qconnect.device_name" => {
             qconnect_kv::persist_device_name_at(&qconnect_db(roots), parse_output_device(raw).as_deref())
@@ -408,15 +538,16 @@ pub(crate) fn write_one(roots: &ProfileRoots, key: &str, raw: &str) -> Result<Ap
                 "on" => qconnect_app::QconnectStartupMode::On,
                 "off" => qconnect_app::QconnectStartupMode::Off,
                 other => {
-                    return Err(format!(
+                    return Err(SetError::Usage(format!(
                         "invalid startup mode '{other}' — expected one of: on, off (use: qbzd qconnect enable|disable)"
-                    ))
+                    )))
                 }
             };
             qconnect_kv::save_startup_mode_at(&qconnect_db(roots), mode)
         }
         "qconnect.volume_mode" => {
-            qconnect_kv::save_volume_mode_at(&qconnect_db(roots), &parse_volume_mode(raw)?)
+            let v = parse_volume_mode(raw).map_err(SetError::Usage)?;
+            qconnect_kv::save_volume_mode_at(&qconnect_db(roots), &v)
         }
         other => unreachable!("KEY_TABLE/write_one drifted apart on key: {other}"),
     }
@@ -483,16 +614,23 @@ pub fn show(json: bool, roots: &ProfileRoots) -> i32 {
 }
 
 /// `qbzd settings set <KEY> <VALUE>` (⬇). Unknown key → exit 2 listing valid
-/// keys; invalid value for a known key → exit 2 naming the valid values.
-/// Writes always succeed locally before any daemon contact is attempted
-/// (§2.4 daemon-down capable); daemon-down prints `changes apply when the
-/// daemon starts` (this task's brief, verbatim) instead of failing.
+/// keys; invalid value for a known key → exit 2 naming the valid values;
+/// the key/value classified and parsed fine but the backing store failed to
+/// open or write (disk/permissions) → exit 1 (02 §1.3: 2 is USAGE-only —
+/// see [`SetError`]). Writes always succeed locally before any daemon
+/// contact is attempted (§2.4 daemon-down capable); daemon-down prints
+/// `changes apply when the daemon starts` (this task's brief, verbatim)
+/// instead of failing.
 pub fn set(roots: &ProfileRoots, key: &str, value: &str) -> i32 {
     let class = match write_one(roots, key, value) {
         Ok(c) => c,
-        Err(e) => {
+        Err(SetError::Usage(e)) => {
             eprintln!("error: {}", e.trim_end());
             return 2;
+        }
+        Err(SetError::Io(e)) => {
+            eprintln!("error: {}", e.trim_end());
+            return 1;
         }
     };
     if nudge(roots) {
@@ -1027,10 +1165,37 @@ mod tests {
     fn unknown_key_is_rejected_and_lists_every_valid_key() {
         let roots = scratch_roots("unknown-key");
         let err = write_one(&roots, "audio.bogus", "x").unwrap_err();
-        assert!(err.contains("unknown setting key 'audio.bogus'"), "{err}");
+        // 02 §1.3: an unknown key is a USAGE mistake (exit 2), never Io.
+        assert!(matches!(err, SetError::Usage(_)), "{err:?}");
+        assert!(err.message().contains("unknown setting key 'audio.bogus'"), "{err}");
         for (k, _) in KEY_TABLE {
-            assert!(err.contains(k), "missing '{k}' from the listed keys:\n{err}");
+            assert!(err.message().contains(k), "missing '{k}' from the listed keys:\n{err}");
         }
+        cleanup(&roots);
+    }
+
+    #[test]
+    fn invalid_value_for_a_known_key_is_a_usage_error_not_io() {
+        // 02 §1.3: a bad value for a KNOWN key is still exit 2 (usage), same
+        // class as an unknown key — never Io, which is reserved for a store
+        // that failed to open/write after the value parsed fine.
+        let roots = scratch_roots("bad-value");
+        let err = write_one(&roots, "audio.exclusive_mode", "maybe").unwrap_err();
+        assert!(matches!(err, SetError::Usage(_)), "{err:?}");
+        cleanup(&roots);
+    }
+
+    #[test]
+    fn store_open_failure_is_an_io_error_not_usage() {
+        // 02 §1.3: the key classifies and the value parses fine (exclusive_mode
+        // is a plain bool) — a store that then fails to even OPEN (here: the
+        // data root is blocked by a plain file, so `create_dir_all` fails) is
+        // exit 1 (Io), never the usage exit 2.
+        let roots = scratch_roots("store-open-blocked");
+        std::fs::create_dir_all(roots.data.parent().unwrap()).unwrap();
+        std::fs::write(&roots.data, b"not a directory").unwrap();
+        let err = write_one(&roots, "audio.exclusive_mode", "true").unwrap_err();
+        assert!(matches!(err, SetError::Io(_)), "{err:?}");
         cleanup(&roots);
     }
 

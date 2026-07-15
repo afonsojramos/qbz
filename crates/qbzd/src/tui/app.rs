@@ -952,7 +952,10 @@ fn write_keys(roots: &ProfileRoots, keys: &[(String, String)]) -> (Option<String
                 }
             }
             Err(e) => {
-                return (Some(format!("failed to save {k}: {}", e.trim())), reinit);
+                // The TUI only displays the message — it doesn't need the
+                // Usage/Io exit-code split `settings set` maps to (see
+                // `cli::settings::SetError`).
+                return (Some(format!("failed to save {k}: {}", e.to_string().trim())), reinit);
             }
         }
     }
