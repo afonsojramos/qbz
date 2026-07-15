@@ -175,7 +175,12 @@ impl DaemonQconnectService {
 
         let transport = Arc::new(NativeWsTransport::new());
         let sync_state = Arc::new(Mutex::new(QconnectRemoteSyncState::default()));
-        let engine = DaemonRendererEngine::new(Arc::clone(&self.runtime));
+        // T10 (OD4, §7.4): resolve the volume policy from the daemon-root KV at
+        // connect, so a later `qbzd settings reload` (T11) is picked up on the
+        // next connect. Unset/unknown -> Software (the OD4 default).
+        let volume_mode =
+            engine::VolumeMode::from_kv(transport::load_volume_mode_at(&self.settings_db).as_deref());
+        let engine = DaemonRendererEngine::new(Arc::clone(&self.runtime), volume_mode);
         let sink = Arc::new(DaemonEventSink::new(engine, Arc::clone(&sync_state)));
         let app = Arc::new(QconnectApp::new(
             Arc::clone(&transport),
@@ -210,6 +215,7 @@ impl DaemonQconnectService {
             sink: Arc::clone(&sink),
             runtime: Arc::clone(&self.runtime),
             shared: Arc::clone(&self.shared),
+            volume_mode, // T10 (OD4): join-time volume report honors the mode
         });
         let app_for_loop = Arc::clone(&app);
         let event_loop = tokio::spawn(async move {
@@ -329,6 +335,10 @@ impl DaemonQconnectService {
 pub struct QconnectHandle {
     service: Arc<DaemonQconnectService>,
     watcher: Option<JoinHandle<()>>,
+    /// T10: the report-tick scheduler task. Held so shutdown can abort+join it
+    /// (it clones `Arc<AppRuntime>`, so it must drop before `drop(booted)` per the
+    /// #521 clock-release ordering, exactly like the watcher).
+    report_task: Option<JoinHandle<()>>,
 }
 
 impl QconnectHandle {
@@ -353,6 +363,12 @@ impl QconnectHandle {
             watcher.abort();
             let _ = watcher.await;
         }
+        // T10: stop the report scheduler too, so its `Arc<AppRuntime>` clone drops
+        // ahead of `drop(booted)`.
+        if let Some(report_task) = self.report_task.take() {
+            report_task.abort();
+            let _ = report_task.await;
+        }
         let _ = self.service.disconnect().await;
     }
 }
@@ -361,7 +377,12 @@ impl QconnectHandle {
 /// daemon-root KV, decides auto-connect from the persisted startup mode
 /// (`cli_override = None`, `last_known = None` — P0), latches the initial status,
 /// and, when enabled, spawns the connect-on-Ready retry task.
-pub fn start(runtime: Runtime, shared: SharedState, roots: &ProfileRoots) -> QconnectHandle {
+pub fn start(
+    runtime: Runtime,
+    shared: SharedState,
+    roots: &ProfileRoots,
+    report_notify: Arc<tokio::sync::Notify>,
+) -> QconnectHandle {
     let settings_db = roots.data.join("qconnect_settings.db");
     // Re-point device identity + KV at the daemon root (NEVER the desktop global).
     transport::init_settings_db_path(settings_db.clone());
@@ -406,5 +427,19 @@ pub fn start(runtime: Runtime, shared: SharedState, roots: &ProfileRoots) -> Qco
         None
     };
 
-    QconnectHandle { service, watcher }
+    // T10 (§7.2): spawn the report-tick scheduler. It runs for the daemon
+    // lifetime, waking on the driver's ReportEdge signal (via `report_notify`)
+    // and its own ~2 s floor, and reports on the LIVE session (a no-op until a
+    // connect installs a runtime).
+    let scheduler_inner = Arc::clone(&service.inner);
+    let scheduler_runtime = Arc::clone(&service.runtime);
+    let report_task = Some(tokio::spawn(async move {
+        report::run_report_scheduler(report_notify, scheduler_inner, scheduler_runtime).await;
+    }));
+
+    QconnectHandle {
+        service,
+        watcher,
+        report_task,
+    }
 }

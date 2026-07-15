@@ -85,12 +85,24 @@ pub async fn run(roots: ProfileRoots, cfg: QbzdConfig, warns: Vec<String>) -> Re
     let prefs = daemon_prefs::load_at(&roots.data);
     let quality = playback_driver::quality_from_key(&prefs.streaming_quality);
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let deps = build_driver_deps(quality, booted.shared.clone());
+    // T10 (§7.2): the driver's `ReportEdge` action pulses this Notify; the
+    // QConnect report scheduler (step 12) waits on it. Created BEFORE the driver
+    // so `on_edge` can capture it, and shared with `qconnect::start`.
+    let report_notify = Arc::new(tokio::sync::Notify::new());
+    let deps = build_driver_deps(quality, booted.shared.clone(), report_notify.clone());
     let driver = tokio::spawn(playback_driver::run_driver(
         booted.runtime.clone(),
         deps,
         shutdown_rx,
     ));
+
+    // 10b. Queue-persistence subscriber (T10, §7.5): a `CoreEvent::QueueUpdated`
+    //      on the DaemonAdapter bus — from driver auto-advance, the CLI queue
+    //      verbs OR a QConnect-driven remote mutation — is debounced 2 s and then
+    //      flushed to the session store, so a restart resumes the remote-set queue
+    //      PAUSED (boot already restores it, §8.1-9½). Holds an `Arc<AppRuntime>`
+    //      clone, so it is aborted+joined ahead of `drop(booted)` (#521 ordering).
+    let queue_persist = spawn_queue_persist(booted.runtime.clone(), booted.bus.subscribe());
 
     // 11. HTTP serve (02 §3) on the already-bound socket. `ApiState` carries a
     //     second read-only audio-store connection (WAL) for the status audio
@@ -120,7 +132,12 @@ pub async fn run(roots: ProfileRoots, cfg: QbzdConfig, warns: Vec<String>) -> Re
     //     schedule. Reads NOTHING from qbzd.toml. Held to shut the session down
     //     ahead of playback (§8.2-1); it also clones `Arc<AppRuntime>`, so it must
     //     drop before `drop(booted)` (the #521 ordering).
-    let mut qconnect = crate::qconnect::start(booted.runtime.clone(), booted.shared.clone(), &roots);
+    let mut qconnect = crate::qconnect::start(
+        booted.runtime.clone(),
+        booted.shared.clone(),
+        &roots,
+        report_notify,
+    );
 
     // 13. park on SIGTERM/SIGINT. NO startup audio "hygiene": both candidate
     //     fns are verified no-ops from a fresh process and re-adding them is the
@@ -139,6 +156,11 @@ pub async fn run(roots: ProfileRoots, cfg: QbzdConfig, warns: Vec<String>) -> Re
     if let Err(e) = driver.await {
         log::warn!("driver task join failed: {e:?}");
     }
+    // T10 (§7.5): stop the queue-persistence subscriber before the authoritative
+    // final save, so it neither races the flush below nor keeps its
+    // `Arc<AppRuntime>` clone alive past `drop(booted)` (#521 ordering).
+    queue_persist.abort();
+    let _ = queue_persist.await;
     // Final full session save (queue + position) now that playback is quiesced.
     playback_driver::save_session_now(booted.runtime.as_ref()).await;
     // The background auth-retry task also holds an Arc<AppRuntime> clone — abort
@@ -252,14 +274,22 @@ async fn boot(roots: &ProfileRoots, cfg: &QbzdConfig, warn_count: usize) -> Resu
 }
 
 /// Assemble the driver's host side channels: the streaming-quality resolver and
-/// the daemon-shared latching / tick-timestamping hooks. `on_edge` is a no-op
-/// until T10 wires the outbound QConnect renderer report.
-fn build_driver_deps(quality: qbz_models::Quality, shared: Arc<Mutex<DaemonShared>>) -> DriverDeps {
+/// the daemon-shared latching / tick-timestamping hooks. T10: `on_edge` now
+/// pulses the QConnect report `Notify` so the report scheduler reports on the
+/// same transition/periodic edges the driver detects (§7.2).
+fn build_driver_deps(
+    quality: qbz_models::Quality,
+    shared: Arc<Mutex<DaemonShared>>,
+    report_notify: Arc<tokio::sync::Notify>,
+) -> DriverDeps {
     let latch_shared = shared.clone();
     let tick_shared = shared;
     DriverDeps {
         quality: Arc::new(move || quality),
-        on_edge: Arc::new(|| {}),
+        // T10: signal the report scheduler on every ReportEdge. `notify_one`
+        // stores a single permit if the scheduler is mid-report, so no edge is
+        // lost and rapid edges coalesce into one report.
+        on_edge: Arc::new(move || report_notify.notify_one()),
         on_latch: Arc::new(move |category, message| {
             if let Ok(mut s) = latch_shared.lock() {
                 match category {
@@ -276,6 +306,49 @@ fn build_driver_deps(quality: qbz_models::Quality, shared: Arc<Mutex<DaemonShare
             }
         }),
     }
+}
+
+/// T10 (§7.5): the queue-persistence subscriber. Debounces `CoreEvent::QueueUpdated`
+/// bursts by 2 s, then flushes the live queue + position to the session store via
+/// `save_session_now`. QConnect-driven mutations (`materialize_remote_queue` ->
+/// `set_queue`) also emit `QueueUpdated`, so a remote-set queue survives a restart
+/// (boot restores it PAUSED). Non-queue events (e.g. position ticks) are drained
+/// WITHOUT extending the debounce window, so they can never starve the flush.
+fn spawn_queue_persist(
+    runtime: Arc<AppRuntime<DaemonAdapter>>,
+    mut rx: broadcast::Receiver<CoreEvent>,
+) -> JoinHandle<()> {
+    use tokio::sync::broadcast::error::RecvError;
+    const DEBOUNCE: std::time::Duration = std::time::Duration::from_secs(2);
+    tokio::spawn(async move {
+        loop {
+            // Block until the FIRST queue mutation of a burst.
+            match rx.recv().await {
+                Ok(CoreEvent::QueueUpdated { .. }) => {}
+                Ok(_) => continue,
+                Err(RecvError::Lagged(_)) => continue,
+                Err(RecvError::Closed) => return,
+            }
+            // Debounce: a fixed deadline that only a further QueueUpdated extends.
+            // Other events are consumed but never push the deadline out.
+            let mut deadline = tokio::time::Instant::now() + DEBOUNCE;
+            loop {
+                tokio::select! {
+                    _ = tokio::time::sleep_until(deadline) => break,
+                    r = rx.recv() => match r {
+                        Ok(CoreEvent::QueueUpdated { .. }) => {
+                            deadline = tokio::time::Instant::now() + DEBOUNCE;
+                        }
+                        Ok(_) => {}
+                        Err(RecvError::Lagged(_)) => {}
+                        Err(RecvError::Closed) => return,
+                    }
+                }
+            }
+            playback_driver::save_session_now(runtime.as_ref()).await;
+            log::debug!("[qbzd] queue-persist: session flushed after QueueUpdated burst");
+        }
+    })
 }
 
 /// Activate the per-user session against DAEMON paths (§8.1-9): inject the

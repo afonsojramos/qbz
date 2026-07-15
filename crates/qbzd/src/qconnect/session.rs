@@ -34,6 +34,7 @@ use uuid::Uuid;
 
 use crate::adapter::DaemonAdapter;
 use crate::state::DaemonShared;
+use super::engine::VolumeMode; // T10 (OD4): join-time volume report honors the mode
 use super::sink::{DaemonEventSink, DaemonQconnectApp};
 use super::transport::{
     default_qconnect_device_info, default_qconnect_device_info_with_name, resolve_transport_config,
@@ -55,6 +56,9 @@ pub struct DaemonSessionLoopHost {
     pub sink: Arc<DaemonEventSink>,
     pub runtime: Runtime,
     pub shared: Arc<std::sync::Mutex<DaemonShared>>,
+    /// T10 (OD4): resolved volume policy — the deferred renderer join reports 100
+    /// in `Locked` mode, the real player volume in `Software`.
+    pub volume_mode: VolumeMode,
 }
 
 #[async_trait::async_trait]
@@ -92,6 +96,7 @@ impl SessionLoopHost for DaemonSessionLoopHost {
             &self.app,
             &self.sync_state,
             &self.runtime,
+            self.volume_mode, // T10 (OD4): 100 in Locked, real in Software
             &session_uuid,
             reason,
         )
@@ -185,6 +190,7 @@ pub async fn deferred_renderer_join(
     app: &Arc<DaemonQconnectApp>,
     sync_state: &Arc<Mutex<QconnectRemoteSyncState>>,
     runtime: &Runtime,
+    volume_mode: VolumeMode, // T10 (OD4): join-time volume report policy
     session_uuid: &str,
     join_reason: i32,
 ) {
@@ -290,10 +296,9 @@ pub async fn deferred_renderer_join(
     // FIX (a) (§7.4, daemon-copy only): report the player's REAL volume, not the
     // desktop's hardcoded 100. `get_playback_state().volume` is a 0.0-1.0
     // fraction; the wire wants a 0-100 percent.
-    let volume_pct = {
-        let fraction = runtime.core().get_playback_state().volume;
-        (fraction.clamp(0.0, 1.0) * 100.0).round() as i32
-    };
+    // T10 (OD4): the volume MODE decides — `Software` reports the real percent,
+    // `Locked` reports 100 fixed (no software attenuation on the bit-perfect path).
+    let volume_pct = volume_mode.reported_volume_pct(runtime.core().get_playback_state().volume);
     let volume_report = RendererReport::new(
         RendererReportType::RndrSrvrVolumeChanged,
         Uuid::new_v4().to_string(),

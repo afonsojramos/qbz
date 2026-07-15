@@ -181,6 +181,83 @@ async fn resolve_queue_item_ids_by_track_id(
     }
 }
 
+// T10 (§7.2, §3.1-7): the report-tick scheduler. The desktop reports from its
+// 450 ms Slint poll loop; the daemon has no such loop, so a dedicated tokio task
+// owns the cadence. It calls `report_playback_state` on the LIVE session (a no-op
+// when not connected or when a peer owns playback, since the body self-gates on
+// `is_local_renderer_active`).
+//
+// Two triggers, per §7.2 ("~2 s tokio interval while playing + edge-triggered on
+// track/play-state transitions"):
+//   * `notify` — the driver's `DriverAction::ReportEdge` signal (daemon.rs wires
+//     `on_edge -> Notify::notify_one`). The landed T4 driver folds the ~2 s
+//     periodic cadence AND the transition edges into this one signal
+//     (playback.rs:4648, `transition || periodic`).
+//   * a ~2 s `interval` — the periodic FLOOR of §3.1-7. Because the driver
+//     already supplies the periodic edge, the interval is RESET on every wake so
+//     it only elapses when the edge stream goes quiet (no double-reporting during
+//     active playback); interval-driven reports are additionally gated on
+//     `is_playing`, so a paused/stopped renderer stays silent like the desktop.
+pub async fn run_report_scheduler(
+    notify: Arc<tokio::sync::Notify>,
+    inner: Arc<Mutex<super::DaemonQconnectInner>>,
+    runtime: Arc<AppRuntime<DaemonAdapter>>,
+) {
+    use qconnect_app::renderer::{PLAYING_STATE_PAUSED, PLAYING_STATE_PLAYING};
+
+    let mut interval = tokio::time::interval(std::time::Duration::from_millis(2_000));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+    loop {
+        let via_interval = tokio::select! {
+            _ = notify.notified() => false,
+            _ = interval.tick() => true,
+        };
+        // Reset so the periodic floor only fires after 2 s of edge silence.
+        interval.reset();
+
+        // Read the live player state. Nothing loaded -> nothing to report.
+        let ev = runtime.core().player().get_playback_event();
+        if ev.track_id == 0 {
+            continue;
+        }
+        // The periodic floor only fires while actually playing; edge notifications
+        // (transitions + the driver's periodic) always report.
+        if via_interval && !ev.is_playing {
+            continue;
+        }
+
+        // Resolve the LIVE session (app + the shared sync accumulator). No runtime
+        // means QConnect is not connected -> a no-op this tick.
+        let (app, sync_state) = {
+            let guard = inner.lock().await;
+            match guard.runtime.as_ref() {
+                Some(rt) => (Arc::clone(&rt.app), Arc::clone(&rt.sync_state)),
+                None => continue,
+            }
+        };
+
+        let playing_state = if ev.is_playing {
+            PLAYING_STATE_PLAYING
+        } else {
+            PLAYING_STATE_PAUSED
+        };
+        // `report_playback_state` wants MILLISECONDS; the player reports seconds.
+        let position_ms = (ev.position as i64) * 1000;
+        let duration_ms = (ev.duration as i64) * 1000;
+        report_playback_state(
+            &app,
+            &sync_state,
+            &runtime,
+            playing_state,
+            position_ms,
+            duration_ms,
+            ev.track_id,
+        )
+        .await;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

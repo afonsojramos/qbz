@@ -32,17 +32,66 @@ use qconnect_app::QconnectRendererEngine;
 
 use crate::adapter::DaemonAdapter;
 
+// T10 (OD4, §7.4): daemon-only volume policy. The desktop has no equivalent —
+// it always applies remote volume. The mode is read from the daemon-root
+// `qconnect_settings.db` `volume_mode` KV key (transport::load_volume_mode_at)
+// at connect time and injected into the engine + session host.
+/// How the daemon treats a controller's remote volume command (01 §7.4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum VolumeMode {
+    /// OD4 DEFAULT. Remote `SetVolume` is applied to the player via the core,
+    /// and the player's real volume is reported back to the controller.
+    #[default]
+    Software,
+    /// Bit-perfect purist. The player stays at 100 % (no software attenuation);
+    /// remote `SetVolume` is acknowledged-but-ignored (logged at info) and 100
+    /// is reported. For DACs feeding power amps where software gain is unwanted.
+    Locked,
+}
+
+impl VolumeMode {
+    /// Parse the `volume_mode` KV value. Anything but the literal `"locked"`
+    /// (unset, empty, unknown) falls back to `Software` — the OD4 default.
+    pub fn from_kv(value: Option<&str>) -> Self {
+        match value.map(str::trim) {
+            Some("locked") => VolumeMode::Locked,
+            _ => VolumeMode::Software,
+        }
+    }
+
+    /// Whether a controller's remote `SetVolume` should reach the player. True
+    /// only in `Software`; `Locked` acknowledges-but-ignores.
+    pub fn applies_remote_volume(self) -> bool {
+        matches!(self, VolumeMode::Software)
+    }
+
+    /// The volume (0-100 percent) to REPORT to the controller given the player's
+    /// real 0.0-1.0 fraction. `Software` reports the real (rounded) percent;
+    /// `Locked` always reports 100 regardless of the player's actual level.
+    pub fn reported_volume_pct(self, real_fraction: f32) -> i32 {
+        match self {
+            VolumeMode::Software => (real_fraction.clamp(0.0, 1.0) * 100.0).round() as i32,
+            VolumeMode::Locked => 100,
+        }
+    }
+}
+
 /// QConnect renderer engine backed by the daemon `AppRuntime`. Holds the shared
 /// runtime and forwards every trait method through `runtime.core()`; the async
 /// feeder spawns on the ambient tokio runtime (`start_track_stream` is always
 /// awaited from a runtime task).
 pub struct DaemonRendererEngine {
     runtime: Arc<AppRuntime<DaemonAdapter>>,
+    /// T10 (OD4): resolved volume policy for this session (from the KV at connect).
+    volume_mode: VolumeMode,
 }
 
 impl DaemonRendererEngine {
-    pub fn new(runtime: Arc<AppRuntime<DaemonAdapter>>) -> Self {
-        Self { runtime }
+    pub fn new(runtime: Arc<AppRuntime<DaemonAdapter>>, volume_mode: VolumeMode) -> Self {
+        Self {
+            runtime,
+            volume_mode,
+        }
     }
 
     fn core(&self) -> &Arc<QbzCore<DaemonAdapter>> {
@@ -66,6 +115,17 @@ impl QconnectRendererEngine for DaemonRendererEngine {
         self.core().seek(position_secs).map_err(|err| err.to_string())
     }
     fn set_volume(&self, fraction: f32) -> Result<(), String> {
+        // T10 (OD4, §7.4): volume-mode gate. In `Locked` mode the player stays
+        // at 100 % and a controller's remote SetVolume is acknowledged-but-
+        // ignored (logged at info), so the DAC keeps receiving full-scale,
+        // bit-perfect samples. `Software` (default) applies it via the core.
+        if !self.volume_mode.applies_remote_volume() {
+            log::info!(
+                "[QConnect] volume_mode=locked: ignoring remote SetVolume({:.3}); player stays at 100%",
+                fraction
+            );
+            return Ok(());
+        }
         self.core().set_volume(fraction).map_err(|err| err.to_string())
     }
     fn get_playback_state(&self) -> PlaybackState {
@@ -195,4 +255,45 @@ async fn download_remote_audio(url: &str) -> Result<Vec<u8>, String> {
         .await
         .map_err(|err| format!("read remote audio bytes failed: {err}"))?;
     Ok(bytes.to_vec())
+}
+
+// T10 (OD4, §7.4): volume-mode policy tests. These pin the decision the engine's
+// `set_volume` gate and the session host's join-time volume report consult — the
+// two enforcement points of the software|locked contract.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn software_mode_applies_and_reports_real() {
+        // remote SetVolume 0.4 -> engine.set_volume(0.4); report reads real volume.
+        let mode = VolumeMode::from_kv(Some("software"));
+        assert_eq!(mode, VolumeMode::Software);
+        assert!(mode.applies_remote_volume());
+        assert_eq!(mode.reported_volume_pct(0.4), 40);
+        assert_eq!(mode.reported_volume_pct(1.0), 100);
+    }
+
+    #[test]
+    fn locked_mode_ignores_and_reports_100() {
+        // remote SetVolume -> acknowledged-but-ignored; player stays 1.0; 100 reported.
+        let mode = VolumeMode::from_kv(Some("locked"));
+        assert_eq!(mode, VolumeMode::Locked);
+        assert!(!mode.applies_remote_volume());
+        // 100 reported regardless of the player's actual level.
+        assert_eq!(mode.reported_volume_pct(0.4), 100);
+        assert_eq!(mode.reported_volume_pct(1.0), 100);
+    }
+
+    #[test]
+    fn default_mode_is_software_od4() {
+        // Unset / empty / unknown all resolve to the OD4 default (software).
+        assert_eq!(VolumeMode::default(), VolumeMode::Software);
+        assert_eq!(VolumeMode::from_kv(None), VolumeMode::Software);
+        assert_eq!(VolumeMode::from_kv(Some("")), VolumeMode::Software);
+        assert_eq!(VolumeMode::from_kv(Some("  ")), VolumeMode::Software);
+        assert_eq!(VolumeMode::from_kv(Some("garbage")), VolumeMode::Software);
+        // Whitespace around the real value is tolerated.
+        assert_eq!(VolumeMode::from_kv(Some(" locked ")), VolumeMode::Locked);
+    }
 }
