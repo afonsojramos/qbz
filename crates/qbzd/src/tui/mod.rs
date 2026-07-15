@@ -10,9 +10,11 @@
 // short-lived `block_on` — never on a keystroke.
 
 pub mod app;
+pub mod clipboard;
 pub mod strings;
 pub mod theme;
 pub mod widgets;
+pub mod wizard_core;
 
 mod screens;
 

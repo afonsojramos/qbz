@@ -18,7 +18,7 @@ use qbz_app::settings::bundle::{self, Bundle, ExportOptions, ExportSource, Impor
 use qbz_app::settings::daemon_prefs;
 use qbz_app::settings::playback::PlaybackPreferencesStore;
 use qbz_audio::settings::{AudioSettings, AudioSettingsStore};
-use qbz_audio::{AudioBackendType, AudioDevice, BackendManager};
+use qbz_audio::{AudioBackendType, AudioDevice, BackendManager, NegotiatedRate};
 
 use crate::cli::client::{ApiClient, CliError};
 use crate::config::QbzdConfig;
@@ -32,9 +32,11 @@ use super::screens::bundle::{BundleState, PendingImport};
 use super::screens::network::{self as network_screen, NetworkState};
 use super::screens::playback::PlaybackState;
 use super::screens::qconnect::QConnectState;
+use super::screens::wizard::WizardState;
 use super::strings as s;
 use super::theme;
 use super::widgets;
+use super::wizard_core::{self, DacCandidateData, DacConfigData};
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -53,16 +55,20 @@ pub enum Screen {
     QConnect,
     Network,
     Bundle,
+    Wizard,
 }
 
-/// D7 hard cap — a seventh screen needs an owner decision, not a PR.
-pub const SCREENS: [Screen; 6] = [
+/// Seven sections. The original D7 six-screen cap was broken deliberately for
+/// FB4's HiFi Wizard (owner-sanctioned); a further screen still needs an owner
+/// decision, not a PR.
+pub const SCREENS: [Screen; 7] = [
     Screen::Account,
     Screen::Audio,
     Screen::Playback,
     Screen::QConnect,
     Screen::Network,
     Screen::Bundle,
+    Screen::Wizard,
 ];
 
 /// Sidebar width (columns, incl. border). 14 keeps the content frame at 64 inner
@@ -113,6 +119,7 @@ fn section_title(screen: Screen) -> &'static str {
         Screen::QConnect => s::QCONNECT_TITLE,
         Screen::Network => s::NETWORK_TITLE,
         Screen::Bundle => s::BUNDLE_TITLE,
+        Screen::Wizard => s::WIZARD_TITLE,
     }
 }
 
@@ -162,10 +169,10 @@ enum NavIntent {
 /// is open in the content (it owns every key); `uses_horizontal` = the focused
 /// content field consumes ←/→ (Audio's Buffer slider), so ← must NOT drop focus.
 fn classify_key(focus: Focus, code: KeyCode, editing: bool, uses_horizontal: bool) -> NavIntent {
-    // Number keys 1-6 jump from ANY focus — but only when no field editor is
+    // Number keys 1-7 jump from ANY focus — but only when no field editor is
     // capturing input (a port/token/name field must receive its digits).
     if !editing {
-        if let KeyCode::Char(c @ '1'..='6') = code {
+        if let KeyCode::Char(c @ '1'..='7') = code {
             return NavIntent::JumpSection(c as usize - '1' as usize);
         }
     }
@@ -211,6 +218,19 @@ pub enum ScreenAction {
     ImportPlan(String),
     ImportApply,
     Export { dest: String, include_auth: bool },
+    // ---- HiFi Wizard (FB4) worker requests ----
+    /// Run the heavy audio-stack health probe (Check step).
+    WizardProbeHealth,
+    /// Enumerate DAC candidates via pw-dump (Select-DACs step).
+    WizardDetect,
+    /// Generate the per-DAC config blocks (Review step).
+    WizardGenConfigs(Vec<(String, String)>),
+    /// Start the daemon's own playback of the current queue, then read back.
+    WizardTestStart,
+    /// Re-read the requested-vs-negotiated rate without (re)starting playback.
+    WizardTestPoll,
+    /// Esc mid-wizard — open the confirm-abandon modal.
+    WizardAbandon,
 }
 
 /// Read-only context passed to every screen's `draw` (the live status body for
@@ -236,6 +256,15 @@ pub enum Msg {
     ImportPlanned(Result<Box<PendingImport>, String>),
     ImportApplied { lines: Vec<String>, status: Option<Value>, reachable: bool },
     Exported(Result<Vec<String>, String>),
+    // ---- HiFi Wizard (FB4) worker results ----
+    WizardHealth(qbz_audio::AudioStackHealth),
+    WizardDacs(Vec<DacCandidateData>),
+    WizardConfigs(Vec<DacConfigData>),
+    WizardTest {
+        requested: Option<(u32, u32)>,
+        negotiated: Option<NegotiatedRate>,
+        note: Option<String>,
+    },
 }
 
 // ============================ active screen ============================
@@ -247,6 +276,7 @@ enum Active {
     QConnect(QConnectState),
     Network(NetworkState),
     Bundle(BundleState),
+    Wizard(WizardState),
 }
 
 enum Overlay {
@@ -254,6 +284,8 @@ enum Overlay {
     Help,
     Result { title: String, lines: Vec<String> },
     DirtyLeave { target: LeaveTarget },
+    /// FB4: Esc mid-wizard — leaving discards the wizard's transient selections.
+    ConfirmAbandon,
 }
 
 /// Where a dirty-guarded departure lands. Switching sections and quitting both
@@ -418,6 +450,7 @@ impl App {
                 Active::Network(NetworkState::new(&cfg, warns))
             }
             Screen::Bundle => Active::Bundle(BundleState::new(desktop_profile_present())),
+            Screen::Wizard => Active::Wizard(WizardState::new()),
         };
     }
 
@@ -488,10 +521,12 @@ impl App {
             Active::QConnect(s) => s.is_editing(),
             Active::Network(s) => s.is_editing(),
             Active::Bundle(s) => s.is_editing(),
+            Active::Wizard(s) => s.is_editing(),
         }
     }
 
     /// The breadcrumb's level-2 node (field label) when an inline edit is active.
+    /// The Wizard uses it for the current STEP name (`Wizard › <step>`).
     fn active_editing_label(&self) -> Option<&'static str> {
         match &self.active {
             Active::Account(s) => s.editing_label(),
@@ -500,12 +535,18 @@ impl App {
             Active::QConnect(s) => s.editing_label(),
             Active::Network(s) => s.editing_label(),
             Active::Bundle(s) => s.editing_label(),
+            Active::Wizard(s) => s.editing_label(),
         }
     }
 
     /// Whether the focused content field consumes ←/→ (so ← must not drop focus).
+    /// The Wizard claims ←/→ for step back/next navigation.
     fn content_uses_horizontal(&self) -> bool {
-        matches!(&self.active, Active::Audio(s) if s.focused_is_buffer())
+        match &self.active {
+            Active::Audio(s) => s.focused_is_buffer(),
+            Active::Wizard(_) => true,
+            _ => false,
+        }
     }
 
     // -------------------------- key handling --------------------------
@@ -540,6 +581,20 @@ impl App {
                         self.apply_leave(target);
                     }
                     KeyCode::Esc => self.overlay = Overlay::None,
+                    _ => {}
+                }
+                return LoopCmd::None;
+            }
+            Overlay::ConfirmAbandon => {
+                match key.code {
+                    // Quit the wizard: discard its transient state (a fresh
+                    // WizardState) and drop focus back to the sidebar.
+                    KeyCode::Char('y') | KeyCode::Enter => {
+                        self.overlay = Overlay::None;
+                        self.enter_screen(Screen::Wizard);
+                        self.enter_nav_focus();
+                    }
+                    KeyCode::Esc | KeyCode::Char('n') => self.overlay = Overlay::None,
                     _ => {}
                 }
                 return LoopCmd::None;
@@ -593,6 +648,7 @@ impl App {
             Active::QConnect(s) => s.handle_key(key),
             Active::Network(s) => s.handle_key(key),
             Active::Bundle(s) => s.handle_key(key),
+            Active::Wizard(s) => s.handle_key(key),
         }
     }
 
@@ -635,6 +691,30 @@ impl App {
             }
             ScreenAction::Export { dest, include_auth } => {
                 self.spawn_export(dest, include_auth);
+                LoopCmd::None
+            }
+            ScreenAction::WizardProbeHealth => {
+                self.spawn_wizard_health();
+                LoopCmd::None
+            }
+            ScreenAction::WizardDetect => {
+                self.spawn_wizard_detect();
+                LoopCmd::None
+            }
+            ScreenAction::WizardGenConfigs(dacs) => {
+                self.spawn_wizard_configs(dacs);
+                LoopCmd::None
+            }
+            ScreenAction::WizardTestStart => {
+                self.spawn_wizard_test(true);
+                LoopCmd::None
+            }
+            ScreenAction::WizardTestPoll => {
+                self.spawn_wizard_test(false);
+                LoopCmd::None
+            }
+            ScreenAction::WizardAbandon => {
+                self.overlay = Overlay::ConfirmAbandon;
                 LoopCmd::None
             }
         }
@@ -782,6 +862,79 @@ impl App {
         });
     }
 
+    // -------------------------- wizard workers (FB4) --------------------------
+
+    /// The heavy audio-stack health probe (shells out to systemctl/aplay/pw-dump)
+    /// — never on the render thread.
+    fn spawn_wizard_health(&mut self) {
+        self.busy = Some(s::WIZ_HEALTH_CHECKING.to_string());
+        let tx = self.tx.clone();
+        self.handle.spawn_blocking(move || {
+            let _ = tx.send(Msg::WizardHealth(qbz_audio::audio_stack_health()));
+        });
+    }
+
+    /// Enumerate DAC candidates via the pw-dump-robust path (blocking).
+    fn spawn_wizard_detect(&mut self) {
+        self.busy = Some(s::WIZ_DETECTING.to_string());
+        let tx = self.tx.clone();
+        self.handle.spawn_blocking(move || {
+            let _ = tx.send(Msg::WizardDacs(wizard_core::detect_blocking()));
+        });
+    }
+
+    /// Re-probe rates + build the per-DAC config blocks (blocking).
+    fn spawn_wizard_configs(&mut self, dacs: Vec<(String, String)>) {
+        self.busy = Some(s::WIZ_GENERATING.to_string());
+        let tx = self.tx.clone();
+        self.handle.spawn_blocking(move || {
+            let _ = tx.send(Msg::WizardConfigs(wizard_core::gen_configs_blocking(dacs)));
+        });
+    }
+
+    /// Test read-back: optionally cold-start the daemon's OWN playback of the
+    /// current queue, then sample the requested rate (`/api/status`) and the
+    /// DAC's REAL negotiated rate (`/proc/asound` via qbz-audio::dac_probe). The
+    /// requested-vs-negotiated pair is the bit-perfect proof (N6).
+    fn spawn_wizard_test(&mut self, start_playback: bool) {
+        self.busy = Some(if start_playback {
+            "starting playback…".to_string()
+        } else {
+            "reading DAC…".to_string()
+        });
+        let roots = self.roots.clone();
+        let tx = self.tx.clone();
+        self.handle.spawn(async move {
+            let client = ApiClient::new(None, &roots);
+            let mut note = None;
+            if start_playback {
+                match client.post("/api/playback/play", json!({})).await {
+                    Ok(_) => {
+                        // Give the stream a moment to open on the DAC before the read.
+                        tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+                    }
+                    Err(CliError::Unreachable(_)) => {
+                        note = Some("daemon not reachable — start it, then try the test".to_string());
+                    }
+                    Err(_) => {
+                        note = Some(
+                            "nothing to play — queue a track or cast to the daemon first".to_string(),
+                        );
+                    }
+                }
+            }
+            // Requested (what QBZ asked the daemon for), while playing.
+            let requested = client.get("/api/status").await.ok().and_then(|st| {
+                let sr = st.pointer("/audio/sample_rate").and_then(Value::as_u64)?;
+                let bd = st.pointer("/audio/bit_depth").and_then(Value::as_u64).unwrap_or(0);
+                Some((sr as u32, bd as u32))
+            });
+            // Negotiated (the DAC's real hardware clock).
+            let negotiated = qbz_audio::negotiated_active_rate();
+            let _ = tx.send(Msg::WizardTest { requested, negotiated, note });
+        });
+    }
+
     // -------------------------- worker results --------------------------
 
     pub fn drain_worker(&mut self) {
@@ -894,6 +1047,30 @@ impl App {
                     lines,
                 };
             }
+            Msg::WizardHealth(health) => {
+                self.busy = None;
+                if let Active::Wizard(w) = &mut self.active {
+                    w.set_health(health);
+                }
+            }
+            Msg::WizardDacs(dacs) => {
+                self.busy = None;
+                if let Active::Wizard(w) = &mut self.active {
+                    w.set_candidates(dacs);
+                }
+            }
+            Msg::WizardConfigs(configs) => {
+                self.busy = None;
+                if let Active::Wizard(w) = &mut self.active {
+                    w.set_configs(configs);
+                }
+            }
+            Msg::WizardTest { requested, negotiated, note } => {
+                self.busy = None;
+                if let Active::Wizard(w) = &mut self.active {
+                    w.set_test_result(requested, negotiated, note);
+                }
+            }
         }
     }
 
@@ -983,6 +1160,7 @@ impl App {
             Active::QConnect(sc) => sc.draw(f, inner, &ctx),
             Active::Network(sc) => sc.draw(f, inner, &ctx),
             Active::Bundle(sc) => sc.draw(f, inner, &ctx),
+            Active::Wizard(sc) => sc.draw(f, inner, &ctx),
         }
 
         self.draw_footer(f, rows[3]);
@@ -1004,6 +1182,9 @@ impl App {
             }
             Overlay::DirtyLeave { .. } => {
                 widgets::modal(f, area, s::DIRTY_TITLE, s::DIRTY_BODY, s::DIRTY_HINT);
+            }
+            Overlay::ConfirmAbandon => {
+                widgets::modal(f, area, s::WIZ_ABANDON_TITLE, s::WIZ_ABANDON_BODY, s::WIZ_ABANDON_HINT);
             }
             Overlay::None => {}
         }
@@ -1118,6 +1299,7 @@ impl App {
                         s::HELP_AUDIO_CLEAN
                     }
                 }
+                Active::Wizard(sc) => sc.help_text(),
                 _ => {
                     if self.active_is_dirty() {
                         s::HELP_CONTENT_DIRTY
@@ -1518,10 +1700,12 @@ mod tests {
 
     #[test]
     fn number_keys_jump_from_any_focus_but_not_while_editing() {
-        // 1-6 jump from nav and from content (not editing).
+        // 1-7 jump from nav and from content (not editing).
         assert_eq!(classify_key(Focus::Nav, KeyCode::Char('3'), false, false), NavIntent::JumpSection(2));
         assert_eq!(classify_key(Focus::Content, KeyCode::Char('1'), false, false), NavIntent::JumpSection(0));
         assert_eq!(classify_key(Focus::Content, KeyCode::Char('6'), false, false), NavIntent::JumpSection(5));
+        // 7 reaches the FB4 Wizard section (the seventh).
+        assert_eq!(classify_key(Focus::Content, KeyCode::Char('7'), false, false), NavIntent::JumpSection(6));
         // While a field editor is open, digits are typed into it, not swallowed.
         assert_eq!(classify_key(Focus::Content, KeyCode::Char('5'), true, false), NavIntent::ToScreen);
         // ...and so is every other key while editing.
@@ -1545,6 +1729,7 @@ mod tests {
             Screen::QConnect => Active::QConnect(QConnectState::new(false, None, None)),
             Screen::Network => Active::Network(NetworkState::new(&QbzdConfig::default(), Vec::new())),
             Screen::Bundle => Active::Bundle(BundleState::new(false)),
+            Screen::Wizard => Active::Wizard(WizardState::new()),
         };
         App {
             roots: ProfileRoots {

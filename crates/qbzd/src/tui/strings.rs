@@ -27,21 +27,23 @@ pub const HELP_TITLE: &str = "Help";
 /// while editing, the field label) carries the accent.
 pub const BREADCRUMB_ROOT: &str = "Setup";
 
-/// Persistent left-nav labels (fixed order — the D7 six-screen hard cap). NAME
-/// only; the old menu's live summaries are dropped — the content is the detail.
-/// Dirty-capable sections (Audio/Playback/QConnect/Network) stay ≤ 8 chars so a
-/// trailing `*` fits the 14-col sidebar; Account/Import are never dirty.
-pub const SIDEBAR_LABELS: [&str; 6] = [
+/// Persistent left-nav labels (fixed order). NAME only; the old menu's live
+/// summaries are dropped — the content is the detail. Dirty-capable sections
+/// (Audio/Playback/QConnect/Network) stay ≤ 8 chars so a trailing `*` fits the
+/// 14-col sidebar; Account/Import/Wizard are never dirty. Seven since FB4 added
+/// the HiFi Wizard (owner-sanctioned cap break over the old six-screen D7 cap).
+pub const SIDEBAR_LABELS: [&str; 7] = [
     "Account",
     "Audio",
     "Playback",
     "QConnect",
     "Network",
     "Import/Exp",
+    "Wizard",
 ];
 
 // Global help-bar hints (context-sensitive; assembled per focus + screen).
-pub const HELP_NAV: &str = "up/down move · Enter open · 1-6 jump · Tab content · ? help · q quit";
+pub const HELP_NAV: &str = "up/down move · Enter open · 1-7 jump · Tab content · ? help · q quit";
 pub const HELP_CONTENT_CLEAN: &str = "up/down move · Enter edit · Tab nav · Esc nav · ? help · q quit";
 pub const HELP_CONTENT_DIRTY: &str = "up/down move · Enter edit · s SAVE* · Tab nav · Esc nav · q quit";
 pub const HELP_AUDIO_CLEAN: &str =
@@ -58,7 +60,7 @@ pub const HELP_OVERLAY: &str = "GLOBAL KEYS
   Enter                  open a section / edit a field / confirm
   Tab                    toggle sidebar <-> content
   Esc                    content: back to sidebar · sidebar: quit
-  1 - 6                  jump straight to a section
+  1 - 7                  jump straight to a section
   s                      save the current section
   r                      refresh (Audio: re-enumerate devices)
   /                      filter (device picker)
@@ -295,3 +297,100 @@ pub const SAVED_DISK_ONLY: &str =
     "saved to disk — daemon didn't answer; changes apply on restart";
 pub const RELOAD_REFUSED: &str =
     "saved to disk — daemon answered but refused the reload; restart it:\n  systemctl --user restart qbzd";
+
+// ============================ HiFi Wizard (FB4, §7) ============================
+
+pub const WIZARD_TITLE: &str = "Wizard";
+
+// Step names (breadcrumb `Wizard › <step>`).
+pub const WIZ_STEP_WELCOME: &str = "Welcome";
+pub const WIZ_STEP_CHECK: &str = "Check";
+pub const WIZ_STEP_SELECT: &str = "Select DACs";
+pub const WIZ_STEP_REVIEW: &str = "Review";
+pub const WIZ_STEP_TEST: &str = "Test";
+pub const WIZ_STEP_DONE: &str = "Done";
+
+// Per-step help bars.
+pub const WIZ_HELP_WELCOME: &str = "Enter start · → next · Tab nav · q quit";
+pub const WIZ_HELP_CHECK: &str = "up/down move · Enter override · → next · ← back · Esc quit wizard";
+pub const WIZ_HELP_SELECT: &str = "up/down move · Space toggle · m manual · → next · ← back · Esc quit";
+pub const WIZ_HELP_REVIEW: &str =
+    "up/down block · c copy · C copy all · w save · PgUp/PgDn scroll · → next · ← back";
+pub const WIZ_HELP_TEST: &str = "t play test · r re-read · → next (skip) · ← back · Esc quit wizard";
+pub const WIZ_HELP_DONE: &str = "Enter finish · ← back · Esc close";
+
+// Welcome step.
+pub const WIZ_WELCOME_TITLE: &str = "HiFi / DAC Setup Wizard";
+pub const WIZ_WELCOME_BODY: &str = "This wizard checks your PipeWire/ALSA audio stack, finds your DAC(s), and\ngenerates the exact bit-perfect config for each one. It never touches a system\nfile — you copy the blocks and apply them yourself.\n\nSteps: Check the stack · Select DACs · Review the config · Test playback.";
+pub const WIZ_WELCOME_CTA: &str = "Enter start";
+
+// Check step.
+pub const WIZ_DISTRO: &str = "Distribution";
+pub const WIZ_INIT: &str = "Init system";
+pub const WIZ_HEALTH_CHECKING: &str = "checking your audio stack…";
+pub const WIZ_HEALTH_READY: &str = "✓ your audio stack is ready for bit-perfect playback";
+pub const WIZ_HEALTH_ATTENTION: &str = "! some pieces need attention before bit-perfect playback will work:";
+pub const WIZ_NO_REMEDIATION: &str = "nothing to change — the commands below are for reference only.";
+
+pub fn wiz_sandbox_note(name: &str) -> String {
+    format!(
+        "running inside {name} — the host audio stack can't be probed from here; \
+the commands below are the reference setup for the distro/init you pick."
+    )
+}
+
+// Select-DACs step.
+pub const WIZ_SELECT_INTRO: &str = "Detected outputs — check the DAC(s) you want bit-perfect config for:";
+pub const WIZ_DETECTING: &str = "detecting DACs…";
+pub const WIZ_DAC_BADGE: &str = "  [likely DAC]";
+pub const WIZ_DEFAULT_BADGE: &str = "  [default]";
+pub const WIZ_NO_DACS: &str = "no outputs enumerated — is PipeWire running and pw-dump installed?\nyou can still enter a node.name manually with 'm'.";
+pub const WIZ_MANUAL_HINT: &str = "m — enter a PipeWire node.name manually (alsa_output.* / alsa_input.*)";
+pub const WIZ_MANUAL_ACCEPTED: &str = "manual node:";
+pub const WIZ_MANUAL_TITLE: &str = "Manual node.name";
+pub const WIZ_MANUAL_BODY: &str = "Paste a PipeWire node.name (must contain alsa_output or alsa_input):";
+pub const WIZ_MANUAL_INVALID: &str = "not a valid node.name — it must contain alsa_output or alsa_input";
+pub const WIZ_SELECT_GATE: &str = "select at least one DAC (or enter a node.name with 'm') before continuing";
+
+// Review step.
+pub const WIZ_GENERATING: &str = "generating per-DAC config…";
+pub const WIZ_BACKUP_HINT: &str = "tip: back up ~/.config/pipewire + ~/.config/wireplumber before applying anything.";
+pub const WIZ_REVIEW_FOOTER: &str =
+    "the wizard NEVER writes these files — copy (c/C) or save (w), then apply them yourself";
+pub const WIZ_SAVED_TO: &str = "saved to";
+pub const WIZ_SAVE_FAILED: &str = "could not save";
+
+pub fn wiz_copied_all(n: usize) -> String {
+    if n == 1 {
+        "copied 1 block".to_string()
+    } else {
+        format!("copied all {n} blocks")
+    }
+}
+
+// Test step.
+pub const WIZ_TEST_INTRO: &str = "Play a track through the daemon, then read the DAC's REAL negotiated rate back\n(from /proc/asound) — the requested vs negotiated rate is the bit-perfect proof.";
+pub const WIZ_TEST_NOTHING: &str = "nothing playing yet — press t to start the current queue";
+pub const WIZ_TEST_WAITING: &str = "waiting for the DAC to open a stream…";
+pub const WIZ_TEST_MATCHED: &str = "✓ the DAC clock matches what QBZ requested — bit-perfect";
+pub const WIZ_TEST_REFERENCE: &str = "known reference track:";
+pub const WIZ_TEST_SEEDS_HEADER: &str = "reference tracks you can cast/queue to verify each rate:";
+
+// Done step.
+pub const WIZ_DONE_TITLE: &str = "All set";
+pub const WIZ_DONE_REMINDER: &str = "reminder: QBZ never writes system audio configs. Apply the blocks you copied,\nthen restart your PipeWire/WirePlumber user services (or log out and back in).";
+pub const WIZ_DONE_RESTART: &str = "on this box, that is:";
+pub const WIZ_DONE_CTA: &str = "Enter finish";
+
+pub fn wiz_done_summary(dacs: usize) -> String {
+    match dacs {
+        0 => "No DAC config was generated — re-run the wizard to select a DAC.".to_string(),
+        1 => "Generated bit-perfect config for 1 DAC.".to_string(),
+        n => format!("Generated bit-perfect config for {n} DACs."),
+    }
+}
+
+// Confirm-abandon modal (Esc mid-wizard).
+pub const WIZ_ABANDON_TITLE: &str = "Quit the wizard?";
+pub const WIZ_ABANDON_BODY: &str = "Your selections and generated config will be discarded.";
+pub const WIZ_ABANDON_HINT: &str = "y quit · Esc stay";
