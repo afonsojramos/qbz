@@ -9,7 +9,6 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
 use ratatui::text::Line;
-use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 use serde_json::Value;
 
@@ -213,7 +212,8 @@ impl QConnectState {
             lines.push(widgets::note_line(&live));
         }
 
-        f.render_widget(Paragraph::new(lines), area);
+        let secs = [widgets::Section::new(s::QCONNECT_SECTION, true, lines)];
+        widgets::sections(f, area, &secs);
 
         match &self.editor {
             Some(Editor::Volume(p)) => p.draw(f, area),

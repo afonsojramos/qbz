@@ -11,7 +11,6 @@ use std::net::IpAddr;
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
 use ratatui::text::Line;
-use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 use crate::config::QbzdConfig;
@@ -173,27 +172,28 @@ impl NetworkState {
             lines.push(widgets::field_line(label, &value, focused, true, None, widget));
         }
 
-        // Field-level validation notes (§4.2).
+        // Field-level validation notes (§4.2): errors in red, exposure in yellow.
         if self.staged.bind.parse::<IpAddr>().is_err() {
-            lines.push(widgets::note_line(s::N_BAD_IP));
+            lines.push(widgets::err_line(s::N_BAD_IP));
         } else if self.bind_is_lan() {
             lines.push(widgets::blank());
             for l in s::NETWORK_LAN_WARNING.lines() {
-                lines.push(widgets::note_line(l));
+                lines.push(widgets::warn_line(l));
             }
         }
         if self.port_invalid() {
-            lines.push(widgets::note_line(s::N_BAD_PORT));
+            lines.push(widgets::err_line(s::N_BAD_PORT));
         }
 
         // Pre-save unknown-key warning (§3.5).
         if !self.unknown_keys.is_empty() {
             lines.push(widgets::blank());
-            lines.push(widgets::note_line(s::N_DROP_UNKNOWN));
-            lines.push(widgets::note_line(&format!("  {}", self.unknown_keys.join(", "))));
+            lines.push(widgets::warn_line(s::N_DROP_UNKNOWN));
+            lines.push(widgets::warn_line(&format!("  {}", self.unknown_keys.join(", "))));
         }
 
-        f.render_widget(Paragraph::new(lines), area);
+        let secs = [widgets::Section::new(s::NETWORK_SECTION, true, lines)];
+        widgets::sections(f, area, &secs);
 
         if let Some((field, input)) = &self.editor {
             let title = match field {

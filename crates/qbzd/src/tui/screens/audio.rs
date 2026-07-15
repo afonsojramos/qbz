@@ -16,7 +16,6 @@ use qbz_audio::{AlsaPlugin, AudioBackendType, AudioDevice, BackendManager};
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
 use ratatui::text::Line;
-use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 use crate::tui::app::{DrawCtx, ScreenAction};
@@ -656,44 +655,36 @@ impl AudioState {
 
     pub fn draw(&self, f: &mut Frame, area: Rect, _ctx: &DrawCtx) {
         let fields = visible_fields(&self.staged);
-        let mut lines: Vec<Line> = Vec::new();
-
-        let render_group = |lines: &mut Vec<Line>, header: &str, group: &[AField]| {
-            let any = group.iter().any(|g| fields.contains(g));
-            if !any {
-                return;
-            }
-            lines.push(widgets::group_header(header));
-            for gf in group {
-                if let Some(pos) = fields.iter().position(|x| x == gf) {
-                    lines.push(self.field_line(*gf, pos));
-                }
-            }
+        let focused_field = fields.get(self.focus).copied();
+        let active = |members: &[AField]| {
+            focused_field.map(|ff| members.contains(&ff)).unwrap_or(false)
         };
 
         use AField::*;
-        render_group(
-            &mut lines,
-            s::AUDIO_GROUP_OUTPUT,
-            &[Backend, Device, AlsaPlugin, HwVolume, Dsd],
-        );
-        if self.staged.backend == AudioBackendType::Jack {
-            lines.push(widgets::note_line(s::JACK_WARNING));
-        }
-        lines.push(widgets::blank());
-        render_group(
-            &mut lines,
-            s::AUDIO_GROUP_BITPERFECT,
-            &[Exclusive, Reserve, Passthrough, ForceBp, LockOutput],
-        );
-        lines.push(widgets::blank());
-        render_group(
-            &mut lines,
-            s::AUDIO_GROUP_TRANSPORT,
-            &[StreamUncached, Buffer, StreamingOnly],
-        );
+        let mut secs: Vec<widgets::Section> = Vec::new();
 
-        f.render_widget(Paragraph::new(lines), area);
+        let out_members: &[AField] = &[Backend, Device, AlsaPlugin, HwVolume, Dsd];
+        let mut out_lines = self.group_lines(&fields, out_members);
+        if self.staged.backend == AudioBackendType::Jack {
+            out_lines.push(widgets::warn_line(s::JACK_WARNING));
+        }
+        if !out_lines.is_empty() {
+            secs.push(widgets::Section::new(s::AUDIO_GROUP_OUTPUT, active(out_members), out_lines));
+        }
+
+        let bp_members: &[AField] = &[Exclusive, Reserve, Passthrough, ForceBp, LockOutput];
+        let bp_lines = self.group_lines(&fields, bp_members);
+        if !bp_lines.is_empty() {
+            secs.push(widgets::Section::new(s::AUDIO_GROUP_BITPERFECT, active(bp_members), bp_lines));
+        }
+
+        let tr_members: &[AField] = &[StreamUncached, Buffer, StreamingOnly];
+        let tr_lines = self.group_lines(&fields, tr_members);
+        if !tr_lines.is_empty() {
+            secs.push(widgets::Section::new(s::AUDIO_GROUP_TRANSPORT, active(tr_members), tr_lines));
+        }
+
+        widgets::sections(f, area, &secs);
 
         // Overlays.
         match &self.editor {
@@ -715,6 +706,17 @@ impl AudioState {
             }
             None => {}
         }
+    }
+
+    /// The field rows of one group, in declared order (skipping hidden fields).
+    fn group_lines(&self, fields: &[AField], members: &[AField]) -> Vec<Line<'static>> {
+        let mut lines = Vec::new();
+        for gf in members {
+            if let Some(pos) = fields.iter().position(|x| x == gf) {
+                lines.push(self.field_line(*gf, pos));
+            }
+        }
+        lines
     }
 
     fn field_line(&self, field: AField, focus_pos: usize) -> Line<'static> {

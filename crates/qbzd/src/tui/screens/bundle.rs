@@ -15,14 +15,14 @@ use qbz_app::settings::bundle::{
 use qbz_audio::{AudioBackendType, AudioDevice};
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 use super::audio::{group_devices, DeviceEntry};
 use crate::tui::app::{DrawCtx, ScreenAction};
 use crate::tui::strings as s;
+use crate::tui::theme;
 use crate::tui::widgets::{self, InputOutcome, SelectOutcome, SelectPopup, TextInput};
 
 /// Everything a planned import carries between the plan worker, the re-pick, and
@@ -342,40 +342,49 @@ impl BundleState {
             return;
         }
 
-        let mut lines: Vec<Line> = Vec::new();
-        lines.push(widgets::group_header(s::BUNDLE_IMPORT_HEADER));
+        let cur = FIELDS[self.focus];
+
+        // IMPORT box.
         let path_val = if self.import_path.is_empty() {
             s::B_IMPORT_PATH_HINT.to_string()
         } else {
             self.import_path.clone()
         };
-        lines.push(self.row(BField::ImportPath, s::B_IMPORT_PATH, &path_val, "[input]"));
-        lines.push(self.action_row(BField::Review, s::B_IMPORT_ACTION));
-        lines.push(widgets::blank());
+        let import_lines = vec![
+            self.row(BField::ImportPath, s::B_IMPORT_PATH, &path_val, "[input]"),
+            self.action_row(BField::Review, s::B_IMPORT_ACTION),
+        ];
+        let import_active = matches!(cur, BField::ImportPath | BField::Review);
 
-        lines.push(widgets::group_header(s::BUNDLE_EXPORT_HEADER));
-        lines.push(self.row(BField::ExportDest, s::B_EXPORT_DEST, &self.export_dest, "[input]"));
-        lines.push(self.row(
-            BField::IncludeAuth,
-            s::B_EXPORT_INCLUDE_AUTH,
-            if self.include_auth { "on" } else { "off" },
-            "[toggle]",
-        ));
+        // EXPORT box.
+        let mut export_lines = vec![
+            self.row(BField::ExportDest, s::B_EXPORT_DEST, &self.export_dest, "[input]"),
+            self.row(
+                BField::IncludeAuth,
+                s::B_EXPORT_INCLUDE_AUTH,
+                if self.include_auth { "on" } else { "off" },
+                "[toggle]",
+            ),
+        ];
         if self.include_auth {
             for l in s::B_EXPORT_AUTH_WARNING.lines() {
-                lines.push(widgets::note_line(l));
+                export_lines.push(widgets::warn_line(l));
             }
         }
-        lines.push(self.action_row(BField::Export, s::B_EXPORT_ACTION));
-
+        export_lines.push(self.action_row(BField::Export, s::B_EXPORT_ACTION));
         if self.has_desktop {
-            lines.push(widgets::blank());
+            export_lines.push(widgets::blank());
             for l in s::B_DESKTOP_HINT.lines() {
-                lines.push(widgets::note_line(l));
+                export_lines.push(widgets::note_line(l));
             }
         }
+        let export_active = matches!(cur, BField::ExportDest | BField::IncludeAuth | BField::Export);
 
-        f.render_widget(Paragraph::new(lines), area);
+        let secs = [
+            widgets::Section::new(s::BUNDLE_IMPORT_HEADER, import_active, import_lines),
+            widgets::Section::new(s::BUNDLE_EXPORT_HEADER, export_active, export_lines),
+        ];
+        widgets::sections(f, area, &secs);
 
         match &self.editor {
             Some(Editor::ImportPath(input)) => {
@@ -433,9 +442,16 @@ enum BucketKind {
 }
 
 fn bucket(lines: &mut Vec<Line<'static>>, title: &str, rows: &[PlanLine], kind: BucketKind) {
+    // Bucket headers carry a semantic tint (applies=ok, adapted=warn, skipped=dim);
+    // the count and label stand on their own without it.
+    let head_style = match kind {
+        BucketKind::Applied => theme::ok().add_modifier(Modifier::BOLD),
+        BucketKind::Adapted => theme::warn().add_modifier(Modifier::BOLD),
+        BucketKind::Skipped => theme::dim().add_modifier(Modifier::BOLD),
+    };
     lines.push(Line::from(Span::styled(
         format!("{title} ({})", rows.len()),
-        Style::default().add_modifier(Modifier::BOLD),
+        head_style,
     )));
     for l in rows {
         let text = match kind {

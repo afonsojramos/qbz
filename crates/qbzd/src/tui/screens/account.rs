@@ -11,7 +11,6 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
 use ratatui::text::Line;
-use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 use crate::tui::app::{DrawCtx, ScreenAction};
@@ -164,7 +163,8 @@ impl AccountState {
             lines.push(widgets::action_line(&format!("> {action}"), focused, true));
         }
 
-        f.render_widget(Paragraph::new(lines), area);
+        let secs = [widgets::Section::new(s::ACCOUNT_SECTION, true, lines)];
+        widgets::sections(f, area, &secs);
 
         if let Some(input) = &self.token_input {
             widgets::modal(f, area, s::ACCOUNT_PASTE_TOKEN, &input.display(), s::HELP_INPUT);

@@ -11,6 +11,7 @@
 
 pub mod app;
 pub mod strings;
+pub mod theme;
 pub mod widgets;
 
 mod screens;

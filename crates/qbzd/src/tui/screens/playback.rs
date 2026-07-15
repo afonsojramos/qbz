@@ -13,7 +13,6 @@ use qbz_audio::settings::AudioSettings;
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
 use ratatui::text::Line;
-use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 use crate::tui::app::{DrawCtx, ScreenAction};
@@ -320,16 +319,33 @@ impl PlaybackState {
 
     pub fn draw(&self, f: &mut Frame, area: Rect, _ctx: &DrawCtx) {
         let fields = visible_fields(&self.staged);
-        let mut lines: Vec<Line> = Vec::new();
+        let focused_field = fields.get(self.focus).copied();
+        let active = |members: &[PField]| {
+            focused_field.map(|ff| members.contains(&ff)).unwrap_or(false)
+        };
 
         use PField::*;
-        self.group(&mut lines, &fields, s::PLAYBACK_GROUP_QUALITY, &[Quality, Limit, MaxRate, AllowFallback, RetryFail]);
-        lines.push(widgets::blank());
-        self.group(&mut lines, &fields, s::PLAYBACK_GROUP_BEHAVIOR, &[Continue, Gapless]);
-        lines.push(widgets::blank());
-        self.group(&mut lines, &fields, s::PLAYBACK_GROUP_SESSION, &[Restore, Resume]);
+        let mut secs: Vec<widgets::Section> = Vec::new();
 
-        f.render_widget(Paragraph::new(lines), area);
+        let quality: &[PField] = &[Quality, Limit, MaxRate, AllowFallback, RetryFail];
+        let q_lines = self.group_lines(&fields, quality);
+        if !q_lines.is_empty() {
+            secs.push(widgets::Section::new(s::PLAYBACK_GROUP_QUALITY, active(quality), q_lines));
+        }
+
+        let behavior: &[PField] = &[Continue, Gapless];
+        let b_lines = self.group_lines(&fields, behavior);
+        if !b_lines.is_empty() {
+            secs.push(widgets::Section::new(s::PLAYBACK_GROUP_BEHAVIOR, active(behavior), b_lines));
+        }
+
+        let session: &[PField] = &[Restore, Resume];
+        let sess_lines = self.group_lines(&fields, session);
+        if !sess_lines.is_empty() {
+            secs.push(widgets::Section::new(s::PLAYBACK_GROUP_SESSION, active(session), sess_lines));
+        }
+
+        widgets::sections(f, area, &secs);
 
         match &self.editor {
             Some(Editor::Quality(p)) | Some(Editor::MaxRate(p)) | Some(Editor::Retry(p)) => {
@@ -339,16 +355,15 @@ impl PlaybackState {
         }
     }
 
-    fn group(&self, lines: &mut Vec<Line<'static>>, fields: &[PField], header: &str, group: &[PField]) {
-        if !group.iter().any(|g| fields.contains(g)) {
-            return;
-        }
-        lines.push(widgets::group_header(header));
-        for gf in group {
+    /// The field rows of one group, in declared order (skipping hidden fields).
+    fn group_lines(&self, fields: &[PField], members: &[PField]) -> Vec<Line<'static>> {
+        let mut lines = Vec::new();
+        for gf in members {
             if let Some(pos) = fields.iter().position(|x| x == gf) {
                 lines.push(self.field_line(*gf, pos));
             }
         }
+        lines
     }
 
     fn field_line(&self, field: PField, focus_pos: usize) -> Line<'static> {

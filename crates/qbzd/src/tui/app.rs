@@ -33,12 +33,14 @@ use super::screens::network::{self as network_screen, NetworkState};
 use super::screens::playback::PlaybackState;
 use super::screens::qconnect::QConnectState;
 use super::strings as s;
+use super::theme;
 use super::widgets;
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::text::Line;
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::style::Style;
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, BorderType, Paragraph};
 use ratatui::Frame;
 
 // ============================ shared vocabulary ============================
@@ -805,9 +807,12 @@ impl App {
         let footer_area = rows[1];
         let help_area = rows[2];
 
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title(format!(" {} ", self.screen_title()));
+        // The outer frame stays neutral (dim) so the accent-bordered ACTIVE inner
+        // section is what draws the eye; the accent-bold title carries identity.
+        let block = Block::bordered()
+            .border_type(BorderType::Rounded)
+            .border_style(theme::dim())
+            .title(self.screen_title_line());
         let inner = block.inner(content_area);
         f.render_widget(block, content_area);
 
@@ -850,8 +855,8 @@ impl App {
         }
     }
 
-    fn screen_title(&self) -> String {
-        let (name, dirty) = match &self.active {
+    fn screen_name_dirty(&self) -> (&'static str, bool) {
+        match &self.active {
             Active::Menu => (s::MENU_TITLE, false),
             Active::Account(_) => (s::ACCOUNT_TITLE, false),
             Active::Audio(sc) => (s::AUDIO_TITLE, sc.is_dirty()),
@@ -859,42 +864,59 @@ impl App {
             Active::QConnect(sc) => (s::QCONNECT_TITLE, sc.is_dirty()),
             Active::Network(sc) => (s::NETWORK_TITLE, sc.is_dirty()),
             Active::Bundle(_) => (s::BUNDLE_TITLE, false),
-        };
-        if dirty {
-            format!("{name} *")
-        } else {
-            name.to_string()
         }
     }
 
+    /// The frame title: accent-bold screen name, plus a warn `*` when the screen
+    /// has unsaved edits (the `*` glyph is the meaning; the color reinforces it).
+    fn screen_title_line(&self) -> Line<'static> {
+        let (name, dirty) = self.screen_name_dirty();
+        let mut spans = vec![Span::styled(format!(" {name} "), theme::accent_bold())];
+        if dirty {
+            spans.push(Span::styled("* ", theme::warn()));
+        }
+        Line::from(spans)
+    }
+
     fn draw_menu(&self, f: &mut Frame, area: Rect) {
-        let mut lines: Vec<Line> = Vec::new();
+        let mut lines: Vec<Line> = vec![widgets::blank()];
         for (i, label) in s::MENU_ROWS.iter().enumerate() {
             let focused = i == self.menu_focus;
-            let marker = if focused { "▸" } else { " " };
             let summary = self.menu_summaries.get(i).map(String::as_str).unwrap_or("");
-            let text = format!("{marker} {:<20} {}", label, summary);
-            let style = if focused { widgets::focus_style() } else { Default::default() };
-            lines.push(Line::from(ratatui::text::Span::styled(text, style)));
+            let (marker, marker_style, label_style) = if focused {
+                ("▸ ", theme::accent(), theme::accent_bold())
+            } else {
+                ("  ", Style::default(), Style::default())
+            };
+            lines.push(Line::from(vec![
+                Span::styled(marker, marker_style),
+                Span::styled(format!("{label:<20}"), label_style),
+                Span::styled(format!("  {summary}"), theme::dim()),
+            ]));
         }
         f.render_widget(Paragraph::new(lines), area);
     }
 
+    /// The daemon-state footer, color-coded: running (ok/green), running but not
+    /// signed in (warn/yellow), unreachable (dim). Never color alone — every state
+    /// spells itself out.
     fn draw_footer(&self, f: &mut Frame, area: Rect) {
-        let text = if self.reachable {
-            let extra = self.status.as_ref().and_then(playing_extra);
-            match extra {
-                Some(e) => format!(" daemon: running · {e}"),
-                None => " daemon: running".to_string(),
-            }
+        let (text, style) = if !self.reachable {
+            (format!(" {}", s::FOOTER_UNREACHABLE), theme::dim())
+        } else if !self.auth.logged_in {
+            (
+                format!(" {} · {}", s::FOOTER_RUNNING, s::FOOTER_NEEDS_AUTH),
+                theme::warn(),
+            )
         } else {
-            format!(" {}", s::FOOTER_UNREACHABLE)
+            let text = match self.status.as_ref().and_then(playing_extra) {
+                Some(e) => format!(" {} · {e}", s::FOOTER_RUNNING),
+                None => format!(" {}", s::FOOTER_RUNNING),
+            };
+            (text, theme::ok())
         };
         f.render_widget(
-            Paragraph::new(Line::from(ratatui::text::Span::styled(
-                text,
-                widgets::dim_style(),
-            ))),
+            Paragraph::new(Line::from(Span::styled(text, style))),
             area,
         );
     }

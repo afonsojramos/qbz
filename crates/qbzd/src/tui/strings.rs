@@ -70,6 +70,8 @@ pub const DIRTY_HINT: &str = "s save · d discard · Esc stay";
 // ============================ footer (daemon state) ============================
 
 pub const FOOTER_UNREACHABLE: &str = "daemon: not reachable";
+pub const FOOTER_RUNNING: &str = "daemon: running";
+pub const FOOTER_NEEDS_AUTH: &str = "not signed in";
 /// Appended to a save result when the daemon is down (03 §2.3, error-voice).
 pub const APPLIES_ON_START: &str =
     "changes apply when the daemon starts — systemctl --user status qbzd";
@@ -77,6 +79,8 @@ pub const APPLIES_ON_START: &str =
 // ============================ Account (§3.1) ============================
 
 pub const ACCOUNT_TITLE: &str = "Account";
+/// In-screen section box title (distinct from the screen title in the frame).
+pub const ACCOUNT_SECTION: &str = "SIGN-IN";
 pub const ACCOUNT_STATUS: &str = "Status";
 pub const ACCOUNT_NOT_LOGGED_IN: &str = "not logged in";
 /// Offline + daemon-down: a credential file exists but was never validated —
@@ -194,6 +198,8 @@ pub const RATE_NO_LIMIT: &str = "No limit";
 // ============================ QConnect (§3.4) ============================
 
 pub const QCONNECT_TITLE: &str = "Qobuz Connect";
+/// In-screen section box title.
+pub const QCONNECT_SECTION: &str = "CONNECTION";
 pub const QC_ENABLE: &str = "Enable";
 pub const QC_DEVICE_NAME: &str = "Device name";
 pub const QC_VOLUME_MODE: &str = "Volume mode";
@@ -208,6 +214,8 @@ pub fn qc_preview(name: &str) -> String {
 // ============================ Network (§3.5) ============================
 
 pub const NETWORK_TITLE: &str = "Network";
+/// In-screen section box title.
+pub const NETWORK_SECTION: &str = "HTTP SERVER";
 pub const N_BIND: &str = "Bind address";
 pub const N_PORT: &str = "Port";
 pub const N_TOKEN: &str = "Access token";
