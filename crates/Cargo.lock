@@ -5536,6 +5536,7 @@ dependencies = [
  "md-5",
  "qbz-audio",
  "qbz-core",
+ "qbz-credentials",
  "qbz-models",
  "qbz-player",
  "qbz-qobuz",

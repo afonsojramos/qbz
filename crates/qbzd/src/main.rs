@@ -247,10 +247,20 @@ async fn main() {
             match cmd {
                 SettingsCmd::Show { json } => cli::settings::show(json, &roots),
                 SettingsCmd::Set { key, value } => cli::settings::set(&roots, &key, &value),
-                // Export/import land in T12 (04-settings-portability.md).
-                SettingsCmd::Export { .. } | SettingsCmd::Import { .. } => {
-                    eprintln!("not implemented yet — lands in T12 (04-settings-portability.md)");
-                    1
+                SettingsCmd::Export {
+                    file,
+                    from,
+                    include_auth,
+                } => cli::settings::export(&roots, file, &from, include_auth),
+                SettingsCmd::Import {
+                    file,
+                    include_auth,
+                    trust_dsd,
+                    remap,
+                    dry_run,
+                } => {
+                    cli::settings::import(&roots, &file, include_auth, trust_dsd, &remap, dry_run)
+                        .await
                 }
             }
         }

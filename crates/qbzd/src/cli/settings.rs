@@ -23,12 +23,17 @@
 // convenience no shipped P0/P1 script needs (the CLI is the machine
 // interface here, not `/api/settings/reload`'s response body).
 
+use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
+use qbz_app::settings::bundle::{
+    self, Bundle, DeviceChoice, ExportOptions, ExportSource, ImportOptions, ImportPlan, LiveSystem,
+    ProfilePaths,
+};
 use qbz_app::settings::daemon_prefs;
 use qbz_app::settings::playback::{AutoplayMode, PlaybackPreferencesStore};
 use qbz_audio::settings::AudioSettingsStore;
-use qbz_audio::{AlsaPlugin, AudioBackendType};
+use qbz_audio::{AlsaPlugin, AudioBackendType, BackendManager};
 
 use crate::paths::ProfileRoots;
 use crate::qconnect::transport as qconnect_kv;
@@ -609,6 +614,340 @@ fn present_keys(path: &Path) -> std::collections::HashSet<String> {
         }
     }
     out
+}
+
+// ============================ settings export / import (T12) ============================
+
+/// `qbzd settings export [FILE] [--from daemon|desktop] [--include-auth]` (⬇,
+/// 04-settings-portability.md §4.1). Reads the daemon (default) or the desktop's
+/// GLOBAL stores, writes ONE versioned JSON bundle at 0600. Exit: 0 · 1 · 2.
+pub fn export(roots: &ProfileRoots, file: Option<String>, from: &str, include_auth: bool) -> i32 {
+    let source = match from {
+        "daemon" => ExportSource::Daemon(ProfilePaths {
+            config_root: roots.config.clone(),
+            data_root: roots.data.clone(),
+        }),
+        "desktop" => ExportSource::Desktop,
+        other => {
+            eprintln!("error: invalid --from '{other}' — expected 'daemon' or 'desktop'");
+            return 2;
+        }
+    };
+
+    let bundle = match bundle::export(source, &ExportOptions { include_auth }) {
+        Ok(b) => b,
+        Err(bundle::BundleError::NoDesktopProfile) => {
+            eprintln!("{}", crate::cli::copy::bundle_no_desktop_profile());
+            return 1;
+        }
+        Err(bundle::BundleError::TokenDecryptFailed) => {
+            eprintln!("{}", crate::cli::copy::bundle_token_decrypt_failed());
+            return 1;
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            return 1;
+        }
+    };
+
+    let path = file.unwrap_or_else(bundle::default_filename);
+    if let Err(e) = bundle::write_bundle_file(&PathBuf::from(&path), &bundle) {
+        eprintln!("error: {e}");
+        return 1;
+    }
+
+    // The §3 warning prints only when secrets actually made it into the bundle
+    // (--include-auth with a decryptable token present).
+    if bundle.domains.contains_key("auth") {
+        println!("{}", crate::cli::copy::bundle_secret_warning(&path));
+    } else {
+        println!("{}", crate::cli::copy::bundle_export_success(&path));
+    }
+    0
+}
+
+/// `qbzd settings import FILE [--include-auth] [--trust-dsd] [--remap OLD=NEW]...
+/// [--dry-run]` (⬇, 04 §5.3). read → version-gate → plan → (TTY device re-pick /
+/// non-tty safe defaults) → validate secrets BEFORE any write → apply →
+/// reload-nudge → three-bucket summary. Exit: 0 · 1 · 2 · 4.
+pub async fn import(
+    roots: &ProfileRoots,
+    file: &str,
+    include_auth: bool,
+    trust_dsd: bool,
+    remap_raw: &[String],
+    dry_run: bool,
+) -> i32 {
+    // Step 1: read + parse.
+    let text = match std::fs::read_to_string(file) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("error: cannot read bundle: {e}");
+            return 1;
+        }
+    };
+    let bundle = match Bundle::parse(&text) {
+        Ok(b) => b,
+        Err(bundle::BundleError::VersionMalformed) => {
+            eprintln!("error: cannot read bundle: missing or non-integer schema_version");
+            return 1;
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            return 1;
+        }
+    };
+
+    // --remap OLD=NEW (parsed + validated even though the P0 daemon skips
+    // library_folders, so scripts written for P1 do not break — 04 §5.2).
+    let mut remap = Vec::new();
+    for r in remap_raw {
+        match r.split_once('=') {
+            Some((old, new)) => remap.push((old.to_string(), new.to_string())),
+            None => {
+                eprintln!("error: invalid --remap '{r}' — expected OLD=NEW");
+                return 2;
+            }
+        }
+    }
+
+    let target = ProfilePaths {
+        config_root: roots.config.clone(),
+        data_root: roots.data.clone(),
+    };
+    let non_tty = !std::io::stdin().is_terminal();
+    let opts = ImportOptions {
+        include_auth,
+        trust_dsd,
+        remap,
+        non_tty,
+    };
+    let live = build_live_system(&bundle);
+
+    // Steps 2–4: plan.
+    let mut plan = match bundle::plan(&bundle, &target, &opts, &live) {
+        Ok(p) => p,
+        Err(bundle::BundleError::VersionTooNew { bundle: b, supported }) => {
+            eprintln!("{}", crate::cli::copy::bundle_version_too_new(b, supported));
+            return 1;
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            return 1;
+        }
+    };
+
+    print_summary_header(&bundle);
+
+    // Step 4: interactive device re-pick (TTY only; non-tty already fell back).
+    if let Some(pick) = plan.device_pick.clone() {
+        if !non_tty && !dry_run {
+            let choice = prompt_device(&pick);
+            plan = match bundle::replan_with_device(&bundle, &target, &opts, &live, choice) {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    return 1;
+                }
+            };
+        }
+    }
+
+    // Step 5: validate secrets BEFORE any write (rejected → exit 4, nothing done).
+    let mut validated_uid: Option<u64> = None;
+    let mut auth_note: Option<String> = None;
+    if let Some(token) = plan.auth_token.clone() {
+        match crate::login::validate_token(&token).await {
+            Ok(session) => {
+                validated_uid = Some(session.user_id);
+                let mut note =
+                    format!("Qobuz token validated — logged in as user {}", session.user_id);
+                if let Some(bid) = plan.bundle_user_id {
+                    if bid != session.user_id {
+                        note.push_str(&format!(
+                            "\n  note: bundle user_id {bid} differs from the validated login {}",
+                            session.user_id
+                        ));
+                    }
+                }
+                auth_note = Some(note);
+            }
+            Err(_) => {
+                eprintln!("{}", crate::cli::copy::bundle_token_rejected());
+                return 4;
+            }
+        }
+    }
+
+    // Dry-run stops after step 5 (04 §5.1): same summary, writes nothing.
+    if dry_run {
+        print_buckets(&plan, &bundle, auth_note.as_deref(), None);
+        println!("\ndry-run: no changes written");
+        return 0;
+    }
+
+    // Step 6: apply (validate-all-then-apply; re-run is idempotent).
+    if let Err(e) = bundle::apply(&plan, &target, validated_uid) {
+        print_buckets(&plan, &bundle, auth_note.as_deref(), None);
+        eprintln!(
+            "\nerror: settings only partially applied: {e}\n  → fix the disk/permissions, then re-run (import is idempotent)"
+        );
+        return 1;
+    }
+
+    // Step 7: reload-nudge a running daemon.
+    let reloaded = nudge(roots);
+    let reload_line = if reloaded {
+        "daemon reloaded (was running)"
+    } else {
+        "daemon not running (changes apply on next start)"
+    };
+
+    print_buckets(&plan, &bundle, auth_note.as_deref(), Some(reload_line));
+    0
+}
+
+/// Enumerate the local audio system for [`bundle::plan`]: the available backends
+/// + the devices of the bundle's intended backend (the picker's candidate list).
+fn build_live_system(bundle: &Bundle) -> LiveSystem {
+    let backends: Vec<String> = BackendManager::available_backends()
+        .into_iter()
+        .filter_map(|b| serde_json::to_value(b).ok().and_then(|v| v.as_str().map(str::to_string)))
+        .collect();
+
+    let wanted: Option<AudioBackendType> = bundle
+        .domains
+        .get("audio")
+        .and_then(|a| a.get("backend_type"))
+        .and_then(|v| serde_json::from_value(v.clone()).ok());
+    let backend = wanted.unwrap_or(AudioBackendType::SystemDefault);
+    let devices = BackendManager::create_backend(backend)
+        .and_then(|b| b.enumerate_devices())
+        .map(|list| list.into_iter().map(|d| (d.id, d.name)).collect())
+        .unwrap_or_default();
+
+    LiveSystem { backends, devices }
+}
+
+/// Interactive device picker (04 §5.4). Numbered device list; the last entry is
+/// always "system default"; an unparseable answer falls to system default.
+fn prompt_device(pick: &bundle::DevicePick) -> DeviceChoice {
+    println!(
+        "audio device \"{}\" not found on this machine. Available:",
+        pick.wanted
+    );
+    for (i, (id, label)) in pick.options.iter().enumerate() {
+        println!("  [{}] {}  {}", i + 1, id, label);
+    }
+    let sys_idx = pick.options.len() + 1;
+    println!("  [{sys_idx}] system default");
+    print!("pick a device [1-{sys_idx}]: ");
+    let _ = std::io::stdout().flush();
+    let mut line = String::new();
+    let _ = std::io::stdin().read_line(&mut line);
+    match line.trim().parse::<usize>() {
+        Ok(n) if n >= 1 && n <= pick.options.len() => {
+            let (id, label) = pick.options[n - 1].clone();
+            println!();
+            DeviceChoice::Device { id, label }
+        }
+        _ => {
+            println!();
+            DeviceChoice::SystemDefault
+        }
+    }
+}
+
+fn print_summary_header(bundle: &Bundle) {
+    let date = bundle
+        .created_at
+        .split('T')
+        .next()
+        .unwrap_or(&bundle.created_at);
+    println!(
+        "bundle: schema v{} — exported {} from \"{}\" (qbz {}, {} profile)",
+        bundle.schema_version,
+        date,
+        bundle.source.hostname,
+        bundle.source.app_version,
+        bundle.source.profile
+    );
+    println!();
+}
+
+/// The three-bucket summary EXACTLY in the 04 §5.4 format: applied (`= value`),
+/// adapted (`old -> new (why)`), skipped (`+why`), the desktop shared-name
+/// advisory, the auth footer, and the `done:` line.
+fn print_buckets(
+    plan: &ImportPlan,
+    bundle: &Bundle,
+    auth_note: Option<&str>,
+    reload_line: Option<&str>,
+) {
+    let width = plan
+        .applied
+        .iter()
+        .chain(&plan.adapted)
+        .chain(&plan.skipped)
+        .map(|l| l.key.len())
+        .max()
+        .unwrap_or(0)
+        .min(44);
+
+    println!("applied ({})", plan.applied.len());
+    for l in &plan.applied {
+        let note = if l.why.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", l.why)
+        };
+        println!("  {:width$} = {}{}", l.key, l.new, note);
+    }
+
+    println!("\nadapted ({})", plan.adapted.len());
+    for l in &plan.adapted {
+        println!(
+            "  {:width$} {} -> {} ({})",
+            l.key,
+            l.old.as_deref().unwrap_or(""),
+            l.new,
+            l.why
+        );
+    }
+
+    println!("\nskipped ({})", plan.skipped.len());
+    for l in &plan.skipped {
+        println!("  {:width$} {}", l.key, l.why);
+    }
+
+    // Shared-device-name advisory: only for a desktop-sourced bundle (§2.4/§5.4).
+    if bundle.source.profile == "desktop" {
+        if let Some(dn) = plan.applied.iter().find(|l| l.key == "qconnect.device_name") {
+            println!("\nadvisory");
+            println!(
+                "  qconnect.device_name \"{}\" is also the exporting desktop's Connect name — two nodes with",
+                dn.new
+            );
+            println!(
+                "  one name are hard to tell apart in the Qobuz app; rename with: qbzd qconnect name <name>"
+            );
+        }
+    }
+
+    if let Some(note) = auth_note {
+        println!("\nauth");
+        println!("  {note}");
+    }
+
+    if let Some(reload) = reload_line {
+        println!(
+            "\ndone: {} applied, {} adapted, {} skipped — {}",
+            plan.applied.len(),
+            plan.adapted.len(),
+            plan.skipped.len(),
+            reload
+        );
+    }
 }
 
 #[cfg(test)]
