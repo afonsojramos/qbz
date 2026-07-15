@@ -879,7 +879,7 @@ impl App {
     }
 
     fn draw_menu(&self, f: &mut Frame, area: Rect) {
-        let mut lines: Vec<Line> = vec![widgets::blank()];
+        let mut lines: Vec<Line> = Vec::new();
         for (i, label) in s::MENU_ROWS.iter().enumerate() {
             let focused = i == self.menu_focus;
             let summary = self.menu_summaries.get(i).map(String::as_str).unwrap_or("");
@@ -897,24 +897,11 @@ impl App {
         f.render_widget(Paragraph::new(lines), area);
     }
 
-    /// The daemon-state footer, color-coded: running (ok/green), running but not
-    /// signed in (warn/yellow), unreachable (dim). Never color alone — every state
-    /// spells itself out.
+    /// The daemon-state footer, color-coded via `footer_state`. Never color
+    /// alone — every state spells itself out.
     fn draw_footer(&self, f: &mut Frame, area: Rect) {
-        let (text, style) = if !self.reachable {
-            (format!(" {}", s::FOOTER_UNREACHABLE), theme::dim())
-        } else if !self.auth.logged_in {
-            (
-                format!(" {} · {}", s::FOOTER_RUNNING, s::FOOTER_NEEDS_AUTH),
-                theme::warn(),
-            )
-        } else {
-            let text = match self.status.as_ref().and_then(playing_extra) {
-                Some(e) => format!(" {} · {e}", s::FOOTER_RUNNING),
-                None => format!(" {}", s::FOOTER_RUNNING),
-            };
-            (text, theme::ok())
-        };
+        let playing = self.status.as_ref().and_then(playing_extra);
+        let (text, style) = footer_state(self.reachable, self.auth.logged_in, playing);
         f.render_widget(
             Paragraph::new(Line::from(Span::styled(text, style))),
             area,
@@ -1181,6 +1168,34 @@ fn build_live(bundle: &Bundle) -> (LiveSystem, AudioBackendType, Vec<AudioDevice
     )
 }
 
+/// Pure footer mapping (tested below). Three states, each spelled out in text —
+/// the tone only reinforces it:
+/// - unreachable → dim `daemon: not reachable`;
+/// - reachable but not signed in → warn `daemon: running · not signed in`
+///   (a deliberate FB2 addition over the base footer: an operator-visible
+///   needs-auth cue, owner veto at the smoke);
+/// - running + signed in → ok, with the optional `playing …` tail.
+fn footer_state(
+    reachable: bool,
+    logged_in: bool,
+    playing: Option<String>,
+) -> (String, ratatui::style::Style) {
+    if !reachable {
+        (format!(" {}", s::FOOTER_UNREACHABLE), theme::dim())
+    } else if !logged_in {
+        (
+            format!(" {} · {}", s::FOOTER_RUNNING, s::FOOTER_NEEDS_AUTH),
+            theme::warn(),
+        )
+    } else {
+        let text = match playing {
+            Some(e) => format!(" {} · {e}", s::FOOTER_RUNNING),
+            None => format!(" {}", s::FOOTER_RUNNING),
+        };
+        (text, theme::ok())
+    }
+}
+
 /// A "playing 192000 Hz / 24 bit" tail from a status body (§4.3), if playing.
 fn playing_extra(status: &Value) -> Option<String> {
     let state = status.pointer("/playback/state").and_then(Value::as_str).unwrap_or("");
@@ -1231,5 +1246,28 @@ mod tests {
     fn test_initial_screen_cred_file_and_logged_in() {
         // Credential file present and logged in (daemon up) → land on Menu
         assert_eq!(initial_screen(true, true), None);
+    }
+
+    #[test]
+    fn footer_state_maps_the_three_daemon_states() {
+        // Unreachable → dim, regardless of auth.
+        let (text, style) = footer_state(false, true, None);
+        assert_eq!(text, format!(" {}", s::FOOTER_UNREACHABLE));
+        assert_eq!(style, theme::dim());
+
+        // Reachable but not signed in → warn, names the missing auth.
+        let (text, style) = footer_state(true, false, None);
+        assert_eq!(text, format!(" {} · {}", s::FOOTER_RUNNING, s::FOOTER_NEEDS_AUTH));
+        assert_eq!(style, theme::warn());
+
+        // Running + signed in → ok, with and without the playing tail.
+        let (text, style) = footer_state(true, true, None);
+        assert_eq!(text, format!(" {}", s::FOOTER_RUNNING));
+        assert_eq!(style, theme::ok());
+        let (text, _) = footer_state(true, true, Some("playing 96000 Hz / 24 bit".into()));
+        assert_eq!(
+            text,
+            format!(" {} · playing 96000 Hz / 24 bit", s::FOOTER_RUNNING)
+        );
     }
 }

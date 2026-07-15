@@ -7,7 +7,7 @@
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Clear, Paragraph, Wrap};
 use ratatui::Frame;
@@ -54,7 +54,7 @@ pub fn field_line(
     if focused {
         let mut sel = focus_style();
         if !enabled {
-            sel = sel.add_modifier(Modifier::DIM);
+            sel = sel.patch(theme::dim());
         }
         return Line::from(vec![
             Span::styled(label_txt, sel),
@@ -182,9 +182,20 @@ fn truncate(s: &str, max: usize) -> String {
 
 // ============================ help bar ============================
 
+/// True only for tokens that are real key glyphs in the hint vocabulary: a
+/// single character (`s`, `r`, `/`, `?`, `q`, `y`, `d`, `p`, …) or a named key.
+/// Instructional words ("type") are NOT keys — their segment stays dim.
+fn is_key_glyph(token: &str) -> bool {
+    token.chars().count() == 1
+        || matches!(
+            token,
+            "Esc" | "Enter" | "Tab" | "Shift-Tab" | "up/down" | "left/right" | "up" | "down"
+        )
+}
+
 /// Split a `key desc · key desc` hint into accent-key / dim-description spans.
-/// Segments are separated by ` · `; within a segment the first token is the key
-/// glyph (accent) and the remainder is its description (dim).
+/// Segments are separated by ` · `; a segment's leading token is accent-tinted
+/// only when it is a real key glyph — otherwise the whole segment is dim.
 pub fn help_spans(text: &str) -> Vec<Span<'static>> {
     let mut spans: Vec<Span<'static>> = Vec::new();
     for (i, seg) in text.split(" · ").enumerate() {
@@ -192,11 +203,14 @@ pub fn help_spans(text: &str) -> Vec<Span<'static>> {
             spans.push(Span::styled(" · ", theme::dim()));
         }
         match seg.split_once(' ') {
-            Some((key, rest)) => {
+            Some((key, rest)) if is_key_glyph(key) => {
                 spans.push(Span::styled(key.to_string(), theme::accent()));
                 spans.push(Span::styled(format!(" {rest}"), theme::dim()));
             }
-            None => spans.push(Span::styled(seg.to_string(), theme::accent())),
+            None if is_key_glyph(seg) => {
+                spans.push(Span::styled(seg.to_string(), theme::accent()));
+            }
+            _ => spans.push(Span::styled(seg.to_string(), theme::dim())),
         }
     }
     spans
@@ -275,8 +289,10 @@ pub fn spinner_frame(tick: u64) -> char {
 /// Busy overlay: a small centered spinner + label (§5.5). The spinner glyph is
 /// accent; the label plain.
 pub fn busy_overlay(f: &mut Frame, area: Rect, label: &str, tick: u64) {
+    // Layout parity with the pre-theme overlay: body = "<spinner> <label>"
+    // (label + 2 chars) + 6 → total rect width = label + 8.
     let width = label.chars().count() as u16 + 8;
-    let rect = centered_rect(width + 4, 5, area);
+    let rect = centered_rect(width, 5, area);
     f.render_widget(Clear, rect);
     let block = Block::bordered()
         .border_type(BorderType::Rounded)

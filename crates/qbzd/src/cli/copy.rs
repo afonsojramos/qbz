@@ -20,7 +20,7 @@ pub fn login_timeout(port: u16) -> String {
     )
 }
 
-/// FB1 (owner feedback, post-smoke): printed once, before the URL, when
+/// FB1 (owner feedback, post-smoke): printed once, after the URL, when
 /// `SSH_CONNECTION` auto-detected the LAN callback host. The common real case
 /// is configuring the daemon headless over SSH from another machine on the
 /// LAN, so the operator should know the link isn't loopback-only.
