@@ -176,8 +176,46 @@ jobs:
           path: qbz-unstripped
           retention-days: 90
 
+  # T15: qbzd is minutes-class (no qbz_ui compilation unit), so none of the
+  # desktop build's swap/tier ceremony applies. Runs on ubuntu-22.04 (not
+  # 24.04 like the desktop `build` job above) so the shipped binary's glibc
+  # floor stays <= Pi OS bookworm's 2.36 (D13, the honest-Pi-story gate) —
+  # the objdump step below verifies that empirically rather than trusting
+  # the runner's advertised glibc version.
+  build-qbzd:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: system deps
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libdbus-1-dev libssl-dev
+      - name: slint-free dep-graph gate
+        run: |
+          set -euo pipefail
+          hits=$(cargo tree --manifest-path crates/Cargo.toml -p qbzd -e normal \
+                 | grep -E '\b(slint|qbz-ui|qbz-slint-common|qbz-dac-wizard) v' || true)
+          [ -z "$hits" ] || { echo "::error::qbzd graph resolves Slint:"; echo "$hits"; exit 1; }
+      - name: build
+        run: cargo build --release --manifest-path crates/Cargo.toml -p qbzd
+      - name: glibc floor gate (objdump — the empirical-verification rule)
+        run: |
+          set -euo pipefail
+          floor=$(objdump -T crates/target/release/qbzd \
+                  | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | sort -Vu | tail -1)
+          echo "glibc floor: $floor"
+          highest=$(printf '%s\n' "$floor" "GLIBC_2.35" | sort -V | tail -1)
+          [ "$highest" = "GLIBC_2.35" ] || { echo "::error::floor $floor exceeds 2.35"; exit 1; }
+      # NOTE: the T15 brief's literal YAML names this artifact
+      # `qbzd-linux-amd64`, but T14 (39eb12fc, already merged into this
+      # branch) wired the package job's Download-qbzd step below to expect
+      # `qbzd-linux-x86_64` — matching what already landed wins over the
+      # brief text (see task-15-report.md for the full note).
+      - uses: actions/upload-artifact@v4
+        with: { name: qbzd-linux-x86_64, path: crates/target/release/qbzd }
+
   package:
-    needs: build
+    needs: [build, build-qbzd]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -192,12 +230,12 @@ jobs:
         with:
           name: qbz-linux-x86_64
 
-      # T14: the slint-free qbzd binary, produced by T15's build job
-      # (extends the `build` job above to also compile `-p qbzd` and
-      # upload it under this artifact name). Consumed for deb/rpm (nfpm)
-      # and the main AUR/Gentoo tarball below. T15's own ubuntu-22.04
-      # lower-glibc-floor build feeds the separate standalone qbzd
-      # tarball only — not this artifact.
+      # T14: the slint-free qbzd binary, produced by T15's build-qbzd job
+      # (a separate ubuntu-22.04 job, not an extension of `build` above —
+      # see that job for the glibc-floor rationale). This ONE artifact is
+      # consumed for deb/rpm (nfpm), the main AUR/Gentoo tarball below, AND
+      # the standalone qbzd tarball (T15 Step 2b) further down — all three
+      # ship the same 2.35-glibc-floor binary.
       - name: Download qbzd binary
         uses: actions/download-artifact@v4
         with:
@@ -290,6 +328,26 @@ jobs:
           ./qbzd completions zsh  > "tarball-staging/${TARBALL_DIR}/completions/qbzd.zsh"
           ./qbzd completions fish > "tarball-staging/${TARBALL_DIR}/completions/qbzd.fish"
           tar -czvf "dist/qbz_${VERSION}_amd64.tar.gz" -C tarball-staging "${TARBALL_DIR}"
+          ls -la dist
+
+      # T15 Step 2b (OD3, G0): the standalone qbzd tarball — the independent
+      # daemon download the owner asked for, separate from the main qbz
+      # tarball above. Never touches snap/Flathub/AppImage/dmg (owner
+      # constraint) — this only adds one more file into dist/, which the
+      # existing Upload-artifacts and Publish-Release-Assets steps below
+      # already pick up unmodified via their dist/* globs.
+      - name: qbzd-tarball
+        run: |
+          QBZD_DIR="qbzd-${VERSION}-linux-amd64"
+          mkdir -p "qbzd-tarball-staging/${QBZD_DIR}/completions"
+          cp qbzd "qbzd-tarball-staging/${QBZD_DIR}/qbzd"
+          chmod +x "qbzd-tarball-staging/${QBZD_DIR}/qbzd"
+          cp crates/qbzd/service/qbzd.service "qbzd-tarball-staging/${QBZD_DIR}/qbzd.service"
+          ./qbzd completions bash > "qbzd-tarball-staging/${QBZD_DIR}/completions/qbzd.bash"
+          ./qbzd completions zsh  > "qbzd-tarball-staging/${QBZD_DIR}/completions/qbzd.zsh"
+          ./qbzd completions fish > "qbzd-tarball-staging/${QBZD_DIR}/completions/qbzd.fish"
+          cp packaging/linux/qbzd-standalone-README.md "qbzd-tarball-staging/${QBZD_DIR}/README.md"
+          tar -czvf "dist/qbzd-${VERSION}-linux-amd64.tar.gz" -C qbzd-tarball-staging "${QBZD_DIR}"
           ls -la dist
 
       - name: Upload artifacts

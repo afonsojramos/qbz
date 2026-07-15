@@ -141,8 +141,49 @@ jobs:
           path: qbz-unstripped
           retention-days: 90
 
+  # T15: aarch64 mirror of release-linux.yml's build-qbzd job — see that
+  # file's header comment for the glibc-floor rationale. Uses the native
+  # ubuntu-22.04-arm runner label rather than cross-compiling.
+  #
+  # Fallback note (NOT implemented — flagged for pre-flight per the T15
+  # brief): if ubuntu-22.04-arm is ever unavailable to this repo, cross-build
+  # instead via the existing Cross.toml pattern (crates/Cross.toml,
+  # scripts/build-aarch64-linux.sh's CROSS mode) targeting a 2.35-floor
+  # image; the objdump gate below stays the acceptance test either way.
+  build-qbzd:
+    runs-on: ubuntu-22.04-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: system deps
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libdbus-1-dev libssl-dev
+      - name: slint-free dep-graph gate
+        run: |
+          set -euo pipefail
+          hits=$(cargo tree --manifest-path crates/Cargo.toml -p qbzd -e normal \
+                 | grep -E '\b(slint|qbz-ui|qbz-slint-common|qbz-dac-wizard) v' || true)
+          [ -z "$hits" ] || { echo "::error::qbzd graph resolves Slint:"; echo "$hits"; exit 1; }
+      - name: build
+        run: cargo build --release --manifest-path crates/Cargo.toml -p qbzd
+      - name: glibc floor gate (objdump — the empirical-verification rule)
+        run: |
+          set -euo pipefail
+          floor=$(objdump -T crates/target/release/qbzd \
+                  | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | sort -Vu | tail -1)
+          echo "glibc floor: $floor"
+          highest=$(printf '%s\n' "$floor" "GLIBC_2.35" | sort -V | tail -1)
+          [ "$highest" = "GLIBC_2.35" ] || { echo "::error::floor $floor exceeds 2.35"; exit 1; }
+      # NOTE: the T15 brief's literal YAML names this artifact
+      # `qbzd-linux-arm64`, but T14 (39eb12fc, already merged into this
+      # branch) wired the package job's Download-qbzd step below to expect
+      # `qbzd-linux-aarch64` — matching what already landed wins over the
+      # brief text (see task-15-report.md for the full note).
+      - uses: actions/upload-artifact@v4
+        with: { name: qbzd-linux-aarch64, path: crates/target/release/qbzd }
+
   package:
-    needs: build
+    needs: [build, build-qbzd]
     runs-on: ubuntu-24.04-arm
     permissions:
       contents: write
@@ -157,8 +198,9 @@ jobs:
         with:
           name: qbz-linux-aarch64
 
-      # T14: the slint-free qbzd binary, produced by T15's build job — see
-      # release-linux.yml's matching step for the rationale.
+      # T14: the slint-free qbzd binary, produced by T15's build-qbzd job — see
+      # release-linux.yml's matching step for the full rationale (one
+      # artifact feeds nfpm, the main tarball, and the standalone tarball).
       - name: Download qbzd binary
         uses: actions/download-artifact@v4
         with:
@@ -238,6 +280,22 @@ jobs:
           ./qbzd completions zsh  > "tarball-staging/${TARBALL_DIR}/completions/qbzd.zsh"
           ./qbzd completions fish > "tarball-staging/${TARBALL_DIR}/completions/qbzd.fish"
           tar -czvf "dist/qbz_${VERSION}_aarch64.tar.gz" -C tarball-staging "${TARBALL_DIR}"
+          ls -la dist
+
+      # T15 Step 2b (OD3, G0) — see release-linux.yml's matching step for
+      # the rationale. Never touches snap/Flathub/AppImage/dmg.
+      - name: qbzd-tarball
+        run: |
+          QBZD_DIR="qbzd-${VERSION}-linux-aarch64"
+          mkdir -p "qbzd-tarball-staging/${QBZD_DIR}/completions"
+          cp qbzd "qbzd-tarball-staging/${QBZD_DIR}/qbzd"
+          chmod +x "qbzd-tarball-staging/${QBZD_DIR}/qbzd"
+          cp crates/qbzd/service/qbzd.service "qbzd-tarball-staging/${QBZD_DIR}/qbzd.service"
+          ./qbzd completions bash > "qbzd-tarball-staging/${QBZD_DIR}/completions/qbzd.bash"
+          ./qbzd completions zsh  > "qbzd-tarball-staging/${QBZD_DIR}/completions/qbzd.zsh"
+          ./qbzd completions fish > "qbzd-tarball-staging/${QBZD_DIR}/completions/qbzd.fish"
+          cp packaging/linux/qbzd-standalone-README.md "qbzd-tarball-staging/${QBZD_DIR}/README.md"
+          tar -czvf "dist/qbzd-${VERSION}-linux-aarch64.tar.gz" -C qbzd-tarball-staging "${QBZD_DIR}"
           ls -la dist
 
       - name: Upload artifacts
