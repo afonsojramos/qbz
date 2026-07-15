@@ -338,8 +338,10 @@ fn read_all(roots: &ProfileRoots) -> Result<Vec<(&'static str, String)>, String>
 }
 
 /// Validate + write ONE canonical key. Returns its [`ApplyClass`] on success
-/// (the CLI's own success-line hint — see module doc).
-fn write_one(roots: &ProfileRoots, key: &str, raw: &str) -> Result<ApplyClass, String> {
+/// (the CLI's own success-line hint — see module doc). `pub(crate)` so the T13
+/// setup TUI persists every screen through this SAME validated writer (03 §6 —
+/// the TUI adds no persistence of its own).
+pub(crate) fn write_one(roots: &ProfileRoots, key: &str, raw: &str) -> Result<ApplyClass, String> {
     let Some(class) = classify(key) else {
         return Err(unknown_key_error(key));
     };

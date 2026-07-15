@@ -1,0 +1,279 @@
+// crates/qbzd/src/tui/strings.rs — EVERY user-facing string in the setup TUI.
+//
+// English-only v1 (03-setup-tui.md §1.2). Centralized here so a later gettext
+// pass (qbz-i18n is Slint-free) is a P2 batch job, not a rewrite. Nothing under
+// tui/ prints a bare literal — it comes from here.
+
+// ============================ entry / guards ============================
+
+/// Non-tty rejection (03 §2.4, VERBATIM). Printed to stderr, exit 2.
+pub const NON_TTY_ERROR: &str = "error: 'qbzd setup' needs an interactive terminal
+  → import a settings bundle:   qbzd settings import <file.qbzb>
+  → set one value:              qbzd settings set <key> <value>
+  → log in without the TUI:     qbzd login   (or: qbzd login --token <token>)";
+
+/// Terminal-too-small line (03 §5.4). `w`/`h` are the current dimensions.
+pub fn too_small(w: u16, h: u16) -> String {
+    format!("terminal too small — 80x24 minimum (current: {w}x{h})")
+}
+
+// ============================ shell / navigation ============================
+
+pub const MENU_TITLE: &str = "QBZ Daemon Setup";
+pub const HELP_TITLE: &str = "Help";
+
+/// Menu row labels (fixed order — the D7 six-screen hard cap).
+pub const MENU_ROWS: [&str; 6] = [
+    "1. Account",
+    "2. Audio",
+    "3. Playback",
+    "4. Qobuz Connect",
+    "5. Network",
+    "6. Import / Export",
+];
+
+// Global help-bar hints (context-sensitive; assembled per screen).
+pub const HELP_MENU: &str = "up/down select · Enter open · ? help · q quit";
+pub const HELP_SCREEN_CLEAN: &str = "up/down move · Enter edit · Esc back · ? help";
+pub const HELP_SCREEN_DIRTY: &str = "up/down move · Enter edit · s SAVE* · Esc back · ? help";
+pub const HELP_AUDIO_CLEAN: &str =
+    "up/down move · Enter edit · r refresh · / filter · Esc back · ? help";
+pub const HELP_AUDIO_DIRTY: &str =
+    "up/down move · Enter edit · s SAVE* · r refresh · / filter · Esc back";
+pub const HELP_SELECT: &str = "up/down choose · Enter select · Esc cancel";
+pub const HELP_FILTER: &str = "type to filter · up/down choose · Enter select · Esc cancel";
+pub const HELP_INPUT: &str = "type · Enter accept · Esc cancel";
+
+pub const HELP_OVERLAY: &str = "GLOBAL KEYS
+
+  up / down (or j / k)   move selection
+  Enter                  open a screen / edit a field / confirm
+  Esc                    back / cancel
+  Tab / Shift-Tab        next / previous field
+  s                      save the current screen
+  r                      refresh (Audio: re-enumerate devices)
+  /                      filter (device picker)
+  ?                      this help
+  q                      quit (asks to save unsaved changes)
+
+Each screen saves explicitly with 's'. A '*' in the title means unsaved edits.
+The daemon does NOT need to be running — changes apply when it next starts.
+
+  Press Esc or ? to close.";
+
+// ============================ dirty-save / quit ============================
+
+pub const DIRTY_TITLE: &str = "Unsaved changes";
+pub const DIRTY_BODY: &str = "This screen has unsaved edits.";
+pub const DIRTY_HINT: &str = "s save · d discard · Esc stay";
+
+// ============================ footer (daemon state) ============================
+
+pub const FOOTER_UNREACHABLE: &str = "daemon: not reachable";
+/// Appended to a save result when the daemon is down (03 §2.3, error-voice).
+pub const APPLIES_ON_START: &str =
+    "changes apply when the daemon starts — systemctl --user status qbzd";
+
+// ============================ Account (§3.1) ============================
+
+pub const ACCOUNT_TITLE: &str = "Account";
+pub const ACCOUNT_STATUS: &str = "Status";
+pub const ACCOUNT_NOT_LOGGED_IN: &str = "not logged in";
+/// Offline + daemon-down: a credential file exists but was never validated —
+/// NEVER fabricate an email/name (§3.1 rules).
+pub const ACCOUNT_CRED_PRESENT: &str = "credential file present (not validated)";
+pub const ACCOUNT_LOGIN_BROWSER: &str = "Log in with browser";
+pub const ACCOUNT_PASTE_TOKEN: &str = "Paste token";
+pub const ACCOUNT_LOGOUT: &str = "Log out";
+
+pub fn account_logged_in(email: &str) -> String {
+    format!("logged in as {email}")
+}
+pub fn account_logged_in_plan(email: &str, plan: &str) -> String {
+    format!("logged in as {email} ({plan})")
+}
+
+pub const ACCOUNT_LOGOUT_CONFIRM_TITLE: &str = "Log out";
+pub const ACCOUNT_LOGOUT_CONFIRM_BODY: &str =
+    "Clear the Qobuz credentials on this box? If the daemon is running it will\nstop playback and wait for a new login.";
+pub const CONFIRM_YN: &str = "y confirm · Esc cancel";
+
+pub const ACCOUNT_VALIDATING: &str = "validating token with Qobuz…";
+
+/// Suspend-and-run divergence banner (see report): the browser flow runs on the
+/// plain terminal. Shown briefly before the alt-screen is left.
+pub const ACCOUNT_BROWSER_HANDOFF: &str =
+    "Starting browser login on the terminal below. Follow the printed URL;\nthe TUI resumes when login finishes or times out.";
+
+// ============================ Audio (§3.2) ============================
+
+pub const AUDIO_TITLE: &str = "Audio";
+pub const AUDIO_GROUP_OUTPUT: &str = "OUTPUT";
+pub const AUDIO_GROUP_BITPERFECT: &str = "BIT-PERFECT";
+pub const AUDIO_GROUP_TRANSPORT: &str = "STREAMING TRANSPORT";
+
+pub const A_BACKEND: &str = "Backend";
+pub const A_DEVICE: &str = "Output device";
+pub const A_ALSA_PLUGIN: &str = "ALSA plugin";
+pub const A_HW_VOLUME: &str = "Hardware volume";
+pub const A_DSD: &str = "DSD playback";
+pub const A_EXCLUSIVE: &str = "Exclusive mode";
+pub const A_RESERVE: &str = "Reserve DAC";
+pub const A_PASSTHROUGH: &str = "DAC passthrough";
+pub const A_FORCE_BP: &str = "Force bit-perfect";
+pub const A_LOCK_OUTPUT: &str = "Lock output device";
+pub const A_STREAM_UNCACHED: &str = "Stream uncached";
+pub const A_BUFFER: &str = "Initial buffer";
+pub const A_STREAMING_ONLY: &str = "Streaming only";
+
+// Disabled-row reasons (rendered dim in parentheses, §3).
+pub const R_ALSA_ONLY: &str = "ALSA only";
+pub const R_PIPEWIRE_ONLY: &str = "PipeWire only";
+pub const R_PASSTHROUGH_OFF: &str = "off while DAC passthrough on";
+
+pub const DSD_CONVERT: &str = "Convert to PCM (works everywhere)";
+pub const DSD_DOP: &str = "DoP — DSD over PCM (bit-perfect)";
+pub const DSD_NATIVE: &str = "Native DSD (kernel support required)";
+
+pub const ALSA_HW: &str = "hw (Direct Hardware)";
+pub const ALSA_PLUGHW: &str = "plughw (Auto-convert)";
+pub const ALSA_PCM: &str = "pcm (Most compatible)";
+
+/// DSD guard (§3.2.4). Verbatim-in-spirit of the desktop warning.
+pub const DSD_GUARD_TITLE: &str = "DSD direct mode";
+pub const DSD_GUARD_BODY: &str = "Choose DoP or Native only if your DAC supports it. On any other DAC they play\nas LOUD NOISE. Volume is fixed and seeking is disabled in DoP/Native; Native\nadditionally needs kernel support.";
+pub const DSD_GUARD_HINT: &str = "Enter confirm · Esc revert";
+
+pub const AUDIO_SCANNING: &str = "scanning…";
+pub const DEVICE_PICKER_TITLE: &str = "Output device";
+
+/// No-devices hint panel (§5.1).
+pub const NO_DEVICES: &str = "no output devices found — is the DAC plugged in and powered? is your user in\nthe 'audio' group? PipeWire backend: is pipewire running?  (r to re-scan)";
+
+pub const JACK_WARNING: &str = "JACK is not bit-perfect (routes through the JACK graph, resamples)";
+pub const BP_BADGE: &str = "[BP]";
+
+// ============================ Playback (§3.3) ============================
+
+pub const PLAYBACK_TITLE: &str = "Playback";
+pub const PLAYBACK_GROUP_QUALITY: &str = "QUALITY";
+pub const PLAYBACK_GROUP_BEHAVIOR: &str = "BEHAVIOR";
+pub const PLAYBACK_GROUP_SESSION: &str = "SESSION";
+
+pub const P_QUALITY: &str = "Streaming quality";
+pub const P_LIMIT_DEVICE: &str = "Limit quality to device";
+pub const P_MAX_RATE: &str = "Maximum sample rate";
+pub const P_ALLOW_FALLBACK: &str = "Allow quality fallback";
+pub const P_RETRY_FAIL: &str = "When retries fail";
+pub const P_CONTINUE: &str = "Continue after track";
+pub const P_GAPLESS: &str = "Gapless playback";
+pub const P_RESTORE: &str = "Restore session";
+pub const P_RESUME_POS: &str = "Resume position";
+
+pub const R_LIMIT_OFF: &str = "Limit quality to device off";
+pub const R_STREAMING_ONLY_ON: &str = "off while Audio > Streaming only on";
+pub const R_RESTORE_OFF: &str = "needs Restore session";
+
+pub const Q_MP3: &str = "MP3";
+pub const Q_CD: &str = "CD Quality";
+pub const Q_HIRES: &str = "Hi-Res";
+pub const Q_HIRES_PLUS: &str = "Hi-Res+";
+
+pub const RETRY_FALLBACK: &str = "Fall back (play lowest available)";
+pub const RETRY_SKIP: &str = "Skip the track";
+/// Stored `ask` render until the operator picks (§3.3.2). The TUI never writes `ask`.
+pub const RETRY_ASK: &str = "Ask (desktop setting) — daemon falls back";
+
+pub const AUTOPLAY_ON: &str = "on";
+pub const AUTOPLAY_OFF: &str = "off";
+/// A pre-existing `infinite` (radio, P1) renders read-only until toggled (§3.3.1).
+pub const AUTOPLAY_INFINITE: &str = "on (infinite radio)";
+
+pub const RATE_NO_LIMIT: &str = "No limit";
+
+// ============================ QConnect (§3.4) ============================
+
+pub const QCONNECT_TITLE: &str = "Qobuz Connect";
+pub const QC_ENABLE: &str = "Enable";
+pub const QC_DEVICE_NAME: &str = "Device name";
+pub const QC_VOLUME_MODE: &str = "Volume mode";
+pub const QC_APPLIES_NEXT: &str = "applies on the next connection";
+pub const VOL_SOFTWARE: &str = "software";
+pub const VOL_LOCKED: &str = "locked";
+
+pub fn qc_preview(name: &str) -> String {
+    format!("phones will see: \"{name}\"")
+}
+
+// ============================ Network (§3.5) ============================
+
+pub const NETWORK_TITLE: &str = "Network";
+pub const N_BIND: &str = "Bind address";
+pub const N_PORT: &str = "Port";
+pub const N_TOKEN: &str = "Access token";
+pub const N_TOKEN_HINT: &str = "(empty = open)";
+
+/// LAN-exposure warning shown when bind is non-loopback (§3.5, copy normative).
+pub const NETWORK_LAN_WARNING: &str = "! bound beyond localhost: anyone on your network can control playback\n  (Sonos/Chromecast posture). Plain HTTP — never expose it past your LAN.";
+
+/// Restart-required copy on a bind/port/token save (§3.5).
+pub const NETWORK_RESTART: &str =
+    "bind/port change needs a restart — systemctl --user restart qbzd";
+
+pub const N_BAD_IP: &str = "invalid IP address";
+pub const N_BAD_PORT: &str = "port must be 1-65535";
+
+/// Pre-save warning naming keys outside the daemon schema. Per 03 §3.5 they are
+/// PRESERVED on save (a save must never destroy a released key) — only comments
+/// and formatting are lost. (The brief said "drops"; 03 wins — flagged in the
+/// report.) Keys are appended.
+pub const N_DROP_UNKNOWN: &str =
+    "note: qbzd.toml has keys outside the daemon schema — they are kept, but\n  comments and formatting are not preserved on save:";
+
+// ============================ Import / Export (§3.6) ============================
+
+pub const BUNDLE_TITLE: &str = "Import / Export";
+pub const BUNDLE_IMPORT_HEADER: &str = "IMPORT";
+pub const BUNDLE_EXPORT_HEADER: &str = "EXPORT";
+
+pub const B_IMPORT_PATH: &str = "Bundle file";
+pub const B_IMPORT_PATH_HINT: &str = "path to a .qbzb (scp it to ~ first)";
+pub const B_IMPORT_ACTION: &str = "Review import";
+pub const B_EXPORT_DEST: &str = "Destination";
+pub const B_EXPORT_INCLUDE_AUTH: &str = "Include Qobuz login";
+pub const B_EXPORT_ACTION: &str = "Export";
+
+pub const B_BUCKET_APPLIED: &str = "applies verbatim";
+pub const B_BUCKET_ADAPTED: &str = "needs your confirmation";
+pub const B_BUCKET_SKIPPED: &str = "skipped";
+
+/// Import-side auth gate (§3.6 step 5) — dedicated, default-OFF.
+pub const B_IMPORT_AUTH_TITLE: &str = "Bundle carries a Qobuz login";
+pub const B_IMPORT_AUTH_BODY: &str =
+    "Also log in with the bundled account? The token is validated with Qobuz\nbefore anything is stored.";
+pub const B_IMPORT_AUTH_HINT: &str = "y log in · Esc skip auth";
+
+/// Export include-auth warning (§3.6, shown while the toggle is on).
+pub const B_EXPORT_AUTH_WARNING: &str = "embeds your decrypted Qobuz token — anyone with this file can use your\naccount. File is written 0600; move it privately (scp), delete after import.";
+
+pub fn b_export_success(path: &str) -> String {
+    format!("saved. on the daemon box: qbzd settings import {path}")
+}
+/// Success-panel hint when a desktop profile is detected (§3.6): desktop export
+/// is the CLI's job.
+pub const B_DESKTOP_HINT: &str =
+    "a desktop QBZ profile was found on this box — to export IT instead:\n  qbzd settings export --from desktop";
+
+pub fn b_import_done(applied: usize, adapted: usize, skipped: usize) -> String {
+    format!("imported: {applied} applied, {adapted} adapted, {skipped} skipped")
+}
+
+// ============================ save result (§4.3) ============================
+
+pub const SAVE_TITLE: &str = "Saved";
+pub const RESULT_HINT: &str = "Enter / Esc close";
+
+pub const SAVED_DISK_ONLY: &str =
+    "saved to disk — daemon didn't answer; changes apply on restart";
+pub const RELOAD_REFUSED: &str =
+    "saved to disk — daemon answered but refused the reload; restart it:\n  systemctl --user restart qbzd";

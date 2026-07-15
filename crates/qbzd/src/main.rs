@@ -10,6 +10,7 @@ mod login;
 mod paths;
 mod qconnect;
 mod state;
+mod tui;
 
 pub const API_VERSION: u32 = 1; // 02-cli-and-api.md §1.6
 
@@ -279,7 +280,12 @@ async fn main() {
                 ConfigCmd::Show { json } => cli::settings::config_show(json, &roots),
             }
         }
-        _ => { eprintln!("not implemented yet"); 1 } // burned down task by task
+        Cmd::Setup => {
+            // The setup TUI edits the daemon's REAL stores at the daemon roots,
+            // honoring a `qbzd.toml` `data_root` override exactly like `run`.
+            let roots = login_roots();
+            tui::run(roots).await
+        }
     };
     std::process::exit(code);
 }
