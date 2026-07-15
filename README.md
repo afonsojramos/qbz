@@ -196,6 +196,18 @@ Multi-device playback control using Qobuz's real-time streaming protocol. Consid
 - Server-authoritative queue sync across all devices
 - Bidirectional transport: play, pause, skip, seek, shuffle, repeat, volume
 
+### Headless Daemon (qbzd)
+
+Run QBZ without a screen: `qbzd` is a standalone ~25 MB binary (shipped inside the deb/rpm
+packages and as its own tarball) that turns any Linux box — a Raspberry Pi, a NAS, the
+living-room mini-PC — into a bit-perfect **Qobuz Connect endpoint** that appears in the
+official Qobuz apps like a hardware streamer.
+
+- Daemon + full CLI + terminal setup wizard (TUI) in one binary
+- Browser-based login that works over SSH; one-file settings hand-off from desktop QBZ
+- HiFi wizard with copyable audio-stack config blocks (clipboard works over SSH)
+- Full manual: **[Headless Daemon (qbzd) — Wiki](https://github.com/vicrodh/qbz/wiki/Headless-Daemon)**
+
 ### Casting
 
 - **Chromecast** and **DLNA/UPnP** discovery and streaming
