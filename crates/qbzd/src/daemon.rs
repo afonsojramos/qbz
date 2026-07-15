@@ -201,6 +201,11 @@ pub async fn run(roots: ProfileRoots, cfg: QbzdConfig, warns: Vec<String>) -> Re
     // ahead of the #521 pair — the same ordering constraint as the driver and
     // auth-retry tasks (§8.2).
     api.shutdown();
+    // The reload route's OnceLock handle also clones `QconnectControl`, which
+    // holds an `Arc<AppRuntime>` (via `DaemonQconnectService.runtime`) — drop
+    // it before `drop(booted)` too, same #521/§8.2 ordering as the driver,
+    // queue-persist and auth-retry tasks above.
+    drop(qconnect_control);
     // Release the audio device by dropping the runtime (its Player) BEFORE the
     // #521 pair (§8.2 step 3 precedes step 4).
     drop(booted);
