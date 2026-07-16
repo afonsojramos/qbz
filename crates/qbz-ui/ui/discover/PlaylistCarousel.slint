@@ -46,8 +46,10 @@ component ViewAllLink inherits Rectangle {
     border-radius: 4px;
     background: ta.has-hover ? Theme.surface-hover : transparent;
     link-text := Text {
-        text: @tr("View all");
-        color: Theme.accent;
+        // Muted with the trailing arrow — 1:1 with the standard Carousel's
+        // "View all →" (not the theme accent) so every Home row's link matches.
+        text: @tr("View all →");
+        color: ta.has-hover ? Theme.text-primary : Theme.text-secondary;
         font-size: 14px;
         font-weight: Typography.medium;
         x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
@@ -98,31 +100,36 @@ export component PlaylistCarousel inherits VerticalLayout {
             vertical-alignment: center;
             horizontal-stretch: 1;
         }
-        VerticalLayout {
-            alignment: center;
-            NavButton {
-                icon: @image-url("../assets/icons/chevron-left.svg");
-                enabled: root.current-page > 0;
-                clicked => {
-                    root.page = root.current-page - 1;
+        // "View all →" sits to the LEFT of the page chevrons, 4px control
+        // grouping — identical to the standard Carousel header.
+        HorizontalLayout {
+            spacing: 4px;
+            if root.show-view-all: VerticalLayout {
+                alignment: center;
+                ViewAllLink {
+                    clicked => {
+                        root.view-all-clicked();
+                    }
                 }
             }
-        }
-        VerticalLayout {
-            alignment: center;
-            NavButton {
-                icon: @image-url("../assets/icons/chevron-right.svg");
-                enabled: root.current-page < root.page-count - 1;
-                clicked => {
-                    root.page = root.current-page + 1;
+            VerticalLayout {
+                alignment: center;
+                NavButton {
+                    icon: @image-url("../assets/icons/chevron-left.svg");
+                    enabled: root.current-page > 0;
+                    clicked => {
+                        root.page = root.current-page - 1;
+                    }
                 }
             }
-        }
-        if root.show-view-all: VerticalLayout {
-            alignment: center;
-            ViewAllLink {
-                clicked => {
-                    root.view-all-clicked();
+            VerticalLayout {
+                alignment: center;
+                NavButton {
+                    icon: @image-url("../assets/icons/chevron-right.svg");
+                    enabled: root.current-page < root.page-count - 1;
+                    clicked => {
+                        root.page = root.current-page + 1;
+                    }
                 }
             }
         }
