@@ -189,8 +189,18 @@ pub fn install(window: &AppWindow, runtime: &Arc<AppRuntime<SlintAdapter>>) {
             last_beat *= 0.88;
             if let Some(w) = weak.upgrade() {
                 let imm = w.global::<ImmersiveState>();
-                let m = imm.get_shader_mode();
-                if m > 0 && imm.get_open() {
+                // When the immersive overlay is OPEN, its picked `shader-mode`
+                // drives the scene; when CLOSED, the app-wide dynamic background's
+                // `app-shader-mode` does (7 = ambient) — kept separate so opening
+                // immersive (which force-resets shader-mode to 0) never clobbers
+                // the app-wide background. Both render into the same texture sink.
+                let open = imm.get_open();
+                let m = if open {
+                    imm.get_shader_mode()
+                } else {
+                    imm.get_app_shader_mode()
+                };
+                if m > 0 {
                     // Derive the enriched audio pack from the latched cells.
                     let mut bands8 = [0.0f32; 8];
                     for i in 0..8 {

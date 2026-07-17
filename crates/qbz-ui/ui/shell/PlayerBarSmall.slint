@@ -127,7 +127,9 @@ export component PlayerBarSmall inherits Rectangle {
     // One bar, header-height tall: a 3px top seekbar strip + the controls row
     // that fills the rest (no band bump — the large album art defines the height).
     height: Layout.header-height;
-    background: Theme.surface-card;
+    background: ShellState.app-background-active
+        ? Theme.surface-card.with-alpha(AppearanceState.app-background-surface-alpha)
+        : Theme.surface-card;
 
     // Responsive side fraction — IDENTICAL to PlayerBar's New mechanism
     // (PlayerBar.slint:138-140). LEFT and RIGHT columns share this fraction so

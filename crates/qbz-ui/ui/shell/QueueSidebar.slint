@@ -16,7 +16,7 @@ import { Radius } from "../foundation/radius.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { ContextMenu } from "../primitives/ContextMenu.slint";
 import { ContextMenuItem } from "../primitives/ContextMenuItem.slint";
-import { ShellState, QueueState, QueueItem, NowPlayingState, UiFocusState, SleepTimerState, SleepTimerActions } from "../state.slint";
+import { ShellState, QueueState, QueueItem, NowPlayingState, UiFocusState, SleepTimerState, SleepTimerActions, AppearanceState } from "../state.slint";
 
 // Close button — mirrors the X control used by LyricsSidebar.
 component CloseButton inherits Rectangle {
@@ -360,7 +360,9 @@ export component QueueSidebar inherits Rectangle {
     // Width is owned by the right-panel column in AppShell (which animates it);
     // this fills that column and vertical-stretches to its share of the height.
     clip: true;
-    background: Theme.surface-card;
+    background: ShellState.app-background-active
+        ? Theme.surface-card.with-alpha(AppearanceState.app-background-surface-alpha)
+        : Theme.surface-card;
 
     // True when the Queue tab has nothing to show at all.
     property <bool> queue-empty:

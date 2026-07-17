@@ -240,6 +240,20 @@ export component AppearanceSettings inherits VerticalLayout {
         }
     }
 
+    if AppearanceState.app-background-available: SettingRow {
+        label: @tr("Dynamic background");
+        description: @tr("Animated album-art background behind the whole app. High resource use — GPU accelerated.");
+        QbzSelect {
+            menu-width: 200px;
+            options: AppearanceState.app-background-modes;
+            current-index: AppearanceState.app-background-mode-index;
+            selected(i) => {
+                AppearanceState.app-background-mode-index = i;
+                AppearanceState.appearance-select("app-background", i);
+            }
+        }
+    }
+
     SettingRow {
         label: @tr("Intelligent Search");
         description: @tr("Smart search cache, ranking, and the search preview dropdown. On by default.");

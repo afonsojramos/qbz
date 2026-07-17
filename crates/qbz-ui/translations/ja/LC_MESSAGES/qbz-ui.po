@@ -4569,3 +4569,16 @@ msgstr "リンクをコピーしました"
 
 msgid "Failed to copy link"
 msgstr "リンクをコピーできませんでした"
+
+# Dynamic app background (Appearance settings)
+msgid "Ambient"
+msgstr "アンビエント"
+
+msgid "Blurred art"
+msgstr "ぼかしアートワーク"
+
+msgid "Dynamic background"
+msgstr "ダイナミック背景"
+
+msgid "Animated album-art background behind the whole app. High resource use — GPU accelerated."
+msgstr "アプリ全体の背後にアルバムアートワークのアニメーション背景を表示します。リソース使用量が高く、GPUアクセラレーションを使用します。"

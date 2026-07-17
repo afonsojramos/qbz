@@ -4595,3 +4595,16 @@ msgstr "Ссылка скопирована"
 
 msgid "Failed to copy link"
 msgstr "Не удалось скопировать ссылку"
+
+# Dynamic app background (Appearance settings)
+msgid "Ambient"
+msgstr "Атмосферный"
+
+msgid "Blurred art"
+msgstr "Размытая обложка"
+
+msgid "Dynamic background"
+msgstr "Динамический фон"
+
+msgid "Animated album-art background behind the whole app. High resource use — GPU accelerated."
+msgstr "Анимированный фон из обложки альбома за всем приложением. Высокое потребление ресурсов — аппаратное ускорение GPU."

@@ -4124,6 +4124,11 @@ fn reseed_i18n_labels(window: &AppWindow) {
         t("Lyrics"),
         t("Queue"),
     ])));
+    state.set_app_background_modes(ModelRc::new(VecModel::from(vec![
+        t("Off"),
+        t("Ambient"),
+        t("Blurred art"),
+    ])));
     state.set_wc_positions(ModelRc::new(VecModel::from(vec![t("Left"), t("Right")])));
     state.set_wc_styles(ModelRc::new(VecModel::from(vec![
         t("Rectangular"),
@@ -7170,6 +7175,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     window
         .global::<ImmersiveState>()
         .set_shader_scenes_available(use_gpu_renderer);
+    // App-wide dynamic background ("modo Cider"): available only on the wgpu
+    // tier (same reason as the shader scenes — it would render black on
+    // GL/software where reduce-motion is forced on). Gates the whole picker row.
+    {
+        let ap = window.global::<AppearanceState>();
+        ap.set_app_background_available(use_gpu_renderer);
+        // Live-tunable look knobs (QBZ_BG_DIM / QBZ_BG_SURFACE_ALPHA in [0,1])
+        // so the appearance can be dialed in ONE smoke session without a rebuild,
+        // then baked to the defaults in state.slint.
+        if let Some(f) = std::env::var("QBZ_BG_DIM")
+            .ok()
+            .and_then(|v| v.trim().parse::<f32>().ok())
+        {
+            ap.set_app_background_dim(f.clamp(0.0, 1.0));
+        }
+        if let Some(f) = std::env::var("QBZ_BG_SURFACE_ALPHA")
+            .ok()
+            .and_then(|v| v.trim().parse::<f32>().ok())
+        {
+            ap.set_app_background_surface_alpha(f.clamp(0.0, 1.0));
+        }
+    }
     // Kiosk profile (2.0.2 frente #3, axis A): QBZ_PROFILE=kiosk (env wins,
     // else the persisted ui_prefs.profile key). The small-panel touch appliance
     // boots the main window fullscreen and forces reduce-motion; the kiosk image
@@ -7388,6 +7415,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         crate::ui_prefs::immersive_default_view_index(
             &crate::ui_prefs::load().immersive_default_view,
         ),
+    );
+    // App-wide dynamic background mode (0 = off, 1 = ambient, 2 = blurred).
+    window.global::<AppearanceState>().set_app_background_mode_index(
+        crate::ui_prefs::app_background_index(&crate::ui_prefs::load().app_background),
     );
     // System Notifications toggle: seed the UI + the poll-thread atomic gate.
     {
@@ -9800,6 +9831,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let mut prefs = crate::ui_prefs::load();
                 prefs.immersive_default_view =
                     crate::ui_prefs::immersive_default_view_for_index(index).to_string();
+                crate::ui_prefs::save(&prefs);
+            }
+            "app-background" => {
+                // 0 = Off, 1 = Ambient (GPU shader), 2 = Blurred art. The Slint
+                // side already flipped app-background-mode-index; app-shader-mode
+                // and app-background-active derive from it, and the AppShell
+                // viz-should-run recompute starts/stops the drain reactively.
+                let mut prefs = crate::ui_prefs::load();
+                prefs.app_background =
+                    crate::ui_prefs::app_background_for_index(index).to_string();
                 crate::ui_prefs::save(&prefs);
             }
             "miniplayer-view" => {

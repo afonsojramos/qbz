@@ -127,7 +127,9 @@ export component PlayerBar inherits Rectangle {
     // stateful ShellState — avoiding an import direction that would couple
     // foundation to state.
     height: ShellState.npb-mode == 2 ? Layout.header-height : Layout.player-bar-height;
-    background: Theme.surface-card;
+    background: ShellState.app-background-active
+        ? Theme.surface-card.with-alpha(AppearanceState.app-background-surface-alpha)
+        : Theme.surface-card;
 
     // Responsive column zones. The song-card (left) and the buttons (right)
     // share the SAME fraction so they are symmetric — which makes the centre

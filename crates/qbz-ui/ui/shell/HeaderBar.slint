@@ -549,7 +549,9 @@ export component HeaderBar inherits Rectangle {
     callback navigate(string /* route */);
 
     height: Layout.header-height;
-    background: Theme.surface-card;
+    background: ShellState.app-background-active
+        ? Theme.surface-card.with-alpha(AppearanceState.app-background-surface-alpha)
+        : Theme.surface-card;
 
     // Responsive breakpoints.
     property <bool> show-tab-icons: root.width >= 1140px;

@@ -4581,3 +4581,16 @@ msgstr "Link kopiert"
 
 msgid "Failed to copy link"
 msgstr "Link konnte nicht kopiert werden"
+
+# Dynamic app background (Appearance settings)
+msgid "Ambient"
+msgstr "Ambient"
+
+msgid "Blurred art"
+msgstr "Unscharfes Cover"
+
+msgid "Dynamic background"
+msgstr "Dynamischer Hintergrund"
+
+msgid "Animated album-art background behind the whole app. High resource use — GPU accelerated."
+msgstr "Animierter Album-Cover-Hintergrund hinter der gesamten App. Hoher Ressourcenverbrauch — GPU-beschleunigt."

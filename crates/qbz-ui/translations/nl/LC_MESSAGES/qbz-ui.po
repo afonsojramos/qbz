@@ -4593,3 +4593,16 @@ msgstr "Link gekopieerd"
 
 msgid "Failed to copy link"
 msgstr "Kopiëren van link mislukt"
+
+# Dynamic app background (Appearance settings)
+msgid "Ambient"
+msgstr "Ambient"
+
+msgid "Blurred art"
+msgstr "Vervaagde albumhoes"
+
+msgid "Dynamic background"
+msgstr "Dynamische achtergrond"
+
+msgid "Animated album-art background behind the whole app. High resource use — GPU accelerated."
+msgstr "Geanimeerde albumhoes-achtergrond achter de hele app. Hoog verbruik van systeembronnen — GPU-versneld."

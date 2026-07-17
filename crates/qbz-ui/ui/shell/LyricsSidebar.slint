@@ -23,7 +23,7 @@ import { IconButton } from "../primitives/BarControls.slint";
 import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
 import { LyricsLinesView } from "LyricsLinesView.slint";
 import { LyricsControlsPanel } from "LyricsControlsFlyout.slint";
-import { ShellState, LyricsState, ArtworkActions } from "../state.slint";
+import { ShellState, LyricsState, ArtworkActions, AppearanceState } from "../state.slint";
 
 component CloseButton inherits Rectangle {
     callback clicked();
@@ -53,7 +53,9 @@ export component LyricsSidebar inherits Rectangle {
     // Width is owned by the right-panel column in AppShell; this fills it and
     // vertical-stretches to its share of the height (stacked under the queue).
     clip: true;
-    background: Theme.surface-card;
+    background: ShellState.app-background-active
+        ? Theme.surface-card.with-alpha(AppearanceState.app-background-surface-alpha)
+        : Theme.surface-card;
 
     // Conditionally mounted (`if lyrics-open` at the AppShell mount site,
     // ADR-010) — re-request lyrics for the current track on every open.

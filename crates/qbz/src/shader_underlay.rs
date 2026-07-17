@@ -333,6 +333,7 @@ const SHADER_SOURCES: &[&str] = &[
     include_str!("../../qbz-ui/ui/shaders/aurora.wgsl"),          // [2] mode 3
     include_str!("../../qbz-ui/ui/shaders/spectral_ribbon.wgsl"), // [3] mode 4
     include_str!("../../qbz-ui/ui/shaders/liquid_spectrum.wgsl"), // [4] mode 6
+    include_str!("../../qbz-ui/ui/shaders/ambient.wgsl"),         // [5] mode 7 (app-wide)
 ];
 
 thread_local! {
@@ -812,9 +813,16 @@ pub fn render_frame(mode: i32, a: &FrameAudio, win_w: u32, win_h: u32) -> Option
             }
             res.linebed_pipeline.as_ref()?
         } else {
-            // modes 1-4 → pipelines[0..3]; mode 6 (liquid spectrum) → pipelines[4].
-            // mode 5 is line_bed's own pipeline above, so the index skips it.
-            let idx = if mode == 6 { 4 } else { (mode - 1) as usize };
+            // modes 1-4 → pipelines[0..3]; mode 6 (liquid spectrum) → pipelines[4];
+            // mode 7 (ambient, app-wide) → pipelines[5]. mode 5 is line_bed's own
+            // pipeline above, so the index skips it.
+            let idx = if mode == 6 {
+                4
+            } else if mode == 7 {
+                5
+            } else {
+                (mode - 1) as usize
+            };
             let idx = if idx < SHADER_SOURCES.len() { idx } else { 0 };
             if res.pipelines[idx].is_none() {
                 res.pipelines[idx] =

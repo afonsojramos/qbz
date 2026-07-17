@@ -32,7 +32,7 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Radius } from "../foundation/radius.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
-import { NowPlayingState, VisualizerState, ImmersiveState, ShellState } from "../state.slint";
+import { NowPlayingState, VisualizerState, ImmersiveState, ShellState, AppearanceState } from "../state.slint";
 
 // One spectrum bar that grows UP from the bottom edge. Amplitude (0..1) is
 // already smoothed + clamped in Rust; only a short ease settles the step.
@@ -190,7 +190,9 @@ export component SidebarNowPlayingDock inherits Rectangle {
             drop-shadow-blur: 24px;
             drop-shadow-color: #00000080;
             drop-shadow-offset-y: 4px;
-            background: Theme.surface-main;
+            background: ShellState.app-background-active
+                ? Theme.surface-main.with-alpha(AppearanceState.app-background-surface-alpha)
+                : Theme.surface-main;
 
             if NowPlayingState.has-track
                 && (NowPlayingState.artwork-large.width > 0 || NowPlayingState.artwork.width > 0): Image {

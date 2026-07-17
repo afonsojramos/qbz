@@ -685,7 +685,9 @@ export component Sidebar inherits Rectangle {
     callback navigate(string /* route */);
     // Three-state rendered width: 0 (closed) / 64 (mini) / 240 (open).
     width: ShellState.sidebar-rendered-width;
-    background: Theme.surface-card;
+    background: ShellState.app-background-active
+        ? Theme.surface-card.with-alpha(AppearanceState.app-background-surface-alpha)
+        : Theme.surface-card;
     // Square edges — the bezel lives on the inset content panel, not here.
     // Clip keeps content from spilling while the width animates.
     clip: true;
@@ -899,7 +901,9 @@ export component Sidebar inherits Rectangle {
                 y: 26px;
                 width: 200px;
                 Rectangle {
-                    background: Theme.surface-card;
+                    background: ShellState.app-background-active
+                        ? Theme.surface-card.with-alpha(AppearanceState.app-background-surface-alpha)
+                        : Theme.surface-card;
                     border-width: 1px;
                     border-color: Theme.border-subtle;
                     border-radius: 8px;

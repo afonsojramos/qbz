@@ -144,6 +144,10 @@ pub fn immersive_search_action_index(key: &str) -> i32 {
 /// was open last time; the other keys PIN a fixed FOCUS-mode foreground.
 pub const DEFAULT_IMMERSIVE_DEFAULT_VIEW: &str = "remember";
 
+/// Default app-wide dynamic background: "off". Other keys: "ambient" (GPU
+/// shader scene, wgpu tier only) | "blurred" (blurred-artwork atmosphere).
+pub const DEFAULT_APP_BACKGROUND: &str = "off";
+
 /// Map an immersive-default-view select index to its persisted key. The
 /// on-screen order is Remember last / Album Reactive / Static / Coverflow /
 /// Spectrum / Lyrics / Queue (0-6); any unknown index falls back to the
@@ -299,6 +303,29 @@ pub fn immersive_default_view_index(key: &str) -> i32 {
     }
 }
 
+/// Map an app-background select index to its persisted key. On-screen order is
+/// Off / Ambient / Blurred (0-2); any unknown index falls back to the default
+/// (`"off"`).
+pub fn app_background_for_index(index: i32) -> &'static str {
+    match index {
+        0 => "off",
+        1 => "ambient",
+        2 => "blurred",
+        _ => DEFAULT_APP_BACKGROUND,
+    }
+}
+
+/// Inverse of [`app_background_for_index`]: the select index for a persisted
+/// key, falling back to the default's index (0 = "off").
+pub fn app_background_index(key: &str) -> i32 {
+    match key {
+        "off" => 0,
+        "ambient" => 1,
+        "blurred" => 2,
+        _ => 0,
+    }
+}
+
 /// Persisted UI preferences. New fields must default sanely so an older
 /// file (missing the field) still deserializes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -449,6 +476,11 @@ pub struct UiPrefs {
     /// `"queue"` pins a fixed FOCUS view. See [`DEFAULT_IMMERSIVE_DEFAULT_VIEW`].
     #[serde(default = "default_immersive_default_view")]
     pub immersive_default_view: String,
+    /// App-wide dynamic background key: `"off"` (none) | `"ambient"` (GPU shader
+    /// scene, wgpu tier only) | `"blurred"` (blurred-artwork atmosphere). See
+    /// [`DEFAULT_APP_BACKGROUND`].
+    #[serde(default = "default_app_background")]
+    pub app_background: String,
     /// Last immersive view-mode (0 FOCUS / 1 SPLIT), persisted only while the
     /// default is `"remember"`; restored on the next overlay open.
     #[serde(default)]
@@ -674,6 +706,10 @@ fn default_immersive_default_view() -> String {
     DEFAULT_IMMERSIVE_DEFAULT_VIEW.to_string()
 }
 
+fn default_app_background() -> String {
+    DEFAULT_APP_BACKGROUND.to_string()
+}
+
 /// Default theme slug. Owner decision 2026-06-20: OLED Dark is the default for
 /// fresh installs and any profile without a persisted theme. Sourced from the
 /// `qbz-theme` registry so the default stays single-sourced.
@@ -723,6 +759,7 @@ impl Default for UiPrefs {
             last_nav: None,
             immersive_search_action: default_immersive_search_action(),
             immersive_default_view: default_immersive_default_view(),
+            app_background: default_app_background(),
             immersive_last_view_mode: 0,
             immersive_last_mode: 0,
             immersive_last_split_panel: 0,

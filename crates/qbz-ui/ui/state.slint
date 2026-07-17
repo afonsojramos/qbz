@@ -3236,6 +3236,25 @@ export global AppearanceState {
     in-out property <bool> immersive-panels-collapsed: true;
     in-out property <bool> immersive-fps-collapsed: true;
 
+    // --- APP-WIDE DYNAMIC BACKGROUND ("modo Cider") ------------------------
+    // Album-art background composited behind the WHOLE shell. Opt-in, wgpu-tier
+    // only. 0 = Off, 1 = Ambient (GPU shader scene 7), 2 = Blurred art (the
+    // ImmersiveAtmosphere blurred-cover look). Persisted in ui_prefs
+    // (`app_background`) via appearance-select("app-background", i).
+    in-out property <[string]> app-background-modes: [@tr("Off"), @tr("Ambient"), @tr("Blurred art")];
+    in-out property <int> app-background-mode-index: 0;
+    // False on the femtovg-GL / software tiers (no wgpu underlay, and
+    // reduce-motion is forced ON there → the effect would freeze). Seeded from
+    // Rust (= use_gpu_renderer); gates the whole picker row.
+    in-out property <bool> app-background-available: false;
+    // Live-tunable look knobs, seeded from Rust env at startup (QBZ_BG_DIM /
+    // QBZ_BG_SURFACE_ALPHA) so the appearance can be dialed in a single smoke
+    // session without recompiling, then baked to constants. `dim` = extra dark
+    // scrim over the background for legibility; `surface-alpha` = translucency
+    // of the shell chrome when the background is active.
+    in-out property <float> app-background-dim: 0.28;
+    in-out property <float> app-background-surface-alpha: 0.55;
+
     // Callbacks. Unwired in this replica — the Rust side may bind them
     // later. Kept generic (key + value) so the controller can dispatch.
     callback appearance-bool(string /* key */, bool /* value */);
@@ -3965,6 +3984,16 @@ export global ShellState {
     // "viz-toggle"). When off, the spectrum band collapses and the sidebar
     // content reclaims the space; the FFT tap idles (AppShell viz-should-run).
     in-out property <bool> large-visualizer-on: true;
+
+    // --- APP-WIDE DYNAMIC BACKGROUND (derived) -----------------------------
+    // Active only when a mode is picked, the wgpu tier allows it, AND a track is
+    // loaded — so with nothing playing the shell restores its opaque theme
+    // surfaces (D4). Shell chrome reads this to go translucent; AppShell reads
+    // it to mount the background layer.
+    out property <bool> app-background-active:
+        AppearanceState.app-background-mode-index > 0
+        && AppearanceState.app-background-available
+        && NowPlayingState.has-track;
 }
 
 // Authenticated user, for the header user element.
@@ -4054,6 +4083,14 @@ export global ImmersiveState {
     // 0->1->2->3->0 with the 'g' key.
     in property <image> shader-texture;
     in-out property <int> shader-mode: 0;
+    // App-wide dynamic-background scene selector, kept SEPARATE from
+    // `shader-mode` so opening the immersive overlay (which force-resets
+    // shader-mode to 0 in main.rs) does NOT clobber the app-wide background.
+    // 0 = none, 7 = Ambient (ui/shaders/ambient.wgsl). The drain renders this
+    // scene into `shader-texture` when the immersive overlay is CLOSED (see
+    // visualizer.rs); the AppShell root Image binds the same `shader-texture`.
+    // Derived: Ambient (mode 1) → 7, everything else → 0. No Rust setter needed.
+    out property <int> app-shader-mode: AppearanceState.app-background-mode-index == 1 ? 7 : 0;
     // False on the femtovg-GL / software renderer tiers (no wgpu underlay →
     // shader scenes would render black). Seeded from Rust at startup; gates
     // the picker rows and the `g` cycle in ImmersiveView.

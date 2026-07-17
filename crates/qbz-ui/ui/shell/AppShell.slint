@@ -8,7 +8,8 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Layout } from "../foundation/layout.slint";
 import { Radius } from "../foundation/radius.slint";
-import { NavState, ContentView, ShellState, OfflineState, PlaylistState, ImmersiveState, SearchActions, VisualizerState, PurchaseDetailState, NowPlayingState } from "../state.slint";
+import { NavState, ContentView, ShellState, OfflineState, PlaylistState, ImmersiveState, SearchActions, VisualizerState, PurchaseDetailState, NowPlayingState, AppearanceState } from "../state.slint";
+import { ImmersiveAtmosphere } from "../immersive/ImmersiveAtmosphere.slint";
 import { Sidebar } from "Sidebar.slint";
 import { SidebarNowPlayingDock } from "SidebarNowPlayingDock.slint";
 import { HeaderBar } from "HeaderBar.slint";
@@ -161,7 +162,14 @@ export component AppShell inherits Rectangle {
     // value (changed only fires on transitions). Immersive's own close handlers
     // defer to `large-active` so closing it never kills an active Large dock.
     property <bool> viz-should-run: ImmersiveState.open
-        || (ShellState.large-active && ShellState.large-visualizer-on);
+        || (ShellState.large-active && ShellState.large-visualizer-on)
+        // App-wide Ambient background (mode 1) needs the 30fps shader drain
+        // running even with the immersive overlay closed. Blurred art (mode 2)
+        // is Slint-animated and needs no drain. has-track gates it so nothing
+        // playing → drain idle (the FFT tap self-freezes on !playing anyway).
+        || (AppearanceState.app-background-mode-index == 1
+            && AppearanceState.app-background-available
+            && NowPlayingState.has-track);
     changed viz-should-run => {
         VisualizerState.set-enabled(self.viz-should-run);
     }
@@ -185,6 +193,44 @@ export component AppShell inherits Rectangle {
         triggered => {
             ShellState.coarse-tick-ms = Math.mod(ShellState.coarse-tick-ms + 125, 86400000);
         }
+    }
+
+    // APP-WIDE DYNAMIC BACKGROUND ("modo Cider") — the bottom-most visual layer,
+    // behind every shell surface (which goes translucent via
+    // ShellState.app-background-active). Only mounts when a mode is picked, the
+    // wgpu tier allows it, AND a track is loaded (D4: nothing playing → opaque
+    // theme restored). Ambient (mode 1) shows the GPU shader texture the drain
+    // renders into ImmersiveState.shader-texture; Blurred art (mode 2) reuses the
+    // ImmersiveAtmosphere blurred-cover. Edge-pinned to root (absolute layout).
+    if ShellState.app-background-active && AppearanceState.app-background-mode-index == 1: Image {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        image-fit: fill;
+        source: ImmersiveState.shader-texture;
+    }
+    if ShellState.app-background-active && AppearanceState.app-background-mode-index == 2: ImmersiveAtmosphere {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        source-image: ImmersiveState.bg-image;
+        fallback-image: NowPlayingState.artwork-large.width > 0
+            ? NowPlayingState.artwork-large
+            : NowPlayingState.artwork;
+        animated: NowPlayingState.playing;
+        dim: AppearanceState.app-background-dim;
+    }
+    // Extra tunable dark scrim over the Ambient shader (the atmosphere applies
+    // its own `dim`). Keeps chrome text legible over a bright album palette;
+    // QBZ_BG_DIM tunes it live at startup.
+    if ShellState.app-background-active && AppearanceState.app-background-mode-index == 1: Rectangle {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        background: #000000.with-alpha(AppearanceState.app-background-dim);
     }
 
     // Bottom layer: catches the mouse back / forward buttons for history
@@ -239,7 +285,9 @@ export component AppShell inherits Rectangle {
             // content panel (Slack-style bezel on all four corners).
             Rectangle {
                 horizontal-stretch: 1;
-                background: Theme.surface-card;
+                background: ShellState.app-background-active
+                    ? Theme.surface-card.with-alpha(AppearanceState.app-background-surface-alpha)
+                    : Theme.surface-card;
                 VerticalLayout {
                     vertical-stretch: 1;
                     padding-left: 8px;
@@ -277,7 +325,9 @@ export component AppShell inherits Rectangle {
                             - (ShellState.npb-mode == 2 ? Layout.header-height : Layout.player-bar-height)
                             - 8px;
                         vertical-stretch: 1;
-                        background: Theme.surface-main;
+                        background: ShellState.app-background-active
+                            ? Theme.surface-main.with-alpha(AppearanceState.app-background-surface-alpha)
+                            : Theme.surface-main;
                             border-radius: Radius.md;
                             clip: true;
 
@@ -550,7 +600,12 @@ export component AppShell inherits Rectangle {
                 width: (ShellState.queue-open || ShellState.lyrics-open) ? 300px : 0px;
                 clip: true;
                 animate width { duration: 160ms; easing: ease-in-out; }
-                background: Theme.surface-card;
+                // Transparent when the app-background is active so the inner
+                // QueueSidebar / LyricsSidebar (already translucent) carry the
+                // tint once, not twice (no double-darkening of this column).
+                background: ShellState.app-background-active
+                    ? transparent
+                    : Theme.surface-card;
                 VerticalLayout {
                     spacing: 0px;
                     if ShellState.queue-open: QueueSidebar {
