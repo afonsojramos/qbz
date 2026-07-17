@@ -52,8 +52,14 @@ fn vs_main(@builtin(vertex_index) vid: u32) -> VsOut {
     return out;
 }
 
+// Sin-FREE hash (Dave Hoskins). The old `fract(sin(dot(p,k))*43758)` breaks on
+// NVIDIA: as the noise coords grow with time, sin's argument gets huge and the
+// driver's range-reduction precision diverges from Intel's, degenerating the
+// noise into big blocks. This integer-style fract hash is stable across GPUs.
 fn hash2(p: vec2<f32>) -> f32 {
-    return fract(sin(dot(p, vec2<f32>(127.1, 311.7))) * 43758.5453);
+    var p3 = fract(p.xyx * 0.1031);
+    p3 = p3 + dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
 }
 
 fn vnoise(p: vec2<f32>) -> f32 {

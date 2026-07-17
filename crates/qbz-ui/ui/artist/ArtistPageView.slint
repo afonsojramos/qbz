@@ -791,6 +791,7 @@ export component ArtistPageView inherits Rectangle {
                     { id: "play-next", label: @tr("Play next"), icon: @image-url("../assets/icons/list-plus.svg"), danger: false, needs-selection: true },
                     { id: "queue", label: @tr("Add to queue"), icon: @image-url("../assets/icons/list-end.svg"), danger: false, needs-selection: true },
                     { id: "add-to-playlist", label: @tr("Add to playlist"), icon: @image-url("../assets/icons/list-music.svg"), danger: false, needs-selection: true },
+                    { id: "add-to-mixtape", label: @tr("Add to Mixtape/Collection"), icon: @image-url("../assets/icons/cassette-tape.svg"), danger: false, needs-selection: true },
                     { id: "add-to-favorites", label: @tr("Add to Library"), icon: @image-url("../assets/icons/heart.svg"), danger: false, needs-selection: true },
                     { id: "clear", label: @tr("Clear"), icon: @image-url("../assets/icons/x.svg"), danger: false, needs-selection: true },
                 ];
@@ -806,9 +807,10 @@ export component ArtistPageView inherits Rectangle {
                 height: self.visible ? 50px : 0px;
                 track: track;
                 index: index;
-                // Artist Popular Tracks: number cell (no cover), with
-                // the multi-select checkbox.
-                show-artwork: false;
+                // Artist Popular Tracks: show the album cover thumbnail so you
+                // can tell which album/EP a track is from (discussion #631). The
+                // artwork URL is threaded from Rust (artist.rs top-tracks).
+                show-artwork: true;
                 multi-select-mode: ArtistState.top-tracks-multi-select;
                 media-action(kind, id, action) => {
                     root.media-action(kind, id, action);
@@ -1082,6 +1084,12 @@ export component ArtistPageView inherits Rectangle {
         viewport-height: page-flickable.viewport-height;
         visible-height: page-flickable.height;
         viewport-y <=> page-flickable.viewport-y;
+        auto-hide: true;
+        hover-active: ShellState.pointer-in-window
+            && ShellState.pointer-x >= page-flickable.absolute-position.x
+            && ShellState.pointer-x <= page-flickable.absolute-position.x + page-flickable.width
+            && ShellState.pointer-y >= page-flickable.absolute-position.y
+            && ShellState.pointer-y <= page-flickable.absolute-position.y + page-flickable.height;
     }
 
         // Network sidebar — overlay anchored to the right edge of the

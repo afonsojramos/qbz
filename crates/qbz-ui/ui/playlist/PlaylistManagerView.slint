@@ -1473,5 +1473,11 @@ export component PlaylistManagerView inherits Rectangle {
         viewport-height: pm-flick.viewport-height;
         visible-height: pm-flick.height;
         viewport-y <=> pm-flick.viewport-y;
+        auto-hide: true;
+        hover-active: ShellState.pointer-in-window
+            && ShellState.pointer-x >= pm-flick.absolute-position.x
+            && ShellState.pointer-x <= pm-flick.absolute-position.x + pm-flick.width
+            && ShellState.pointer-y >= pm-flick.absolute-position.y
+            && ShellState.pointer-y <= pm-flick.absolute-position.y + pm-flick.height;
     }
 }

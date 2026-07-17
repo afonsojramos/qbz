@@ -93,6 +93,14 @@ pub struct TrackData {
     /// apply layer stamps the viewed album's id); artist top-tracks set it
     /// per-track since they span different albums.
     pub album_id: String,
+    /// Album TITLE for the row's album column ("" when unavailable). Album view
+    /// leaves this empty (the apply layer stamps the viewed album's title);
+    /// artist top-tracks fill it per-track since they span different albums.
+    pub album: String,
+    /// Album cover URL for the row thumbnail ("" when unavailable). Same
+    /// ownership split as `album`/`album_id`: filled by artist top-tracks,
+    /// left empty by the album view (whose rows share the header cover).
+    pub artwork_url: String,
     pub duration: String,
     pub quality_tier: String,
     pub quality_detail: String,
@@ -422,6 +430,10 @@ fn map_track(track: Track) -> TrackData {
         artist_id,
         // The album view stamps the viewed album's id at the apply layer.
         album_id: String::new(),
+        // Album title + cover are stamped by the apply layer (album view rows
+        // all belong to the viewed album); leave empty here.
+        album: String::new(),
+        artwork_url: String::new(),
         duration: mmss(track.duration),
         quality_tier: tier(track.maximum_bit_depth).to_string(),
         quality_detail: crate::quality::detail(

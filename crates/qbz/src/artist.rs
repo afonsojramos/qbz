@@ -487,6 +487,18 @@ pub fn artwork_jobs(data: &ArtistData) -> Vec<ArtworkJob> {
             album_idx += 1;
         }
     }
+    // "Popular Tracks" rows carry the album-cover URL but Slint can't fetch
+    // network images — decode each into the row's `artwork` (#631). The
+    // top-tracks model is built 1:1 from `data.top_tracks` (no blacklist
+    // filter, unlike releases), so the enumerate index matches the row.
+    for (i, track) in data.top_tracks.iter().enumerate() {
+        if !track.artwork_url.is_empty() {
+            jobs.push(ArtworkJob {
+                target: ArtworkTarget::ArtistTopTrack { index: i },
+                url: track.artwork_url.clone(),
+            });
+        }
+    }
     jobs
 }
 
@@ -499,7 +511,17 @@ fn map_track(index: usize, track: PageArtistTrack) -> TrackData {
         .artist
         .map(|a| (a.name.display, a.id.to_string()))
         .unwrap_or_default();
-    let album_id = track.album.map(|a| a.id).unwrap_or_default();
+    // Pull the album id, title AND cover from the same nested album object —
+    // the /artist/page response already carries all three, so the row can show
+    // the album name + thumbnail without an extra request. `smallest()` is the
+    // list-row thumbnail variant (best() would download the mega/large cover).
+    let (album_id, album, artwork_url) = track
+        .album
+        .map(|a| {
+            let url = a.image.and_then(|img| img.smallest().cloned()).unwrap_or_default();
+            (a.id, a.title, url)
+        })
+        .unwrap_or_default();
     let bit_depth = track.audio_info.as_ref().and_then(|a| a.maximum_bit_depth);
     let sample_rate = track.audio_info.as_ref().and_then(|a| a.maximum_sampling_rate);
     TrackData {
@@ -509,6 +531,8 @@ fn map_track(index: usize, track: PageArtistTrack) -> TrackData {
         artist,
         artist_id,
         album_id,
+        album,
+        artwork_url,
         duration: mmss(track.duration.unwrap_or(0)),
         quality_tier: tier(bit_depth).to_string(),
         quality_detail: crate::quality::detail(bit_depth, sample_rate),
@@ -654,13 +678,13 @@ fn track_data_to_item(track: TrackData) -> TrackItem {
         number: track.number.into(),
         title: track.title.into(),
         artist: track.artist.into(),
-        album: "".into(),
+        album: track.album.clone().into(),
         duration: track.duration.into(),
         quality_tier: track.quality_tier.into(),
         quality_detail: track.quality_detail.into(),
         explicit: track.explicit,
         selected: false,
-        artwork_url: "".into(),
+        artwork_url: track.artwork_url.clone().into(),
         artwork: slint::Image::default(),
         is_favorite: crate::fav_cache::is_favorite(&track.id),
         artist_id: track.artist_id.into(),

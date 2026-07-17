@@ -5,7 +5,7 @@
 import { Radius } from "../foundation/radius.slint";
 import { Typography } from "../foundation/typography.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
-import { NowPlayingState, VisualizerState, ImmersiveState, ImmersiveSearchActions, ImmersiveActions, SettingsState, LyricsState, QueueState, TrackInfoActions, SuggestionsActions, WindowControlActions, ShellState, UiFocusState } from "../state.slint";
+import { NowPlayingState, VisualizerState, ImmersiveState, ImmersiveSearchActions, ImmersiveActions, SettingsState, LyricsState, QueueState, TrackInfoActions, SuggestionsActions, WindowControlActions, ShellState, UiFocusState, AppearanceState } from "../state.slint";
 import { ImmersiveSearchCortinilla } from "ImmersiveSearchCortinilla.slint";
 import { ImmersiveAtmosphere } from "ImmersiveAtmosphere.slint";
 import { AlbumReactivePanel } from "AlbumReactivePanel.slint";
@@ -414,7 +414,14 @@ component ImmersivePlayerBar inherits Rectangle {
                             ImmersiveState.open = false;
                             // Keep the tap alive if the Large NPB dock still needs
                             // its spectrum; only idle it when nothing else does.
-                            VisualizerState.set-enabled(ShellState.large-active && ShellState.large-visualizer-on);
+                            VisualizerState.set-enabled(
+                    (ShellState.large-active && ShellState.large-visualizer-on)
+                    // Keep the drain alive for the app-wide Ambient background so
+                    // it renders the ambient scene after exit instead of freezing
+                    // on the last immersive frame (stale line-bed/etc. bug).
+                    || (AppearanceState.app-background-mode-index == 1
+                        && AppearanceState.app-background-available
+                        && NowPlayingState.has-track));
                         }
                     }
                     QbzIcon {
@@ -1116,7 +1123,14 @@ component ImmersiveWindowControls inherits Rectangle {
             clicked => {
                 ImmersiveState.open = false;
                 // Keep the tap alive for the Large NPB dock if it is active.
-                VisualizerState.set-enabled(ShellState.large-active && ShellState.large-visualizer-on);
+                VisualizerState.set-enabled(
+                    (ShellState.large-active && ShellState.large-visualizer-on)
+                    // Keep the drain alive for the app-wide Ambient background so
+                    // it renders the ambient scene after exit instead of freezing
+                    // on the last immersive frame (stale line-bed/etc. bug).
+                    || (AppearanceState.app-background-mode-index == 1
+                        && AppearanceState.app-background-available
+                        && NowPlayingState.has-track));
             }
         }
 
@@ -1218,7 +1232,14 @@ export component ImmersiveView inherits Rectangle {
             if (event.text == Key.Escape) {
                 ImmersiveState.open = false;
                 // Keep the tap alive for the Large NPB dock if it is active.
-                VisualizerState.set-enabled(ShellState.large-active && ShellState.large-visualizer-on);
+                VisualizerState.set-enabled(
+                    (ShellState.large-active && ShellState.large-visualizer-on)
+                    // Keep the drain alive for the app-wide Ambient background so
+                    // it renders the ambient scene after exit instead of freezing
+                    // on the last immersive frame (stale line-bed/etc. bug).
+                    || (AppearanceState.app-background-mode-index == 1
+                        && AppearanceState.app-background-available
+                        && NowPlayingState.has-track));
                 return accept;
             }
             // 'g' (GPU) cycles the shader scene 0..5 (Off -> Plasma -> Tunnel ->

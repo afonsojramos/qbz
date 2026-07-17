@@ -1162,6 +1162,12 @@ export component AlbumPageView inherits Rectangle {
         viewport-height: flick.viewport-height;
         visible-height: flick.height;
         viewport-y <=> flick.viewport-y;
+        auto-hide: true;
+        hover-active: ShellState.pointer-in-window
+            && ShellState.pointer-x >= flick.absolute-position.x
+            && ShellState.pointer-x <= flick.absolute-position.x + flick.width
+            && ShellState.pointer-y >= flick.absolute-position.y
+            && ShellState.pointer-y <= flick.absolute-position.y + flick.height;
     }
 
     // --- Full-description modal --------------------------------------------

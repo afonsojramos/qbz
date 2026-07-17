@@ -1158,6 +1158,12 @@ export component PlaylistView inherits Rectangle {
                     viewport-height: track-list.viewport-height;
                     visible-height: track-list.visible-height;
                     viewport-y <=> track-list.viewport-y;
+                    auto-hide: true;
+                    hover-active: ShellState.pointer-in-window
+                        && ShellState.pointer-x >= track-list.absolute-position.x
+                        && ShellState.pointer-x <= track-list.absolute-position.x + track-list.width
+                        && ShellState.pointer-y >= track-list.absolute-position.y
+                        && ShellState.pointer-y <= track-list.absolute-position.y + track-list.height;
                 }
             }
 

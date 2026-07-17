@@ -641,8 +641,20 @@ fn parse_top_track(raw: &Value) -> TopTrack {
         .and_then(|a| a.get("image"))
         .map(parse_image_value)
         .unwrap_or_default();
-    // performer OR artist (the page uses either).
-    let perf = raw.get("performer").or_else(|| raw.get("artist"));
+    // performer OR artist (the page uses either). The label /page top_tracks
+    // sometimes omit a per-track performer, which left rows nameless
+    // (discussion #631) — fall back to the album's main artist so the name (and
+    // its clickable id) is populated.
+    let perf = raw
+        .get("performer")
+        .or_else(|| raw.get("artist"))
+        .filter(|p| {
+            p.get("name")
+                .and_then(|v| v.as_str())
+                .map(|s| !s.trim().is_empty())
+                .unwrap_or(false)
+        })
+        .or_else(|| album.and_then(|a| a.get("artist")));
     let artist = perf
         .and_then(|p| p.get("name"))
         .map(name_display)

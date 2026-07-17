@@ -122,6 +122,11 @@ pub enum ArtworkTarget {
     ArtistReleasesAlbum { index: usize },
     /// A Magazine story thumbnail in `ArtistState.stories[index]`.
     ArtistStory { index: usize },
+    /// A row in `ArtistState.top-tracks[index]` (artist "Popular Tracks"
+    /// list). Mirrors `LabelTopTrack`: Slint can't fetch network images, so
+    /// the row's album-cover thumbnail only paints once this job decodes the
+    /// `artwork_url` bytes into the row's `artwork` field (#631).
+    ArtistTopTrack { index: usize },
     /// A card in MusicianState.appearances[index].
     MusicianAppearance { index: usize },
     /// A card in LabelState.albums[index] (releases sub-view grid).
@@ -295,6 +300,10 @@ impl ArtworkTarget {
             | ArtworkTarget::PlaylistTrack { .. }
             | ArtworkTarget::SuggestionTrackCover { .. }
             | ArtworkTarget::PlaylistSuggestionCover { .. }
+            // Label/Artist "Popular Tracks" rows are the same list-row
+            // thumbnail as the track targets above (~40px rendered).
+            | ArtworkTarget::LabelTopTrack { .. }
+            | ArtworkTarget::ArtistTopTrack { .. }
             | ArtworkTarget::LocalArtistRowImage { .. } => 96,
             // Sidebar micro-collage tiles render at ~10-20px; decode tiny.
             ArtworkTarget::SidebarPlaylistCover { .. } => 48,
@@ -1209,6 +1218,13 @@ fn apply_artwork(
             let model = window.global::<ArtistState>().get_stories();
             if let Some(mut item) = model.row_data(index) {
                 item.image = image;
+                model.set_row_data(index, item);
+            }
+        }
+        ArtworkTarget::ArtistTopTrack { index } => {
+            let model = window.global::<ArtistState>().get_top_tracks();
+            if let Some(mut item) = model.row_data(index) {
+                item.artwork = image;
                 model.set_row_data(index, item);
             }
         }

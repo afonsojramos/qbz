@@ -1917,6 +1917,65 @@ fn open_add_to_mixtape(
     });
 }
 
+/// Build "Add to Mixtape" track payloads from Qobuz `Track` objects (the
+/// Favorites, Label and Mix bulk bars — issue #446). `item_type: "track"`
+/// auto-restricts the picker to mixtapes; title/artist/artwork enrich the
+/// picker rows. Rows without a numeric id are dropped (they cannot be added).
+fn mixtape_items_from_qobuz_tracks(tracks: &[qbz_models::Track]) -> Vec<myqbz_add::AddItem> {
+    tracks
+        .iter()
+        .filter(|t| t.id != 0)
+        .map(|t| {
+            let subtitle = t
+                .performer
+                .as_ref()
+                .map(|a| a.name.clone())
+                .filter(|s| !s.is_empty());
+            let artwork_url = t
+                .album
+                .as_ref()
+                .and_then(|a| a.image.best().cloned())
+                .filter(|u| !u.is_empty());
+            myqbz_add::AddItem {
+                item_type: "track".into(),
+                source: "qobuz".into(),
+                source_item_id: t.id.to_string(),
+                title: t.title.clone(),
+                subtitle,
+                artwork_url,
+                year: None,
+                track_count: None,
+            }
+        })
+        .collect()
+}
+
+/// Build "Add to Mixtape" track payloads from the Artist Popular-Tracks
+/// selection (issue #446). The artist view only exposes `selected_ids`, so we
+/// read the selected `TrackItem` rows directly for their display fields.
+fn mixtape_items_from_artist_selection(window: &AppWindow) -> Vec<myqbz_add::AddItem> {
+    use slint::Model;
+    let model = window.global::<ArtistState>().get_top_tracks();
+    (0..model.row_count())
+        .filter_map(|i| model.row_data(i))
+        .filter(|t| t.selected && t.id.as_str().parse::<u64>().is_ok())
+        .map(|t| {
+            let subtitle = (!t.artist.is_empty()).then(|| t.artist.to_string());
+            let artwork_url = (!t.artwork_url.is_empty()).then(|| t.artwork_url.to_string());
+            myqbz_add::AddItem {
+                item_type: "track".into(),
+                source: "qobuz".into(),
+                source_item_id: t.id.to_string(),
+                title: t.title.to_string(),
+                subtitle,
+                artwork_url,
+                year: None,
+                track_count: None,
+            }
+        })
+        .collect()
+}
+
 /// Update the offline cache-status (+ progress) of every visible row matching
 /// `track_id`. Mirrors `set_row_favorite`. status: 0 none / 1 queued / 2
 /// downloading / 3 ready / 4 failed; `progress` is 0.0..1.0.
@@ -11666,6 +11725,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                 }
+                ("label", "add-to-mixtape") => {
+                    if let Some(w) = weak.upgrade() {
+                        let items =
+                            mixtape_items_from_qobuz_tracks(&label::selected_play_tracks(&w));
+                        if !items.is_empty() {
+                            open_add_to_mixtape(weak.clone(), handle.clone(), items);
+                            label::clear_selection(&w);
+                        }
+                    }
+                }
                 // More-Labels card click -> open that label's landing.
                 ("label", "open") => {
                     if let Ok(label_id) = id.parse::<u64>() {
@@ -11935,6 +12004,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     playlist_picker::apply(&w, playlists);
                                 });
                             });
+                        }
+                    }
+                }
+                ("mix", "add-to-mixtape") => {
+                    if let Some(w) = weak.upgrade() {
+                        let items =
+                            mixtape_items_from_qobuz_tracks(&mix::selected_play_tracks(&w));
+                        if !items.is_empty() {
+                            open_add_to_mixtape(weak.clone(), handle.clone(), items);
+                            mix::clear_selection(&w);
                         }
                     }
                 }
@@ -13676,6 +13755,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 crate::toast::success(&w, "Added to favorites");
                             });
                         });
+                    }
+                    "add-to-mixtape" => {
+                        let items = mixtape_items_from_artist_selection(&w);
+                        if !items.is_empty() {
+                            open_add_to_mixtape(weak.clone(), handle.clone(), items);
+                            artist::clear_selection(&w);
+                        }
                     }
                     _ => {}
                 }
@@ -20809,6 +20895,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             tracks,
                         );
                         favorites::clear_selection(&w);
+                    }
+                    "add-to-mixtape" => {
+                        let items =
+                            mixtape_items_from_qobuz_tracks(&favorites::selected_tracks(&w));
+                        if !items.is_empty() {
+                            open_add_to_mixtape(weak.clone(), handle.clone(), items);
+                            favorites::clear_selection(&w);
+                        }
                     }
                     "add-to-playlist" => {
                         let ids = favorites::selected_ids(&w);
