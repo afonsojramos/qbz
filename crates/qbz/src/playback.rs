@@ -253,6 +253,16 @@ const MAX_OFFLINE_SKIPS: usize = 5;
 static UNAVAILABLE_SKIPS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 const MAX_UNAVAILABLE_SKIPS: u32 = 5;
 
+/// Watchdog-driven recovery for a track whose initial load HUNG rather than
+/// erroring — a transient network stall during the CMAF setup / initial-buffer
+/// wait, which the legacy fallback (an error-stage path) never catches, so the
+/// track would otherwise silently die at the 45s watchdog. Keyed to the stuck
+/// track id: a new stuck track resets the count. Re-start the current track a
+/// couple of times (the stall is usually over by the 45s mark), then skip.
+static WATCHDOG_RECOVER_TRACK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static WATCHDOG_RECOVERIES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+const MAX_WATCHDOG_RECOVERIES: u32 = 2;
+
 /// True when a stringified play error means the track cannot play now or
 /// ever at any quality — as opposed to a transient network/server failure
 /// (those are already retried with backoff inside the client and must NOT
@@ -1657,6 +1667,17 @@ fn mpris_meta_changed(key: &(u64, Option<String>)) -> bool {
 
 pub(crate) async fn refresh_now_playing_meta(runtime: &Runtime, weak: &slint::Weak<AppWindow>) {
     let state = runtime.core().get_queue_state().await;
+    // Seed the transport shuffle/repeat onto the bar so a restored (or already
+    // shuffling/repeating) queue lights those buttons — previously only a manual
+    // toggle set NowPlayingState.shuffle/repeat, so after a session restore the
+    // state was ON in the core but the NPB shuffle/repeat icons stayed dark.
+    // RepeatMode -> the i32 the NPB uses (mirrors cycle-repeat's mapping).
+    let shuffle_seed = state.shuffle;
+    let repeat_seed = match state.repeat {
+        RepeatMode::Off => 0,
+        RepeatMode::All => 1,
+        RepeatMode::One => 2,
+    };
     let Some(track) = state.current_track else {
         // No current track → clear the tray tooltip (Linux) + stop media controls.
         // Reset the notify guard so replaying the same track after a stop fires.
@@ -1919,6 +1940,8 @@ pub(crate) async fn refresh_now_playing_meta(runtime: &Runtime, weak: &slint::We
     let _ = weak.upgrade_in_event_loop(move |w| {
         let np = w.global::<NowPlayingState>();
         np.set_has_track(true);
+        np.set_shuffle(shuffle_seed);
+        np.set_repeat_mode(repeat_seed);
         np.set_title(title.into());
         np.set_artist(artist.into());
         np.set_album(album_display.into());
@@ -4640,6 +4663,10 @@ pub fn start_poll_loop(
                 // Real audio ends any unavailable-skip streak (Tauri parity:
                 // `consecutiveSkips = 0` on successful play).
                 UNAVAILABLE_SKIPS.store(0, std::sync::atomic::Ordering::SeqCst);
+                // ...and any watchdog-recovery streak: the load that was stuck
+                // is now producing audio, so future stalls start fresh.
+                WATCHDOG_RECOVERIES.store(0, std::sync::atomic::Ordering::SeqCst);
+                WATCHDOG_RECOVER_TRACK.store(0, std::sync::atomic::Ordering::SeqCst);
             } else {
                 // Watchdog: a play the engine accepted but that never advances
                 // (undecodable-but-valid-looking file, zero-frame stream) would
@@ -4650,11 +4677,53 @@ pub fn start_poll_loop(
                         PENDING_PLAY_AT_MS.load(std::sync::atomic::Ordering::Relaxed),
                     ) > LOADING_WATCHDOG_MS
                 {
-                    log::warn!(
-                        "[qbz-slint] loading watchdog: track {pending} never started after {}ms, clearing spinner",
-                        LOADING_WATCHDOG_MS
-                    );
-                    clear_loading(&weak, 0);
+                    // A load that hung (not errored) never triggers the legacy
+                    // fallback, so recover here instead of just clearing the
+                    // spinner: re-start the stuck track a couple of times, then
+                    // skip to the next playable one (owner: recover, worst case
+                    // skip). Per-track count so a new stuck track starts fresh.
+                    if WATCHDOG_RECOVER_TRACK
+                        .swap(pending, std::sync::atomic::Ordering::SeqCst)
+                        != pending
+                    {
+                        WATCHDOG_RECOVERIES.store(0, std::sync::atomic::Ordering::SeqCst);
+                    }
+                    let n = WATCHDOG_RECOVERIES
+                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                        + 1;
+                    // Re-arm the watchdog window so it gives the retry/skip a
+                    // fresh ceiling before firing again.
+                    PENDING_PLAY_AT_MS.store(now_ms(), std::sync::atomic::Ordering::Relaxed);
+                    let runtime = runtime.clone();
+                    let weak = weak.clone();
+                    if n <= MAX_WATCHDOG_RECOVERIES {
+                        log::warn!(
+                            "[qbz-slint] loading watchdog: track {pending} stuck after {}ms — recovery attempt {n}/{MAX_WATCHDOG_RECOVERIES} (re-starting current track)",
+                            LOADING_WATCHDOG_MS
+                        );
+                        // A fresh play generation supersedes the hung load and
+                        // re-attempts; the stall has usually cleared by now.
+                        tokio::spawn(async move {
+                            after_track_change(&runtime, &weak, pending).await;
+                        });
+                    } else {
+                        log::warn!(
+                            "[qbz-slint] loading watchdog: track {pending} still stuck after {MAX_WATCHDOG_RECOVERIES} retries — skipping to the next playable track"
+                        );
+                        WATCHDOG_RECOVERIES.store(0, std::sync::atomic::Ordering::SeqCst);
+                        WATCHDOG_RECOVER_TRACK.store(0, std::sync::atomic::Ordering::SeqCst);
+                        tokio::spawn(async move {
+                            if let Some(track) =
+                                advance_to_playable(&runtime, &weak, true).await
+                            {
+                                let track_id = track.id;
+                                after_track_change(&runtime, &weak, track_id).await;
+                                refresh_sidebar(true);
+                            } else {
+                                clear_loading(&weak, 0);
+                            }
+                        });
+                    }
                 }
             }
 
