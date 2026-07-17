@@ -20,6 +20,7 @@ import {
     PmTreeRow,
     NavState,
     UiFocusState,
+    ShellState,
 } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
@@ -1080,7 +1081,7 @@ export component PlaylistManagerView inherits Rectangle {
                 : @image-url("../assets/icons/layout-grid.svg"))
         : @image-url("../assets/icons/layout-grid.svg");
 
-    background: Theme.surface-main;
+    background: ShellState.app-background-active ? transparent : Theme.surface-main;
 
     VerticalLayout {
         spacing: 0px;

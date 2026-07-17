@@ -118,7 +118,7 @@ export component AwardAlbumsView inherits Rectangle {
     property <length> album-h: 266px;
     property <length> gap: 24px;
 
-    background: Theme.surface-main;
+    background: ShellState.app-background-active ? transparent : Theme.surface-main;
 
     VerticalLayout {
         spacing: 0px;

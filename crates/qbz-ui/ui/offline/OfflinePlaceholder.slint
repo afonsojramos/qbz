@@ -9,10 +9,10 @@ import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { SecondaryButton } from "../primitives/SecondaryButton.slint";
-import { OfflineState, NavState, SettingsState } from "../state.slint";
+import { OfflineState, NavState, SettingsState, ShellState } from "../state.slint";
 
 export component OfflinePlaceholder inherits Rectangle {
-    background: Theme.surface-main;
+    background: ShellState.app-background-active ? transparent : Theme.surface-main;
 
     // 2 = induced offline (OfflineState.mode semantics: 0 online / 1 real / 2 induced).
     property <bool> induced: OfflineState.mode == 2;

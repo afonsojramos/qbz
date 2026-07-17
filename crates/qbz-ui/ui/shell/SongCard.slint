@@ -12,7 +12,7 @@ import { Typography } from "../foundation/typography.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { QualityBadgeFull } from "../primitives/QualityBadgeFull.slint";
 import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
-import { NowPlayingState, SettingsState, TooltipState, ArtPreviewState } from "../state.slint";
+import { NowPlayingState, SettingsState, TooltipState, ArtPreviewState, ShellState } from "../state.slint";
 
 // Clickable artist/album link. Elides and shares the row width through a
 // stretch factor (the artist gets the larger share) so neither can be pushed
@@ -184,7 +184,11 @@ export component SongCard inherits Rectangle {
         - (root.has-stamp ? root.stamp-w + 4px : 0px)
         - (root.show-art ? root.art-size + root.art-text-gap : 0px));
 
-    background: root.glass ? Theme.surface-elevated : transparent;
+    // Transparent when the app-wide background is active so the card blends into
+    // the (already translucent) player bar instead of showing an opaque slab.
+    background: ShellState.app-background-active
+        ? transparent
+        : (root.glass ? Theme.surface-elevated : transparent);
     border-radius: root.glass ? 8px : 0px;
     // No border — keeps the album art flush with the card (Tauri parity).
     drop-shadow-blur: root.glass ? 8px : 0px;

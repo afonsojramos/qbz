@@ -21,7 +21,7 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { BlacklistState, BlacklistActions, UiFocusState } from "../state.slint";
+import { BlacklistState, BlacklistActions, UiFocusState, ShellState } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { ListScrollbar } from "../primitives/ListScrollbar.slint";
 import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
@@ -246,7 +246,7 @@ component AlbumRow inherits Rectangle {
 }
 
 export component BlacklistManagerView inherits Rectangle {
-    background: Theme.surface-main;
+    background: ShellState.app-background-active ? transparent : Theme.surface-main;
 
     // Local modal flag (Clear-All confirmation). Lives in the view; the
     // confirm only fires BlacklistActions.clear-all on the danger button.

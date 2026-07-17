@@ -27,7 +27,7 @@ export component ArtistReleasesView inherits Rectangle {
         ArtistReleasesState.sort-by == "title-asc" ? 3 :
         ArtistReleasesState.sort-by == "title-desc" ? 4 : 0;
 
-    background: Theme.surface-main;
+    background: ShellState.app-background-active ? transparent : Theme.surface-main;
 
     VerticalLayout {
         spacing: 0px;

@@ -13,6 +13,7 @@ import {
     MusicianActions,
     MusicianAppearanceItem,
     NavState,
+    ShellState,
 } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
@@ -89,7 +90,7 @@ export component MusicianPageView inherits Rectangle {
     property <length> card-height: 270px;
     property <length> card-gap: 24px;
 
-    background: Theme.surface-main;
+    background: ShellState.app-background-active ? transparent : Theme.surface-main;
 
     flick := Flickable {
         viewport-width: self.width;

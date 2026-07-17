@@ -91,27 +91,29 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     var uv = in.uv;
     uv.x = uv.x * aspect;
 
-    // Slow clock. Long periods → a background that morphs over ~20-40s, never
-    // strobes. `level_smooth` adds a barely-there breathe (kept small on purpose).
-    let t = u.time * 0.04;
-    let breathe = 1.0 + 0.06 * u.level_smooth;
+    // Clock. FAST enough that the flow is clearly visible in seconds (blob
+    // orbits are ~10-18s) — a subtle drift reads as "not moving". `level_smooth`
+    // adds a gentle breathe on top when audio is flowing.
+    let t = u.time * 0.5;
+    let breathe = 1.0 + 0.10 * u.level_smooth;
 
-    // Gentle domain warp so the blobs don't move on rigid circles.
+    // Stronger domain warp so the blobs flow like fluid, not on rigid circles.
     let warp = vec2<f32>(
-        fbm(uv * 1.6 + vec2<f32>(t, 0.0)),
-        fbm(uv * 1.6 + vec2<f32>(0.0, t * 0.9)),
+        fbm(uv * 1.8 + vec2<f32>(t * 0.6, t * 0.2)),
+        fbm(uv * 1.8 + vec2<f32>(-t * 0.25, t * 0.55)),
     );
-    let p = uv + (warp - 0.5) * 0.35;
+    let p = uv + (warp - 0.5) * 0.55;
 
-    // Three album-colored blobs drifting on long-period sinusoids.
-    let cA = vec2<f32>(0.30 * aspect + 0.22 * aspect * sin(t * 0.7),
-                       0.35 + 0.20 * cos(t * 0.53));
-    let cB = vec2<f32>(0.72 * aspect + 0.20 * aspect * sin(t * 0.6 + 2.1),
-                       0.62 + 0.22 * cos(t * 0.47 + 1.3));
-    let cC = vec2<f32>(0.52 * aspect + 0.24 * aspect * cos(t * 0.5 + 4.0),
-                       0.28 + 0.18 * sin(t * 0.63 + 3.2));
+    // Three album-colored blobs sweeping across most of the screen (big travel
+    // so the motion is obvious), each on its own period so they never lock.
+    let cA = vec2<f32>((0.35 + 0.34 * sin(t * 0.41)) * aspect,
+                       0.42 + 0.30 * cos(t * 0.33));
+    let cB = vec2<f32>((0.66 + 0.32 * sin(t * 0.37 + 2.1)) * aspect,
+                       0.58 + 0.34 * cos(t * 0.29 + 1.3));
+    let cC = vec2<f32>((0.50 + 0.36 * cos(t * 0.31 + 4.0)) * aspect,
+                       0.34 + 0.30 * sin(t * 0.44 + 3.2));
 
-    let r = 0.55 * breathe;
+    let r = 0.62 * breathe;
     let wA = blob(p, cA, r);
     let wB = blob(p, cB, r * 0.92);
     let wC = blob(p, cC, r * 0.85);
@@ -119,15 +121,20 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 
     var col = (u.primary.rgb * wA + u.secondary.rgb * wB + u.accent.rgb * wC) / wSum;
 
-    // Vertical falloff → a touch darker at the very top/bottom edges, so chrome
+    // Push saturation/contrast a touch so the album hues read as a living
+    // gradient rather than a muddy average.
+    let luma = dot(col, vec3<f32>(0.299, 0.587, 0.114));
+    col = mix(vec3<f32>(luma), col, 1.25);
+
+    // Vertical falloff → a touch darker at the very top/bottom edges so chrome
     // (titlebar, player bar) sits on calmer color. Kept subtle.
-    let vshade = 1.0 - 0.18 * pow(abs(in.uv.y - 0.5) * 2.0, 2.0);
+    let vshade = 1.0 - 0.16 * pow(abs(in.uv.y - 0.5) * 2.0, 2.0);
     col = col * vshade;
 
-    // Overall brightness pull-down: this is a BACKGROUND. The Slint scrim adds
-    // the real legibility dim; this just keeps the base from ever glaring on a
-    // white-heavy album palette.
-    col = col * 0.62;
+    // Overall brightness: brighter than before — the content area now shows the
+    // full background, and the Slint scrim (QBZ_BG_DIM) provides the legibility
+    // dim, so the base can stay vivid without glaring.
+    col = clamp(col, vec3<f32>(0.0), vec3<f32>(1.0)) * 0.82;
 
     // A whisper of grain to avoid banding on the smooth gradient.
     let grain = (vnoise(in.uv * u.resolution * 0.5) - 0.5) * 0.015;

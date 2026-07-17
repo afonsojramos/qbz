@@ -79,7 +79,7 @@ export component PlaylistBrowseView inherits Rectangle {
     // 36px tag bar when the tag set is non-empty.
     property <length> header-h: PlaylistBrowseState.tags.length > 0 ? 92px : 56px;
 
-    background: Theme.surface-main;
+    background: ShellState.app-background-active ? transparent : Theme.surface-main;
 
     VerticalLayout {
         spacing: 0px;

@@ -325,8 +325,12 @@ export component AppShell inherits Rectangle {
                             - (ShellState.npb-mode == 2 ? Layout.header-height : Layout.player-bar-height)
                             - 8px;
                         vertical-stretch: 1;
+                        // Fully transparent when the background is active so the
+                        // dynamic background shows through the content area (the
+                        // views inside also go transparent); the root scrim keeps
+                        // text legible. Opaque theme surface otherwise.
                         background: ShellState.app-background-active
-                            ? Theme.surface-main.with-alpha(AppearanceState.app-background-surface-alpha)
+                            ? transparent
                             : Theme.surface-main;
                             border-radius: Radius.md;
                             clip: true;

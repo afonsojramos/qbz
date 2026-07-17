@@ -186,7 +186,7 @@ export component AlbumPageView inherits Rectangle {
     // the page layout, so this cannot form a binding loop.
     property <length> atmo-height: page.y + header-divider.y;
 
-    background: Theme.surface-main;
+    background: ShellState.app-background-active ? transparent : Theme.surface-main;
 
     flick := Flickable {
         // Full-width: the gradient + page background bleed edge-to-edge so

@@ -20,6 +20,7 @@ import {
     GenreFilterActions,
     AlphaJump,
     NavState,
+    ShellState,
 } from "../state.slint";
 import { AlbumCollectionView } from "../discover/AlbumCollectionView.slint";
 import { PlaylistCard } from "../discover/PlaylistCard.slint";
@@ -382,7 +383,7 @@ export component FavoritesView inherits Rectangle {
     property <length> artist-h: 200px;
     property <length> gap: 24px;
 
-    background: Theme.surface-main;
+    background: ShellState.app-background-active ? transparent : Theme.surface-main;
 
     VerticalLayout {
         spacing: 0px;

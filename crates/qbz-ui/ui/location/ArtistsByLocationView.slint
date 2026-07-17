@@ -7,7 +7,7 @@
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
-import { LocationViewState, LocationViewActions, LocationArtistItem, NavState } from "../state.slint";
+import { LocationViewState, LocationViewActions, LocationArtistItem, NavState, ShellState } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
 import { ListScrollbar } from "../primitives/ListScrollbar.slint";
@@ -82,7 +82,7 @@ export component ArtistsByLocationView inherits Rectangle {
     property <length> card-height: 210px;
     property <length> card-gap: 20px;
 
-    background: Theme.surface-main;
+    background: ShellState.app-background-active ? transparent : Theme.surface-main;
 
     flick := Flickable {
         viewport-width: self.width;

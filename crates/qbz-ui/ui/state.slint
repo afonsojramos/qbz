@@ -3252,8 +3252,8 @@ export global AppearanceState {
     // session without recompiling, then baked to constants. `dim` = extra dark
     // scrim over the background for legibility; `surface-alpha` = translucency
     // of the shell chrome when the background is active.
-    in-out property <float> app-background-dim: 0.28;
-    in-out property <float> app-background-surface-alpha: 0.55;
+    in-out property <float> app-background-dim: 0.35;
+    in-out property <float> app-background-surface-alpha: 0.5;
 
     // Callbacks. Unwired in this replica — the Rust side may bind them
     // later. Kept generic (key + value) so the controller can dispatch.

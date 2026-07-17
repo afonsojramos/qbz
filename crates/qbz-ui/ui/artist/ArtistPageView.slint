@@ -172,7 +172,7 @@ export component ArtistPageView inherits Rectangle {
         NetworkSidebarState.open = !root.net-cramped;
     }
 
-    background: Theme.surface-main;
+    background: ShellState.app-background-active ? transparent : Theme.surface-main;
 
     // Single page-wide Flickable — the gradient header + body row
     // (main content + sidebar-slot placeholder) all live inside it so

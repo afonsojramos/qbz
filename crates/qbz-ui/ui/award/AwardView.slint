@@ -14,7 +14,7 @@
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
-import { AwardState, AwardActions, NavState, DragState } from "../state.slint";
+import { AwardState, AwardActions, NavState, DragState, ShellState } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { CircleAction } from "../primitives/CircleAction.slint";
 import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
@@ -34,7 +34,7 @@ export component AwardView inherits Rectangle {
     callback open-artist(string);
     callback media-action(string, string, string);
 
-    background: Theme.surface-main;
+    background: ShellState.app-background-active ? transparent : Theme.surface-main;
 
     page-flickable := Flickable {
         // Don't scroll while a track is being dragged out (keeps the row's

@@ -30,6 +30,7 @@ import {
     PurchaseTrackGroup,
     PurchaseFormatItem,
     UiFocusState,
+    ShellState,
 } from "../state.slint";
 
 // ── A toolbar dropdown button (group / sort) — the favorites toolbar look ──
@@ -1306,7 +1307,7 @@ export component PurchasesView inherits Rectangle {
     callback open-artist(string);
     callback media-action(string, string, string);
 
-    background: Theme.surface-main;
+    background: ShellState.app-background-active ? transparent : Theme.surface-main;
 
     // Outside-press dismissal for any open menu (§2.1.16): a full-area
     // TouchArea behind the content that closes `open-menu` on a press that

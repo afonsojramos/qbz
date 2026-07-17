@@ -8,7 +8,7 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { MixState, DragState, NavState, BulkAction } from "../state.slint";
+import { MixState, DragState, NavState, BulkAction, ShellState } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { TrackRow } from "../primitives/TrackRow.slint";
 import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
@@ -69,7 +69,7 @@ export component MixView inherits Rectangle {
             ? @linear-gradient(135deg, #7f1d1d 0%, #ef4444 50%, #fb923c 100%)
             : @linear-gradient(135deg, #1f2937 0%, #4b5563 50%, #fbbf24 100%);
 
-    background: Theme.surface-main;
+    background: ShellState.app-background-active ? transparent : Theme.surface-main;
 
     flick := Flickable {
         interactive: !DragState.active;

@@ -716,7 +716,9 @@ export component HeaderBar inherits Rectangle {
             border-radius: 6px;
             border-width: 1px;
             border-color: Theme.border-subtle;
-            background: Theme.surface-elevated;
+            background: ShellState.app-background-active
+                ? Theme.surface-elevated.with-alpha(AppearanceState.app-background-surface-alpha)
+                : Theme.surface-elevated;
 
             // Magnifier — absolutely positioned on the left so it does NOT take
             // layout space; the text/placeholder center against the full input

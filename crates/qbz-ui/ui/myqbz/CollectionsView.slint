@@ -9,7 +9,7 @@
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
-import { MyQbzState, MyQbzActions, MixtapeCardItem, NavState } from "../state.slint";
+import { MyQbzState, MyQbzActions, MixtapeCardItem, NavState, ShellState } from "../state.slint";
 import { ExpandableSearch } from "../primitives/ExpandableSearch.slint";
 import { QbzSelect } from "../primitives/QbzSelect.slint";
 import { ListScrollbar } from "../primitives/ListScrollbar.slint";
@@ -31,7 +31,7 @@ export component CollectionsView inherits Rectangle {
         : MyQbzState.col-kind-filter == "artist_collection" ? 2
         : 0;
 
-    background: Theme.surface-main;
+    background: ShellState.app-background-active ? transparent : Theme.surface-main;
 
     flick := Flickable {
         viewport-width: self.width;

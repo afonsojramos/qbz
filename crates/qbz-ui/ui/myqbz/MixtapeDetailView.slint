@@ -23,7 +23,7 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { MyQbzDetailState, MyQbzDetailActions, MixtapeDetailItem, TrackItem, NavState } from "../state.slint";
+import { MyQbzDetailState, MyQbzDetailActions, MixtapeDetailItem, TrackItem, NavState, ShellState } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { CircleAction } from "../primitives/CircleAction.slint";
 import { ToggleButton } from "../primitives/ToggleButton.slint";
@@ -593,7 +593,7 @@ export component MixtapeDetailView inherits Rectangle {
     property <length> grid-min-w: 150px;
     property <length> grid-gap: 20px;
 
-    background: Theme.surface-main;
+    background: ShellState.app-background-active ? transparent : Theme.surface-main;
 
     // ===================== LOADING =====================================
     if MyQbzDetailState.loading: HorizontalLayout {

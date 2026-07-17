@@ -31,7 +31,7 @@ import { TrackRow } from "../primitives/TrackRow.slint";
 import { ToggleButton } from "../primitives/ToggleButton.slint";
 import { MultiSelectBar } from "../primitives/MultiSelectBar.slint";
 import { TooltipState } from "../state.slint";
-import { UiFocusState } from "../state.slint";
+import { UiFocusState, ShellState } from "../state.slint";
 import { SegmentedTabBar, SegTab } from "../primitives/SegmentedTabBar.slint";
 import { ListView } from "std-widgets.slint";
 
@@ -702,7 +702,7 @@ component FilterChip inherits Rectangle {
 }
 
 export component LocalLibraryView inherits Rectangle {
-    background: Theme.surface-main;
+    background: ShellState.app-background-active ? transparent : Theme.surface-main;
 
     VerticalLayout {
         spacing: 0px;

@@ -7,7 +7,7 @@
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
-import { LocalAlbumState, LocalAlbumActions, LocalAlbumVersion, NowPlayingState, NavState, DragState, UiFocusState } from "../state.slint";
+import { LocalAlbumState, LocalAlbumActions, LocalAlbumVersion, NowPlayingState, NavState, DragState, UiFocusState, ShellState } from "../state.slint";
 import { NavButtons } from "../shell/NavButtons.slint";
 import { CircleAction } from "../primitives/CircleAction.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
@@ -148,7 +148,7 @@ export component LocalAlbumView inherits Rectangle {
     // Navigate to the artist (the NAME — local/Plex artists have no id; the
     // source-aware open-artist routes a name to the LocalLibrary Artists tab).
     callback open-artist(string);
-    background: Theme.surface-main;
+    background: ShellState.app-background-active ? transparent : Theme.surface-main;
 
     // Homologated 1:1 with the Qobuz AlbumPageView: whole-page Flickable, the
     // same header proportions + action row, the toolbar (quality badge + track

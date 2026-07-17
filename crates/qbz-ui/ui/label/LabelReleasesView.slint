@@ -10,7 +10,7 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { LabelState, LabelActions, NavState } from "../state.slint";
+import { LabelState, LabelActions, NavState, ShellState } from "../state.slint";
 import { AlbumCollectionView } from "../discover/AlbumCollectionView.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { QbzSelect } from "../primitives/QbzSelect.slint";
@@ -27,7 +27,7 @@ export component LabelReleasesView inherits Rectangle {
 
     property <length> list-row-gap: 4px;
 
-    background: Theme.surface-main;
+    background: ShellState.app-background-active ? transparent : Theme.surface-main;
 
     flick := Flickable {
         viewport-width: self.width;

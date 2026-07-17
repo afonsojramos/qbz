@@ -12,7 +12,7 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { LabelState, LabelActions, TrackItem, DragState, NavState, BulkAction } from "../state.slint";
+import { LabelState, LabelActions, TrackItem, DragState, NavState, BulkAction, ShellState } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { TrackRow } from "../primitives/TrackRow.slint";
 import { CircleAction } from "../primitives/CircleAction.slint";
@@ -44,7 +44,7 @@ export component LabelPageView inherits Rectangle {
     // Popular Tracks progressive reveal: 5 -> 20 -> 50 (Tauri's steps).
     property <int> preview-count: 5;
 
-    background: Theme.surface-main;
+    background: ShellState.app-background-active ? transparent : Theme.surface-main;
 
     page-flickable := Flickable {
         // Don't scroll while a track is being dragged out (keeps the row's

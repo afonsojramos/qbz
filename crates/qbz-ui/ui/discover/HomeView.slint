@@ -160,7 +160,7 @@ export component HomeView inherits Rectangle {
     // the link.
     callback discover-view-all(string, string);
 
-    background: Theme.surface-main;
+    background: ShellState.app-background-active ? transparent : Theme.surface-main;
 
     // The view remounts on every navigation to Home (AppShell's `if` mount),
     // so this is the "Home regained focus" hook: Rust re-reads the LOCAL

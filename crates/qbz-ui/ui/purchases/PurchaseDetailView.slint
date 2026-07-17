@@ -30,6 +30,7 @@ import {
     PurchaseDetailState,
     PurchaseDetailActions,
     PurchaseDetailTrack,
+    ShellState,
 } from "../state.slint";
 
 // ── One detail track row (bespoke, §2.2.5) ──────────────────────────────────
@@ -210,7 +211,7 @@ component DetailTrackRow inherits Rectangle {
 }
 
 export component PurchaseDetailView inherits Rectangle {
-    background: Theme.surface-main;
+    background: ShellState.app-background-active ? transparent : Theme.surface-main;
 
     // ── REACTIVE RELOAD (§A.3) ──────────────────────────────────────────────
     // Fire a fresh load whenever the bound album id changes (and on first

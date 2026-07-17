@@ -158,7 +158,7 @@ component BulkIconBtn inherits Rectangle {
 }
 
 export component OfflineManagerView inherits Rectangle {
-    background: Theme.surface-main;
+    background: ShellState.app-background-active ? transparent : Theme.surface-main;
 
     VerticalLayout {
         padding: 24px;
