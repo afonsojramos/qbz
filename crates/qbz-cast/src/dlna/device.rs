@@ -83,6 +83,24 @@ impl DlnaConnection {
             rendering_control_service.is_some()
         );
 
+        // Clear any residual transport state the renderer kept from a previous
+        // session/app run. Without this, a renderer left mid-playback re-requests
+        // its orphaned CurrentURI against our fresh media server (new path token
+        // -> 403 loop) AND reports a stale PLAYING position, which poisons
+        // `cast_max_position` and trips the premature-STOPPED end-detection guard
+        // into auto-advancing the FIRST cast track. Best-effort: a renderer with
+        // nothing loaded may reject Stop, which is fine.
+        if let Some(av) = av_transport_service.as_ref() {
+            let _ = Self::run_action(
+                av,
+                &device_url,
+                "Stop",
+                "<InstanceID>0</InstanceID>",
+                5,
+            )
+            .await;
+        }
+
         Ok(Self {
             device,
             connected: true,
