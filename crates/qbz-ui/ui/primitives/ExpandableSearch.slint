@@ -10,6 +10,7 @@ import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { QbzIcon } from "QbzIcon.slint";
 import { UiFocusState } from "../focus-state.slint";
+import { ShellState, AppearanceState } from "../state.slint";
 
 export component ExpandableSearch inherits Rectangle {
     in property <string> placeholder: @tr("Search…");
@@ -76,7 +77,9 @@ export component ExpandableSearch inherits Rectangle {
         x: parent.width - self.width;
         width: root.open ? root.max-open-width : 0px;
         height: root.sm ? 30px : 34px;
-        background: Theme.surface-card;
+        background: ShellState.app-background-active
+            ? Theme.surface-card.with-alpha(AppearanceState.app-background-surface-alpha)
+            : Theme.surface-card;
         border-radius: 6px;
         border-width: root.open ? 1px : 0px;
         // Focused border uses the dedicated focus-ring token (accent-equal in

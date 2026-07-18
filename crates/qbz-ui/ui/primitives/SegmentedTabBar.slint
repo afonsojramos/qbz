@@ -6,6 +6,7 @@
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
+import { ShellState, AppearanceState } from "../state.slint";
 
 // One entry in the navigator. `count <= 0` hides the badge.
 export struct SegTab {
@@ -24,7 +25,10 @@ component Segment inherits Rectangle {
     callback clicked();
 
     border-radius: 4px;
-    background: root.active ? Theme.surface-main
+    background: root.active
+        ? (ShellState.app-background-active
+            ? Theme.surface-main.with-alpha(AppearanceState.app-background-surface-alpha)
+            : Theme.surface-main)
         : ta.has-hover ? Theme.surface-hover : transparent;
     // HC-only: a 1px strong border makes the active/inactive distinction
     // survive a flattened High-Contrast palette where the fill alone reads
@@ -101,7 +105,9 @@ export component SegmentedTabBar inherits Rectangle {
 
     width: row.preferred-width;
     height: row.preferred-height;
-    background: Theme.surface-elevated;
+    background: ShellState.app-background-active
+        ? Theme.surface-elevated.with-alpha(AppearanceState.app-background-surface-alpha)
+        : Theme.surface-elevated;
     border-radius: 6px;
 
     row := HorizontalLayout {

@@ -150,6 +150,7 @@ where
         crate::discover_prefs::init_for_user(&dir);
         crate::artist_blacklist::init_for_user(&dir);
         crate::pinned::init_for_user(&dir);
+        crate::local_favorites::init_for_user(&dir);
         // Intelligent Search (cache + ranking), seeded from the persisted pref.
         crate::search_service::init(&dir, crate::ui_prefs::load().intelligent_search);
         // Session persistence (queue + playback): open the per-user session.db
@@ -284,6 +285,7 @@ where
                 crate::discover_prefs::init_for_user(&dir);
                 crate::artist_blacklist::init_for_user(&dir);
                 crate::pinned::init_for_user(&dir);
+                crate::local_favorites::init_for_user(&dir);
                 // Intelligent Search (cache + ranking), seeded from the pref.
                 crate::search_service::init(&dir, crate::ui_prefs::load().intelligent_search);
                 // Session persistence (queue + playback): open the per-user
@@ -340,6 +342,7 @@ where
     crate::discover_prefs::teardown();
     crate::artist_blacklist::teardown();
     crate::pinned::teardown();
+    crate::local_favorites::teardown();
     crate::search_service::teardown();
     crate::lyrics::teardown();
     runtime.deactivate().await?;

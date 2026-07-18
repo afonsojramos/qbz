@@ -2277,12 +2277,33 @@ fn navigate_artist(
                     .iter()
                     .map(|s| s.name.clone())
                     .collect();
-                let aid_lib = artist_id.clone();
+                // Catalog/library toggle: look up the per-artist index (favorites
+                // this session) once, build cover jobs for the "In library" rows
+                // (they seed with empty images — Slint can't fetch network art),
+                // then seed the models + dispatch alongside the catalog jobs.
+                let lib = crate::library_by_artist::get(&artist_id);
+                let mut lib_jobs: Vec<artwork::ArtworkJob> = Vec::new();
+                if let Some(lib) = lib.as_ref() {
+                    for (index, t) in lib.tracks.iter().enumerate() {
+                        if !t.artwork_url.is_empty() {
+                            lib_jobs.push(artwork::ArtworkJob {
+                                target: artwork::ArtworkTarget::ArtistLibraryTrack { index },
+                                url: t.artwork_url.clone(),
+                            });
+                        }
+                    }
+                    for (index, a) in lib.albums.iter().enumerate() {
+                        if !a.artwork_url.is_empty() {
+                            lib_jobs.push(artwork::ArtworkJob {
+                                target: artwork::ArtworkTarget::ArtistLibraryAlbum { index },
+                                url: a.artwork_url.clone(),
+                            });
+                        }
+                    }
+                }
                 let _ = weak.upgrade_in_event_loop(move |w| {
                     artist::apply_artist(&w, data);
-                    // Seed the catalog/library toggle from the per-artist index
-                    // (favorites this session). The toggle only shows if count>0.
-                    if let Some(lib) = crate::library_by_artist::get(&aid_lib) {
+                    if let Some(lib) = lib.as_ref() {
                         let ast = w.global::<ArtistState>();
                         ast.set_library_count(lib.count() as i32);
                         ast.set_library_tracks(crate::library_by_artist::track_items(&lib.tracks));
@@ -2291,6 +2312,7 @@ fn navigate_artist(
                     w.global::<ArtistState>().set_loading(false);
                 });
                 artwork::spawn_loads(jobs, weak.clone(), image_cache.clone());
+                artwork::spawn_loads(lib_jobs, weak.clone(), image_cache.clone());
 
                 // Seed the follow heart: pull the user's followed artists (also
                 // refreshes the in-memory cache the toggle reads), then reflect

@@ -411,7 +411,6 @@ export component ArtistPageView inherits Rectangle {
                     // Scene (MB-gated), and the Blacklist/Show toggle —
                     // see the menu block below.
                     HorizontalLayout {
-                        alignment: start;
                         spacing: 12px;
                         CircleAction {
                             icon: @image-url("../assets/icons/heart.svg");
@@ -568,6 +567,21 @@ export component ArtistPageView inherits Rectangle {
                                 }
                             }
                         }
+                        // Catalog / Library toggle — floated to the RIGHT of the
+                        // header action cluster (webplayer parity). Only when the
+                        // user has library items for this artist.
+                        Rectangle { horizontal-stretch: 1; }
+                        if ArtistState.library-count > 0: VerticalLayout {
+                            alignment: center;
+                            SegmentedTabBar {
+                                active-id: ArtistState.artist-tab;
+                                tabs: [
+                                    { id: "catalog", label: @tr("From catalog"), count: 0 },
+                                    { id: "library", label: @tr("In library"), count: ArtistState.library-count },
+                                ];
+                                selected(id) => { ArtistState.artist-tab = id; }
+                            }
+                        }
                     }
                 }
             }
@@ -664,26 +678,6 @@ export component ArtistPageView inherits Rectangle {
             // height plus a small visual gap for content to land
             // below it rather than behind it.
             Rectangle { height: 52px; }
-
-            // Catalog / Library toggle (webplayer "Del catálogo" / "En la
-            // biblioteca"). Shown ONLY when the user has library items for this
-            // artist; right-aligned at the top of the content column. Lives
-            // OUTSIDE the catalog wrapper so it stays visible in both modes.
-            if ArtistState.library-count > 0: HorizontalLayout {
-                Rectangle { horizontal-stretch: 1; }
-                VerticalLayout {
-                    alignment: center;
-                    SegmentedTabBar {
-                        active-id: ArtistState.artist-tab;
-                        tabs: [
-                            { id: "catalog", label: @tr("From catalog"), count: 0 },
-                            { id: "library", label: @tr("In library"), count: ArtistState.library-count },
-                        ];
-                        selected(id) => { ArtistState.artist-tab = id; }
-                    }
-                }
-            }
-            if ArtistState.library-count > 0: Rectangle { height: 12px; }
 
             if ArtistState.loading && ArtistState.top-tracks.length == 0: Rectangle {
                 height: 280px;

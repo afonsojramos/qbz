@@ -4,6 +4,7 @@
 // button: highlighted when active, surface-elevated on hover.
 
 import { Theme } from "../foundation/semantic-colors.slint";
+import { ShellState, AppearanceState } from "../state.slint";
 import { QbzIcon } from "QbzIcon.slint";
 
 export component ToggleButton inherits Rectangle {
@@ -15,8 +16,13 @@ export component ToggleButton inherits Rectangle {
 
     width: root.sm ? 30px : 34px;
     height: root.sm ? 30px : 34px;
+    // Glass under the dynamic background: the active fill goes translucent so the
+    // moving art shows through (with-alpha only on the OPAQUE token — surface-hover
+    // is already translucent).
     background: root.active
-        ? Theme.surface-hover
+        ? (ShellState.app-background-active
+            ? Theme.surface-elevated.with-alpha(AppearanceState.app-background-surface-alpha)
+            : Theme.surface-hover)
         : (ta.has-hover ? Theme.surface-elevated : transparent);
 
     QbzIcon {

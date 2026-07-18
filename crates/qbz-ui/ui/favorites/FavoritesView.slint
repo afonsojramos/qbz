@@ -388,6 +388,10 @@ export component FavoritesView inherits Rectangle {
 
     property <length> artist-w: 160px;
     property <length> artist-h: 200px;
+    // Artists grid now uses the 200x246 ArtistGridCard (labels still use the
+    // round 160x200 FavLabelCard via artist-w/artist-h above).
+    property <length> artist-card-w: 200px;
+    property <length> artist-card-h: 246px;
     property <length> gap: 24px;
 
     background: ShellState.app-background-active ? transparent : Theme.surface-main;
@@ -777,6 +781,24 @@ export component FavoritesView inherits Rectangle {
                         clicked => { LibraryAllActions.toggle-source("following"); }
                     }
                 }
+                // Show local files + Plex (local-favorites layer).
+                VerticalLayout {
+                    alignment: center;
+                    ToggleButton {
+                        icon: @image-url("../assets/icons/hard-drive.svg");
+                        active: LibraryAllState.show-local;
+                        sm: true;
+                        clicked => { LibraryAllActions.toggle-source("local"); }
+                    }
+                }
+                // Grid / list view toggle.
+                VerticalLayout {
+                    alignment: center;
+                    ViewToggle {
+                        view-mode: LibraryAllState.view-mode;
+                        set-view(v) => { LibraryAllActions.set-view(v); }
+                    }
+                }
                 VerticalLayout {
                     alignment: center;
                     QbzSelect {
@@ -910,7 +932,8 @@ export component FavoritesView inherits Rectangle {
                 }
                 // Grid — non-windowed flow (columns from width), one card per
                 // item keyed off `kind`, reusing the existing card components.
-                if !LibraryAllState.loading && LibraryAllState.load-error == "": Flickable {
+                if !LibraryAllState.loading && LibraryAllState.load-error == ""
+                    && LibraryAllState.view-mode != "list": Flickable {
                     viewport-height: all-grid.height + 32px;
                     all-grid := Rectangle {
                         property <length> cw: 200px;
@@ -1006,6 +1029,76 @@ export component FavoritesView inherits Rectangle {
                                     image-url: item.image-url,
                                 };
                                 clicked(id, name) => { FavoritesActions.open-label(id, name); }
+                            }
+                        }
+                    }
+                }
+                // List view — compact mixed rows (cover + title + subtitle).
+                if !LibraryAllState.loading && LibraryAllState.load-error == ""
+                    && LibraryAllState.view-mode == "list": Flickable {
+                    viewport-height: all-list.preferred-height + 32px;
+                    all-list := VerticalLayout {
+                        x: 32px;
+                        y: 16px;
+                        width: parent.width - 64px;
+                        spacing: 2px;
+                        for item[i] in LibraryAllState.items-visible: Rectangle {
+                            height: 52px;
+                            border-radius: 6px;
+                            background: row-ta.has-hover ? Theme.surface-hover : transparent;
+                            HorizontalLayout {
+                                padding-left: 8px;
+                                padding-right: 8px;
+                                spacing: 12px;
+                                VerticalLayout {
+                                    alignment: center;
+                                    Rectangle {
+                                        width: 40px;
+                                        height: 40px;
+                                        border-radius: item.kind == "artist" ? 20px : 4px;
+                                        background: Theme.surface-elevated;
+                                        clip: true;
+                                        Image {
+                                            width: 100%;
+                                            height: 100%;
+                                            source: item.image;
+                                            image-fit: cover;
+                                        }
+                                    }
+                                }
+                                VerticalLayout {
+                                    alignment: center;
+                                    horizontal-stretch: 1;
+                                    Text {
+                                        text: item.title;
+                                        color: Theme.text-primary;
+                                        font-size: Typography.body;
+                                        font-weight: Typography.medium;
+                                        overflow: elide;
+                                    }
+                                    Text {
+                                        text: item.subtitle;
+                                        color: Theme.text-muted;
+                                        font-size: Typography.legal;
+                                        overflow: elide;
+                                    }
+                                }
+                            }
+                            row-ta := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    if (item.kind == "track") {
+                                        FavoritesActions.track-action(item.id, "play");
+                                    } else if (item.kind == "album") {
+                                        FavoritesActions.open-album(item.id);
+                                    } else if (item.kind == "artist") {
+                                        FavoritesActions.open-artist(item.id);
+                                    } else if (item.kind == "playlist") {
+                                        FavoritesActions.open-playlist(item.id);
+                                    } else if (item.kind == "label") {
+                                        FavoritesActions.open-label(item.id, item.title);
+                                    }
+                                }
                             }
                         }
                     }
@@ -1149,6 +1242,7 @@ export component FavoritesView inherits Rectangle {
             // --- Albums / Artists / Playlists / Labels — scrolling ---------
             if !FavoritesState.loading && FavoritesState.load-error == ""
                 && FavoritesState.active-tab != "tracks"
+                && FavoritesState.active-tab != "all"
                 && !(FavoritesState.active-tab == "artists"
                     && FavoritesState.artists-view-mode == "sidepanel"): Rectangle {
                 other-flick := Flickable {
@@ -1246,15 +1340,22 @@ export component FavoritesView inherits Rectangle {
                             if !FavoritesState.artists-group-enabled: artists-grid := Rectangle {
                                 property <int> columns: Math.max(
                                     1,
-                                    Math.floor((self.width + root.gap) / (root.artist-w + root.gap)));
+                                    Math.floor((self.width + root.gap) / (root.artist-card-w + root.gap)));
                                 property <int> rows: Math.ceil(FavoritesState.artists-visible.length / self.columns);
                                 height: self.rows > 0
-                                    ? self.rows * root.artist-h + Math.max(0, self.rows - 1) * root.gap
+                                    ? self.rows * root.artist-card-h + Math.max(0, self.rows - 1) * root.gap
                                     : 0px;
-                                for artist[i] in FavoritesState.artists-visible: FavArtistCard {
-                                    x: Math.mod(i, artists-grid.columns) * (root.artist-w + root.gap);
-                                    y: Math.floor(i / artists-grid.columns) * (root.artist-h + root.gap);
-                                    item: artist;
+                                for artist[i] in FavoritesState.artists-visible: ArtistGridCard {
+                                    x: Math.mod(i, artists-grid.columns) * (root.artist-card-w + root.gap);
+                                    y: Math.floor(i / artists-grid.columns) * (root.artist-card-h + root.gap);
+                                    artist: {
+                                        id: artist.id,
+                                        title: artist.name,
+                                        artwork-url: artist.image-url,
+                                        artwork: artist.image,
+                                        following: true,
+                                    };
+                                    follow-mode: "none";
                                     clicked(id) => { root.open-artist(id); }
                                 }
                             }
@@ -1272,15 +1373,22 @@ export component FavoritesView inherits Rectangle {
                                     section-grid := Rectangle {
                                         property <int> columns: Math.max(
                                             1,
-                                            Math.floor((self.width + root.gap) / (root.artist-w + root.gap)));
+                                            Math.floor((self.width + root.gap) / (root.artist-card-w + root.gap)));
                                         property <int> rows: Math.ceil(section.artists.length / self.columns);
                                         height: self.rows > 0
-                                            ? self.rows * root.artist-h + Math.max(0, self.rows - 1) * root.gap
+                                            ? self.rows * root.artist-card-h + Math.max(0, self.rows - 1) * root.gap
                                             : 0px;
-                                        for artist[i] in section.artists: FavArtistCard {
-                                            x: Math.mod(i, section-grid.columns) * (root.artist-w + root.gap);
-                                            y: Math.floor(i / section-grid.columns) * (root.artist-h + root.gap);
-                                            item: artist;
+                                        for artist[i] in section.artists: ArtistGridCard {
+                                            x: Math.mod(i, section-grid.columns) * (root.artist-card-w + root.gap);
+                                            y: Math.floor(i / section-grid.columns) * (root.artist-card-h + root.gap);
+                                            artist: {
+                                                id: artist.id,
+                                                title: artist.name,
+                                                artwork-url: artist.image-url,
+                                                artwork: artist.image,
+                                                following: true,
+                                            };
+                                            follow-mode: "none";
                                             clicked(id) => { root.open-artist(id); }
                                         }
                                     }

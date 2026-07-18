@@ -134,6 +134,12 @@ pub enum ArtworkTarget {
     /// A card in the Library "All" mixed feed (`LibraryAllState.items-visible[index]`).
     /// Dispatched against the VISIBLE model, re-dispatched on each derive.
     LibraryAllCover { index: usize },
+    /// A row in `ArtistState.library-tracks[index]` — the ArtistPage
+    /// "In library" track list (library_by_artist seed). Row thumbnail.
+    ArtistLibraryTrack { index: usize },
+    /// A card in `ArtistState.library-albums[index]` — the ArtistPage
+    /// "In library" album grid.
+    ArtistLibraryAlbum { index: usize },
     /// A card in MusicianState.appearances[index].
     MusicianAppearance { index: usize },
     /// A card in LabelState.albums[index] (releases sub-view grid).
@@ -311,6 +317,7 @@ impl ArtworkTarget {
             // thumbnail as the track targets above (~40px rendered).
             | ArtworkTarget::LabelTopTrack { .. }
             | ArtworkTarget::ArtistTopTrack { .. }
+            | ArtworkTarget::ArtistLibraryTrack { .. }
             | ArtworkTarget::LocalArtistRowImage { .. } => 96,
             // Sidebar micro-collage tiles render at ~10-20px; decode tiny.
             ArtworkTarget::SidebarPlaylistCover { .. } => 48,
@@ -1232,6 +1239,20 @@ fn apply_artwork(
             let model = window.global::<crate::LibraryAllState>().get_items_visible();
             if let Some(mut item) = model.row_data(index) {
                 item.image = image;
+                model.set_row_data(index, item);
+            }
+        }
+        ArtworkTarget::ArtistLibraryTrack { index } => {
+            let model = window.global::<ArtistState>().get_library_tracks();
+            if let Some(mut item) = model.row_data(index) {
+                item.artwork = image;
+                model.set_row_data(index, item);
+            }
+        }
+        ArtworkTarget::ArtistLibraryAlbum { index } => {
+            let model = window.global::<ArtistState>().get_library_albums();
+            if let Some(mut item) = model.row_data(index) {
+                item.artwork = image;
                 model.set_row_data(index, item);
             }
         }
