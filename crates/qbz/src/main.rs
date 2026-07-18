@@ -12854,9 +12854,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let handle = handle.clone();
                 handle.clone().spawn(async move {
                     if let Some(cast) = cast_service::service() {
-                        let frac = fraction.clamp(0.0, 1.0) as f64;
-                        let dur = runtime.core().get_playback_state().duration as f64;
-                        match cast.seek_if_cast(frac * dur).await {
+                        // Pass the raw fraction: the cast service resolves the
+                        // real duration from the cast track. The local core's
+                        // duration is 0/stale while casting (backend stopped),
+                        // so `fraction * core_duration` would seek to ~0 and
+                        // restart the track on every drag.
+                        match cast
+                            .seek_fraction_if_cast(fraction.clamp(0.0, 1.0) as f64)
+                            .await
+                        {
                             Ok(true) => return,
                             Ok(false) => {}
                             Err(e) => {

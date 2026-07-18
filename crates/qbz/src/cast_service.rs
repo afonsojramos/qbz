@@ -555,6 +555,35 @@ impl SlintCastService {
         Ok(true)
     }
 
+    /// Seek to a 0..1 fraction of the CURRENT cast track.
+    ///
+    /// The seekbar cannot derive the absolute position from the local core's
+    /// playback duration while casting: the local backend is stopped, so its
+    /// duration reads 0 (or a stale value from the last local track), and
+    /// `fraction * duration` collapses to ~0 — every drag restarts the track.
+    /// Resolve the real duration from the cast track's catalog metadata (the
+    /// same source the position poll uses) instead.
+    pub async fn seek_fraction_if_cast(&self, fraction: f64) -> Result<bool, String> {
+        if !self.is_casting().await {
+            return Ok(false);
+        }
+        let dur = self
+            .runtime
+            .core()
+            .current_track()
+            .await
+            .map(|t| t.duration_secs as f64)
+            .unwrap_or(0.0);
+        if dur <= 0.0 {
+            // No usable duration — swallow the seek rather than jump to 0 and
+            // restart the track. Reports handled (true) so the caller stops.
+            return Ok(true);
+        }
+        let secs = (fraction.clamp(0.0, 1.0) * dur).max(0.0);
+        self.seek_secs(secs).await?;
+        Ok(true)
+    }
+
     pub async fn set_volume_if_cast(&self, volume: f32) -> Result<bool, String> {
         let proto = {
             let inner = self.inner.lock().await;
