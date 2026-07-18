@@ -31,6 +31,7 @@ pub struct Feed {
     pub artist: String,
     pub artist_id: String,
     pub album: String,
+    pub album_id: String,
     pub image_url: String,
     pub quality_tier: String,
     pub quality_detail: String,
@@ -69,6 +70,7 @@ pub async fn load_library_all(runtime: &Runtime) -> Result<Vec<Feed>, String> {
                 artist: t.artist,
                 artist_id: t.artist_id,
                 album: t.album,
+                album_id: t.album_id,
                 image_url: t.artwork_url,
                 quality_tier: t.quality_tier,
                 quality_detail: t.quality_detail,
@@ -92,6 +94,7 @@ pub async fn load_library_all(runtime: &Runtime) -> Result<Vec<Feed>, String> {
                 artist: a.artist,
                 artist_id: a.artist_id,
                 album: String::new(),
+                album_id: String::new(),
                 image_url: a.artwork_url,
                 quality_tier: a.quality_tier,
                 quality_detail: a.quality_detail,
@@ -117,6 +120,7 @@ pub async fn load_library_all(runtime: &Runtime) -> Result<Vec<Feed>, String> {
                 artist: String::new(),
                 artist_id: ar.id.clone(),
                 album: String::new(),
+                album_id: String::new(),
                 image_url: ar.image_url,
                 quality_tier: String::new(),
                 quality_detail: String::new(),
@@ -140,6 +144,7 @@ pub async fn load_library_all(runtime: &Runtime) -> Result<Vec<Feed>, String> {
                 artist: String::new(),
                 artist_id: String::new(),
                 album: String::new(),
+                album_id: String::new(),
                 image_url: l.image_url,
                 quality_tier: String::new(),
                 quality_detail: String::new(),
@@ -168,6 +173,7 @@ pub async fn load_library_all(runtime: &Runtime) -> Result<Vec<Feed>, String> {
                 artist: String::new(),
                 artist_id: String::new(),
                 album: String::new(),
+                album_id: String::new(),
                 image_url,
                 quality_tier: String::new(),
                 quality_detail: String::new(),
@@ -188,6 +194,7 @@ pub async fn load_library_all(runtime: &Runtime) -> Result<Vec<Feed>, String> {
                 artist: String::new(),
                 artist_id: String::new(),
                 album: String::new(),
+                album_id: String::new(),
                 image_url,
                 quality_tier: String::new(),
                 quality_detail: String::new(),
@@ -214,6 +221,7 @@ pub async fn load_library_all(runtime: &Runtime) -> Result<Vec<Feed>, String> {
                 artist: a.artist.name,
                 artist_id: a.artist.id.to_string(),
                 album: String::new(),
+                album_id: String::new(),
                 image_url,
                 quality_tier: tier.into(),
                 quality_detail: String::new(),
@@ -225,14 +233,20 @@ pub async fn load_library_all(runtime: &Runtime) -> Result<Vec<Feed>, String> {
         }
         let n = tracks.len();
         for (i, t) in tracks.into_iter().enumerate() {
-            let (artist, image_url, album) = {
+            let (artist, image_url, album, album_id) = {
                 let artist = t.performer.name.clone();
-                let (img, alb) = t
+                let (img, alb, aid) = t
                     .album
                     .as_ref()
-                    .map(|a| (a.image.best().cloned().unwrap_or_default(), a.title.clone()))
+                    .map(|a| {
+                        (
+                            a.image.best().cloned().unwrap_or_default(),
+                            a.title.clone(),
+                            a.id.clone(),
+                        )
+                    })
                     .unwrap_or_default();
-                (artist, img, alb)
+                (artist, img, alb, aid)
             };
             let tier = if t.hires { "hires" } else { "cd" };
             feed.push(Feed {
@@ -243,6 +257,7 @@ pub async fn load_library_all(runtime: &Runtime) -> Result<Vec<Feed>, String> {
                 artist,
                 artist_id: t.performer.id.to_string(),
                 album,
+                album_id,
                 image_url,
                 quality_tier: tier.into(),
                 quality_detail: String::new(),
@@ -268,6 +283,7 @@ pub async fn load_library_all(runtime: &Runtime) -> Result<Vec<Feed>, String> {
                 artist: lf.artist.clone(),
                 artist_id: String::new(),
                 album: String::new(),
+                album_id: String::new(),
                 image_url: lf.artwork_url,
                 quality_tier: String::new(),
                 quality_detail: String::new(),
@@ -299,6 +315,7 @@ fn to_item(f: &Feed) -> LibraryFeedItem {
         artist: f.artist.clone().into(),
         artist_id: f.artist_id.clone().into(),
         album: f.album.clone().into(),
+        album_id: f.album_id.clone().into(),
         image_url: f.image_url.clone().into(),
         image: slint::Image::default(),
         quality_tier: f.quality_tier.clone().into(),

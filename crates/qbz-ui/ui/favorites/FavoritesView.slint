@@ -40,6 +40,8 @@ import { ToggleButton } from "../primitives/ToggleButton.slint";
 import { QbzSelect } from "../primitives/QbzSelect.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { QualityBadge } from "../primitives/QualityBadge.slint";
+import { QualityBadgeFull } from "../primitives/QualityBadgeFull.slint";
+import { SourceGlyph } from "../primitives/SourceGlyph.slint";
 import { ContextMenu } from "../primitives/ContextMenu.slint";
 import { ContextMenuItem } from "../primitives/ContextMenuItem.slint";
 import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
@@ -966,6 +968,7 @@ export component FavoritesView inherits Rectangle {
                                     artist: item.artist,
                                     artist-id: item.artist-id,
                                     album: item.album,
+                                    album-id: item.album-id,
                                     artwork: item.image,
                                     quality-tier: item.quality-tier,
                                     quality-detail: item.quality-detail,
@@ -975,6 +978,8 @@ export component FavoritesView inherits Rectangle {
                                 media-action(kind, id, action) => {
                                     if (kind == "artist") {
                                         FavoritesActions.open-artist(id);
+                                    } else if (kind == "album") {
+                                        FavoritesActions.open-album(id);
                                     } else {
                                         FavoritesActions.track-action(id, action);
                                     }
@@ -1080,10 +1085,10 @@ export component FavoritesView inherits Rectangle {
                                 }
                             }
                             HorizontalLayout {
-                                padding-left: 8px;
-                                padding-right: 8px;
+                                padding-left: 12px;
+                                padding-right: 12px;
                                 spacing: 12px;
-                                // Cover (round for artists, square otherwise).
+                                // Col — artwork (round for artists) + hover play.
                                 VerticalLayout {
                                     alignment: center;
                                     Rectangle {
@@ -1098,65 +1103,128 @@ export component FavoritesView inherits Rectangle {
                                             source: item.image;
                                             image-fit: item.kind == "label" ? contain : cover;
                                         }
+                                        if item.kind == "track" || item.kind == "album" || item.kind == "playlist": Rectangle {
+                                            width: 100%;
+                                            height: 100%;
+                                            background: #000000a6;
+                                            opacity: play-ta.has-hover ? 1.0 : 0.0;
+                                            animate opacity { duration: 150ms; }
+                                            QbzIcon {
+                                                source: @image-url("../assets/icons/play-fill.svg");
+                                                width: 16px;
+                                                height: 16px;
+                                                x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                                                y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+                                                tint: #ffffff;
+                                            }
+                                            play-ta := TouchArea {
+                                                mouse-cursor: pointer;
+                                                clicked => {
+                                                    if (item.kind == "track") { FavoritesActions.track-action(item.id, "play"); }
+                                                    else if (item.kind == "album") { FavoritesActions.album-action(item.id, "play"); }
+                                                    else { FavoritesActions.playlist-action(item.id, "play"); }
+                                                }
+                                            }
+                                        }
                                     }
                                 }
-                                // Title + type-aware subtitle.
+                                // Col — title + subtitle (artist link for track/album).
                                 VerticalLayout {
                                     alignment: center;
                                     horizontal-stretch: 1;
                                     spacing: 2px;
-                                    Text {
-                                        text: item.title;
-                                        color: Theme.text-primary;
-                                        font-size: Typography.body;
-                                        font-weight: Typography.medium;
-                                        overflow: elide;
+                                    title-ta := TouchArea {
+                                        height: 18px;
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            if (item.kind == "track") { FavoritesActions.track-action(item.id, "play"); }
+                                            else if (item.kind == "album") { FavoritesActions.open-album(item.id); }
+                                            else if (item.kind == "artist") { FavoritesActions.open-artist(item.id); }
+                                            else if (item.kind == "playlist") { FavoritesActions.open-playlist(item.id); }
+                                            else { FavoritesActions.open-label(item.id, item.title); }
+                                        }
+                                        Text {
+                                            width: 100%;
+                                            text: item.title;
+                                            color: title-ta.has-hover ? Theme.accent : Theme.text-primary;
+                                            font-size: 14px;
+                                            font-weight: Typography.medium;
+                                            overflow: elide;
+                                            vertical-alignment: center;
+                                        }
                                     }
-                                    Text {
-                                        text: item.kind == "artist" ? @tr("Artist")
-                                            : item.kind == "album"
-                                                ? (item.artist != "" ? @tr("Album") + " • " + item.artist : @tr("Album"))
-                                            : item.kind == "track"
-                                                ? (item.artist != "" ? @tr("Track") + " • " + item.artist : @tr("Track"))
-                                            : item.kind == "playlist"
-                                                ? (item.subtitle != "" ? @tr("Playlist") + " • " + item.subtitle : @tr("Playlist"))
-                                            : (item.subtitle != "" ? @tr("Label") + " • " + item.subtitle : @tr("Label"));
-                                        color: Theme.text-muted;
-                                        font-size: Typography.legal;
-                                        overflow: elide;
-                                    }
-                                }
-                                // Quality badge (albums + tracks).
-                                if item.kind == "album" || item.kind == "track": VerticalLayout {
-                                    alignment: center;
-                                    QualityBadge {
-                                        tier: item.quality-tier;
-                                        label: item.quality-detail;
-                                        detail: item.quality-detail;
-                                    }
-                                }
-                                // Source badge (local / Plex).
-                                if item.source == "local" || item.source == "plex": VerticalLayout {
-                                    alignment: center;
-                                    Rectangle {
-                                        width: 24px;
-                                        height: 24px;
-                                        border-radius: 4px;
-                                        background: #000000b3;
-                                        Image {
-                                            source: item.source == "plex"
-                                                ? @image-url("../assets/icons/plex-logo.svg")
-                                                : @image-url("../assets/icons/hard-drive.svg");
-                                            colorize: item.source == "local" ? #ffffff : transparent;
-                                            width: item.source == "plex" ? 15px : 14px;
-                                            height: self.width;
-                                            x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
-                                            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
-                                            image-fit: contain;
+                                    if item.subtitle != "": sub-ta := TouchArea {
+                                        height: 16px;
+                                        mouse-cursor: (item.artist-id != "" && (item.kind == "track" || item.kind == "album")) ? pointer : default;
+                                        clicked => {
+                                            if (item.artist-id != "" && (item.kind == "track" || item.kind == "album")) {
+                                                FavoritesActions.open-artist(item.artist-id);
+                                            }
+                                        }
+                                        Text {
+                                            width: 100%;
+                                            text: item.subtitle;
+                                            color: (item.artist-id != "" && (item.kind == "track" || item.kind == "album") && sub-ta.has-hover)
+                                                ? Theme.accent : Theme.text-muted;
+                                            font-size: 12px;
+                                            overflow: elide;
+                                            vertical-alignment: center;
                                         }
                                     }
                                 }
-                                // Favorite (heart) / follow (check) indicator.
+                                // Col — type (icon + label).
+                                Rectangle {
+                                    width: 116px;
+                                    HorizontalLayout {
+                                        spacing: 6px;
+                                        alignment: start;
+                                        VerticalLayout {
+                                            alignment: center;
+                                            QbzIcon {
+                                                source: item.kind == "track" ? @image-url("../assets/icons/music.svg")
+                                                    : item.kind == "playlist" ? @image-url("../assets/icons/list-music.svg")
+                                                    : item.kind == "artist" ? @image-url("../assets/icons/user.svg")
+                                                    : item.kind == "label" ? @image-url("../assets/icons/disc-3.svg")
+                                                    : @image-url("../assets/icons/disc.svg");
+                                                width: 13px;
+                                                height: 13px;
+                                                tint: Theme.text-muted;
+                                            }
+                                        }
+                                        Text {
+                                            text: item.kind == "track" ? @tr("Track")
+                                                : item.kind == "album" ? @tr("Album")
+                                                : item.kind == "artist" ? @tr("Artist")
+                                                : item.kind == "playlist" ? @tr("Playlist")
+                                                : @tr("Label");
+                                            color: Theme.text-muted;
+                                            font-size: 10px;
+                                            font-weight: Typography.semibold;
+                                            letter-spacing: 1.2px;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                }
+                                // Col — source glyph (its own column).
+                                Rectangle {
+                                    width: 44px;
+                                    if item.source != "": SourceGlyph {
+                                        kind: item.source;
+                                        x: 0;
+                                        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+                                    }
+                                }
+                                // Col — quality (albums + tracks; the row badge).
+                                Rectangle {
+                                    width: 150px;
+                                    if (item.kind == "album" || item.kind == "track") && item.quality-tier != "": QualityBadgeFull {
+                                        tier: item.quality-tier;
+                                        detail: item.quality-detail;
+                                        x: 0;
+                                        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+                                    }
+                                }
+                                // Col — favorite (heart) / follow (person) indicator.
                                 VerticalLayout {
                                     alignment: center;
                                     QbzIcon {
@@ -1170,7 +1238,7 @@ export component FavoritesView inherits Rectangle {
                                         tint: Theme.accent;
                                     }
                                 }
-                                // Context-menu button.
+                                // Col — context-menu button.
                                 VerticalLayout {
                                     alignment: center;
                                     menu-btn := Rectangle {
@@ -1244,6 +1312,11 @@ export component FavoritesView inherits Rectangle {
                                         icon: @image-url("../assets/icons/user.svg");
                                         label: @tr("Go to artist");
                                         clicked => { FavoritesActions.open-artist(item.artist-id); }
+                                    }
+                                    if item.kind == "track" && item.album-id != "": ContextMenuItem {
+                                        icon: @image-url("../assets/icons/disc.svg");
+                                        label: @tr("Go to album");
+                                        clicked => { FavoritesActions.open-album(item.album-id); }
                                     }
                                     if item.kind == "artist": ContextMenuItem {
                                         icon: @image-url("../assets/icons/user.svg");

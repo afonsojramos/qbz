@@ -202,8 +202,8 @@ export component TrackCard inherits Rectangle {
                 x: 26px;
                 y: 56px;
                 width: 196px;
-                // Open-artist? Play / Play-next / Queue + favorite = 4-5 items.
-                height: 5 * 33px + 10px;
+                // Play / Play-next / Queue / Go-to-artist / Go-to-album / favorite.
+                height: 6 * 33px + 10px;
                 ContextMenu {
                     ContextMenuItem {
                         icon: @image-url("../assets/icons/play.svg");
@@ -231,6 +231,13 @@ export component TrackCard inherits Rectangle {
                         label: @tr("Go to artist");
                         clicked => {
                             root.media-action("artist", root.track.artist-id, "open");
+                        }
+                    }
+                    if root.track.album-id != "": ContextMenuItem {
+                        icon: @image-url("../assets/icons/disc.svg");
+                        label: @tr("Go to album");
+                        clicked => {
+                            root.media-action("album", root.track.album-id, "open");
                         }
                     }
                     if root.show-favorite: ContextMenuItem {

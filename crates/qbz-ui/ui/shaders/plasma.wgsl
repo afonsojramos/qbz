@@ -52,14 +52,18 @@ fn vs_main(@builtin(vertex_index) vid: u32) -> VsOut {
     return out;
 }
 
-// Sin-FREE hash (Dave Hoskins). The old `fract(sin(dot(p,k))*43758)` breaks on
-// NVIDIA: as the noise coords grow with time, sin's argument gets huge and the
-// driver's range-reduction precision diverges from Intel's, degenerating the
-// noise into big blocks. This integer-style fract hash is stable across GPUs.
+// INTEGER lattice hash (bit-exact) — vnoise only hashes floor() outputs, so the
+// i32 conversion is exact. A float hash leaves the result to f32 rounding, which
+// NVIDIA can contract/round differently per inline call site, so the SAME
+// lattice corner hashed from two adjacent cells disagrees and draws the cell
+// border as a straight "wallpaper join" seam. u32 arithmetic is bit-exact: same
+// input, same output, every call site, every GPU, any coordinate magnitude.
 fn hash2(p: vec2<f32>) -> f32 {
-    var p3 = fract(p.xyx * 0.1031);
-    p3 = p3 + dot(p3, p3.yzx + 33.33);
-    return fract((p3.x + p3.y) * p3.z);
+    var h = bitcast<u32>(i32(p.x)) * 0x8da6b343u + bitcast<u32>(i32(p.y)) * 0xd8163841u;
+    h = (h ^ (h >> 15u)) * 0x2c1b3c6du;
+    h = (h ^ (h >> 12u)) * 0x297a2d39u;
+    h = h ^ (h >> 15u);
+    return f32(h >> 8u) * (1.0 / 16777216.0);
 }
 
 fn vnoise(p: vec2<f32>) -> f32 {
