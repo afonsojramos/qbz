@@ -34,6 +34,9 @@ import { ListScrollbar } from "../primitives/ListScrollbar.slint";
 import { MultiSelectBar } from "../primitives/MultiSelectBar.slint";
 import { ReleaseGrid } from "ReleaseGrid.slint";
 import { AlbumCard } from "../discover/AlbumCard.slint";
+import { AlbumCollectionView } from "../discover/AlbumCollectionView.slint";
+import { PlaylistCarousel } from "../discover/PlaylistCarousel.slint";
+import { SegmentedTabBar, SegTab } from "../primitives/SegmentedTabBar.slint";
 import { NavButtons } from "../shell/NavButtons.slint";
 import { JumpNavBar, JumpNavTab } from "../primitives/JumpNavBar.slint";
 import { CircleAction } from "../primitives/CircleAction.slint";
@@ -662,6 +665,26 @@ export component ArtistPageView inherits Rectangle {
             // below it rather than behind it.
             Rectangle { height: 52px; }
 
+            // Catalog / Library toggle (webplayer "Del catálogo" / "En la
+            // biblioteca"). Shown ONLY when the user has library items for this
+            // artist; right-aligned at the top of the content column. Lives
+            // OUTSIDE the catalog wrapper so it stays visible in both modes.
+            if ArtistState.library-count > 0: HorizontalLayout {
+                Rectangle { horizontal-stretch: 1; }
+                VerticalLayout {
+                    alignment: center;
+                    SegmentedTabBar {
+                        active-id: ArtistState.artist-tab;
+                        tabs: [
+                            { id: "catalog", label: @tr("From catalog"), count: 0 },
+                            { id: "library", label: @tr("In library"), count: ArtistState.library-count },
+                        ];
+                        selected(id) => { ArtistState.artist-tab = id; }
+                    }
+                }
+            }
+            if ArtistState.library-count > 0: Rectangle { height: 12px; }
+
             if ArtistState.loading && ArtistState.top-tracks.length == 0: Rectangle {
                 height: 280px;
                 VerticalLayout {
@@ -679,6 +702,11 @@ export component ArtistPageView inherits Rectangle {
                     }
                 }
             }
+
+            // Catalog content — the whole discography stack renders only in
+            // "catalog" mode; "library" swaps to the user's added items below.
+            if ArtistState.artist-tab == "catalog": VerticalLayout {
+            spacing: 0px;
 
             // --- Popular tracks ----------------------------------------------
             // Section header: title on the left, action cluster on the right
@@ -953,6 +981,20 @@ export component ArtistPageView inherits Rectangle {
                 }
             }
 
+            // --- Playlists (curated playlists featuring this artist) ---------
+            // The /artist/page `playlists` section, rendered as a main-column
+            // carousel directly above the "Other" block. Body click opens the
+            // playlist; the overlay play button plays it.
+            if ArtistState.playlists.length > 0: Rectangle { height: 32px; }
+            if ArtistState.playlists.length > 0: PlaylistCarousel {
+                title: @tr("Playlists");
+                playlists: ArtistState.playlists;
+                body-opens: true;
+                media-action(kind, id, action) => {
+                    root.media-action(kind, id, action);
+                }
+            }
+
             // --- Other (rendered LAST, collapsed by default) -----------------
             // Usually low-quality / AI cover junk, so it sits below Appears On
             // and stays hidden behind a Show/Hide toggle.
@@ -1010,6 +1052,39 @@ export component ArtistPageView inherits Rectangle {
                     }
                 }
             }
+                }   // close the "catalog" wrapper VerticalLayout
+
+                // --- In library — the user's added items for this artist ------
+                if ArtistState.artist-tab == "library": VerticalLayout {
+                    spacing: 0px;
+                    if ArtistState.library-tracks.length > 0: SectionTitle {
+                        text: @tr("Tracks");
+                    }
+                    if ArtistState.library-tracks.length > 0: Rectangle { height: 10px; }
+                    for track[index] in ArtistState.library-tracks: TrackRow {
+                        track: track;
+                        index: index;
+                        show-artwork: true;
+                        multi-select-mode: false;
+                        media-action(kind, id, action) => {
+                            root.media-action(kind, id, action);
+                        }
+                    }
+                    if ArtistState.library-albums.length > 0: Rectangle { height: 24px; }
+                    if ArtistState.library-albums.length > 0: SectionTitle {
+                        text: @tr("Albums");
+                    }
+                    if ArtistState.library-albums.length > 0: Rectangle { height: 10px; }
+                    if ArtistState.library-albums.length > 0: AlbumCollectionView {
+                        albums: ArtistState.library-albums;
+                        view-mode: "grid";
+                        show-favorite: true;
+                        open-album(id) => { root.open-album(id); }
+                        media-action(kind, id, action) => {
+                            root.media-action(kind, id, action);
+                        }
+                    }
+                }
                 }   // close main-col VerticalLayout
 
                 // Sidebar slot — empty placeholder that reserves the

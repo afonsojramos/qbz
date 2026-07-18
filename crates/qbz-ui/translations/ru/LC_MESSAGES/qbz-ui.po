@@ -4624,3 +4624,12 @@ msgstr "встроенный"
 
 msgid "Preferred GPU changed — restart QBZ to apply"
 msgstr "Предпочитаемый GPU изменён — перезапустите QBZ, чтобы применить"
+
+msgid "Search your library"
+msgstr "Поиск в библиотеке"
+
+msgid "From catalog"
+msgstr "Из каталога"
+
+msgid "In library"
+msgstr "В библиотеке"

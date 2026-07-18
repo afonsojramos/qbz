@@ -4622,3 +4622,12 @@ msgstr "geïntegreerd"
 
 msgid "Preferred GPU changed — restart QBZ to apply"
 msgstr "Voorkeurs-GPU gewijzigd — herstart QBZ om toe te passen"
+
+msgid "Search your library"
+msgstr "Zoek in je bibliotheek"
+
+msgid "From catalog"
+msgstr "Uit catalogus"
+
+msgid "In library"
+msgstr "In bibliotheek"

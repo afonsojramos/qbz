@@ -11,6 +11,9 @@ import { Radius } from "../foundation/radius.slint";
 import {
     FavoritesState,
     FavoritesActions,
+    LibraryAllState,
+    LibraryAllActions,
+    LibraryFeedItem,
     AlbumCardItem,
     TrackItem,
     FavoriteArtistItem,
@@ -23,6 +26,9 @@ import {
     ShellState,
 } from "../state.slint";
 import { AlbumCollectionView } from "../discover/AlbumCollectionView.slint";
+import { AlbumCard } from "../discover/AlbumCard.slint";
+import { TrackCard } from "../discover/TrackCard.slint";
+import { ArtistGridCard } from "../discover/ArtistGridCard.slint";
 import { PlaylistCard } from "../discover/PlaylistCard.slint";
 import { GenreFilterPopup } from "../discover/GenreFilterPopup.slint";
 import { TrackRow } from "../primitives/TrackRow.slint";
@@ -46,6 +52,7 @@ import { ListView } from "std-widgets.slint";
 component FavTabMenu inherits SegmentedTabBar {
     active-id: FavoritesState.active-tab;
     tabs: [
+        { id: "all", label: @tr("All"), count: LibraryAllState.total },
         { id: "tracks", label: @tr("Tracks"), count: FavoritesState.tracks-total },
         { id: "albums", label: @tr("Albums"), count: FavoritesState.albums-total },
         { id: "artists", label: @tr("Artists"), count: FavoritesState.artists-total },
@@ -727,6 +734,69 @@ export component FavoritesView inherits Rectangle {
                     }
                 }
             }
+            // --- Library "All" mixed feed toolbar (search + source switches +
+            // genre + sort). Mirrors the webplayer /user-library/all header. ---
+            if FavoritesState.active-tab == "all": HorizontalLayout {
+                spacing: 8px;
+                VerticalLayout {
+                    alignment: center;
+                    ExpandableSearch {
+                        placeholder: @tr("Search your library");
+                        sm: true;
+                        query <=> LibraryAllState.search;
+                        edited(q) => {
+                            LibraryAllActions.search(q);
+                        }
+                    }
+                }
+                // Source switches — Purchases / Favorites / Following.
+                VerticalLayout {
+                    alignment: center;
+                    ToggleButton {
+                        icon: @image-url("../assets/icons/shopping-bag.svg");
+                        active: LibraryAllState.show-purchases;
+                        sm: true;
+                        clicked => { LibraryAllActions.toggle-source("purchases"); }
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    ToggleButton {
+                        icon: @image-url("../assets/icons/heart.svg");
+                        active: LibraryAllState.show-favorites;
+                        sm: true;
+                        clicked => { LibraryAllActions.toggle-source("favorites"); }
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    ToggleButton {
+                        icon: @image-url("../assets/icons/user-plus.svg");
+                        active: LibraryAllState.show-following;
+                        sm: true;
+                        clicked => { LibraryAllActions.toggle-source("following"); }
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    QbzSelect {
+                        menu-width: 150px;
+                        options: [
+                            @tr("Date added"),
+                            @tr("Title"),
+                            @tr("Artist"),
+                        ];
+                        sm: true;
+                        current-index: LibraryAllState.sort-by == "date" ? 0
+                            : LibraryAllState.sort-by == "title" ? 1
+                            : 2;
+                        selected(i) => {
+                            LibraryAllActions.set-sort(
+                                i == 0 ? "date" : i == 1 ? "title" : "artist");
+                        }
+                    }
+                }
+            }
         }
 
         Rectangle { height: 14px; }
@@ -786,6 +856,156 @@ export component FavoritesView inherits Rectangle {
                             mouse-cursor: pointer;
                             clicked => {
                                 FavoritesActions.retry-load();
+                            }
+                        }
+                    }
+                }
+            }
+
+            // --- Library "All" — the mixed feed grid (webplayer parity) ----
+            if FavoritesState.active-tab == "all": Rectangle {
+                vertical-stretch: 1;
+                clip: true;
+                // Loading.
+                if LibraryAllState.loading: VerticalLayout {
+                    alignment: center;
+                    HorizontalLayout {
+                        alignment: center;
+                        LoadingSpinner { size: 36px; }
+                    }
+                }
+                // Error + retry.
+                if !LibraryAllState.loading && LibraryAllState.load-error != "": VerticalLayout {
+                    alignment: center;
+                    spacing: 10px;
+                    Text {
+                        text: @tr("Couldn't load your Library.");
+                        color: Theme.text-primary;
+                        font-size: Typography.body;
+                        font-weight: Typography.semibold;
+                        horizontal-alignment: center;
+                    }
+                    HorizontalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: all-retry-label.preferred-width + 28px;
+                            height: 32px;
+                            border-radius: 6px;
+                            background: all-retry-ta.has-hover ? Theme.surface-hover : Theme.surface-elevated;
+                            border-width: 1px;
+                            border-color: Theme.border-subtle;
+                            all-retry-label := Text {
+                                text: @tr("Retry");
+                                color: Theme.text-primary;
+                                font-size: Typography.legal;
+                                x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                                y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+                            }
+                            all-retry-ta := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { LibraryAllActions.retry(); }
+                            }
+                        }
+                    }
+                }
+                // Grid — non-windowed flow (columns from width), one card per
+                // item keyed off `kind`, reusing the existing card components.
+                if !LibraryAllState.loading && LibraryAllState.load-error == "": Flickable {
+                    viewport-height: all-grid.height + 32px;
+                    all-grid := Rectangle {
+                        property <length> cw: 200px;
+                        property <length> ch: 246px;
+                        property <length> gap: 20px;
+                        property <int> columns: Math.max(1,
+                            Math.floor((self.width + self.gap) / (self.cw + self.gap)));
+                        property <int> rows: Math.ceil(
+                            LibraryAllState.items-visible.length / self.columns);
+                        x: 32px;
+                        y: 16px;
+                        width: parent.width - 64px;
+                        height: self.rows > 0 ? self.rows * (self.ch + self.gap) : 0px;
+
+                        for item[i] in LibraryAllState.items-visible: Rectangle {
+                            x: Math.mod(i, all-grid.columns) * (all-grid.cw + all-grid.gap);
+                            y: Math.floor(i / all-grid.columns) * (all-grid.ch + all-grid.gap);
+                            width: all-grid.cw;
+                            height: all-grid.ch;
+
+                            if item.kind == "track": TrackCard {
+                                track: {
+                                    id: item.id,
+                                    title: item.title,
+                                    artist: item.artist,
+                                    artist-id: item.artist-id,
+                                    album: item.album,
+                                    artwork: item.image,
+                                    quality-tier: item.quality-tier,
+                                    quality-detail: item.quality-detail,
+                                    is-favorite: item.is-favorite,
+                                    source: item.source,
+                                };
+                                media-action(kind, id, action) => {
+                                    if (kind == "artist") {
+                                        FavoritesActions.open-artist(id);
+                                    } else {
+                                        FavoritesActions.track-action(id, action);
+                                    }
+                                }
+                            }
+                            if item.kind == "album": AlbumCard {
+                                album: {
+                                    id: item.id,
+                                    title: item.title,
+                                    artist: item.artist,
+                                    artist-id: item.artist-id,
+                                    artwork: item.image,
+                                    quality-tier: item.quality-tier,
+                                    quality-label: item.quality-detail,
+                                };
+                                clicked(id) => { FavoritesActions.open-album(id); }
+                                media-action(kind, id, action) => {
+                                    if (kind == "artist") {
+                                        FavoritesActions.open-artist(id);
+                                    } else {
+                                        FavoritesActions.album-action(id, action);
+                                    }
+                                }
+                            }
+                            if item.kind == "artist": ArtistGridCard {
+                                artist: {
+                                    id: item.id,
+                                    title: item.title,
+                                    artwork: item.image,
+                                };
+                                follow-mode: "none";
+                                clicked(id) => { FavoritesActions.open-artist(id); }
+                            }
+                            if item.kind == "playlist": PlaylistCard {
+                                playlist: {
+                                    id: item.id,
+                                    title: item.title,
+                                    subtitle: item.subtitle,
+                                    cover-count: 1,
+                                    url1: item.image-url,
+                                    cover1: item.image,
+                                };
+                                body-opens: true;
+                                media-action(kind, id, action) => {
+                                    if (action == "open") {
+                                        FavoritesActions.open-playlist(id);
+                                    } else {
+                                        FavoritesActions.playlist-action(id, action);
+                                    }
+                                }
+                            }
+                            if item.kind == "label": FavLabelCard {
+                                item: {
+                                    id: item.id,
+                                    name: item.title,
+                                    image: item.image,
+                                    image-url: item.image-url,
+                                };
+                                clicked(id, name) => { FavoritesActions.open-label(id, name); }
                             }
                         }
                     }

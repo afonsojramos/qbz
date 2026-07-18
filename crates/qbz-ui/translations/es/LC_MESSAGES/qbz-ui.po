@@ -4640,3 +4640,12 @@ msgstr "integrada"
 
 msgid "Preferred GPU changed — restart QBZ to apply"
 msgstr "GPU preferida cambiada — reinicia QBZ para aplicar"
+
+msgid "Search your library"
+msgstr "Buscar en tu biblioteca"
+
+msgid "From catalog"
+msgstr "Del catálogo"
+
+msgid "In library"
+msgstr "En la biblioteca"

@@ -195,12 +195,15 @@ pub fn classify_release_type(track_count: Option<u32>) -> &'static str {
 /// (single-source Qobuz context — hide the column with `show-source: false`).
 pub fn to_item(card: AlbumCard) -> AlbumCardItem {
     AlbumCardItem {
-        // Favorite heart state from the login-seeded cache, so every card
-        // surface fed by this funnel (album suggestions, label, awards, …)
+        // Favorite heart state. Local/Plex albums read the local-favorites
+        // store (their composite keys never match a Qobuz favorite id);
+        // Qobuz albums read the login-seeded fav cache so every card surface
         // renders the filled heart in sync with the album-detail header.
-        // Local Library ids never match a Qobuz favorite id (and LL hides
-        // the heart), so the lookup is harmless there.
-        is_favorite: crate::fav_cache::is_album_favorite(&card.id),
+        is_favorite: if card.source == "local" || card.source == "plex" {
+            crate::local_favorites::is_favorite("album", &card.id)
+        } else {
+            crate::fav_cache::is_album_favorite(&card.id)
+        },
         // Pin badge state from the per-user pinned store (kept live by
         // main::set_album_row_pinned when a pin toggles anywhere).
         is_pinned: crate::pinned::is_pinned("album", &card.id),

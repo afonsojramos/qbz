@@ -127,6 +127,13 @@ pub enum ArtworkTarget {
     /// the row's album-cover thumbnail only paints once this job decodes the
     /// `artwork_url` bytes into the row's `artwork` field (#631).
     ArtistTopTrack { index: usize },
+    /// A curated playlist card in `ArtistState.playlists[index]` (the
+    /// main-column Playlists carousel). Single cover (slot 0), like
+    /// `LabelPlaylistCover`.
+    ArtistPlaylistCover { index: usize },
+    /// A card in the Library "All" mixed feed (`LibraryAllState.items-visible[index]`).
+    /// Dispatched against the VISIBLE model, re-dispatched on each derive.
+    LibraryAllCover { index: usize },
     /// A card in MusicianState.appearances[index].
     MusicianAppearance { index: usize },
     /// A card in LabelState.albums[index] (releases sub-view grid).
@@ -1211,6 +1218,20 @@ fn apply_artwork(
             let model = window.global::<crate::ArtistReleasesState>().get_albums();
             if let Some(mut item) = model.row_data(index) {
                 item.artwork = image;
+                model.set_row_data(index, item);
+            }
+        }
+        ArtworkTarget::ArtistPlaylistCover { index } => {
+            let model = window.global::<ArtistState>().get_playlists();
+            if let Some(mut item) = model.row_data(index) {
+                item.cover1 = image;
+                model.set_row_data(index, item);
+            }
+        }
+        ArtworkTarget::LibraryAllCover { index } => {
+            let model = window.global::<crate::LibraryAllState>().get_items_visible();
+            if let Some(mut item) = model.row_data(index) {
+                item.image = image;
                 model.set_row_data(index, item);
             }
         }

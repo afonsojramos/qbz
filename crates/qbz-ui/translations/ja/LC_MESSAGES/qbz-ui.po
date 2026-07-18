@@ -4598,3 +4598,12 @@ msgstr "内蔵"
 
 msgid "Preferred GPU changed — restart QBZ to apply"
 msgstr "優先GPUを変更しました — 適用するには QBZ を再起動してください"
+
+msgid "Search your library"
+msgstr "ライブラリを検索"
+
+msgid "From catalog"
+msgstr "カタログから"
+
+msgid "In library"
+msgstr "ライブラリ内"

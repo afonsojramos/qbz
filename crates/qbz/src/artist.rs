@@ -20,7 +20,7 @@ use crate::home::CardData;
 use crate::{
     AlbumCardItem, TrackItem, AppWindow, ArtistReleaseSection, ArtistState, DiscoveryArtist,
     JumpNavTab, LabelEntry, MbOriginData, MbRelationship, MbRelationshipsData,
-    NetworkSidebarState, SettingsState, ShellState, SimilarEntry, StoryItem,
+    NetworkSidebarState, SearchPlaylistItem, SettingsState, ShellState, SimilarEntry, StoryItem,
 };
 
 /// Plain, `Send` artist data produced on the worker thread.
@@ -48,6 +48,18 @@ pub struct ArtistData {
     pub labels: Vec<LabelData>,
     /// Similar artists from /artist/page — sidebar Similar Artists.
     pub similar_artists: Vec<SimilarArtistData>,
+    /// Curated playlists featuring this artist (the /artist/page `playlists`
+    /// section) — main-column Playlists carousel, above the "Other" block.
+    pub playlists: Vec<PlaylistSlim>,
+}
+
+/// One curated playlist card for the artist Playlists carousel.
+#[derive(Clone)]
+pub struct PlaylistSlim {
+    pub id: String,
+    pub title: String,
+    pub subtitle: String,
+    pub image_url: String,
 }
 
 #[derive(Clone)]
@@ -362,6 +374,36 @@ fn map_artist(page: PageArtistResponse) -> ArtistData {
         })
         .unwrap_or_default();
 
+    // Curated playlists featuring this artist (the /artist/page `playlists`
+    // section) — rendered as a main-column carousel above the "Other" block.
+    let playlists: Vec<PlaylistSlim> = page
+        .playlists
+        .map(|p| {
+            p.items
+                .into_iter()
+                .map(|pl| {
+                    let owner = pl
+                        .owner
+                        .and_then(|o| o.name)
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or_else(|| "Qobuz".to_string());
+                    let track_count = pl.tracks_count.unwrap_or(0);
+                    let image_url = pl
+                        .images
+                        .and_then(|imgs| imgs.rectangle)
+                        .and_then(|rects| rects.into_iter().find(|s| !s.is_empty()))
+                        .unwrap_or_default();
+                    PlaylistSlim {
+                        id: pl.id.to_string(),
+                        title: pl.title.unwrap_or_default(),
+                        subtitle: format!("{owner} · {track_count}"),
+                        image_url,
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
     // "Novedad más reciente" — the single latest-release highlight.
     // Drop a blocked "Latest release" at the SOURCE so has_last_release is
     // false (section hidden) and no stale cover job is queued.
@@ -435,6 +477,7 @@ fn map_artist(page: PageArtistResponse) -> ArtistData {
         release_sections,
         labels,
         similar_artists,
+        playlists,
     }
 }
 
@@ -496,6 +539,15 @@ pub fn artwork_jobs(data: &ArtistData) -> Vec<ArtworkJob> {
             jobs.push(ArtworkJob {
                 target: ArtworkTarget::ArtistTopTrack { index: i },
                 url: track.artwork_url.clone(),
+            });
+        }
+    }
+    // Curated playlist covers (single rectangle cover per card).
+    for (i, playlist) in data.playlists.iter().enumerate() {
+        if !playlist.image_url.is_empty() {
+            jobs.push(ArtworkJob {
+                target: ArtworkTarget::ArtistPlaylistCover { index: i },
+                url: playlist.image_url.clone(),
             });
         }
     }
@@ -790,6 +842,8 @@ pub fn apply_artist(window: &AppWindow, data: ArtistData) {
             name: sa.name.into(),
         })
         .collect();
+    let playlists: Vec<SearchPlaylistItem> =
+        data.playlists.iter().map(playlist_to_item).collect();
 
     // Cache the full models on the UI thread so the in-page search
     // can rebuild filtered views without re-fetching the artist.
@@ -821,7 +875,31 @@ pub fn apply_artist(window: &AppWindow, data: ArtistData) {
     state.set_release_sections(ModelRc::new(VecModel::from(release_sections)));
     state.set_labels(ModelRc::new(VecModel::from(labels)));
     state.set_similar_artists(ModelRc::new(VecModel::from(similar_artists)));
+    state.set_playlists(ModelRc::new(VecModel::from(playlists)));
     state.set_jump_tabs(ModelRc::new(VecModel::from(jump_tabs)));
+}
+
+/// Map an artist-page curated playlist to the shared collage card model
+/// (single cover, slot 0 — filled by ArtworkTarget::ArtistPlaylistCover).
+/// Mirrors `label::playlist_to_item`.
+fn playlist_to_item(p: &PlaylistSlim) -> SearchPlaylistItem {
+    SearchPlaylistItem {
+        id: p.id.clone().into(),
+        title: p.title.clone().into(),
+        subtitle: p.subtitle.clone().into(),
+        is_pinned: crate::pinned::is_pinned("playlist", &p.id),
+        cover_count: if p.image_url.is_empty() { 0 } else { 1 },
+        url1: p.image_url.clone().into(),
+        url2: "".into(),
+        url3: "".into(),
+        url4: "".into(),
+        cover1: slint::Image::default(),
+        cover2: slint::Image::default(),
+        cover3: slint::Image::default(),
+        cover4: slint::Image::default(),
+        category: "".into(),
+        dominant_color: slint::Color::from_argb_u8(0, 0, 0, 0),
+    }
 }
 
 /// Build the JUMP TO tab list for this artist. Tabs are emitted only
@@ -1077,6 +1155,14 @@ pub fn reset_artist(window: &AppWindow) {
     state.set_top_tracks_multi_select(false);
     state.set_top_tracks_selected_count(0);
     state.set_is_blacklisted(false);
+    state.set_playlists(ModelRc::new(VecModel::from(Vec::<SearchPlaylistItem>::new())));
+    // Catalog/library toggle — reset so an artist WITHOUT library items (apply
+    // only seeds these when the index has the artist) never shows the previous
+    // artist's count/subset.
+    state.set_artist_tab("catalog".into());
+    state.set_library_count(0);
+    state.set_library_tracks(ModelRc::new(VecModel::from(Vec::<TrackItem>::new())));
+    state.set_library_albums(ModelRc::new(VecModel::from(Vec::<AlbumCardItem>::new())));
     state.set_loading(true);
 }
 

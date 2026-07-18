@@ -1240,8 +1240,9 @@ export component LocalLibraryView inherits Rectangle {
                                 select-mode: LocalLibraryState.albums-multi-select;
                                 // List view shows the SOURCE column (local/offline/plex).
                                 show-source: true;
-                                // Local albums aren't Qobuz-favoritable — hide the heart.
-                                show-favorite: false;
+                                // Local files + Plex are locally favoritable (Phase 2);
+                                // offline-cache albums show the heart but it no-ops.
+                                show-favorite: true;
                                 // Always-visible source badge (local | qobuz-offline | plex).
                                 show-source-badge: true;
                                 // Viewport windowing (Phase 1): only cards near the
@@ -1581,7 +1582,7 @@ export component LocalLibraryView inherits Rectangle {
                                     is-grouped: LocalLibraryState.folders-group != "off";
                                     view-mode: LocalLibraryState.folders-grid-view;
                                     show-source: false;
-                                    show-favorite: false;
+                                    show-favorite: true;
                                     show-source-badge: true;
                                     open-album(id) => {
                                         LocalLibraryActions.open-album(id);
@@ -2380,7 +2381,7 @@ export component LocalLibraryView inherits Rectangle {
                                                 is-grouped: false;
                                                 view-mode: "grid";
                                                 show-source: false;
-                                                show-favorite: false;
+                                                show-favorite: true;
                                                 show-source-badge: true;
                                                 open-album(id) => {
                                                     LocalLibraryActions.open-album(id);

@@ -55,6 +55,8 @@ mod immersive;
 mod info_modals;
 mod keybindings;
 mod label;
+mod library_all;
+mod library_by_artist;
 mod link_resolver;
 mod miniplayer;
 mod location_view;
@@ -86,6 +88,7 @@ mod drag;
 mod ephemeral;
 mod folders;
 mod library_db;
+mod local_favorites;
 mod local_library;
 mod local_playlist;
 mod local_library_settings;
@@ -422,6 +425,19 @@ async fn enter_shell(
         });
     }
 
+    // Seed the per-artist library index so the ArtistPage catalog/library toggle
+    // can decide (O(1)) whether the user has items for that artist. Favorites-
+    // only (tracks + albums), once per session, off the UI thread.
+    {
+        let runtime = runtime.clone();
+        tokio::spawn(async move {
+            if crate::offline_mode::engine().is_offline() {
+                return;
+            }
+            crate::library_by_artist::seed(&runtime).await;
+        });
+    }
+
     // Same for followed AWARDS — seeds fav_cache so the AwardView follow heart
     // is correct from first open (Tauri's loadAwardFavorites, plural read).
     {
@@ -632,6 +648,7 @@ async fn enter_shell_offline(
         crate::artist_blacklist::init_for_user(&dir);
         // Pinned items are local-only and must render offline too.
         crate::pinned::init_for_user(&dir);
+        crate::local_favorites::init_for_user(&dir);
         // Intelligent Search (cache + ranking), seeded from the persisted pref.
         // Cached results stay searchable offline; live revalidation no-ops.
         crate::search_service::init(&dir, crate::ui_prefs::load().intelligent_search);
@@ -2260,8 +2277,17 @@ fn navigate_artist(
                     .iter()
                     .map(|s| s.name.clone())
                     .collect();
+                let aid_lib = artist_id.clone();
                 let _ = weak.upgrade_in_event_loop(move |w| {
                     artist::apply_artist(&w, data);
+                    // Seed the catalog/library toggle from the per-artist index
+                    // (favorites this session). The toggle only shows if count>0.
+                    if let Some(lib) = crate::library_by_artist::get(&aid_lib) {
+                        let ast = w.global::<ArtistState>();
+                        ast.set_library_count(lib.count() as i32);
+                        ast.set_library_tracks(crate::library_by_artist::track_items(&lib.tracks));
+                        ast.set_library_albums(crate::library_by_artist::album_items(&lib.albums));
+                    }
                     w.global::<ArtistState>().set_loading(false);
                 });
                 artwork::spawn_loads(jobs, weak.clone(), image_cache.clone());
@@ -3607,6 +3633,50 @@ fn navigate_favorites(
                 let msg = e.to_string();
                 let _ = weak.upgrade_in_event_loop(move |w| {
                     let st = w.global::<FavoritesState>();
+                    st.set_loading(false);
+                    st.set_load_error(msg.into());
+                });
+            }
+        }
+    });
+}
+
+/// Navigate to the Library "All" mixed feed (webplayer /user-library/all).
+/// Fans out to every source, merges + orders by date added, then applies +
+/// dispatches cover artwork. Rendered by the FavoritesView `active-tab == "all"`
+/// branch reading `LibraryAllState`.
+fn navigate_library_all(
+    runtime: Arc<AppRuntime<SlintAdapter>>,
+    weak: slint::Weak<AppWindow>,
+    handle: &tokio::runtime::Handle,
+    image_cache: artwork::ImageCache,
+) {
+    handle.spawn(async move {
+        let _ = weak.upgrade_in_event_loop(|w| {
+            w.global::<FavoritesState>().set_active_tab("all".into());
+            w.global::<NavState>().set_view(ContentView::Favorites);
+            let st = w.global::<LibraryAllState>();
+            st.set_loading(true);
+            st.set_load_error("".into());
+            // The genre popup edits the favorites context on this surface too.
+            genre_filter::set_context("favorites");
+            genre_filter::apply_state(&w);
+        });
+        match library_all::load_library_all(&runtime).await {
+            Ok(feed) => {
+                let weak_j = weak.clone();
+                let ic = image_cache.clone();
+                let _ = weak.upgrade_in_event_loop(move |w| {
+                    library_all::apply_library_all(&w, feed);
+                    let jobs = library_all::artwork_jobs(&w);
+                    artwork::spawn_loads(jobs, weak_j.clone(), ic.clone());
+                });
+            }
+            Err(e) => {
+                log::error!("[qbz-slint] library-all load failed: {e}");
+                let msg = e.to_string();
+                let _ = weak.upgrade_in_event_loop(move |w| {
+                    let st = w.global::<LibraryAllState>();
                     st.set_loading(false);
                     st.set_load_error(msg.into());
                 });
@@ -16469,6 +16539,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 return;
             }
+            if route.as_str() == "favorites-all" {
+                nav::record(nav::NavEntry::Favorites {
+                    tab: "all".to_string(),
+                });
+                if let Some(w) = weak.upgrade() {
+                    update_nav_flags(&w);
+                }
+                navigate_library_all(
+                    runtime.clone(),
+                    weak.clone(),
+                    &handle,
+                    image_cache.clone(),
+                );
+                return;
+            }
             if let Some(tab) = favorites::FavTab::from_route(route.as_str()) {
                 let tab_id = route.strip_prefix("favorites-").unwrap_or("tracks");
                 nav::record(nav::NavEntry::Favorites {
@@ -17356,6 +17441,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "toggle-select" => {
                     if let Some(w) = weak.upgrade() {
                         local_library::toggle_album_select(&w, id.as_str());
+                    }
+                }
+                "favorite" => {
+                    if let Some(w) = weak.upgrade() {
+                        local_library::toggle_album_favorite(&w, id.as_str());
                     }
                 }
                 _ => {
@@ -20249,6 +20339,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         window
             .global::<FavoritesActions>()
             .on_select_tab(move |id| {
+                if id.as_str() == "all" {
+                    nav::record(nav::NavEntry::Favorites {
+                        tab: "all".to_string(),
+                    });
+                    if let Some(w) = weak.upgrade() {
+                        update_nav_flags(&w);
+                    }
+                    navigate_library_all(
+                        runtime.clone(),
+                        weak.clone(),
+                        &handle,
+                        image_cache.clone(),
+                    );
+                    return;
+                }
                 let Some(tab) = favorites::FavTab::from_tab_id(id.as_str()) else {
                     // Playlists / Labels: just switch the visible tab,
                     // their content is not implemented yet.
@@ -20610,6 +20715,74 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     w.invoke_media_action("album".into(), id, action);
                 }
             });
+    }
+    // ── Library "All" mixed feed — toolbar handlers ──
+    {
+        let weak = window.as_weak();
+        let image_cache = image_cache.clone();
+        window.global::<LibraryAllActions>().on_search(move |q| {
+            if let Some(w) = weak.upgrade() {
+                w.global::<LibraryAllState>().set_search(q);
+                library_all::derive(&w);
+                let jobs = library_all::artwork_jobs(&w);
+                artwork::spawn_loads(jobs, weak.clone(), image_cache.clone());
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let image_cache = image_cache.clone();
+        window.global::<LibraryAllActions>().on_set_sort(move |key| {
+            if let Some(w) = weak.upgrade() {
+                w.global::<LibraryAllState>().set_sort_by(key);
+                library_all::derive(&w);
+                let jobs = library_all::artwork_jobs(&w);
+                artwork::spawn_loads(jobs, weak.clone(), image_cache.clone());
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        window.global::<LibraryAllActions>().on_set_view(move |mode| {
+            if let Some(w) = weak.upgrade() {
+                w.global::<LibraryAllState>().set_view_mode(mode);
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let image_cache = image_cache.clone();
+        window
+            .global::<LibraryAllActions>()
+            .on_toggle_source(move |which| {
+                if let Some(w) = weak.upgrade() {
+                    let st = w.global::<LibraryAllState>();
+                    match which.as_str() {
+                        "purchases" => st.set_show_purchases(!st.get_show_purchases()),
+                        "favorites" => st.set_show_favorites(!st.get_show_favorites()),
+                        "following" => st.set_show_following(!st.get_show_following()),
+                        "local" => st.set_show_local(!st.get_show_local()),
+                        _ => {}
+                    }
+                    library_all::derive(&w);
+                    let jobs = library_all::artwork_jobs(&w);
+                    artwork::spawn_loads(jobs, weak.clone(), image_cache.clone());
+                }
+            });
+    }
+    {
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
+        window.global::<LibraryAllActions>().on_retry(move || {
+            navigate_library_all(
+                runtime.clone(),
+                weak.clone(),
+                &handle,
+                image_cache.clone(),
+            );
+        });
     }
     {
         // Local search over the loaded favorite albums (title / artist).

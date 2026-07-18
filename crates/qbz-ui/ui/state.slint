@@ -3452,6 +3452,17 @@ export global ArtistState {
     // Similar artists from the /artist/page response — feed the Similar
     // Artists section of the network sidebar.
     in property <[SimilarEntry]> similar-artists: [];
+    // Curated playlists featuring this artist (the /artist/page `playlists`
+    // section). Rendered as a main-column PlaylistCarousel directly above the
+    // "Other" releases block. Covers filled by ArtworkTarget::ArtistPlaylistCover.
+    in property <[SearchPlaylistItem]> playlists: [];
+    // Catalog-vs-library toggle (webplayer "Del catálogo" / "En la biblioteca").
+    // The toggle only shows when library-count > 0; "library" swaps the main
+    // column to the user's added items for this artist.
+    in-out property <string> artist-tab: "catalog"; // "catalog" | "library"
+    in property <int> library-count: 0;
+    in property <[TrackItem]> library-tracks: [];
+    in property <[AlbumCardItem]> library-albums: [];
     // Filtered JUMP TO tabs for this artist — only the sections
     // that actually have content. Built in artist::apply_artist
     // from the page response. anchor-y is the page-local y the
@@ -4945,6 +4956,61 @@ export global FavoritesActions {
     callback unfavorite-track(string /* track id */);
     callback unfavorite-album(string /* album id */);
     callback retry-load();
+}
+
+// ── Library "All" — the mixed feed (webplayer /user-library/all) ──
+//
+// One heterogeneous item that renders as a track / album / artist / playlist /
+// label card depending on `kind`. The mixed feed interleaves favorites,
+// purchases and followed items sorted by date added. Sort/filter/source-switch
+// are applied ENTIRELY in Rust (crate::library_all::derive) — Slint renders the
+// pre-computed `items-visible`.
+export struct LibraryFeedItem {
+    kind: string,          // "track" | "album" | "artist" | "playlist" | "label"
+    group: string,         // "favorites" | "following" | "purchases"
+    source: string,        // "qobuz" | "local" | "plex"
+    id: string,
+    title: string,
+    subtitle: string,      // "Track • Artist" / "year • artist" / owner·count / …
+    artist: string,
+    artist-id: string,
+    album: string,
+    image-url: string,
+    image: image,          // decoded cover (empty until the pipeline resolves it)
+    quality-tier: string,  // "hires" | "cd" | ""
+    quality-detail: string,// "24-bit / 96 kHz"
+    is-favorite: bool,
+    removing: bool,
+    sort-title: string,    // lowercased title for the A-Z sort
+    sort-artist: string,   // lowercased artist for the artist sort
+}
+
+export global LibraryAllState {
+    in property <[LibraryFeedItem]> items: [];         // full merged feed
+    in property <[LibraryFeedItem]> items-visible: []; // after search + source + sort
+    in-out property <string> search: "";
+    in-out property <string> sort-by: "date";          // "date" | "title" | "artist"
+    in-out property <string> view-mode: "grid";        // "grid" | "list"
+    // Source-switch filters — the three webplayer toggles. All on = show all.
+    in-out property <bool> show-purchases: true;
+    in-out property <bool> show-favorites: true;
+    in-out property <bool> show-following: true;
+    // "show local" — includes local files + Plex (Phase 2). Off until the
+    // local-favorites layer lands.
+    in-out property <bool> show-local: false;
+    in property <int> total: 0;                        // badge count (deduped union)
+    in property <bool> loading: false;
+    in property <string> load-error: "";
+}
+
+export global LibraryAllActions {
+    callback search(string /* query */);
+    callback set-sort(string /* date | title | artist */);
+    callback set-view(string /* grid | list */);
+    callback toggle-source(string /* purchases | favorites | following | local */);
+    callback open-item(string /* kind */, string /* id */);
+    callback media-action(string /* kind */, string /* id */, string /* action */);
+    callback retry();
 }
 
 // ── Purchases (My-Purchases library surface, source-of-truth §2.1) ──

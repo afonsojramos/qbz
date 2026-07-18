@@ -388,3 +388,12 @@ msgstr "integrated"
 
 msgid "Preferred GPU changed — restart QBZ to apply"
 msgstr "Preferred GPU changed — restart QBZ to apply"
+
+msgid "Search your library"
+msgstr "Search your library"
+
+msgid "From catalog"
+msgstr "From catalog"
+
+msgid "In library"
+msgstr "In library"

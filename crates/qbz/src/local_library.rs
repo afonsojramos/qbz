@@ -992,7 +992,16 @@ fn map_local_track(t: qbz_library::LocalTrack) -> TrackItem {
         selected: false,
         artwork_url: t.artwork_path.unwrap_or_default().into(),
         artwork: slint::Image::default(),
-        is_favorite: false,
+        // Local/Plex favorite state from the local-favorites store, keyed by the
+        // stable track key (file_path, or plex:<file_path> for Plex). Offline /
+        // ephemeral rows are not locally favoritable.
+        is_favorite: match t.source.as_deref() {
+            Some("plex") => {
+                crate::local_favorites::is_favorite("track", &format!("plex:{}", t.file_path))
+            }
+            Some("qobuz_download") | Some("ephemeral") => false,
+            _ => crate::local_favorites::is_favorite("track", &t.file_path),
+        },
         artist_id: "".into(),
         album_id: "".into(),
         removing: false,
@@ -1426,6 +1435,61 @@ fn album_is_selected(window: &AppWindow, id: &str) -> bool {
         }
     });
     found
+}
+
+/// Toggle the local-favorite state of a local/Plex album by its composite key.
+/// Reads the album's display snapshot from the rendered model, writes to the
+/// local-favorites store (genuine local/Plex only — offline-cache albums are
+/// skipped), and optimistically flips the heart on every rendered model.
+pub fn toggle_album_favorite(window: &AppWindow, id: &str) {
+    let mut snap: Option<(String, String, String, String)> = None; // title, artist, artwork, source
+    for_each_album_model(window, |m| {
+        if snap.is_some() {
+            return;
+        }
+        for i in 0..m.row_count() {
+            if let Some(a) = m.row_data(i) {
+                if a.id.as_str() == id {
+                    snap = Some((
+                        a.title.to_string(),
+                        a.artist.to_string(),
+                        a.artwork_url.to_string(),
+                        a.source.to_string(),
+                    ));
+                    return;
+                }
+            }
+        }
+    });
+    let Some((title, artist, artwork_url, source)) = snap else {
+        return;
+    };
+    // Only genuine local files + Plex are locally favoritable (never the Qobuz
+    // offline cache).
+    if source != "local" && source != "plex" {
+        return;
+    }
+    let item = crate::local_favorites::LocalFavItem {
+        kind: "album".into(),
+        id: id.to_string(),
+        title,
+        subtitle: String::new(),
+        artwork_url,
+        artist,
+        source,
+        favorited_at: 0,
+    };
+    let new_state = crate::local_favorites::toggle(&item).unwrap_or(false);
+    for_each_album_model(window, |m| {
+        for i in 0..m.row_count() {
+            if let Some(mut a) = m.row_data(i) {
+                if a.id.as_str() == id && a.is_favorite != new_state {
+                    a.is_favorite = new_state;
+                    m.set_row_data(i, a);
+                }
+            }
+        }
+    });
 }
 
 /// Recount distinct selected albums into `albums-selected-count`.
