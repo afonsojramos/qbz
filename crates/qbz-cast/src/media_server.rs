@@ -503,7 +503,7 @@ fn content_type_for_path(path: &Path) -> String {
 /// a sequential id alone.
 fn generate_token() -> String {
     let mut bytes = [0u8; 16];
-    if getrandom::getrandom(&mut bytes).is_err() {
+    if getrandom::fill(&mut bytes).is_err() {
         // Extremely rare; fall back to a non-crypto scramble so cast still works.
         use std::hash::BuildHasher;
         let hi = std::collections::hash_map::RandomState::new().hash_one(0x9E37_79B9u64);
