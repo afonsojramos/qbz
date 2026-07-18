@@ -111,17 +111,19 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let t = u.time * 0.75;
     let breathe = 1.0 + 0.12 * u.level_smooth;
 
-    // Two-octave domain warp — heavy, so the metaball field distorts organically
-    // (amoeba edges, not circles) and churns as it flows.
+    // Two-octave domain warp. The LOW octave does the big organic flow; the high
+    // octave is kept small + lower-frequency — a strong high-freq warp folds the
+    // metaball field into sharp creases that read as ugly hard edges over the
+    // translucent UI, so it's gentle here.
     let w1 = vec2<f32>(
-        fbm(uv * 1.4 + vec2<f32>(t * 0.5, t * 0.2)),
-        fbm(uv * 1.4 + vec2<f32>(-t * 0.3, t * 0.45)),
+        fbm(uv * 1.3 + vec2<f32>(t * 0.5, t * 0.2)),
+        fbm(uv * 1.3 + vec2<f32>(-t * 0.3, t * 0.45)),
     );
     let w2 = vec2<f32>(
-        fbm(uv * 3.1 + vec2<f32>(-t * 0.7, t * 0.5)),
-        fbm(uv * 3.1 + vec2<f32>(t * 0.6, -t * 0.4)),
+        fbm(uv * 2.3 + vec2<f32>(-t * 0.6, t * 0.45)),
+        fbm(uv * 2.3 + vec2<f32>(t * 0.55, -t * 0.35)),
     );
-    let p = uv + (w1 - 0.5) * 0.80 + (w2 - 0.5) * 0.30;
+    let p = uv + (w1 - 0.5) * 0.68 + (w2 - 0.5) * 0.14;
 
     // Four album-colored METABALLS on big wandering orbits. Their r²/d² fields
     // sum, so where two get close they FUSE into a stretched amoeba lobe, and
@@ -143,16 +145,16 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     var col = (u.primary.rgb * fA + u.secondary.rgb * fB + u.accent.rgb * fC + c4 * fD)
         / (field + 0.0001);
 
-    // The AMOEBA structure: the iso-surface. `shape` ~1 inside the fused lobes,
-    // ~0 in the gaps between them → bright morphing shapes over a darker base, so
-    // the motion is obvious instead of a flat smear.
-    let shape = smoothstep(0.85, 2.6, field);
-    col = col * mix(0.32, 1.18, shape);
+    // The AMOEBA structure: the iso-surface. A WIDE smoothstep so the lobes melt
+    // into the base with a long soft gradient instead of a hard rim (the ugly
+    // edges), and a gentler bright/dark spread so transitions never snap.
+    let shape = smoothstep(0.45, 3.4, field);
+    col = col * mix(0.42, 1.12, shape);
 
-    // Push saturation/contrast so the lobes read as vivid amoebas, not a muddy
-    // average.
+    // Push saturation/contrast a little so the lobes read as album color, not a
+    // muddy average — but not so hard it re-sharpens the transitions.
     let luma = dot(col, vec3<f32>(0.299, 0.587, 0.114));
-    col = mix(vec3<f32>(luma), col, 1.4);
+    col = mix(vec3<f32>(luma), col, 1.28);
 
     // Vertical falloff → a touch darker at the very top/bottom edges so chrome
     // (titlebar, player bar) sits on calmer color. Kept subtle.
@@ -163,8 +165,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // legibility dim, so the base can stay bright without glaring.
     col = clamp(col, vec3<f32>(0.0), vec3<f32>(1.0)) * 0.92;
 
-    // A whisper of grain to avoid banding on the smooth gradient.
-    let grain = (vnoise(in.uv * u.resolution * 0.5) - 0.5) * 0.015;
+    // A touch of grain (dither) to break up 8-bit banding on the smooth gradient
+    // — banding rings read as faint hard edges too.
+    let grain = (vnoise(in.uv * u.resolution * 0.5) - 0.5) * 0.022;
     col = col + vec3<f32>(grain);
 
     return vec4<f32>(clamp(col, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
