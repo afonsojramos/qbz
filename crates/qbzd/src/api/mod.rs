@@ -18,6 +18,7 @@ pub mod browse;
 pub mod play;
 pub mod playback;
 pub mod queue;
+pub mod radio;
 pub mod search;
 pub mod settings;
 pub mod status;
@@ -76,6 +77,7 @@ pub const P1_ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/artist"),
     ("GET", "/api/similar"),
     ("GET", "/api/suggest"),
+    ("POST", "/api/radio"),
 ];
 
 /// A socket bound at boot step 5, not yet serving. Wraps the tiny_http server
@@ -286,6 +288,10 @@ fn route(state: &ApiState, req: &mut Request) -> Response<Cursor<Vec<u8>>> {
         ("GET", "/api/artist") => browse::artist(state, &query),
         ("GET", "/api/similar") => browse::similar(state, &query),
         ("GET", "/api/suggest") => browse::suggest(state, &query),
+        ("POST", "/api/radio") => {
+            let body = read_json_body(req);
+            radio::radio(state, &body)
+        }
         ("GET", "/api/queue") => queue::list(state, &query),
         ("POST", "/api/queue/add") => {
             let body = read_json_body(req);
@@ -453,13 +459,14 @@ mod tests {
         // §3.1.4 HARD RULE, applied to the content-verb door). Row 19:
         // GET /api/search — caller: `qbzd search`. Count is pinned so a route
         // with no caller cannot creep in; P1 must never overlap P0.
-        assert_eq!(P1_ROUTES.len(), 6);
+        assert_eq!(P1_ROUTES.len(), 7);
         assert!(P1_ROUTES.contains(&("GET", "/api/search")));
         assert!(P1_ROUTES.contains(&("POST", "/api/play")));
         assert!(P1_ROUTES.contains(&("GET", "/api/album")));
         assert!(P1_ROUTES.contains(&("GET", "/api/artist")));
         assert!(P1_ROUTES.contains(&("GET", "/api/similar")));
         assert!(P1_ROUTES.contains(&("GET", "/api/suggest")));
+        assert!(P1_ROUTES.contains(&("POST", "/api/radio")));
         for r in P1_ROUTES {
             assert!(!P0_ROUTES.contains(r), "{r:?} is duplicated across P0 and P1");
         }

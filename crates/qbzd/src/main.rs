@@ -84,6 +84,10 @@ enum Cmd {
         #[arg(long)] ids: bool,
         #[arg(long)] json: bool,
     },
+    /// Seed-and-go radio: artist:ID | track:ID | album:ID
+    Radio { seed: String },
+    /// Resolve a Qobuz URL to a kind:ID token (pure, no daemon)
+    Resolve { url: String },
     /// Resume (bare) or play content: album:ID | track:ID | artist:ID | playlist:ID | URL
     Play   { content: Option<String> },
     Pause, Toggle, Stop, Next, Prev,
@@ -255,6 +259,11 @@ async fn main() {
             let roots = paths::ProfileRoots::resolve(None, None);
             cli::browse::suggest(cli.host, seed, limit, ids, json, &roots).await
         }
+        Cmd::Radio { seed } => {
+            let roots = paths::ProfileRoots::resolve(None, None);
+            cli::radio::radio(cli.host, seed, &roots).await
+        }
+        Cmd::Resolve { url } => cli::resolve::resolve(url),
         Cmd::Play { content } => {
             let roots = paths::ProfileRoots::resolve(None, None);
             cli::play::play(cli.host, content, &roots).await

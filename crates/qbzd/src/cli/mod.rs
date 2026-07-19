@@ -8,6 +8,8 @@ pub mod client;
 pub mod copy;
 pub mod play;
 pub mod queue;
+pub mod radio;
+pub mod resolve;
 pub mod search;
 pub mod settings;
 pub mod status;

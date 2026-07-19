@@ -49,17 +49,26 @@ pub fn play(state: &ApiState, body: &Value) -> Response<Cursor<Vec<u8>>> {
         Ok(v) => v,
         Err(resp) => return resp,
     };
+    start_resolved(state, tracks, context, body.get("index").and_then(|v| v.as_u64()))
+}
+
+/// Materialize resolved catalog `tracks` into the queue and cold-start the
+/// chosen one through the SHIPPED ritual (set_queue → play_track_resolved →
+/// save_session_now) — never a bare cursor move (control-surface §2.2). The
+/// protected qbz-player/qbz-audio crates are untouched. `context` stamps
+/// "playing from" provenance (context_kind ∈ album|artist|playlist —
+/// qbz-models/src/playback.rs:60-71); `start_index` is the 0-based start
+/// position. Shared by `play` (selector-resolved) and `radio` (seed-generated).
+pub(crate) fn start_resolved(
+    state: &ApiState,
+    tracks: Vec<Track>,
+    context: Option<(&'static str, String)>,
+    start_index: Option<u64>,
+) -> Response<Cursor<Vec<u8>>> {
     if tracks.is_empty() {
-        return err_json(
-            404,
-            "not_found",
-            "nothing to play for that selector",
-            "check the id: qbzd search <QUERY>",
-        );
+        return err_json(404, "not_found", "nothing to play", "check the id: qbzd search <QUERY>");
     }
 
-    // Map to QueueTracks, stamping "playing from" provenance for container plays
-    // (context_kind ∈ album|artist|playlist — qbz-models/src/playback.rs:60-71).
     let mut queue_tracks: Vec<QueueTrack> = tracks.iter().map(track_to_queue_track).collect();
     if let Some((kind, id)) = &context {
         for qt in &mut queue_tracks {
@@ -69,12 +78,10 @@ pub fn play(state: &ApiState, body: &Value) -> Response<Cursor<Vec<u8>>> {
     }
 
     let total = queue_tracks.len();
-    let start = clamp_index(body.get("index").and_then(|v| v.as_u64()), total);
+    let start = clamp_index(start_index, total);
     let start_track_id = queue_tracks[start].id;
     let start_summary = summary(&queue_tracks[start]);
 
-    // Replace the queue and cold-start the chosen track through the shipped
-    // ritual: set_queue → play_track_resolved → save_session_now.
     state
         .rt
         .block_on(state.runtime.core().set_queue(queue_tracks, Some(start)));
