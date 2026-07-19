@@ -6732,6 +6732,99 @@ fn gpu_power_from_prefs() -> Option<slint::wgpu_28::wgpu::PowerPreference> {
     }
 }
 
+/// Minimal `block_on` for the wgpu init futures (ready on first poll on native
+/// platforms; the parking loop keeps it correct even if a driver ever leaves
+/// them pending). The tokio runtime does not exist yet this early in startup,
+/// and pulling one in just for the adapter/device requests is overkill.
+fn block_on_wgpu<F: std::future::Future>(future: F) -> F::Output {
+    use std::sync::Arc;
+    use std::task::{Context, Poll, Wake, Waker};
+    struct Parker(std::thread::Thread);
+    impl Wake for Parker {
+        fn wake(self: Arc<Self>) {
+            self.0.unpark();
+        }
+        fn wake_by_ref(self: &Arc<Self>) {
+            self.0.unpark();
+        }
+    }
+    let waker: Waker = Arc::new(Parker(std::thread::current())).into();
+    let mut cx = Context::from_waker(&waker);
+    let mut future = std::pin::pin!(future);
+    loop {
+        match future.as_mut().poll(&mut cx) {
+            Poll::Ready(out) => return out,
+            Poll::Pending => std::thread::park(),
+        }
+    }
+}
+
+/// Create the wgpu instance/adapter/device/queue ONCE at startup so they can be
+/// handed to Slint as `WGPUConfiguration::Manual` and REUSED across every
+/// window re-creation. Mirrors Slint's own Automatic init (vendored
+/// i-slint-core `graphics/wgpu_28.rs`) minus the surface — none exists yet at
+/// this point, and Vulkan-Wayland adapters are not surface-specific.
+///
+/// Why: on Wayland `hide()` destroys the winit window and every `show()`
+/// re-runs the femtovg-wgpu surface setup; with `Automatic` each re-creation
+/// spins up a BRAND-NEW VkInstance + VkDevice (and drops the old ones). On the
+/// NVIDIA proprietary driver that churn segfaults — a null call inside
+/// libnvidia-glcore during surface re-creation, racing in-flight GPU work
+/// (close-to-tray → restore; reproduced under gdb 2026-07-18: crash inside
+/// `set_surface`, before the first render, with playback starting mid-restore).
+/// With a Manual stack the restore only creates a new VkSurfaceKHR + swapchain
+/// on the SAME device — the path every resize already exercises.
+///
+/// Returns `None` on any failure so the caller can fall back to `Automatic`.
+fn create_shared_wgpu_stack(
+    settings: &slint::wgpu_28::WGPUSettings,
+) -> Option<(
+    slint::wgpu_28::wgpu::Instance,
+    slint::wgpu_28::wgpu::Adapter,
+    slint::wgpu_28::wgpu::Device,
+    slint::wgpu_28::wgpu::Queue,
+)> {
+    use slint::wgpu_28::wgpu;
+    // Same backend mask as the femtovg-wgpu renderer (GL excluded for its
+    // rendering artifacts); the rest follows WGPUSettings/env as before.
+    let instance = block_on_wgpu(wgpu::util::new_instance_with_webgpu_detection(
+        &wgpu::InstanceDescriptor {
+            backends: settings.backends & !wgpu::Backends::GL,
+            flags: settings.instance_flags,
+            backend_options: settings.backend_options.clone(),
+            memory_budget_thresholds: settings.instance_memory_budget_thresholds,
+        },
+    ));
+    let adapter = match block_on_wgpu(wgpu::util::initialize_adapter_from_env(&instance, None)) {
+        Ok(adapter) => adapter,
+        Err(_) => block_on_wgpu(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: settings.power_preference,
+            force_fallback_adapter: false,
+            compatible_surface: None,
+        }))
+        .map_err(|e| log::warn!("[renderer] shared wgpu adapter request failed: {e}"))
+        .ok()?,
+    };
+    let (device, queue) = block_on_wgpu(adapter.request_device(&wgpu::DeviceDescriptor {
+        label: settings.device_label.as_deref(),
+        required_features: settings.device_required_features,
+        required_limits: settings
+            .device_required_limits
+            .clone()
+            .using_resolution(adapter.limits()),
+        experimental_features: settings.device_experimental_features,
+        memory_hints: settings.device_memory_hints.clone(),
+        trace: wgpu::Trace::default(),
+    }))
+    .map_err(|e| log::warn!("[renderer] shared wgpu device request failed: {e}"))
+    .ok()?;
+    log::info!(
+        "[renderer] shared wgpu stack created ({}), reused across surface re-creations",
+        adapter.get_info().name
+    );
+    Some((instance, adapter, device, queue))
+}
+
 /// Decide + activate the Slint backend, returning whether the GPU (wgpu) renderer was
 /// selected. `false` => femtovg-GL or the pure software renderer is active and the caller
 /// must skip the wgpu shader underlay (neither exposes a WGPU28 GraphicsAPI). See the big
@@ -6838,10 +6931,44 @@ fn select_slint_backend() -> Result<bool, slint::PlatformError> {
                 "[renderer] selecting wgpu (GPU) renderer (power_preference={:?})",
                 wgpu_settings.power_preference
             );
-            slint::BackendSelector::new()
-                .require_wgpu_28(slint::wgpu_28::WGPUConfiguration::Automatic(wgpu_settings))
-                .with_winit_window_attributes_hook(attributes_hook)
-                .select()?;
+            // Tray-restore SEGFAULT fix (2026-07-18): on Wayland, hide()
+            // destroys the winit window and show() re-runs the femtovg-wgpu
+            // surface setup; with `Automatic` that spins up a fresh VkInstance
+            // + VkDevice EVERY restore and the NVIDIA driver segfaults on the
+            // churn (null call in libnvidia-glcore inside `set_surface`;
+            // close-to-tray → restore). On Linux+Wayland create the wgpu stack
+            // ONCE here and hand it over as `Manual`, so a restore only
+            // re-creates the surface/swapchain on the same device. Other
+            // platforms don't destroy on hide — keep `Automatic` there, and
+            // fall back to it if the shared stack cannot be created.
+            let shared_stack = if cfg!(target_os = "linux")
+                && std::env::var_os("WAYLAND_DISPLAY").is_some()
+            {
+                create_shared_wgpu_stack(&wgpu_settings)
+            } else {
+                None
+            };
+            match shared_stack {
+                Some((instance, adapter, device, queue)) => {
+                    slint::BackendSelector::new()
+                        .require_wgpu_28(slint::wgpu_28::WGPUConfiguration::Manual {
+                            instance,
+                            adapter,
+                            device,
+                            queue,
+                        })
+                        .with_winit_window_attributes_hook(attributes_hook)
+                        .select()?;
+                }
+                None => {
+                    slint::BackendSelector::new()
+                        .require_wgpu_28(slint::wgpu_28::WGPUConfiguration::Automatic(
+                            wgpu_settings,
+                        ))
+                        .with_winit_window_attributes_hook(attributes_hook)
+                        .select()?;
+                }
+            }
         }
         RendererTier::FemtovgGl => {
             log::info!(
