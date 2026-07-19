@@ -6,6 +6,7 @@
 pub mod client;
 pub mod copy;
 pub mod queue;
+pub mod search;
 pub mod settings;
 pub mod status;
 pub mod transport;

@@ -16,6 +16,7 @@
 // what keeps the 01-architecture.md §8.1 boot order honest.
 pub mod playback;
 pub mod queue;
+pub mod search;
 pub mod settings;
 pub mod status;
 
@@ -58,6 +59,15 @@ pub const P0_ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/queue/clear"),
     ("POST", "/api/settings/reload"),
 ];
+
+/// The P1 route table (02 §3.4) — the content-verb surface. SAME HARD RULE as
+/// P0 (§3.1.4): a route exists only iff a shipped CLI/TUI client calls it, and
+/// this table grows one row per verb+route pair in the SAME change as the verb.
+/// Row 19 (this change): `GET /api/search` — caller: `qbzd search`. The
+/// `p1_route_table_grows_only_with_a_shipped_caller` test pins the count and
+/// forbids overlap with P0, so the 68-routes failure shape cannot creep in
+/// through the P1 door either.
+pub const P1_ROUTES: &[(&str, &str)] = &[("GET", "/api/search")];
 
 /// A socket bound at boot step 5, not yet serving. Wraps the tiny_http server
 /// in an `Arc` so the serving thread and the shutdown handle can both hold it
@@ -193,7 +203,12 @@ pub fn probe_is_qbzd(addr: SocketAddr) -> bool {
 pub fn serve(server: BoundServer, state: ApiState) -> ApiHandle {
     // The counted P0 surface — logged at boot so an operator sees exactly how
     // many routes this build exposes (and it anchors the const to production).
-    log::info!("control plane serving {} P0 route(s)", P0_ROUTES.len());
+    log::info!(
+        "control plane serving {} route(s) ({} P0 + {} P1)",
+        P0_ROUTES.len() + P1_ROUTES.len(),
+        P0_ROUTES.len(),
+        P1_ROUTES.len()
+    );
     let srv = server.server;
     let srv_handle = srv.clone();
     let thread = std::thread::Builder::new()
@@ -253,6 +268,7 @@ fn route(state: &ApiState, req: &mut Request) -> Response<Cursor<Vec<u8>>> {
             let body = read_json_body(req);
             playback::volume(state, &body)
         }
+        ("GET", "/api/search") => search::search(state, &query),
         ("GET", "/api/queue") => queue::list(state, &query),
         ("POST", "/api/queue/add") => {
             let body = read_json_body(req);
@@ -412,6 +428,19 @@ mod tests {
         assert!(P0_ROUTES.contains(&("POST", "/api/queue/remove")));
         assert!(P0_ROUTES.contains(&("POST", "/api/queue/clear")));
         assert!(P0_ROUTES.contains(&("POST", "/api/settings/reload")));
+    }
+
+    #[test]
+    fn p1_route_table_grows_only_with_a_shipped_caller() {
+        // 02-cli-and-api.md §3.4 — each P1 route lands with its CLI verb (the
+        // §3.1.4 HARD RULE, applied to the content-verb door). Row 19:
+        // GET /api/search — caller: `qbzd search`. Count is pinned so a route
+        // with no caller cannot creep in; P1 must never overlap P0.
+        assert_eq!(P1_ROUTES.len(), 1);
+        assert!(P1_ROUTES.contains(&("GET", "/api/search")));
+        for r in P1_ROUTES {
+            assert!(!P0_ROUTES.contains(r), "{r:?} is duplicated across P0 and P1");
+        }
     }
 
     #[test]

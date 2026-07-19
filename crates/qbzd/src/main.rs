@@ -45,6 +45,15 @@ enum Cmd {
     Ping   { #[arg(long)] json: bool },
     /// One-line now-playing
     Now    { #[arg(long)] json: bool },
+    /// Search Qobuz — top hits with ids (--ids pipes into `queue add -`)
+    Search {
+        query: String,
+        #[arg(long = "type", default_value = "all")] kind: String,
+        #[arg(long, default_value_t = 20)] limit: u32,
+        #[arg(long, default_value_t = 0)] offset: u32,
+        #[arg(long)] ids: bool,
+        #[arg(long)] json: bool,
+    },
     Play, Pause, Toggle, Stop, Next, Prev,
     /// Absolute secs, +N/-N, or mm:ss
     Seek   { position: String },
@@ -193,6 +202,10 @@ async fn main() {
         Cmd::Now { json } => {
             let roots = paths::ProfileRoots::resolve(None, None);
             cli::transport::now(cli.host, json, &roots).await
+        }
+        Cmd::Search { query, kind, limit, offset, ids, json } => {
+            let roots = paths::ProfileRoots::resolve(None, None);
+            cli::search::search(cli.host, query, kind, limit, offset, ids, json, &roots).await
         }
         Cmd::Play => {
             let roots = paths::ProfileRoots::resolve(None, None);
