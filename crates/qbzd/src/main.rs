@@ -84,6 +84,19 @@ enum Cmd {
         #[arg(long)] ids: bool,
         #[arg(long)] json: bool,
     },
+    /// Discover rails: index | most-streamed | new-releases | press-awards |
+    /// qobuzissims | album-of-the-week | ideal-discography | playlists | tags |
+    /// release-watch (replicate Discover; no recommendations)
+    Discover {
+        section: Option<String>,
+        #[arg(long)] genre: Option<String>,
+        #[arg(long)] tag: Option<String>,
+        #[arg(long = "release-type")] release_type: Option<String>,
+        #[arg(long = "type")] kind: Option<String>,
+        #[arg(long, default_value_t = 20)] limit: u32,
+        #[arg(long)] ids: bool,
+        #[arg(long)] json: bool,
+    },
     /// Favorites: list | add | remove
     Fav { #[command(subcommand)] cmd: FavCmd },
     /// Playlists: list | show
@@ -307,6 +320,10 @@ async fn main() {
         Cmd::Suggest { seed, limit, ids, json } => {
             let roots = paths::ProfileRoots::resolve(None, None);
             cli::browse::suggest(cli.host, seed, limit, ids, json, &roots).await
+        }
+        Cmd::Discover { section, genre, tag, release_type, kind, limit, ids, json } => {
+            let roots = paths::ProfileRoots::resolve(None, None);
+            cli::discover::discover(cli.host, section, genre, tag, release_type, kind, limit, ids, json, &roots).await
         }
         Cmd::Fav { cmd } => {
             let roots = paths::ProfileRoots::resolve(None, None);

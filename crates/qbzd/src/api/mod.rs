@@ -15,6 +15,7 @@
 // diagnosis runs BEFORE the stores/runtime exist), `serve` at boot step 11 — is
 // what keeps the 01-architecture.md §8.1 boot order honest.
 pub mod browse;
+pub mod discover;
 pub mod fav;
 pub mod play;
 pub mod playback;
@@ -79,6 +80,7 @@ pub const P1_ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/artist"),
     ("GET", "/api/similar"),
     ("GET", "/api/suggest"),
+    ("GET", "/api/discover"),
     ("POST", "/api/radio"),
     ("POST", "/api/playback/shuffle"),
     ("POST", "/api/playback/repeat"),
@@ -313,6 +315,7 @@ fn route(state: &ApiState, req: &mut Request) -> Response<Cursor<Vec<u8>>> {
         ("GET", "/api/artist") => browse::artist(state, &query),
         ("GET", "/api/similar") => browse::similar(state, &query),
         ("GET", "/api/suggest") => browse::suggest(state, &query),
+        ("GET", "/api/discover") => discover::discover(state, &query),
         ("POST", "/api/radio") => {
             let body = read_json_body(req);
             radio::radio(state, &body)
@@ -527,7 +530,8 @@ mod tests {
         // §3.1.4 HARD RULE, applied to the content-verb door). Row 19:
         // GET /api/search — caller: `qbzd search`. Count is pinned so a route
         // with no caller cannot creep in; P1 must never overlap P0.
-        assert_eq!(P1_ROUTES.len(), 22);
+        assert_eq!(P1_ROUTES.len(), 23);
+        assert!(P1_ROUTES.contains(&("GET", "/api/discover")));
         assert!(P1_ROUTES.contains(&("GET", "/api/favorites")));
         assert!(P1_ROUTES.contains(&("POST", "/api/favorites/add")));
         assert!(P1_ROUTES.contains(&("POST", "/api/favorites/remove")));

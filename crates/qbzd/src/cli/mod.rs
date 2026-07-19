@@ -7,6 +7,7 @@ pub mod art;
 pub mod browse;
 pub mod client;
 pub mod copy;
+pub mod discover;
 pub mod fav;
 pub mod mode;
 pub mod play;
