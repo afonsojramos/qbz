@@ -20,6 +20,7 @@ import { ContentFilteringSettings } from "ContentFilteringSettings.slint";
 import { IntegrationsSettings } from "IntegrationsSettings.slint";
 import { DeveloperSettings } from "DeveloperSettings.slint";
 import { ScrollView } from "std-widgets.slint";
+import { ListScrollbar } from "../primitives/ListScrollbar.slint";
 
 component SubNavItem inherits Rectangle {
     in property <image> icon;
@@ -196,22 +197,28 @@ export component SettingsView inherits Rectangle {
                 }
             }
 
-            // Active panel.
-            ScrollView {
+            // Active panel. A raw Flickable (NOT the std ScrollView) so the
+            // panel scrolls on TOUCH-DRAG on the Pi kiosk — a Flickable intercepts
+            // the drag after a few px even over the dense SettingRows' controls,
+            // which the std ScrollView did not. A ListScrollbar overlay keeps the
+            // desktop scrollbar; sr-restore uses `self.height` (the Flickable's
+            // visible height) in place of ScrollView's `visible-height`.
+            Rectangle {
                 horizontal-stretch: 1;
-                horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
-                // Scroll-position restore on back/forward (see nav::scope_for).
-                property <string> sr-armed: NavState.restore-scope;
-                function sr-restore() {
-                    if (NavState.restore-scope == "settings" && self.viewport-height > self.visible-height) {
-                        self.viewport-y = NavState.scroll-restore;
-                        NavState.restore-scope = "";
+                settings-flick := Flickable {
+                    interactive: true;
+                    viewport-width: self.width;
+                    property <string> sr-armed: NavState.restore-scope;
+                    function sr-restore() {
+                        if (NavState.restore-scope == "settings" && self.viewport-height > self.height) {
+                            self.viewport-y = NavState.scroll-restore;
+                            NavState.restore-scope = "";
+                        }
                     }
-                }
-                init => { self.sr-restore(); }
-                changed sr-armed => { self.sr-restore(); }
-                changed viewport-height => { self.sr-restore(); }
-                changed viewport-y => { NavState.report-scroll(self.viewport-y); }
+                    init => { self.sr-restore(); }
+                    changed sr-armed => { self.sr-restore(); }
+                    changed viewport-height => { self.sr-restore(); }
+                    changed viewport-y => { NavState.report-scroll(self.viewport-y); }
                 VerticalLayout {
                     padding-left: 20px;
                     padding-right: 40px;
@@ -270,6 +277,16 @@ export component SettingsView inherits Rectangle {
                         }
                     }
                     if !SettingsState.loading && SettingsState.section == 5: DeveloperSettings { }
+                }
+                }
+                ListScrollbar {
+                    x: parent.width - self.width - 2px;
+                    width: 14px;
+                    height: 100%;
+                    viewport-height: settings-flick.viewport-height;
+                    visible-height: settings-flick.height;
+                    viewport-y <=> settings-flick.viewport-y;
+                    auto-hide: true;
                 }
             }
         }
