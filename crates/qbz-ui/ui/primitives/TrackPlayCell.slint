@@ -80,8 +80,11 @@ export component TrackPlayCell inherits Rectangle {
     // Fired when a non-current track should start playing.
     callback play();
 
+    // Offline-cache tracks publish the Qobuz catalog id in track-id but the
+    // local-library row id in local-track-id (playback.rs) — match either.
     property <bool> is-active:
-        NowPlayingState.has-track && NowPlayingState.track-id == root.track-id;
+        NowPlayingState.has-track && (NowPlayingState.track-id == root.track-id
+            || (NowPlayingState.local-track-id != "" && NowPlayingState.local-track-id == root.track-id));
     property <bool> is-playing: root.is-active && NowPlayingState.playing;
     // This row is the track being fetched/resolved (no audio yet). The global
     // loading flag + active-row match means only the one loading row spins,

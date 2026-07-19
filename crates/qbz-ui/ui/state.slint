@@ -4188,6 +4188,11 @@ export global WindowControlActions {
 export global NowPlayingState {
     in property <bool> has-track: false;
     in property <string> title;
+    // Secondary alias for the playing track: the LOCAL-LIBRARY ROW ID when the
+    // track is an offline-cache copy (queue track-id carries the Qobuz catalog
+    // id there; set by refresh_now_playing_meta in playback.rs). Empty for every
+    // other source. TrackPlayCell / TrackRow / KioskAlbum match on either id.
+    in property <string> local-track-id;
     in property <string> artist;
     in property <string> album;
     in property <string> album-id;
