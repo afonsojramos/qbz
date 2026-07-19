@@ -54,7 +54,9 @@ enum Cmd {
         #[arg(long)] ids: bool,
         #[arg(long)] json: bool,
     },
-    Play, Pause, Toggle, Stop, Next, Prev,
+    /// Resume (bare) or play content: album:ID | track:ID | artist:ID | playlist:ID | URL
+    Play   { content: Option<String> },
+    Pause, Toggle, Stop, Next, Prev,
     /// Absolute secs, +N/-N, or mm:ss
     Seek   { position: String },
     /// Bare = read; 0-100, +N, -N
@@ -207,9 +209,9 @@ async fn main() {
             let roots = paths::ProfileRoots::resolve(None, None);
             cli::search::search(cli.host, query, kind, limit, offset, ids, json, &roots).await
         }
-        Cmd::Play => {
+        Cmd::Play { content } => {
             let roots = paths::ProfileRoots::resolve(None, None);
-            cli::transport::play(cli.host, &roots).await
+            cli::play::play(cli.host, content, &roots).await
         }
         Cmd::Pause => {
             let roots = paths::ProfileRoots::resolve(None, None);

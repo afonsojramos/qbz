@@ -5,6 +5,7 @@
 // one place lets the spec and the code diff cleanly.
 pub mod client;
 pub mod copy;
+pub mod play;
 pub mod queue;
 pub mod search;
 pub mod settings;

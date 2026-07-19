@@ -383,7 +383,7 @@ fn repeat_str(mode: RepeatMode) -> String {
 /// `context_id` are left `None`: those are "playing from" provenance fields
 /// with no equivalent in a bare `qbzd queue add <TRACK_ID>` call (no album/
 /// playlist/artist container in play).
-fn track_to_queue_track(track: &Track) -> QueueTrack {
+pub(crate) fn track_to_queue_track(track: &Track) -> QueueTrack {
     let artwork_url = track.album.as_ref().and_then(|a| a.image.best().cloned());
     let artist = track
         .performer

@@ -14,6 +14,7 @@
 // The two-call split — `bind` at boot step 5 (stateless, so the foreign-occupant
 // diagnosis runs BEFORE the stores/runtime exist), `serve` at boot step 11 — is
 // what keeps the 01-architecture.md §8.1 boot order honest.
+pub mod play;
 pub mod playback;
 pub mod queue;
 pub mod search;
@@ -67,7 +68,10 @@ pub const P0_ROUTES: &[(&str, &str)] = &[
 /// `p1_route_table_grows_only_with_a_shipped_caller` test pins the count and
 /// forbids overlap with P0, so the 68-routes failure shape cannot creep in
 /// through the P1 door either.
-pub const P1_ROUTES: &[(&str, &str)] = &[("GET", "/api/search")];
+pub const P1_ROUTES: &[(&str, &str)] = &[
+    ("GET", "/api/search"),
+    ("POST", "/api/play"),
+];
 
 /// A socket bound at boot step 5, not yet serving. Wraps the tiny_http server
 /// in an `Arc` so the serving thread and the shutdown handle can both hold it
@@ -269,6 +273,10 @@ fn route(state: &ApiState, req: &mut Request) -> Response<Cursor<Vec<u8>>> {
             playback::volume(state, &body)
         }
         ("GET", "/api/search") => search::search(state, &query),
+        ("POST", "/api/play") => {
+            let body = read_json_body(req);
+            play::play(state, &body)
+        }
         ("GET", "/api/queue") => queue::list(state, &query),
         ("POST", "/api/queue/add") => {
             let body = read_json_body(req);
@@ -436,8 +444,9 @@ mod tests {
         // §3.1.4 HARD RULE, applied to the content-verb door). Row 19:
         // GET /api/search — caller: `qbzd search`. Count is pinned so a route
         // with no caller cannot creep in; P1 must never overlap P0.
-        assert_eq!(P1_ROUTES.len(), 1);
+        assert_eq!(P1_ROUTES.len(), 2);
         assert!(P1_ROUTES.contains(&("GET", "/api/search")));
+        assert!(P1_ROUTES.contains(&("POST", "/api/play")));
         for r in P1_ROUTES {
             assert!(!P0_ROUTES.contains(r), "{r:?} is duplicated across P0 and P1");
         }

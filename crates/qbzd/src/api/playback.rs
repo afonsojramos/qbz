@@ -355,7 +355,7 @@ fn cold_start(state: &ApiState) -> Result<(), Response<Cursor<Vec<u8>>>> {
 /// prefs — the SAME key contract `daemon.rs` uses to seed the driver's
 /// `DriverDeps.quality` closure at boot (01 §10.3), so a cold-start play and
 /// the next auto-advance never pick different tiers.
-fn resolve_quality(state: &ApiState) -> qbz_models::Quality {
+pub(crate) fn resolve_quality(state: &ApiState) -> qbz_models::Quality {
     let prefs = qbz_app::settings::daemon_prefs::load_at(&state.roots.data);
     qbz_app::playback_driver::quality_from_key(&prefs.streaming_quality)
 }
