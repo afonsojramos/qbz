@@ -2479,6 +2479,135 @@ pub fn play_artist_top_tracks(
     });
 }
 
+/// Play button on an artist card / grid overlay. Plays the artist's Popular
+/// (top) tracks; if the artist has NONE, falls back to their STUDIO
+/// discography — the "album" + EP/single buckets, in the page's section order,
+/// deduped by album id — EXCLUDING compilations, live, and "other". One fresh
+/// queue starting at the first track. Wired to media-action("artist", id,
+/// "play"). Fetches the artist page ONCE and decides from it (no double
+/// round-trip for the top-tracks-present common case).
+pub fn play_artist(
+    runtime: Runtime,
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+    artist_id: String,
+) {
+    // Studio discography release_type buckets (webplayer keys). Popular tracks
+    // are tried first; this set is only the fallback. "album" = the discography;
+    // epSingle/ep/single = EPs & Singles. compilation/live/other are omitted on
+    // purpose (owner spec: studio releases only).
+    const STUDIO_TYPES: &[&str] = &["album", "epSingle", "ep", "single"];
+
+    handle.spawn(async move {
+        let id: u64 = match artist_id.parse() {
+            Ok(v) => v,
+            Err(_) => {
+                log::warn!("[qbz-slint] artist-play: invalid artist id {artist_id}");
+                return;
+            }
+        };
+        let page = match runtime.core().get_artist_page(id, None).await {
+            Ok(p) => p,
+            Err(e) => {
+                log::error!("[qbz-slint] artist-play: get_artist_page {artist_id} failed: {e}");
+                crate::toast::error_weak(&weak, qbz_i18n::t("Couldn't load this artist"));
+                return;
+            }
+        };
+        let artist_name = page.name.display.clone();
+
+        // 1) Popular tracks — the primary behavior. Moves `top_tracks` out of
+        // `page`; `releases` (a disjoint field) is moved later in the fallback.
+        let raw_top: Vec<QueueTrack> = page
+            .top_tracks
+            .unwrap_or_default()
+            .into_iter()
+            .map(|track| make_top_track_queue(track, &artist_name))
+            .collect();
+        let top = filter_blacklisted_queue(raw_top);
+        if !top.is_empty() {
+            let mut tracks = top;
+            stamp_queue_context(&mut tracks, "artist", &artist_id);
+            let start_track_id = tracks[0].id;
+            runtime.core().set_queue(tracks, Some(0)).await;
+            after_track_change(&runtime, &weak, start_track_id).await;
+            refresh_sidebar(true);
+            return;
+        }
+
+        // 2) Fallback — the studio discography. Collect album ids from the
+        // studio buckets in the page's section order, deduped (a release can
+        // appear in more than one bucket for edge metadata).
+        let mut album_ids: Vec<String> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for group in page.releases.unwrap_or_default() {
+            if STUDIO_TYPES.contains(&group.release_type.as_str()) {
+                for item in group.items {
+                    if seen.insert(item.id.clone()) {
+                        album_ids.push(item.id);
+                    }
+                }
+            }
+        }
+        if album_ids.is_empty() {
+            log::warn!(
+                "[qbz-slint] artist-play: {artist_id} has no top tracks and no studio releases"
+            );
+            crate::toast::error_weak(&weak, qbz_i18n::t("No top tracks available for this artist"));
+            return;
+        }
+
+        // Concatenate each studio album's tracks into one queue. Fetch quietly:
+        // a single unavailable album must not toast (this is a bulk play) and
+        // must not abort the rest — skip it and continue. Blacklist filtering
+        // mirrors `fetch_album_for_play` (performer/composer/featured aware).
+        let mut queue: Vec<QueueTrack> = Vec::new();
+        for aid in &album_ids {
+            match runtime.core().get_album(aid.as_str()).await {
+                Ok(album) => {
+                    let album_title = album.title.clone();
+                    let album_artist = album.artist.name.clone();
+                    let album_artwork = album.image.best().cloned().unwrap_or_default();
+                    let album_primary = Some(album.artist.id);
+                    let raw_tracks = album
+                        .tracks
+                        .as_ref()
+                        .map(|c| c.items.as_slice())
+                        .unwrap_or_default();
+                    for track in raw_tracks {
+                        if track_is_blacklisted_full(track, album_primary) {
+                            continue;
+                        }
+                        queue.push(make_queue_track(
+                            track,
+                            &album.id,
+                            &album_title,
+                            &album_artist,
+                            &album_artwork,
+                            album.version.as_deref(),
+                        ));
+                    }
+                }
+                Err(e) => {
+                    log::warn!("[qbz-slint] artist-play: get_album {aid} failed: {e}; skipping");
+                }
+            }
+        }
+        if queue.is_empty() {
+            log::warn!(
+                "[qbz-slint] artist-play: {artist_id} studio discography produced no playable tracks"
+            );
+            crate::toast::error_weak(&weak, qbz_i18n::t("No top tracks available for this artist"));
+            return;
+        }
+        stamp_queue_context(&mut queue, "artist", &artist_id);
+        let start_track_id = queue[0].id;
+        runtime.core().set_queue(queue, Some(0)).await;
+        after_track_change(&runtime, &weak, start_track_id).await;
+        refresh_sidebar(true);
+    });
+}
+
 /// Enqueue (play-next or append) a subset of the artist's Popular tracks,
 /// identified by catalog id. Re-fetches the page (like the play-all path),
 /// filters to `ids`, preserves the page order, and queues — QConnect-aware

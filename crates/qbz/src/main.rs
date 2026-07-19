@@ -11863,6 +11863,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                 }
+                // Artist card / grid overlay play button: Popular tracks, with
+                // a studio-discography fallback when the artist has none (see
+                // playback::play_artist).
+                ("artist", "play") => playback::play_artist(
+                    runtime.clone(),
+                    weak.clone(),
+                    handle.clone(),
+                    id.clone(),
+                ),
                 ("artist", "play-top") => playback::play_artist_top_tracks(
                     runtime.clone(),
                     weak.clone(),
