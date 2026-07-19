@@ -376,6 +376,12 @@ where
 
         self.renderer.set_size(width, height, dpi);
 
+        // QBZ vendor patch (issue #617): keep `current_render_target` in sync
+        // with the SetRenderTarget(Screen) command queued below. Without this a
+        // caller that set an offscreen target before set_size() gets its
+        // re-assert swallowed by the stale field and the scene silently renders
+        // to the swapchain.
+        self.current_render_target = RenderTarget::Screen;
         self.append_cmd(Command::new(CommandType::SetRenderTarget(RenderTarget::Screen)));
     }
 

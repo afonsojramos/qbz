@@ -548,6 +548,15 @@ export component HeaderBar inherits Rectangle {
     // `header-menu-navigate` route handler the dropdown menus use.
     callback navigate(string /* route */);
 
+    // #617 per-frame cost: femtovg has no partial rendering, so the animated
+    // now-playing equalizer bars repaint the WHOLE window ~8x/sec. This header is
+    // static at idle (no internal scroll; the search cortinilla is a separate
+    // AppShell overlay), so cache its subtree to a persistent texture: every
+    // repaint then skips the header's tree-walk + path re-tessellation and blits
+    // the cache instead. Invalidates only when something inside changes (typing,
+    // hover, resize) — not per frame. See spec 2026-07-19-cpu-idle-repaint-617 §9.2.
+    cache-rendering-hint: true;
+
     height: Layout.header-height;
     background: ShellState.app-background-active
         ? Theme.surface-card.with-alpha(AppearanceState.app-background-surface-alpha)

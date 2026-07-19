@@ -13,15 +13,15 @@ use i_slint_core::graphics::euclid::{self};
 use i_slint_core::graphics::rendering_metrics_collector::RenderingMetrics;
 use i_slint_core::graphics::{IntRect, Point, Size};
 use i_slint_core::item_rendering::{
-    CachedRenderingData, ItemCache, ItemRenderer, RenderBorderRectangle, RenderImage,
-    RenderRectangle, RenderText,
+    CachedRenderingData, ItemCache, ItemRenderer, ItemRendererFeatures, RenderBorderRectangle,
+    RenderImage, RenderRectangle, RenderText,
 };
 use i_slint_core::items::{
     self, Clip, FillRule, ImageRendering, ImageTiling, ItemRc, Layer, Opacity, RenderingResult,
 };
 use i_slint_core::lengths::{
-    LogicalBorderRadius, LogicalLength, LogicalPoint, LogicalRect, LogicalSize, LogicalVector,
-    RectLengths, ScaleFactor, logical_size_from_api,
+    ItemTransform, LogicalBorderRadius, LogicalLength, LogicalPoint, LogicalRect, LogicalSize,
+    LogicalVector, RectLengths, ScaleFactor, logical_size_from_api,
 };
 use i_slint_core::textlayout::sharedparley::{self, GlyphRenderer, fontique, parley};
 use i_slint_core::{Brush, Color, ImageInner, SharedString};
@@ -89,6 +89,11 @@ struct State {
     scissor: LogicalRect,
     global_alpha: f32,
     current_render_target: femtovg::RenderTarget,
+    // #617 partial-rendering scaffold (stage 1): track the item-tree transform in
+    // logical space, exactly like the Skia renderer's RenderState, so the core
+    // PartialRenderer proxy can query `current_transform()`. Inert until partial
+    // rendering is wired (stage 3).
+    transform: ItemTransform,
 }
 
 pub struct GLItemRenderer<'a, R: femtovg::Renderer + TextureImporter> {
@@ -759,6 +764,13 @@ impl<'a, R: femtovg::Renderer + TextureImporter> ItemRenderer for GLItemRenderer
         self.canvas.borrow_mut().restore();
     }
 
+    // #617 partial-rendering scaffold (stage 1): the core PartialRenderer proxy
+    // needs the current item-tree transform (the trait default is `todo!()`).
+    // Mirrors the Skia renderer. Inert until partial rendering is wired.
+    fn current_transform(&self) -> ItemTransform {
+        self.state.last().unwrap().transform
+    }
+
     fn scale_factor(&self) -> f32 {
         self.scale_factor.get()
     }
@@ -883,14 +895,18 @@ impl<'a, R: femtovg::Renderer + TextureImporter> ItemRenderer for GLItemRenderer
     fn translate(&mut self, distance: LogicalVector) {
         let physical_distance = distance * self.scale_factor;
         self.canvas.borrow_mut().translate(physical_distance.x, physical_distance.y);
-        let clip = &mut self.state.last_mut().unwrap().scissor;
+        let state = self.state.last_mut().unwrap();
+        state.transform = state.transform.pre_translate(distance.cast());
+        let clip = &mut state.scissor;
         *clip = clip.translate(-distance)
     }
 
     fn rotate(&mut self, angle_in_degrees: f32) {
         let angle_in_radians = angle_in_degrees.to_radians();
         self.canvas.borrow_mut().rotate(angle_in_radians);
-        let clip = &mut self.state.last_mut().unwrap().scissor;
+        let state = self.state.last_mut().unwrap();
+        state.transform = state.transform.pre_rotate(euclid::Angle::degrees(angle_in_degrees));
+        let clip = &mut state.scissor;
         // Compute the bounding box of the rotated rectangle
         let (sin, cos) = (-angle_in_radians).sin_cos();
         let rotate_point = |p: LogicalPoint| (p.x * cos - p.y * sin, p.x * sin + p.y * cos);
@@ -915,7 +931,9 @@ impl<'a, R: femtovg::Renderer + TextureImporter> ItemRenderer for GLItemRenderer
 
     fn scale(&mut self, x_factor: f32, y_factor: f32) {
         self.canvas.borrow_mut().scale(x_factor, y_factor);
-        let clip = &mut self.state.last_mut().unwrap().scissor;
+        let state = self.state.last_mut().unwrap();
+        state.transform = state.transform.pre_scale(x_factor, y_factor);
+        let clip = &mut state.scissor;
         clip.origin.x /= x_factor;
         clip.origin.y /= y_factor;
         clip.size.width /= x_factor;
@@ -927,6 +945,14 @@ impl<'a, R: femtovg::Renderer + TextureImporter> ItemRenderer for GLItemRenderer
         *state *= opacity;
         self.canvas.borrow_mut().set_global_alpha(*state);
     }
+}
+
+// #617 partial-rendering scaffold (stage 1): advertise transform support so the
+// core `PartialRenderer<GLItemRenderer>` proxy can wrap this renderer. Mirrors the
+// Skia renderer's impl (`SUPPORTS_TRANSFORMATIONS = true`). Inert until partial
+// rendering is wired (stage 3).
+impl<'a, R: femtovg::Renderer + TextureImporter> ItemRendererFeatures for GLItemRenderer<'a, R> {
+    const SUPPORTS_TRANSFORMATIONS: bool = true;
 }
 
 #[derive(Clone)]
@@ -1042,6 +1068,12 @@ impl<'a, R: femtovg::Renderer + TextureImporter> GLItemRenderer<'a, R> {
         window: &'a i_slint_core::api::Window,
         width: u32,
         height: u32,
+        // #617 (stage 2): the render target the canvas is set to when this item
+        // renderer starts — Screen normally, the persistent scene texture when
+        // the partial-rendering path is active. Layer passes restore to this
+        // target after rendering into their offscreen image, so seeding it
+        // wrong would route post-layer scene draws to the swapchain directly.
+        initial_render_target: femtovg::RenderTarget,
     ) -> Self {
         let scale_factor = ScaleFactor::new(window.scale_factor());
         Self {
@@ -1059,7 +1091,8 @@ impl<'a, R: femtovg::Renderer + TextureImporter> GLItemRenderer<'a, R> {
                     PhysicalSize::new(width as f32, height as f32) / scale_factor,
                 ),
                 global_alpha: 1.,
-                current_render_target: femtovg::RenderTarget::Screen,
+                current_render_target: initial_render_target,
+                transform: ItemTransform::identity(),
             }],
             metrics: RenderingMetrics { layers_created: Some(0), ..Default::default() },
         }
@@ -1151,6 +1184,12 @@ impl<'a, R: femtovg::Renderer + TextureImporter> GLItemRenderer<'a, R> {
                 scissor: bounding_rect,
                 global_alpha: 1.,
                 current_render_target: layer_image.as_render_target(),
+                // Layer renders into its own offscreen target with the canvas
+                // translated by -origin. identity is CORRECT here even with the
+                // stage-3 partial renderer wired: render_layer renders children
+                // through this inner GLItemRenderer directly, so the core proxy
+                // never queries current_transform() inside a layer pass.
+                transform: ItemTransform::identity(),
             };
 
             let window_adapter = self.window().window_adapter();

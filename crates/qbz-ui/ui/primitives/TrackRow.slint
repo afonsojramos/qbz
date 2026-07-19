@@ -141,7 +141,8 @@ export component TrackRow inherits Rectangle {
             if (root.multi-select-mode) {
                 return;
             }
-            if (NowPlayingState.has-track && NowPlayingState.track-id == root.track.id) {
+            // Same local-track-id alias as TrackPlayCell (offline-cache tracks).
+            if (NowPlayingState.has-track && (NowPlayingState.track-id == root.track.id || (NowPlayingState.local-track-id != "" && NowPlayingState.local-track-id == root.track.id))) {
                 NowPlayingState.toggle-play();
             } else {
                 root.media-action("track", root.track.id, "play");

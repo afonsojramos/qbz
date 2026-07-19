@@ -120,7 +120,8 @@ export component KioskAlbum inherits Rectangle {
                 for track[i] in AlbumState.tracks: trow-rect := Rectangle {
                     height: 52px;
                     border-radius: Radius.sm;
-                    property <bool> current: NowPlayingState.track-id == track.id;
+                    // Same local-track-id alias as TrackPlayCell (offline-cache tracks).
+                    property <bool> current: NowPlayingState.track-id == track.id || (NowPlayingState.local-track-id != "" && NowPlayingState.local-track-id == track.id);
                     background: trow.has-hover
                         ? Theme.alpha-6
                         : self.current ? Theme.accent.with-alpha(0.10) : transparent;

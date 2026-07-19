@@ -19,7 +19,10 @@ use i_slint_core::graphics::{euclid, rendering_metrics_collector::RenderingMetri
 use i_slint_core::item_rendering::ItemRenderer;
 use i_slint_core::item_tree::ItemTreeWeak;
 use i_slint_core::items::{ItemRc, TextWrap};
-use i_slint_core::lengths::{LogicalLength, LogicalPoint, LogicalRect, LogicalSize, PhysicalPx};
+use i_slint_core::lengths::{
+    LogicalLength, LogicalPoint, LogicalRect, LogicalSize, PhysicalPx, ScaleFactor,
+};
+use i_slint_core::partial_renderer::PartialRenderingState;
 use i_slint_core::platform::PlatformError;
 use i_slint_core::renderer::RendererSealed;
 use i_slint_core::textlayout::sharedparley;
@@ -92,6 +95,48 @@ pub trait GraphicsBackend {
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
 }
 
+/// QBZ vendor patch (issue #617): partial-rendering mode, env-gated via
+/// `SLINT_FEMTOVG_PARTIAL_RENDERING` (mirrors Skia's `SLINT_SKIA_PARTIAL_RENDERING`).
+/// Unset / "" / "0" / "off" / "no" = disabled (default; today's full-window
+/// repaint straight into the swapchain).
+///   - "frozen-blit": stage-2 mode — render the scene into a persistent
+///     offscreen texture and blit it whole to the swapchain every frame, dirty
+///     tracking OFF. Measures the irreducible acquire+submit+blit+present
+///     floor of the partial-rendering design.
+///   - any other value ("1", "visualize", "log", …): full partial rendering
+///     (stage 3: dirty-region tracking — only the dirty bounding rect of the
+///     persistent texture is repainted). "visualize" outlines the dirty rect
+///     on the swapchain; "log" prints the repainted percentage.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PartialRenderingMode {
+    FrozenBlit,
+    Enabled { visualize: bool, log: bool },
+}
+
+fn partial_rendering_mode() -> Option<PartialRenderingMode> {
+    static MODE: std::sync::OnceLock<Option<PartialRenderingMode>> = std::sync::OnceLock::new();
+    *MODE.get_or_init(|| {
+        let value = std::env::var("SLINT_FEMTOVG_PARTIAL_RENDERING").ok()?.to_ascii_lowercase();
+        match value.as_str() {
+            "" | "0" | "off" | "no" => None,
+            "frozen-blit" => Some(PartialRenderingMode::FrozenBlit),
+            "visualize" => Some(PartialRenderingMode::Enabled { visualize: true, log: false }),
+            "log" => Some(PartialRenderingMode::Enabled { visualize: false, log: true }),
+            _ => Some(PartialRenderingMode::Enabled { visualize: false, log: false }),
+        }
+    })
+}
+
+/// QBZ vendor patch (issue #617): the persistent offscreen scene texture the
+/// partial-rendering path renders into. femtovg image passes open with
+/// `LoadOp::Load`, so its contents survive across frames — the buffer-age-∞
+/// backing store the wgpu swapchain cannot provide.
+struct PersistentScene<R: femtovg::Renderer + TextureImporter> {
+    texture: Rc<images::Texture<R>>,
+    width: u32,
+    height: u32,
+}
+
 /// Use the FemtoVG renderer when implementing a custom Slint platform where you deliver events to
 /// Slint and want the scene to be rendered using OpenGL. The rendering is done using the [FemtoVG](https://github.com/femtovg/femtovg)
 /// library.
@@ -99,6 +144,14 @@ pub struct FemtoVGRenderer<B: GraphicsBackend> {
     maybe_window_adapter: RefCell<Option<Weak<dyn WindowAdapter>>>,
     rendering_notifier: RefCell<Option<Box<dyn RenderingNotifier>>>,
     canvas: RefCell<Option<CanvasRc<B::Renderer>>>,
+    /// #617 stage 2: persistent scene texture for the partial-rendering path;
+    /// `None` when the env gate is off. Belongs to the current canvas — dropped
+    /// on `reset_canvas` / `clear_graphics_context`.
+    persistent_scene: RefCell<Option<PersistentScene<B::Renderer>>>,
+    /// #617 stage 3: cross-frame dirty-region bookkeeping (core machinery).
+    /// `Some` only when the env gate selects full partial rendering —
+    /// "frozen-blit" has no state (it deliberately never tracks dirtiness).
+    partial_rendering_state: Option<PartialRenderingState>,
     graphics_cache: itemrenderer::ItemGraphicsCache<B::Renderer>,
     texture_cache: RefCell<images::TextureCache<B::Renderer>>,
     text_layout_cache: sharedparley::TextLayoutCache,
@@ -115,6 +168,13 @@ impl<B: GraphicsBackend> FemtoVGRenderer<B> {
             maybe_window_adapter: Default::default(),
             rendering_notifier: Default::default(),
             canvas: RefCell::new(None),
+            persistent_scene: RefCell::new(None),
+            partial_rendering_state: match partial_rendering_mode() {
+                Some(PartialRenderingMode::Enabled { .. }) => {
+                    Some(PartialRenderingState::default())
+                }
+                _ => None,
+            },
             graphics_cache: Default::default(),
             texture_cache: Default::default(),
             text_layout_cache: Default::default(),
@@ -185,6 +245,73 @@ impl<B: GraphicsBackend> FemtoVGRenderer<B> {
                 // self.canvas is checked for being Some(...) at the beginning of this function
                 let canvas = self.canvas.borrow().as_ref().unwrap().clone();
 
+                // QBZ vendor patch (issue #617, stage 2): when the partial-rendering
+                // env gate is on and this is an untransformed frame, render the scene
+                // into a persistent offscreen texture and blit it whole to the
+                // swapchain (the "frozen-blit" floor: dirty tracking comes in stage
+                // 3). Transformed frames (rotation/translation — unused by desktop
+                // QBZ) keep the direct-to-swapchain path.
+                let mode = partial_rendering_mode();
+                let scene_texture = match mode {
+                    Some(_) if rotation_angle_degrees == 0. && translation == (0., 0.) => {
+                        let mut persistent = self.persistent_scene.borrow_mut();
+                        let size_matches = matches!(
+                            persistent.as_ref(),
+                            Some(p) if p.width == surface_size.width
+                                && p.height == surface_size.height
+                        );
+                        if !size_matches {
+                            // First frame / resize / DPR or UI-scale change: (re)create.
+                            *persistent = images::Texture::new_empty_on_gpu(
+                                &canvas,
+                                surface_size.width,
+                                surface_size.height,
+                            )
+                            .map(|texture| PersistentScene {
+                                texture,
+                                width: surface_size.width,
+                                height: surface_size.height,
+                            });
+                            // A fresh texture holds no previous frame: the next partial
+                            // frame must repaint everything once.
+                            if let Some(state) = self.partial_rendering_state.as_ref() {
+                                state.force_screen_refresh();
+                            }
+                            static LOGGED: std::sync::atomic::AtomicBool =
+                                std::sync::atomic::AtomicBool::new(false);
+                            if persistent.is_some()
+                                && !LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed)
+                            {
+                                i_slint_core::debug_log!(
+                                    "qbz(femtovg): SLINT_FEMTOVG_PARTIAL_RENDERING active \
+                                     ({mode:?}) — persistent scene texture + blit"
+                                );
+                            }
+                        }
+                        persistent.as_ref().map(|p| p.texture.clone())
+                    }
+                    _ => {
+                        // Direct-to-swapchain frame: it bypasses the persistent
+                        // texture, so if dirty tracking is enabled its contents and
+                        // the partial caches are stale — repaint fully next time the
+                        // partial path runs.
+                        if let Some(state) = self.partial_rendering_state.as_ref() {
+                            state.force_screen_refresh();
+                        }
+                        None
+                    }
+                };
+
+                // #617 stage 3: dirty-region tracking is live for this frame only
+                // when the persistent texture exists and the mode enables it
+                // ("frozen-blit" deliberately never tracks).
+                let partial_active =
+                    scene_texture.is_some() && self.partial_rendering_state.is_some();
+                let logical_window_size = i_slint_core::lengths::logical_size_from_api(
+                    window.size().to_logical(window_inner.scale_factor()),
+                );
+                let scale_factor = ScaleFactor::new(window_inner.scale_factor());
+
                 let window_background_brush =
                     window_inner.window_item().map(|w| w.as_pin_ref().background());
 
@@ -195,8 +322,21 @@ impl<B: GraphicsBackend> FemtoVGRenderer<B> {
                     // We need to care about that `ceil()` when calculating metrics.
                     femtovg_canvas.set_size(surface_size.width, surface_size.height, scale);
 
-                    // Clear with window background if it is a solid color otherwise it will drawn as gradient
-                    if let Some(Brush::SolidColor(clear_color)) = window_background_brush {
+                    if let Some(scene) = scene_texture.as_ref() {
+                        // #617 stage 2: the whole scene (clear included) goes into
+                        // the persistent texture instead of the swapchain. MUST come
+                        // after set_size: set_size queues a SetRenderTarget(Screen)
+                        // command (see the femtovg vendor patch keeping the canvas
+                        // field in sync).
+                        femtovg_canvas.set_render_target(scene.as_render_target());
+                    }
+
+                    // Clear with window background if it is a solid color otherwise it will drawn as gradient.
+                    // #617 stage 3: in the partial path this becomes one clear_rect
+                    // per dirty rect once the dirty region is known (see below).
+                    if !partial_active
+                        && let Some(Brush::SolidColor(clear_color)) = window_background_brush
+                    {
                         femtovg_canvas.clear_rect(
                             0,
                             0,
@@ -231,6 +371,16 @@ impl<B: GraphicsBackend> FemtoVGRenderer<B> {
                     })?;
                 }
 
+                if let Some(scene) = scene_texture.as_ref() {
+                    // #617: the notifier block above queues SetRenderTarget(Screen)
+                    // through set_size — re-assert the scene target for everything
+                    // drawn from here on (swallowed as a no-op when no notifier ran).
+                    // Design note: a BeforeRendering notifier that actually DREW
+                    // would be overwritten by the final Copy blit; QBZ's notifier is
+                    // setup-only (device/queue capture), so this is safe here.
+                    canvas.borrow_mut().set_render_target(scene.as_render_target());
+                }
+
                 self.graphics_cache.clear_cache_if_scale_factor_changed(window);
                 self.text_layout_cache.clear_cache_if_scale_factor_changed(window);
 
@@ -242,44 +392,239 @@ impl<B: GraphicsBackend> FemtoVGRenderer<B> {
                     window,
                     width.get(),
                     height.get(),
+                    // #617 stage 2: layers must restore to the target the scene
+                    // is actually rendering into (see GLItemRenderer::new).
+                    scene_texture
+                        .as_ref()
+                        .map(|scene| scene.as_render_target())
+                        .unwrap_or(femtovg::RenderTarget::Screen),
                 );
 
-                if let Some(window_item_rc) = window_inner.window_item_rc() {
-                    let window_item =
-                        window_item_rc.downcast::<i_slint_core::items::WindowItem>().unwrap();
-                    if let Brush::SolidColor(..) = window_item.as_pin_ref().background() {
-                        // clear_rect is called earlier
-                    } else {
-                        // Draws the window background as gradient
-                        item_renderer.draw_rectangle(
-                            window_item.as_pin_ref(),
-                            &window_item_rc,
-                            i_slint_core::lengths::logical_size_from_api(
-                                window.size().to_logical(window_inner.scale_factor()),
-                            ),
-                            &window_item.as_pin_ref().cached_rendering_data,
+                // #617 visualize: set by the partial branch so the dirty-rect
+                // outline can be stroked on the swapchain after the blit (drawn
+                // into the persistent texture it would linger and pile up).
+                let mut visualize_dirty_rect: Option<PhysicalRect> = None;
+
+                // #617: both branches yield the concrete item renderer so the
+                // blit/flush/drop below is identical for every path.
+                let item_renderer = if partial_active {
+                    // #617 stage 3: wrap the item renderer in the core's dirty-region
+                    // proxy and repaint only the dirty region of the persistent scene
+                    // texture (ReusedBuffer semantics — the texture holds the
+                    // previous frame, so `None` buffer damage is always valid).
+                    let partial_state = self.partial_rendering_state.as_ref().unwrap();
+                    let mut partial_renderer =
+                        partial_state.create_partial_renderer(item_renderer);
+                    let _frame_dirty = partial_state.apply_dirty_region(
+                        &mut partial_renderer,
+                        components,
+                        logical_window_size,
+                        None,
+                    );
+
+                    // Collapse the (≤3-rect) dirty region to its single bounding
+                    // rect so that filter_item, the canvas scissor and the scoped
+                    // clears all agree on ONE rect: BoxShadow/Transform/Opacity/
+                    // Layer/Clip items bypass filter_item and re-render every frame
+                    // (core item_rendering.rs:209-217) — with a multi-rect region
+                    // they would re-blend over uncleared pixels in the gaps between
+                    // rects, progressively smearing until an unrelated full refresh.
+                    partial_renderer.dirty_region =
+                        i_slint_core::partial_renderer::DirtyRegion::from(
+                            partial_renderer.dirty_region.bounding_rect(),
+                        );
+
+                    // Canvas-level scissor on the main pass only (the canvas was
+                    // reset above, so this lands in physical pixels). Layer passes
+                    // reset their own canvas state and keep rendering full-texture —
+                    // exactly what their persistent textures require. NEVER a
+                    // wgpu-pass-level scissor: it would clip those layers'
+                    // full-texture clears and smear stale texels.
+                    let dirty_bounds = partial_renderer.dirty_region.bounding_rect();
+                    let phys_dirty = (dirty_bounds * scale_factor).round_out();
+                    if matches!(
+                        mode,
+                        Some(PartialRenderingMode::Enabled { visualize: true, .. })
+                    ) {
+                        visualize_dirty_rect = Some(phys_dirty);
+                    }
+                    {
+                        let mut femtovg_canvas = canvas.borrow_mut();
+                        // An empty dirty region scissors everything away: the proxy
+                        // already filters every item out, this just also culls the
+                        // always-re-emitted box-shadow draws GPU-side.
+                        femtovg_canvas.scissor(
+                            phys_dirty.origin.x,
+                            phys_dirty.origin.y,
+                            phys_dirty.size.width,
+                            phys_dirty.size.height,
+                        );
+                        // clear_rect ignores the canvas scissor — one call per dirty
+                        // rect is exactly the scoped clear (a full-window clear would
+                        // destroy the reused contents of the persistent texture).
+                        if let Some(Brush::SolidColor(clear_color)) = window_background_brush {
+                            let clear_color = self::itemrenderer::to_femtovg_color(&clear_color);
+                            let surface_rect = PhysicalRect::new(
+                                PhysicalPoint::default(),
+                                PhysicalSize::new(
+                                    surface_size.width as f32,
+                                    surface_size.height as f32,
+                                ),
+                            );
+                            for rect in partial_renderer.dirty_region.iter() {
+                                let rect = (rect.to_rect() * scale_factor)
+                                    .round_out()
+                                    .intersection(&surface_rect);
+                                if let Some(rect) = rect {
+                                    femtovg_canvas.clear_rect(
+                                        rect.origin.x as u32,
+                                        rect.origin.y as u32,
+                                        rect.size.width as u32,
+                                        rect.size.height as u32,
+                                        clear_color,
+                                    );
+                                }
+                            }
+                        }
+                    }
+
+                    if matches!(mode, Some(PartialRenderingMode::Enabled { log: true, .. })) {
+                        let area_to_repaint: f32 =
+                            partial_renderer.dirty_region.iter().map(|b| b.area()).sum();
+                        i_slint_core::debug_log!(
+                            "qbz(femtovg) partial: repainting {:.2}%",
+                            area_to_repaint * 100. / logical_window_size.area()
                         );
                     }
-                }
 
-                for (component, origin) in components {
-                    if let Some(component) = ItemTreeWeak::upgrade(component) {
-                        i_slint_core::item_rendering::render_component_items(
-                            &component,
-                            &mut item_renderer,
-                            *origin,
-                            &self.window_adapter()?,
-                        );
+                    if let Some(window_item_rc) = window_inner.window_item_rc() {
+                        let window_item =
+                            window_item_rc.downcast::<i_slint_core::items::WindowItem>().unwrap();
+                        if let Brush::SolidColor(..) = window_item.as_pin_ref().background() {
+                            // per-dirty-rect clear_rects were issued above
+                        } else {
+                            // Draws the window background as gradient (tracked, via the proxy)
+                            partial_renderer.draw_rectangle(
+                                window_item.as_pin_ref(),
+                                &window_item_rc,
+                                logical_window_size,
+                                &window_item.as_pin_ref().cached_rendering_data,
+                            );
+                        }
                     }
-                }
 
-                if let Some(cb) = post_render_cb.as_ref() {
-                    cb(&mut item_renderer)
-                }
+                    for (component, origin) in components {
+                        if let Some(component) = ItemTreeWeak::upgrade(component) {
+                            i_slint_core::item_rendering::render_component_items(
+                                &component,
+                                &mut partial_renderer,
+                                *origin,
+                                &self.window_adapter()?,
+                            );
+                        }
+                    }
 
-                if let Some(collector) = &self.rendering_metrics_collector.borrow().as_ref() {
-                    let metrics = item_renderer.metrics();
-                    collector.measure_frame_rendered(&mut item_renderer, metrics);
+                    if let Some(cb) = post_render_cb.as_ref() {
+                        cb(&mut partial_renderer)
+                    }
+
+                    let mut item_renderer = partial_renderer.into_inner();
+
+                    if let Some(collector) = &self.rendering_metrics_collector.borrow().as_ref()
+                    {
+                        let metrics = item_renderer.metrics();
+                        collector.measure_frame_rendered(&mut item_renderer, metrics);
+                        if collector.refresh_mode()
+                            == i_slint_core::graphics::rendering_metrics_collector::RefreshMode::FullSpeed
+                        {
+                            partial_state.force_screen_refresh();
+                        }
+                    }
+                    item_renderer
+                } else {
+                    if let Some(window_item_rc) = window_inner.window_item_rc() {
+                        let window_item =
+                            window_item_rc.downcast::<i_slint_core::items::WindowItem>().unwrap();
+                        if let Brush::SolidColor(..) = window_item.as_pin_ref().background() {
+                            // clear_rect is called earlier
+                        } else {
+                            // Draws the window background as gradient
+                            item_renderer.draw_rectangle(
+                                window_item.as_pin_ref(),
+                                &window_item_rc,
+                                i_slint_core::lengths::logical_size_from_api(
+                                    window.size().to_logical(window_inner.scale_factor()),
+                                ),
+                                &window_item.as_pin_ref().cached_rendering_data,
+                            );
+                        }
+                    }
+
+                    for (component, origin) in components {
+                        if let Some(component) = ItemTreeWeak::upgrade(component) {
+                            i_slint_core::item_rendering::render_component_items(
+                                &component,
+                                &mut item_renderer,
+                                *origin,
+                                &self.window_adapter()?,
+                            );
+                        }
+                    }
+
+                    if let Some(cb) = post_render_cb.as_ref() {
+                        cb(&mut item_renderer)
+                    }
+
+                    if let Some(collector) = &self.rendering_metrics_collector.borrow().as_ref()
+                    {
+                        let metrics = item_renderer.metrics();
+                        collector.measure_frame_rendered(&mut item_renderer, metrics);
+                    }
+                    item_renderer
+                };
+
+                if let Some(scene) = scene_texture.as_ref() {
+                    // #617 stage 2: blit the persistent scene texture onto the
+                    // swapchain. `Copy` ignores the destination — no prior
+                    // full-window clear needed, and the transparent
+                    // (pre-multiplied) miniplayer swapchain comes out exact,
+                    // where a source-over blit of alpha<1 pixels would smear.
+                    // Paint first: as_paint() borrows the canvas.
+                    let scene_paint = scene.as_paint().with_anti_alias(false);
+                    let mut blit_path = femtovg::Path::new();
+                    blit_path.rect(
+                        0.,
+                        0.,
+                        surface_size.width as f32,
+                        surface_size.height as f32,
+                    );
+                    let mut femtovg_canvas = canvas.borrow_mut();
+                    femtovg_canvas.set_render_target(femtovg::RenderTarget::Screen);
+                    femtovg_canvas.save_with(|canvas| {
+                        canvas.reset();
+                        canvas.global_composite_operation(femtovg::CompositeOperation::Copy);
+                        canvas.fill_path(&blit_path, &scene_paint);
+                        if let Some(dirty_rect) = visualize_dirty_rect {
+                            // #617 visualize: outline the dirty bounding rect on the
+                            // swapchain — self-erasing next frame; drawn into the
+                            // persistent scene texture it would linger and pile up.
+                            canvas.global_composite_operation(
+                                femtovg::CompositeOperation::SourceOver,
+                            );
+                            let mut outline = femtovg::Path::new();
+                            outline.rect(
+                                dirty_rect.origin.x,
+                                dirty_rect.origin.y,
+                                dirty_rect.size.width,
+                                dirty_rect.size.height,
+                            );
+                            let mut paint = femtovg::Paint::color(femtovg::Color::rgbaf(
+                                1., 0., 0., 0.5,
+                            ));
+                            paint.set_line_width(2.);
+                            canvas.stroke_path(&outline, &paint);
+                        }
+                    });
                 }
 
                 let commands = canvas.borrow_mut().flush_to_output(surface.render_output());
@@ -316,6 +661,14 @@ impl<B: GraphicsBackend> FemtoVGRenderer<B> {
 
     #[cfg(any(feature = "wgpu-28", feature = "opengl"))]
     pub(crate) fn reset_canvas(&self, canvas: CanvasRc<B::Renderer>) {
+        // #617: the persistent scene texture belongs to the old canvas's image
+        // store — drop it first (its own Rc keeps that canvas alive for the
+        // delete_image in Texture::drop).
+        self.persistent_scene.borrow_mut().take();
+        // #617 stage 4: new canvas/context — the partial caches are stale.
+        if let Some(state) = self.partial_rendering_state.as_ref() {
+            state.clear_cache();
+        }
         *self.canvas.borrow_mut() = canvas.into();
         self.rendering_first_time.set(true);
     }
@@ -424,7 +777,7 @@ impl<B: GraphicsBackend> RendererSealed for FemtoVGRenderer<B> {
     fn free_graphics_resources(
         &self,
         component: i_slint_core::item_tree::ItemTreeRef,
-        _items: &mut dyn Iterator<Item = Pin<i_slint_core::items::ItemRef<'_>>>,
+        items: &mut dyn Iterator<Item = Pin<i_slint_core::items::ItemRef<'_>>>,
     ) -> Result<(), i_slint_core::platform::PlatformError> {
         self.text_layout_cache.component_destroyed(component);
         if !self.graphics_cache.is_empty() {
@@ -432,12 +785,29 @@ impl<B: GraphicsBackend> RendererSealed for FemtoVGRenderer<B> {
                 self.graphics_cache.component_destroyed(component);
             })?;
         }
+        // #617 stage 4: drop the destroyed items' partial-cache entries (and let
+        // it force a full refresh — their on-screen regions are unknowable now).
+        if let Some(state) = self.partial_rendering_state.as_ref() {
+            state.free_graphics_resources(items);
+        }
         Ok(())
+    }
+
+    // #617 stage 4: forward explicit dirty regions (e.g. popup-window close) to
+    // the partial state; the core default is a no-op, which would lose them.
+    fn mark_dirty_region(&self, region: i_slint_core::partial_renderer::DirtyRegion) {
+        if let Some(state) = self.partial_rendering_state.as_ref() {
+            state.mark_dirty_region(region);
+        }
     }
 
     fn set_window_adapter(&self, window_adapter: &Rc<dyn WindowAdapter>) {
         *self.maybe_window_adapter.borrow_mut() = Some(Rc::downgrade(window_adapter));
         self.text_layout_cache.clear_all();
+        // #617 stage 4: cached geometries/trackers belong to the previous window.
+        if let Some(state) = self.partial_rendering_state.as_ref() {
+            state.clear_cache();
+        }
         self.graphics_backend
             .with_graphics_api(|_| {
                 self.graphics_cache.clear_all();
@@ -527,6 +897,13 @@ impl<B: GraphicsBackend> FemtoVGRendererExt for FemtoVGRenderer<B> {
             maybe_window_adapter: Default::default(),
             rendering_notifier: Default::default(),
             canvas: RefCell::new(None),
+            persistent_scene: RefCell::new(None),
+            partial_rendering_state: match partial_rendering_mode() {
+                Some(PartialRenderingMode::Enabled { .. }) => {
+                    Some(PartialRenderingState::default())
+                }
+                _ => None,
+            },
             graphics_cache: Default::default(),
             texture_cache: Default::default(),
             text_layout_cache: Default::default(),
@@ -555,6 +932,10 @@ impl<B: GraphicsBackend> FemtoVGRendererExt for FemtoVGRenderer<B> {
         })?;
 
         self.text_layout_cache.clear_all();
+
+        // #617: drop the persistent scene texture before the canvas below (its
+        // Drop deletes the image from the canvas it was created on).
+        self.persistent_scene.borrow_mut().take();
 
         if let Some(canvas) = self.canvas.borrow_mut().take()
             && Rc::strong_count(&canvas) != 1

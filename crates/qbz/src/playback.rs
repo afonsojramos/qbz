@@ -1405,6 +1405,13 @@ pub(crate) fn local_queue_track(track: &qbz_library::LocalTrack) -> QueueTrack {
         // the session queue store so playback survives a restart.
         source_item_id_hint: if is_plex {
             Some(track.file_path.clone())
+        } else if is_offline {
+            // Offline copies: carry the local-library row id. The queue `id`
+            // above is the Qobuz catalog id (so the shared resolver finds the
+            // track), but every local surface's track row binds the DB row id —
+            // NowPlayingState re-publishes it as local-track-id so active-row
+            // comparisons (TrackPlayCell/TrackRow/KioskAlbum) match either.
+            Some(track.id.to_string())
         } else {
             None
         },
@@ -1777,6 +1784,15 @@ pub(crate) async fn refresh_now_playing_meta(runtime: &Runtime, weak: &slint::We
         .source
         .clone()
         .unwrap_or_else(|| if track.is_local { "local" } else { "qobuz" }.to_string());
+    // Active-row alias for offline-cache tracks: the local-library row id (the
+    // queue id is the Qobuz catalog id there, so the row's track-id binding
+    // never matches). Only trusted for qobuz_download — other builders reuse
+    // the hint for unrelated things (album id, plex rating key).
+    let local_track_id = if source == "qobuz_download" {
+        track.source_item_id_hint.clone().unwrap_or_default()
+    } else {
+        String::new()
+    };
     let duration = track.duration_secs;
     // Plex-aware: a Plex track carries a raw `/library/...` thumb path that
     // must resolve to a tokenized `PlexThumb` (from current creds) so the
@@ -1982,6 +1998,7 @@ pub(crate) async fn refresh_now_playing_meta(runtime: &Runtime, weak: &slint::We
         np.set_context_kind(context_kind.into());
         np.set_context_id(context_id.into());
         np.set_track_id(track_id.into());
+        np.set_local_track_id(local_track_id.into());
         // Mirror the active track + playing flag onto the Purchases globals so a
         // purchase track-row highlights/animates when it is the now-playing one.
         mirror_now_playing_to_purchases(&w, track_id_num, true);
