@@ -146,6 +146,22 @@ enum FavCmd {
 enum PlaylistCmd {
     List { #[arg(long)] json: bool },
     Show { id: u64, #[arg(long)] ids: bool, #[arg(long)] json: bool },
+    /// Create a playlist
+    Create { name: String, #[arg(long)] desc: Option<String>, #[arg(long)] public: bool },
+    /// Rename / re-describe / change visibility
+    Edit {
+        id: u64,
+        #[arg(long)] name: Option<String>,
+        #[arg(long)] desc: Option<String>,
+        #[arg(long)] public: bool,
+        #[arg(long)] private: bool,
+    },
+    /// Delete an owned playlist (requires --yes)
+    Rm { id: u64, #[arg(long)] yes: bool },
+    /// Add tracks (ids, or - to read from stdin)
+    Add { id: u64, track_ids: Vec<String> },
+    /// Remove tracks (plain track ids)
+    Remove { id: u64, track_ids: Vec<String> },
 }
 
 #[derive(Subcommand)]
@@ -308,6 +324,19 @@ async fn main() {
                 PlaylistCmd::List { json } => cli::playlist::list(cli.host, json, &roots).await,
                 PlaylistCmd::Show { id, ids, json } => {
                     cli::playlist::show(cli.host, id, ids, json, &roots).await
+                }
+                PlaylistCmd::Create { name, desc, public } => {
+                    cli::playlist::create(cli.host, name, desc, public, &roots).await
+                }
+                PlaylistCmd::Edit { id, name, desc, public, private } => {
+                    cli::playlist::edit(cli.host, id, name, desc, public, private, &roots).await
+                }
+                PlaylistCmd::Rm { id, yes } => cli::playlist::rm(cli.host, id, yes, &roots).await,
+                PlaylistCmd::Add { id, track_ids } => {
+                    cli::playlist::add(cli.host, id, track_ids, &roots).await
+                }
+                PlaylistCmd::Remove { id, track_ids } => {
+                    cli::playlist::remove(cli.host, id, track_ids, &roots).await
                 }
             }
         }

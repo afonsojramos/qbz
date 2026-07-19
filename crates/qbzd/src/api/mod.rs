@@ -90,6 +90,11 @@ pub const P1_ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/favorites/remove"),
     ("GET", "/api/playlists"),
     ("GET", "/api/playlist"),
+    ("POST", "/api/playlist/create"),
+    ("POST", "/api/playlist/update"),
+    ("POST", "/api/playlist/delete"),
+    ("POST", "/api/playlist/tracks/add"),
+    ("POST", "/api/playlist/tracks/remove"),
 ];
 
 /// A socket bound at boot step 5, not yet serving. Wraps the tiny_http server
@@ -323,6 +328,26 @@ fn route(state: &ApiState, req: &mut Request) -> Response<Cursor<Vec<u8>>> {
         }
         ("GET", "/api/playlists") => playlist::list(state),
         ("GET", "/api/playlist") => playlist::show(state, &query),
+        ("POST", "/api/playlist/create") => {
+            let body = read_json_body(req);
+            playlist::create(state, &body)
+        }
+        ("POST", "/api/playlist/update") => {
+            let body = read_json_body(req);
+            playlist::update(state, &body)
+        }
+        ("POST", "/api/playlist/delete") => {
+            let body = read_json_body(req);
+            playlist::delete(state, &body)
+        }
+        ("POST", "/api/playlist/tracks/add") => {
+            let body = read_json_body(req);
+            playlist::tracks_add(state, &body)
+        }
+        ("POST", "/api/playlist/tracks/remove") => {
+            let body = read_json_body(req);
+            playlist::tracks_remove(state, &body)
+        }
         ("GET", "/api/queue") => queue::list(state, &query),
         ("POST", "/api/queue/add") => {
             let body = read_json_body(req);
@@ -502,12 +527,17 @@ mod tests {
         // §3.1.4 HARD RULE, applied to the content-verb door). Row 19:
         // GET /api/search — caller: `qbzd search`. Count is pinned so a route
         // with no caller cannot creep in; P1 must never overlap P0.
-        assert_eq!(P1_ROUTES.len(), 17);
+        assert_eq!(P1_ROUTES.len(), 22);
         assert!(P1_ROUTES.contains(&("GET", "/api/favorites")));
         assert!(P1_ROUTES.contains(&("POST", "/api/favorites/add")));
         assert!(P1_ROUTES.contains(&("POST", "/api/favorites/remove")));
         assert!(P1_ROUTES.contains(&("GET", "/api/playlists")));
         assert!(P1_ROUTES.contains(&("GET", "/api/playlist")));
+        assert!(P1_ROUTES.contains(&("POST", "/api/playlist/create")));
+        assert!(P1_ROUTES.contains(&("POST", "/api/playlist/update")));
+        assert!(P1_ROUTES.contains(&("POST", "/api/playlist/delete")));
+        assert!(P1_ROUTES.contains(&("POST", "/api/playlist/tracks/add")));
+        assert!(P1_ROUTES.contains(&("POST", "/api/playlist/tracks/remove")));
         assert!(P1_ROUTES.contains(&("GET", "/api/search")));
         assert!(P1_ROUTES.contains(&("POST", "/api/play")));
         assert!(P1_ROUTES.contains(&("GET", "/api/album")));
