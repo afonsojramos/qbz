@@ -19,6 +19,17 @@ export component NowPlayingBar inherits Rectangle {
     callback media-action(string, string, string);
     callback settings-bool(string, bool);
 
+    // #617 per-frame cost: the always-visible bottom bar is a high-item-count
+    // subtree (SongCard cover, seek line, transport controls, quality badges,
+    // volume) that is static except for the ~1 Hz seek push (verified: SeekBar's
+    // only animates are hover-opacity one-shots; progress = whole-second position).
+    // Caching it drops the bar's tree-walk + path re-tessellation from ~8x/sec
+    // (driven by the eq-bar full-window repaints) to ~1x/sec; the other 7 frames
+    // blit the cached texture. See spec 2026-07-19-cpu-idle-repaint-617 §9.2.
+    // NOTE: Large mode's sidebar spectrum dock is NOT inside this component; it is
+    // in Sidebar and must stay un-cached (30 fps visualizer).
+    cache-rendering-hint: true;
+
     // EXPLICIT mode-aware height on the wrapper itself. The bottom bar lives in
     // AppShell's outer VerticalLayout slot, which sizes a plain Rectangle child
     // to its CONTENT height — and a Rectangle does NOT auto-adopt a conditional
