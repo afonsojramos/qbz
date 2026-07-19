@@ -103,9 +103,10 @@ pub trait GraphicsBackend {
 ///     offscreen texture and blit it whole to the swapchain every frame, dirty
 ///     tracking OFF. Measures the irreducible acquire+submit+blit+present
 ///     floor of the partial-rendering design.
-///   - any other value ("1", "visualize", "log", …): full partial rendering.
-///     Stage 3 wires dirty-region tracking; until then these behave exactly
-///     like "frozen-blit".
+///   - any other value ("1", "visualize", "log", …): full partial rendering
+///     (stage 3: dirty-region tracking — only the dirty bounding rect of the
+///     persistent texture is repainted). "visualize" outlines the dirty rect
+///     on the swapchain; "log" prints the repainted percentage.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum PartialRenderingMode {
     FrozenBlit,
@@ -115,7 +116,7 @@ enum PartialRenderingMode {
 fn partial_rendering_mode() -> Option<PartialRenderingMode> {
     static MODE: std::sync::OnceLock<Option<PartialRenderingMode>> = std::sync::OnceLock::new();
     *MODE.get_or_init(|| {
-        let value = std::env::var("SLINT_FEMTOVG_PARTIAL_RENDERING").ok()?;
+        let value = std::env::var("SLINT_FEMTOVG_PARTIAL_RENDERING").ok()?.to_ascii_lowercase();
         match value.as_str() {
             "" | "0" | "off" | "no" => None,
             "frozen-blit" => Some(PartialRenderingMode::FrozenBlit),
@@ -316,15 +317,19 @@ impl<B: GraphicsBackend> FemtoVGRenderer<B> {
 
                 {
                     let mut femtovg_canvas = canvas.borrow_mut();
-                    if let Some(scene) = scene_texture.as_ref() {
-                        // #617 stage 2: the whole scene (clear included) goes into
-                        // the persistent texture instead of the swapchain.
-                        femtovg_canvas.set_render_target(scene.as_render_target());
-                    }
                     // We pass an integer that is greater than or equal to the scale factor as
                     // dpi / device pixel ratio as the anti-alias of femtovg needs that to draw text clearly.
                     // We need to care about that `ceil()` when calculating metrics.
                     femtovg_canvas.set_size(surface_size.width, surface_size.height, scale);
+
+                    if let Some(scene) = scene_texture.as_ref() {
+                        // #617 stage 2: the whole scene (clear included) goes into
+                        // the persistent texture instead of the swapchain. MUST come
+                        // after set_size: set_size queues a SetRenderTarget(Screen)
+                        // command (see the femtovg vendor patch keeping the canvas
+                        // field in sync).
+                        femtovg_canvas.set_render_target(scene.as_render_target());
+                    }
 
                     // Clear with window background if it is a solid color otherwise it will drawn as gradient.
                     // #617 stage 3: in the partial path this becomes one clear_rect
@@ -366,6 +371,16 @@ impl<B: GraphicsBackend> FemtoVGRenderer<B> {
                     })?;
                 }
 
+                if let Some(scene) = scene_texture.as_ref() {
+                    // #617: the notifier block above queues SetRenderTarget(Screen)
+                    // through set_size — re-assert the scene target for everything
+                    // drawn from here on (swallowed as a no-op when no notifier ran).
+                    // Design note: a BeforeRendering notifier that actually DREW
+                    // would be overwritten by the final Copy blit; QBZ's notifier is
+                    // setup-only (device/queue capture), so this is safe here.
+                    canvas.borrow_mut().set_render_target(scene.as_render_target());
+                }
+
                 self.graphics_cache.clear_cache_if_scale_factor_changed(window);
                 self.text_layout_cache.clear_cache_if_scale_factor_changed(window);
 
@@ -385,6 +400,11 @@ impl<B: GraphicsBackend> FemtoVGRenderer<B> {
                         .unwrap_or(femtovg::RenderTarget::Screen),
                 );
 
+                // #617 visualize: set by the partial branch so the dirty-rect
+                // outline can be stroked on the swapchain after the blit (drawn
+                // into the persistent texture it would linger and pile up).
+                let mut visualize_dirty_rect: Option<PhysicalRect> = None;
+
                 // #617: both branches yield the concrete item renderer so the
                 // blit/flush/drop below is identical for every path.
                 let item_renderer = if partial_active {
@@ -402,6 +422,18 @@ impl<B: GraphicsBackend> FemtoVGRenderer<B> {
                         None,
                     );
 
+                    // Collapse the (≤3-rect) dirty region to its single bounding
+                    // rect so that filter_item, the canvas scissor and the scoped
+                    // clears all agree on ONE rect: BoxShadow/Transform/Opacity/
+                    // Layer/Clip items bypass filter_item and re-render every frame
+                    // (core item_rendering.rs:209-217) — with a multi-rect region
+                    // they would re-blend over uncleared pixels in the gaps between
+                    // rects, progressively smearing until an unrelated full refresh.
+                    partial_renderer.dirty_region =
+                        i_slint_core::partial_renderer::DirtyRegion::from(
+                            partial_renderer.dirty_region.bounding_rect(),
+                        );
+
                     // Canvas-level scissor on the main pass only (the canvas was
                     // reset above, so this lands in physical pixels). Layer passes
                     // reset their own canvas state and keep rendering full-texture —
@@ -410,6 +442,12 @@ impl<B: GraphicsBackend> FemtoVGRenderer<B> {
                     // full-texture clears and smear stale texels.
                     let dirty_bounds = partial_renderer.dirty_region.bounding_rect();
                     let phys_dirty = (dirty_bounds * scale_factor).round_out();
+                    if matches!(
+                        mode,
+                        Some(PartialRenderingMode::Enabled { visualize: true, .. })
+                    ) {
+                        visualize_dirty_rect = Some(phys_dirty);
+                    }
                     {
                         let mut femtovg_canvas = canvas.borrow_mut();
                         // An empty dirty region scissors everything away: the proxy
@@ -492,29 +530,6 @@ impl<B: GraphicsBackend> FemtoVGRenderer<B> {
 
                     let mut item_renderer = partial_renderer.into_inner();
 
-                    if matches!(
-                        mode,
-                        Some(PartialRenderingMode::Enabled { visualize: true, .. })
-                    ) {
-                        // Stroke the dirty bounding rect in red (lands in the scene
-                        // texture and shows through the blit).
-                        let mut outline = femtovg::Path::new();
-                        outline.rect(
-                            phys_dirty.origin.x,
-                            phys_dirty.origin.y,
-                            phys_dirty.size.width,
-                            phys_dirty.size.height,
-                        );
-                        let mut paint =
-                            femtovg::Paint::color(femtovg::Color::rgbaf(1., 0., 0., 0.5));
-                        paint.set_line_width(2.);
-                        let mut femtovg_canvas = canvas.borrow_mut();
-                        femtovg_canvas.save_with(|canvas| {
-                            canvas.reset();
-                            canvas.stroke_path(&outline, &paint);
-                        });
-                    }
-
                     if let Some(collector) = &self.rendering_metrics_collector.borrow().as_ref()
                     {
                         let metrics = item_renderer.metrics();
@@ -589,6 +604,26 @@ impl<B: GraphicsBackend> FemtoVGRenderer<B> {
                         canvas.reset();
                         canvas.global_composite_operation(femtovg::CompositeOperation::Copy);
                         canvas.fill_path(&blit_path, &scene_paint);
+                        if let Some(dirty_rect) = visualize_dirty_rect {
+                            // #617 visualize: outline the dirty bounding rect on the
+                            // swapchain — self-erasing next frame; drawn into the
+                            // persistent scene texture it would linger and pile up.
+                            canvas.global_composite_operation(
+                                femtovg::CompositeOperation::SourceOver,
+                            );
+                            let mut outline = femtovg::Path::new();
+                            outline.rect(
+                                dirty_rect.origin.x,
+                                dirty_rect.origin.y,
+                                dirty_rect.size.width,
+                                dirty_rect.size.height,
+                            );
+                            let mut paint = femtovg::Paint::color(femtovg::Color::rgbaf(
+                                1., 0., 0., 0.5,
+                            ));
+                            paint.set_line_width(2.);
+                            canvas.stroke_path(&outline, &paint);
+                        }
                     });
                 }
 

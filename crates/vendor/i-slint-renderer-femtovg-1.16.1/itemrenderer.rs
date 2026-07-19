@@ -1185,8 +1185,10 @@ impl<'a, R: femtovg::Renderer + TextureImporter> GLItemRenderer<'a, R> {
                 global_alpha: 1.,
                 current_render_target: layer_image.as_render_target(),
                 // Layer renders into its own offscreen target with the canvas
-                // translated by -origin; identity is a safe placeholder here while
-                // this is inert. Revisit when stage 3 wires layer dirty-tracking.
+                // translated by -origin. identity is CORRECT here even with the
+                // stage-3 partial renderer wired: render_layer renders children
+                // through this inner GLItemRenderer directly, so the core proxy
+                // never queries current_transform() inside a layer pass.
                 transform: ItemTransform::identity(),
             };
 
