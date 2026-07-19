@@ -693,6 +693,21 @@ export component Sidebar inherits Rectangle {
     clip: true;
     animate width { duration: 160ms; easing: ease-in-out; }
 
+    // #617 per-frame cost: cache this whole subtree to a persistent texture so
+    // the eq-bar's ~8x/sec full-window repaints skip the sidebar's tree-walk +
+    // path re-tessellation (nav rows + playlists list) and blit the cache instead.
+    // SAFE to cache the root here: the animated Large-NPB spectrum dock is NOT a
+    // child of the Sidebar — it is an AppShell-root overlay (see the dock-band
+    // RESERVATION comment ~line 1120); everything actually inside the Sidebar is
+    // static at idle (the scrollbar thumb only animates on hover; the sort/context
+    // menus are separate PopupWindow surfaces, not part of this texture).
+    // Invalidates on: playlist scroll (transient), width toggle (160ms transient),
+    // hover, list changes. SMOKE-WATCH: scroll the playlists list and confirm no
+    // clipping/offset artifact from the Flickable-inside-cache interaction; if it
+    // regresses, narrow the hint to the static nav section only.
+    // See spec 2026-07-19-cpu-idle-repaint-617 §9.2.
+    cache-rendering-hint: true;
+
     VerticalLayout {
         // Per-side padding so Large can zero ONLY the bottom: the reserved dock
         // band (and the AppShell overlay aligned to it) then reaches the true
