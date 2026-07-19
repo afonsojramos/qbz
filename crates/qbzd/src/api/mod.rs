@@ -15,8 +15,10 @@
 // diagnosis runs BEFORE the stores/runtime exist), `serve` at boot step 11 — is
 // what keeps the 01-architecture.md §8.1 boot order honest.
 pub mod browse;
+pub mod fav;
 pub mod play;
 pub mod playback;
+pub mod playlist;
 pub mod queue;
 pub mod radio;
 pub mod search;
@@ -83,6 +85,11 @@ pub const P1_ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/queue/move"),
     ("POST", "/api/queue/jump"),
     ("POST", "/api/queue/stop-after"),
+    ("GET", "/api/favorites"),
+    ("POST", "/api/favorites/add"),
+    ("POST", "/api/favorites/remove"),
+    ("GET", "/api/playlists"),
+    ("GET", "/api/playlist"),
 ];
 
 /// A socket bound at boot step 5, not yet serving. Wraps the tiny_http server
@@ -305,6 +312,17 @@ fn route(state: &ApiState, req: &mut Request) -> Response<Cursor<Vec<u8>>> {
             let body = read_json_body(req);
             radio::radio(state, &body)
         }
+        ("GET", "/api/favorites") => fav::list(state, &query),
+        ("POST", "/api/favorites/add") => {
+            let body = read_json_body(req);
+            fav::add(state, &body)
+        }
+        ("POST", "/api/favorites/remove") => {
+            let body = read_json_body(req);
+            fav::remove(state, &body)
+        }
+        ("GET", "/api/playlists") => playlist::list(state),
+        ("GET", "/api/playlist") => playlist::show(state, &query),
         ("GET", "/api/queue") => queue::list(state, &query),
         ("POST", "/api/queue/add") => {
             let body = read_json_body(req);
@@ -484,7 +502,12 @@ mod tests {
         // §3.1.4 HARD RULE, applied to the content-verb door). Row 19:
         // GET /api/search — caller: `qbzd search`. Count is pinned so a route
         // with no caller cannot creep in; P1 must never overlap P0.
-        assert_eq!(P1_ROUTES.len(), 12);
+        assert_eq!(P1_ROUTES.len(), 17);
+        assert!(P1_ROUTES.contains(&("GET", "/api/favorites")));
+        assert!(P1_ROUTES.contains(&("POST", "/api/favorites/add")));
+        assert!(P1_ROUTES.contains(&("POST", "/api/favorites/remove")));
+        assert!(P1_ROUTES.contains(&("GET", "/api/playlists")));
+        assert!(P1_ROUTES.contains(&("GET", "/api/playlist")));
         assert!(P1_ROUTES.contains(&("GET", "/api/search")));
         assert!(P1_ROUTES.contains(&("POST", "/api/play")));
         assert!(P1_ROUTES.contains(&("GET", "/api/album")));

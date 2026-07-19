@@ -100,8 +100,9 @@ fn read_stdin_ids() -> String {
 
 /// Generic human list: every object carried in an `items`/`tracks` array,
 /// rendered as `id  Artist — Title`. Robust across the album/artist/similar/
-/// suggest payload shapes (the `--json` output is the exact contract).
-fn render(p: &Value) -> String {
+/// suggest payload shapes (the `--json` output is the exact contract). Shared
+/// with `cli::fav` (favorites payloads are the same items-array shape).
+pub(crate) fn render(p: &Value) -> String {
     let mut items: Vec<&Value> = Vec::new();
     walk(p, &mut items);
     if items.is_empty() {
@@ -129,7 +130,7 @@ fn render(p: &Value) -> String {
     out
 }
 
-fn collect_ids(p: &Value) -> Vec<String> {
+pub(crate) fn collect_ids(p: &Value) -> Vec<String> {
     let mut items: Vec<&Value> = Vec::new();
     walk(p, &mut items);
     items

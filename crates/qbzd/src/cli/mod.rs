@@ -6,8 +6,10 @@
 pub mod browse;
 pub mod client;
 pub mod copy;
+pub mod fav;
 pub mod mode;
 pub mod play;
+pub mod playlist;
 pub mod queue;
 pub mod radio;
 pub mod resolve;

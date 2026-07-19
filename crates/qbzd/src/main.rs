@@ -84,6 +84,10 @@ enum Cmd {
         #[arg(long)] ids: bool,
         #[arg(long)] json: bool,
     },
+    /// Favorites: list | add | remove
+    Fav { #[command(subcommand)] cmd: FavCmd },
+    /// Playlists: list | show
+    Playlist { #[command(subcommand)] cmd: PlaylistCmd },
     /// Shuffle: on | off | toggle (bare = toggle)
     Shuffle { mode: Option<String> },
     /// Repeat: off | all | one
@@ -123,6 +127,23 @@ enum QueueCmd {
     Jump  { position: usize },
     /// Stop after the current track (or `off` to clear)
     StopAfter { arg: Option<String> },
+}
+
+#[derive(Subcommand)]
+enum FavCmd {
+    List {
+        #[arg(long = "type")] kind: Option<String>,
+        #[arg(long)] ids: bool,
+        #[arg(long)] json: bool,
+    },
+    Add    { fav_type: String, id: Option<String>, #[arg(long)] current: bool },
+    Remove { fav_type: String, id: String },
+}
+
+#[derive(Subcommand)]
+enum PlaylistCmd {
+    List { #[arg(long)] json: bool },
+    Show { id: u64, #[arg(long)] ids: bool, #[arg(long)] json: bool },
 }
 
 #[derive(Subcommand)]
@@ -268,6 +289,25 @@ async fn main() {
         Cmd::Suggest { seed, limit, ids, json } => {
             let roots = paths::ProfileRoots::resolve(None, None);
             cli::browse::suggest(cli.host, seed, limit, ids, json, &roots).await
+        }
+        Cmd::Fav { cmd } => {
+            let roots = paths::ProfileRoots::resolve(None, None);
+            match cmd {
+                FavCmd::List { kind, ids, json } => cli::fav::list(cli.host, kind, ids, json, &roots).await,
+                FavCmd::Add { fav_type, id, current } => {
+                    cli::fav::add(cli.host, fav_type, id, current, &roots).await
+                }
+                FavCmd::Remove { fav_type, id } => cli::fav::remove(cli.host, fav_type, id, &roots).await,
+            }
+        }
+        Cmd::Playlist { cmd } => {
+            let roots = paths::ProfileRoots::resolve(None, None);
+            match cmd {
+                PlaylistCmd::List { json } => cli::playlist::list(cli.host, json, &roots).await,
+                PlaylistCmd::Show { id, ids, json } => {
+                    cli::playlist::show(cli.host, id, ids, json, &roots).await
+                }
+            }
         }
         Cmd::Shuffle { mode } => {
             let roots = paths::ProfileRoots::resolve(None, None);
