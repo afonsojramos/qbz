@@ -84,6 +84,10 @@ enum Cmd {
         #[arg(long)] ids: bool,
         #[arg(long)] json: bool,
     },
+    /// Shuffle: on | off | toggle (bare = toggle)
+    Shuffle { mode: Option<String> },
+    /// Repeat: off | all | one
+    Repeat  { mode: String },
     /// Seed-and-go radio: artist:ID | track:ID | album:ID
     Radio { seed: String },
     /// Resolve a Qobuz URL to a kind:ID token (pure, no daemon)
@@ -113,6 +117,12 @@ enum QueueCmd {
     Add   { track_id: u64, #[arg(long)] next: bool },
     Remove{ index: usize },
     Clear { #[arg(long)] keep_current: bool },
+    /// Reorder a 1-based position to another
+    Move  { from: usize, to: usize },
+    /// Jump to (play) a 1-based position
+    Jump  { position: usize },
+    /// Stop after the current track (or `off` to clear)
+    StopAfter { arg: Option<String> },
 }
 
 #[derive(Subcommand)]
@@ -259,6 +269,14 @@ async fn main() {
             let roots = paths::ProfileRoots::resolve(None, None);
             cli::browse::suggest(cli.host, seed, limit, ids, json, &roots).await
         }
+        Cmd::Shuffle { mode } => {
+            let roots = paths::ProfileRoots::resolve(None, None);
+            cli::mode::shuffle(cli.host, mode, &roots).await
+        }
+        Cmd::Repeat { mode } => {
+            let roots = paths::ProfileRoots::resolve(None, None);
+            cli::mode::repeat(cli.host, mode, &roots).await
+        }
         Cmd::Radio { seed } => {
             let roots = paths::ProfileRoots::resolve(None, None);
             cli::radio::radio(cli.host, seed, &roots).await
@@ -311,8 +329,12 @@ async fn main() {
                 QueueCmd::Clear { keep_current } => {
                     cli::queue::clear(cli.host, &roots, keep_current).await
                 }
+                QueueCmd::Move { from, to } => cli::queue::move_(cli.host, &roots, from, to).await,
+                QueueCmd::Jump { position } => cli::queue::jump(cli.host, &roots, position).await,
+                QueueCmd::StopAfter { arg } => cli::queue::stop_after(cli.host, &roots, arg).await,
             }
         }
+
         Cmd::Settings { cmd } => {
             let roots = login_roots();
             match cmd {

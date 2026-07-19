@@ -78,6 +78,11 @@ pub const P1_ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/similar"),
     ("GET", "/api/suggest"),
     ("POST", "/api/radio"),
+    ("POST", "/api/playback/shuffle"),
+    ("POST", "/api/playback/repeat"),
+    ("POST", "/api/queue/move"),
+    ("POST", "/api/queue/jump"),
+    ("POST", "/api/queue/stop-after"),
 ];
 
 /// A socket bound at boot step 5, not yet serving. Wraps the tiny_http server
@@ -279,6 +284,14 @@ fn route(state: &ApiState, req: &mut Request) -> Response<Cursor<Vec<u8>>> {
             let body = read_json_body(req);
             playback::volume(state, &body)
         }
+        ("POST", "/api/playback/shuffle") => {
+            let body = read_json_body(req);
+            playback::shuffle(state, &body)
+        }
+        ("POST", "/api/playback/repeat") => {
+            let body = read_json_body(req);
+            playback::repeat(state, &body)
+        }
         ("GET", "/api/search") => search::search(state, &query),
         ("POST", "/api/play") => {
             let body = read_json_body(req);
@@ -304,6 +317,18 @@ fn route(state: &ApiState, req: &mut Request) -> Response<Cursor<Vec<u8>>> {
         ("POST", "/api/queue/clear") => {
             let body = read_json_body(req);
             queue::clear(state, &body)
+        }
+        ("POST", "/api/queue/move") => {
+            let body = read_json_body(req);
+            queue::reorder(state, &body)
+        }
+        ("POST", "/api/queue/jump") => {
+            let body = read_json_body(req);
+            queue::jump(state, &body)
+        }
+        ("POST", "/api/queue/stop-after") => {
+            let body = read_json_body(req);
+            queue::stop_after(state, &body)
         }
         ("POST", "/api/settings/reload") => settings::reload(state),
         _ => err_json(404, "not_found", "unknown route", "see qbzd --help"),
@@ -459,7 +484,7 @@ mod tests {
         // §3.1.4 HARD RULE, applied to the content-verb door). Row 19:
         // GET /api/search — caller: `qbzd search`. Count is pinned so a route
         // with no caller cannot creep in; P1 must never overlap P0.
-        assert_eq!(P1_ROUTES.len(), 7);
+        assert_eq!(P1_ROUTES.len(), 12);
         assert!(P1_ROUTES.contains(&("GET", "/api/search")));
         assert!(P1_ROUTES.contains(&("POST", "/api/play")));
         assert!(P1_ROUTES.contains(&("GET", "/api/album")));
@@ -467,6 +492,11 @@ mod tests {
         assert!(P1_ROUTES.contains(&("GET", "/api/similar")));
         assert!(P1_ROUTES.contains(&("GET", "/api/suggest")));
         assert!(P1_ROUTES.contains(&("POST", "/api/radio")));
+        assert!(P1_ROUTES.contains(&("POST", "/api/playback/shuffle")));
+        assert!(P1_ROUTES.contains(&("POST", "/api/playback/repeat")));
+        assert!(P1_ROUTES.contains(&("POST", "/api/queue/move")));
+        assert!(P1_ROUTES.contains(&("POST", "/api/queue/jump")));
+        assert!(P1_ROUTES.contains(&("POST", "/api/queue/stop-after")));
         for r in P1_ROUTES {
             assert!(!P0_ROUTES.contains(r), "{r:?} is duplicated across P0 and P1");
         }

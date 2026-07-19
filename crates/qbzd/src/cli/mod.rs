@@ -6,6 +6,7 @@
 pub mod browse;
 pub mod client;
 pub mod copy;
+pub mod mode;
 pub mod play;
 pub mod queue;
 pub mod radio;
