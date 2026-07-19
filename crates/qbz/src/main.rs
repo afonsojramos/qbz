@@ -451,6 +451,47 @@ async fn enter_shell(
         });
     }
 
+    // Same for followed ARTISTS — the Pinned carousel's artist follow chip
+    // seeds from fav_cache at build time (its only build-time consumer), and
+    // the pinned model is built BEFORE this warm lands: re-seed any already-
+    // built artist rows once the fresh set arrives (walk > rebuild_pinned: no
+    // model swap, no artwork-job re-dispatch, no flicker).
+    {
+        let runtime = runtime.clone();
+        let weak = weak.clone();
+        tokio::spawn(async move {
+            if crate::offline_mode::engine().is_offline() {
+                return;
+            }
+            match runtime.core().favorite_artist_ids().await {
+                Ok(ids) => {
+                    let _ =
+                        tokio::task::spawn_blocking(move || fav_cache::set_all_artists(ids)).await;
+                    let _ = weak.upgrade_in_event_loop(move |w| {
+                        let pm = w.global::<PinnedState>().get_items();
+                        for i in 0..pm.row_count() {
+                            if let Some(mut it) = pm.row_data(i) {
+                                if it.kind == "artist" {
+                                    let following = it
+                                        .artist
+                                        .id
+                                        .parse::<u64>()
+                                        .map(|id| fav_cache::is_artist_favorite(id))
+                                        .unwrap_or(false);
+                                    if it.artist.following != following {
+                                        it.artist.following = following;
+                                        pm.set_row_data(i, it);
+                                    }
+                                }
+                            }
+                        }
+                    });
+                }
+                Err(e) => log::warn!("[qbz-slint] favorite artists warm failed: {e}"),
+            }
+        });
+    }
+
     // Load Audio + Playback settings into the Settings page in the
     // background — store reads and device enumeration are blocking.
     spawn_settings_snapshot_load(runtime.clone(), weak.clone(), settings_ctx.clone());

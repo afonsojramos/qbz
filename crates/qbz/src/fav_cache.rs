@@ -36,10 +36,11 @@ static FAV_ALBUMS: LazyLock<RwLock<HashSet<String>>> =
 static FAV_AWARDS: LazyLock<RwLock<HashSet<String>>> =
     LazyLock::new(|| RwLock::new(HashSet::new()));
 
-/// Process-wide set of the user's followed ARTIST ids (u64). IN-MEMORY ONLY
-/// (no per-user disk store): the search + artist-page surfaces re-seed it from
-/// `favorite_artist_ids` on load, so the follow heart toggle always has the
-/// current state without a per-click network hit.
+/// Process-wide set of the user's followed ARTIST ids (u64). Same disk-first
+/// + network-refresh lifecycle as the album set (seeded from the per-user
+/// store in [`init_for_user`], refreshed by the shell-entry warm and the
+/// search/artist-page loaders) — the Pinned carousel's artist follow chip
+/// reads it at build time, so it must be correct from first paint and offline.
 static FAV_ARTISTS: LazyLock<RwLock<HashSet<u64>>> =
     LazyLock::new(|| RwLock::new(HashSet::new()));
 
@@ -101,6 +102,22 @@ pub fn init_for_user(base_dir: &Path) {
             }
         }
         Err(e) => log::warn!("[qbz-slint] favorites cache award disk seed failed: {e}"),
+    }
+    match store.get_favorite_artist_ids() {
+        Ok(ids) => {
+            let set: HashSet<u64> = ids
+                .into_iter()
+                .filter_map(|id| u64::try_from(id).ok())
+                .collect();
+            log::info!(
+                "[qbz-slint] favorites cache: {} artist ids seeded from disk",
+                set.len()
+            );
+            if let Ok(mut guard) = FAV_ARTISTS.write() {
+                *guard = set;
+            }
+        }
+        Err(e) => log::warn!("[qbz-slint] favorites cache artist disk seed failed: {e}"),
     }
     if let Ok(mut guard) = STORE.lock() {
         *guard = Some(store);
@@ -255,20 +272,43 @@ pub fn is_artist_favorite(artist_id: u64) -> bool {
         .unwrap_or(false)
 }
 
-/// Replace the followed-artist set with a freshly-fetched id list (in-memory).
+/// Replace the followed-artist set with a freshly-fetched id list and mirror
+/// it to the per-user store (full replace — same lifecycle as the album set).
+/// Blocking disk write; call off the UI thread.
 pub fn set_all_artists(ids: HashSet<u64>) {
+    if let Ok(guard) = STORE.lock() {
+        if let Some(store) = guard.as_ref() {
+            let disk: Vec<i64> = ids.iter().map(|&id| id as i64).collect();
+            if let Err(e) = store.sync_favorite_artists(&disk) {
+                log::warn!("[qbz-slint] favorites cache artist sync failed: {e}");
+            }
+        }
+    }
     if let Ok(mut guard) = FAV_ARTISTS.write() {
         *guard = ids;
     }
 }
 
-/// Insert / remove a single artist id (optimistic follow toggle).
+/// Insert / remove a single artist id (optimistic follow toggle) and mirror
+/// the change to the per-user store so the follow survives a restart.
 pub fn set_artist(artist_id: u64, favorite: bool) {
     if let Ok(mut guard) = FAV_ARTISTS.write() {
         if favorite {
             guard.insert(artist_id);
         } else {
             guard.remove(&artist_id);
+        }
+    }
+    if let Ok(guard) = STORE.lock() {
+        if let Some(store) = guard.as_ref() {
+            let res = if favorite {
+                store.add_favorite_artist(artist_id as i64)
+            } else {
+                store.remove_favorite_artist(artist_id as i64)
+            };
+            if let Err(e) = res {
+                log::warn!("[qbz-slint] favorites cache artist disk update failed: {e}");
+            }
         }
     }
 }
