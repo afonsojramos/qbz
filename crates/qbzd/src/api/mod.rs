@@ -14,6 +14,7 @@
 // The two-call split — `bind` at boot step 5 (stateless, so the foreign-occupant
 // diagnosis runs BEFORE the stores/runtime exist), `serve` at boot step 11 — is
 // what keeps the 01-architecture.md §8.1 boot order honest.
+pub mod browse;
 pub mod play;
 pub mod playback;
 pub mod queue;
@@ -71,6 +72,10 @@ pub const P0_ROUTES: &[(&str, &str)] = &[
 pub const P1_ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/search"),
     ("POST", "/api/play"),
+    ("GET", "/api/album"),
+    ("GET", "/api/artist"),
+    ("GET", "/api/similar"),
+    ("GET", "/api/suggest"),
 ];
 
 /// A socket bound at boot step 5, not yet serving. Wraps the tiny_http server
@@ -277,6 +282,10 @@ fn route(state: &ApiState, req: &mut Request) -> Response<Cursor<Vec<u8>>> {
             let body = read_json_body(req);
             play::play(state, &body)
         }
+        ("GET", "/api/album") => browse::album(state, &query),
+        ("GET", "/api/artist") => browse::artist(state, &query),
+        ("GET", "/api/similar") => browse::similar(state, &query),
+        ("GET", "/api/suggest") => browse::suggest(state, &query),
         ("GET", "/api/queue") => queue::list(state, &query),
         ("POST", "/api/queue/add") => {
             let body = read_json_body(req);
@@ -444,9 +453,13 @@ mod tests {
         // §3.1.4 HARD RULE, applied to the content-verb door). Row 19:
         // GET /api/search — caller: `qbzd search`. Count is pinned so a route
         // with no caller cannot creep in; P1 must never overlap P0.
-        assert_eq!(P1_ROUTES.len(), 2);
+        assert_eq!(P1_ROUTES.len(), 6);
         assert!(P1_ROUTES.contains(&("GET", "/api/search")));
         assert!(P1_ROUTES.contains(&("POST", "/api/play")));
+        assert!(P1_ROUTES.contains(&("GET", "/api/album")));
+        assert!(P1_ROUTES.contains(&("GET", "/api/artist")));
+        assert!(P1_ROUTES.contains(&("GET", "/api/similar")));
+        assert!(P1_ROUTES.contains(&("GET", "/api/suggest")));
         for r in P1_ROUTES {
             assert!(!P0_ROUTES.contains(r), "{r:?} is duplicated across P0 and P1");
         }

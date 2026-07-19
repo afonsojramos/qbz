@@ -54,6 +54,36 @@ enum Cmd {
         #[arg(long)] ids: bool,
         #[arg(long)] json: bool,
     },
+    /// Album page — tracklist with ids
+    Album {
+        id: String,
+        #[arg(long)] suggest: bool,
+        #[arg(long)] ids: bool,
+        #[arg(long)] json: bool,
+    },
+    /// Artist page (default), --top tracks, or --albums grid
+    Artist {
+        id: u64,
+        #[arg(long)] top: bool,
+        #[arg(long)] albums: bool,
+        #[arg(long, default_value_t = 20)] limit: u32,
+        #[arg(long)] ids: bool,
+        #[arg(long)] json: bool,
+    },
+    /// Similar artists or albums: artist:ID | album:ID
+    Similar {
+        selector: String,
+        #[arg(long, default_value_t = 20)] limit: u32,
+        #[arg(long)] ids: bool,
+        #[arg(long)] json: bool,
+    },
+    /// For-You suggestions — seeds from the queue, or --seed <ID,ID>|-
+    Suggest {
+        #[arg(long)] seed: Option<String>,
+        #[arg(long, default_value_t = 20)] limit: u32,
+        #[arg(long)] ids: bool,
+        #[arg(long)] json: bool,
+    },
     /// Resume (bare) or play content: album:ID | track:ID | artist:ID | playlist:ID | URL
     Play   { content: Option<String> },
     Pause, Toggle, Stop, Next, Prev,
@@ -208,6 +238,22 @@ async fn main() {
         Cmd::Search { query, kind, limit, offset, ids, json } => {
             let roots = paths::ProfileRoots::resolve(None, None);
             cli::search::search(cli.host, query, kind, limit, offset, ids, json, &roots).await
+        }
+        Cmd::Album { id, suggest, ids, json } => {
+            let roots = paths::ProfileRoots::resolve(None, None);
+            cli::browse::album(cli.host, id, suggest, ids, json, &roots).await
+        }
+        Cmd::Artist { id, top, albums, limit, ids, json } => {
+            let roots = paths::ProfileRoots::resolve(None, None);
+            cli::browse::artist(cli.host, id, top, albums, limit, ids, json, &roots).await
+        }
+        Cmd::Similar { selector, limit, ids, json } => {
+            let roots = paths::ProfileRoots::resolve(None, None);
+            cli::browse::similar(cli.host, selector, limit, ids, json, &roots).await
+        }
+        Cmd::Suggest { seed, limit, ids, json } => {
+            let roots = paths::ProfileRoots::resolve(None, None);
+            cli::browse::suggest(cli.host, seed, limit, ids, json, &roots).await
         }
         Cmd::Play { content } => {
             let roots = paths::ProfileRoots::resolve(None, None);
