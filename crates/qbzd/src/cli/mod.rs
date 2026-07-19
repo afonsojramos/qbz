@@ -14,6 +14,7 @@ pub mod play;
 pub mod playlist;
 pub mod queue;
 pub mod radio;
+pub mod reco;
 pub mod resolve;
 pub mod search;
 pub mod settings;

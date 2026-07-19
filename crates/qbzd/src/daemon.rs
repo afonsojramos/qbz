@@ -251,6 +251,16 @@ async fn boot(roots: &ProfileRoots, cfg: &QbzdConfig, warn_count: usize) -> Resu
         log::warn!("core init did not complete (continuing offline-tolerant): {e}");
     }
 
+    // Playlist recommendations (CONSOLE): open the per-user artist-vector store
+    // at the DAEMON root — mirrors qbz/src/auth.rs:145-149, but slint-free and
+    // session-independent. The store is a CACHE the suggestions engine reads/
+    // writes; vectors are built on demand from MusicBrainz + Qobuz, so this
+    // needs no listening history. Best-effort: a failed open leaves
+    // `generate_playlist_suggestions` working un-cached (artist_vectors = None).
+    if let Ok(store) = qbz_reco::ArtistVectorStore::open_at(&roots.data) {
+        runtime.core().set_artist_vectors(store).await;
+    }
+
     let shared = new_shared(cfg);
     if let Ok(mut s) = shared.lock() {
         s.startup_warnings = warn_count as u32;

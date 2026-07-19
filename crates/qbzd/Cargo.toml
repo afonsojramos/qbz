@@ -17,6 +17,7 @@ qbz-core = { path = "../qbz-core" }
 qbz-player = { path = "../qbz-player" }
 qbz-audio = { path = "../qbz-audio" }          # PROTECTED — read-only consumer
 qbz-qobuz = { path = "../qbz-qobuz" }
+qbz-reco = { path = "../qbz-reco" }             # playlist recommendations (ArtistVectorStore); already in-tree via qbz-core
 qbz-credentials = { path = "../qbz-credentials" }
 qbz-log = { path = "../qbz-log" }
 qconnect-core = { path = "../qconnect-core" }

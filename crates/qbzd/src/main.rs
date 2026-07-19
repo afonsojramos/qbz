@@ -97,6 +97,8 @@ enum Cmd {
         #[arg(long)] ids: bool,
         #[arg(long)] json: bool,
     },
+    /// Recommendations: playlist <ID> (Suggested Songs — no history needed)
+    Reco { #[command(subcommand)] cmd: RecoCmd },
     /// Favorites: list | add | remove
     Fav { #[command(subcommand)] cmd: FavCmd },
     /// Playlists: list | show
@@ -142,6 +144,16 @@ enum QueueCmd {
     Jump  { position: usize },
     /// Stop after the current track (or `off` to clear)
     StopAfter { arg: Option<String> },
+}
+
+#[derive(Subcommand)]
+enum RecoCmd {
+    Playlist {
+        id: u64,
+        #[arg(long)] limit: Option<u32>,
+        #[arg(long)] ids: bool,
+        #[arg(long)] json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -324,6 +336,14 @@ async fn main() {
         Cmd::Discover { section, genre, tag, release_type, kind, limit, ids, json } => {
             let roots = paths::ProfileRoots::resolve(None, None);
             cli::discover::discover(cli.host, section, genre, tag, release_type, kind, limit, ids, json, &roots).await
+        }
+        Cmd::Reco { cmd } => {
+            let roots = paths::ProfileRoots::resolve(None, None);
+            match cmd {
+                RecoCmd::Playlist { id, limit, ids, json } => {
+                    cli::reco::playlist(cli.host, id, limit, ids, json, &roots).await
+                }
+            }
         }
         Cmd::Fav { cmd } => {
             let roots = paths::ProfileRoots::resolve(None, None);

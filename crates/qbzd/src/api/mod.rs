@@ -22,6 +22,7 @@ pub mod playback;
 pub mod playlist;
 pub mod queue;
 pub mod radio;
+pub mod reco;
 pub mod search;
 pub mod settings;
 pub mod status;
@@ -82,6 +83,7 @@ pub const P1_ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/suggest"),
     ("GET", "/api/discover"),
     ("POST", "/api/radio"),
+    ("POST", "/api/reco/playlist"),
     ("POST", "/api/playback/shuffle"),
     ("POST", "/api/playback/repeat"),
     ("POST", "/api/queue/move"),
@@ -320,6 +322,10 @@ fn route(state: &ApiState, req: &mut Request) -> Response<Cursor<Vec<u8>>> {
             let body = read_json_body(req);
             radio::radio(state, &body)
         }
+        ("POST", "/api/reco/playlist") => {
+            let body = read_json_body(req);
+            reco::playlist(state, &body)
+        }
         ("GET", "/api/favorites") => fav::list(state, &query),
         ("POST", "/api/favorites/add") => {
             let body = read_json_body(req);
@@ -530,8 +536,9 @@ mod tests {
         // §3.1.4 HARD RULE, applied to the content-verb door). Row 19:
         // GET /api/search — caller: `qbzd search`. Count is pinned so a route
         // with no caller cannot creep in; P1 must never overlap P0.
-        assert_eq!(P1_ROUTES.len(), 23);
+        assert_eq!(P1_ROUTES.len(), 24);
         assert!(P1_ROUTES.contains(&("GET", "/api/discover")));
+        assert!(P1_ROUTES.contains(&("POST", "/api/reco/playlist")));
         assert!(P1_ROUTES.contains(&("GET", "/api/favorites")));
         assert!(P1_ROUTES.contains(&("POST", "/api/favorites/add")));
         assert!(P1_ROUTES.contains(&("POST", "/api/favorites/remove")));
