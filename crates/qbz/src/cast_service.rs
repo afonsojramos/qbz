@@ -10,8 +10,12 @@
 //! Bytes + MIME + delivered quality are resolved through the shared core API
 //! `CoreBridge::fetch_for_external_stream_resolved`, requesting the user's
 //! streaming-quality preference (#638; reverses the old always-UltraHiRes
-//! decision D3). The preference governs only what we REQUEST — bytes already
-//! in the L1/L2 cache or the offline store are served as-is, never resampled.
+//! decision D3) clamped by the manual per-renderer cap when one is stored
+//! for the connected device (#638 fix 4). Caps govern only what we REQUEST —
+//! bytes already in the L1/L2 cache or the offline store are served as-is,
+//! never resampled. The LOCAL output device's cap never applies here: the
+//! local DAC is not in a cast's signal path (precedence rule, owner
+//! decision 2026-07-20).
 //! Before registration the served bytes are PROBED (FLAC STREAMINFO), so the
 //! picker line and the now-playing badge report the MEASURED delivered
 //! quality — never the catalog metadata — regardless of which tier produced
@@ -92,6 +96,10 @@ struct CastAssetInfo {
     probe: Option<AudioParams>,
     origin: Option<AssetOrigin>,
     requested: Option<Quality>,
+    /// Request-time cause paired with `requested` (#638 fix 4): which cap
+    /// shaped the request (`Preference` / `RendererCap`), `None` when
+    /// nothing constrained it or the source is not governed.
+    request_cause: QualityLimit,
 }
 
 // ---- Module singleton -------------------------------------------------------
@@ -123,6 +131,13 @@ struct CastInner {
     protocol: Option<CastProtocol>,
     connected_device_ip: Option<String>,
     connected_device_name: Option<String>,
+    // Stable identity of the connected renderer + the ui_prefs cap key
+    // derived from it (#638 fix 4). `connected_cap_key` is None when no
+    // persistable identity exists (a Chromecast without the mDNS TXT `id`
+    // record — a fullname-keyed cap would silently detach on rename), and
+    // the picker hides the cap row for that device.
+    connected_device_id: Option<String>,
+    connected_cap_key: Option<String>,
     // ONE shared lazy media server for both protocols.
     media_server: Option<MediaServer>,
     // Playback mirror.
@@ -292,8 +307,17 @@ impl SlintCastService {
             inner.cast_saw_playing = false;
             inner.cast_max_position = 0.0;
             inner.cast_premature_stop_polls = 0;
+            // Identity + cap-key line so a "my cap doesn't apply" report is
+            // diagnosable from the log alone (#638 fix 4).
+            log::info!(
+                "[Cast] connected to {} ({}; cap key: {})",
+                inner.connected_device_name.as_deref().unwrap_or("?"),
+                inner.connected_device_id.as_deref().unwrap_or("?"),
+                inner.connected_cap_key.as_deref().unwrap_or("none — unstable id")
+            );
         }
         self.push_connection_state().await;
+        self.push_device_cap_row().await;
         self.start_position_poll();
 
         // Re-cast the current track at its position, passing the REAL source
@@ -333,6 +357,20 @@ impl SlintCastService {
         let mut inner = self.inner.lock().await;
         inner.chromecast = Some(handle);
         inner.connected_device_name = Some(device.name.clone());
+        // Cap key only when the id is the mDNS TXT `id` record (the Cast
+        // UUID). The fullname fallback tracks the friendly name, so a cap
+        // keyed on it would silently stop applying on rename — the failure
+        // mode #638 exists to remove; such devices get no cap row.
+        inner.connected_cap_key = device
+            .id_is_stable
+            .then(|| format!("chromecast:{}", device.id));
+        if !device.id_is_stable {
+            log::info!(
+                "[Cast] {} broadcasts no mDNS TXT id — per-device quality cap unavailable",
+                device.name
+            );
+        }
+        inner.connected_device_id = Some(device.id);
         Ok(device.ip)
     }
 
@@ -348,12 +386,17 @@ impl SlintCastService {
         };
         let ip = device.ip.clone();
         let name = device.name.clone();
+        let udn = device.id.clone();
         let conn = DlnaConnection::connect(device)
             .await
             .map_err(|e| e.to_string())?;
         let mut inner = self.inner.lock().await;
         inner.dlna = Some(conn);
         inner.connected_device_name = Some(name);
+        // The DLNA id IS the UPnP UDN — stable by construction (F14), so a
+        // DLNA renderer is always cappable.
+        inner.connected_cap_key = Some(format!("dlna:{udn}"));
+        inner.connected_device_id = Some(udn);
         Ok(ip)
     }
 
@@ -374,6 +417,8 @@ impl SlintCastService {
             inner.protocol = None;
             inner.connected_device_ip = None;
             inner.connected_device_name = None;
+            inner.connected_device_id = None;
+            inner.connected_cap_key = None;
             // Release the served track buffers with the session (#550); the
             // server itself stays up for the next connect.
             if let Some(server) = inner.media_server.as_ref() {
@@ -396,6 +441,7 @@ impl SlintCastService {
         // Clear the fix-1 measured/over-cap disclosure with the session (the
         // quality line itself is hidden by `connected == false`; the badge's
         // effective values are re-owned by the local poll on its next tick).
+        // The fix-4 cap row is per-connection state — cleared with it.
         let weak = self.window.clone();
         let _ = weak.upgrade_in_event_loop(|w| {
             use slint::ComponentHandle;
@@ -403,6 +449,9 @@ impl SlintCastService {
             cs.set_quality_limit_cause(0);
             cs.set_quality_over_cap(false);
             cs.set_quality_origin("".into());
+            cs.set_device_cap_available(false);
+            cs.set_device_cap_key("".into());
+            cs.set_device_cap_index(0);
         });
         self.push_connection_state().await;
     }
@@ -524,12 +573,15 @@ impl SlintCastService {
     async fn register_qobuz(&self, track_id: u64) -> Result<CastAssetInfo, String> {
         let offline = crate::offline::get().await;
         let sink = crate::offline_cache::row_sink(self.window.clone());
-        // The streaming-quality preference governs what we REQUEST from Qobuz
-        // (#638), resolved fresh per cast track so a Settings change applies to
-        // the very next one. Bytes that already exist locally (L1/L2 cache, the
-        // offline store) go out as-is at whatever tier they were fetched at —
-        // no resampling, ever (owner decision).
-        let quality = crate::playback::playback_quality();
+        // The streaming-quality preference — clamped by this renderer's
+        // manual cap when one is stored (#638 fix 4) — governs what we
+        // REQUEST from Qobuz, resolved fresh per cast track so a Settings or
+        // cap change applies to the very next one. This request-time min is
+        // the ENTIRE enforcement: bytes that already exist locally (L1/L2
+        // cache, the offline store) go out as-is at whatever tier they were
+        // fetched at — no resampling, no re-fetch, ever (owner decision).
+        let cap_key = self.inner.lock().await.connected_cap_key.clone();
+        let (quality, request_cause) = self.effective_cast_quality(cap_key.as_deref());
         let asset = self
             .runtime
             .core()
@@ -562,7 +614,49 @@ impl SlintCastService {
             probe,
             origin: Some(origin),
             requested: Some(quality),
+            request_cause,
         })
+    }
+
+    /// Resolve the tier to REQUEST for a cast to the renderer keyed
+    /// `cap_key`, plus the request-time cause: the user's streaming
+    /// preference clamped by the manual per-renderer cap, lowest tier wins
+    /// (#638 fix 4). On a tie the cause is `RendererCap` — the more
+    /// specific, more surprising of the two (spec §2.2 mandate). NEVER
+    /// consults the local DAC cap (`device_cap` / `local_playback_quality`):
+    /// the local DAC is not in a cast's signal path (precedence rule, owner
+    /// decision 2026-07-20).
+    fn effective_cast_quality(&self, cap_key: Option<&str>) -> (Quality, QualityLimit) {
+        let pref = crate::playback::playback_quality();
+        // Second (deliberate) tiny ui_prefs read per cast track: the pref
+        // stays sourced from the canonical playback_quality() — its purity
+        // doc names this module as a direct caller — and the cap map is
+        // read fresh beside it.
+        let cap = cap_key.and_then(|k| {
+            crate::ui_prefs::load()
+                .cast_quality_caps
+                .get(k)
+                .map(|c| crate::ui_prefs::streaming_quality_for_key(&c.tier))
+        });
+        match cap {
+            // A stored `hires_plus`/unknown tier resolves to UltraHiRes via
+            // the mapper's fallback = no effective cap (and never a
+            // RendererCap cause) — only real caps take these two arms.
+            Some(cap) if cap < pref => {
+                (Quality::min_tier(cap, pref), QualityLimit::RendererCap)
+            }
+            Some(cap) if cap == pref && cap < Quality::UltraHiRes => {
+                (pref, QualityLimit::RendererCap)
+            }
+            _ => (
+                pref,
+                if pref < Quality::UltraHiRes {
+                    QualityLimit::Preference
+                } else {
+                    QualityLimit::None
+                },
+            ),
+        }
     }
 
     /// local: stream the file from disk via register_file (no full-RAM read);
@@ -586,6 +680,7 @@ impl SlintCastService {
             probe: None,
             origin: None,
             requested: None,
+            request_cause: QualityLimit::None,
         })
     }
 
@@ -1062,6 +1157,8 @@ impl SlintCastService {
         inner.protocol = None;
         inner.connected_device_ip = None;
         inner.connected_device_name = None;
+        inner.connected_device_id = None;
+        inner.connected_cap_key = None;
         inner.current_track_id = None;
         inner.is_playing = false;
     }
@@ -1171,13 +1268,10 @@ impl SlintCastService {
         let downgraded =
             crate::playback::stream_downgraded(eff_rate_hz, eff_bits, max_rate_hz, max_bits);
         let requested_id = info.requested.map(|q| q.id()).unwrap_or(0);
-        // Request-time cause: the streaming preference is the only cast cap
-        // today; the per-renderer cap (#638 fix 4) will carry its own cause
-        // through here. The local device cap is NEVER a cast cause.
-        let request_cause = match info.requested {
-            Some(q) if q < Quality::UltraHiRes => QualityLimit::Preference as i32,
-            _ => QualityLimit::None as i32,
-        };
+        // Request-time cause from the cast resolution
+        // (`effective_cast_quality`): Preference or RendererCap (#638
+        // fix 4). The local device cap is NEVER a cast cause.
+        let request_cause = info.request_cause as i32;
         let limit_cause = crate::playback::classify_limit_cause(
             downgraded,
             requested_id,
@@ -1242,9 +1336,118 @@ impl SlintCastService {
             cs.set_quality_origin(origin_str.into());
         });
     }
+
+    /// Push the per-renderer cap row state for the connected device (#638
+    /// fix 4): whether a cap can be offered at all (stable identity only),
+    /// the ui_prefs key the picker hands back on selection, and the current
+    /// index (0 = follow the app setting — the absent-entry default).
+    async fn push_device_cap_row(&self) {
+        let cap_key = self.inner.lock().await.connected_cap_key.clone();
+        let index = cap_key.as_deref().map(cap_index_for_key).unwrap_or(0);
+        let weak = self.window.clone();
+        let _ = weak.upgrade_in_event_loop(move |w| {
+            use slint::ComponentHandle;
+            let cs = w.global::<CastState>();
+            cs.set_device_cap_available(cap_key.is_some());
+            cs.set_device_cap_key(cap_key.unwrap_or_default().into());
+            cs.set_device_cap_index(index);
+        });
+    }
+
+    /// Persist the user's manual cap choice for the renderer keyed
+    /// `cap_key` (#638 fix 4): index 0 removes the entry (follow the app
+    /// setting), 1/2/3 store hires/cd/mp3. Enforcement is request-time
+    /// only — the NEXT cast resolve picks the change up; nothing is
+    /// cleared, re-fetched or restarted (a per-device cap must never
+    /// punish the global cache or break an in-flight cast — owner
+    /// decision C; an over-cap cached serve stays disclosed and self-heals
+    /// on natural cache turnover).
+    pub async fn set_device_cap(&self, cap_key: String, index: i32) {
+        if cap_key.is_empty() {
+            return;
+        }
+        let tier = match index {
+            1 => Some("hires"),
+            2 => Some("cd"),
+            3 => Some("mp3"),
+            _ => None,
+        };
+        let name = {
+            let inner = self.inner.lock().await;
+            inner.connected_device_name.clone().unwrap_or_default()
+        };
+        let mut prefs = crate::ui_prefs::load();
+        match tier {
+            Some(t) => {
+                prefs.cast_quality_caps.insert(
+                    cap_key.clone(),
+                    crate::ui_prefs::CastDeviceCap {
+                        tier: t.to_string(),
+                        name: name.clone(),
+                    },
+                );
+                log::info!("[Cast] quality cap for {name} ({cap_key}) -> {t}");
+            }
+            None => {
+                prefs.cast_quality_caps.remove(&cap_key);
+                log::info!(
+                    "[Cast] quality cap for {name} ({cap_key}) removed — follows the app setting"
+                );
+            }
+        }
+        crate::ui_prefs::save(&prefs);
+        // Reflect the persisted choice back (the dropdown binds to
+        // CastState.device-cap-index, not to local widget state).
+        let index = index.clamp(0, 3);
+        let weak = self.window.clone();
+        let _ = weak.upgrade_in_event_loop(move |w| {
+            use slint::ComponentHandle;
+            w.global::<CastState>().set_device_cap_index(index);
+        });
+    }
 }
 
 // ---- Free helpers -----------------------------------------------------------
+
+/// Dropdown index for the stored cap of `cap_key` (0 follow · 1 hires ·
+/// 2 cd · 3 mp3). Unknown stored tiers read as "follow" so a hand-edited
+/// value degrades to the no-cap default instead of showing a wrong cap.
+fn cap_index_for_key(cap_key: &str) -> i32 {
+    match crate::ui_prefs::load()
+        .cast_quality_caps
+        .get(cap_key)
+        .map(|c| c.tier.as_str())
+    {
+        Some("hires") => 1,
+        Some("cd") => 2,
+        Some("mp3") => 3,
+        _ => 0,
+    }
+}
+
+/// Seed/refresh the cap dropdown option labels + the live global-quality
+/// label on `CastState` (#638 fix 4). Called from `reseed_i18n_labels`
+/// (startup + language change — Rust-pushed option models never
+/// re-translate on their own) and from the Settings streaming-quality arm
+/// (option 0 embeds the live global label, so it must track the setting).
+/// UI-thread only.
+pub fn push_cap_options(window: &AppWindow) {
+    use slint::ComponentHandle;
+    let prefs = crate::ui_prefs::load();
+    let idx = crate::ui_prefs::streaming_quality_index(&prefs.streaming_quality);
+    // Tier names ("Hi-Res+", "CD Quality") are product names — untranslated
+    // data, same convention as the Settings streaming dropdown.
+    let global_label = crate::ui_prefs::STREAMING_QUALITIES[idx].label;
+    let options: Vec<slint::SharedString> = vec![
+        qbz_i18n::t_args("Follow app setting ({})", &[global_label]).into(),
+        qbz_i18n::t("Hi-Res — 24-bit, up to 96 kHz").into(),
+        qbz_i18n::t("CD — 16-bit / 44.1 kHz").into(),
+        qbz_i18n::t("MP3 320").into(),
+    ];
+    let cs = window.global::<CastState>();
+    cs.set_global_quality_label(global_label.into());
+    cs.set_device_cap_options(slint::ModelRc::new(slint::VecModel::from(options)));
+}
 
 /// Resolve the on-disk path for a local/ephemeral track id (mirrors
 /// `playback::local_track_file_exists` lookup).

@@ -1171,6 +1171,12 @@ pub async fn handle_select(
                     "[qbz-slint] streaming quality changed -> clearing audio cache (L1+L2)"
                 );
                 runtime.core().player().clear_audio_cache();
+                // Keep the cast picker's cap row honest (#638 fix 4):
+                // option 0 of the per-renderer cap dropdown embeds the
+                // global label ("Follow app setting (…)").
+                let _ = weak.upgrade_in_event_loop(|w| {
+                    crate::cast_service::push_cap_options(&w);
+                });
             }
         }
         "backend" => {

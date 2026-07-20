@@ -4743,6 +4743,10 @@ fn reseed_i18n_labels(window: &AppWindow) {
         t("Lite"),
         t("Off"),
     ])));
+    // Cast picker: per-renderer cap options (#638 fix 4) — option 0 embeds
+    // the live global streaming-quality label, so this also re-reads
+    // ui_prefs (the Settings streaming-quality arm re-pushes on change).
+    cast_service::push_cap_options(window);
 }
 
 /// Open the folder editor modal for an existing folder, populating
@@ -13292,6 +13296,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 svc.disconnect().await;
             });
         });
+    }
+    {
+        // Manual per-renderer quality cap (#638 fix 4): persist the choice
+        // for the cap key the picker row carries. Request-time enforcement
+        // only — the next cast resolve picks it up; nothing is re-fetched.
+        let handle = tokio_rt.handle().clone();
+        window
+            .global::<CastActions>()
+            .on_set_device_quality_cap(move |cap_key, index| {
+                let Some(svc) = cast_service::service() else {
+                    return;
+                };
+                let key = cap_key.to_string();
+                handle.spawn(async move {
+                    svc.set_device_cap(key, index).await;
+                });
+            });
     }
     {
         let weak = window.as_weak();
