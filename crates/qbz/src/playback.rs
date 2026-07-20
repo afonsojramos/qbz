@@ -1767,7 +1767,9 @@ static HYDRATED_BITS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU3
 /// ran for it — `(bit_depth, sample_rate)` in the `QueueTrack` conventions
 /// (rate as f64, Hz here; None = unknown / hydrated for another track).
 fn hydrated_catalog_quality(track_id: u64) -> (Option<u32>, Option<f64>) {
-    if HYDRATED_TRACK_ID.load(std::sync::atomic::Ordering::Relaxed) != track_id {
+    // Acquire pairs with the hydration task's Release store of the id, so a
+    // matching id guarantees the value stores before it are visible.
+    if HYDRATED_TRACK_ID.load(std::sync::atomic::Ordering::Acquire) != track_id {
         return (None, None);
     }
     let bits = HYDRATED_BITS.load(std::sync::atomic::Ordering::Relaxed);
@@ -2110,11 +2112,14 @@ pub(crate) async fn refresh_now_playing_meta(runtime: &Runtime, weak: &slint::We
                     (sr * 1000.0) as u32
                 }
             });
-            // Values BEFORE the id, so a reader keyed on the id never sees
-            // another track's params.
+            // Values BEFORE the id, with the id store Released and paired
+            // with the Acquire load in `hydrated_catalog_quality`, so a
+            // reader keyed on the id never sees another track's params
+            // (program order alone would not survive a weakly-ordered CPU —
+            // macOS ARM is a shipped target).
             HYDRATED_RATE_HZ.store(rate_hz, std::sync::atomic::Ordering::Relaxed);
             HYDRATED_BITS.store(bits.unwrap_or(0), std::sync::atomic::Ordering::Relaxed);
-            HYDRATED_TRACK_ID.store(track_id_num, std::sync::atomic::Ordering::Relaxed);
+            HYDRATED_TRACK_ID.store(track_id_num, std::sync::atomic::Ordering::Release);
             TRACK_MAX_RATE_HZ.store(rate_hz, std::sync::atomic::Ordering::Relaxed);
             TRACK_MAX_BITS.store(bits.unwrap_or(0), std::sync::atomic::Ordering::Relaxed);
             // Re-push the badge seed values the meta pass left empty. No DSD
