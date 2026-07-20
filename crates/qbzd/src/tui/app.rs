@@ -446,8 +446,8 @@ impl App {
                 let playback = PlaybackPreferencesStore::new_at(&self.roots.data)
                     .and_then(|s| s.get_preferences())
                     .unwrap_or_default();
-                let quality = daemon_prefs::load_at(&self.roots.data).streaming_quality;
-                Active::Playback(PlaybackState::new(&quality, &audio, &playback))
+                let dp = daemon_prefs::load_at(&self.roots.data);
+                Active::Playback(PlaybackState::new(&dp.streaming_quality, dp.mpris_enabled, &audio, &playback))
             }
             Screen::QConnect => {
                 let db = self.roots.data.join("qconnect_settings.db");
@@ -1780,6 +1780,7 @@ mod tests {
             Screen::Audio => Active::Audio(AudioState::new(&AudioSettings::default())),
             Screen::Playback => Active::Playback(PlaybackState::new(
                 "hires_plus",
+                true,
                 &AudioSettings::default(),
                 &qbz_app::settings::playback::PlaybackPreferences::default(),
             )),

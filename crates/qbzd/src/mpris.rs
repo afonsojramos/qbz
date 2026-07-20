@@ -53,12 +53,15 @@ impl MprisHandle {
     }
 }
 
-/// Whether MPRIS should be published (see the module header).
-fn enabled() -> bool {
-    match std::env::var("QBZD_MPRIS") {
-        Ok(v) => !matches!(v.trim().to_ascii_lowercase().as_str(), "0" | "false" | "off" | "no"),
-        Err(_) => true,
+/// Whether MPRIS should be published. The `QBZD_MPRIS` env var wins when set
+/// (deploy/override knob); otherwise the persisted `daemon_prefs.mpris_enabled`
+/// toggle decides (default ON), which is what the setup-TUI Playback screen and
+/// `qbzd settings set playback.mpris` write.
+fn enabled(roots: &ProfileRoots) -> bool {
+    if let Ok(v) = std::env::var("QBZD_MPRIS") {
+        return !matches!(v.trim().to_ascii_lowercase().as_str(), "0" | "false" | "off" | "no");
     }
+    qbz_app::settings::daemon_prefs::load_at(&roots.data).mpris_enabled
 }
 
 /// Spawn the MPRIS integration. Returns None when disabled, on a non-Linux
@@ -69,8 +72,8 @@ pub fn spawn(
     mut bus: broadcast::Receiver<CoreEvent>,
     handle: Handle,
 ) -> Option<MprisHandle> {
-    if !enabled() {
-        log::info!("[mpris] disabled via QBZD_MPRIS");
+    if !enabled(&roots) {
+        log::info!("[mpris] disabled (playback.mpris / QBZD_MPRIS)");
         return None;
     }
 
