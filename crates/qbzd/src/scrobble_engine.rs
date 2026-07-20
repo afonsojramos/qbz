@@ -10,18 +10,32 @@
 //
 // Providers: Last.fm (LastFmClient::update_now_playing / scrobble) and
 // ListenBrainz (submit_playing_now / submit_listen). Both backends are
-// qbz-integrations (Slint-free). A persistent ListenBrainz offline queue
-// (ListenBrainzCache) is a follow-up; this slice submits best-effort.
-use std::time::{SystemTime, UNIX_EPOCH};
+// qbz-integrations (Slint-free).
+//
+// ListenBrainz has a persistent offline queue: a failed `submit_listen` is
+// written to the SHARED `ListenBrainzCache.listen_queue` (daemon-root
+// `cache/listenbrainz_v2.db`, the same schema the desktop uses) and a periodic
+// drain — plus one drain at task start — retries pending listens oldest-first,
+// stopping at the first failure and resuming on the next tick. The rusqlite
+// Connection is never held across an await: it is opened inside a
+// `spawn_blocking` for each queue/drain op (mirrors `qbz::scrobble`).
+use std::path::PathBuf;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use qbz_app::settings::scrobblers::{ScrobblerSettings, ScrobblerSettingsStore};
 use qbz_integrations::lastfm::LastFmClient;
-use qbz_integrations::listenbrainz::{ListenBrainzClient, ListenBrainzConfig};
+use qbz_integrations::listenbrainz::cache::ListenBrainzCache;
+use qbz_integrations::listenbrainz::{AdditionalInfo, ListenBrainzClient, ListenBrainzConfig};
 use qbz_models::{CoreEvent, QueueTrack};
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 
 use crate::paths::ProfileRoots;
+
+/// How often the ListenBrainz offline queue is retried (plus once at task
+/// start). Live now-playing/scrobble submits are unaffected — the drain only
+/// clears listens that a prior submit could not deliver.
+const DRAIN_INTERVAL: Duration = Duration::from_secs(120);
 
 /// The track currently being timed for a scrobble.
 struct Playing {
@@ -48,35 +62,49 @@ pub fn spawn(roots: ProfileRoots, mut rx: broadcast::Receiver<CoreEvent>) -> Joi
             }
         };
         let mut playing: Option<Playing> = None;
+        // Fires immediately on the first tick (drains any queue left from a
+        // prior offline session), then every DRAIN_INTERVAL.
+        let mut drain = tokio::time::interval(DRAIN_INTERVAL);
+        drain.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         loop {
-            match rx.recv().await {
-                Ok(CoreEvent::TrackStarted { track, .. }) => {
-                    let settings = store.get_settings().unwrap_or_default();
-                    if !settings.enabled {
-                        playing = None;
-                        continue;
+            // `biased`: live bus events take priority over the drain tick.
+            tokio::select! {
+                biased;
+                ev = rx.recv() => match ev {
+                    Ok(CoreEvent::TrackStarted { track, .. }) => {
+                        let settings = store.get_settings().unwrap_or_default();
+                        if !settings.enabled {
+                            playing = None;
+                            continue;
+                        }
+                        now_playing(&settings, &track).await;
+                        playing = Some(Playing {
+                            threshold: qbz_app::scrobble_timing::scrobble_delay_secs(track.duration_secs),
+                            started_at: now_unix(),
+                            track,
+                            scrobbled: false,
+                        });
                     }
-                    now_playing(&settings, &track).await;
-                    playing = Some(Playing {
-                        threshold: qbz_app::scrobble_timing::scrobble_delay_secs(track.duration_secs),
-                        started_at: now_unix(),
-                        track,
-                        scrobbled: false,
-                    });
-                }
-                Ok(CoreEvent::PositionUpdated { position_secs, .. }) => {
-                    if let Some(p) = playing.as_mut() {
-                        if due(position_secs, p.threshold, p.scrobbled) {
-                            let settings = store.get_settings().unwrap_or_default();
-                            scrobble(&settings, &p.track, p.started_at).await;
-                            p.scrobbled = true;
+                    Ok(CoreEvent::PositionUpdated { position_secs, .. }) => {
+                        if let Some(p) = playing.as_mut() {
+                            if due(position_secs, p.threshold, p.scrobbled) {
+                                let settings = store.get_settings().unwrap_or_default();
+                                scrobble(&settings, &p.track, p.started_at, &roots).await;
+                                p.scrobbled = true;
+                            }
                         }
                     }
+                    Ok(_) => {}
+                    Err(RecvError::Lagged(_)) => continue,
+                    Err(RecvError::Closed) => return,
+                },
+                _ = drain.tick() => {
+                    let settings = store.get_settings().unwrap_or_default();
+                    if settings.enabled && settings.listenbrainz_active() {
+                        drain_listenbrainz(&settings, &roots).await;
+                    }
                 }
-                Ok(_) => {}
-                Err(RecvError::Lagged(_)) => continue,
-                Err(RecvError::Closed) => return,
             }
         }
     })
@@ -106,7 +134,7 @@ async fn now_playing(s: &ScrobblerSettings, t: &QueueTrack) {
     }
 }
 
-async fn scrobble(s: &ScrobblerSettings, t: &QueueTrack, started_at: u64) {
+async fn scrobble(s: &ScrobblerSettings, t: &QueueTrack, started_at: u64, roots: &ProfileRoots) {
     let album = album_opt(t);
     if s.lastfm_active() {
         let c = LastFmClient::with_session_key(s.lastfm_session_key.clone());
@@ -119,9 +147,110 @@ async fn scrobble(s: &ScrobblerSettings, t: &QueueTrack, started_at: u64) {
         let c = lb_client(s);
         match c.submit_listen(&t.artist, &t.title, album, started_at as i64, None).await {
             Ok(()) => log::info!("[scrobbler] listenbrainz submitted: {} — {}", t.artist, t.title),
-            Err(e) => log::warn!("[scrobbler] listenbrainz submit failed: {e}"),
+            Err(e) => {
+                // Persist to the shared offline queue; the periodic drain retries it.
+                log::warn!("[scrobbler] listenbrainz submit failed, queueing: {e}");
+                queue_listenbrainz(roots, t, started_at as i64).await;
+            }
         }
     }
+}
+
+/// Persist a failed listen into the SHARED `ListenBrainzCache.listen_queue`
+/// (daemon-root `cache/listenbrainz_v2.db`). Opened inside a `spawn_blocking` so
+/// the rusqlite Connection never crosses an await.
+async fn queue_listenbrainz(roots: &ProfileRoots, t: &QueueTrack, timestamp: i64) {
+    let Some(path) = lb_cache_path(roots) else {
+        return;
+    };
+    let artist = t.artist.clone();
+    let track = t.title.clone();
+    let album = album_opt(t).map(str::to_string);
+    let duration_ms = (t.duration_secs > 0).then_some(t.duration_secs * 1000);
+    let _ = tokio::task::spawn_blocking(move || match ListenBrainzCache::new(&path) {
+        Ok(cache) => {
+            if let Err(e) = cache.queue_listen(
+                timestamp,
+                &artist,
+                &track,
+                album.as_deref(),
+                None,
+                None,
+                None,
+                None,
+                duration_ms,
+            ) {
+                log::warn!("[scrobbler] queue listenbrainz listen failed: {e}");
+            }
+        }
+        Err(e) => log::warn!("[scrobbler] open listenbrainz cache failed: {e}"),
+    })
+    .await;
+}
+
+/// Drain pending ListenBrainz listens oldest-first, stopping at the first
+/// failure (still offline / flaky — retry on the next tick). Mirrors
+/// `qbz::scrobble::flush_listenbrainz_queue`.
+async fn drain_listenbrainz(s: &ScrobblerSettings, roots: &ProfileRoots) {
+    let Some(path) = lb_cache_path(roots) else {
+        return;
+    };
+    let pending = match tokio::task::spawn_blocking({
+        let path = path.clone();
+        move || ListenBrainzCache::new(&path).and_then(|c| c.get_pending_listens(500))
+    })
+    .await
+    {
+        Ok(Ok(p)) => p,
+        _ => return,
+    };
+    if pending.is_empty() {
+        return;
+    }
+
+    let client = lb_client(s);
+    let mut sent_ids: Vec<i64> = Vec::new();
+    for item in pending {
+        let info = AdditionalInfo {
+            recording_mbid: item.recording_mbid.clone(),
+            release_mbid: item.release_mbid.clone(),
+            artist_mbids: item.artist_mbids.clone(),
+            isrc: item.isrc.clone(),
+            duration_ms: item.duration_ms,
+            ..Default::default()
+        };
+        if client
+            .submit_listen(
+                &item.artist_name,
+                &item.track_name,
+                item.release_name.as_deref(),
+                item.listened_at,
+                Some(info),
+            )
+            .await
+            .is_ok()
+        {
+            sent_ids.push(item.id);
+        } else {
+            break; // still failing — retry on the next tick
+        }
+    }
+    if !sent_ids.is_empty() {
+        let count = sent_ids.len();
+        let _ = tokio::task::spawn_blocking(move || {
+            ListenBrainzCache::new(&path).and_then(|c| c.mark_listens_sent(&sent_ids))
+        })
+        .await;
+        log::info!("[scrobbler] listenbrainz drain: {count} listen(s) sent");
+    }
+}
+
+/// The daemon-root shared ListenBrainz cache DB — `<cache>/listenbrainz_v2.db`,
+/// the same file name and schema the desktop opens (the daemon uses its own
+/// `qbzd` cache root; it never touches the desktop's dirs).
+fn lb_cache_path(roots: &ProfileRoots) -> Option<PathBuf> {
+    std::fs::create_dir_all(&roots.cache).ok()?;
+    Some(roots.cache.join("listenbrainz_v2.db"))
 }
 
 /// A ListenBrainz client bound to the stored token, with its own enabled flag
