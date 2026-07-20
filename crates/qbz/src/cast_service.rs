@@ -1298,8 +1298,21 @@ impl SlintCastService {
             request_cause,
             eff_bits,
         );
-        let delivered_tier =
-            crate::playback::delivered_tier_str(downgraded, requested_id, eff_bits);
+        // Tier token for the badge's main line. The shared helper's
+        // requested-mp3 shortcut is for the LOCAL engine path (an MP3 stream
+        // decodes to 16-bit PCM, so the requested tier is the only tell);
+        // here a successful STREAMINFO parse proves the served bytes are
+        // FLAC, never MP3 — an over-cap cache/offline serve under an mp3
+        // cap must not read "MP3" beside a measured "24-bit / 96 kHz".
+        let delivered_tier = if downgraded && info.probe.is_some() {
+            if eff_bits >= 24 {
+                "hires"
+            } else {
+                "cd"
+            }
+        } else {
+            crate::playback::delivered_tier_str(downgraded, requested_id, eff_bits)
+        };
         // Measured line for the tooltip's "Output", same formatter as the
         // local poll ("16-bit / 44.1 kHz").
         let true_detail = if eff_rate_hz > 0 || eff_bits > 0 {
