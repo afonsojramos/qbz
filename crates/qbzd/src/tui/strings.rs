@@ -32,7 +32,7 @@ pub const BREADCRUMB_ROOT: &str = "Setup";
 /// so a trailing `*` fits the 14-col sidebar; Account/Import/Wizard are never
 /// dirty. Seven since FB4 added the HiFi Wizard (owner-sanctioned cap break over
 /// the old six-screen D7 cap).
-pub const SIDEBAR_LABELS: [&str; 7] = [
+pub const SIDEBAR_LABELS: [&str; 8] = [
     "Account",
     "Audio",
     "Playback",
@@ -40,11 +40,12 @@ pub const SIDEBAR_LABELS: [&str; 7] = [
     "Network",
     "Import/Exp",
     "Wizard",
+    "Scrobbler",
 ];
 
 /// Left-nav labels, WIDE tier (≥ 100 cols → the 28-col sidebar, FB5). The extra
 /// room lets `Import / Export` spell itself out; everything else is already whole.
-pub const SIDEBAR_LABELS_WIDE: [&str; 7] = [
+pub const SIDEBAR_LABELS_WIDE: [&str; 8] = [
     "Account",
     "Audio",
     "Playback",
@@ -52,12 +53,13 @@ pub const SIDEBAR_LABELS_WIDE: [&str; 7] = [
     "Network",
     "Import / Export",
     "Wizard",
+    "Scrobbler",
 ];
 
 /// A terse, static one-line summary shown dim UNDER each name in the wide sidebar
 /// only (FB5). Static (not live device state) — it names what the section is for
 /// so the roomy sidebar reads intentionally; it never needs the section loaded.
-pub const SIDEBAR_SUMMARIES: [&str; 7] = [
+pub const SIDEBAR_SUMMARIES: [&str; 8] = [
     "sign in",
     "output · bit-perfect",
     "quality · behavior",
@@ -65,10 +67,11 @@ pub const SIDEBAR_SUMMARIES: [&str; 7] = [
     "http control",
     "settings bundle",
     "DAC setup",
+    "last.fm · listenbrainz",
 ];
 
 // Global help-bar hints (context-sensitive; assembled per focus + screen).
-pub const HELP_NAV: &str = "up/down move · Enter open · 1-7 jump · Tab content · ? help · q quit";
+pub const HELP_NAV: &str = "up/down move · Enter open · 1-8 jump · Tab content · ? help · q quit";
 pub const HELP_CONTENT_CLEAN: &str = "up/down move · Enter edit · Tab nav · Esc nav · ? help · q quit";
 pub const HELP_CONTENT_DIRTY: &str = "up/down move · Enter edit · s SAVE* · Tab nav · Esc nav · q quit";
 pub const HELP_AUDIO_CLEAN: &str =
@@ -419,3 +422,15 @@ pub fn wiz_done_summary(dacs: usize) -> String {
 pub const WIZ_ABANDON_TITLE: &str = "Quit the wizard?";
 pub const WIZ_ABANDON_BODY: &str = "Your selections and generated config will be discarded.";
 pub const WIZ_ABANDON_HINT: &str = "y quit · Esc stay";
+
+// ============================ Scrobbler (CONSOLE ext) ============================
+
+pub const SCROBBLER_TITLE: &str = "Scrobbler";
+pub const HELP_SCROBBLER: &str = "L connect Last.fm · B connect ListenBrainz · Tab nav · Esc nav · q quit";
+// Alt-screen handoffs — printed on the plain terminal before the CLI auth flow
+// runs (same methodology as the Account browser login).
+pub const SCROBBLE_LASTFM_HANDOFF: &str =
+    "Connecting Last.fm — a browser authorize step follows below.\n";
+pub const SCROBBLE_LISTENBRAINZ_HANDOFF: &str =
+    "Connecting ListenBrainz — paste your user token below.\n";
+pub const SCROBBLE_RETURN_HINT: &str = "\nPress Enter to return to setup…";
