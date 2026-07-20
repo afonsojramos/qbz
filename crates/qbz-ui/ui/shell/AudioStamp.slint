@@ -17,7 +17,7 @@
 
 import { Theme } from "../foundation/semantic-colors.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
-import { NowPlayingState, TooltipState } from "../state.slint";
+import { CastState, NowPlayingState, TooltipState } from "../state.slint";
 
 export component AudioStamp inherits VerticalLayout {
     spacing: 1px;
@@ -44,15 +44,18 @@ export component AudioStamp inherits VerticalLayout {
     // WHY the stream is below the catalog max — third tooltip line, keyed by
     // the QualityLimit discriminant in quality-limit-cause. Informative, not
     // alarming: a downgrade caused by the user's own setting is the app doing
-    // what it was told, never a failure. Causes 2 (local device cap, fix 3)
-    // and 3 (per-renderer cap, fix 4) are pre-wired; they become reachable
-    // when those fixes land.
+    // what it was told, never a failure. Cause 2 = the local device cap
+    // (fix 3); cause 3 = the per-renderer cast cap (fix 4) — it only ever
+    // fires while casting, so it NAMES the renderer (CastState.device-name,
+    // set for the whole connection): its sibling cause-2 line uses "device"
+    // for the local DAC, and an unnamed "this device" would read as the
+    // local machine (spec 2.5 sketches the named form).
     property <string> cause-line: NowPlayingState.quality-limit-cause == 1
         ? @tr("Limited by your streaming quality setting")
         : (NowPlayingState.quality-limit-cause == 2
             ? @tr("Limited by your output device's limit")
             : (NowPlayingState.quality-limit-cause == 3
-                ? @tr("Limited by the quality cap for this device")
+                ? @tr("Limited by the quality cap for {}", CastState.device-name)
                 : (NowPlayingState.quality-limit-cause == 4
                     ? @tr("Qobuz has no higher quality for this track")
                     : "")));

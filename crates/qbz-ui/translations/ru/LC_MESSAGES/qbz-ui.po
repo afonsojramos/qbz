@@ -4759,8 +4759,8 @@ msgstr "MP3 320"
 msgid "Qobuz only offers these tiers — there is no 48 kHz option. The step below Hi-Res is CD 44.1 kHz."
 msgstr "Qobuz предлагает только эти уровни — варианта 48 кГц нет. Ступень ниже Hi-Res — CD 44.1 кГц."
 
-msgid "Limited by the quality cap for this device"
-msgstr "Ограничено пределом качества для этого устройства"
+msgid "Limited by the quality cap for {}"
+msgstr "Ограничено пределом качества для {}"
 
 msgid "capped for this device"
 msgstr "ограничено для этого устройства"
