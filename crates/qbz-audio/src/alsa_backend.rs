@@ -372,6 +372,24 @@ fn build_hw_fallback_id(device_id: &str) -> Option<String> {
     Some(format!("hw:CARD={},DEV={}", card_name, dev_num))
 }
 
+/// Derive the raw `(hw, plughw)` open ids for an aliased device id.
+///
+/// Aliases like `front:` are resolved by alsa-lib through per-card config
+/// (`cards.<driver>.pcm.front.<DEV>`), which some cards don't declare for
+/// every device — snd-aloop's `Loopback.conf` defines `front` for DEV=0
+/// only, and there it routes through softvol — so opening the alias itself
+/// can fail with ENOENT at config-expansion time, or add an unwanted plugin
+/// stage (discussion #641). The raw ids take the same `CARD=`/`DEV=` args
+/// directly from the kernel driver, with no config dependency.
+///
+/// Returns None for ids that carry no `CARD=` alias shape (raw `hw:`,
+/// `default`, etc.) — the caller keeps its existing handling for those.
+fn raw_open_ids(device_id: &str) -> Option<(String, String)> {
+    let hw = build_hw_fallback_id(device_id)?;
+    let plug = hw.replacen("hw:", "plughw:", 1);
+    Some((hw, plug))
+}
+
 /// Extract card name from an ALSA device ID.
 /// `front:CARD=C20,DEV=0` -> `"C20"`, `hw:0,0` -> card 0 short name, etc.
 ///
@@ -703,12 +721,13 @@ impl AlsaBackend {
             return None;
         }
 
-        // Determine the base device path for hw/plughw attempts
-        // front:CARD=X,DEV=Y -> extract card name for hw attempts
-        let (hw_device, plughw_device) = if device_id.starts_with("front:CARD=") {
-            // front:CARD=AMP,DEV=0 -> need to find corresponding hw:X,0
-            // For now, try the front: device directly as it's already hardware-direct
-            (device_id.to_string(), format!("plug:{}", device_id))
+        // Determine the base device path for hw/plughw attempts. Aliased ids
+        // (front:CARD=…) are opened through their raw hw:/plughw: forms: the
+        // alias itself may be undeclared for the selected DEV (snd-aloop only
+        // declares `front` for DEV=0) and needlessly routes through alsa-lib
+        // plugins, while the raw ids open the kernel PCM directly (#641).
+        let (hw_device, plughw_device) = if let Some(ids) = raw_open_ids(device_id) {
+            ids
         } else if device_id.starts_with("hw:") {
             (device_id.to_string(), device_id.replace("hw:", "plughw:"))
         } else if device_id.starts_with("plughw:") {
@@ -1471,5 +1490,46 @@ mod tests {
         assert!(!is_known_pcm_id("null"));
         assert!(!is_known_pcm_id("hw:0,0"));
         assert!(!is_known_pcm_id("plughw:0,0"));
+    }
+
+    #[test]
+    fn raw_open_ids_derives_raw_pair_from_front_alias() {
+        // Discussion #641 — snd-aloop declares `front` for DEV=0 only, so a
+        // saved `front:CARD=Loopback,DEV=1` fails to open with ENOENT. The
+        // derived raw ids take CARD=/DEV= straight to the kernel PCM.
+        assert_eq!(
+            raw_open_ids("front:CARD=Loopback,DEV=1"),
+            Some((
+                "hw:CARD=Loopback,DEV=1".to_string(),
+                "plughw:CARD=Loopback,DEV=1".to_string()
+            ))
+        );
+        assert_eq!(
+            raw_open_ids("front:CARD=ZH3,DEV=0"),
+            Some((
+                "hw:CARD=ZH3,DEV=0".to_string(),
+                "plughw:CARD=ZH3,DEV=0".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn raw_open_ids_defaults_dev_when_missing() {
+        assert_eq!(
+            raw_open_ids("front:CARD=Loopback"),
+            Some((
+                "hw:CARD=Loopback,DEV=0".to_string(),
+                "plughw:CARD=Loopback,DEV=0".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn raw_open_ids_passes_through_non_alias_ids() {
+        // Raw and virtual ids keep the caller's pre-existing handling.
+        assert_eq!(raw_open_ids("hw:0,0"), None);
+        assert_eq!(raw_open_ids("plughw:1,0"), None);
+        assert_eq!(raw_open_ids("default"), None);
+        assert_eq!(raw_open_ids("pulse"), None);
     }
 }
