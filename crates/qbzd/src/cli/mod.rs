@@ -17,6 +17,7 @@ pub mod queue;
 pub mod radio;
 pub mod reco;
 pub mod resolve;
+pub mod scrobble;
 pub mod search;
 pub mod settings;
 pub mod status;

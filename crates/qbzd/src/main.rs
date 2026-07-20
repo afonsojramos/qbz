@@ -9,6 +9,7 @@ mod lock;
 mod login;
 mod paths;
 mod qconnect;
+mod scrobbler;
 mod state;
 mod tui;
 
@@ -127,6 +128,8 @@ enum Cmd {
     Queue    { #[command(subcommand)] cmd: QueueCmd },
     Settings { #[command(subcommand)] cmd: SettingsCmd },
     Qconnect { #[command(subcommand)] cmd: QconnectCmd },
+    /// Scrobbling: login (Last.fm / ListenBrainz) · status · enable · disable
+    Scrobble { #[command(subcommand)] cmd: ScrobbleCmd },
     Config   { #[command(subcommand)] cmd: ConfigCmd },
     Version  { #[arg(long)] json: bool },
     /// Shell completions (hidden; packaged by T14)
@@ -211,6 +214,26 @@ enum SettingsCmd {
 
 #[derive(Subcommand)]
 enum QconnectCmd { Enable, Disable, Name { name: String } }
+
+#[derive(Subcommand)]
+enum ScrobbleCmd {
+    /// Connect a provider
+    Login { #[command(subcommand)] cmd: ScrobbleLoginCmd },
+    /// Connection + enabled state
+    Status,
+    /// Stop scrobbling to a provider (keeps credentials)
+    Disable { provider: String },
+    /// Resume scrobbling to a provider
+    Enable { provider: String },
+}
+
+#[derive(Subcommand)]
+enum ScrobbleLoginCmd {
+    /// Last.fm web auth (prints a URL to approve)
+    Lastfm,
+    /// ListenBrainz user token (from listenbrainz.org/settings)
+    Listenbrainz { #[arg(long)] token: String },
+}
 
 // The tokenless default has no rotation verb (02 §3.1.2): `config` is just
 // path|show. Rotating the opt-in [server] token = edit qbzd.toml + restart.
@@ -481,6 +504,24 @@ async fn main() {
                 QconnectCmd::Enable => cli::settings::qconnect_enable(&roots),
                 QconnectCmd::Disable => cli::settings::qconnect_disable(&roots),
                 QconnectCmd::Name { name } => cli::settings::qconnect_name(&roots, &name),
+            }
+        }
+        Cmd::Scrobble { cmd } => {
+            let roots = login_roots();
+            match cmd {
+                ScrobbleCmd::Login { cmd } => match cmd {
+                    ScrobbleLoginCmd::Lastfm => cli::scrobble::login_lastfm(cli.host, &roots).await,
+                    ScrobbleLoginCmd::Listenbrainz { token } => {
+                        cli::scrobble::login_listenbrainz(cli.host, token, &roots).await
+                    }
+                },
+                ScrobbleCmd::Status => cli::scrobble::status(&roots),
+                ScrobbleCmd::Disable { provider } => {
+                    cli::scrobble::set_enabled(cli.host, provider, false, &roots).await
+                }
+                ScrobbleCmd::Enable { provider } => {
+                    cli::scrobble::set_enabled(cli.host, provider, true, &roots).await
+                }
             }
         }
         Cmd::Config { cmd } => {
