@@ -4690,3 +4690,6 @@ msgstr "コピー"
 
 msgid "Copied!"
 msgstr "コピーしました！"
+
+msgid "Limited by your output device's limit"
+msgstr "出力デバイスの上限により制限されています"

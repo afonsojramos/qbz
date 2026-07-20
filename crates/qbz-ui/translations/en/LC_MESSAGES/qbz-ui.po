@@ -507,3 +507,6 @@ msgstr "offline copy — cap not applied"
 
 msgid "cached copy — cap not applied"
 msgstr "cached copy — cap not applied"
+
+msgid "Limited by your output device's limit"
+msgstr "Limited by your output device's limit"

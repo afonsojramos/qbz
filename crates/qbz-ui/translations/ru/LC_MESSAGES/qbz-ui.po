@@ -4716,3 +4716,6 @@ msgstr "Копировать"
 
 msgid "Copied!"
 msgstr "Скопировано!"
+
+msgid "Limited by your output device's limit"
+msgstr "Ограничено пределом вашего устройства вывода"

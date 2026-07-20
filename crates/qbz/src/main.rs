@@ -33,6 +33,7 @@ mod booklet;
 mod commands;
 mod custom_artwork;
 mod custom_theme;
+mod device_cap;
 mod diagnostics;
 #[cfg(target_os = "linux")]
 mod glibc_compat;
@@ -273,6 +274,11 @@ fn spawn_settings_snapshot_load(
     settings_ctx: Arc<settings::SettingsCtx>,
 ) {
     tokio::spawn(async move {
+        // Seed the local device-cap cache (#638 fix 3) BEFORE the snapshot
+        // build so the Settings "Detected device limit" row is filled on
+        // first open and the first governed play resolves against the cap.
+        // Instant no-op while the toggle is off (the default).
+        settings::refresh_device_cap(&settings_ctx, &weak).await;
         let ctx_for_load = settings_ctx.clone();
         match tokio::task::spawn_blocking(move || settings::load_snapshot(&ctx_for_load)).await {
             Ok(snap) => {

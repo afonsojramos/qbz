@@ -159,6 +159,11 @@ pub struct SettingsSnapshot {
     alsa_plugin_index: i32,
     // Audio — toggles.
     limit_quality_to_device: bool,
+    // Detected local device limit (#638 fix 3): the read-only value line
+    // ("192 kHz · Hi-Res+"; empty = none) + whether it came from real
+    // detection (false = fallback set → the Settings caveat shows).
+    device_cap_summary: String,
+    device_cap_detected: bool,
     alsa_hardware_volume: bool,
     dsd_modes: Vec<String>,
     dsd_mode_index: i32,
@@ -525,6 +530,10 @@ fn build_snapshot(
     let qconnect_device_name_default =
         crate::qconnect_transport::resolve_qconnect_friendly_name(None);
 
+    // Detected device limit (#638 fix 3): a cheap cache read — the probe
+    // itself only runs on the explicit refresh triggers, never here.
+    let (device_cap_summary, device_cap_detected) = crate::device_cap::summary();
+
     let backend_is_alsa = active_backend == AudioBackendType::Alsa;
     let backend_is_pipewire = active_backend == AudioBackendType::PipeWire;
     let backend_is_jack = active_backend == AudioBackendType::Jack;
@@ -562,6 +571,8 @@ fn build_snapshot(
         alsa_plugins: ALSA_PLUGINS.iter().map(|(l, _)| qbz_i18n::t(l)).collect(),
         alsa_plugin_index: alsa_plugin_index as i32,
         limit_quality_to_device: audio.limit_quality_to_device,
+        device_cap_summary,
+        device_cap_detected,
         alsa_hardware_volume: audio.alsa_hardware_volume,
         dsd_modes: DSD_MODES.iter().map(|(l, _)| qbz_i18n::t(l)).collect(),
         dsd_mode_index: DSD_MODES
@@ -645,6 +656,8 @@ pub fn apply_snapshot(window: &AppWindow, snap: SettingsSnapshot) {
     st.set_alsa_plugin_index(snap.alsa_plugin_index);
     // Audio — toggles.
     st.set_limit_quality_to_device(snap.limit_quality_to_device);
+    st.set_device_cap_summary(snap.device_cap_summary.into());
+    st.set_device_cap_detected(snap.device_cap_detected);
     st.set_alsa_hardware_volume(snap.alsa_hardware_volume);
     st.set_dsd_modes(string_model(snap.dsd_modes));
     st.set_dsd_mode_index(snap.dsd_mode_index);
@@ -771,6 +784,29 @@ pub async fn apply_startup_bitperfect_volume(
     weak: &slint::Weak<AppWindow>,
 ) {
     maybe_force_bitperfect_volume(ctx, runtime, weak).await;
+}
+
+/// Re-detect the local output device's quality cap (#638 fix 3) from the
+/// persisted audio settings and re-push the Settings "Detected device limit"
+/// row. The probe itself runs off-thread inside `device_cap::refresh`;
+/// await-able so callers sequence the UI push after the cache settles.
+/// Explicit triggers ONLY — startup, the limit toggle, an output-device or
+/// backend change, reset-to-defaults — never the playback path or poll tick.
+pub async fn refresh_device_cap(ctx: &SettingsCtx, weak: &slint::Weak<AppWindow>) {
+    let audio = match with_audio(&ctx.audio, |s| s.get_settings()) {
+        Ok(s) => s,
+        Err(e) => {
+            log::error!("[qbz-slint] re-read audio settings for device cap failed: {e}");
+            return;
+        }
+    };
+    crate::device_cap::refresh(audio.limit_quality_to_device, audio.output_device).await;
+    let (summary, detected) = crate::device_cap::summary();
+    let _ = weak.upgrade_in_event_loop(move |w| {
+        let st = w.global::<SettingsState>();
+        st.set_device_cap_summary(summary.into());
+        st.set_device_cap_detected(detected);
+    });
 }
 
 /// Recompute the backend/ALSA conditional flags from the current audio
@@ -999,6 +1035,12 @@ pub async fn handle_bool(
             }
         }
         Err(e) => log::error!("[qbz-slint] failed to persist '{key}': {e}"),
+    }
+    // The local device-cap cache follows the toggle (#638 fix 3): re-probe on
+    // enable, drop on disable, then re-push the detected-limit row. After the
+    // persist above so the refresh reads the fresh flag.
+    if key == "limit-quality-to-device" {
+        refresh_device_cap(&ctx, &weak).await;
     }
     // After a cascade, rebuild + re-push the full snapshot so the forced
     // changes and disabled states reach the UI.
@@ -1231,6 +1273,10 @@ pub async fn handle_select(
             // gapless) and the conditional flags all reach the UI in one
             // consistent push.
             apply_audio(&ctx, &runtime, Apply::Reinit);
+            // A backend switch reset the output device to the system default
+            // above — re-detect the device cap for it (#638 fix 3) BEFORE the
+            // snapshot rebuild below reads the cache.
+            refresh_device_cap(&ctx, &weak).await;
             // Bit-perfect (ALSA + hw) forces local volume to 100%; lifted while
             // controlling a peer. Mirrors Tauri's playerSetVolume(100).
             maybe_force_bitperfect_volume(&ctx, &runtime, &weak).await;
@@ -1253,6 +1299,9 @@ pub async fn handle_select(
                 return;
             }
             apply_audio(&ctx, &runtime, Apply::Reinit);
+            // The cap is per-device — re-detect for the new output (#638
+            // fix 3). No-op while the limit toggle is off.
+            refresh_device_cap(&ctx, &weak).await;
         }
         "dsd-mode" => {
             let Some((_, mode)) = DSD_MODES.get(index) else {
@@ -1322,6 +1371,10 @@ pub async fn handle_reset(
     if let Err(e) = with_playback(&ctx.playback, |s| s.reset_all()) {
         log::error!("[qbz-slint] playback reset_all failed: {e}");
     }
+    // Reset turns "Limit quality to device" off — drop the cached cap so the
+    // next play is uncapped and the snapshot below reads the cleared state
+    // (#638 fix 3).
+    refresh_device_cap(&ctx, &weak).await;
     // Rebuild the snapshot off the UI thread (device enumeration blocks).
     let snap = {
         let ctx = ctx.clone();

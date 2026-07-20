@@ -4702,3 +4702,6 @@ msgstr "Kopieren"
 
 msgid "Copied!"
 msgstr "Kopiert!"
+
+msgid "Limited by your output device's limit"
+msgstr "Begrenzt durch das Limit Ihres Ausgabegeräts"

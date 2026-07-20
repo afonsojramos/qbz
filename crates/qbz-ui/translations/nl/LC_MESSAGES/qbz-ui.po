@@ -4714,3 +4714,6 @@ msgstr "Kopiëren"
 
 msgid "Copied!"
 msgstr "Gekopieerd!"
+
+msgid "Limited by your output device's limit"
+msgstr "Beperkt door de limiet van je uitvoerapparaat"

@@ -2992,6 +2992,13 @@ export global SettingsState {
 
     // Audio — toggles.
     in-out property <bool> limit-quality-to-device: false;
+    // Detected local device limit (#638 fix 3), shown while the toggle above
+    // is on. `device-cap-summary` is the Rust-composed value line (e.g.
+    // "192 kHz · Hi-Res+"; empty = nothing detected yet → row hidden);
+    // `device-cap-detected` false = the probe fell back to an assumed common
+    // rate set, which surfaces the plain informative caveat (never an alert).
+    in-out property <string> device-cap-summary: "";
+    in-out property <bool> device-cap-detected: true;
     in-out property <bool> alsa-hardware-volume: false;
     // DSD delivery mode (DSD plan Phases 2-3): Convert to PCM / DoP /
     // Native DSD. Only meaningful on the ALSA direct backend.

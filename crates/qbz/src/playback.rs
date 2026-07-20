@@ -131,7 +131,9 @@ async fn kick_prefetch(runtime: &Runtime) {
     // prefetch right now"; the semaphore still bounds concurrency otherwise.
     {
         use qbz_audio::network_throttle::{self, PlaybackQualityTag};
-        let tag = match playback_quality() {
+        // Device-capped (#638 fix 3): the bandwidth estimate must describe
+        // the tier prefetch will actually request below, not the raw pref.
+        let tag = match local_playback_quality().0 {
             Quality::UltraHiRes => PlaybackQualityTag::UltraHiRes,
             Quality::HiRes => PlaybackQualityTag::HiRes,
             Quality::Lossless => PlaybackQualityTag::Lossless,
@@ -173,7 +175,7 @@ async fn kick_prefetch(runtime: &Runtime) {
             };
             let player = runtime.core().player();
             if let Err(e) = player
-                .prefetch_into_cache(client, track_id, playback_quality())
+                .prefetch_into_cache(client, track_id, local_playback_quality().0)
                 .await
             {
                 log::debug!("[qbz-slint] prefetch: track {track_id} failed: {e}");
@@ -196,6 +198,36 @@ async fn kick_prefetch(runtime: &Runtime) {
 /// separate wrapper, never here.
 pub(crate) fn playback_quality() -> Quality {
     crate::ui_prefs::streaming_quality_for_key(&crate::ui_prefs::load().streaming_quality)
+}
+
+/// Streaming quality for LOCAL playback plus the request-time cause: the
+/// user's preference clamped by the local output device's cap when "Limit
+/// quality to device" is on (#638 fix 3; cached in `crate::device_cap`, so
+/// this stays as cheap as `playback_quality` plus one RwLock read). A tie
+/// between the preference and the cap reports `LocalDeviceCap` — the more
+/// specific, more surprising constraint (mirrors the spec's cast tie rule).
+/// A resolved Hi-Res+ request reports `None`: nothing constrained it.
+///
+/// NEVER call this from the cast path (`cast_service`): the local DAC is not
+/// in a cast's signal path, so its cap must not shape a cast request
+/// (precedence rule, owner decision) — casts resolve via the pure
+/// `playback_quality()` above.
+pub(crate) fn local_playback_quality() -> (Quality, QualityLimit) {
+    let pref = playback_quality();
+    match crate::device_cap::cap() {
+        Some((cap, _)) if cap < pref => (cap, QualityLimit::LocalDeviceCap),
+        Some((cap, _)) if cap == pref && cap < Quality::UltraHiRes => {
+            (pref, QualityLimit::LocalDeviceCap)
+        }
+        _ => (
+            pref,
+            if pref < Quality::UltraHiRes {
+                QualityLimit::Preference
+            } else {
+                QualityLimit::None
+            },
+        ),
+    }
 }
 
 /// Convenience alias for the runtime handle threaded through every call.
@@ -642,7 +674,9 @@ async fn play_audible(runtime: &Runtime, weak: &slint::Weak<AppWindow>, track_id
         .core()
         .play_track_resolved(
             track_id,
-            playback_quality(),
+            // LOCAL playback: the device cap applies (#638 fix 3). The cast
+            // branch above returned already, so a cast can never reach this.
+            local_playback_quality().0,
             offline.as_deref(),
             Some(&sink),
             start_position_secs,
@@ -2007,21 +2041,14 @@ pub(crate) async fn refresh_now_playing_meta(runtime: &Runtime, weak: &slint::We
     // (ui_prefs::load is a disk read + JSON parse — never per poll tick).
     // Only Qobuz-sourced tracks are governed by the streaming-quality
     // preference; local / Plex / ephemeral sources store 0 = not governed,
-    // which keeps the cause line off for them. NOTE(#638 fix 3): when the
-    // local device cap lands, this resolve switches to the device-capped
-    // wrapper so the cause can name the output device.
+    // which keeps the cause line off for them. The device-capped resolve
+    // (#638 fix 3) names the output device when its cap — not the
+    // preference — shaped the request, so the tooltip can say which.
     let governed = !track.is_local && matches!(source.as_str(), "qobuz" | "qobuz_download");
     if governed {
-        let requested = playback_quality();
+        let (requested, cause) = local_playback_quality();
         REQUESTED_QUALITY_ID.store(requested.id(), std::sync::atomic::Ordering::Relaxed);
-        REQUESTED_CAUSE.store(
-            if requested < Quality::UltraHiRes {
-                QualityLimit::Preference as i32
-            } else {
-                QualityLimit::None as i32
-            },
-            std::sync::atomic::Ordering::Relaxed,
-        );
+        REQUESTED_CAUSE.store(cause as i32, std::sync::atomic::Ordering::Relaxed);
     } else {
         REQUESTED_QUALITY_ID.store(0, std::sync::atomic::Ordering::Relaxed);
         REQUESTED_CAUSE.store(QualityLimit::None as i32, std::sync::atomic::Ordering::Relaxed);
@@ -4885,7 +4912,7 @@ pub fn start_poll_loop(
                                 .core()
                                 .fetch_for_gapless_resolved(
                                     next_id,
-                                    playback_quality(),
+                                    local_playback_quality().0,
                                     offline.as_deref(),
                                     Some(&sink),
                                 )
