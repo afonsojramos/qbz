@@ -10,6 +10,7 @@ import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
 import { CastState, CastActions } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
+import { QbzSelect } from "../primitives/QbzSelect.slint";
 
 // One discovered-device row.
 component CastDeviceRow inherits Rectangle {
@@ -99,17 +100,21 @@ component CastTab inherits Rectangle {
 export component CastPicker inherits Rectangle {
     visible: CastState.picker-open;
 
-    // Over-cap disclosure suffix for the quality line (#638 fix 1): a
-    // locally-existing copy (cache / offline store) served above the
-    // requested tier — named plainly, never as an error (caps govern
-    // requests only; the bytes go out as-is, owner decision).
-    property <string> over-cap-suffix: !CastState.quality-over-cap
-        ? ""
-        : (CastState.quality-origin == "offline"
+    // Quality-line suffix (#638). Over-cap wins: a locally-existing copy
+    // (cache / offline store) served above the requested tier — named
+    // plainly, never as an error (caps govern requests only; the bytes go
+    // out as-is, owner decision). Otherwise, when the per-renderer cap
+    // shaped the request (fix 4, cause 3), say so — the user's own choice,
+    // never an implied device limitation.
+    property <string> quality-suffix: CastState.quality-over-cap
+        ? (CastState.quality-origin == "offline"
             ? " · " + @tr("offline copy — cap not applied")
             : (CastState.quality-origin == "cache"
                 ? " · " + @tr("cached copy — cap not applied")
-                : ""));
+                : ""))
+        : (CastState.quality-limit-cause == 3
+            ? " · " + @tr("capped for this device")
+            : "");
 
     if CastState.picker-open: Rectangle {
         background: #000000bf;
@@ -240,10 +245,45 @@ export component CastPicker inherits Rectangle {
                 }
 
                 // Delivered quality under the banner, when known — measured
-                // from the served bytes (#638 fix 1), plus the over-cap
-                // disclosure suffix when a local copy exceeds the cap.
+                // from the served bytes (#638 fix 1), plus the disclosure
+                // suffix (over-cap local copy, or the fix-4 cap at work).
                 if CastState.connected && CastState.quality-detail != "": Text {
-                    text: @tr("Streaming {} · {}", CastState.protocol == "dlna" ? "DLNA" : "Chromecast", CastState.quality-detail) + root.over-cap-suffix;
+                    text: @tr("Streaming {} · {}", CastState.protocol == "dlna" ? "DLNA" : "Chromecast", CastState.quality-detail) + root.quality-suffix;
+                    color: Theme.text-muted;
+                    font-size: Typography.legal;
+                    wrap: word-wrap;
+                }
+
+                // Per-renderer quality cap (#638 fix 4) — a manual per-device
+                // choice of the tier QBZ REQUESTS when casting here, persisted
+                // per renderer id (hidden when the device has no stable
+                // identity). Label-left / control-trailing per the flyout rule;
+                // options come from Rust (reseeded on language change).
+                if CastState.connected && CastState.device-cap-available: HorizontalLayout {
+                    spacing: 10px;
+                    Text {
+                        text: @tr("Quality for this device");
+                        color: Theme.text-primary;
+                        font-size: Typography.body;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                        overflow: elide;
+                    }
+                    QbzSelect {
+                        options: CastState.device-cap-options;
+                        current-index: CastState.device-cap-index;
+                        menu-width: 200px;
+                        popup-width: 260px;
+                        selected(index) => {
+                            CastActions.set-device-quality-cap(CastState.device-cap-key, index);
+                        }
+                    }
+                }
+
+                // The literal answer to #638: Qobuz sells four discrete
+                // tiers — there is no 48 kHz tier to offer.
+                if CastState.connected && CastState.device-cap-available: Text {
+                    text: @tr("Qobuz only offers these tiers — there is no 48 kHz option. The step below Hi-Res is CD 44.1 kHz.");
                     color: Theme.text-muted;
                     font-size: Typography.legal;
                     wrap: word-wrap;

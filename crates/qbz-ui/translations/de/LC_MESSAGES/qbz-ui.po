@@ -4714,3 +4714,27 @@ msgstr "Die genauen Limits Ihres Geräts konnten auf diesem System nicht ausgele
 
 msgid "Detected device limit"
 msgstr "Erkanntes Gerätelimit"
+
+msgid "Quality for this device"
+msgstr "Qualität für dieses Gerät"
+
+msgid "Follow app setting ({})"
+msgstr "App-Einstellung folgen ({})"
+
+msgid "Hi-Res — 24-bit, up to 96 kHz"
+msgstr "Hi-Res — 24-bit, bis zu 96 kHz"
+
+msgid "CD — 16-bit / 44.1 kHz"
+msgstr "CD — 16-bit / 44.1 kHz"
+
+msgid "MP3 320"
+msgstr "MP3 320"
+
+msgid "Qobuz only offers these tiers — there is no 48 kHz option. The step below Hi-Res is CD 44.1 kHz."
+msgstr "Qobuz bietet nur diese Stufen an — eine 48-kHz-Option gibt es nicht. Die Stufe unter Hi-Res ist CD 44.1 kHz."
+
+msgid "Limited by the quality cap for this device"
+msgstr "Begrenzt durch das Qualitätslimit für dieses Gerät"
+
+msgid "capped for this device"
+msgstr "für dieses Gerät begrenzt"

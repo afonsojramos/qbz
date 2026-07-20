@@ -4580,6 +4580,20 @@ export global CastState {
     // (owner decision); the picker line discloses it instead of hiding it.
     in property <bool> quality-over-cap: false;
     in property <string> quality-origin;  // "cache" | "offline" | "" (network)
+    // Per-renderer manual quality cap (#638 fix 4) — the connected device's
+    // cap row in the picker. Only offered when the renderer has a STABLE
+    // identity (DLNA UDN always; Chromecast only when the mDNS TXT `id`
+    // record exists — a fullname-keyed cap would silently detach on
+    // rename). Options are pushed from Rust and reseeded on language
+    // change; option 0 embeds the live global streaming-quality label. The
+    // cap is the user's own quality/bandwidth choice — never a statement
+    // that the device cannot play the stream (renderers accept ~anything
+    // and downsample internally).
+    in property <bool> device-cap-available: false;
+    in property <string> device-cap-key;        // "dlna:<UDN>" | "chromecast:<id>" | ""
+    in property <[string]> device-cap-options: [];
+    in property <int> device-cap-index: 0;      // 0 follow · 1 hires · 2 cd · 3 mp3
+    in property <string> global-quality-label;  // live Settings tier, e.g. "Hi-Res+"
     // Raw last-error for the picker error state (empty = none).
     in property <string> error;
 }
@@ -4590,6 +4604,9 @@ export global CastActions {
     callback refresh();               // re-arm discovery scan
     callback connect(string, string); // device-id, protocol
     callback disconnect();
+    // Persist the manual quality cap for the connected renderer (#638
+    // fix 4): cap-key, option index (0 = follow the app setting).
+    callback set-device-quality-cap(string, int);
 }
 
 // Single global hover-tooltip channel. Each hoverable control writes its text
