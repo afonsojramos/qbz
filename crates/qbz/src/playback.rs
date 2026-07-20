@@ -188,7 +188,13 @@ async fn kick_prefetch(runtime: &Runtime) {
 /// highest tier (Hi-Res+ = `Quality::UltraHiRes`, the previous hardcoded
 /// behavior); the player still falls back internally when the requested
 /// tier is not available (#590).
-fn playback_quality() -> Quality {
+///
+/// This returns the PURE user preference and must stay that way: the cast
+/// path (`cast_service::register_qobuz`) calls it directly, and a local
+/// output-device cap must NEVER leak into a cast — the local DAC is not in
+/// a cast's signal path (#638). Any device-capped variant belongs in a
+/// separate wrapper, never here.
+pub(crate) fn playback_quality() -> Quality {
     crate::ui_prefs::streaming_quality_for_key(&crate::ui_prefs::load().streaming_quality)
 }
 

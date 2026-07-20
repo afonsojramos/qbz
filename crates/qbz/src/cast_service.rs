@@ -8,8 +8,11 @@
 //! backend entirely (the renderer's own DAC decodes the bytes we serve).
 //!
 //! Bytes + MIME + delivered quality are resolved through the shared core API
-//! `CoreBridge::fetch_for_external_stream_resolved` (Phase 0), which attempts
-//! UltraHiRes first and reports the real delivered tier (decision D3).
+//! `CoreBridge::fetch_for_external_stream_resolved`, requesting the user's
+//! streaming-quality preference (#638; reverses the old always-UltraHiRes
+//! decision D3) and reporting the real delivered tier. The preference governs
+//! only what we REQUEST — bytes already in the L1/L2 cache or the offline
+//! store are served as-is, never resampled.
 //!
 //! Source routing (decision: route by `QueueTrack.source`, never QConnect
 //! admission): qobuz -> shared resolver; local -> `register_file` (streams from
@@ -22,7 +25,7 @@ use qbz_cast::{
     CastPositionInfo, ChromecastHandle, DeviceDiscovery, DiscoveredDevice, DiscoveredDlnaDevice,
     DlnaConnection, DlnaDiscovery, DlnaMetadata, DlnaPositionInfo, MediaMetadata, MediaServer,
 };
-use qbz_models::{QueueTrack, Quality};
+use qbz_models::QueueTrack;
 use tokio::sync::Mutex;
 
 use crate::adapter::SlintAdapter;
@@ -475,12 +478,18 @@ impl SlintCastService {
     async fn register_qobuz(&self, track_id: u64) -> Result<String, String> {
         let offline = crate::offline::get().await;
         let sink = crate::offline_cache::row_sink(self.window.clone());
+        // The streaming-quality preference governs what we REQUEST from Qobuz
+        // (#638), resolved fresh per cast track so a Settings change applies to
+        // the very next one. Bytes that already exist locally (L1/L2 cache, the
+        // offline store) go out as-is at whatever tier they were fetched at —
+        // no resampling, ever (owner decision).
+        let quality = crate::playback::playback_quality();
         let asset = self
             .runtime
             .core()
             .fetch_for_external_stream_resolved(
                 track_id,
-                Quality::UltraHiRes,
+                quality,
                 offline.as_deref(),
                 Some(&sink),
             )
