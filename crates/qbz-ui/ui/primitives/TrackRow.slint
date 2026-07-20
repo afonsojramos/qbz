@@ -18,10 +18,9 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { TrackItem, DragActions, NowPlayingState, NavState, TooltipState, ShellState } from "../state.slint";
+import { TrackItem, DragActions, NowPlayingState, NavState, TooltipState, ShellState, TrackMenuState } from "../state.slint";
 import { QbzIcon } from "QbzIcon.slint";
 import { TrackPlayCell } from "TrackPlayCell.slint";
-import { TrackContextMenu } from "TrackContextMenu.slint";
 import { QualityBadgeFull } from "QualityBadgeFull.slint";
 
 export component TrackRow inherits Rectangle {
@@ -106,12 +105,6 @@ export component TrackRow inherits Rectangle {
     // Set from the (conditional) context-menu button so the row highlight
     // still reacts to hovering it without referencing a possibly-absent id.
     property <bool> menu-hovered: false;
-    // Right-click context mode (spec §3.5): the popup opens at the pointer
-    // instead of the "..." anchor. ta fills the row, so ta.mouse-x/y are
-    // already the popup's parent-relative coordinates.
-    property <bool> menu-at-pointer: false;
-    property <length> menu-click-x;
-    property <length> menu-click-y;
     property <bool> row-hovered:
         ta.has-hover || play-cell.hovered || root.menu-hovered;
 
@@ -173,21 +166,18 @@ export component TrackRow inherits Rectangle {
             if (e.kind == PointerEventKind.down && e.button == PointerEventButton.forward) {
                 NavState.request-forward();
             }
-            // Right-click opens the same context menu at the pointer (Tauri's
-            // contextmenu mode, spec §3.5). Suppressed in multi-select mode
-            // (Tauri parity: row right-click toggles nothing there) and on
-            // menu-less rows (ephemeral). A blacklisted (inert) row STILL
-            // opens it — reduced to nav-only (Go to album/artist, Track info)
-            // via track-menu.nav-only below, so the user keeps navigation.
-            // x clamps to the row so the menu never overflows past the "..."
-            // gutter; vertical overflow at the window bottom matches the
-            // existing "..." anchor behavior.
+            // Right-click opens the unified shell-level context menu at the
+            // pointer (Tauri's contextmenu mode, spec §3.5). Suppressed in
+            // multi-select mode (Tauri parity: row right-click toggles nothing
+            // there) and on menu-less rows (ephemeral). A blacklisted (inert)
+            // row STILL opens it — reduced to nav-only (Go to album/artist,
+            // Track info) via TrackMenuState.row-inert, so the user keeps
+            // navigation. x clamps to the row so the menu never overflows
+            // past the "..." gutter; vertical overflow at the window bottom
+            // matches the existing "..." anchor behavior.
             if (e.kind == PointerEventKind.down && e.button == PointerEventButton.right
                 && root.show-menu && !root.multi-select-mode) {
-                root.menu-at-pointer = true;
-                root.menu-click-x = ta.mouse-x;
-                root.menu-click-y = ta.mouse-y;
-                track-menu.show();
+                root.open-track-menu(ta.mouse-x, ta.mouse-y, true);
             }
             if (e.kind == PointerEventKind.down) {
                 // absolute-position double-counts this row's own layout offset
@@ -740,8 +730,7 @@ export component TrackRow inherits Rectangle {
                 more-ta := TouchArea {
                     mouse-cursor: pointer;
                     clicked => {
-                        root.menu-at-pointer = false;
-                        track-menu.show();
+                        root.open-track-menu(0px, 0px, false);
                     }
                     changed has-hover => {
                         root.menu-hovered = self.has-hover;
@@ -751,63 +740,26 @@ export component TrackRow inherits Rectangle {
         }
     }
 
-    // True for rows whose source is Qobuz-backed (Qobuz surfaces + offline
-    // copies); the menu gates below split on it.
-    property <bool> qobuz-row: root.track.source != "local"
-        && root.track.source != "plex"
-        && root.track.source != "ephemeral";
-
-    track-menu := TrackContextMenu {
-        // Anchored at the "..." gutter, or at the right-click pointer in
-        // context mode (spec §3.5).
-        x: root.menu-at-pointer
-            ? Math.max(0px, Math.min(root.menu-click-x, root.width - self.width - 12px))
-            : parent.width - self.width - 12px;
-        y: root.menu-at-pointer ? root.menu-click-y : 48px;
-        track-id: root.track.id;
-        // Blacklisted (inert) rows get the nav-only reduction: only Go to
-        // album / Go to artist / Track info, no play/queue/mutating entries.
-        nav-only: root.row-inert;
-        // Per-source menu logic: the Qobuz block (radio, share, offline,
-        // go-to, track-info) only for Qobuz/offline rows, and never on
-        // library surfaces (force-local-menu — its arms are dead on library
-        // row ids, spec §3.4); transient play/queue always.
-        qobuz-actions: !root.force-local-menu && root.qobuz-row;
-        // Favorite: on library surfaces only qobuz_download rows (source
-        // renders "qobuz") get the entry, wired to the REAL Qobuz id in
-        // Rust. Plain local/Plex rows get NO favorite entry — deliberate
-        // deviation from Tauri, whose "Add to Library" there sends the
-        // LOCAL row id to the Qobuz favorites API (spec §1.4/§3.2 latent
-        // bug): we port the intent, not the bug.
-        favorite-action: root.force-local-menu
-            ? root.track.source == "qobuz"
-            : root.qobuz-row;
-        // Add to Mixtape/Collection on library surfaces for every
-        // persistent row (local + Plex + qobuz_download; spec §3.1 —
-        // Tauri's Tracks-tab-only asymmetry is an artifact, not a design).
-        mixtape-action: root.force-local-menu
-            ? root.track.source != "ephemeral"
-            : root.qobuz-row;
-        // Add-to-playlist for Qobuz/offline/local/Plex (local playlists
-        // store each source's own ref), not ephemeral (no persistent row
-        // to reference). Deliberately NOT hidden offline (deviation from
-        // Tauri's shouldHidePlaylistFeatures, spec §3.3): our local
-        // playlists accept tracks offline (D7/D8) and the picker already
-        // hides the Qobuz set offline.
-        playlist-action: root.track.source != "ephemeral";
-        remove-from-playlist-action: root.remove-from-playlist-action;
-        track-info-action: root.track-info-action;
-        // Go to album / artist: the Qobuz block's pair, ALSO enabled on
-        // local-surface rows (local-goto-actions doc above) — the Rust
-        // arms route by source (local album view / LocalLibrary artist
-        // for local+plex, the real Qobuz pages for qobuz_download).
-        go-album-action: self.qobuz-actions || root.local-goto-actions;
-        go-artist-action: self.qobuz-actions || root.local-goto-actions;
-        // Cached-state-aware offline entry (Refresh/Remove when cached) —
-        // straight from the row model.
-        cache-status: root.track.cache-status;
-        media-action(k, i, a) => {
-            root.media-action(k, i, a);
-        }
+    // Opens the ONE shell-level unified track menu (TrackMenuState /
+    // AppShell): writes every gate input from this row, then bumps the open
+    // token. at-pointer = right-click (x clamped to the row so the menu
+    // never overflows past the "..." gutter); otherwise anchored at the
+    // gutter. Window coordinates use the same scroll-safe absolute-position
+    // correction as the drag ghost above. 224px = TrackContextMenu's width.
+    function open-track-menu(local-x: length, local-y: length, at-pointer: bool) {
+        TrackMenuState.track-id = root.track.id;
+        TrackMenuState.source = root.track.source;
+        TrackMenuState.cache-status = root.track.cache-status;
+        TrackMenuState.row-inert = root.row-inert;
+        TrackMenuState.force-local-menu = root.force-local-menu;
+        TrackMenuState.remove-from-playlist-action = root.remove-from-playlist-action;
+        TrackMenuState.track-info-action = root.track-info-action;
+        TrackMenuState.local-goto-actions = root.local-goto-actions;
+        TrackMenuState.x = root.absolute-position.x - root.x
+            + (at-pointer
+                ? Math.max(0px, Math.min(local-x, root.width - 224px - 12px))
+                : root.width - 224px - 12px);
+        TrackMenuState.y = root.absolute-position.y - root.y + (at-pointer ? local-y : 48px);
+        TrackMenuState.open-token += 1;
     }
 }

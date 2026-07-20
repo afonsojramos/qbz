@@ -108,7 +108,7 @@ export component AlbumCard inherits Rectangle {
         spacing: 0px;
 
         // --- Artwork + hover overlay -------------------------------------
-        Rectangle {
+        artwork-box := Rectangle {
             width: 200px;
             height: 200px;
             border-radius: Radius.sm;
@@ -374,8 +374,13 @@ export component AlbumCard inherits Rectangle {
 
             // Context menu for the "more" button.
             album-menu := PopupWindow {
-                x: 26px;
-                y: 56px;
+                // Anchor the menu's TOP-LEFT at the "..." button's center —
+                // where the cursor is when it opens (the natural context-menu
+                // behavior; the old fixed 26/56 anchor left the menu's
+                // vertical MIDDLE on the cursor). Popup x/y are relative to
+                // the artwork box, so convert via absolute positions.
+                x: more-btn.absolute-position.x + more-btn.width / 2 - artwork-box.absolute-position.x;
+                y: more-btn.absolute-position.y + more-btn.height / 2 - artwork-box.absolute-position.y;
                 width: 196px;
                 // 6 items max (Open/Play/Play-next/Queue + favorite + block).
                 height: 6 * 33px + 10px;

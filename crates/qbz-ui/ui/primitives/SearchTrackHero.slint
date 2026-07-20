@@ -16,9 +16,8 @@ import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
 import { Spacing } from "../foundation/spacing.slint";
-import { TrackItem } from "../state.slint";
+import { TrackItem, TrackMenuState } from "../state.slint";
 import { QbzIcon } from "QbzIcon.slint";
-import { TrackContextMenu } from "TrackContextMenu.slint";
 
 // Circular hover-overlay action button — identical visual to AlbumCard's
 // OverlayButton so the hero cards share one look.
@@ -176,21 +175,30 @@ export component SearchTrackHero inherits Rectangle {
                         diameter: 30px;
                         icon-size: 14px;
                         clicked => {
-                            track-menu.show();
+                            // Unified shell-level menu (TrackMenuState /
+                            // AppShell) at the old card-relative (20px, 48px)
+                            // anchor, converted to window coordinates with the
+                            // scroll-safe absolute-position correction. Real
+                            // source keeps the per-source gates correct;
+                            // cache-status stays 0 for parity with the old
+                            // default-gated instance.
+                            TrackMenuState.track-id = root.track.id;
+                            TrackMenuState.source = root.track.source;
+                            TrackMenuState.cache-status = 0;
+                            TrackMenuState.row-inert = false;
+                            TrackMenuState.force-local-menu = false;
+                            TrackMenuState.remove-from-playlist-action = false;
+                            TrackMenuState.track-info-action = true;
+                            TrackMenuState.local-goto-actions = false;
+                            TrackMenuState.x = root.absolute-position.x - root.x + 20px;
+                            TrackMenuState.y = root.absolute-position.y - root.y + 48px;
+                            TrackMenuState.open-token += 1;
                         }
                     }
                 }
             }
 
-            // Context menu for the "more" button — the shared track menu.
-            track-menu := TrackContextMenu {
-                x: 20px;
-                y: 48px;
-                track-id: root.track.id;
-                media-action(k, i, a) => {
-                    root.media-action(k, i, a);
-                }
-            }
+            // (Context menu now lives once in AppShell — see TrackMenuState.)
             }
         }
 

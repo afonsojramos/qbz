@@ -8,7 +8,7 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Layout } from "../foundation/layout.slint";
 import { Radius } from "../foundation/radius.slint";
-import { NavState, ContentView, ShellState, OfflineState, PlaylistState, ImmersiveState, SearchActions, VisualizerState, PurchaseDetailState, NowPlayingState, AppearanceState } from "../state.slint";
+import { NavState, ContentView, ShellState, OfflineState, PlaylistState, ImmersiveState, SearchActions, VisualizerState, PurchaseDetailState, NowPlayingState, AppearanceState, TrackMenuState, LocalAlbumActions } from "../state.slint";
 import { ImmersiveAtmosphere } from "../immersive/ImmersiveAtmosphere.slint";
 import { Sidebar } from "Sidebar.slint";
 import { SidebarNowPlayingDock } from "SidebarNowPlayingDock.slint";
@@ -35,6 +35,7 @@ import { SettingsExportModal } from "../settings/SettingsExportModal.slint";
 import { TagEditorModal } from "../primitives/TagEditorModal.slint";
 import { PlaylistImportModal } from "../primitives/PlaylistImportModal.slint";
 import { DacWizardModal } from "../primitives/DacWizardModal.slint";
+import { TrackContextMenu } from "../primitives/TrackContextMenu.slint";
 import { TrackInfoModal } from "../album/TrackInfoModal.slint";
 import { AlbumCreditsModal } from "../album/AlbumCreditsModal.slint";
 import { AlbumBookletModal } from "../album/AlbumBookletModal.slint";
@@ -877,5 +878,80 @@ export component AppShell inherits Rectangle {
     ArtPreviewOverlay {
         width: 100%;
         height: 100%;
+    }
+
+    // === Unified track context menu (ONE instance for the whole app) ===
+    // Replaces the per-row / per-view `track-menu := TrackContextMenu` popups:
+    // popup windows are ALWAYS inlined by the Slint compiler, so every site
+    // (and every TrackRow repeater) generated its own full copy — 18 structs,
+    // ~22k generated lines, for one logical menu. Openers write TrackMenuState
+    // and bump `open-token`; this single instance shows at those coordinates.
+    property <bool> track-menu-qobuz-source: TrackMenuState.source != "local"
+        && TrackMenuState.source != "plex"
+        && TrackMenuState.source != "ephemeral";
+    property <int> track-menu-open-watch: TrackMenuState.open-token;
+    changed track-menu-open-watch => {
+        unified-track-menu.show();
+    }
+    // The menu belongs to the view it was opened from — never let it survive
+    // a navigation (its row is gone and dispatch is view-scoped).
+    property <ContentView> track-menu-view-watch: NavState.view;
+    changed track-menu-view-watch => {
+        unified-track-menu.close();
+    }
+    unified-track-menu := TrackContextMenu {
+        x: TrackMenuState.x;
+        y: TrackMenuState.y;
+        track-id: TrackMenuState.track-id;
+        nav-only: TrackMenuState.row-inert;
+        // Gate expressions ported 1:1 from the former TrackRow menu instance
+        // (TrackRow.slint): same inputs, same menu, one copy. Rationales kept
+        // from that block:
+        //  - qobuz-actions: the Qobuz block (radio, share, offline, go-to,
+        //    track-info) only for Qobuz/offline rows, never on library
+        //    surfaces (force-local-menu — its arms are dead on library row
+        //    ids, spec §3.4); transient play/queue always.
+        //  - favorite-action: on library surfaces only qobuz_download rows
+        //    (source renders "qobuz") get the entry, wired to the REAL Qobuz
+        //    id in Rust; plain local/Plex rows get NO favorite entry —
+        //    deliberate deviation from Tauri, which sends the LOCAL row id
+        //    to the Qobuz favorites API (spec §1.4/§3.2 latent bug): we port
+        //    the intent, not the bug.
+        //  - mixtape-action: on library surfaces for every persistent row
+        //    (local + Plex + qobuz_download; spec §3.1 — Tauri's
+        //    Tracks-tab-only asymmetry is an artifact, not a design).
+        //  - playlist-action: for every non-ephemeral source; NOT hidden
+        //    offline (deviation from Tauri, spec §3.3): local playlists
+        //    accept tracks offline (D7/D8) and the picker already hides the
+        //    Qobuz set offline.
+        qobuz-actions: !TrackMenuState.force-local-menu && root.track-menu-qobuz-source;
+        favorite-action: TrackMenuState.force-local-menu
+            ? TrackMenuState.source == "qobuz"
+            : root.track-menu-qobuz-source;
+        mixtape-action: TrackMenuState.force-local-menu
+            ? TrackMenuState.source != "ephemeral"
+            : root.track-menu-qobuz-source;
+        playlist-action: TrackMenuState.source != "ephemeral";
+        remove-from-playlist-action: TrackMenuState.remove-from-playlist-action;
+        track-info-action: TrackMenuState.track-info-action;
+        go-album-action: self.qobuz-actions || TrackMenuState.local-goto-actions;
+        go-artist-action: self.qobuz-actions || TrackMenuState.local-goto-actions;
+        cache-status: TrackMenuState.cache-status;
+        media-action(k, i, a) => {
+            unified-track-menu.close();
+            // Dispatch mirrors LocalAlbumView's own split (play stays on
+            // play-track, the rest resolves against the version track cache);
+            // every other surface uses the window's central media-action,
+            // which internally reroutes local "play" on the album view.
+            if (NavState.view == ContentView.local-album) {
+                if (a == "play") {
+                    LocalAlbumActions.play-track(i);
+                } else {
+                    LocalAlbumActions.track-menu-action(i, a);
+                }
+            } else {
+                root.media-action(k, i, a);
+            }
+        }
     }
 }
