@@ -1475,6 +1475,35 @@ export global LocalAlbumActions {
     callback disc-action(int /* disc number */, string /* action */);
 }
 
+// Unified track context menu — ONE shell-level instance fed by this state
+// instead of a `track-menu := TrackContextMenu` popup per row/view (popup
+// windows are always inlined by the Slint compiler, so every per-site
+// instance generated a full copy: 18 structs / ~22k lines for one logical
+// menu). Openers (TrackRow right-click / "..." gutter, SearchTrackHero) set
+// EVERY field below and then bump `open-token`; the shell instance watches
+// the token and shows itself at (x, y). Dispatch: the shell routes
+// media-action to LocalAlbumActions on the local-album view and to the
+// window's central media-action everywhere else (spec:
+// qbz-nix-docs/context-menu-unification/2026-07-17-single-context-menu-spec.md).
+export global TrackMenuState {
+    // Window-relative open position, pre-computed by the opener with the
+    // scroll-safe `absolute-position - layout-offset + local-pointer` math.
+    in-out property <length> x;
+    in-out property <length> y;
+    // Payload.
+    in-out property <string> track-id;
+    in-out property <string> source;         // TrackItem.source ("qobuz" | "local" | "plex" | "ephemeral" | ...)
+    in-out property <int> cache-status;
+    // Row-context inputs, copied 1:1 from the opener's row properties.
+    in-out property <bool> row-inert;                      // blacklisted row → nav-only menu
+    in-out property <bool> force-local-menu;               // library surface gates
+    in-out property <bool> remove-from-playlist-action;
+    in-out property <bool> track-info-action: true;
+    in-out property <bool> local-goto-actions;
+    // Increment to open (a counter, not a bool, so open-while-open re-fires).
+    in-out property <int> open-token;
+}
+
 // ============================ Local Library management ====================
 // The folder list + scan + maintenance + danger zone live under
 // Settings > Local Library (NOT the browse view). One row per registered
