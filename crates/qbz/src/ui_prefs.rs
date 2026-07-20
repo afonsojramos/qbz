@@ -326,6 +326,18 @@ pub fn app_background_index(key: &str) -> i32 {
     }
 }
 
+/// A manual per-renderer cast quality cap (#638 fix 4). `tier` is a
+/// `STREAMING_QUALITIES` key restricted to `"mp3" | "cd" | "hires"` — a
+/// Hi-Res+ cap would be a no-op against the streaming preference, so it is
+/// never stored (unknown tiers degrade to "no cap" at read time). `name` is
+/// the renderer's friendly name when the cap was set, kept for display and
+/// possible re-matching if a renderer ever regenerates its id.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CastDeviceCap {
+    pub tier: String,
+    pub name: String,
+}
+
 /// Persisted UI preferences. New fields must default sanely so an older
 /// file (missing the field) still deserializes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -333,6 +345,15 @@ pub struct UiPrefs {
     /// Streaming-quality key — one of `STREAMING_QUALITIES[*].key`.
     #[serde(default = "default_streaming_quality")]
     pub streaming_quality: String,
+    /// Manual per-renderer cast quality caps (#638 fix 4), keyed
+    /// `"dlna:<UDN>"` / `"chromecast:<mDNS id>"` — raw stable device ids,
+    /// never option indexes, so a cap survives list reordering. An absent
+    /// key means "follow the app setting". Deliberately machine-local: the
+    /// settings bundle reads ui_prefs.json key-by-key (only
+    /// `streaming_quality`), so caps never travel to another box — a
+    /// renderer id is LAN-local and meaningless (or colliding) elsewhere.
+    #[serde(default)]
+    pub cast_quality_caps: BTreeMap<String, CastDeviceCap>,
     /// Now-playing bar layout: `"new"` | `"classic"` | `"small"` | `"large"`.
     /// Maps to `ShellState.npb-mode` (0 / 1 / 2 / 3).
     #[serde(default = "default_npb_mode")]
@@ -735,6 +756,7 @@ impl Default for UiPrefs {
     fn default() -> Self {
         Self {
             streaming_quality: default_streaming_quality(),
+            cast_quality_caps: BTreeMap::new(),
             npb_mode: default_npb_mode(),
             language: default_language(),
             large_visualizer: default_large_visualizer(),
@@ -934,6 +956,23 @@ mod tests {
         assert!(prefs.album_header_gradient);
         // A profile that predates the theme field falls back to OLED.
         assert_eq!(prefs.theme, "oled");
+        // A profile that predates the per-renderer caps has none (#638 fix 4).
+        assert!(prefs.cast_quality_caps.is_empty());
+    }
+
+    #[test]
+    fn cast_quality_caps_roundtrip() {
+        let mut prefs = UiPrefs::default();
+        prefs.cast_quality_caps.insert(
+            "dlna:uuid:5f9ec1b3-ff59-19bb-8530-0005cd15e929".to_string(),
+            CastDeviceCap {
+                tier: "cd".to_string(),
+                name: "Living Room".to_string(),
+            },
+        );
+        let json = serde_json::to_string(&prefs).expect("serializes");
+        let back: UiPrefs = serde_json::from_str(&json).expect("deserializes");
+        assert_eq!(back.cast_quality_caps, prefs.cast_quality_caps);
     }
 
     #[test]
