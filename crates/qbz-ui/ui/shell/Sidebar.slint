@@ -693,20 +693,15 @@ export component Sidebar inherits Rectangle {
     clip: true;
     animate width { duration: 160ms; easing: ease-in-out; }
 
-    // #617 per-frame cost: cache this whole subtree to a persistent texture so
-    // the eq-bar's ~8x/sec full-window repaints skip the sidebar's tree-walk +
-    // path re-tessellation (nav rows + playlists list) and blit the cache instead.
-    // SAFE to cache the root here: the animated Large-NPB spectrum dock is NOT a
-    // child of the Sidebar — it is an AppShell-root overlay (see the dock-band
-    // RESERVATION comment ~line 1120); everything actually inside the Sidebar is
-    // static at idle (the scrollbar thumb only animates on hover; the sort/context
-    // menus are separate PopupWindow surfaces, not part of this texture).
-    // Invalidates on: playlist scroll (transient), width toggle (160ms transient),
-    // hover, list changes. SMOKE-WATCH: scroll the playlists list and confirm no
-    // clipping/offset artifact from the Flickable-inside-cache interaction; if it
-    // regresses, narrow the hint to the static nav section only.
-    // See spec 2026-07-19-cpu-idle-repaint-617 §9.2.
-    cache-rendering-hint: true;
+    // NO cache-rendering-hint here (removed 2026-07-19): this root is NOT a
+    // static subtree — it toggles by animating its width every open/close, so
+    // the cached layer texture was perpetually invalidated/re-created, and the
+    // layer blit ended up pointing at a dead texture after the toggle: the
+    // sidebar's content went invisible while layout/hit-testing kept working
+    // (repro: open/close sidebar; and the miniplayer->theme->sidebar journey
+    // after a surface re-creation). HeaderBar/NowPlayingBar keep their hints —
+    // they are static-mounted and do not animate size. The Sidebar's per-frame
+    // cost is addressed by the femtovg partial-render fork instead (#617).
 
     VerticalLayout {
         // Per-side padding so Large can zero ONLY the bottom: the reserved dock
