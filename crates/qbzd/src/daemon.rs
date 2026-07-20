@@ -119,6 +119,18 @@ pub async fn run(roots: ProfileRoots, cfg: QbzdConfig, warns: Vec<String>) -> Re
     //      outside the #521/§8.2 ordering — aborted for a clean shutdown below.
     let scrobbler = crate::scrobble_engine::spawn(roots.clone(), booted.bus.subscribe());
 
+    // 10d. MPRIS media controls (CONSOLE): publish org.mpris.MediaPlayer2 so a
+    //      KDE/GNOME media widget, a plasmoid, or hardware media keys drive the
+    //      daemon with no custom client. The inbound callback holds a
+    //      Weak<AppRuntime> (never pins the runtime), so it too sits outside the
+    //      #521 ordering; None on a headless box / when QBZD_MPRIS disables it.
+    let mpris = crate::mpris::spawn(
+        &booted.runtime,
+        roots.clone(),
+        booted.bus.subscribe(),
+        tokio::runtime::Handle::current(),
+    );
+
     // 11. HTTP serve (02 §3) on the already-bound socket. `ApiState` carries a
     //     second read-only audio-store connection (WAL) for the status audio
     //     block, the tokio handle for the async queue read, and the opt-in
@@ -197,6 +209,11 @@ pub async fn run(roots: ProfileRoots, cfg: QbzdConfig, warns: Vec<String>) -> Re
     // Stop the scrobble-on-play subscriber (holds no Arc<AppRuntime>; order-free).
     scrobbler.abort();
     let _ = scrobbler.await;
+    // Tear down MPRIS: abort its updater and drop the D-Bus handle. Its inbound
+    // callback held only a Weak<AppRuntime>, so this is order-free too.
+    if let Some(mpris) = mpris {
+        mpris.shutdown().await;
+    }
     // Final full session save (queue + position) now that playback is quiesced.
     playback_driver::save_session_now(booted.runtime.as_ref()).await;
     // The background auth-retry task also holds an Arc<AppRuntime> clone — abort

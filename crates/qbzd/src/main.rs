@@ -7,6 +7,7 @@ mod config;
 mod daemon;
 mod lock;
 mod login;
+mod mpris;
 mod paths;
 mod qconnect;
 mod scrobble_engine;
