@@ -19,6 +19,7 @@ pub mod reco;
 pub mod resolve;
 pub mod scrobble;
 pub mod search;
+pub mod service;
 pub mod settings;
 pub mod status;
 pub mod transport;

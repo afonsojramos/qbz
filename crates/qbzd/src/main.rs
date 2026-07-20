@@ -135,6 +135,17 @@ enum Cmd {
     Scrobble { #[command(subcommand)] cmd: ScrobbleCmd },
     Config   { #[command(subcommand)] cmd: ConfigCmd },
     Version  { #[arg(long)] json: bool },
+    /// Generate an init service file (systemd/openrc/runit); prints to stdout
+    Service {
+        /// systemd | openrc | runit (auto-detected from the running init if omitted)
+        init: Option<String>,
+        /// User the service runs as (default: current user)
+        #[arg(long)] user: Option<String>,
+        /// Path to the qbzd binary (default: this executable, else /usr/bin/qbzd)
+        #[arg(long)] bin: Option<String>,
+        /// systemd: emit a SYSTEM unit (runs as --user) instead of a user unit
+        #[arg(long)] system: bool,
+    },
     /// Shell completions (hidden; packaged by T14)
     #[command(hide = true)]
     Completions { shell: clap_complete::Shell },
@@ -256,6 +267,7 @@ async fn main() {
             }
             0
         }
+        Cmd::Service { init, user, bin, system } => cli::service::service(init, user, bin, system),
         Cmd::Completions { shell } => {
             use clap::CommandFactory;
             clap_complete::generate(shell, &mut Cli::command(), "qbzd",
