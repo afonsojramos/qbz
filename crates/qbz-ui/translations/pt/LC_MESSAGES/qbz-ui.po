@@ -4660,3 +4660,45 @@ msgstr "Selecionar faixas"
 msgid "Qobuz is temporarily refusing requests — backing off. Try again shortly."
 msgstr "O Qobuz está recusando solicitações temporariamente — aguardando. Tente novamente em breve."
 
+
+msgid "Flatpak"
+msgstr "Flatpak"
+
+msgid "Snap"
+msgstr "Snap"
+
+msgid "FLATPAK SANDBOX"
+msgstr "SANDBOX FLATPAK"
+
+msgid "SNAP SANDBOX"
+msgstr "SANDBOX SNAP"
+
+msgid "QBZ is running inside a Flatpak sandbox. Some features need one-time permission grants — run the commands in a terminal, then restart QBZ. Grants persist across updates."
+msgstr "O QBZ está a correr dentro de uma sandbox Flatpak. Algumas funcionalidades precisam de permissões concedidas uma única vez — execute os comandos num terminal e reinicie o QBZ. As permissões mantêm-se entre atualizações."
+
+msgid "QBZ is running inside a Snap sandbox. Some audio interfaces need one-time connections — run these commands in a terminal, then restart QBZ."
+msgstr "O QBZ está a correr dentro de uma sandbox Snap. Algumas interfaces de áudio precisam de ser ligadas uma única vez — execute estes comandos num terminal e reinicie o QBZ."
+
+msgid "Exclusive DAC access (bit-perfect)"
+msgstr "Acesso exclusivo ao DAC (bit-perfect)"
+
+msgid "Recommended for exclusive mode: lets QBZ ask PipeWire to hand over the DAC cleanly (D-Bus device reservation)."
+msgstr "Recomendado para o modo exclusivo: permite ao QBZ pedir ao PipeWire que entregue o DAC de forma limpa (reserva de dispositivo via D-Bus)."
+
+msgid "Music on NAS or external drives"
+msgstr "Música em NAS ou discos externos"
+
+msgid "Grants access to a folder outside the sandbox. Repeat the command for each folder you need."
+msgstr "Concede acesso a uma pasta fora da sandbox. Repita o comando para cada pasta necessária."
+
+msgid "Required audio connections"
+msgstr "Ligações de áudio obrigatórias"
+
+msgid "Optional — external drives & NAS"
+msgstr "Opcional — discos externos e NAS"
+
+msgid "Copy"
+msgstr "Copiar"
+
+msgid "Copied!"
+msgstr "Copiado!"

@@ -5710,6 +5710,19 @@ export global DacWizardActions {
 }
 
 // ============================================================================
+// Sandbox (Flatpak/Snap) — Settings section holding the one-time permission
+// commands for sandboxed installs (Tauri parity: Settings > Flatpak / Snap).
+// The section is only shown when install-method is "flatpak" or "snap".
+// ============================================================================
+
+export global SandboxState {
+    // "flatpak" | "snap" | anything else (section hidden). Seeded once at
+    // startup from qbz_app::diagnostics::system_info().install_method.
+    in property <string> install-method: "";
+    callback copy-command(string);   // → crate::share::copy_to_clipboard
+}
+
+// ============================================================================
 // Keyboard shortcuts (hotkeys) — port of the Tauri keybindings system.
 // ============================================================================
 

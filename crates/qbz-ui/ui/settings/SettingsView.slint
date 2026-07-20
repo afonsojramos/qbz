@@ -8,7 +8,7 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { NavState, ContentView, SettingsState, LogViewerState } from "../state.slint";
+import { NavState, ContentView, SettingsState, LogViewerState, SandboxState } from "../state.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { NavButtons } from "../shell/NavButtons.slint";
 import { AudioSettings } from "AudioSettings.slint";
@@ -19,6 +19,7 @@ import { LocalLibrarySettings } from "LocalLibrarySettings.slint";
 import { ContentFilteringSettings } from "ContentFilteringSettings.slint";
 import { IntegrationsSettings } from "IntegrationsSettings.slint";
 import { DeveloperSettings } from "DeveloperSettings.slint";
+import { SandboxSettings } from "SandboxSettings.slint";
 import { ScrollView } from "std-widgets.slint";
 import { ListScrollbar } from "../primitives/ListScrollbar.slint";
 
@@ -180,6 +181,24 @@ export component SettingsView inherits Rectangle {
                             SettingsState.section = 5;
                         }
                     }
+                    // Sandbox (Flatpak/Snap) — only on sandboxed installs;
+                    // holds the one-time permission commands (Tauri parity).
+                    if SandboxState.install-method == "flatpak": SubNavItem {
+                        icon: @image-url("../assets/icons/lock.svg");
+                        label: @tr("Flatpak");
+                        active: SettingsState.section == 8;
+                        clicked => {
+                            SettingsState.section = 8;
+                        }
+                    }
+                    if SandboxState.install-method == "snap": SubNavItem {
+                        icon: @image-url("../assets/icons/lock.svg");
+                        label: @tr("Snap");
+                        active: SettingsState.section == 8;
+                        clicked => {
+                            SettingsState.section = 8;
+                        }
+                    }
                     // Absorbs the leftover height so the log affordance below
                     // pins to the bottom of the sub-nav column.
                     Rectangle { }
@@ -277,6 +296,7 @@ export component SettingsView inherits Rectangle {
                         }
                     }
                     if !SettingsState.loading && SettingsState.section == 5: DeveloperSettings { }
+                    if !SettingsState.loading && SettingsState.section == 8: SandboxSettings { }
                 }
                 }
                 ListScrollbar {

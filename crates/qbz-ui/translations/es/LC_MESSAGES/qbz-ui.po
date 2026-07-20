@@ -4690,3 +4690,45 @@ msgstr "Seleccionar pistas"
 msgid "Qobuz is temporarily refusing requests — backing off. Try again shortly."
 msgstr "Qobuz está rechazando solicitudes temporalmente; esperando un momento. Intenta de nuevo en breve."
 
+
+msgid "Flatpak"
+msgstr "Flatpak"
+
+msgid "Snap"
+msgstr "Snap"
+
+msgid "FLATPAK SANDBOX"
+msgstr "SANDBOX DE FLATPAK"
+
+msgid "SNAP SANDBOX"
+msgstr "SANDBOX DE SNAP"
+
+msgid "QBZ is running inside a Flatpak sandbox. Some features need one-time permission grants — run the commands in a terminal, then restart QBZ. Grants persist across updates."
+msgstr "QBZ se está ejecutando dentro de un sandbox de Flatpak. Algunas funciones necesitan permisos que se otorgan una sola vez: ejecuta los comandos en una terminal y reinicia QBZ. Los permisos se conservan entre actualizaciones."
+
+msgid "QBZ is running inside a Snap sandbox. Some audio interfaces need one-time connections — run these commands in a terminal, then restart QBZ."
+msgstr "QBZ se está ejecutando dentro de un sandbox de Snap. Algunas interfaces de audio necesitan conectarse una sola vez: ejecuta estos comandos en una terminal y reinicia QBZ."
+
+msgid "Exclusive DAC access (bit-perfect)"
+msgstr "Acceso exclusivo al DAC (bit-perfect)"
+
+msgid "Recommended for exclusive mode: lets QBZ ask PipeWire to hand over the DAC cleanly (D-Bus device reservation)."
+msgstr "Recomendado para el modo exclusivo: permite que QBZ le pida a PipeWire que entregue el DAC limpiamente (reserva de dispositivo por D-Bus)."
+
+msgid "Music on NAS or external drives"
+msgstr "Música en NAS o discos externos"
+
+msgid "Grants access to a folder outside the sandbox. Repeat the command for each folder you need."
+msgstr "Da acceso a una carpeta fuera del sandbox. Repite el comando por cada carpeta que necesites."
+
+msgid "Required audio connections"
+msgstr "Conexiones de audio requeridas"
+
+msgid "Optional — external drives & NAS"
+msgstr "Opcional — discos externos y NAS"
+
+msgid "Copy"
+msgstr "Copiar"
+
+msgid "Copied!"
+msgstr "¡Copiado!"

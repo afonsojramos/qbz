@@ -4648,3 +4648,45 @@ msgstr "トラックを選択"
 msgid "Qobuz is temporarily refusing requests — backing off. Try again shortly."
 msgstr "Qobuzが一時的にリクエストを拒否しています。少し待って再試行してください。"
 
+
+msgid "Flatpak"
+msgstr "Flatpak"
+
+msgid "Snap"
+msgstr "Snap"
+
+msgid "FLATPAK SANDBOX"
+msgstr "FLATPAK サンドボックス"
+
+msgid "SNAP SANDBOX"
+msgstr "SNAP サンドボックス"
+
+msgid "QBZ is running inside a Flatpak sandbox. Some features need one-time permission grants — run the commands in a terminal, then restart QBZ. Grants persist across updates."
+msgstr "QBZ は Flatpak サンドボックス内で動作しています。一部の機能には一度だけの権限付与が必要です。コマンドをターミナルで実行してから QBZ を再起動してください。権限はアップデート後も保持されます。"
+
+msgid "QBZ is running inside a Snap sandbox. Some audio interfaces need one-time connections — run these commands in a terminal, then restart QBZ."
+msgstr "QBZ は Snap サンドボックス内で動作しています。一部のオーディオインターフェースは一度だけ接続する必要があります。これらのコマンドをターミナルで実行してから QBZ を再起動してください。"
+
+msgid "Exclusive DAC access (bit-perfect)"
+msgstr "DAC 排他アクセス（ビットパーフェクト）"
+
+msgid "Recommended for exclusive mode: lets QBZ ask PipeWire to hand over the DAC cleanly (D-Bus device reservation)."
+msgstr "排他モードに推奨：PipeWire に DAC のクリーンな引き渡しを要求できます（D-Bus デバイス予約）。"
+
+msgid "Music on NAS or external drives"
+msgstr "NAS や外部ドライブの音楽"
+
+msgid "Grants access to a folder outside the sandbox. Repeat the command for each folder you need."
+msgstr "サンドボックス外のフォルダへのアクセスを許可します。必要なフォルダごとにコマンドを繰り返してください。"
+
+msgid "Required audio connections"
+msgstr "必須のオーディオ接続"
+
+msgid "Optional — external drives & NAS"
+msgstr "任意 — 外部ドライブと NAS"
+
+msgid "Copy"
+msgstr "コピー"
+
+msgid "Copied!"
+msgstr "コピーしました！"

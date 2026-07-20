@@ -20721,6 +20721,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
     }
 
+    // ---- Sandbox (Flatpak/Snap) settings section ----
+    // Seed the install method once (drives section visibility) and wire the
+    // copy-to-clipboard action for the permission commands.
+    {
+        let method = qbz_app::diagnostics::system_info().install_method;
+        window.global::<SandboxState>().set_install_method(method.into());
+        window
+            .global::<SandboxState>()
+            .on_copy_command(move |cmd| {
+                share::copy_to_clipboard(cmd.to_string());
+            });
+    }
+
     // ---- Playlist Importer (public playlists) — spec §3.3 ----
     {
         // No cancel exists: a running import task continues to completion

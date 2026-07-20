@@ -4674,3 +4674,45 @@ msgstr "Выбрать треки"
 msgid "Qobuz is temporarily refusing requests — backing off. Try again shortly."
 msgstr "Qobuz временно отклоняет запросы — пауза. Повторите попытку чуть позже."
 
+
+msgid "Flatpak"
+msgstr "Flatpak"
+
+msgid "Snap"
+msgstr "Snap"
+
+msgid "FLATPAK SANDBOX"
+msgstr "ПЕСОЧНИЦА FLATPAK"
+
+msgid "SNAP SANDBOX"
+msgstr "ПЕСОЧНИЦА SNAP"
+
+msgid "QBZ is running inside a Flatpak sandbox. Some features need one-time permission grants — run the commands in a terminal, then restart QBZ. Grants persist across updates."
+msgstr "QBZ работает внутри песочницы Flatpak. Некоторым функциям нужны разрешения, выдаваемые один раз, — выполните команды в терминале и перезапустите QBZ. Разрешения сохраняются между обновлениями."
+
+msgid "QBZ is running inside a Snap sandbox. Some audio interfaces need one-time connections — run these commands in a terminal, then restart QBZ."
+msgstr "QBZ работает внутри песочницы Snap. Некоторые аудиоинтерфейсы нужно подключить один раз — выполните эти команды в терминале и перезапустите QBZ."
+
+msgid "Exclusive DAC access (bit-perfect)"
+msgstr "Эксклюзивный доступ к ЦАП (bit-perfect)"
+
+msgid "Recommended for exclusive mode: lets QBZ ask PipeWire to hand over the DAC cleanly (D-Bus device reservation)."
+msgstr "Рекомендуется для эксклюзивного режима: позволяет QBZ попросить PipeWire корректно освободить ЦАП (резервирование устройства через D-Bus)."
+
+msgid "Music on NAS or external drives"
+msgstr "Музыка на NAS или внешних дисках"
+
+msgid "Grants access to a folder outside the sandbox. Repeat the command for each folder you need."
+msgstr "Даёт доступ к папке вне песочницы. Повторите команду для каждой нужной папки."
+
+msgid "Required audio connections"
+msgstr "Необходимые аудиоподключения"
+
+msgid "Optional — external drives & NAS"
+msgstr "Опционально — внешние диски и NAS"
+
+msgid "Copy"
+msgstr "Копировать"
+
+msgid "Copied!"
+msgstr "Скопировано!"
