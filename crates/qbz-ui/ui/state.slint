@@ -4559,9 +4559,22 @@ export global CastState {
     in property <bool> is-playing: false;
     in property <float> position-secs: 0;
     in property <float> duration-secs: 0;
-    // Delivered quality (D3) — surfaced in the badge tooltip / picker banner.
-    in property <string> quality-label;   // coarse, e.g. "FLAC 24-bit/>96kHz"
-    in property <string> quality-detail;  // precise, e.g. "192 kHz / 24-bit"
+    // Delivered quality — surfaced in the badge tooltip / picker banner.
+    // MEASURED from the served bytes when probeable (#638 fix 1), catalog
+    // fallback otherwise.
+    in property <string> quality-label;   // coarse, e.g. "Hi-Res FLAC"
+    in property <string> quality-detail;  // precise, e.g. "24-bit / 192 kHz"
+    // Fix-1 cast half (#638): measured-truth disclosure for the picker line.
+    // quality-limit-cause carries the same QualityLimit discriminants as
+    // NowPlayingState.quality-limit-cause (0 none · 1 preference · 3
+    // renderer cap · 4 availability; 2 = local device cap NEVER applies
+    // while casting — precedence rule).
+    in property <int> quality-limit-cause: 0;
+    // The served bytes EXCEED the requested tier (a locally-existing
+    // cache/offline copy under a lower cap) — sent as-is, never resampled
+    // (owner decision); the picker line discloses it instead of hiding it.
+    in property <bool> quality-over-cap: false;
+    in property <string> quality-origin;  // "cache" | "offline" | "" (network)
     // Raw last-error for the picker error state (empty = none).
     in property <string> error;
 }

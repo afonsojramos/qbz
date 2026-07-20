@@ -150,18 +150,17 @@ pub async fn probe_remote_stream_info(url: &str) -> Result<RemoteStreamInfo, Str
         10.0
     };
 
-    let (sample_rate, channels, bit_depth) =
-        if initial_bytes.len() >= 26 && initial_bytes.starts_with(b"fLaC") {
-            let sample_rate = ((initial_bytes[18] as u32) << 12)
-                | ((initial_bytes[19] as u32) << 4)
-                | ((initial_bytes[20] as u32) >> 4);
-            let channels = ((initial_bytes[20] >> 1) & 0x07) + 1;
-            let bit_depth = ((initial_bytes[20] & 0x01) << 4) | ((initial_bytes[21] >> 4) & 0x0F);
-            (sample_rate, channels as u16, (bit_depth + 1) as u32)
-        } else {
+    // STREAMINFO parse via the shared prober (hoisted to qbz-models for the
+    // cast path, #638 fix 1). The prober never guesses — the CD-shaped
+    // defaults for a non-FLAC probe stay HERE so this path's behavior is
+    // byte-identical to the original inline parse.
+    let (sample_rate, channels, bit_depth) = match qbz_models::probe_streaminfo(&initial_bytes) {
+        Some(p) => (p.sample_rate, p.channels, p.bits_per_sample),
+        None => {
             log::warn!("[remote-stream] Non-FLAC probe for remote handoff, using defaults");
             (44_100, 2, 16)
-        };
+        }
+    };
 
     Ok(RemoteStreamInfo {
         content_length,

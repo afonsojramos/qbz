@@ -10,9 +10,13 @@
 //! Bytes + MIME + delivered quality are resolved through the shared core API
 //! `CoreBridge::fetch_for_external_stream_resolved`, requesting the user's
 //! streaming-quality preference (#638; reverses the old always-UltraHiRes
-//! decision D3) and reporting the real delivered tier. The preference governs
-//! only what we REQUEST — bytes already in the L1/L2 cache or the offline
-//! store are served as-is, never resampled.
+//! decision D3). The preference governs only what we REQUEST — bytes already
+//! in the L1/L2 cache or the offline store are served as-is, never resampled.
+//! Before registration the served bytes are PROBED (FLAC STREAMINFO), so the
+//! picker line and the now-playing badge report the MEASURED delivered
+//! quality — never the catalog metadata — regardless of which tier produced
+//! the bytes, with an explicit disclosure when locally-existing bytes exceed
+//! the requested tier (#638 fix 1).
 //!
 //! Source routing (decision: route by `QueueTrack.source`, never QConnect
 //! admission): qobuz -> shared resolver; local -> `register_file` (streams from
@@ -25,7 +29,7 @@ use qbz_cast::{
     CastPositionInfo, ChromecastHandle, DeviceDiscovery, DiscoveredDevice, DiscoveredDlnaDevice,
     DlnaConnection, DlnaDiscovery, DlnaMetadata, DlnaPositionInfo, MediaMetadata, MediaServer,
 };
-use qbz_models::QueueTrack;
+use qbz_models::{probe_streaminfo, AssetOrigin, AudioParams, Quality, QualityLimit, QueueTrack};
 use tokio::sync::Mutex;
 
 use crate::adapter::SlintAdapter;
@@ -76,6 +80,18 @@ impl CastProtocol {
             _ => None,
         }
     }
+}
+
+/// What `register_*` learned about the asset it just registered (#638 fix 1):
+/// the MIME for the renderer, the measured STREAMINFO probe of the bytes
+/// actually served (None = non-FLAC / local file), where those bytes came
+/// from, and the tier the resolver was asked for (None = the source is not
+/// governed by the streaming preference — local files).
+struct CastAssetInfo {
+    content_type: String,
+    probe: Option<AudioParams>,
+    origin: Option<AssetOrigin>,
+    requested: Option<Quality>,
 }
 
 // ---- Module singleton -------------------------------------------------------
@@ -377,6 +393,17 @@ impl SlintCastService {
         }
         // Hand the lyrics position source back to the local player.
         crate::lyrics_sync::clear_remote_anchor();
+        // Clear the fix-1 measured/over-cap disclosure with the session (the
+        // quality line itself is hidden by `connected == false`; the badge's
+        // effective values are re-owned by the local poll on its next tick).
+        let weak = self.window.clone();
+        let _ = weak.upgrade_in_event_loop(|w| {
+            use slint::ComponentHandle;
+            let cs = w.global::<CastState>();
+            cs.set_quality_limit_cause(0);
+            cs.set_quality_over_cap(false);
+            cs.set_quality_origin("".into());
+        });
         self.push_connection_state().await;
     }
 
@@ -398,7 +425,7 @@ impl SlintCastService {
 
         // Resolve the content type + register the bytes per source. The fetch
         // (cache / offline / network) happens OUTSIDE the inner lock.
-        let content_type = match source {
+        let info = match source {
             "local" | "ephemeral" => {
                 let path = resolve_local_path(track.id)
                     .ok_or_else(|| format!("Local file not found for track {}", track.id))?;
@@ -419,6 +446,7 @@ impl SlintCastService {
             }
             other => return Err(format!("Unsupported cast source: {other}")),
         };
+        let content_type = info.content_type.clone();
 
         // Build the per-device URL and hand it to the renderer.
         let url = {
@@ -464,18 +492,36 @@ impl SlintCastService {
             inner.cast_max_position = 0.0;
             inner.cast_premature_stop_polls = 0;
         }
-        // Quality label comes from the track's catalog metadata (always present,
-        // no network call) so it's the same whether bytes came from cache,
-        // offline, or the network.
-        let (quality_label, quality_detail) = quality_label_from_track(track);
+        // Delivered quality for the picker line (#638 fix 1): MEASURED from
+        // the served bytes when the probe can read them, falling back to the
+        // track's catalog metadata (non-FLAC / local files). The old
+        // catalog-only label could read "24-bit / 96 kHz" while CD bytes were
+        // on the wire (F20).
+        let (quality_label, quality_detail) = match info.probe {
+            Some(p) => (
+                if p.bits_per_sample >= 24 {
+                    "Hi-Res FLAC"
+                } else {
+                    "FLAC"
+                }
+                .to_string(),
+                crate::quality::detail(Some(p.bits_per_sample), Some(p.sample_rate as f64)),
+            ),
+            None => quality_label_from_track(track),
+        };
         self.push_quality(quality_label, quality_detail).await;
+        // Un-stale the now-playing badge + disclose over-cap serves: the
+        // local poll (which normally drives the 85e11d28 properties) is
+        // skipped while casting.
+        self.publish_measured_badge(&info).await;
         self.push_connection_state().await;
         Ok(())
     }
 
     /// qobuz: resolve via the shared core API (cache -> offline -> network),
-    /// register the bytes. Returns the content type.
-    async fn register_qobuz(&self, track_id: u64) -> Result<String, String> {
+    /// probe the served bytes' STREAMINFO, register them. Returns the asset
+    /// info for the picker/badge publish.
+    async fn register_qobuz(&self, track_id: u64) -> Result<CastAssetInfo, String> {
         let offline = crate::offline::get().await;
         let sink = crate::offline_cache::row_sink(self.window.clone());
         // The streaming-quality preference governs what we REQUEST from Qobuz
@@ -498,6 +544,12 @@ impl SlintCastService {
 
         log::info!("[Cast] qobuz track {track_id} resolved from {:?}", asset.origin);
         let content_type = asset.content_type.clone();
+        // Measure BEFORE register_audio moves the bytes: the probe reports the
+        // truth regardless of which tier (network / L1/L2 cache / offline
+        // store) served them — the same measure-the-bytes philosophy as the
+        // local path's cached_quality_below_requested gate (F17/F24).
+        let probe = probe_streaminfo(&asset.bytes);
+        let origin = asset.origin;
 
         self.ensure_media_server().await?;
         {
@@ -505,12 +557,19 @@ impl SlintCastService {
             let server = inner.media_server.as_mut().ok_or("Media server gone")?;
             server.register_audio(track_id, asset.bytes, &content_type);
         }
-        Ok(content_type)
+        Ok(CastAssetInfo {
+            content_type,
+            probe,
+            origin: Some(origin),
+            requested: Some(quality),
+        })
     }
 
     /// local: stream the file from disk via register_file (no full-RAM read);
-    /// the crate's rich MIME map sets the content type.
-    async fn register_local(&self, track_id: u64, path: &str) -> Result<String, String> {
+    /// the crate's rich MIME map sets the content type. No probe/origin/
+    /// requested-tier: local files are not governed by the streaming
+    /// preference and the picker keeps its catalog-metadata fallback.
+    async fn register_local(&self, track_id: u64, path: &str) -> Result<CastAssetInfo, String> {
         self.ensure_media_server().await?;
         let content_type = {
             let mut inner = self.inner.lock().await;
@@ -522,7 +581,12 @@ impl SlintCastService {
             // the crate's own register_file map).
             content_type_for_local(path)
         };
-        Ok(content_type)
+        Ok(CastAssetInfo {
+            content_type,
+            probe: None,
+            origin: None,
+            requested: None,
+        })
     }
 
     async fn ensure_media_server(&self) -> Result<(), String> {
@@ -1086,6 +1150,98 @@ impl SlintCastService {
             cs.set_quality_detail(detail.into());
         });
     }
+
+    /// Publish the measured delivered-quality state the SKIPPED local poll
+    /// would have published (#638 fix 1 cast half): the local player is
+    /// stopped while casting, so without this the badge's downgrade
+    /// arrow/tooltip (85e11d28) go stale. Also computes the over-cap
+    /// disclosure for the picker line — bytes that already existed locally
+    /// (cache / offline store) are served AS-IS even above the requested
+    /// tier, never resampled and never re-fetched (owner decision), and the
+    /// UI says so instead of hiding it. NEVER consults the local DAC cap:
+    /// the local DAC is not in a cast's signal path (#638 precedence rule).
+    async fn publish_measured_badge(&self, info: &CastAssetInfo) {
+        let (eff_rate_hz, eff_bits) = info
+            .probe
+            .map(|p| (p.sample_rate, p.bits_per_sample))
+            .unwrap_or((0, 0));
+        // Catalog maxima seeded by refresh_now_playing_meta for this same
+        // track (the cast is always the current queue track).
+        let (max_rate_hz, max_bits) = crate::playback::track_catalog_max();
+        let downgraded =
+            crate::playback::stream_downgraded(eff_rate_hz, eff_bits, max_rate_hz, max_bits);
+        let requested_id = info.requested.map(|q| q.id()).unwrap_or(0);
+        // Request-time cause: the streaming preference is the only cast cap
+        // today; the per-renderer cap (#638 fix 4) will carry its own cause
+        // through here. The local device cap is NEVER a cast cause.
+        let request_cause = match info.requested {
+            Some(q) if q < Quality::UltraHiRes => QualityLimit::Preference as i32,
+            _ => QualityLimit::None as i32,
+        };
+        let limit_cause = crate::playback::classify_limit_cause(
+            downgraded,
+            requested_id,
+            request_cause,
+            eff_bits,
+        );
+        let delivered_tier =
+            crate::playback::delivered_tier_str(downgraded, requested_id, eff_bits);
+        // Measured line for the tooltip's "Output", same formatter as the
+        // local poll ("16-bit / 44.1 kHz").
+        let true_detail = if eff_rate_hz > 0 || eff_bits > 0 {
+            crate::quality::detail(
+                (eff_bits > 0).then_some(eff_bits),
+                (eff_rate_hz > 0).then_some(eff_rate_hz as f64),
+            )
+        } else {
+            String::new()
+        };
+        // Over-cap: locally-existing bytes ABOVE the requested tier. Measured
+        // tier via the F24-style inverse of the probe (24-bit AND >96 kHz →
+        // Hi-Res+; 24-bit → Hi-Res; else CD-class FLAC).
+        let measured_tier = info.probe.map(|p| {
+            if p.bits_per_sample >= 24 && p.sample_rate > 96_000 {
+                Quality::UltraHiRes
+            } else if p.bits_per_sample >= 24 {
+                Quality::HiRes
+            } else {
+                Quality::Lossless
+            }
+        });
+        let over_cap = matches!(info.origin, Some(o) if o != AssetOrigin::Network)
+            && matches!(
+                (measured_tier, info.requested),
+                (Some(m), Some(r)) if m > r
+            );
+        let origin_str = match info.origin {
+            Some(AssetOrigin::Cache) => "cache",
+            Some(AssetOrigin::Offline) => "offline",
+            _ => "",
+        };
+        if over_cap {
+            log::info!(
+                "[Cast] serving {origin_str} bytes above the requested tier \
+                 (measured {measured_tier:?} > requested {:?}) — caps govern \
+                 requests only; local bytes go out as-is, never resampled",
+                info.requested
+            );
+        }
+        let weak = self.window.clone();
+        let _ = weak.upgrade_in_event_loop(move |w| {
+            use slint::ComponentHandle;
+            let np = w.global::<NowPlayingState>();
+            np.set_effective_sample_rate_hz(eff_rate_hz as i32);
+            np.set_effective_bit_depth(eff_bits as i32);
+            np.set_quality_downgraded(downgraded);
+            np.set_quality_true_detail(true_detail.into());
+            np.set_quality_limit_cause(limit_cause);
+            np.set_quality_effective_tier(delivered_tier.into());
+            let cs = w.global::<CastState>();
+            cs.set_quality_limit_cause(limit_cause);
+            cs.set_quality_over_cap(over_cap);
+            cs.set_quality_origin(origin_str.into());
+        });
+    }
 }
 
 // ---- Free helpers -----------------------------------------------------------
@@ -1145,10 +1301,10 @@ fn dlna_metadata(track: &QueueTrack) -> DlnaMetadata {
     }
 }
 
-/// Quality label + detail from the track's CATALOG metadata (always present,
-/// no network call) — used regardless of whether the bytes came from cache,
-/// offline, or the network. Returns (label, detail) e.g. ("Hi-Res FLAC",
-/// "96 kHz / 24-bit").
+/// FALLBACK quality label + detail from the track's CATALOG metadata — used
+/// only when the STREAMINFO probe cannot read the served bytes (non-FLAC /
+/// local files); Qobuz FLAC casts report the MEASURED values instead (#638
+/// fix 1). Returns (label, detail) e.g. ("Hi-Res FLAC", "96 kHz / 24-bit").
 fn quality_label_from_track(track: &QueueTrack) -> (String, String) {
     let detail = match (track.sample_rate, track.bit_depth) {
         (Some(khz), Some(bits)) => format!("{} kHz / {}-bit", trim_khz(khz), bits),

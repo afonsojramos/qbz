@@ -1722,7 +1722,7 @@ fn hydrated_catalog_quality(track_id: u64) -> (Option<u32>, Option<f64>) {
     }
     let bits = HYDRATED_BITS.load(std::sync::atomic::Ordering::Relaxed);
     let rate = HYDRATED_RATE_HZ.load(std::sync::atomic::Ordering::Relaxed);
-    ((bits > 0).then_some(bits), (rate > 0).then(|| rate as f64))
+    ((bits > 0).then_some(bits), (rate > 0).then_some(rate as f64))
 }
 
 /// The #590 downgrade arithmetic, extracted so the cast publish
@@ -1806,6 +1806,17 @@ pub(crate) fn delivered_tier_str(
     } else {
         "cd"
     }
+}
+
+/// The current track's catalog-max stream params `(rate_hz, bits)` — the
+/// same maxima the local poll compares against, exposed for the cast
+/// publish (#638 fix 1 cast half: the local poll is skipped while casting,
+/// so `cast_service` computes the downgrade itself). 0 = unknown.
+pub(crate) fn track_catalog_max() -> (u32, u32) {
+    (
+        TRACK_MAX_RATE_HZ.load(std::sync::atomic::Ordering::Relaxed),
+        TRACK_MAX_BITS.load(std::sync::atomic::Ordering::Relaxed),
+    )
 }
 
 /// Compare-and-record the MPRIS metadata dedupe key. Returns `true` when

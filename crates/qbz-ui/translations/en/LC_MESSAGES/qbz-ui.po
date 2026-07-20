@@ -501,3 +501,9 @@ msgstr "Limited by your streaming quality setting"
 
 msgid "Qobuz has no higher quality for this track"
 msgstr "Qobuz has no higher quality for this track"
+
+msgid "offline copy — cap not applied"
+msgstr "offline copy — cap not applied"
+
+msgid "cached copy — cap not applied"
+msgstr "cached copy — cap not applied"

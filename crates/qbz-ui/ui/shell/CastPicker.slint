@@ -99,6 +99,18 @@ component CastTab inherits Rectangle {
 export component CastPicker inherits Rectangle {
     visible: CastState.picker-open;
 
+    // Over-cap disclosure suffix for the quality line (#638 fix 1): a
+    // locally-existing copy (cache / offline store) served above the
+    // requested tier — named plainly, never as an error (caps govern
+    // requests only; the bytes go out as-is, owner decision).
+    property <string> over-cap-suffix: !CastState.quality-over-cap
+        ? ""
+        : (CastState.quality-origin == "offline"
+            ? " · " + @tr("offline copy — cap not applied")
+            : (CastState.quality-origin == "cache"
+                ? " · " + @tr("cached copy — cap not applied")
+                : ""));
+
     if CastState.picker-open: Rectangle {
         background: #000000bf;
         // Scrim — click closes + stops discovery.
@@ -227,11 +239,14 @@ export component CastPicker inherits Rectangle {
                     }
                 }
 
-                // Delivered quality (D3) under the banner, when known.
+                // Delivered quality under the banner, when known — measured
+                // from the served bytes (#638 fix 1), plus the over-cap
+                // disclosure suffix when a local copy exceeds the cap.
                 if CastState.connected && CastState.quality-detail != "": Text {
-                    text: @tr("Streaming {} · {}", CastState.protocol == "dlna" ? "DLNA" : "Chromecast", CastState.quality-detail);
+                    text: @tr("Streaming {} · {}", CastState.protocol == "dlna" ? "DLNA" : "Chromecast", CastState.quality-detail) + root.over-cap-suffix;
                     color: Theme.text-muted;
                     font-size: Typography.legal;
+                    wrap: word-wrap;
                 }
 
                 // ---- Tabs + device list (when not connected) ----
