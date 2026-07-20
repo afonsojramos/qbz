@@ -297,7 +297,7 @@ impl AudioSettingsStore {
                         stream_first_track: row.get::<_, Option<i64>>(7)?.unwrap_or(0) != 0,
                         stream_buffer_seconds: row.get::<_, Option<i64>>(8)?.unwrap_or(3) as u8,
                         streaming_only: row.get::<_, Option<i64>>(9)?.unwrap_or(0) != 0,
-                        limit_quality_to_device: row.get::<_, Option<i64>>(10)?.unwrap_or(1) != 0,
+                        limit_quality_to_device: row.get::<_, Option<i64>>(10)?.unwrap_or(0) != 0,
                         device_max_sample_rate: row.get::<_, Option<i64>>(11)?.map(|r| r as u32),
                         device_sample_rate_limits,
                         normalization_enabled: row.get::<_, Option<i64>>(12)?.unwrap_or(0) != 0,
