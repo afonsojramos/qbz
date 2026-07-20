@@ -4273,14 +4273,27 @@ export global NowPlayingState {
 
     // EFFECTIVE (delivered) stream quality — what the engine is actually
     // decoding after the streaming-quality setting downgrade (#590 follow-up).
-    // The badge keeps showing the catalog MAX (quality-tier/detail above);
-    // when the delivered stream is below it, `quality-downgraded` turns on
-    // the AudioStamp's downgrade arrow and `quality-true-detail` carries the
-    // true "16-bit / 44.1 kHz" line for the hover tooltip. 0 / "" = unknown.
+    // `quality-tier`/`quality-detail` above keep the catalog MAX; while
+    // `quality-downgraded` is on the AudioStamp's MAIN line reports the
+    // delivered tier/detail instead (#638 fix 1 — owner decision, Tauri
+    // parity), the amber arrow turns on, and `quality-true-detail` carries
+    // the delivered "16-bit / 44.1 kHz" line. 0 / "" = unknown.
     in property <int> effective-sample-rate-hz: 0;
     in property <int> effective-bit-depth: 0;
     in property <bool> quality-downgraded: false;
     in property <string> quality-true-detail;
+    // WHY the delivered stream is below the catalog max (#638 fix 1) — the
+    // AudioStamp tooltip names the cause so a downgrade the user configured
+    // never reads as a failure. Discriminants of the Rust `QualityLimit`
+    // enum: 0 none · 1 streaming-quality preference · 2 local output device
+    // cap (fix 3) · 3 per-renderer cap (fix 4) · 4 Qobuz catalog
+    // availability.
+    in property <int> quality-limit-cause: 0;
+    // Delivered tier for the badge's main line while downgraded ("hires" |
+    // "cd" | "mp3"); empty = not downgraded (the badge shows the catalog
+    // tier). Derived in Rust from the delivered params + the requested tier
+    // so an MP3-capped stream is not mislabeled CD.
+    in property <string> quality-effective-tier;
 
     // Output backend + mode LEDs (Mode C "Small" bar reads these). Mirror of
     // the same four on SettingsState (:2154-2157) — surfaced here so the

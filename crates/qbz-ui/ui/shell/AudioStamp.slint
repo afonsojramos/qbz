@@ -31,13 +31,40 @@ export component AudioStamp inherits VerticalLayout {
             ? "MP3"
             : (NowPlayingState.quality-tier == "lossless" ? "LOSSLESS" : "CD"));
 
-    // Tooltip for Row 1: while downgraded, two lines — the catalog max
-    // ("Source") vs the truly delivered stream ("Output"); otherwise the plain
-    // tier + detail. Shown only when a detail line exists (no empty "CD: ").
-    property <string> quality-tooltip: NowPlayingState.quality-downgraded
-        && NowPlayingState.quality-true-detail != ""
+    // DELIVERED-first main line (#638 fix 1, owner decision — reverses the
+    // #590 catalog-max choice, restoring the Tauri behavior): while the
+    // stream is downgraded, Row 1 reports the tier/detail actually playing
+    // and the catalog max moves to the tooltip's "Source" line.
+    property <bool> show-delivered: NowPlayingState.quality-downgraded
+        && NowPlayingState.quality-true-detail != "";
+    property <string> delivered-tier-label: NowPlayingState.quality-effective-tier == "hires"
+        ? "HI-RES"
+        : (NowPlayingState.quality-effective-tier == "mp3" ? "MP3" : "CD");
+
+    // WHY the stream is below the catalog max — third tooltip line, keyed by
+    // the QualityLimit discriminant in quality-limit-cause. Informative, not
+    // alarming: a downgrade caused by the user's own setting is the app doing
+    // what it was told, never a failure. Causes 2 (local device cap, fix 3)
+    // and 3 (per-renderer cap, fix 4) are pre-wired; they become reachable
+    // when those fixes land.
+    property <string> cause-line: NowPlayingState.quality-limit-cause == 1
+        ? @tr("Limited by your streaming quality setting")
+        : (NowPlayingState.quality-limit-cause == 2
+            ? @tr("Limited by your output device's limit")
+            : (NowPlayingState.quality-limit-cause == 3
+                ? @tr("Limited by the quality cap for this device")
+                : (NowPlayingState.quality-limit-cause == 4
+                    ? @tr("Qobuz has no higher quality for this track")
+                    : "")));
+
+    // Tooltip for Row 1: while downgraded, the catalog max ("Source") vs the
+    // truly delivered stream ("Output") plus the cause line when known;
+    // otherwise the plain tier + detail. Shown only when a detail line exists
+    // (no empty "CD: ").
+    property <string> quality-tooltip: root.show-delivered
         ? @tr("Source: {}", NowPlayingState.quality-detail) + "\n"
             + @tr("Output: {}", NowPlayingState.quality-true-detail)
+            + (root.cause-line == "" ? "" : "\n" + root.cause-line)
         : root.tier-label + ": " + NowPlayingState.quality-detail;
 
     // === Row 1 — quality, INLINE + BRIGHT (the focus) ====================
@@ -59,7 +86,9 @@ export component AudioStamp inherits VerticalLayout {
             spacing: 5px;
             alignment: end;
             Text {
-                text: root.tier-label;
+                // Delivered tier while downgraded (#638 fix 1); catalog tier
+                // otherwise.
+                text: root.show-delivered ? root.delivered-tier-label : root.tier-label;
                 font-size: 9px;
                 font-weight: 700;
                 color: Theme.text-secondary;
@@ -67,8 +96,8 @@ export component AudioStamp inherits VerticalLayout {
                 letter-spacing: 0.3px;
             }
             // Downgrade arrow (glyph, not a pill — ADR-008): the delivered
-            // stream is below the catalog max the badge advertises. Amber so
-            // it reads as "adjusted", not as an error.
+            // stream is below the track's catalog max. Amber so it reads as
+            // "adjusted", not as an error.
             if NowPlayingState.quality-downgraded: Text {
                 text: "↓";
                 font-size: 9px;
@@ -77,7 +106,10 @@ export component AudioStamp inherits VerticalLayout {
                 vertical-alignment: center;
             }
             Text {
-                text: NowPlayingState.quality-detail;
+                // Delivered detail while downgraded; catalog detail otherwise.
+                text: root.show-delivered
+                    ? NowPlayingState.quality-true-detail
+                    : NowPlayingState.quality-detail;
                 font-size: 9px;
                 font-weight: 600;
                 color: Theme.text-primary;

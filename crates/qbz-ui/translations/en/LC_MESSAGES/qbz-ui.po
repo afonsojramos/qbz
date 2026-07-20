@@ -495,3 +495,9 @@ msgstr "Copy"
 
 msgid "Copied!"
 msgstr "Copied!"
+
+msgid "Limited by your streaming quality setting"
+msgstr "Limited by your streaming quality setting"
+
+msgid "Qobuz has no higher quality for this track"
+msgstr "Qobuz has no higher quality for this track"

@@ -14,7 +14,7 @@
 use std::sync::{Arc, OnceLock};
 
 use qbz_app::shell::AppRuntime;
-use qbz_models::{Quality, QueueTrack, RepeatMode, Track};
+use qbz_models::{Quality, QualityLimit, QueueTrack, RepeatMode, Track};
 use qconnect_app::renderer::{PLAYING_STATE_PAUSED, PLAYING_STATE_PLAYING};
 use slint::{ComponentHandle, Model, ModelRc};
 
@@ -1683,12 +1683,107 @@ static FORCE_UI_REPUSH: std::sync::atomic::AtomicBool =
 /// Catalog-MAX stream params of the current track, cached at every
 /// track-change meta push so the poll loop can compare the DELIVERED stream
 /// (PlaybackEvent.sample_rate / bit_depth) against the track's advertised
-/// max without an async queue read per tick (#590 follow-up: the badge keeps
-/// the max; a downgrade arrow + tooltip surface the true delivered quality).
+/// max without an async queue read per tick (#590 follow-up; since #638
+/// fix 1 the badge's main line reports the DELIVERED quality while
+/// downgraded and the catalog max moves to the tooltip's "Source" line).
 /// Rate in Hz (same normalization as NowPlayingState.sample-rate-hz); 0 =
 /// unknown. Bits: 1 = DSD (nominal 1-bit — exempt from the bit comparison).
 static TRACK_MAX_RATE_HZ: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 static TRACK_MAX_BITS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// REQUESTED tier of the current track's stream (Qobuz format id; 0 = the
+/// track is not governed by the streaming-quality preference — local, Plex
+/// and ephemeral sources) plus the request-time cause (a `QualityLimit`
+/// discriminant). Seeded once per track change in `refresh_now_playing_meta`
+/// beside the TRACK_MAX_* stores — NEVER re-resolved per 450 ms poll tick
+/// (`ui_prefs::load()` is a whole-file disk read + JSON parse). The poll
+/// loop combines them with the DELIVERED stream params to name WHY a
+/// downgrade happened (#638 fix 1).
+static REQUESTED_QUALITY_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static REQUESTED_CAUSE: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+
+/// The #590 downgrade arithmetic, extracted so the cast publish
+/// (`cast_service`) reuses it instead of forking it (#638 fix 1). PRESERVED
+/// EXACTLY: the 0.9 rate guard avoids flagging 44.1-vs-48 kHz family
+/// mismatches (Tauri QualityBadge.svelte parity), and DSD (nominal 1-bit,
+/// on either side) is exempt ENTIRELY, not just from the depth arm — past
+/// DSD Phase 1 the DoP/native paths play DSD bit-perfect, and its
+/// carrier/PCM rate vs the DSD "max" is apples-to-oranges, so any compare
+/// would flag a false downgrade arrow on a bit-perfect DSD stream.
+pub(crate) fn stream_downgraded(
+    eff_rate_hz: u32,
+    eff_bits: u32,
+    max_rate_hz: u32,
+    max_bits: u32,
+) -> bool {
+    let dsd = max_bits == 1 || eff_bits == 1;
+    !dsd
+        && ((eff_rate_hz > 0
+            && max_rate_hz > 0
+            && (eff_rate_hz as f64) < max_rate_hz as f64 * 0.9)
+            || (eff_bits > 0 && max_bits > 0 && eff_bits < max_bits))
+}
+
+/// Display-time classification of WHY the delivered stream is below the
+/// catalog max (#638 fix 1). `requested_id` / `request_cause` are the raw
+/// values of `REQUESTED_QUALITY_ID` / `REQUESTED_CAUSE` (or the cast path's
+/// request-time resolution); the return value is a `QualityLimit`
+/// discriminant for the Slint `quality-limit-cause` property. Rules:
+/// - not downgraded, or not a governed source (`requested_id` 0) → None;
+/// - requested Hi-Res+ (no cap was in play) → Qobuz simply had no more
+///   (CatalogAvailability) — this early-out is why no >96 kHz promise
+///   check is needed here;
+/// - delivered meets the requested tier's promise (F24-style: Hi-Res needs
+///   24-bit, CD/MP3 are always met) → the request-time cause (the cap did
+///   this);
+/// - delivered below even the requested promise → Qobuz did not offer the
+///   requested tier (CatalogAvailability).
+pub(crate) fn classify_limit_cause(
+    downgraded: bool,
+    requested_id: u32,
+    request_cause: i32,
+    eff_bits: u32,
+) -> i32 {
+    if !downgraded {
+        return QualityLimit::None as i32;
+    }
+    let Some(requested) = Quality::from_id(requested_id) else {
+        return QualityLimit::None as i32;
+    };
+    let promise_met = match requested {
+        Quality::UltraHiRes => return QualityLimit::CatalogAvailability as i32,
+        Quality::HiRes => eff_bits >= 24,
+        Quality::Lossless | Quality::Mp3 => true,
+    };
+    if promise_met {
+        request_cause
+    } else {
+        QualityLimit::CatalogAvailability as i32
+    }
+}
+
+/// Delivered-tier string for the badge's main line while downgraded
+/// ("hires" | "cd" | "mp3"; "" = not downgraded → the badge shows the
+/// catalog tier). Derived from the delivered bit depth PLUS the requested
+/// tier so an MP3-capped stream (which decodes to 16-bit PCM) is labeled
+/// MP3, not mislabeled CD.
+pub(crate) fn delivered_tier_str(
+    downgraded: bool,
+    requested_id: u32,
+    eff_bits: u32,
+) -> &'static str {
+    if !downgraded {
+        return "";
+    }
+    if requested_id == Quality::Mp3.id() {
+        return "mp3";
+    }
+    if eff_bits >= 24 {
+        "hires"
+    } else {
+        "cd"
+    }
+}
 
 /// Compare-and-record the MPRIS metadata dedupe key. Returns `true` when
 /// `key` differs from the last pushed value (→ caller pushes now), recording
@@ -1856,6 +1951,31 @@ pub(crate) async fn refresh_now_playing_meta(runtime: &Runtime, weak: &slint::We
         track.bit_depth.unwrap_or(0),
         std::sync::atomic::Ordering::Relaxed,
     );
+
+    // REQUESTED tier + request-time cause for the badge's WHY line (#638
+    // fix 1), resolved ONCE per track change beside the TRACK_MAX stores
+    // (ui_prefs::load is a disk read + JSON parse — never per poll tick).
+    // Only Qobuz-sourced tracks are governed by the streaming-quality
+    // preference; local / Plex / ephemeral sources store 0 = not governed,
+    // which keeps the cause line off for them. NOTE(#638 fix 3): when the
+    // local device cap lands, this resolve switches to the device-capped
+    // wrapper so the cause can name the output device.
+    let governed = !track.is_local && matches!(source.as_str(), "qobuz" | "qobuz_download");
+    if governed {
+        let requested = playback_quality();
+        REQUESTED_QUALITY_ID.store(requested.id(), std::sync::atomic::Ordering::Relaxed);
+        REQUESTED_CAUSE.store(
+            if requested < Quality::UltraHiRes {
+                QualityLimit::Preference as i32
+            } else {
+                QualityLimit::None as i32
+            },
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    } else {
+        REQUESTED_QUALITY_ID.store(0, std::sync::atomic::Ordering::Relaxed);
+        REQUESTED_CAUSE.store(QualityLimit::None as i32, std::sync::atomic::Ordering::Relaxed);
+    }
 
     // Mirror the now-playing metadata into the system tray tooltip (Linux).
     if let Some(t) = crate::tray::handle() {
@@ -2029,6 +2149,8 @@ pub(crate) async fn refresh_now_playing_meta(runtime: &Runtime, weak: &slint::We
         np.set_effective_bit_depth(0);
         np.set_quality_downgraded(false);
         np.set_quality_true_detail("".into());
+        np.set_quality_limit_cause(0);
+        np.set_quality_effective_tier("".into());
         np.set_duration_secs(duration as i32);
         np.set_position_secs(0);
         np.set_progress(0.0);
@@ -4744,27 +4866,24 @@ pub fn start_poll_loop(
             );
             if last_ui_push != Some(ui_snapshot) {
                 last_ui_push = Some(ui_snapshot);
-                // Effective-vs-max quality (#590 follow-up): the badge keeps
-                // advertising the catalog max; when the DELIVERED stream is
-                // below it, flip the downgrade flag + format the true line for
-                // the AudioStamp tooltip. The 0.9 rate guard avoids flagging
-                // 44.1-vs-48 kHz family mismatches (Tauri QualityBadge.svelte
-                // parity). DSD (nominal 1-bit, on either side) is exempt from
-                // the bit-depth comparison — its depth is not comparable to
-                // PCM's (mirrors the DSD special-case in the meta seed).
+                // Effective-vs-max quality (#590 follow-up, reshaped by #638
+                // fix 1): when the DELIVERED stream is below the catalog max,
+                // the badge's main line flips to the delivered tier/detail
+                // (owner decision — restores the Tauri behavior; the catalog
+                // max moves to the tooltip's "Source" line), the amber arrow
+                // turns on, and the tooltip names the CAUSE. The downgrade
+                // arithmetic (0.9 rate-family guard + full DSD exemption)
+                // lives in `stream_downgraded`, shared with the cast publish.
                 let max_rate_hz =
                     TRACK_MAX_RATE_HZ.load(std::sync::atomic::Ordering::Relaxed);
                 let max_bits = TRACK_MAX_BITS.load(std::sync::atomic::Ordering::Relaxed);
-                let dsd = max_bits == 1 || eff_bits == 1;
-                // DSD is exempt ENTIRELY (not just the depth arm): past Phase 1
-                // the DoP/native paths play DSD bit-perfect, and its carrier/PCM
-                // rate vs the DSD "max" is apples-to-oranges, so any compare would
-                // flag a false downgrade arrow on a bit-perfect DSD stream.
-                let downgraded = !dsd
-                    && ((eff_rate_hz > 0
-                        && max_rate_hz > 0
-                        && (eff_rate_hz as f64) < max_rate_hz as f64 * 0.9)
-                        || (eff_bits > 0 && max_bits > 0 && eff_bits < max_bits));
+                let downgraded = stream_downgraded(eff_rate_hz, eff_bits, max_rate_hz, max_bits);
+                let requested_id =
+                    REQUESTED_QUALITY_ID.load(std::sync::atomic::Ordering::Relaxed);
+                let request_cause = REQUESTED_CAUSE.load(std::sync::atomic::Ordering::Relaxed);
+                let limit_cause =
+                    classify_limit_cause(downgraded, requested_id, request_cause, eff_bits);
+                let delivered_tier = delivered_tier_str(downgraded, requested_id, eff_bits);
                 // True delivered line, via the shared formatter so it matches
                 // the badge style ("16-bit / 44.1 kHz"). Native DSD streams
                 // (1-bit) go through the DSD label instead — the generic
@@ -4808,11 +4927,14 @@ pub fn start_poll_loop(
                     np.set_remaining(remaining.into());
                     np.set_playing(is_playing);
                     np.set_volume(volume.clamp(0.0, 1.0));
-                    // Effective quality for the downgrade arrow + tooltip.
+                    // Effective quality for the delivered-first badge line,
+                    // the downgrade arrow and the tooltip cause (#638 fix 1).
                     np.set_effective_sample_rate_hz(eff_rate_hz as i32);
                     np.set_effective_bit_depth(eff_bits as i32);
                     np.set_quality_downgraded(downgraded);
                     np.set_quality_true_detail(true_detail.into());
+                    np.set_quality_limit_cause(limit_cause);
+                    np.set_quality_effective_tier(delivered_tier.into());
                     // Keep the Purchases globals in step with play/pause + the live
                     // track id every tick (the meta-apply seeds them on a track
                     // change; this follows pause/resume + the engine's own id flips).
