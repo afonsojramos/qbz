@@ -21,6 +21,13 @@ pub struct DiscoveredDevice {
     pub model: String,
     pub ip: String,
     pub port: u16,
+    /// Whether `id` came from the mDNS TXT `id` record — the Cast device
+    /// UUID, stable across restarts and renames (comparable to a DLNA UDN).
+    /// When the record is absent, `id` falls back to the mDNS fullname,
+    /// which is derived from the friendly name and so DETACHES on rename:
+    /// callers must not persist per-device state keyed on an unstable id
+    /// (#638 fix 4 offers no quality cap for such devices).
+    pub id_is_stable: bool,
 }
 
 #[derive(Default)]
@@ -73,8 +80,9 @@ impl DeviceDiscovery {
                 match event {
                     ServiceEvent::ServiceResolved(info) => {
                         let fullname = info.get_fullname().to_string();
-                        let id = info
-                            .get_property_val_str("id")
+                        let id_prop = info.get_property_val_str("id");
+                        let id_is_stable = id_prop.is_some();
+                        let id = id_prop
                             .unwrap_or_else(|| fullname.as_str())
                             .to_string();
                         let name = info
@@ -95,6 +103,7 @@ impl DeviceDiscovery {
                             model,
                             ip,
                             port: info.get_port(),
+                            id_is_stable,
                         };
 
                         if let Ok(mut state) = state.lock() {
