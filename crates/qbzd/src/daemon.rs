@@ -112,6 +112,13 @@ pub async fn run(roots: ProfileRoots, cfg: QbzdConfig, warns: Vec<String>) -> Re
     //      clone, so it is aborted+joined ahead of `drop(booted)` (#521 ordering).
     let queue_persist = spawn_queue_persist(booted.runtime.clone(), booted.bus.subscribe());
 
+    // 10c. Scrobble-on-play (CONSOLE): a CoreEvent-bus subscriber that sends
+    //      "now playing" on TrackStarted and scrobbles once past the Last.fm
+    //      threshold, to whichever of Last.fm / ListenBrainz is connected +
+    //      enabled in the scrobbler store. Holds NO Arc<AppRuntime>, so it sits
+    //      outside the #521/§8.2 ordering — aborted for a clean shutdown below.
+    let scrobbler = crate::scrobble_engine::spawn(roots.clone(), booted.bus.subscribe());
+
     // 11. HTTP serve (02 §3) on the already-bound socket. `ApiState` carries a
     //     second read-only audio-store connection (WAL) for the status audio
     //     block, the tokio handle for the async queue read, and the opt-in
@@ -187,6 +194,9 @@ pub async fn run(roots: ProfileRoots, cfg: QbzdConfig, warns: Vec<String>) -> Re
     // `Arc<AppRuntime>` clone alive past `drop(booted)` (#521 ordering).
     queue_persist.abort();
     let _ = queue_persist.await;
+    // Stop the scrobble-on-play subscriber (holds no Arc<AppRuntime>; order-free).
+    scrobbler.abort();
+    let _ = scrobbler.await;
     // Final full session save (queue + position) now that playback is quiesced.
     playback_driver::save_session_now(booted.runtime.as_ref()).await;
     // The background auth-retry task also holds an Arc<AppRuntime> clone — abort

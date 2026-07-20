@@ -9,7 +9,7 @@ mod lock;
 mod login;
 mod paths;
 mod qconnect;
-mod scrobbler;
+mod scrobble_engine;
 mod state;
 mod tui;
 
