@@ -659,6 +659,26 @@ impl SlintCastService {
         }
     }
 
+    /// The tier the NEXT cast request would resolve to right now (the
+    /// streaming preference clamped by the connected renderer's manual cap),
+    /// or `None` when no renderer is connected — the same gate `is_casting`
+    /// uses, so this agrees with `play_audible`'s routing. Lets
+    /// `kick_prefetch` warm the quality-blind L1/L2 cache at the tier the
+    /// cast will actually request: the cast resolve is cache-first, so bytes
+    /// prefetched at any OTHER tier (notably the local-DAC-capped one) would
+    /// go out to the renderer verbatim, leaking a cap from a device that is
+    /// not in the cast's signal path (#638 precedence rule).
+    pub async fn casting_prefetch_quality(&self) -> Option<Quality> {
+        let cap_key = {
+            let inner = self.inner.lock().await;
+            if inner.protocol.is_none() {
+                return None;
+            }
+            inner.connected_cap_key.clone()
+        };
+        Some(self.effective_cast_quality(cap_key.as_deref()).0)
+    }
+
     /// local: stream the file from disk via register_file (no full-RAM read);
     /// the crate's rich MIME map sets the content type. No probe/origin/
     /// requested-tier: local files are not governed by the streaming

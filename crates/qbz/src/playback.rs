@@ -125,15 +125,31 @@ async fn kick_prefetch(runtime: &Runtime) {
     if crate::offline_mode::engine().is_offline() {
         return;
     }
+    // The tier to prefetch at, resolved ONCE so the throttle estimate and
+    // the actual requests below can never disagree. Local playback: the
+    // device-capped resolve (#638 fix 3). CASTING: the cast-effective tier
+    // instead — after_track_change runs this even when play_audible took the
+    // cast branch, the L1/L2 cache is quality-blind, and the cast resolve is
+    // cache-first, so bytes prefetched at the local-DAC-capped tier would go
+    // out to the renderer verbatim on the next advance, leaking a cap from a
+    // device that is not in the cast's signal path (#638 precedence rule,
+    // owner decision). While casting this warms the cache for the CAST (the
+    // local gapless engine is stopped), so the cast's own request tier is
+    // the only correct one.
+    let quality = match crate::cast_service::service() {
+        Some(cast) => cast.casting_prefetch_quality().await,
+        None => None,
+    }
+    .unwrap_or_else(|| local_playback_quality().0);
     // Adaptive throttle (#591): when the live stream is starving — panic mode
     // after a decoder underrun, or bandwidth headroom below the surviving
     // ratio — prefetch must get out of the pipe entirely. Cap 0 means "no
     // prefetch right now"; the semaphore still bounds concurrency otherwise.
     {
         use qbz_audio::network_throttle::{self, PlaybackQualityTag};
-        // Device-capped (#638 fix 3): the bandwidth estimate must describe
-        // the tier prefetch will actually request below, not the raw pref.
-        let tag = match local_playback_quality().0 {
+        // The bandwidth estimate describes the tier prefetch actually
+        // requests below (#638 fix 3).
+        let tag = match quality {
             Quality::UltraHiRes => PlaybackQualityTag::UltraHiRes,
             Quality::HiRes => PlaybackQualityTag::HiRes,
             Quality::Lossless => PlaybackQualityTag::Lossless,
@@ -175,7 +191,7 @@ async fn kick_prefetch(runtime: &Runtime) {
             };
             let player = runtime.core().player();
             if let Err(e) = player
-                .prefetch_into_cache(client, track_id, local_playback_quality().0)
+                .prefetch_into_cache(client, track_id, quality)
                 .await
             {
                 log::debug!("[qbz-slint] prefetch: track {track_id} failed: {e}");
