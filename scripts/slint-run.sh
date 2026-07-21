@@ -28,13 +28,27 @@
 # is functionally identical but not byte-identical to the FAST/distribution build,
 # and switching tiers (or any RUSTFLAGS/profile knob) forces a one-time rebuild.
 #
+# ─── VISUAL PROGRESS ────────────────────────────────────────────────────────
+# Prints a start banner (wall-clock + tier), a live ⏱ ticker every 15s while the
+# long codegen phase is otherwise silent (elapsed / ETA / percent), and a final
+# banner with total build time. The ETA is learned: each successful build records
+# its duration per tier under ${XDG_CACHE_HOME:-~/.cache}/qbz-slint/, and the next
+# run of the same tier uses it as the estimate (no estimate on the first ever run
+# of a tier, or right after `cargo clean`). NO_TICKER=1 silences the live ticker.
+#
 # Usage: ./scripts/slint-run.sh [extra app args]
 #   FAST=1                        ./scripts/slint-run.sh   # force the fast build
 #   THREADS=4 CODEGEN_UNITS=128 OPT=3 ./scripts/slint-run.sh   # manual override
 #   CAPPED=0                      ./scripts/slint-run.sh   # disable the cgroup cap
 #   NORUN=1                       ./scripts/slint-run.sh   # build only, don't exec
+#   NO_TICKER=1                   ./scripts/slint-run.sh   # no live progress ticker
 set -euo pipefail
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/.."
+
+# --- Pretty helpers ----------------------------------------------------------
+if [[ -t 2 ]]; then C_DIM=$'\033[2m'; C_BOLD=$'\033[1m'; C_GRN=$'\033[32m'; C_RST=$'\033[0m'
+else C_DIM=""; C_BOLD=""; C_GRN=""; C_RST=""; fi
+fmt_dur() { local s=$1; printf '%dm %02ds' $(( s / 60 )) $(( s % 60 )); }
 
 avail_mb=$(free -m | awk '/^Mem:/ {print $7}')
 
@@ -59,8 +73,43 @@ export CARGO_PROFILE_RELEASE_CODEGEN_UNITS="${CODEGEN_UNITS}"
 export CARGO_PROFILE_RELEASE_OPT_LEVEL="${OPT}"
 export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"   # one rustc at a time (memory)
 
+# --- Learned ETA: last successful build duration for THIS tier ---------------
+eta_dir="${XDG_CACHE_HOME:-$HOME/.cache}/qbz-slint"
+eta_file="${eta_dir}/last-build-${TIER}.secs"
+eta_secs=0
+[[ -r "${eta_file}" ]] && eta_secs=$(cat "${eta_file}" 2>/dev/null || echo 0)
+[[ "${eta_secs}" =~ ^[0-9]+$ ]] || eta_secs=0
+
 echo "[slint-run] tier=${TIER} avail=${avail_mb}MB → threads=${THREADS} codegen-units=${CODEGEN_UNITS} opt-level=${OPT} capped=${CAPPED}"
 
+# --- Start banner ------------------------------------------------------------
+build_start=$(date +%s)
+if (( eta_secs > 0 )); then eta_txt="~$(fmt_dur "${eta_secs}") (last ${TIER})"; else eta_txt="unknown (first ${TIER} build)"; fi
+printf '%s[slint-run] ▶ build started %s  ·  ETA %s%s\n' \
+  "${C_BOLD}" "$(date '+%H:%M:%S')" "${eta_txt}" "${C_RST}"
+
+# --- Live ticker: elapsed / ETA / percent, every 15s while codegen is silent -
+tick_pid=""
+if [[ "${NO_TICKER:-0}" != 1 ]] && [[ -t 2 ]]; then
+  (
+    while true; do
+      sleep 15
+      now=$(date +%s); el=$(( now - build_start ))
+      if (( eta_secs > 0 )); then
+        pct=$(( el * 100 / eta_secs )); (( pct > 99 )) && pct=99
+        printf '%s[slint-run] ⏱  %s elapsed · ETA ~%s · ~%d%%%s\n' \
+          "${C_DIM}" "$(fmt_dur "${el}")" "$(fmt_dur "${eta_secs}")" "${pct}" "${C_RST}" >&2
+      else
+        printf '%s[slint-run] ⏱  %s elapsed%s\n' "${C_DIM}" "$(fmt_dur "${el}")" "${C_RST}" >&2
+      fi
+    done
+  ) &
+  tick_pid=$!
+  # Safety net: if the build aborts (set -e), don't leak the ticker.
+  trap '[[ -n "${tick_pid}" ]] && kill "${tick_pid}" 2>/dev/null || true' EXIT
+fi
+
+# --- The build ---------------------------------------------------------------
 if [[ "${CAPPED}" == 1 ]] && command -v cargo-capped >/dev/null 2>&1; then
   # Cap the cgroup so the GLOBAL MemAvailable floor never reaches earlyoom's
   # 10% trigger (~3.2 GB on this box). Empirically (2026-07-04, ftrace-caught):
@@ -76,6 +125,14 @@ if [[ "${CAPPED}" == 1 ]] && command -v cargo-capped >/dev/null 2>&1; then
 else
   cargo +nightly build --release --manifest-path crates/Cargo.toml -p qbz
 fi
+
+# --- Stop the ticker, record the duration, print the final banner ------------
+[[ -n "${tick_pid}" ]] && { kill "${tick_pid}" 2>/dev/null || true; wait "${tick_pid}" 2>/dev/null || true; }
+trap - EXIT
+build_secs=$(( $(date +%s) - build_start ))
+mkdir -p "${eta_dir}" 2>/dev/null && printf '%s\n' "${build_secs}" > "${eta_file}" 2>/dev/null || true
+printf '%s[slint-run] ✔ build finished %s  ·  took %s  (tier %s)%s\n' \
+  "${C_BOLD}${C_GRN}" "$(date '+%H:%M:%S')" "$(fmt_dur "${build_secs}")" "${TIER}" "${C_RST}"
 
 [[ "${NORUN:-0}" == 1 ]] && { echo "[slint-run] build done (NORUN set)."; exit 0; }
 
