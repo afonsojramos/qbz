@@ -3760,6 +3760,14 @@ export global LabelState {
     in property <bool> description-truncated: false;
     // Header follow state — true when the label is in the user's favorites.
     in property <bool> is-following: false;
+    // Catalog/library toggle (SegmentedTabBar, mirrors ArtistState.artist-tab
+    // + library-*): "catalog" renders the /label/page sections; "library"
+    // renders the user's favorite albums on this label (the session
+    // library_by_label index). The toggle only shows when count > 0.
+    in-out property <string> label-tab: "catalog";
+    in property <int> library-count: 0;
+    in property <[AlbumCardItem]> library-albums: [];
+    in property <[TrackItem]> library-tracks: [];
     // Popular tracks (album-thumbnail rows, multi-select capable).
     in property <[TrackItem]> top-tracks: [];
     // Multi-select (mirrors AlbumState): mode flag + count. Per-row toggle

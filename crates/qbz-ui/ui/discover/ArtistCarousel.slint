@@ -7,6 +7,7 @@ import { Typography } from "../foundation/typography.slint";
 import { SlimItem, ShellState, AppearanceState } from "../state.slint";
 import { ArtistCard } from "ArtistCard.slint";
 import { ArtistGridCard } from "ArtistGridCard.slint";
+import { LabelCard } from "LabelCard.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 
 component NavButton inherits Rectangle {
@@ -77,16 +78,21 @@ export component ArtistCarousel inherits VerticalLayout {
     // the legacy 160x220 ArtistCard, used by non-artist carousels whose items
     // are labels/awards (the artist-specific play/open actions don't apply).
     in property <bool> grid-cards: true;
+    // Render the 200x246 LabelCard (Library-favorites parity — the label
+    // twin of the album card: logo + name, no hover actions) for carousels
+    // whose items are LABELS (e.g. LabelView's More Labels). Wins over
+    // grid-cards. Items stay SlimItem; the card fields are mapped inline.
+    in property <bool> label-cards: false;
     callback artist-clicked(string);
     callback media-action(string, string, string);
     callback view-all-clicked();
 
     // Grid cards are wider (200) and taller (246); the legacy card stays 160.
-    property <length> card-width: root.grid-cards ? 200px : 160px;
+    property <length> card-width: root.grid-cards || root.label-cards ? 200px : 160px;
     // Overridable so a host view (Discover Recommendations, whose cards carry a
     // "Similar to…" subtitle) can give the row a taller viewport + card.
     in property <length> card-height: 220px;
-    property <length> eff-height: root.grid-cards ? 246px : root.card-height;
+    property <length> eff-height: root.grid-cards || root.label-cards ? 246px : root.card-height;
     property <length> gap: 16px;
 
     property <int> count: root.artists.length;
@@ -160,7 +166,19 @@ export component ArtistCarousel inherits VerticalLayout {
                 for artist in root.artists: Rectangle {
                     width: root.card-width;
                     height: root.eff-height;
-                    if root.grid-cards: ArtistGridCard {
+                    if root.label-cards: LabelCard {
+                        label: {
+                            id: artist.id,
+                            name: artist.title,
+                            albums-line: artist.subtitle,
+                            image-url: artist.artwork-url,
+                            image: artist.artwork,
+                        };
+                        clicked(id, name) => {
+                            root.artist-clicked(id);
+                        }
+                    }
+                    if !root.label-cards && root.grid-cards: ArtistGridCard {
                         artist: artist;
                         follow-mode: root.card-follow-mode;
                         follow-kind: root.card-follow-kind;
@@ -171,7 +189,7 @@ export component ArtistCarousel inherits VerticalLayout {
                             root.media-action(k, i, a);
                         }
                     }
-                    if !root.grid-cards: ArtistCard {
+                    if !root.label-cards && !root.grid-cards: ArtistCard {
                         artist: artist;
                         card-height: root.card-height;
                         follow-mode: root.card-follow-mode;

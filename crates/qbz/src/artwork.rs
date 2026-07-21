@@ -148,6 +148,10 @@ pub enum ArtworkTarget {
     LabelTopTrack { index: usize },
     /// A card in LabelState.releases-section.albums[index] (landing).
     LabelReleaseAlbum { index: usize },
+    /// A card in LabelState.library-albums[index] (landing, "In library" tab).
+    LabelLibraryAlbum { index: usize },
+    /// A row in LabelState.library-tracks[index] (landing, "In library" tab).
+    LabelLibraryTrack { index: usize },
     /// A card in LabelState.critics-section.albums[index] (landing).
     LabelCriticsAlbum { index: usize },
     /// The cover of LabelState.playlists[index] (landing).
@@ -316,6 +320,7 @@ impl ArtworkTarget {
             // Label/Artist "Popular Tracks" rows are the same list-row
             // thumbnail as the track targets above (~40px rendered).
             | ArtworkTarget::LabelTopTrack { .. }
+            | ArtworkTarget::LabelLibraryTrack { .. }
             | ArtworkTarget::ArtistTopTrack { .. }
             | ArtworkTarget::ArtistLibraryTrack { .. }
             | ArtworkTarget::LocalArtistRowImage { .. } => 96,
@@ -1293,6 +1298,20 @@ fn apply_artwork(
         }
         ArtworkTarget::LabelReleaseAlbum { index } => {
             let model = window.global::<crate::LabelState>().get_releases_section().albums;
+            if let Some(mut item) = model.row_data(index) {
+                item.artwork = image;
+                model.set_row_data(index, item);
+            }
+        }
+        ArtworkTarget::LabelLibraryAlbum { index } => {
+            let model = window.global::<crate::LabelState>().get_library_albums();
+            if let Some(mut item) = model.row_data(index) {
+                item.artwork = image;
+                model.set_row_data(index, item);
+            }
+        }
+        ArtworkTarget::LabelLibraryTrack { index } => {
+            let model = window.global::<crate::LabelState>().get_library_tracks();
             if let Some(mut item) = model.row_data(index) {
                 item.artwork = image;
                 model.set_row_data(index, item);

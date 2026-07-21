@@ -46,22 +46,32 @@ where
 {
     let mut map: HashMap<String, ArtistLibrary> = HashMap::new();
 
+    let mut fav_tracks: Vec<TrackCard> = Vec::new();
+    let mut fav_albums: Vec<AlbumCard> = Vec::new();
+
     if let Ok(FavData::Tracks { items, .. }) =
         favorites::load_favorites(runtime, FavTab::Tracks).await
     {
-        for t in items {
-            if !t.artist_id.is_empty() {
-                map.entry(t.artist_id.clone()).or_default().tracks.push(t);
-            }
-        }
+        fav_tracks = items;
     }
     if let Ok(FavData::Albums { items, .. }) =
         favorites::load_favorites(runtime, FavTab::Albums).await
     {
-        for a in items {
-            if !a.artist_id.is_empty() {
-                map.entry(a.artist_id.clone()).or_default().albums.push(a);
-            }
+        fav_albums = items;
+    }
+
+    // Feed the per-label index from the SAME two fetches (no doubled
+    // pagination) — powers the LabelPage catalog/library toggle.
+    crate::library_by_label::seed_from_parts(&fav_tracks, &fav_albums);
+
+    for t in fav_tracks {
+        if !t.artist_id.is_empty() {
+            map.entry(t.artist_id.clone()).or_default().tracks.push(t);
+        }
+    }
+    for a in fav_albums {
+        if !a.artist_id.is_empty() {
+            map.entry(a.artist_id.clone()).or_default().albums.push(a);
         }
     }
 

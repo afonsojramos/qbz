@@ -23,6 +23,12 @@ pub fn qobuz_artist_url(artist_id: &str) -> String {
     format!("https://play.qobuz.com/artist/{artist_id}")
 }
 
+/// Qobuz web-player label URL (label-page header Share action). There is no
+/// Song.link/Album.link equivalent for labels — Qobuz-link only.
+pub fn qobuz_label_url(label_id: &str) -> String {
+    format!("https://play.qobuz.com/label/{label_id}")
+}
+
 /// Long-lived clipboard instance. arboard ties the offer's lifetime to the
 /// LAST live `Clipboard` object: dropping it destroys the X11 selection
 /// window (contents survive only when a clipboard MANAGER accepts the

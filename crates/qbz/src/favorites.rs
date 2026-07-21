@@ -129,6 +129,10 @@ pub struct TrackCard {
     pub quality_detail: String,
     pub explicit: bool,
     pub artwork_url: String,
+    /// Qobuz label id from the nested album object ("" when the surface
+    /// doesn't return it) — feeds the per-label library index behind the
+    /// LabelPage catalog/library toggle. Not rendered by any card.
+    pub label_id: String,
 }
 
 #[derive(Clone)]
@@ -471,6 +475,12 @@ fn map_track(track: Track) -> TrackCard {
         ),
         explicit: track.parental_warning,
         artwork_url,
+        label_id: track
+            .album
+            .as_ref()
+            .and_then(|a| a.label.as_ref())
+            .map(|l| l.id.to_string())
+            .unwrap_or_default(),
     }
 }
 

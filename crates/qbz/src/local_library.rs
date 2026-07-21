@@ -143,6 +143,9 @@ pub fn map_local_album(a: qbz_library::LocalAlbum) -> crate::album_map::AlbumCar
         quality_tier: tier.to_string(),
         quality_label,
         artwork_url: a.artwork_path.unwrap_or_default(),
+        // Local/Plex albums carry no Qobuz label id — they never join the
+        // per-label library index.
+        label_id: String::new(),
         release_type: crate::album_map::classify_release_type(Some(a.track_count)).to_string(),
         source,
         quality_detail,

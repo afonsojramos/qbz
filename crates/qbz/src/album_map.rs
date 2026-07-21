@@ -24,6 +24,10 @@ pub struct AlbumCard {
     pub quality_tier: String,
     pub quality_label: String,
     pub artwork_url: String,
+    // Qobuz label id ("" when the album surface carries no label object) —
+    // feeds the per-label library index behind the LabelPage catalog/library
+    // toggle. Not rendered by any card.
+    pub label_id: String,
     // List-row extras (AlbumListRow columns; ignored by the grid card).
     pub release_type: String,   // "Album" | "EP" | "Single" (TYPE column)
     // "local" | "qobuz_download" | "plex" | "" — SOURCE column + the
@@ -109,6 +113,11 @@ pub fn map_album(album: Album) -> AlbumCard {
         quality_tier,
         quality_label,
         artwork_url: album.image.best().cloned().unwrap_or_default(),
+        label_id: album
+            .label
+            .as_ref()
+            .map(|l| l.id.to_string())
+            .unwrap_or_default(),
         release_type,
         // Qobuz album surfaces (Discover / Favorites / Label) hide the SOURCE
         // column and the badge, so leave it empty (preserves prior behavior).

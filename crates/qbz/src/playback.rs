@@ -3044,6 +3044,43 @@ pub fn play_artist_top_shuffled(
     });
 }
 
+/// Shuffle-play ALL of the label's Popular tracks (label header shuffle).
+/// Tracks come from the label page's cached list (no re-fetch needed);
+/// xorshift-shuffles in place (same seedless mix as `play_album_shuffled`)
+/// and hands off to `play_tracks_ctx` with the label context stamped.
+pub fn play_label_top_shuffled(
+    runtime: Runtime,
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+    tracks: Vec<Track>,
+    label_id: String,
+) -> bool {
+    let mut tracks = tracks;
+    if tracks.is_empty() {
+        return false;
+    }
+    let mut seed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(1)
+        | 1;
+    for i in (1..tracks.len()).rev() {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        let j = (seed % (i as u64 + 1)) as usize;
+        tracks.swap(i, j);
+    }
+    play_tracks_ctx(
+        runtime,
+        weak,
+        handle,
+        tracks,
+        0,
+        Some(("label".to_string(), label_id)),
+    )
+}
+
 /// Play the artist's Popular tracks starting at the clicked track id (queues
 /// the tracks that follow it). `visible_ids` is the Popular-tracks VISIBLE row
 /// order — the queue is reordered/filtered to match, so the in-page search

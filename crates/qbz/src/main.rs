@@ -58,6 +58,7 @@ mod keybindings;
 mod label;
 mod library_all;
 mod library_by_artist;
+mod library_by_label;
 mod link_resolver;
 mod miniplayer;
 mod location_view;
@@ -3338,10 +3339,97 @@ fn navigate_label(
             Ok(payload) => {
                 let jobs = label::page_artwork_jobs(&payload);
                 let image_url = payload.image_url.clone();
+                // Artists whose /label/page entry carried no parseable image —
+                // left as "" the carousel keeps the placeholder forever.
+                // Tauri-parity fallback (LabelView.svelte loadArtistImages):
+                // resolve each missing image (custom portrait first, then
+                // v2/artist/get) and feed it through the same LabelArtist
+                // pipeline (model indices are stable once apply runs).
+                let missing_artists: Vec<(usize, String, String)> = payload
+                    .artists
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, a)| a.image_url.is_empty())
+                    .map(|(i, a)| (i, a.id.clone(), a.name.clone()))
+                    .collect();
+                // Catalog/library toggle: the per-label favorites index (seeded
+                // at login from the same fetch as library_by_artist).
+                let lib = crate::library_by_label::get(&label_id.to_string());
+                // Cover jobs for the "In library" grid — the models seed with
+                // empty images (same pattern as the artist library tab).
+                let lib_jobs: Vec<artwork::ArtworkJob> = lib
+                    .as_ref()
+                    .map(|lib| {
+                        lib.tracks
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, t)| !t.artwork_url.is_empty())
+                            .map(|(index, t)| artwork::ArtworkJob {
+                                target: artwork::ArtworkTarget::LabelLibraryTrack { index },
+                                url: t.artwork_url.clone(),
+                            })
+                            .chain(
+                                lib.albums
+                                    .iter()
+                                    .enumerate()
+                                    .filter(|(_, a)| !a.artwork_url.is_empty())
+                                    .map(|(index, a)| artwork::ArtworkJob {
+                                        target: artwork::ArtworkTarget::LabelLibraryAlbum { index },
+                                        url: a.artwork_url.clone(),
+                                    }),
+                            )
+                            .collect()
+                    })
+                    .unwrap_or_default();
                 let _ = weak.upgrade_in_event_loop(move |w| {
                     label::apply_label_page(&w, payload);
+                    if let Some(lib) = lib.as_ref() {
+                        label::apply_label_library(&w, lib);
+                    }
                 });
                 artwork::spawn_loads(jobs, weak.clone(), image_cache.clone());
+                artwork::spawn_loads(lib_jobs, weak.clone(), image_cache.clone());
+                if !missing_artists.is_empty() {
+                    let runtime = runtime.clone();
+                    let weak = weak.clone();
+                    let image_cache = image_cache.clone();
+                    tokio::spawn(async move {
+                        let mut net_jobs = Vec::new();
+                        let mut local_jobs = Vec::new();
+                        for (index, artist_id, name) in missing_artists {
+                            // A user-set custom portrait always wins (same
+                            // rule as the artist page).
+                            if let Some(path) = crate::custom_artwork::artist_image(&name) {
+                                local_jobs.push(artwork::ArtworkJob {
+                                    target: artwork::ArtworkTarget::LabelArtist { index },
+                                    url: path,
+                                });
+                                continue;
+                            }
+                            if let Ok(id) = artist_id.parse::<u64>() {
+                                match runtime.core().get_artist(id).await {
+                                    Ok(artist) => {
+                                        if let Some(url) =
+                                            artist.image.as_ref().and_then(|i| i.best())
+                                        {
+                                            net_jobs.push(artwork::ArtworkJob {
+                                                target: artwork::ArtworkTarget::LabelArtist {
+                                                    index,
+                                                },
+                                                url: url.clone(),
+                                            });
+                                        }
+                                    }
+                                    Err(e) => {
+                                        log::debug!("[qbz-slint] label artist image fallback for {artist_id} failed: {e}");
+                                    }
+                                }
+                            }
+                        }
+                        artwork::spawn_loads(net_jobs, weak.clone(), image_cache.clone());
+                        artwork::spawn_local_loads(local_jobs, weak, image_cache);
+                    });
+                }
                 if !image_url.is_empty() {
                     if let Some((pixels, width, height)) =
                         artwork::fetch_and_decode(&image_url, &image_cache, 240).await
@@ -12367,6 +12455,57 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if let Some(w) = weak.upgrade() {
                         let tracks = label::selected_play_tracks(&w);
                         playback::enqueue_tracks(runtime.clone(), handle.clone(), tracks, true);
+                    }
+                }
+                // Popular Tracks section menu + header overflow: ALL of the
+                // label's popular tracks play-next / add-to-queue (the cached
+                // list — same source as "play-top").
+                ("label", "top-play-next") => {
+                    let tracks = label::top_tracks_for_play();
+                    if tracks.is_empty() {
+                        crate::toast::error_weak(&weak, "No popular tracks for this label");
+                    } else {
+                        playback::enqueue_tracks(runtime.clone(), handle.clone(), tracks, true);
+                    }
+                }
+                ("label", "top-queue") => {
+                    let tracks = label::top_tracks_for_play();
+                    if tracks.is_empty() {
+                        crate::toast::error_weak(&weak, "No popular tracks for this label");
+                    } else {
+                        playback::enqueue_tracks(runtime.clone(), handle.clone(), tracks, false);
+                    }
+                }
+                // Header shuffle: all popular tracks, xorshift-shuffled.
+                ("label", "shuffle") => {
+                    let tracks = label::top_tracks_for_play();
+                    if tracks.is_empty() {
+                        crate::toast::error_weak(&weak, "No popular tracks for this label");
+                    } else {
+                        playback::play_label_top_shuffled(
+                            runtime.clone(),
+                            weak.clone(),
+                            handle.clone(),
+                            tracks,
+                            id.clone(),
+                        );
+                    }
+                }
+                // Header overflow Share — Qobuz web-player label link (no
+                // Song.link/Album.link equivalent exists for labels).
+                ("label", "share") => {
+                    let label_id = if id.is_empty() {
+                        weak.upgrade()
+                            .map(|w| w.global::<LabelState>().get_id().to_string())
+                            .unwrap_or_default()
+                    } else {
+                        id.clone()
+                    };
+                    if !label_id.is_empty() {
+                        share::copy_to_clipboard(share::qobuz_label_url(&label_id));
+                        if let Some(w) = weak.upgrade() {
+                            crate::toast::success(&w, qbz_i18n::t("Link copied"));
+                        }
                     }
                 }
                 ("label", "add-to-playlist") => {

@@ -24,6 +24,10 @@ import { JumpNavBar } from "../primitives/JumpNavBar.slint";
 import { Carousel } from "../discover/Carousel.slint";
 import { ArtistCarousel } from "../discover/ArtistCarousel.slint";
 import { PlaylistCarousel } from "../discover/PlaylistCarousel.slint";
+import { ContextMenu } from "../primitives/ContextMenu.slint";
+import { ContextMenuItem } from "../primitives/ContextMenuItem.slint";
+import { AlbumCollectionView } from "../discover/AlbumCollectionView.slint";
+import { SegmentedTabBar } from "../primitives/SegmentedTabBar.slint";
 
 component SectionTitle inherits Text {
     color: Theme.text-primary;
@@ -164,10 +168,19 @@ export component LabelPageView inherits Rectangle {
 
                     Rectangle { height: 18px; }
 
-                    // Follow / Following — ghost circle, accent-tinted when
-                    // followed. Toggles via the global media-action channel.
+                    // Header action cluster (Qobuz-web parity): Follow +
+                    // Shuffle + overflow menu, with the catalog/library
+                    // toggle floated right. NO header Play — the Popular
+                    // Tracks section already has it and it does the same
+                    // (owner call 2026-07-21). All 32px secondaries (no
+                    // primary), so the row is uniform — no "roller coaster".
+                    // Default alignment (stretch) so the spacer below can
+                    // push the toggle to the right edge (an `alignment:
+                    // start` row ignores stretch factors and butt-joined it).
                     HorizontalLayout {
-                        alignment: start;
+                        spacing: 12px;
+                        // Follow / Following — ghost circle, accent-tinted when
+                        // followed. Toggles via the global media-action channel.
                         CircleAction {
                             active: LabelState.is-following;
                             // Plain page background — theme-aware variant so it
@@ -180,13 +193,94 @@ export component LabelPageView inherits Rectangle {
                                 root.media-action("label", LabelState.id, "follow");
                             }
                         }
+                        CircleAction {
+                            icon: @image-url("../assets/icons/shuffle.svg");
+                            on-surface: true;
+                            tooltip: @tr("Shuffle");
+                            clicked => {
+                                root.media-action("label", LabelState.id, "shuffle");
+                            }
+                        }
+                        // ⋯ Overflow — Play next / Add to queue / Share (the
+                        // Qobuz web label menu). Share is Qobuz-link only:
+                        // Song.link/Album.link have no label equivalent.
+                        Rectangle {
+                            width: 32px;
+                            height: 32px;
+                            CircleAction {
+                                icon: @image-url("../assets/icons/ellipsis.svg");
+                                on-surface: true;
+                                tooltip: @tr("More options");
+                                clicked => {
+                                    label-overflow-menu.show();
+                                }
+                            }
+                            // Opens below the ⋯ with the left edge aligned to
+                            // the button (the artist header overflow anchors
+                            // the same way).
+                            label-overflow-menu := PopupWindow {
+                                x: 0px;
+                                y: 38px;
+                                width: 224px;
+                                height: 3 * 33px + 10px;
+                                close-policy: close-on-click;
+                                ContextMenu {
+                                    ContextMenuItem {
+                                        icon: @image-url("../assets/icons/list-plus.svg");
+                                        label: @tr("Play next");
+                                        clicked => {
+                                            root.media-action("label", "", "top-play-next");
+                                        }
+                                    }
+                                    ContextMenuItem {
+                                        icon: @image-url("../assets/icons/list-end.svg");
+                                        label: @tr("Add to queue");
+                                        clicked => {
+                                            root.media-action("label", "", "top-queue");
+                                        }
+                                    }
+                                    ContextMenuItem {
+                                        icon: @image-url("../assets/icons/link.svg");
+                                        label: @tr("Share");
+                                        clicked => {
+                                            root.media-action("label", LabelState.id, "share");
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        // Catalog / Library toggle — floated to the RIGHT of the
+                        // header action cluster (artist-page parity). Only when
+                        // the user has library items for this label.
+                        Rectangle { horizontal-stretch: 1; }
+                        if LabelState.library-count > 0: VerticalLayout {
+                            alignment: center;
+                            SegmentedTabBar {
+                                active-id: LabelState.label-tab;
+                                tabs: [
+                                    { id: "catalog", label: @tr("From catalog"), count: 0 },
+                                    { id: "library", label: @tr("In library"), count: LabelState.library-count },
+                                ];
+                                selected(id) => { LabelState.label-tab = id; }
+                            }
+                        }
                     }
                 }
             }
 
             // Reservation for the sticky JUMP TO overlay (its 44px + gap).
-            // The overlay anchors its natural y to this element.
-            jump-anchor := Rectangle { height: 52px; }
+            // The overlay anchors its natural y to this element. Only the
+            // catalog tab has jump sections — collapse the reservation in
+            // library mode.
+            jump-anchor := Rectangle {
+                height: LabelState.label-tab == "catalog" ? 52px : 0px;
+            }
+
+            // Catalog content — the whole /label/page stack renders only in
+            // "catalog" mode; "library" swaps to the user's added albums
+            // below (artist-page parity, same wrap-without-reindent idiom).
+            if LabelState.label-tab == "catalog": VerticalLayout {
+            spacing: 0px;
 
             // --- Loading (first paint) -----------------------------------
             if LabelState.loading && LabelState.top-tracks.length == 0
@@ -221,27 +315,73 @@ export component LabelPageView inherits Rectangle {
                 HorizontalLayout {
                     horizontal-stretch: 0;
                     spacing: 12px;
-                    CircleAction {
-                        icon: @image-url("../assets/icons/play-fill.svg");
-                        primary: true;
-                        on-surface: true;
-                        clicked => {
-                            root.media-action("label", LabelState.id, "play-top");
+                    // Every button wrapped in VerticalLayout (alignment:center)
+                    // so the 44px primary and the 32px secondaries share one
+                    // vertical centre (the artist section's "giant button"
+                    // homologation — an unwrapped CircleAction here
+                    // roller-coasters).
+                    VerticalLayout {
+                        alignment: center;
+                        CircleAction {
+                            icon: @image-url("../assets/icons/play-fill.svg");
+                            primary: true;
+                            on-surface: true;
+                            clicked => {
+                                root.media-action("label", LabelState.id, "play-top");
+                            }
                         }
                     }
-                    CircleAction {
-                        icon: @image-url("../assets/icons/square-check-big.svg");
-                        active: LabelState.multi-select;
-                        on-surface: true;
-                        clicked => {
-                            root.media-action("label", "", "select-toggle");
+                    VerticalLayout {
+                        alignment: center;
+                        CircleAction {
+                            icon: @image-url("../assets/icons/square-check-big.svg");
+                            active: LabelState.multi-select;
+                            on-surface: true;
+                            clicked => {
+                                root.media-action("label", "", "select-toggle");
+                            }
                         }
                     }
-                    CircleAction {
-                        icon: @image-url("../assets/icons/ellipsis.svg");
-                        on-surface: true;
-                        clicked => {
-                            root.media-action("label", "", "top-tracks-menu");
+                    // Popular Tracks section menu (all-tracks actions) —
+                    // was a dead button (fired an unhandled media-action).
+                    // Opens below the ⋯ with right edges aligned (artist-page
+                    // parity).
+                    VerticalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: 32px;
+                            height: 32px;
+                            CircleAction {
+                                icon: @image-url("../assets/icons/ellipsis.svg");
+                                on-surface: true;
+                                tooltip: @tr("More options");
+                                clicked => {
+                                    top-tracks-menu.show();
+                                }
+                            }
+                            top-tracks-menu := PopupWindow {
+                                x: 32px - self.width;
+                                y: 38px;
+                                width: 224px;
+                                height: 2 * 33px + 10px;
+                                close-policy: close-on-click;
+                                ContextMenu {
+                                    ContextMenuItem {
+                                        icon: @image-url("../assets/icons/list-plus.svg");
+                                        label: @tr("Play next");
+                                        clicked => {
+                                            root.media-action("label", "", "top-play-next");
+                                        }
+                                    }
+                                    ContextMenuItem {
+                                        icon: @image-url("../assets/icons/list-end.svg");
+                                        label: @tr("Add to queue");
+                                        clicked => {
+                                            root.media-action("label", "", "top-queue");
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -380,17 +520,51 @@ export component LabelPageView inherits Rectangle {
             if LabelState.more-labels.length > 0: ArtistCarousel {
                 title: @tr("More labels");
                 artists: LabelState.more-labels;
-                // Labels, not artists — keep the generic legacy card (the grid
-                // card's artist play / "Open artist" actions don't apply).
-                grid-cards: false;
-                // Round cards with a Follow/Following toggle, kind = label.
-                card-follow-mode: "toggle";
-                card-follow-kind: "label";
+                // The NEW LabelCard (Library-favorites parity): logo + name,
+                // opened on click — replaces the legacy generic ArtistCard.
+                label-cards: true;
                 artist-clicked(id) => {
                     root.media-action("label", id, "open");
                 }
                 media-action(kind, id, action) => {
                     root.media-action(kind, id, action);
+                }
+            }
+            }   // close the "catalog" wrapper VerticalLayout
+
+            // --- In library — the user's added items on this label ----------
+            // Mirrors the artist library tab: Pistas (track rows) + Álbumes
+            // (grid). Web-parity copy ("Pistas añadidas" / "Álbumes
+            // añadidos") uses the same msgids as the artist tab.
+            if LabelState.label-tab == "library": VerticalLayout {
+                spacing: 0px;
+                if LabelState.library-tracks.length > 0: SectionTitle {
+                    text: @tr("Tracks");
+                }
+                if LabelState.library-tracks.length > 0: Rectangle { height: 10px; }
+                for track[index] in LabelState.library-tracks: TrackRow {
+                    track: track;
+                    index: index;
+                    show-artwork: true;
+                    show-album: true;
+                    multi-select-mode: false;
+                    media-action(kind, id, action) => {
+                        root.media-action(kind, id, action);
+                    }
+                }
+                if LabelState.library-albums.length > 0: Rectangle { height: 24px; }
+                if LabelState.library-albums.length > 0: SectionTitle {
+                    text: @tr("Albums");
+                }
+                if LabelState.library-albums.length > 0: Rectangle { height: 10px; }
+                if LabelState.library-albums.length > 0: AlbumCollectionView {
+                    albums: LabelState.library-albums;
+                    view-mode: "grid";
+                    show-favorite: true;
+                    open-album(id) => { root.open-album(id); }
+                    media-action(kind, id, action) => {
+                        root.media-action(kind, id, action);
+                    }
                 }
             }
         }
@@ -400,7 +574,7 @@ export component LabelPageView inherits Rectangle {
     // Same sticky math as ArtistPageView: tracks the page scroll until the
     // header scrolls away, then pins to y = 0. No inline search (Tauri's
     // label jump-nav has none).
-    if LabelState.jump-tabs.length > 1: JumpNavBar {
+    if LabelState.jump-tabs.length > 1 && LabelState.label-tab == "catalog": JumpNavBar {
         bar-bg: ShellState.app-background-active
             ? Theme.surface-main.with-alpha(AppearanceState.app-background-bar-alpha)
             : Theme.surface-main;

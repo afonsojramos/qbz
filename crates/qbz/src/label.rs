@@ -1033,6 +1033,19 @@ pub fn apply_label_page(window: &AppWindow, payload: LabelPagePayload) {
     state.set_loading(false);
 }
 
+/// Seed the catalog/library toggle state for the open label (the user's
+/// favorite tracks + albums on it, from the session `library_by_label`
+/// index). Runs on the Slint event loop, right after `apply_label_page`.
+pub fn apply_label_library(window: &AppWindow, library: &crate::library_by_label::LabelLibrary) {
+    let state = window.global::<LabelState>();
+    state.set_library_count(library.count() as i32);
+    state.set_library_tracks(crate::library_by_artist::track_items(&library.tracks));
+    state.set_library_albums(crate::library_by_artist::album_items(&library.albums));
+    // Every visit starts on the catalog tab (the toggle is session-owned UI
+    // state, like the artist page's).
+    state.set_label_tab("catalog".into());
+}
+
 /// Build the JUMP TO tabs for the landing — only sections with content.
 /// anchor-y values are layout-derived estimates (variable header/grid
 /// heights make exact numbers impractical; the estimate lands the user
@@ -1180,6 +1193,12 @@ pub fn reset_label_page(window: &AppWindow) {
     state.set_artists(ModelRc::new(VecModel::from(Vec::<SlimItem>::new())));
     state.set_more_labels(ModelRc::new(VecModel::from(Vec::<SlimItem>::new())));
     state.set_jump_tabs(ModelRc::new(VecModel::from(Vec::<JumpNavTab>::new())));
+    // Catalog/library toggle — clear the previous label's library state so
+    // the toggle never lingers on a label with no library items.
+    state.set_label_tab("catalog".into());
+    state.set_library_count(0);
+    state.set_library_albums(ModelRc::new(VecModel::from(Vec::<AlbumCardItem>::new())));
+    state.set_library_tracks(ModelRc::new(VecModel::from(Vec::<TrackItem>::new())));
     state.set_page_loaded(false);
     state.set_loading(true);
 }
