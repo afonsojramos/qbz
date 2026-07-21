@@ -280,15 +280,6 @@ export component CastPicker inherits Rectangle {
                     }
                 }
 
-                // The literal answer to #638: Qobuz sells four discrete
-                // tiers — there is no 48 kHz tier to offer.
-                if CastState.connected && CastState.device-cap-available: Text {
-                    text: @tr("Qobuz only offers these tiers — there is no 48 kHz option. The step below Hi-Res is CD 44.1 kHz.");
-                    color: Theme.text-muted;
-                    font-size: Typography.legal;
-                    wrap: word-wrap;
-                }
-
                 // ---- Tabs + device list (when not connected) ----
                 if !CastState.connected: HorizontalLayout {
                     spacing: 8px;

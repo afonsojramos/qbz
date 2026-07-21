@@ -1471,11 +1471,24 @@ pub fn push_cap_options(window: &AppWindow) {
     // Tier names ("Hi-Res+", "CD Quality") are product names — untranslated
     // data, same convention as the Settings streaming dropdown.
     let global_label = crate::ui_prefs::STREAMING_QUALITIES[idx].label;
+    // Cap tiers use the SAME plain product names as the Settings streaming
+    // dropdown (owner call, #638) — the old verbose "CD — 16-bit / 44.1 kHz"
+    // form was misleading (a CD-tier track can be 48 kHz; the tier is a
+    // format_id, not a fixed sample rate). Looked up by key so they can never
+    // drift from `STREAMING_QUALITIES`. Index order matches `set_device_cap`:
+    // 0 follow · 1 hires · 2 cd · 3 mp3. Product names are untranslated data.
+    let label_for = |key: &str| {
+        crate::ui_prefs::STREAMING_QUALITIES
+            .iter()
+            .find(|q| q.key == key)
+            .map(|q| q.label)
+            .unwrap_or("")
+    };
     let options: Vec<slint::SharedString> = vec![
         qbz_i18n::t_args("Follow app setting ({})", &[global_label]).into(),
-        qbz_i18n::t("Hi-Res — 24-bit, up to 96 kHz").into(),
-        qbz_i18n::t("CD — 16-bit / 44.1 kHz").into(),
-        qbz_i18n::t("MP3 320").into(),
+        label_for("hires").into(),
+        label_for("cd").into(),
+        label_for("mp3").into(),
     ];
     let cs = window.global::<CastState>();
     cs.set_global_quality_label(global_label.into());
@@ -1540,10 +1553,12 @@ fn dlna_metadata(track: &QueueTrack) -> DlnaMetadata {
 /// FALLBACK quality label + detail from the track's CATALOG metadata — used
 /// only when the STREAMINFO probe cannot read the served bytes (non-FLAC /
 /// local files); Qobuz FLAC casts report the MEASURED values instead (#638
-/// fix 1). Returns (label, detail) e.g. ("Hi-Res FLAC", "96 kHz / 24-bit").
+/// fix 1). Returns (label, detail) e.g. ("Hi-Res FLAC", "24-bit / 96 kHz").
+/// Detail order is bit-depth first to match `quality::detail` and every other
+/// badge in the app (owner call, #638).
 fn quality_label_from_track(track: &QueueTrack) -> (String, String) {
     let detail = match (track.sample_rate, track.bit_depth) {
-        (Some(khz), Some(bits)) => format!("{} kHz / {}-bit", trim_khz(khz), bits),
+        (Some(khz), Some(bits)) => format!("{}-bit / {} kHz", bits, trim_khz(khz)),
         (Some(khz), None) => format!("{} kHz", trim_khz(khz)),
         (None, Some(bits)) => format!("{}-bit", bits),
         (None, None) => String::new(),
