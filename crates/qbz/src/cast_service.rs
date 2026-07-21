@@ -525,10 +525,21 @@ impl SlintCastService {
                 let mut inner = self.inner.lock().await;
                 let conn = inner.dlna.as_mut().ok_or("DLNA not connected")?;
                 // DLNA is a TWO-step load -> play.
-                conn.load_media(&url, &dlna_metadata(track), &content_type)
-                    .await
-                    .map_err(|e| e.to_string())?;
-                conn.play().await.map_err(|e| e.to_string())?;
+                let result = async {
+                    conn.load_media(&url, &dlna_metadata(track), &content_type)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    conn.play().await.map_err(|e| e.to_string())?;
+                    Ok::<(), String>(())
+                }
+                .await;
+                if let Err(e) = result {
+                    // Best-effort reset so the renderer doesn't sit half-loaded
+                    // on a URI it already faulted (#646: a rejected stream left
+                    // the renderer wedged and every retry re-routed to it).
+                    let _ = conn.stop().await;
+                    return Err(e);
+                }
             }
         }
 
@@ -1520,6 +1531,10 @@ fn content_type_for_local(path: &str) -> String {
         "wav" => "audio/wav",
         "m4a" | "alac" | "mp4" => "audio/mp4",
         "aiff" | "aif" => "audio/aiff",
+        // DSD containers (MinimServer DLNA convention) — mirrors the served
+        // MIME map in qbz-cast `content_type_for_path` (#646).
+        "dsf" => "audio/x-dsf",
+        "dff" => "audio/x-dff",
         "ape" => "audio/x-ape",
         "mp3" => "audio/mpeg",
         "ogg" | "oga" => "audio/ogg",
@@ -1557,6 +1572,14 @@ fn dlna_metadata(track: &QueueTrack) -> DlnaMetadata {
 /// Detail order is bit-depth first to match `quality::detail` and every other
 /// badge in the app (owner call, #638).
 fn quality_label_from_track(track: &QueueTrack) -> (String, String) {
+    // DSD tracks carry bit_depth=1 + the DSD bit rate as sample_rate — the
+    // generic "{}-bit / {} kHz" format would print the nonsense
+    // "1-bit / 2822.4 kHz". Use the DSD-aware label ("DSD64" …) both slots
+    // report elsewhere (#646).
+    if track.bit_depth == Some(1) {
+        let dsd = crate::quality::dsd_multiple_label(track.sample_rate);
+        return (dsd.clone(), dsd);
+    }
     let detail = match (track.sample_rate, track.bit_depth) {
         (Some(khz), Some(bits)) => format!("{}-bit / {} kHz", bits, trim_khz(khz)),
         (Some(khz), None) => format!("{} kHz", trim_khz(khz)),
