@@ -12,7 +12,7 @@ import { Typography } from "../foundation/typography.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { QualityBadgeFull } from "../primitives/QualityBadgeFull.slint";
 import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
-import { NowPlayingState, SettingsState, TooltipState, ArtPreviewState, ShellState } from "../state.slint";
+import { NowPlayingState, SettingsState, TooltipState, ArtPreviewState, ShellState, CastState } from "../state.slint";
 
 // Clickable artist/album link. Elides and shares the row width through a
 // stretch factor (the artist gets the larger share) so neither can be pushed
@@ -168,6 +168,33 @@ export component SongCard inherits Rectangle {
         ? (root.compact-stamp ? (root.narrow ? 116px : 120px) : 128px)
         : (root.compact-stamp ? (root.narrow ? 94px : 104px) : 140px);
     property <bool> has-stamp: root.show-badges && NowPlayingState.has-track;
+
+    // #638: the New/Classic NPB badge must report the DELIVERED quality and its
+    // cause — not just the catalog max — mirroring AudioStamp (Small/Large/kiosk
+    // mount that; New/Classic mount THIS card, which is where the owner saw the
+    // catalog "24-bit / 96 kHz" with no arrow while playing 44.1/16). All state
+    // is already on NowPlayingState; these just consume it.
+    property <bool> show-delivered: NowPlayingState.quality-downgraded
+        && NowPlayingState.quality-true-detail != "";
+    // WHY the stream is below the catalog max — keyed by the QualityLimit
+    // discriminant. Informative, not alarming: a downgrade from the user's own
+    // setting is the app doing what it was told, never a failure.
+    property <string> quality-cause-line: NowPlayingState.quality-limit-cause == 1
+        ? @tr("Limited by your streaming quality setting")
+        : (NowPlayingState.quality-limit-cause == 2
+            ? @tr("Limited by your output device's limit")
+            : (NowPlayingState.quality-limit-cause == 3
+                ? @tr("Limited by the quality cap for {}", CastState.device-name)
+                : (NowPlayingState.quality-limit-cause == 4
+                    ? @tr("Qobuz has no higher quality for this track")
+                    : "")));
+    // Catalog max ("Source") vs the truly delivered stream ("Output") + cause
+    // while downgraded; plain detail otherwise (matches AudioStamp.quality-tooltip).
+    property <string> quality-stamp-tooltip: root.show-delivered
+        ? @tr("Source: {}", NowPlayingState.quality-detail) + "\n"
+            + @tr("Output: {}", NowPlayingState.quality-true-detail)
+            + (root.quality-cause-line == "" ? "" : "\n" + root.quality-cause-line)
+        : NowPlayingState.quality-detail;
 
     // Exact horizontal space available to the title / meta text. Computed from
     // the card width minus the cover (art-size + art→text gap) and — when the
@@ -577,13 +604,30 @@ export component SongCard inherits Rectangle {
                 compact: root.compact-stamp;
                 show-icon: true;
                 scale-factor: root.compact-stamp && root.narrow ? 0.9 : 1.0;
-                tier: NowPlayingState.quality-tier;
-                detail: NowPlayingState.quality-detail;
+                // #638: while downgraded, advertise the DELIVERED tier/detail
+                // (the true stream) rather than the catalog max; else catalog.
+                tier: root.show-delivered
+                    ? NowPlayingState.quality-effective-tier
+                    : NowPlayingState.quality-tier;
+                detail: root.show-delivered
+                    ? NowPlayingState.quality-true-detail
+                    : NowPlayingState.quality-detail;
+            }
+            // Downgrade arrow (glyph, not a pill — ADR-008), amber so it reads
+            // as "adjusted", not an error. Overlaid top-right so it never
+            // disturbs the badge's width math; the tooltip carries the cause.
+            if NowPlayingState.quality-downgraded: Text {
+                text: "↓";
+                font-size: 9px;
+                font-weight: 700;
+                color: #eab308;
+                x: parent.width - self.width - 2px;
+                y: 1px;
             }
             qta := TouchArea {
                 changed has-hover => {
                     if (self.has-hover) {
-                        TooltipState.text = NowPlayingState.quality-detail;
+                        TooltipState.text = root.quality-stamp-tooltip;
                         TooltipState.anchor-x = parent.absolute-position.x + parent.width / 2;
                         TooltipState.anchor-y = parent.absolute-position.y;
                         TooltipState.show = true;
