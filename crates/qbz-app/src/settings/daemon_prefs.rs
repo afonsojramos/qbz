@@ -89,6 +89,9 @@ mod tests {
         let prefs = DaemonPrefs {
             streaming_quality: "cd".into(),
             volume: 0.72,
+            // Non-default (default is true) so the roundtrip actually exercises
+            // the field, not just its presence.
+            mpris_enabled: false,
         };
 
         save_at(&prefs, &dir).expect("save daemon prefs");
@@ -96,6 +99,7 @@ mod tests {
 
         assert_eq!(loaded.streaming_quality, "cd");
         assert_eq!(loaded.volume, 0.72);
+        assert!(!loaded.mpris_enabled);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
