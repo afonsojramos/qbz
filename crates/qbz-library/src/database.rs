@@ -1857,6 +1857,7 @@ impl LibraryDatabase {
         include_hidden: bool,
         include_qobuz_downloads: bool,
         exclude_network_folders: bool,
+        group_mode: crate::album_grouping::AlbumGroupMode,
     ) -> Result<Vec<LocalAlbum>, LibraryError> {
         let _ = include_hidden;
 
@@ -1876,7 +1877,7 @@ impl LibraryDatabase {
             ""
         };
 
-        let group_key_expr = crate::album_grouping::metadata_group_key_sql_expression();
+        let group_key_expr = crate::album_grouping::group_key_sql_expression(group_mode);
 
         let query = format!(
             r#"
@@ -2014,6 +2015,7 @@ impl LibraryDatabase {
         include_qobuz_downloads: bool,
         exclude_network_folders: bool,
         plex_cache_path: Option<&std::path::Path>,
+        group_mode: crate::album_grouping::AlbumGroupMode,
     ) -> Result<crate::models::AlbumsMetadataPage, LibraryError> {
         // Best-effort ATTACH of the Plex cache so the union below can
         // see `plex_cache.plex_cache_tracks`. DETACH first defensively
@@ -2045,6 +2047,7 @@ impl LibraryDatabase {
             include_qobuz_downloads,
             exclude_network_folders,
             plex_attached,
+            group_mode,
         );
         if plex_attached {
             let _ = self.conn.execute("DETACH DATABASE plex_cache", []);
@@ -2071,9 +2074,15 @@ impl LibraryDatabase {
             "front.png",
         ];
         let expr = crate::album_grouping::metadata_group_key_sql_expression();
+        // Match by the metadata group key AND the raw folder key — the album
+        // id depends on the Albums view's grouping mode (album|artist in
+        // Metadata mode, the folder path in Folder mode). The OR keeps the
+        // lookup correct under either.
         // Scan several tracks, not just one: a CMAF album keeps each track in
         // its own folder, and only some may carry a cover.jpg.
-        let query = format!("SELECT file_path FROM local_tracks WHERE ({expr}) = ?1 LIMIT 12");
+        let query = format!(
+            "SELECT file_path FROM local_tracks WHERE ({expr}) = ?1 OR album_group_key = ?1 LIMIT 12"
+        );
         let mut stmt = self.conn.prepare(&query).ok()?;
         let paths: Vec<String> = stmt
             .query_map(rusqlite::params![group_key], |row| row.get::<_, String>(0))
@@ -2116,6 +2125,7 @@ impl LibraryDatabase {
         include_qobuz_downloads: bool,
         exclude_network_folders: bool,
         plex_attached: bool,
+        group_mode: crate::album_grouping::AlbumGroupMode,
     ) -> Result<crate::models::AlbumsMetadataPage, LibraryError> {
         let source_filter = if include_qobuz_downloads {
             ""
@@ -2146,7 +2156,7 @@ impl LibraryDatabase {
             _ => "(group_key = '__unknown_album__'), artist COLLATE NOCASE, title COLLATE NOCASE",
         };
 
-        let group_key_expr = crate::album_grouping::metadata_group_key_sql_expression();
+        let group_key_expr = crate::album_grouping::group_key_sql_expression(group_mode);
 
         let search_pattern = search.unwrap_or("").trim();
         let has_search: i64 = if search_pattern.is_empty() { 0 } else { 1 };
@@ -2364,6 +2374,7 @@ impl LibraryDatabase {
                 include_qobuz_downloads,
                 exclude_network_folders,
                 plex_attached,
+                group_mode,
             )?;
         }
 
@@ -2381,6 +2392,7 @@ impl LibraryDatabase {
         include_qobuz_downloads: bool,
         exclude_network_folders: bool,
         plex_attached: bool,
+        group_mode: crate::album_grouping::AlbumGroupMode,
     ) -> Result<u64, LibraryError> {
         let source_filter = if include_qobuz_downloads {
             ""
@@ -2396,7 +2408,7 @@ impl LibraryDatabase {
         } else {
             ""
         };
-        let group_key_expr = crate::album_grouping::metadata_group_key_sql_expression();
+        let group_key_expr = crate::album_grouping::group_key_sql_expression(group_mode);
         let search_pattern = search.unwrap_or("").trim();
         let has_search: i64 = if search_pattern.is_empty() { 0 } else { 1 };
         let search_like = format!("%{}%", search_pattern);
@@ -5766,7 +5778,7 @@ mod metadata_grouping_tests {
             "/m/mix/cd",
         );
 
-        let albums = db.get_albums_metadata_grouped(false, true, false).unwrap();
+        let albums = db.get_albums_metadata_grouped(false, true, false, crate::album_grouping::AlbumGroupMode::Metadata).unwrap();
         let vespertine = albums
             .iter()
             .find(|a| a.title == "Vespertine")
@@ -5781,7 +5793,7 @@ mod metadata_grouping_tests {
         insert_track_for_test(&db, "/m/folder/01.flac", None, None, "A", "/m/folder");
         insert_track_for_test(&db, "/m/folder/02.flac", None, None, "B", "/m/folder");
 
-        let albums = db.get_albums_metadata_grouped(false, true, false).unwrap();
+        let albums = db.get_albums_metadata_grouped(false, true, false, crate::album_grouping::AlbumGroupMode::Metadata).unwrap();
         assert_eq!(albums.len(), 1, "single folder fallback group");
         assert_eq!(albums[0].track_count, 2);
         assert_eq!(albums[0].artist, "Various Artists");
@@ -5794,7 +5806,7 @@ mod metadata_grouping_tests {
         insert_track_for_test(&db, "/m/ghost/01.flac", None, None, "X", "");
         insert_track_for_test(&db, "/m/ghost/02.flac", None, None, "Y", "");
 
-        let albums = db.get_albums_metadata_grouped(false, true, false).unwrap();
+        let albums = db.get_albums_metadata_grouped(false, true, false, crate::album_grouping::AlbumGroupMode::Metadata).unwrap();
         let unknown = albums
             .iter()
             .find(|a| a.title == "Unknown Album")
@@ -5823,13 +5835,87 @@ mod metadata_grouping_tests {
             "/m/comp",
         );
 
-        let albums = db.get_albums_metadata_grouped(false, true, false).unwrap();
+        let albums = db.get_albums_metadata_grouped(false, true, false, crate::album_grouping::AlbumGroupMode::Metadata).unwrap();
         let comp = albums
             .iter()
             .find(|a| a.title == "Comp")
             .expect("Comp album");
         assert_eq!(comp.track_count, 2);
         assert_eq!(comp.artist, "Various Artists");
+    }
+
+    #[test]
+    fn folder_group_mode_compilation_is_one_album() {
+        let (_tmp, db) = fresh_db();
+        // Saint Seiya case (spec 2026-07-19-local-album-grouping-mode §D):
+        // one folder, same album tag, 10 distinct track artists, NO
+        // album_artist. Metadata mode splits per track artist; Folder mode
+        // keeps ONE card.
+        for (i, artist) in [
+            "MAKE-UP", "MAKE-UP PROJECT", "Horie", "Kageyama", "Furuya",
+            "Trooper", "Matsuzawa", "Marina", "Broadway", "Oren",
+        ]
+        .iter()
+        .enumerate()
+        {
+            insert_track_for_test(
+                &db,
+                &format!("/m/seiya/{:02}.flac", i + 1),
+                Some("Saint Seiya Best"),
+                None,
+                artist,
+                "/m/seiya",
+            );
+        }
+
+        // Metadata mode: one group per album|artist pair (the #411 split).
+        let albums = db.get_albums_metadata_grouped(false, true, false, crate::album_grouping::AlbumGroupMode::Metadata).unwrap();
+        assert_eq!(albums.len(), 10, "metadata mode splits per track artist");
+
+        // Folder mode: ONE album, Various Artists, everyone in all_artists.
+        let albums = db.get_albums_metadata_grouped(false, true, false, crate::album_grouping::AlbumGroupMode::Folder).unwrap();
+        assert_eq!(albums.len(), 1, "folder mode keeps the compilation whole");
+        let comp = &albums[0];
+        assert_eq!(comp.title, "Saint Seiya Best");
+        assert_eq!(comp.artist, "Various Artists");
+        assert_eq!(comp.track_count, 10);
+        let all = comp.all_artists.as_str();
+        for artist in ["MAKE-UP", "Horie", "Kageyama", "Marina"] {
+            assert!(all.contains(artist), "all_artists carries {artist}");
+        }
+
+        // Same folder with album_artist set -> that artist, not VA.
+        let (_tmp2, db2) = fresh_db();
+        insert_track_for_test(
+            &db2,
+            "/m/eels/01.flac",
+            Some("Beautiful Freak"),
+            Some("EELS"),
+            "EELS",
+            "/m/eels",
+        );
+        insert_track_for_test(
+            &db2,
+            "/m/eels/02.flac",
+            Some("Beautiful Freak"),
+            Some("EELS"),
+            "EELS",
+            "/m/eels",
+        );
+        let albums = db2.get_albums_metadata_grouped(false, true, false, crate::album_grouping::AlbumGroupMode::Folder).unwrap();
+        assert_eq!(albums.len(), 1);
+        assert_eq!(albums[0].artist, "EELS");
+
+        // Orphan bucket still works in folder mode (no folder key at all).
+        let (_tmp3, db3) = fresh_db();
+        insert_track_for_test(&db3, "/m/ghost/01.flac", None, None, "X", "");
+        insert_track_for_test(&db3, "/m/ghost/02.flac", None, None, "Y", "");
+        let albums = db3.get_albums_metadata_grouped(false, true, false, crate::album_grouping::AlbumGroupMode::Folder).unwrap();
+        let unknown = albums
+            .iter()
+            .find(|a| a.title == "Unknown Album")
+            .expect("orphan bucket in folder mode");
+        assert_eq!(unknown.track_count, 2);
     }
 
     #[test]

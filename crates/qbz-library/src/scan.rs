@@ -192,6 +192,10 @@ pub fn scan_with_progress(
     let mut processed: u32 = 0;
 
     for folder in &targets {
+        // The folder's own normalized path, for the untagged-artist root
+        // clamp (an album dir directly under THIS root must not inherit the
+        // root's name as the artist — spec §C).
+        let folder_root = normalize_path(Path::new(&folder.path));
         let scan_result = match scanner.scan_directory(Path::new(&folder.path)) {
             Ok(r) => r,
             Err(e) => {
@@ -264,7 +268,10 @@ pub fn scan_with_progress(
                 path: path_str.clone(),
             });
 
-            match MetadataExtractor::extract(&canonical) {
+            match MetadataExtractor::extract_with_roots(
+                &canonical,
+                std::slice::from_ref(&folder_root),
+            ) {
                 Ok(mut track) => {
                     apply_sidecar_override(&mut track, &mut sidecar_cache);
                     let mut artwork = MetadataExtractor::extract_artwork(&canonical, artwork_cache);

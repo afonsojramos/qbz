@@ -337,7 +337,10 @@ impl MetadataExtractor {
         Some(dir)
     }
 
-    fn infer_artist_album(file_path: &Path) -> (Option<String>, Option<String>) {
+    fn infer_artist_album(
+        file_path: &Path,
+        library_roots: &[PathBuf],
+    ) -> (Option<String>, Option<String>) {
         let album_dir = Self::album_root_dir(file_path);
         let album_name = album_dir
             .as_ref()
@@ -348,9 +351,22 @@ impl MetadataExtractor {
         let artist_name = album_dir
             .as_ref()
             .and_then(|p| p.parent())
-            .and_then(|p| p.file_name())
-            .and_then(|s| s.to_str())
-            .map(Self::strip_year_suffix);
+            .and_then(|parent| {
+                // Root clamp (spec 2026-07-19-local-album-grouping-mode §C):
+                // an album dir hanging DIRECTLY off a library root means the
+                // "parent folder" IS the root itself — its name ("Music", …)
+                // is structural, never an artist. Untagged albums at root
+                // level (e.g. a tagless DSD set) used to surface with the
+                // root's name as the artist.
+                if library_roots.iter().any(|root| root == parent) {
+                    None
+                } else {
+                    parent
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .map(Self::strip_year_suffix)
+                }
+            });
 
         if artist_name.is_none() {
             if let Some(album_dir_name) = album_name.as_deref() {
@@ -394,12 +410,23 @@ impl MetadataExtractor {
 
     /// Extract metadata from an audio file
     pub fn extract(file_path: &Path) -> Result<LocalTrack, LibraryError> {
+        Self::extract_with_roots(file_path, &[])
+    }
+
+    /// Like [`Self::extract`], but the caller supplies the library roots the
+    /// file is being scanned under. Roots feed the untagged-artist root
+    /// clamp (see `infer_artist_album`); the plain `extract` passes none, so
+    /// ephemeral / single-file extraction keeps the legacy inference.
+    pub fn extract_with_roots(
+        file_path: &Path,
+        library_roots: &[PathBuf],
+    ) -> Result<LocalTrack, LibraryError> {
         log::debug!("Extracting metadata from: {}", file_path.display());
 
         // DSD containers aren't lofty-readable: qbz-dsd demuxes them (tech
         // props + embedded ID3v2 for DSF; trailing ID3 for DFF when present).
         if qbz_dsd::is_dsd_path(file_path) {
-            return Self::extract_dsd(file_path);
+            return Self::extract_dsd(file_path, library_roots);
         }
 
         // Probe the file
@@ -440,7 +467,7 @@ impl MetadataExtractor {
             .unwrap_or("Unknown")
             .to_string();
 
-        let (fallback_artist, fallback_album) = Self::infer_artist_album(file_path);
+        let (fallback_artist, fallback_album) = Self::infer_artist_album(file_path, library_roots);
 
         let inferred_disc = Self::infer_disc_number(file_path);
 
@@ -543,7 +570,10 @@ impl MetadataExtractor {
 
     /// Build a LocalTrack from a DSF/DFF file via qbz-dsd. Tag-read failures
     /// degrade to filename-derived metadata — a DSD file must still index.
-    fn extract_dsd(file_path: &Path) -> Result<LocalTrack, LibraryError> {
+    fn extract_dsd(
+        file_path: &Path,
+        library_roots: &[PathBuf],
+    ) -> Result<LocalTrack, LibraryError> {
         let demux = qbz_dsd::open_dsd(file_path)
             .map_err(|e| LibraryError::Metadata(format!("Failed to read DSD file: {}", e)))?;
         let info = demux.info().clone();
@@ -563,7 +593,7 @@ impl MetadataExtractor {
             .and_then(|s| s.to_str())
             .unwrap_or("Unknown")
             .to_string();
-        let (fallback_artist, fallback_album) = Self::infer_artist_album(file_path);
+        let (fallback_artist, fallback_album) = Self::infer_artist_album(file_path, library_roots);
         let inferred_disc = Self::infer_disc_number(file_path);
 
         let tags = &info.tags;
@@ -939,6 +969,51 @@ mod tests {
         );
         let root = MetadataExtractor::album_root_dir(path).unwrap();
         assert_eq!(root, Path::new("/music/EELS/Beautiful Freak"));
+    }
+
+    #[test]
+    fn test_infer_artist_album_root_clamp() {
+        let roots = vec![PathBuf::from("/music")];
+
+        // Album dir directly under the library root: the root's own name
+        // must NOT become the artist (the untagged DSD-at-root case,
+        // spec 2026-07-19-local-album-grouping-mode §C).
+        let path = Path::new("/music/Some DSD Album/01 - Track.dsf");
+        let (artist, album) = MetadataExtractor::infer_artist_album(path, &roots);
+        assert_eq!(artist, None);
+        assert_eq!(album.as_deref(), Some("Some DSD Album"));
+
+        // Same, behind a disc folder (the clamp looks at the album ROOT dir).
+        let path = Path::new("/music/Some DSD Album/Disc 1/01 - Track.dsf");
+        let (artist, album) = MetadataExtractor::infer_artist_album(path, &roots);
+        assert_eq!(artist, None);
+        assert_eq!(album.as_deref(), Some("Some DSD Album"));
+
+        // The "Artist - Album" split still kicks in when the parent-folder
+        // inference is clamped away.
+        let path = Path::new("/music/MAKE-UP - Saint Seiya Best/01.dsf");
+        let (artist, album) = MetadataExtractor::infer_artist_album(path, &roots);
+        assert_eq!(artist.as_deref(), Some("MAKE-UP"));
+        assert_eq!(album.as_deref(), Some("Saint Seiya Best"));
+
+        // Normal Artist/Album layout is NOT clamped (parent != root).
+        let path = Path::new("/music/EELS/Beautiful Freak/01.flac");
+        let (artist, album) = MetadataExtractor::infer_artist_album(path, &roots);
+        assert_eq!(artist.as_deref(), Some("EELS"));
+        assert_eq!(album.as_deref(), Some("Beautiful Freak"));
+
+        // A REAL artist folder whose name matches the root's name is also
+        // not clamped (its parent is the root's artist folder, not the root).
+        let roots = vec![PathBuf::from("/media/Music")];
+        let path = Path::new("/media/Music/Music/Some Album/01.flac");
+        let (artist, _) = MetadataExtractor::infer_artist_album(path, &roots);
+        assert_eq!(artist.as_deref(), Some("Music"));
+
+        // No roots passed (ephemeral / single-file legacy path): inference
+        // is unchanged — parent folder name wins as before.
+        let path = Path::new("/music/Some DSD Album/01 - Track.dsf");
+        let (artist, _) = MetadataExtractor::infer_artist_album(path, &[]);
+        assert_eq!(artist.as_deref(), Some("music"));
     }
 
     #[test]
