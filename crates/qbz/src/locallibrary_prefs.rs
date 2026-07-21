@@ -15,6 +15,11 @@ struct Prefs {
     tracks_group: String,
     #[serde(default = "d_default")]
     tracks_sort: String,
+    // Album identity mode ("folder" | "metadata") — what one album IS on the
+    // Albums tab. Default "folder": compilations/box sets stay whole (the
+    // metadata split is opt-in via the header dropdown or Settings).
+    #[serde(default = "d_folder")]
+    albums_id_mode: String,
     // Path of the last-opened ephemeral folder, re-scanned on startup. None when
     // no ephemeral session is active.
     #[serde(default)]
@@ -26,6 +31,7 @@ impl Default for Prefs {
         Self {
             tracks_group: d_off(),
             tracks_sort: d_default(),
+            albums_id_mode: d_folder(),
             ephemeral_folder: None,
         }
     }
@@ -37,6 +43,10 @@ fn d_off() -> String {
 
 fn d_default() -> String {
     "default".to_string()
+}
+
+fn d_folder() -> String {
+    "folder".to_string()
 }
 
 fn store_path() -> Option<PathBuf> {
@@ -59,6 +69,7 @@ pub fn load(window: &AppWindow) {
     let s = window.global::<LocalLibraryState>();
     s.set_tracks_group_mode(p.tracks_group.into());
     s.set_tracks_sort(p.tracks_sort.into());
+    s.set_albums_id_mode(p.albums_id_mode.into());
 }
 
 fn write(p: &Prefs) {
@@ -80,6 +91,7 @@ pub fn save(window: &AppWindow) {
     let s = window.global::<LocalLibraryState>();
     p.tracks_group = s.get_tracks_group_mode().into();
     p.tracks_sort = s.get_tracks_sort().into();
+    p.albums_id_mode = s.get_albums_id_mode().into();
     write(&p);
 }
 

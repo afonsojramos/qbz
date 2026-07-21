@@ -838,6 +838,25 @@ export component LocalLibraryView inherits Rectangle {
                         }
                     }
                 }
+                // Album identity ("Albums by") — what one album IS: a folder
+                // (compilations/box sets stay whole) or metadata tag pairs
+                // (split per album+artist, #411). Persisted; reloads the set.
+                VerticalLayout {
+                    alignment: center;
+                    QbzSelect {
+                        menu-width: 190px;
+                        sm: true;
+                        options: [
+                            @tr("Albums by folder"),
+                            @tr("Albums by metadata"),
+                        ];
+                        current-index: LocalLibraryState.albums-id-mode == "metadata" ? 1 : 0;
+                        selected(i) => {
+                            LocalLibraryActions.albums-set-id-mode(
+                                i == 1 ? "metadata" : "folder");
+                        }
+                    }
+                }
                 // Quality/format/source filter (popup) + active-count badge.
                 VerticalLayout {
                     alignment: center;

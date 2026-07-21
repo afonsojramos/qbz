@@ -4764,3 +4764,18 @@ msgstr "Ограничено пределом качества для {}"
 
 msgid "capped for this device"
 msgstr "ограничено для этого устройства"
+
+msgid "Albums by folder"
+msgstr "Альбомы по папкам"
+
+msgid "Albums by metadata"
+msgstr "Альбомы по метаданным"
+
+msgid "ALBUMS VIEW"
+msgstr "ВИД АЛЬБОМОВ"
+
+msgid "Album grouping"
+msgstr "Группировка альбомов"
+
+msgid "Folders: one card per album folder — best for compilations and box sets. Metadata: split by album + artist tags."
+msgstr "Папки: одна карточка на папку альбома — лучше для сборников и бокс-сетов. Метаданные: разделение по тегам альбома + исполнителя."

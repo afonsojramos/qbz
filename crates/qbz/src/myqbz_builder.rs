@@ -430,6 +430,10 @@ pub fn fetch_local_and_plex(artist_name: &str) -> Vec<Candidate> {
             true,
             exclude_network,
             plex_path.as_deref(),
+            // My QBZ collections are artist-scoped CANDIDATES, not the Albums
+            // view — keep the metadata grouping regardless of the user's
+            // Local Library identity-mode pref.
+            qbz_library::album_grouping::AlbumGroupMode::Metadata,
         )?;
         let out: Vec<Candidate> = page
             .albums

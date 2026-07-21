@@ -543,3 +543,18 @@ msgstr "Limited by the quality cap for {}"
 
 msgid "capped for this device"
 msgstr "capped for this device"
+
+msgid "Albums by folder"
+msgstr "Albums by folder"
+
+msgid "Albums by metadata"
+msgstr "Albums by metadata"
+
+msgid "ALBUMS VIEW"
+msgstr "ALBUMS VIEW"
+
+msgid "Album grouping"
+msgstr "Album grouping"
+
+msgid "Folders: one card per album folder — best for compilations and box sets. Metadata: split by album + artist tags."
+msgstr "Folders: one card per album folder — best for compilations and box sets. Metadata: split by album + artist tags."

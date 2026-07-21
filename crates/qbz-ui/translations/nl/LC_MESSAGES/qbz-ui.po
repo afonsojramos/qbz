@@ -4762,3 +4762,18 @@ msgstr "Beperkt door de kwaliteitslimiet voor {}"
 
 msgid "capped for this device"
 msgstr "begrensd voor dit apparaat"
+
+msgid "Albums by folder"
+msgstr "Albums per map"
+
+msgid "Albums by metadata"
+msgstr "Albums per metadata"
+
+msgid "ALBUMS VIEW"
+msgstr "ALBUMWEERGAVE"
+
+msgid "Album grouping"
+msgstr "Albumgroepering"
+
+msgid "Folders: one card per album folder — best for compilations and box sets. Metadata: split by album + artist tags."
+msgstr "Mappen: één kaart per albummap — ideaal voor compilaties en boxsets. Metadata: splitsen op album- + artiesttags."

@@ -4738,3 +4738,18 @@ msgstr "{}の音質上限により制限されています"
 
 msgid "capped for this device"
 msgstr "このデバイス向けに上限適用中"
+
+msgid "Albums by folder"
+msgstr "フォルダー別アルバム"
+
+msgid "Albums by metadata"
+msgstr "メタデータ別アルバム"
+
+msgid "ALBUMS VIEW"
+msgstr "アルバムビュー"
+
+msgid "Album grouping"
+msgstr "アルバムのグループ化"
+
+msgid "Folders: one card per album folder — best for compilations and box sets. Metadata: split by album + artist tags."
+msgstr "フォルダー: アルバムフォルダーごとに1枚のカード — コンピレーションやボックスセットに最適。メタデータ: アルバム+アーティストのタグで分割。"

@@ -1194,6 +1194,12 @@ export global LocalLibraryState {
     in property <[AlbumCardItem]> albums-visible: [];
     in property <[DiscoverSection]> albums-grouped: [];
     in-out property <string> albums-group: "off";        // off | alpha | artist
+    // Album IDENTITY mode — what one "album" IS on the Albums tab:
+    // "folder" (one card per album-root folder; default — compilations/box
+    // sets stay whole) | "metadata" (split by album+artist tags, #411).
+    // Persisted in locallibrary_ui.json; switching re-queries the DB (unlike
+    // sort/group, which re-derive client-side).
+    in-out property <string> albums-id-mode: "folder";
     in property <[AlphaJump]> albums-alpha: [];           // A-Z jumps (alpha group)
     in property <int> albums-shown: 0;                    // count after filter
     in-out property <bool> albums-multi-select: false;    // album checkboxes on
@@ -1318,6 +1324,9 @@ export global LocalLibraryActions {
     callback albums-set-sort(string /* sort key */);
     // Set group mode (off|alpha|artist) + re-derive.
     callback albums-set-group(string /* mode */);
+    // Set the album identity mode (folder|metadata) + persist + reload the
+    // albums set (the group key changes — a derive is not enough).
+    callback albums-set-id-mode(string /* mode */);
     // Set grid|list view.
     callback albums-set-view(string /* mode */);
     // A quality/format/source filter toggle changed -> re-derive.

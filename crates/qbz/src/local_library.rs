@@ -720,11 +720,35 @@ pub fn reset_browse_models(window: &AppWindow) {
     s.set_artists(ModelRc::new(VecModel::from(Vec::<LocalArtistItem>::new())));
 }
 
+/// Album-identity mode changed: invalidate ONLY the Artists tab (its album
+/// cache + right pane depend on the group key — a folder-mode compilation
+/// cross-lists under every artist). The Albums tab reloads separately via
+/// `reload_albums`; tracks/folders don't depend on album identity.
+pub fn invalidate_artists(window: &AppWindow) {
+    let s = window.global::<LocalLibraryState>();
+    s.set_artists(ModelRc::new(VecModel::from(Vec::<LocalArtistItem>::new())));
+    s.set_artists_loading(false);
+    if let Ok(mut cache) = ARTIST_ALBUMS.lock() {
+        cache.clear();
+    }
+}
+
 /// Upper bound for the full-load page. The Albums tab loads the entire set in
 /// one shot (search/sort/filter/group are all derived client-side over the
 /// cached set in `derive_albums`), so we request a single large page rather
 /// than truly paginating. `total` from the page is informational here.
 const ALBUMS_FULL_LOAD_LIMIT: u64 = 1_000_000;
+
+/// The user's album-identity mode (Albums tab dropdown / Settings, persisted
+/// in locallibrary_ui.json). Read on the UI thread and captured into the
+/// blocking DB closures — Slint state is not thread-safe.
+pub fn current_group_mode(window: &AppWindow) -> qbz_library::album_grouping::AlbumGroupMode {
+    qbz_library::album_grouping::AlbumGroupMode::from_pref(
+        &window
+            .global::<LocalLibraryState>()
+            .get_albums_id_mode(),
+    )
+}
 
 /// Full-load the metadata-grouped albums off the UI thread (mapping + cover
 /// fallback resolution all happen on the blocking thread), store the raw cache
@@ -743,6 +767,7 @@ fn spawn_albums_load(
     let weak = window.as_weak();
     let plex_path = plex_cache_db_path();
     let plex = crate::plex_settings::get();
+    let group_mode = current_group_mode(window);
     handle.spawn(async move {
         let loaded: Option<(Vec<qbz_library::LocalAlbum>, Vec<crate::album_map::AlbumCard>)> =
             tokio::task::spawn_blocking(move || {
@@ -761,6 +786,7 @@ fn spawn_albums_load(
                         true,
                         exclude_network,
                         plex_path.as_deref(),
+                        group_mode,
                     )?;
                     let albums = page.albums;
                     let cards: Vec<crate::album_map::AlbumCard> = albums
@@ -846,6 +872,10 @@ pub fn reload_albums(
 pub fn seed_counts(weak: slint::Weak<AppWindow>, handle: tokio::runtime::Handle) {
     let plex_path = plex_cache_db_path();
     let plex_enabled = crate::plex_settings::get().enabled;
+    let group_mode = weak
+        .upgrade()
+        .map(|w| current_group_mode(&w))
+        .unwrap_or(qbz_library::album_grouping::AlbumGroupMode::Folder);
     handle.spawn(async move {
         let counts: Option<(usize, usize, usize, usize)> = tokio::task::spawn_blocking(move || {
             // Same include-qobuz / network flags as the Albums tab loader, so
@@ -865,6 +895,7 @@ pub fn seed_counts(weak: slint::Weak<AppWindow>, handle: tokio::runtime::Handle)
                         true,
                         exclude_network,
                         plex_path.as_deref(),
+                        group_mode,
                     )
                     .map(|p| p.total as usize)
                     .unwrap_or(0);
@@ -2008,6 +2039,12 @@ fn spawn_plex_quality_hydration(
     handle: tokio::runtime::Handle,
     group_key: String,
 ) {
+    // The aggregate lookup below must run under the SAME album-identity mode
+    // as the Albums tab (the album id IS the mode's group key).
+    let group_mode = weak
+        .upgrade()
+        .map(|w| current_group_mode(&w))
+        .unwrap_or(qbz_library::album_grouping::AlbumGroupMode::Folder);
     // Collect rating_keys whose cached quality is still incomplete. The Plex
     // LocalTrack carries the rating_key in `file_path` and the cached quality in
     // `bit_depth` / `sample_rate` (0.0 == unknown).
@@ -2084,6 +2121,7 @@ fn spawn_plex_quality_hydration(
                         true,
                         exclude_network,
                         Some(p),
+                        group_mode,
                     )?;
                     Ok(page.albums.into_iter().find(|a| a.id == gk))
                 })
@@ -3505,6 +3543,7 @@ pub fn ensure_artists_loaded(
                             true,
                             exclude_network,
                             plex_path.as_deref(),
+                            group_mode,
                         )
                         .map(|p| p.albums)
                     })

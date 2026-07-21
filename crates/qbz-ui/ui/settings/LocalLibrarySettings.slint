@@ -9,11 +9,12 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { LibraryFoldersState, LibraryManageActions, LibraryScanState, PlexSettingsState, PlexAuthActions , UiFocusState } from "../state.slint";
+import { LibraryFoldersState, LibraryManageActions, LibraryScanState, PlexSettingsState, PlexAuthActions , UiFocusState, LocalLibraryState, LocalLibraryActions } from "../state.slint";
 import { SettingRow } from "SettingRow.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { QbzCheckbox } from "../primitives/QbzCheckbox.slint";
 import { QbzToggle } from "../primitives/QbzToggle.slint";
+import { QbzSelect } from "../primitives/QbzSelect.slint";
 import { ExpandableSearch } from "../primitives/ExpandableSearch.slint";
 import { ScrollView, LineEdit } from "std-widgets.slint";
 
@@ -414,6 +415,32 @@ export component LocalLibrarySettings inherits VerticalLayout {
                     color: Theme.text-muted;
                     font-size: Typography.legal;
                     overflow: elide;
+                }
+            }
+        }
+    }
+
+    Rectangle { height: 22px; }
+
+    // --- Albums view -------------------------------------------------------
+    // Same pref as the Albums-tab header dropdown — this is the discoverable
+    // home, the header is the quick switch (both write albums-id-mode).
+    GroupHeader { text: @tr("ALBUMS VIEW"); }
+    SettingRow {
+        label: @tr("Album grouping");
+        description: @tr("Folders: one card per album folder — best for compilations and box sets. Metadata: split by album + artist tags.");
+        VerticalLayout {
+            alignment: center;
+            QbzSelect {
+                menu-width: 190px;
+                sm: true;
+                options: [
+                    @tr("Albums by folder"),
+                    @tr("Albums by metadata"),
+                ];
+                current-index: LocalLibraryState.albums-id-mode == "metadata" ? 1 : 0;
+                selected(i) => {
+                    LocalLibraryActions.albums-set-id-mode(i == 1 ? "metadata" : "folder");
                 }
             }
         }

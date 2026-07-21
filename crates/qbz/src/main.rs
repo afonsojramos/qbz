@@ -18061,6 +18061,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
     }
     {
+        // Album-identity mode (folder|metadata): the group KEY changes, so a
+        // client-side derive is not enough — persist, reload the Albums set,
+        // and invalidate the Artists tab (its album cache groups the same
+        // way). Header dropdown + Settings row both land here.
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
+        window
+            .global::<LocalLibraryActions>()
+            .on_albums_set_id_mode(move |mode| {
+                if let Some(w) = weak.upgrade() {
+                    w.global::<LocalLibraryState>().set_albums_id_mode(mode.into());
+                    crate::locallibrary_prefs::save(&w);
+                    local_library::invalidate_artists(&w);
+                    local_library::reload_albums(w.as_weak(), handle.clone(), image_cache.clone());
+                }
+            });
+    }
+    {
         let weak = window.as_weak();
         window
             .global::<LocalLibraryActions>()

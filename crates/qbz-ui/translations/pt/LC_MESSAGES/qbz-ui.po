@@ -4750,3 +4750,18 @@ msgstr "Limitado pelo limite de qualidade para {}"
 
 msgid "capped for this device"
 msgstr "limitado para este dispositivo"
+
+msgid "Albums by folder"
+msgstr "Álbuns por pasta"
+
+msgid "Albums by metadata"
+msgstr "Álbuns por metadados"
+
+msgid "ALBUMS VIEW"
+msgstr "VISTA DE ÁLBUNS"
+
+msgid "Album grouping"
+msgstr "Agrupamento de álbuns"
+
+msgid "Folders: one card per album folder — best for compilations and box sets. Metadata: split by album + artist tags."
+msgstr "Pastas: um cartão por pasta de álbum — ideal para compilações e box sets. Metadados: dividir por etiquetas de álbum + artista."
