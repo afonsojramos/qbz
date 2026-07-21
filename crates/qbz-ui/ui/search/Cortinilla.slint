@@ -271,7 +271,7 @@ export component Cortinilla inherits Rectangle {
         // binding-loop / cycle.
         property <length> scroll-cap:
             root.height - Layout.header-height - 6px
-            - (ShellState.npb-mode == 2 ? Layout.header-height : Layout.player-bar-height)
+            - (ShellState.npb-mode == 2 ? ShellState.npb-small-height : Layout.player-bar-height)
             - 16px - 12px;
 
         // Keyboard scroll-into-view. The controller sets cortinilla-scroll-y to

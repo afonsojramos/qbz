@@ -40,7 +40,7 @@ export component NowPlayingBar inherits Rectangle {
     // divider between the content area and the bar, plus the controls row that
     // fills the rest — the whole bar is header-height tall (the large album art
     // defines the visual height, no extra band bump).
-    height: ShellState.npb-mode == 2 ? Layout.header-height : Layout.player-bar-height;
+    height: ShellState.npb-mode == 2 ? ShellState.npb-small-height : Layout.player-bar-height;
 
     // Mode 2 (Small): the compact one-row bar.
     if ShellState.npb-mode == 2: PlayerBarSmall {

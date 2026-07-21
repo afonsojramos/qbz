@@ -126,7 +126,10 @@ export component PlayerBarSmall inherits Rectangle {
 
     // One bar, header-height tall: a 3px top seekbar strip + the controls row
     // that fills the rest (no band bump — the large album art defines the height).
-    height: Layout.header-height;
+    // macOS: +2px (ShellState.npb-small-height) so the meta line never clips at
+    // the window's bottom edge; the song card below keeps its 39px top-anchored
+    // geometry, so the extra height lands as bottom clearance.
+    height: ShellState.npb-small-height;
     background: ShellState.app-background-active
         ? Theme.surface-card.with-alpha(AppearanceState.app-background-surface-alpha)
         : Theme.surface-card;
@@ -223,31 +226,41 @@ export component PlayerBarSmall inherits Rectangle {
                     // gets a 2px subtle border (defines it while flush-left).
                     // show-badges false (the AudioStamp lives in the RIGHT set
                     // now); the smaller title via the new title-font-size prop.
-                    // The controls row sizes the card (a HorizontalLayout
-                    // vertically stretches its children), so no explicit
-                    // height/y is needed.
-                    SongCard {
+                    // The wrapper takes the row's vertical stretch; the card
+                    // itself is pinned to the pre-2.0.2 39px top-anchored
+                    // geometry (Layout.header-height − 3px seekbar) so macOS's
+                    // +2px bar (ShellState.npb-small-height) lands BELOW the
+                    // card: the art keeps its exact top-relative position and
+                    // the meta line gains 2px of bottom clearance (owner ask
+                    // 2026-07-21). Linux: wrapper height == card height →
+                    // pixel-identical to before.
+                    Rectangle {
                         horizontal-stretch: 1;
-                        art-size: 37px;
-                        art-border-width: 3px;
-                        art-border-color: Theme.surface-card;
-                        show-badges: false;
-                        title-font-size: 13px;
-                        // Tighten the art -> text gap by 2px (11 -> 9) for Small.
-                        art-text-gap: 9px;
-                        text-center: true;
-                        open-album(id) => {
-                            root.open-album(id);
-                        }
-                        open-artist(id) => {
-                            root.open-artist(id);
-                        }
-                        open-context(kind, id) => {
-                            root.media-action(kind, id, "open");
-                        }
-                        track-info() => {
-                            if (!NowPlayingState.is-ephemeral) {
-                                root.media-action("track", NowPlayingState.track-id, "track-info");
+                        SongCard {
+                            width: 100%;
+                            height: Layout.header-height - 3px;
+                            y: 0px;
+                            art-size: 37px;
+                            art-border-width: 3px;
+                            art-border-color: Theme.surface-card;
+                            show-badges: false;
+                            title-font-size: 13px;
+                            // Tighten the art -> text gap by 2px (11 -> 9) for Small.
+                            art-text-gap: 9px;
+                            text-center: true;
+                            open-album(id) => {
+                                root.open-album(id);
+                            }
+                            open-artist(id) => {
+                                root.open-artist(id);
+                            }
+                            open-context(kind, id) => {
+                                root.media-action(kind, id, "open");
+                            }
+                            track-info() => {
+                                if (!NowPlayingState.is-ephemeral) {
+                                    root.media-action("track", NowPlayingState.track-id, "track-info");
+                                }
                             }
                         }
                     }

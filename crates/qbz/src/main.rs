@@ -97,6 +97,8 @@ mod lyrics;
 mod lyrics_measure;
 mod lyrics_prefs;
 mod lyrics_sync;
+#[cfg(target_os = "macos")]
+mod macos_chrome;
 mod media_controls;
 mod locallibrary_prefs;
 mod tag_editor;
@@ -22026,6 +22028,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // `quit_event_loop()` (custom titlebar / WM close when not close-to-tray /
     // tray Quit), so hide-to-tray works.
     window.show()?;
+    // macOS custom chrome: centre the native traffic lights in the 42px
+    // header — AppKit parks them at the stock ~28pt titlebar height, visibly
+    // above the header controls. Queued so it runs after the event loop has
+    // processed the show (the NSWindow/handle only exists then).
+    #[cfg(target_os = "macos")]
+    {
+        let weak = window.as_weak();
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(w) = weak.upgrade() {
+                macos_chrome::center_traffic_lights(w.window());
+            }
+        });
+    }
     slint::run_event_loop_until_quit()?;
     // Reaching here = a CLEAN exit (tray Quit calls quit_event_loop directly,
     // with no window input event) — without this, launch-then-quit-from-tray

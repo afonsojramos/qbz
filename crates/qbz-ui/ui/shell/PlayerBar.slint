@@ -126,7 +126,7 @@ export component PlayerBar inherits Rectangle {
     // Layout global) so `Layout` stays a pure leaf with no dependency on the
     // stateful ShellState — avoiding an import direction that would couple
     // foundation to state.
-    height: ShellState.npb-mode == 2 ? Layout.header-height : Layout.player-bar-height;
+    height: ShellState.npb-mode == 2 ? ShellState.npb-small-height : Layout.player-bar-height;
     background: ShellState.app-background-active
         ? Theme.surface-card.with-alpha(AppearanceState.app-background-surface-alpha)
         : Theme.surface-card;

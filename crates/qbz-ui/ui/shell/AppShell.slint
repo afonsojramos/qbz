@@ -323,7 +323,7 @@ export component AppShell inherits Rectangle {
                         // restructuring (cover + spectrum) lives inside the sidebar,
                         // not in this content-height math.
                         height: root.height - Layout.header-height
-                            - (ShellState.npb-mode == 2 ? Layout.header-height : Layout.player-bar-height)
+                            - (ShellState.npb-mode == 2 ? ShellState.npb-small-height : Layout.player-bar-height)
                             - 8px;
                         vertical-stretch: 1;
                         // When the background is active the content area reads as a

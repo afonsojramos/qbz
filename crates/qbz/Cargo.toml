@@ -151,7 +151,11 @@ zbus = { version = "5", default-features = false, features = ["async-io", "block
 # macOS renderer: Skia (femtovg-wgpu pegs CPU on Metal — see [dependencies]).
 # Covers BOTH Apple Silicon and Intel (x86_64-apple-darwin / CICD). skia-wgpu
 # still serves the shader underlay via require_wgpu_28.
-slint = { version = "=1.16.1", features = ["renderer-skia"] }
+slint = { version = "=1.16.1", features = ["renderer-skia", "raw-window-handle-06"] }
+# Direct raw-window-handle 0.6 (same version slint's raw-window-handle-06
+# feature pulls) so macos_chrome can name the traits and read the AppKit
+# NSWindow handle off slint::Window::window_handle().
+raw-window-handle = "0.6"
 objc2 = "0.5"
 objc2-foundation = { version = "0.2", default-features = false, features = [
     "std",
@@ -172,6 +176,7 @@ objc2-app-kit = { version = "0.2", default-features = false, features = [
     "NSButton",
     "NSControl",
     "NSView",
+    "NSWindow",
     "NSEvent",
 ] }
 
