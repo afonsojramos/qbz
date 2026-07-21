@@ -11,7 +11,7 @@ import { TooltipState } from "../state.slint";
 export component TooltipOverlay inherits Rectangle {
     // Fills the window; transparent and non-interactive (no TouchArea → clicks
     // pass through). root.width is the window width, used to clamp.
-    property <length> bw: bubble.preferred-width;
+    property <length> bw: tip-layout.preferred-width;
     property <length> half: root.bw / 2;
     // Clamp the bubble centre so it stays fully on screen (8px margin).
     property <length> cx: Math.clamp(
@@ -25,7 +25,10 @@ export component TooltipOverlay inherits Rectangle {
         x: root.cx - root.half;
         y: TooltipState.anchor-y - self.height - 9px;
         width: root.bw;
-        height: 24px;
+        // Height follows the content so a multi-line tooltip (e.g. the #638
+        // Source/Output/cause stamp) fits without clipping, while a one-line
+        // tooltip stays compact — never a fixed 3-line box.
+        height: tip-layout.preferred-height;
 
         bubble := Rectangle {
             width: parent.width;
@@ -34,16 +37,19 @@ export component TooltipOverlay inherits Rectangle {
             border-radius: 4px;
             drop-shadow-blur: 10px;
             drop-shadow-color: #00000099;
-            HorizontalLayout {
-                padding-left: 9px;
-                padding-right: 9px;
-                Text {
-                    text: TooltipState.text;
-                    color: Theme.text-primary;
-                    font-size: 11px;
-                    font-weight: Typography.medium;
-                    vertical-alignment: center;
-                }
+        }
+        tip-layout := VerticalLayout {
+            width: parent.width;
+            padding-top: 5px;
+            padding-bottom: 5px;
+            padding-left: 9px;
+            padding-right: 9px;
+            Text {
+                text: TooltipState.text;
+                color: Theme.text-primary;
+                font-size: 11px;
+                font-weight: Typography.medium;
+                horizontal-alignment: left;
             }
         }
         // Caret points at the real control centre even when the bubble is clamped.
