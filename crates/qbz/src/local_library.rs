@@ -1942,6 +1942,16 @@ pub fn apply_album_version(window: &AppWindow, index: i32) {
         None => String::new(),
     };
     let total_secs: u64 = tracks.iter().map(|t| t.duration_secs).sum();
+    // Distinct track artists, first-appearance order — the collapsable
+    // multi-artist header list (spec §B2). Raw `artist` (NOT album_artist):
+    // a compilation's 10 track artists are the list's whole point.
+    let mut all_artists: Vec<slint::SharedString> = Vec::new();
+    for t in tracks {
+        let a = t.artist.trim();
+        if !a.is_empty() && !all_artists.iter().any(|x| x.as_str() == a) {
+            all_artists.push(a.into());
+        }
+    }
     let track_count = qbz_i18n::tf("{} track", "{} tracks", tracks.len() as i64, &[&tracks.len().to_string()]);
     let info_line = format!("{} · {}", track_count, fmt_album_duration(total_secs));
     let (tier, detail) = match tracks.iter().max_by_key(|t| t.bit_depth.unwrap_or(0)) {
@@ -2004,6 +2014,7 @@ pub fn apply_album_version(window: &AppWindow, index: i32) {
         .collect();
     s.set_title(title.into());
     s.set_artist(artist.into());
+    s.set_all_artists(ModelRc::new(VecModel::from(all_artists)));
     s.set_info_line(info_line.into());
     s.set_quality_tier(tier.into());
     s.set_quality_detail(detail.into());
@@ -3519,6 +3530,10 @@ pub fn ensure_artists_loaded(
         // branch is skipped and the path is byte-for-byte the pre-Plex flow.
         let plex_enabled = crate::plex_settings::get().enabled;
         let plex_path = plex_cache_db_path();
+        // Album-identity mode for the album cache below — the Artists tab
+        // must group albums the same way as the Albums tab (a folder-mode
+        // compilation cross-lists under every artist in all_artists).
+        let group_mode = current_group_mode(&w);
         handle.spawn(async move {
             let items = tokio::task::spawn_blocking(move || {
                 // Same network flag as every browse tab: connectivity-keyed

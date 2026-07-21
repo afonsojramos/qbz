@@ -558,3 +558,9 @@ msgstr "Album grouping"
 
 msgid "Folders: one card per album folder — best for compilations and box sets. Metadata: split by album + artist tags."
 msgstr "Folders: one card per album folder — best for compilations and box sets. Metadata: split by album + artist tags."
+
+msgid "+{} more artists"
+msgstr "+{} more artists"
+
+msgid "Show less"
+msgstr "Show less"

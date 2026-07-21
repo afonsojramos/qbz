@@ -4777,3 +4777,9 @@ msgstr "Albumgroepering"
 
 msgid "Folders: one card per album folder — best for compilations and box sets. Metadata: split by album + artist tags."
 msgstr "Mappen: één kaart per albummap — ideaal voor compilaties en boxsets. Metadata: splitsen op album- + artiesttags."
+
+msgid "+{} more artists"
+msgstr "+{} artiesten meer"
+
+msgid "Show less"
+msgstr "Minder tonen"

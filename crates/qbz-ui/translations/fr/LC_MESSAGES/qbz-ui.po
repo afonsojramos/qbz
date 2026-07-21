@@ -4765,3 +4765,9 @@ msgstr "Regroupement des albums"
 
 msgid "Folders: one card per album folder — best for compilations and box sets. Metadata: split by album + artist tags."
 msgstr "Dossiers : une carte par dossier d'album — idéal pour les compilations et coffrets. Métadonnées : séparer par tags album + artiste."
+
+msgid "+{} more artists"
+msgstr "+{} artistes de plus"
+
+msgid "Show less"
+msgstr "Afficher moins"

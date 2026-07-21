@@ -4753,3 +4753,9 @@ msgstr "アルバムのグループ化"
 
 msgid "Folders: one card per album folder — best for compilations and box sets. Metadata: split by album + artist tags."
 msgstr "フォルダー: アルバムフォルダーごとに1枚のカード — コンピレーションやボックスセットに最適。メタデータ: アルバム+アーティストのタグで分割。"
+
+msgid "+{} more artists"
+msgstr "他 {} 人のアーティスト"
+
+msgid "Show less"
+msgstr "表示を減らす"

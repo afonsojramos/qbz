@@ -1456,6 +1456,10 @@ export global LocalAlbumState {
     in property <string> quality-detail;  // "24-bit / 96 kHz"
     in property <string> cover-url;
     in property <image> cover;
+    // Distinct track artists in first-appearance order (compilations); the
+    // header shows the single artist line + a "+N more artists" chevron that
+    // expands into the clickable full list (spec §B2). Empty/1 = no chevron.
+    in property <[string]> all-artists: [];
     in property <bool> loading: false;
     in property <[TrackItem]> tracks: [];
     // Versions (distinct copies). >1 -> show the picker. Sorted best-quality

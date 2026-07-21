@@ -150,6 +150,14 @@ export component LocalAlbumView inherits Rectangle {
     callback open-artist(string);
     background: ShellState.app-background-active ? transparent : Theme.surface-main;
 
+    // Expanded multi-artist header list (spec §B2) — view-local, resets when
+    // another album opens (watched via the mirror property below).
+    property <bool> artists-expanded: false;
+    property <string> watched-album-id: LocalAlbumState.id;
+    changed watched-album-id => {
+        root.artists-expanded = false;
+    }
+
     // Homologated 1:1 with the Qobuz AlbumPageView: whole-page Flickable, the
     // same header proportions + action row, the toolbar (quality badge + track
     // search), the column header, and source-aware TrackRows. The only
@@ -238,6 +246,7 @@ export component LocalAlbumView inherits Rectangle {
                     Rectangle { height: 4px; }
                     HorizontalLayout {
                         alignment: start;
+                        spacing: 8px;
                         la-artist := TouchArea {
                             width: la-artist-text.preferred-width;
                             height: la-artist-text.preferred-height;
@@ -252,6 +261,46 @@ export component LocalAlbumView inherits Rectangle {
                                     : Theme.text-secondary;
                                 font-size: Typography.heading;
                                 font-weight: Typography.bold;
+                            }
+                        }
+                        // Multi-artist album (compilations): a "+N more
+                        // artists" chevron expands the full track-artist list
+                        // below (spec §B2). Single-artist albums never see it.
+                        if LocalAlbumState.all-artists.length > 1: VerticalLayout {
+                            alignment: center;
+                            more-ta := TouchArea {
+                                width: more-text.preferred-width;
+                                height: more-text.preferred-height;
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.artists-expanded = !root.artists-expanded;
+                                }
+                                more-text := Text {
+                                    text: root.artists-expanded
+                                        ? @tr("Show less")
+                                        : @tr("+{} more artists", LocalAlbumState.all-artists.length - 1);
+                                    color: more-ta.has-hover ? Theme.accent : Theme.text-muted;
+                                    font-size: Typography.body;
+                                }
+                            }
+                        }
+                    }
+                    // Expanded track-artist list — each entry routes to the
+                    // LocalLibrary Artists tab (name-based open-artist).
+                    if root.artists-expanded && LocalAlbumState.all-artists.length > 1: VerticalLayout {
+                        spacing: 0px;
+                        padding-top: 6px;
+                        for artist in LocalAlbumState.all-artists: TouchArea {
+                            height: 24px;
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.open-artist(artist);
+                            }
+                            Text {
+                                text: artist;
+                                color: parent.has-hover ? Theme.accent : Theme.text-secondary;
+                                font-size: Typography.body;
+                                vertical-alignment: center;
                             }
                         }
                     }

@@ -4795,3 +4795,9 @@ msgstr "Agrupación de álbumes"
 
 msgid "Folders: one card per album folder — best for compilations and box sets. Metadata: split by album + artist tags."
 msgstr "Carpetas: una tarjeta por carpeta de álbum — ideal para compilaciones y box sets. Metadatos: separar por etiquetas de álbum + artista."
+
+msgid "+{} more artists"
+msgstr "+{} artistas más"
+
+msgid "Show less"
+msgstr "Ver menos"
