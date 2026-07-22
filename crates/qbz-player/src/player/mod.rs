@@ -3630,7 +3630,21 @@ impl Player {
                                 &analyzer_enabled,
                             );
 
-                            // Append to existing Sink (gapless queue)
+                            // Append to existing Sink (gapless queue).
+                            // Late-gapless race: this append can arrive AFTER
+                            // the engine went empty at natural end ("track
+                            // finished" already set thread_state.is_playing =
+                            // false). The engine's own append re-opens its
+                            // writer gate and the track PLAYS, but the
+                            // player-level flag stays false — freezing the
+                            // position monitor, the next gapless arm, the
+                            // QConnect reports and the queue cursor on the
+                            // finished track while the next one plays (the
+                            // "invisible track" desync). Capture emptiness
+                            // BEFORE the append: a user-paused engine still
+                            // holds its current source (NOT empty), so a
+                            // paused session is never resumed by this.
+                            let engine_was_empty = engine.empty();
                             if let Err(e) = engine.append(source) {
                                 log::error!(
                                     "Gapless: failed to append track {} to engine: {}",
@@ -3639,6 +3653,14 @@ impl Player {
                                 );
                                 thread_state.set_gapless_ready(false);
                                 return;
+                            }
+                            if engine_was_empty
+                                && !thread_state.is_playing.load(Ordering::SeqCst)
+                            {
+                                log::info!(
+                                    "Gapless: PlayNext landed after track finished — resuming playback-state tracking"
+                                );
+                                thread_state.is_playing.store(true, Ordering::SeqCst);
                             }
 
                             // Store pending gapless data for transition detection
