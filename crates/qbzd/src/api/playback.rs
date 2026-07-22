@@ -26,6 +26,7 @@
 // "muted (was 80%)") trivial reads of one JSON field, and mirrors the
 // desktop's PREMUTE_VOLUME/MUTED pair exactly, just relocated.
 use std::io::Cursor;
+use std::sync::Arc;
 
 use serde_json::Value;
 use tiny_http::Response;
@@ -87,8 +88,10 @@ pub fn play(state: &ApiState) -> Response<Cursor<Vec<u8>>> {
             Err(e) => runtime_error(&e.to_string()),
         };
     }
+    // The cold-start load is spawn-and-ack: report "loading" (honest ack);
+    // `qbzd now` / SSE show the transition to playing.
     match cold_start(state) {
-        Ok(()) => json(200, serde_json::json!({"state": "playing"})),
+        Ok(()) => json(200, serde_json::json!({"state": "loading"})),
         Err(resp) => resp,
     }
 }
@@ -123,8 +126,10 @@ pub fn toggle(state: &ApiState) -> Response<Cursor<Vec<u8>>> {
             Err(e) => runtime_error(&e.to_string()),
         };
     }
+    // The cold-start load is spawn-and-ack: report "loading" (honest ack);
+    // `qbzd now` / SSE show the transition to playing.
     match cold_start(state) {
-        Ok(()) => json(200, serde_json::json!({"state": "playing"})),
+        Ok(()) => json(200, serde_json::json!({"state": "loading"})),
         Err(resp) => resp,
     }
 }
@@ -330,33 +335,52 @@ fn apply_mute(state: &ApiState, live: f32, arg: &str) -> Response<Cursor<Vec<u8>
 
 /// `next`/`previous` (02 §3.3.9-10): gate on NeedsAuth BEFORE running the
 /// ritual (unconditional per those two rows' Errors column, unlike
-/// play/toggle's cold-start-only gate), then run
+/// play/toggle's cold-start-only gate), then SPAWN
 /// `qbz_app::playback_driver::advance_and_play` — the FULL ritual (skip-walk →
-/// play → prefetch → persist), never a bare cursor move (02 §2.2 trap). Exit
-/// set is 0 · 1 · 3 · 4 (no 5, §2.2), so a ritual failure is [`runtime_error`].
+/// play → prefetch → persist), never a bare cursor move (02 §2.2 trap).
+///
+/// Spawn-and-ack: the API serve loop is single-threaded, and the ritual's
+/// load leg (resolve+fetch) can block for many seconds on a slow link — an
+/// inline `block_on` starved every other route ("daemon not reachable" while
+/// the action DID execute). The ritual runs on the tokio runtime; a failure
+/// latches into `last_errors.stream` (visible via `qbzd status`) and the log.
+/// The landing track is no longer reported synchronously — follow it via
+/// `qbzd now` / SSE.
 fn advance(state: &ApiState, forward: bool) -> Response<Cursor<Vec<u8>>> {
     if let Some(resp) = auth_gate(state) {
         return resp;
     }
     let quality = resolve_quality(state);
-    let result = state.rt.block_on(qbz_app::playback_driver::advance_and_play(
-        state.runtime.as_ref(),
-        quality,
-        forward,
-    ));
-    match result {
-        Ok(Some(track)) => json(200, serde_json::to_value(&track).unwrap_or(Value::Null)),
-        Ok(None) => json(200, Value::Null),
-        Err(e) => runtime_error(&e),
-    }
+    let runtime = std::sync::Arc::clone(&state.runtime);
+    let shared = Arc::clone(&state.shared);
+    state.rt.spawn(async move {
+        if let Err(err) =
+            qbz_app::playback_driver::advance_and_play(runtime.as_ref(), quality, forward).await
+        {
+            log::error!("[api] advance(forward={forward}) failed: {err}");
+            if let Ok(mut s) = shared.lock() {
+                s.last_errors.stream = Some(format!("advance: {err}"));
+            }
+        }
+    });
+    json(
+        200,
+        serde_json::json!({"queued": true, "direction": if forward { "next" } else { "previous" }}),
+    )
 }
 
 /// `play`/`toggle`'s cold-start branch: gate on NeedsAuth, resolve the
-/// current queue track, resolve+play it, then best-effort persist the
-/// session — the same ritual tail `advance_and_play` runs, minus the
-/// cursor-move (we're playing the CURRENT track, not advancing to a new one)
-/// and the gapless prefetch (the running driver's tick-based `ArmGapless`
-/// picks that up on a later tick once playback is underway).
+/// current queue track, then SPAWN resolve+play+persist — the same ritual
+/// tail `advance_and_play` runs, minus the cursor-move (we're playing the
+/// CURRENT track, not advancing to a new one) and the gapless prefetch (the
+/// running driver's tick-based `ArmGapless` picks that up on a later tick
+/// once playback is underway).
+///
+/// Spawn-and-ack (see `advance`): the gates (auth, empty queue) stay
+/// synchronous so their documented errors are immediate; the network-bound
+/// load leg runs on the tokio runtime and latches failures into
+/// `last_errors.stream` instead of a 5xx. Ok(()) means "load queued" — the
+/// callers answer `{"state": "loading"}`.
 fn cold_start(state: &ApiState) -> Result<(), Response<Cursor<Vec<u8>>>> {
     if let Some(resp) = auth_gate(state) {
         return Err(resp);
@@ -373,20 +397,24 @@ fn cold_start(state: &ApiState) -> Result<(), Response<Cursor<Vec<u8>>>> {
             "queue a track first: qbzd queue add <TRACK_ID>",
         ));
     };
+    let track_id = track.id;
     let quality = resolve_quality(state);
-    let played = state.rt.block_on(state.runtime.core().play_track_resolved(
-        track.id,
-        quality,
-        None,
-        None,
-        0,
-    ));
-    if let Err(e) = played {
-        return Err(device_error(&e));
-    }
-    state
-        .rt
-        .block_on(qbz_app::playback_driver::save_session_now(state.runtime.as_ref()));
+    let runtime = std::sync::Arc::clone(&state.runtime);
+    let shared = Arc::clone(&state.shared);
+    state.rt.spawn(async move {
+        let played = runtime
+            .core()
+            .play_track_resolved(track_id, quality, None, None, 0)
+            .await;
+        if let Err(err) = played {
+            log::error!("[api] cold-start play of {track_id} failed: {err}");
+            if let Ok(mut s) = shared.lock() {
+                s.last_errors.stream = Some(format!("play: {err}"));
+            }
+            return;
+        }
+        qbz_app::playback_driver::save_session_now(runtime.as_ref()).await;
+    });
     Ok(())
 }
 

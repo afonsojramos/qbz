@@ -87,19 +87,26 @@ pub(crate) fn start_resolved(
         .block_on(state.runtime.core().set_queue(queue_tracks, Some(start)));
 
     let quality = super::playback::resolve_quality(state);
-    let played = state.rt.block_on(state.runtime.core().play_track_resolved(
-        start_track_id,
-        quality,
-        None,
-        None,
-        0,
-    ));
-    if let Err(e) = played {
-        return err_json(503, "audio_unavailable", &e, "check: qbzd status");
-    }
-    state
-        .rt
-        .block_on(qbz_app::playback_driver::save_session_now(state.runtime.as_ref()));
+    // Spawn-and-ack (see `playback::advance`): set_queue is cheap and stays
+    // synchronous; the resolve+play leg runs on the tokio runtime so a slow
+    // fetch can't starve the single-threaded API. A load failure latches into
+    // `last_errors.stream` (visible via `qbzd status`) instead of a 503.
+    let runtime = std::sync::Arc::clone(&state.runtime);
+    let shared = std::sync::Arc::clone(&state.shared);
+    state.rt.spawn(async move {
+        let played = runtime
+            .core()
+            .play_track_resolved(start_track_id, quality, None, None, 0)
+            .await;
+        if let Err(err) = played {
+            log::error!("[api] play start of {start_track_id} failed: {err}");
+            if let Ok(mut s) = shared.lock() {
+                s.last_errors.stream = Some(format!("play: {err}"));
+            }
+            return;
+        }
+        qbz_app::playback_driver::save_session_now(runtime.as_ref()).await;
+    });
 
     json(
         200,

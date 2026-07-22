@@ -241,7 +241,10 @@ pub fn reorder(state: &ApiState, body: &Value) -> Response<Cursor<Vec<u8>>> {
 /// `POST /api/queue/jump` (CONSOLE). Body `{"index": N}` (0-based). A
 /// click-to-play-row: moves the cursor (`play_index`) AND starts audio through
 /// the shipped ritual — never a bare cursor move (control-surface §2.2).
-/// Auth-gated (needs a session to resolve the stream).
+/// Auth-gated (needs a session to resolve the stream). The cursor move is
+/// synchronous (the 404 contract is immediate); the resolve+play leg is
+/// spawn-and-ack (see `playback::advance`) so a slow fetch can't starve the
+/// single-threaded API — failures latch into `last_errors.stream`.
 pub fn jump(state: &ApiState, body: &Value) -> Response<Cursor<Vec<u8>>> {
     if let Some(resp) = auth_gate(state) {
         return resp;
@@ -254,13 +257,24 @@ pub fn jump(state: &ApiState, body: &Value) -> Response<Cursor<Vec<u8>>> {
         Some(t) => t,
         None => return err_json(404, "not_found", &format!("queue index {index} is out of range"), "check: qbzd queue list"),
     };
+    let track_id = track.id;
     let quality = super::playback::resolve_quality(state);
-    if let Err(e) = state.rt.block_on(state.runtime.core().play_track_resolved(track.id, quality, None, None, 0)) {
-        return err_json(503, "audio_unavailable", &e, "check: qbzd status");
-    }
-    state
-        .rt
-        .block_on(qbz_app::playback_driver::save_session_now(state.runtime.as_ref()));
+    let runtime = std::sync::Arc::clone(&state.runtime);
+    let shared = std::sync::Arc::clone(&state.shared);
+    state.rt.spawn(async move {
+        if let Err(err) = runtime
+            .core()
+            .play_track_resolved(track_id, quality, None, None, 0)
+            .await
+        {
+            log::error!("[api] queue jump play of {track_id} failed: {err}");
+            if let Ok(mut s) = shared.lock() {
+                s.last_errors.stream = Some(format!("jump: {err}"));
+            }
+            return;
+        }
+        qbz_app::playback_driver::save_session_now(runtime.as_ref()).await;
+    });
     json(
         200,
         serde_json::json!({"playing": index, "track": {"id": track.id, "title": track.title, "artist": track.artist}}),

@@ -113,10 +113,16 @@ async fn transport_advance(host: Option<String>, roots: &ProfileRoots, path: &st
     }
 }
 
-/// `-> Chick Corea – 500 Miles High` / `queue finished` (02 §2.2, verbatim).
+/// `-> Chick Corea – 500 Miles High` / `queue finished` (02 §2.2, verbatim) —
+/// or `-> queued (next)` for the spawn-and-ack advance response (the ritual
+/// runs async; follow the landing track via `qbzd now`).
 fn render_advance(v: &Value) -> String {
     if v.is_null() {
         return "queue finished".to_string();
+    }
+    if v.get("queued").and_then(|q| q.as_bool()).unwrap_or(false) {
+        let direction = v.get("direction").and_then(|d| d.as_str()).unwrap_or("next");
+        return format!("-> queued ({direction})");
     }
     let artist = v.get("artist").and_then(|s| s.as_str()).unwrap_or("");
     let title = v.get("title").and_then(|s| s.as_str()).unwrap_or("");
@@ -468,6 +474,14 @@ mod tests {
         let landing = serde_json::json!({"artist": "Chick Corea", "title": "500 Miles High"});
         assert_eq!(render_advance(&landing), "-> Chick Corea – 500 Miles High");
         assert_eq!(render_advance(&serde_json::Value::Null), "queue finished");
+    }
+
+    #[test]
+    fn render_advance_shows_spawn_and_ack_queued() {
+        let ack = serde_json::json!({"queued": true, "direction": "next"});
+        assert_eq!(render_advance(&ack), "-> queued (next)");
+        let ack_prev = serde_json::json!({"queued": true, "direction": "previous"});
+        assert_eq!(render_advance(&ack_prev), "-> queued (previous)");
     }
 
     #[test]
