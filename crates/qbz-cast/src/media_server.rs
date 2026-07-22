@@ -278,7 +278,7 @@ fn handle_request(
         "MediaServer: {} request from {:?} for {}",
         method,
         request.remote_addr(),
-        url
+        redact_media_uri(url)
     );
 
     // Allow GET and HEAD. Strict DLNA renderers HEAD-probe the URL to validate
@@ -295,7 +295,7 @@ fn handle_request(
         None => {
             log::warn!(
                 "MediaServer: 404 - Could not parse audio request from URL: {}",
-                url
+                redact_media_uri(url)
             );
             return empty_response(404);
         }
@@ -303,7 +303,10 @@ fn handle_request(
 
     // Constant-ish token check — reject LAN peers that don't hold the token.
     if token != expected_token {
-        log::warn!("MediaServer: 403 - token mismatch for URL: {}", url);
+        log::warn!(
+            "MediaServer: 403 - token mismatch for URL: {}",
+            redact_media_uri(url)
+        );
         return empty_response(403);
     }
 
@@ -562,6 +565,32 @@ fn generate_token() -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// Redact the cast media path token in logs (`/audio/<token>/<id>` → `/audio/***/<id>`).
+/// Session tokens must not appear in log bundles.
+pub(crate) fn redact_media_uri(s: &str) -> String {
+    if !s.contains("/audio/") {
+        return s.to_string();
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(i) = rest.find("/audio/") {
+        out.push_str(&rest[..i]);
+        out.push_str("/audio/");
+        rest = &rest[i + "/audio/".len()..];
+        // token is the next path segment
+        if let Some(slash) = rest.find('/') {
+            out.push_str("***");
+            out.push('/');
+            rest = &rest[slash + 1..];
+        } else {
+            out.push_str("***");
+            rest = "";
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -598,6 +627,22 @@ mod tests {
             content_type_for_path(Path::new("a.xyz")),
             "application/octet-stream"
         );
+    }
+
+    #[test]
+    fn redact_media_uri_hides_token() {
+        assert_eq!(
+            redact_media_uri("http://192.168.1.2:9876/audio/deadbeefcafebabe/42"),
+            "http://192.168.1.2:9876/audio/***/42"
+        );
+        assert_eq!(
+            redact_media_uri("/audio/tokentokentoken/7?x=1"),
+            "/audio/***/7?x=1"
+        );
+        let raw = "/audio/aabbccddeeff0011/9";
+        let red = redact_media_uri(raw);
+        assert!(!red.contains("aabbccddeeff0011"));
+        assert!(red.contains("***/9"));
     }
 
     #[test]
