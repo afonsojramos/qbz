@@ -18179,9 +18179,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         local_library::toggle_album_favorite(&w, id.as_str());
                     }
                 }
+                "play-next" | "queue" => {
+                    // Single-album play-next / queue (#636 — this arm used to
+                    // be a "queue slice pending" stub): resolve the album's
+                    // tracks source-aware (local folders AND Plex, the same
+                    // resolver `play` uses) and enqueue the whole album
+                    // without starting playback.
+                    let play_next = action.as_str() == "play-next";
+                    let runtime = runtime.clone();
+                    let handle2 = handle.clone();
+                    let album_id = id.to_string();
+                    handle.spawn(async move {
+                        let rows = tokio::task::spawn_blocking(move || {
+                            local_library::fetch_album_tracks_blocking(&album_id)
+                        })
+                        .await
+                        .unwrap_or_default();
+                        playback::enqueue_local_tracks(runtime, handle2, rows, play_next);
+                    });
+                }
                 _ => {
-                    // Single-album play-next / queue land with a later slice.
-                    log::debug!("[qbz-slint] local album action (queue slice pending): {id} {action}");
+                    log::debug!("[qbz-slint] unhandled local album action: {id} {action}");
                 }
             });
     }
