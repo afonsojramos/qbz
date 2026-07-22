@@ -16,7 +16,7 @@
 //! suffices. Known limitation: AppKit re-lays out the titlebar on
 //! fullscreen enter/exit, where the centre can drift until the next launch.
 
-use objc2_app_kit::{NSWindow, NSWindowButton};
+use objc2_app_kit::{NSView, NSWindowButton};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 /// Vertical centre target in AppKit points, measured from the window's top
@@ -32,35 +32,69 @@ pub fn center_traffic_lights(window: &slint::Window) {
     if crate::ui_prefs::load().use_system_title_bar {
         return;
     }
-    let Ok(handle) = window.window_handle().window_handle() else {
+    let slint_handle = window.window_handle();
+    let Ok(handle) = slint_handle.window_handle() else {
         return;
     };
     let RawWindowHandle::AppKit(kit) = handle.as_raw() else {
         return;
     };
-    // SAFETY: `ns_window` is the live NSWindow of the just-shown main window,
-    // dereferenced on the main thread; the window outlives this call. Every
-    // AppKit call below is main-thread-only view geometry.
+    // SAFETY: `ns_view` is the live content view of the just-shown main
+    // window (raw-window-handle 0.6 exposes only the view; the NSWindow is
+    // reached via `-[NSView window]`), dereferenced on the main thread; the
+    // window outlives this call. Every AppKit call below is main-thread-only
+    // view geometry.
     unsafe {
-        let ns_window: &NSWindow = &*(kit.ns_window.as_ptr() as *const NSWindow);
+        let ns_view: &NSView = &*(kit.ns_view.as_ptr() as *const NSView);
+        let Some(ns_window) = ns_view.window() else {
+            return;
+        };
         let Some(close) =
             ns_window.standardWindowButton(NSWindowButton::NSWindowCloseButton)
         else {
             return;
         };
         let win_h = ns_window.frame().size.height;
-        // Close-button rect in window base coordinates (origin bottom-left).
-        let in_window = close.convertRect_toView(close.frame(), None);
-        let centre_from_top = win_h - (in_window.origin.y + in_window.size.height / 2.0);
-        let dy = centre_from_top - HEADER_CENTRE_PT;
-        if dy.abs() < 0.5 {
+        // Close-button centre in window base coordinates (origin bottom-left,
+        // +y up), measured from the button's own BOUNDS — its frame lives in
+        // the superview's space and double-counts the in-container offset
+        // (2026-07-22 regression: measuring frame + assuming a bottom-left
+        // superview shifted the lights UP instead of down).
+        let measure_centre_from_top = |btn: &NSView| -> f64 {
+            let r = btn.convertRect_toView(btn.bounds(), None);
+            win_h - (r.origin.y + r.size.height / 2.0)
+        };
+        let before = measure_centre_from_top(&close);
+        let move_down = HEADER_CENTRE_PT - before; // visual pts, +ve = down
+        if move_down.abs() < 0.5 {
             return; // already centred (idempotent re-entry)
         }
-        if let Some(container) = close.superview() {
-            let mut frame = container.frame();
-            frame.origin.y += dy;
-            container.setFrame(frame);
-            log::info!("[macos-chrome] traffic lights centred in header (dy={dy:.1}pt)");
+        let Some(container) = close.superview() else {
+            return;
+        };
+        // The container's frame is in ITS superview's coordinate space, and
+        // AppKit flips the titlebar hierarchy (+y down when flipped).
+        let parent_flipped = container
+            .superview()
+            .map(|sv| sv.isFlipped())
+            .unwrap_or(false);
+        let original = container.frame();
+        let mut frame = original;
+        frame.origin.y += if parent_flipped { move_down } else { -move_down };
+        container.setFrame(frame);
+        // Re-measure: if the shift landed further from target than where we
+        // started (coordinate-model surprise), undo it — stock placement is
+        // the acceptable fallback, a wrongly shifted one is not.
+        let after = measure_centre_from_top(&close);
+        if (after - HEADER_CENTRE_PT).abs() > (before - HEADER_CENTRE_PT).abs() {
+            container.setFrame(original);
+            log::warn!(
+                "[macos-chrome] traffic-light shift reverted: centre {before:.1}pt -> {after:.1}pt from top (target {HEADER_CENTRE_PT}pt, parent flipped: {parent_flipped})"
+            );
+            return;
         }
+        log::info!(
+            "[macos-chrome] traffic lights centred: {before:.1}pt -> {after:.1}pt from top (target {HEADER_CENTRE_PT}pt, parent flipped: {parent_flipped})"
+        );
     }
 }
