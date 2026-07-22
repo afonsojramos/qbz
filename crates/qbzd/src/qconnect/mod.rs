@@ -19,6 +19,7 @@
 //! from qbzd.toml — only the daemon-root `qconnect_settings.db`.
 
 pub mod engine;
+pub mod publish;
 pub mod remote_stream;
 pub mod report;
 pub mod session;
@@ -30,12 +31,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use qbz_app::shell::AppRuntime;
+use qbz_models::CoreEvent;
 use qconnect_app::{
     compute_effective_startup, QconnectApp, QconnectAppEvent, QconnectEventSink,
     QconnectLifecycleState, QconnectRemoteSyncState, QconnectSessionState, SessionLoopHost,
 };
 use qconnect_transport_ws::{NativeWsTransport, WsTransportConfig};
-use tokio::sync::Mutex;
+use tokio::sync::{broadcast, Mutex};
 use tokio::task::JoinHandle;
 
 use crate::adapter::DaemonAdapter;
@@ -71,6 +73,10 @@ pub(crate) struct DaemonQconnectInner {
     #[allow(dead_code)]
     pub last_error: Option<String>,
     pub lifecycle_state: QconnectLifecycleState,
+    /// Last local queue ids this session pushed to the cloud (the publish.rs
+    /// echo latch). Cleared on every connect (parity with the desktop
+    /// `qconnect_service.rs` connect reset).
+    pub last_pushed_queue_ids: Option<Vec<u64>>,
 }
 
 /// Map a lifecycle state to the `/api/status` `qconnect.state` label + the
@@ -246,6 +252,7 @@ impl DaemonQconnectService {
         {
             let mut guard = self.inner.lock().await;
             guard.last_error = None;
+            guard.last_pushed_queue_ids = None; // fresh session: re-arm the publish echo latch
             guard.runtime = Some(DaemonQconnectRuntime {
                 app,
                 config,
@@ -368,6 +375,9 @@ pub struct QconnectHandle {
     /// (it clones `Arc<AppRuntime>`, so it must drop before `drop(booted)` per the
     /// #521 clock-release ordering, exactly like the watcher).
     report_task: Option<JoinHandle<()>>,
+    /// The queue-publish subscriber (publish.rs). Same #521 ordering contract as
+    /// `report_task` — it clones `Arc<AppRuntime>` + the qconnect inner.
+    publish_task: Option<JoinHandle<()>>,
 }
 
 /// T11: a `Clone`-able, `Send + Sync` handle onto the running
@@ -435,6 +445,11 @@ impl QconnectHandle {
             report_task.abort();
             let _ = report_task.await;
         }
+        // Same for the queue-publish subscriber (publish.rs).
+        if let Some(publish_task) = self.publish_task.take() {
+            publish_task.abort();
+            let _ = publish_task.await;
+        }
         let _ = self.service.disconnect().await;
     }
 }
@@ -448,6 +463,7 @@ pub fn start(
     shared: SharedState,
     roots: &ProfileRoots,
     report_notify: Arc<tokio::sync::Notify>,
+    core_events: broadcast::Receiver<CoreEvent>,
 ) -> QconnectHandle {
     let settings_db = roots.data.join("qconnect_settings.db");
     // Re-point device identity + KV at the daemon root (NEVER the desktop global).
@@ -503,9 +519,20 @@ pub fn start(
         report::run_report_scheduler(report_notify, scheduler_inner, scheduler_runtime).await;
     }));
 
+    // Queue-publish subscriber (publish.rs): debounced CoreEvent::QueueUpdated ->
+    // push the local queue to the cloud when it changed. Runs for the daemon
+    // lifetime; a no-op until a connect installs a runtime (and gated to
+    // active-local-renderer sessions inside the publish body).
+    let publish_task = Some(publish::spawn_queue_cloud_publish(
+        Arc::clone(&service.inner),
+        Arc::clone(&service.runtime),
+        core_events,
+    ));
+
     QconnectHandle {
         service,
         watcher,
         report_task,
+        publish_task,
     }
 }

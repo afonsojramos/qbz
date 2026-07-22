@@ -179,6 +179,7 @@ pub async fn run(roots: ProfileRoots, cfg: QbzdConfig, warns: Vec<String>) -> Re
         booted.shared.clone(),
         &roots,
         report_notify,
+        booted.bus.subscribe(),
     );
     // T11: publish the reload route's handle onto the running service now that
     // it exists (`connect`/`disconnect`/device-name refresh — see
