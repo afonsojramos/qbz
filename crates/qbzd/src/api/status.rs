@@ -145,13 +145,16 @@ fn assemble_live(state: &super::ApiState) -> StatusDoc {
     // 3. queue — async core read, driven from this non-worker thread.
     let queue = state.rt.block_on(state.runtime.core().get_queue_state());
 
-    // 4. audio config from the store; device_present from the TTL cache.
+    // 4. audio config from the store; device_present from the TTL cache. An OPEN
+    //    device counts as present: CPAL enumerates DESCRIPTIONS ("HiFiBerry DAC+
+    //    ..."), never `hw:CARD=...` ids, so a playing direct-hw stream would
+    //    otherwise report `not present` (false negative).
     let settings = state.audio.get_settings().ok();
     let backend = settings.as_ref().and_then(|s| backend_label(s.backend_type));
     let configured_device = settings.as_ref().and_then(|s| s.output_device.clone());
     let device_present = match &configured_device {
         None => true, // system default is always "present"
-        Some(dev) => device_is_present(state, dev),
+        Some(dev) => device_open || device_is_present(state, dev),
     };
 
     // 5. playback block. `stopped` when nothing is loaded and the queue has no
