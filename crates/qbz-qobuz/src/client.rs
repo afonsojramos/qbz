@@ -324,6 +324,17 @@ impl QobuzClient {
         *self.session.write().await = Some(session);
     }
 
+    /// Account language (ISO 639-1) of the active session, if the login
+    /// response carried one — the "Auto" target for lyrics translation.
+    /// `None` pre-login and for pre-v10 persisted sessions.
+    pub async fn session_language_code(&self) -> Option<String> {
+        self.session
+            .read()
+            .await
+            .as_ref()
+            .and_then(|s| s.language_code.clone())
+    }
+
     /// Exchange an OAuth code for a full user session.
     ///
     /// This implements the new Qobuz OAuth flow:
