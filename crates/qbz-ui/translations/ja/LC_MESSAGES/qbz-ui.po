@@ -4766,3 +4766,19 @@ msgstr "最も再生したアルバム"
 # Most Played Albums View-all — per-card play count
 msgid "{} plays"
 msgstr "{} 回再生"
+
+# Lyrics translation (Qobuz API v10) — floating-toggle tooltips, flyout row, error toast
+msgid "Show lyrics translation"
+msgstr "歌詞の翻訳を表示"
+
+msgid "Hide lyrics translation"
+msgstr "歌詞の翻訳を隠す"
+
+msgid "Translation language"
+msgstr "翻訳言語"
+
+msgid "Auto (account language)"
+msgstr "自動（アカウントの言語）"
+
+msgid "Translation is not available right now. Please try again later."
+msgstr "翻訳は現在利用できません。後でもう一度お試しください。"
