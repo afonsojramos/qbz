@@ -245,6 +245,96 @@ component AlbumRow inherits Rectangle {
     }
 }
 
+// One reco-dismissed artist row (the Recommendations tab). Lighter than
+// ArtistRow: the dismissal store carries no timestamp/notes, and the avatar
+// is the generic user glyph (NOT blind-eye — this is not the blacklist).
+component DismissedRow inherits Rectangle {
+    in property <string> artist-name;
+    property <bool> hovered: ta.has-hover || rm-ta.has-hover;
+    callback select();
+    callback remove();
+    callback hover-changed(bool);
+    height: 64px;
+    border-radius: Radius.md;
+    background: root.hovered ? Theme.surface-elevated : Theme.surface-card;
+
+    changed hovered => {
+        root.hover-changed(self.hovered);
+    }
+
+    HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 8px;
+        spacing: 12px;
+
+        // Clickable artist-info region — opens the artist page.
+        Rectangle {
+            horizontal-stretch: 1;
+            ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.select();
+                }
+            }
+            HorizontalLayout {
+                spacing: 12px;
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 44px;
+                        height: 44px;
+                        border-radius: 22px;
+                        background: Theme.surface-elevated;
+                        QbzIcon {
+                            source: @image-url("../assets/icons/user.svg");
+                            width: 20px;
+                            height: 20px;
+                            x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+                            tint: Theme.text-muted;
+                        }
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    Text {
+                        text: root.artist-name;
+                        color: Theme.text-primary;
+                        font-size: Typography.body;
+                        font-weight: Typography.medium;
+                        overflow: elide;
+                    }
+                }
+            }
+        }
+
+        // Per-row undo (optimistic, no confirm — mirrors the blacklist rows).
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 36px;
+                height: 36px;
+                border-radius: Radius.sm;
+                background: rm-ta.has-hover ? Theme.danger-bg : transparent;
+                QbzIcon {
+                    source: @image-url("../assets/icons/x.svg");
+                    width: 18px;
+                    height: 18px;
+                    x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                    y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+                    tint: rm-ta.has-hover ? Theme.danger : Theme.text-muted;
+                }
+                rm-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.remove();
+                    }
+                }
+            }
+        }
+    }
+}
+
 export component BlacklistManagerView inherits Rectangle {
     background: ShellState.app-background-active ? transparent : Theme.surface-main;
 
@@ -347,6 +437,28 @@ export component BlacklistManagerView inherits Rectangle {
                             }
                         }
                     }
+                    // Recommendations tab (reco-scoped "Not interested" dismissals).
+                    Rectangle {
+                        width: reco-lbl.preferred-width + 28px;
+                        border-radius: Radius.sm;
+                        background: BlacklistState.active-tab == 2
+                            ? Theme.surface-card
+                            : (reco-ta.has-hover ? Theme.surface-hover : transparent);
+                        reco-lbl := Text {
+                            text: @tr("Recommendations");
+                            color: BlacklistState.active-tab == 2 ? Theme.text-primary : Theme.text-muted;
+                            font-size: Typography.legal;
+                            font-weight: Typography.medium;
+                            x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+                            y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+                        }
+                        reco-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                BlacklistActions.set-tab(2);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -356,7 +468,9 @@ export component BlacklistManagerView inherits Rectangle {
             vertical-stretch: 0;
             text: BlacklistState.active-tab == 0
                 ? @tr("Blacklisted artists are hidden from search results, radio, suggestions, and similar artists.")
-                : @tr("Blocked albums are hidden from search, discovery, and listings — even when their artist is allowed.");
+                : BlacklistState.active-tab == 1
+                    ? @tr("Blocked albums are hidden from search, discovery, and listings — even when their artist is allowed.")
+                    : @tr("Dismissed artists only leave your Recommendations — they still appear in search and everywhere else.");
             color: Theme.text-muted;
             font-size: Typography.body;
             wrap: word-wrap;
@@ -473,7 +587,9 @@ export component BlacklistManagerView inherits Rectangle {
             }
 
             // Clear-All — only when the active tab has something to clear.
-            if (BlacklistState.active-tab == 0 ? BlacklistState.count : BlacklistState.album-count) > 0: Rectangle {
+            // The Recommendations tab has no bulk clear (undo is per-row).
+            if (BlacklistState.active-tab == 0 ? BlacklistState.count
+                : BlacklistState.active-tab == 1 ? BlacklistState.album-count : 0) > 0: Rectangle {
                 width: clear-all-row.preferred-width + 28px;
                 height: 34px;
                 border-radius: Radius.sm;
@@ -519,7 +635,9 @@ export component BlacklistManagerView inherits Rectangle {
                 Text {
                     text: BlacklistState.active-tab == 0
                         ? @tr("{} artists", BlacklistState.count)
-                        : @tr("{} albums", BlacklistState.album-count);
+                        : BlacklistState.active-tab == 1
+                            ? @tr("{} albums", BlacklistState.album-count)
+                            : @tr("{} artists", BlacklistState.dismissed-count);
                     color: Theme.text-muted;
                     font-size: Typography.legal;
                     horizontal-alignment: right;
@@ -770,6 +888,100 @@ export component BlacklistManagerView inherits Rectangle {
                     viewport-height: album-flick.viewport-height;
                     visible-height: album-flick.height;
                     viewport-y <=> album-flick.viewport-y;
+                    auto-hide: true;
+                    hover-active: root.list-hover-rows > 0;
+                }
+            }
+
+            // --- Recommendations tab branches (reco-scoped dismissals) -----
+            // 2c) Empty (nothing dismissed).
+            if BlacklistState.active-tab == 2 && !BlacklistState.loading && BlacklistState.dismissed-count == 0: VerticalLayout {
+                alignment: center;
+                spacing: 12px;
+                HorizontalLayout {
+                    alignment: center;
+                    QbzIcon {
+                        source: @image-url("../assets/icons/thumbs-down.svg");
+                        width: 48px;
+                        height: 48px;
+                        tint: Theme.text-muted;
+                        opacity: 0.3;
+                    }
+                }
+                HorizontalLayout {
+                    alignment: center;
+                    Text {
+                        text: @tr("No dismissed artists");
+                        color: Theme.text-muted;
+                        font-size: Typography.heading;
+                    }
+                }
+                HorizontalLayout {
+                    alignment: center;
+                    Text {
+                        text: @tr("To stop seeing an artist in Recommendations, open its card menu and choose Not interested.");
+                        color: Theme.text-muted;
+                        font-size: Typography.legal;
+                        horizontal-alignment: center;
+                    }
+                }
+            }
+
+            // 3c) No search results (dismissed).
+            if BlacklistState.active-tab == 2 && !BlacklistState.loading && BlacklistState.dismissed-count > 0 && BlacklistState.dismissed-items.length == 0: VerticalLayout {
+                alignment: center;
+                spacing: 12px;
+                HorizontalLayout {
+                    alignment: center;
+                    QbzIcon {
+                        source: @image-url("../assets/icons/search.svg");
+                        width: 48px;
+                        height: 48px;
+                        tint: Theme.text-muted;
+                        opacity: 0.3;
+                    }
+                }
+                HorizontalLayout {
+                    alignment: center;
+                    Text {
+                        text: @tr("No results for \"{}\"", BlacklistState.search-query);
+                        color: Theme.text-muted;
+                        font-size: Typography.heading;
+                    }
+                }
+            }
+
+            // 4c) The dismissed-artists list (per-row undo).
+            if BlacklistState.active-tab == 2 && !BlacklistState.loading && BlacklistState.dismissed-items.length > 0: Rectangle {
+                dismissed-flick := Flickable {
+                    width: 100%;
+                    height: 100%;
+                    viewport-width: self.width;
+                    viewport-height: dismissed-content.preferred-height;
+                    dismissed-content := VerticalLayout {
+                        width: parent.width - 18px;
+                        spacing: 4px;
+                        for item in BlacklistState.dismissed-items: DismissedRow {
+                            artist-name: item.artist-name;
+                            select => {
+                                BlacklistActions.artist-select(item.artist-id);
+                            }
+                            remove => {
+                                BlacklistActions.remove-dismissed(item.artist-id);
+                            }
+                            hover-changed(h) => {
+                                root.list-hover-rows = h ? root.list-hover-rows + 1 : Math.max(0, root.list-hover-rows - 1);
+                            }
+                        }
+                    }
+                }
+                ListScrollbar {
+                    x: parent.width - self.width - 4px;
+                    width: 14px;
+                    height: 100%;
+                    viewport-height: dismissed-flick.viewport-height;
+                    visible-height: dismissed-flick.height;
+                    viewport-y <=> dismissed-flick.viewport-y;
                     auto-hide: true;
                     hover-active: root.list-hover-rows > 0;
                 }

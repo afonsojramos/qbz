@@ -16576,6 +16576,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             });
     }
+    // --- Reco-dismissal callbacks (the Recommendations tab) ---
+    {
+        let weak = window.as_weak();
+        window
+            .global::<BlacklistActions>()
+            .on_remove_dismissed(move |id| {
+                if let Some(w) = weak.upgrade() {
+                    blacklist_manager::remove_dismissed(&w, id);
+                }
+            });
+    }
     {
         let weak = window.as_weak();
         let bl_runtime_b = app_runtime.clone();
