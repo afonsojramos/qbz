@@ -122,6 +122,7 @@ mod plex_settings;
 mod playlist_picker;
 mod quality;
 mod reco;
+mod reco_dismiss;
 mod recently;
 mod scrobble;
 mod scrobbler_settings;
@@ -708,6 +709,9 @@ async fn enter_shell_offline(
     if let Some(dir) = crate::offline_mode::user_data_dir(user_id) {
         crate::offline_mode::init_for_user(&dir);
         crate::fav_cache::init_for_user(&dir);
+        // Reco-scoped "Not interested" dismissal store (Discover >
+        // Recommendations rails only — NOT the blacklist).
+        crate::reco_dismiss::init_for_user(&dir);
         // Recommendation event store (shared events.db with Tauri).
         crate::reco::init_for_user(&dir);
         // External-recommendations resolution cache (4th Discover tab).
