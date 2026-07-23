@@ -81,6 +81,38 @@ pub struct LyricsLine {
     pub words: Option<Vec<Word>>,
 }
 
+/// Synchronization kind of a lyrics content block — mirrors the Android v10
+/// mapper's dispatch on the wire `type` (wsync -> word-synced, lsync ->
+/// line-synced, plain -> plain).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum LyricsKind {
+    LineSynced,
+    Plain,
+    WordSynced,
+}
+
+/// A translated lyrics block (Qobuz API v10). Reuses [`LyricsLine`]/[`Word`]:
+/// synced translations carry the SAME timestamps as the original, so sync and
+/// karaoke stay keyed on the original timings while the translation renders
+/// as static text under each line.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TranslatedLyrics {
+    pub kind: LyricsKind,
+    /// ISO 639-1 of the translation (the language it was fetched with).
+    pub lang: Option<String>,
+    pub lines: Vec<LyricsLine>,
+}
+
+/// Derive `has_translation` (client-derived, NEVER a wire field): the
+/// requested language is listed in the document's `translation_langs`.
+/// False when no language was requested.
+pub fn derive_has_translation(translation_langs: &[String], requested_lang: Option<&str>) -> bool {
+    match requested_lang {
+        Some(lang) => translation_langs.iter().any(|candidate| candidate == lang),
+        None => false,
+    }
+}
+
 /// Parsed, render-ready lyrics document.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct LyricsDoc {
@@ -92,6 +124,14 @@ pub struct LyricsDoc {
     pub translation_langs: Vec<String>,
     /// Songwriter credits display string (Qobuz metadata passthrough).
     pub writers: Option<String>,
+    /// Embedded translation (Qobuz v10 only; `None` for other providers and
+    /// for original-only fetches). Boxed: rare + large, keep the doc small.
+    #[serde(default)]
+    pub translation: Option<Box<TranslatedLyrics>>,
+    /// Client-derived (see [`derive_has_translation`]): a translation for the
+    /// requested language is available. False when none was requested.
+    #[serde(default)]
+    pub has_translation: bool,
 }
 
 impl LyricsDoc {
@@ -103,6 +143,8 @@ impl LyricsDoc {
             provider,
             translation_langs: Vec::new(),
             writers: None,
+            translation: None,
+            has_translation: false,
         }
     }
 
@@ -116,6 +158,8 @@ impl LyricsDoc {
             provider,
             translation_langs: Vec::new(),
             writers: None,
+            translation: None,
+            has_translation: false,
         }
     }
 
@@ -127,6 +171,8 @@ impl LyricsDoc {
             provider,
             translation_langs: Vec::new(),
             writers: None,
+            translation: None,
+            has_translation: false,
         }
     }
 
@@ -152,13 +198,19 @@ impl LyricsDoc {
 
     /// Build from a cached row. Readers PREFER the native wsync document when
     /// present (amended Q5): word timestamps survive the cache; the LRC column
-    /// stays the cross-frontend lingua franca.
-    pub fn from_cached(payload: &LyricsPayload, qobuz_wsync_json: Option<&str>) -> Self {
+    /// stays the cross-frontend lingua franca. `requested_lang` (the active
+    /// translation target, if any) drives the client-derived `has_translation`
+    /// on the served document.
+    pub fn from_cached(
+        payload: &LyricsPayload,
+        qobuz_wsync_json: Option<&str>,
+        requested_lang: Option<&str>,
+    ) -> Self {
         if payload.provider == LyricsProvider::Qobuz {
             if let Some(json) = qobuz_wsync_json {
                 match serde_json::from_str::<crate::wsync::QobuzWsync>(json) {
                     Ok(wsync) => {
-                        let doc = wsync.to_doc();
+                        let doc = wsync.to_doc(requested_lang);
                         if !doc.lines.is_empty() {
                             return doc;
                         }
@@ -297,20 +349,33 @@ mod tests {
             {"line":"hello","start":1000,"end":2000,
              "words":[{"word":"hello","start":1000,"end":2000}]}
         ]}"#;
-        let doc = LyricsDoc::from_cached(&payload, Some(wsync_json));
+        let doc = LyricsDoc::from_cached(&payload, Some(wsync_json), None);
         assert!(doc.synced);
         let words = doc.lines[0].words.as_ref().expect("native words preserved");
         assert_eq!(words[0].text, "hello");
 
         // Without the column, the LRC path applies (no words).
-        let doc = LyricsDoc::from_cached(&payload, None);
+        let doc = LyricsDoc::from_cached(&payload, None, None);
         assert!(doc.synced);
         assert!(doc.lines[0].words.is_none());
 
         // Corrupt wsync json degrades to the LRC path instead of erroring.
-        let doc = LyricsDoc::from_cached(&payload, Some("{not json"));
+        let doc = LyricsDoc::from_cached(&payload, Some("{not json"), None);
         assert!(doc.synced);
         assert!(doc.lines[0].words.is_none());
+    }
+
+    #[test]
+    fn has_translation_derivation() {
+        let langs = vec!["pt".to_string(), "de".to_string(), "es".to_string()];
+        // Requested lang listed -> true.
+        assert!(derive_has_translation(&langs, Some("es")));
+        // Requested lang NOT listed -> false (track lacks that language).
+        assert!(!derive_has_translation(&langs, Some("ja")));
+        // No language requested -> false, even when translations exist.
+        assert!(!derive_has_translation(&langs, None));
+        // Empty list (feature off) -> false.
+        assert!(!derive_has_translation(&[], Some("es")));
     }
 
     #[test]
