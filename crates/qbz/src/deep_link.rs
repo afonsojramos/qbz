@@ -27,6 +27,7 @@
 use std::sync::{Arc, Mutex};
 
 use qbz_app::shell::AppRuntime;
+use slint::ComponentHandle;
 
 use crate::adapter::SlintAdapter;
 use crate::artwork;
