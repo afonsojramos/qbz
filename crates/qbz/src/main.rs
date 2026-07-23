@@ -494,6 +494,30 @@ async fn enter_shell(
                                 }
                             }
                         }
+                        // External-reco artist rows (Discover > Recommendations):
+                        // same in-place re-seed — the rows may already be painted
+                        // from the results blob before this warm lands (their
+                        // build-time fav_cache seed was stale/empty then).
+                        let reco = w.global::<ExternalRecoState>();
+                        for model in [
+                            reco.get_rec_artists_common(),
+                            reco.get_rec_artists_recent(),
+                            reco.get_top_artists(),
+                        ] {
+                            for i in 0..model.row_count() {
+                                if let Some(mut it) = model.row_data(i) {
+                                    let following = it
+                                        .id
+                                        .parse::<u64>()
+                                        .map(|id| fav_cache::is_artist_favorite(id))
+                                        .unwrap_or(false);
+                                    if it.following != following {
+                                        it.following = following;
+                                        model.set_row_data(i, it);
+                                    }
+                                }
+                            }
+                        }
                     });
                 }
                 Err(e) => log::warn!("[qbz-slint] favorite artists warm failed: {e}"),

@@ -601,7 +601,11 @@ fn slim_from_artist(a: &ArtistReco) -> SlimItem {
         rank: "".into(),
         artwork_url: a.image_url.clone().into(),
         artwork: slint::Image::default(),
-        following: false,
+        // Live follow state from the login-seeded fav cache (the
+        // pinned_section precedent) — a hardcoded `false` mislabeled
+        // already-followed artists. Kept live afterwards by
+        // search::mark_artist_followed on every toggle.
+        following: crate::fav_cache::is_artist_favorite(a.qobuz_artist_id),
     }
 }
 fn slim_from_track(t: &TrackReco) -> SlimItem {
