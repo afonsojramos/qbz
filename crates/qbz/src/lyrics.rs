@@ -96,12 +96,19 @@ struct SharedClientProviders {
 
 #[async_trait::async_trait]
 impl LyricsProviders for SharedClientProviders {
-    async fn qobuz(&self, track_id: u64) -> Result<Option<QobuzLyricsDocument>, String> {
+    async fn qobuz(
+        &self,
+        track_id: u64,
+        language: Option<&str>,
+    ) -> Result<Option<QobuzLyricsDocument>, String> {
         let guard = self.client.read().await;
         let client = guard
             .as_ref()
             .ok_or_else(|| "Qobuz client not initialized".to_string())?;
-        client.get_lyrics(track_id).await.map_err(|e| e.to_string())
+        client
+            .get_lyrics(track_id, language)
+            .await
+            .map_err(|e| e.to_string())
     }
 
     async fn lrclib(
@@ -299,6 +306,9 @@ pub fn prefetch_lyrics(track: &QueueTrack) {
         album: (!track.album.is_empty()).then(|| track.album.clone()),
         duration_secs: (track.duration_secs > 0).then_some(track.duration_secs),
         offline: false,
+        // Prefetch warms the original-only entry; the translation toggle
+        // (UI task) triggers the refetch-with-language when needed.
+        language: None,
     };
     tokio::spawn(async move {
         // Resolution upserts into lyrics.db; the result is discarded (no UI).
@@ -332,6 +342,9 @@ pub fn on_track_changed(weak: slint::Weak<AppWindow>, track: &QueueTrack) {
         // Offline as data, not lookup (spec §2.2.4): the engine verdict is
         // read here and travels with the request.
         offline: crate::offline_mode::engine().is_offline(),
+        // Default flow fetches original-only (spec §B.1); the translation
+        // toggle's refetch-with-language is wired by the UI task.
+        language: None,
     };
     let key = request_identity(
         request.track_id,
