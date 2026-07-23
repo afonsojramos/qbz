@@ -53,8 +53,8 @@ const AUTHOR_HANDLE: &str = "vicrodh";
 
 /// The contributor handles + their GitHub profile URLs. First the Tauri About
 /// modal's order, then the Slint-era external-PR contributors: `hoyon`
-/// (classical "work" grouping, PR #536) and `mxnix` (Russian translation,
-/// PR #517).
+/// (classical "work" grouping, PR #536), `mxnix` (Russian translation,
+/// PR #517) and `TerminalTilt`.
 const CONTRIBUTORS: &[&str] = &[
     "vorce",
     "boxdot",
@@ -66,12 +66,13 @@ const CONTRIBUTORS: &[&str] = &[
     "DoubleGate",
     "hoyon",
     "mxnix",
+    "TerminalTilt",
 ];
 
 /// How many contributor chips per wrap row. Slint has no flex-wrap, so the flat
 /// list is pre-grouped into fixed rows (see `AboutContributorGroup`). 5 fills
-/// the widened ~840px panel (10 contributors → 2 even rows) instead of the old
-/// 4-per-row / 3-row layout that left the wider modal half-empty.
+/// the widened ~840px panel instead of the old 4-per-row / 3-row layout that
+/// left the wider modal half-empty.
 const CONTRIBUTORS_PER_ROW: usize = 5;
 
 /// Build the row-grouped contributor model. Avatars start blank (default image)
