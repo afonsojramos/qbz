@@ -25,32 +25,26 @@ import { LyricsLinesView } from "LyricsLinesView.slint";
 import { LyricsControlsPanel } from "LyricsControlsFlyout.slint";
 import { ShellState, LyricsState, ArtworkActions, AppearanceState, TooltipState } from "../state.slint";
 
-// Floating translate toggle (Qobuz v10, owner decision 2026-07-22): circular
-// button anchored bottom-right of the lyrics body, overlaying it — mobile
-// parity (the 文A button on iOS/Android). Off = dim, on = accent. Tooltip
-// rides the shared TooltipState channel like the bar's IconButton.
+// Floating translate toggle (Qobuz v10, owner decisions 2026-07-22/23):
+// square ghost button anchored bottom-right of the lyrics body, overlaying
+// it. Styled after the Discover configurator gear (GearButton in
+// HomeView.slint): no border, bg lights up on hover; the accent tint is the
+// ON state. Tooltip rides the shared TooltipState channel.
 component TranslateButton inherits Rectangle {
-    width: 36px;
-    height: 36px;
-    border-radius: 18px;
-    background: LyricsState.show-translation
-        ? Theme.accent.with-alpha(0.15)
-        : Theme.surface-card;
-    border-width: 1px;
-    border-color: LyricsState.show-translation ? Theme.accent : Theme.border-muted;
-    drop-shadow-blur: 12px;
-    drop-shadow-color: Theme.card-shadow;
-    drop-shadow-offset-y: 3px;
+    width: 32px;
+    height: 32px;
+    border-radius: 4px;
+    background: ta.has-hover ? Theme.surface-hover : transparent;
 
     QbzIcon {
-        source: @image-url("../assets/icons/languages.svg");
-        width: 18px;
-        height: 18px;
+        source: @image-url("../assets/icons/translate.svg");
+        width: 20px;
+        height: 20px;
         x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
         y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
         tint: LyricsState.show-translation
             ? Theme.accent
-            : (ta.has-hover ? Theme.text-primary : Theme.text-secondary);
+            : (ta.has-hover ? Theme.text-primary : Theme.text-muted);
     }
 
     ta := TouchArea {
