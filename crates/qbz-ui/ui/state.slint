@@ -4454,6 +4454,11 @@ export struct LyricsLineItem {
     time-ms: int,
     end-ms: int,
     has-words: bool,
+    // Translation of this line (Qobuz v10), aligned 1:1 with `text` by the
+    // Rust glue; empty when the doc has no translation (or it wasn't
+    // requested). Rendered under the original line only while
+    // `LyricsState.show-translation` is on.
+    translation-text: string,
 }
 
 // One VISUAL line of the ACTIVE logical line, for the per-visual-line karaoke
@@ -4488,6 +4493,18 @@ export global LyricsState {
     // Playing-track meta for the header ("{title} - {artist}").
     in property <string> track-title;
     in property <string> track-artist;
+
+    // ---- Translation (Qobuz API v10) ---------------------------------------
+    // The current doc advertises at least one translation language
+    // (`translation_langs` non-empty) — gates the sidebar's floating toggle.
+    // False on every other state, so the sidebar renders exactly as before.
+    in property <bool> translation-available: false;
+    // User intent: render the translation under each original line. Driven by
+    // Rust (`toggle-translation`): ON refetches with the target language and
+    // flips this only when the translation actually arrived; OFF is pure UI.
+    in-out property <bool> show-translation: false;
+    // Sidebar floating-button action (wired in main.rs).
+    callback toggle-translation();
     // Surfaced backend error text (status == 4) — dynamic content, not chrome.
     in property <string> error;
     // Active line index; -1 = none. The S4 sync engine drives it.
@@ -4538,6 +4555,25 @@ export global LyricsState {
     // between line changes). Default false (smooth karaoke). Kiosk / weak-GPU
     // tiers force it on via ShellState.reduce-motion regardless of this pref.
     in-out property <bool> lite-fill: false;
+    // Translation language (Qobuz v10, persisted like the other prefs):
+    // 0 Auto (account language) · 1..9 = en es fr de it pt nl ja ru. Option
+    // labels: the Auto entry is @tr'd, the language names are native
+    // literals — the same convention as AppearanceState.languages. The @tr
+    // DEFAULT is not reactive, so `reseed_i18n_labels` re-pushes the array
+    // on language change.
+    in-out property <int> translation-language-index: 0;
+    in-out property <[string]> translation-language-options: [
+        @tr("Auto (account language)"),
+        "English",
+        "Español",
+        "Français",
+        "Deutsch",
+        "Italiano",
+        "Português",
+        "Nederlands",
+        "日本語",
+        "Русский",
+    ];
     // Active (karaoke fill) color. `use-custom-color: false` = follow the theme
     // accent (Tauri activeColor: ''). The palette swatches set both (deviation
     // D6: swatches instead of a native color input — Slint has none).

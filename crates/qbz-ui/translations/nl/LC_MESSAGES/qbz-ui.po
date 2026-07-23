@@ -4790,3 +4790,19 @@ msgstr "Meest afgespeelde albums"
 # Most Played Albums View-all — per-card play count
 msgid "{} plays"
 msgstr "{} keer afgespeeld"
+
+# Lyrics translation (Qobuz API v10) — floating-toggle tooltips, flyout row, error toast
+msgid "Show lyrics translation"
+msgstr "Songtekstvertaling tonen"
+
+msgid "Hide lyrics translation"
+msgstr "Songtekstvertaling verbergen"
+
+msgid "Translation language"
+msgstr "Vertaaltaal"
+
+msgid "Auto (account language)"
+msgstr "Automatisch (accounttaal)"
+
+msgid "Translation is not available right now. Please try again later."
+msgstr "Vertaling is nu niet beschikbaar. Probeer het later opnieuw."
