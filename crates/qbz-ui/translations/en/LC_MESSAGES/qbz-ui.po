@@ -587,3 +587,25 @@ msgstr "Auto (account language)"
 
 msgid "Translation is not available right now. Please try again later."
 msgstr "Translation is not available right now. Please try again later."
+# Discover Recommendations — Not interested (reco-scoped dismissals)
+
+msgid "Not interested"
+msgstr "Not interested"
+
+msgid "Dismissed artists only leave your Recommendations — they still appear in search and everywhere else."
+msgstr "Dismissed artists only leave your Recommendations — they still appear in search and everywhere else."
+
+msgid "No dismissed artists"
+msgstr "No dismissed artists"
+
+msgid "To stop seeing an artist in Recommendations, open its card menu and choose Not interested."
+msgstr "To stop seeing an artist in Recommendations, open its card menu and choose Not interested."
+
+msgid "{} won't appear in Recommendations anymore"
+msgstr "{} won't appear in Recommendations anymore"
+
+msgid "Artist dismissed from Recommendations"
+msgstr "Artist dismissed from Recommendations"
+
+msgid "{} restored to Recommendations"
+msgstr "{} restored to Recommendations"

@@ -40,6 +40,7 @@ mod glibc_compat;
 mod log_viewer;
 mod sleep_timer;
 pub use qbz_text_utils::{dates, strip_html};
+mod deep_link;
 mod discover_browse;
 mod discord_rpc;
 mod discover_prefs;
@@ -122,6 +123,7 @@ mod plex_settings;
 mod playlist_picker;
 mod quality;
 mod reco;
+mod reco_dismiss;
 mod recently;
 mod scrobble;
 mod scrobbler_settings;
@@ -351,6 +353,17 @@ async fn enter_shell(
 ) {
     let tray = init_shell_for_user(&runtime, &weak, session.user_id);
 
+    // Deep links (argv capture / warm D-Bus OpenUrl) may now drain: the
+    // session is active and the AppWindow exists. Bound here at the top; the
+    // pending URL itself is dispatched at the very END of this function so
+    // the startup-page/view restore below can't re-root over the deep link.
+    deep_link::bind_shell_ctx(
+        runtime.clone(),
+        weak.clone(),
+        tokio::runtime::Handle::current(),
+        image_cache.clone(),
+    );
+
     let _ = weak.upgrade_in_event_loop(move |w| {
         let state = w.global::<SessionState>();
         state.set_user_name(session.display_name.into());
@@ -490,6 +503,30 @@ async fn enter_shell(
                                     if it.artist.following != following {
                                         it.artist.following = following;
                                         pm.set_row_data(i, it);
+                                    }
+                                }
+                            }
+                        }
+                        // External-reco artist rows (Discover > Recommendations):
+                        // same in-place re-seed — the rows may already be painted
+                        // from the results blob before this warm lands (their
+                        // build-time fav_cache seed was stale/empty then).
+                        let reco = w.global::<ExternalRecoState>();
+                        for model in [
+                            reco.get_rec_artists_common(),
+                            reco.get_rec_artists_recent(),
+                            reco.get_top_artists(),
+                        ] {
+                            for i in 0..model.row_count() {
+                                if let Some(mut it) = model.row_data(i) {
+                                    let following = it
+                                        .id
+                                        .parse::<u64>()
+                                        .map(|id| fav_cache::is_artist_favorite(id))
+                                        .unwrap_or(false);
+                                    if it.following != following {
+                                        it.following = following;
+                                        model.set_row_data(i, it);
                                     }
                                 }
                             }
@@ -635,6 +672,14 @@ async fn enter_shell(
     let _ = weak.upgrade_in_event_loop(move |w| {
         favorites::apply_counts(&w, counts);
     });
+
+    // XDG deep link: drain a pending Qobuz URL LAST — after the startup-page
+    // / view-restore block above, so the restore can't re-root over the deep
+    // link (the navigation lands on top of whatever was restored). Session
+    // active, AppWindow alive: no readiness sleep needed. Nothing pending =>
+    // no-op. (Offline entries never reach here — enter_shell_offline keeps
+    // the URL pending; navigation needs the API.)
+    deep_link::drain_pending();
 }
 
 /// Offline session entry — "Start offline" on the login screen (spec §4.1).
@@ -684,6 +729,9 @@ async fn enter_shell_offline(
     if let Some(dir) = crate::offline_mode::user_data_dir(user_id) {
         crate::offline_mode::init_for_user(&dir);
         crate::fav_cache::init_for_user(&dir);
+        // Reco-scoped "Not interested" dismissal store (Discover >
+        // Recommendations rails only — NOT the blacklist).
+        crate::reco_dismiss::init_for_user(&dir);
         // Recommendation event store (shared events.db with Tauri).
         crate::reco::init_for_user(&dir);
         // External-recommendations resolution cache (4th Discover tab).
@@ -8062,6 +8110,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::env::var("SLINT_SCALE_FACTOR").unwrap_or_default()
         );
     }
+
+    // XDG deep link (Exec=qbz %u): capture a Qobuz link from argv BEFORE the
+    // single-instance guard below — a second launch must read its own argv
+    // before deciding to raise the primary and exit (the guard forwards the
+    // stashed URL over D-Bus; as primary it drains at the end of enter_shell).
+    deep_link::capture_argv();
     // Artwork decode targets grow with the preset so covers stay sharp at
     // Large/XL (and shrink RAM at Small). Set before any artwork job runs.
     crate::artwork::set_ui_scale_factor(ui_scale_factor);
@@ -10555,6 +10609,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         window.on_logout(move || {
             // Drop any Discord "now listening" activity on logout.
             discord_rpc::clear(&handle);
+            // Back at the login screen a pending deep link must wait for the
+            // next enter_shell, not fire into the torn-down session.
+            deep_link::clear_shell_ctx();
             // Clear the per-user purchases cache + download-status store so the
             // next account never sees the previous user's purchased items or
             // in-flight download statuses (cross-account data leak).
@@ -12544,6 +12601,70 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                             }
                         });
+                    }
+                }
+                // "Not interested" (reco-scoped dismissal — NOT the app-wide
+                // blacklist): persist the dismissal, drop the card from the
+                // Recommendations rails live, and backfill the freed slot from
+                // the retained overflow. The artist stays visible everywhere
+                // else (search/home/label pages); future paints exclude it via
+                // the §B filter.
+                ("artist", "not-interested") => {
+                    if let Some(w) = weak.upgrade() {
+                        let snapshot =
+                            crate::external_reco::apply_artist_dismissal(&w, &image_cache, &id);
+                        match snapshot {
+                            Some((name, image)) => {
+                                if let Ok(aid) = id.parse::<u64>() {
+                                    crate::reco_dismiss::dismiss(aid, &name, &image);
+                                }
+                                crate::toast::info_weak(
+                                    &weak,
+                                    qbz_i18n::t_args(
+                                        "{} won't appear in Recommendations anymore",
+                                        &[&name],
+                                    ),
+                                );
+                            }
+                            None => {
+                                // Dismissed from a non-reco surface (search /
+                                // home / pinned card): nothing to remove live
+                                // — resolve the display name, then persist.
+                                let runtime = runtime.clone();
+                                let weak = weak.clone();
+                                let artist_id = id.clone();
+                                handle.spawn(async move {
+                                    let Ok(aid) = artist_id.parse::<u64>() else {
+                                        return;
+                                    };
+                                    let (name, image) = runtime
+                                        .core()
+                                        .get_artist(aid)
+                                        .await
+                                        .map(|a| {
+                                            (
+                                                a.name,
+                                                a.image
+                                                    .and_then(|i| i.best().cloned())
+                                                    .unwrap_or_default(),
+                                            )
+                                        })
+                                        .unwrap_or_default();
+                                    crate::reco_dismiss::dismiss(aid, &name, &image);
+                                    let msg = if name.is_empty() {
+                                        qbz_i18n::t("Artist dismissed from Recommendations")
+                                    } else {
+                                        qbz_i18n::t_args(
+                                            "{} won't appear in Recommendations anymore",
+                                            &[&name],
+                                        )
+                                    };
+                                    let _ = weak.upgrade_in_event_loop(move |w| {
+                                        crate::toast::info(&w, msg);
+                                    });
+                                });
+                            }
+                        }
                     }
                 }
                 // === Label landing actions ===============================
@@ -16522,6 +16643,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .on_clear_all_albums(move || {
                 if let Some(w) = weak.upgrade() {
                     blacklist_manager::clear_all_albums(&w);
+                }
+            });
+    }
+    // --- Reco-dismissal callbacks (the Recommendations tab) ---
+    {
+        let weak = window.as_weak();
+        window
+            .global::<BlacklistActions>()
+            .on_remove_dismissed(move |id| {
+                if let Some(w) = weak.upgrade() {
+                    blacklist_manager::remove_dismissed(&w, id);
                 }
             });
     }

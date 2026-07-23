@@ -2462,6 +2462,16 @@ export struct BlacklistedAlbumItem {
     has-notes: bool,
 }
 
+// One reco-dismissed artist ("Not interested"). Reco-SCOPED — NOT the
+// blacklist: the artist only leaves the Recommendations rails. The store
+// carries no timestamp/notes, so the row is just the name (+ a generic
+// avatar); removal is the undo.
+export struct DismissedArtistItem {
+    // Numeric Qobuz artist id (same int pass-through as BlacklistedArtistItem).
+    artist-id: int,
+    artist-name: string,
+}
+
 export global BlacklistState {
     // The CURRENTLY-VISIBLE rows (already search-filtered by the controller).
     in property <[BlacklistedArtistItem]> items: [];
@@ -2481,7 +2491,11 @@ export global BlacklistState {
     in property <[BlacklistedAlbumItem]> album-items: [];
     // FULL blocked-album count (drives the Albums tab badge + empty state).
     in property <int> album-count: 0;
-    // Active manager tab: 0 = Artists, 1 = Albums.
+    // --- Reco-dismissal axis ("Not interested" — the Recommendations tab) ---
+    in property <[DismissedArtistItem]> dismissed-items: [];
+    // FULL dismissed count (drives the tab badge + empty state).
+    in property <int> dismissed-count: 0;
+    // Active manager tab: 0 = Artists, 1 = Albums, 2 = Recommendations.
     in property <int> active-tab: 0;
 }
 
@@ -2498,12 +2512,14 @@ export global BlacklistActions {
     callback search-changed(string /* query */);
 
     // --- Album axis ---
-    callback set-tab(int /* 0=artists, 1=albums */);
+    callback set-tab(int /* 0=artists, 1=albums, 2=recommendations */);
     callback album-select(string /* album id */);
     callback remove-album(string /* album id */);
     callback clear-all-albums();
     // Block an album from a context menu (id + display fields for the manager).
     callback block-album(string /* id */, string /* title */, string /* artist */, string /* cover-url */);
+    // --- Reco-dismissal axis ---
+    callback remove-dismissed(int /* artist id */);
 }
 
 // === My QBZ — Mixtapes & Collections (read-only index grids) ============

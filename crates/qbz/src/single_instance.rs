@@ -6,14 +6,18 @@
 //! The first instance takes ownership of the well-known session-bus name
 //! `com.blitzfc.qbz` (Flatpak auto-grants owning the app-id name — no
 //! finish-args change needed) and exports a `com.blitzfc.qbz.SingleInstance`
-//! interface with a `Present()` method. A second launch sees the name taken,
-//! calls `Present()` — which raises whichever window is current (the mini
-//! when the miniplayer is open, else the main window) and works from process
-//! start, login screen included — and exits. If the primary predates the
-//! interface (≤2.0.x) the call errors and the second launch falls back to
-//! the MPRIS `Raise` method, which only exists after session entry. Any
-//! D-Bus problem — no session bus, weird sandbox — falls through as "we are
-//! primary": the guard must never block startup.
+//! interface with `Present()` and `OpenUrl(url)` methods. A second launch
+//! sees the name taken and calls `OpenUrl(url)` when its own argv carried a
+//! Qobuz deep link (the primary presents itself AND navigates — Tauri
+//! parity, the piece #618 didn't port) or `Present()` otherwise — which
+//! raises whichever window is current (the mini when the miniplayer is
+//! open, else the main window) and works from process start, login screen
+//! included — and exits. If the primary predates the interface (≤2.0.x) the
+//! call errors and the second launch falls back to the MPRIS `Raise`
+//! method, which only exists after session entry. `OpenUrl` failing on an
+//! older primary (interface present, method missing) falls back to bare
+//! `Present()`. Any D-Bus problem — no session bus, weird sandbox — falls
+//! through as "we are primary": the guard must never block startup.
 //!
 //! Blocking zbus API on purpose: this runs once on the main thread before
 //! the UI exists, and the async-io executor self-drives the connection
@@ -54,16 +58,35 @@ static PENDING_PRESENT: AtomicBool = AtomicBool::new(false);
 /// primary sits at the login window must still raise it).
 struct SingleInstanceIface;
 
+/// Shared Present path for the iface methods: raise whichever window is
+/// current, or remember the request until `bind_window` (simultaneous cold
+/// starts: the DoNotQueue loser can call in while the winner is still
+/// initializing).
+fn present_or_defer() {
+    match MAIN_WEAK.get() {
+        Some(weak) => crate::tray::present(weak),
+        None => PENDING_PRESENT.store(true, Ordering::SeqCst),
+    }
+}
+
 #[zbus::interface(name = "com.blitzfc.qbz.SingleInstance")]
 impl SingleInstanceIface {
     /// Raise whichever window is current (mini when the miniplayer is open,
     /// else the main window). Runs on a zbus executor thread — never touch
     /// Slint state here; `tray::present` routes through the event loop.
     fn present(&self) {
-        match MAIN_WEAK.get() {
-            Some(weak) => crate::tray::present(weak),
-            None => PENDING_PRESENT.store(true, Ordering::SeqCst),
-        }
+        present_or_defer();
+    }
+
+    /// A second launch carrying a Qobuz deep link forwards it here: stash
+    /// the URL, present ourselves, and dispatch it through the running
+    /// instance's Ctrl+L link-resolver flow (`deep_link::drain_pending`).
+    /// With no shell up (sitting at the login screen, or offline) the URL
+    /// stays pending for the next successful `enter_shell`.
+    fn open_url(&self, url: &str) {
+        crate::deep_link::stash(url.to_string());
+        present_or_defer();
+        crate::deep_link::drain_pending();
     }
 }
 
@@ -110,9 +133,22 @@ fn probe() -> zbus::Result<bool> {
         // runs. Ask it to present itself; both calls are best-effort — the
         // duplicate still must not start.
         RequestNameReply::Exists | RequestNameReply::InQueue => {
-            let presented = conn
-                .call_method(Some(BUS_NAME), OBJECT_PATH, Some(IFACE_NAME), "Present", &())
-                .is_ok();
+            // Carrying a deep link from argv (captured at process start)?
+            // Forward it: OpenUrl makes the primary present itself AND
+            // navigate. An older primary without the method errors → the
+            // bare-Present ladder below (version-skew tolerance); the URL
+            // is then lost with this exiting process, same as a failed emit
+            // in the Tauri era.
+            let forwarded = match crate::deep_link::take_pending() {
+                Some(url) => conn
+                    .call_method(Some(BUS_NAME), OBJECT_PATH, Some(IFACE_NAME), "OpenUrl", &url)
+                    .is_ok(),
+                None => false,
+            };
+            let presented = forwarded
+                || conn
+                    .call_method(Some(BUS_NAME), OBJECT_PATH, Some(IFACE_NAME), "Present", &())
+                    .is_ok();
             if !presented {
                 // Older primary (≤2.0.x) without the SingleInstance interface:
                 // fall back to MPRIS Raise. Full MPRIS name =
