@@ -235,7 +235,7 @@ Multi-device playback control using Qobuz's real-time streaming protocol. Consid
 - Mini player
 - Album booklets download to your device — the old in-app PDF reader was dropped in 2.0 to keep the binary lean
 - Configurable keyboard shortcuts, UI scale presets (XS–XL)
-- **7 languages:** English, Spanish, German, French, Portuguese, Russian, Japanese
+- **8 languages:** English, Spanish, German, French, Portuguese, Russian, Japanese, Dutch
 - **Offline mode** usable without ever logging into Qobuz, with fully offline playlists and automatic reconnection
 
 ## Headless Daemon (qbzd)
