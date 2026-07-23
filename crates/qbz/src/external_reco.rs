@@ -9,6 +9,7 @@
 //! Weekly Exploration/Jams (ListenBrainz), Deep-cut albums, and a Qobuz editorial
 //! cold-start fallback.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -18,9 +19,9 @@ use qbz_app::shell::AppRuntime;
 use qbz_external_reco::{
     build_deep_cut_albums, build_editorial, build_fresh_releases, build_rec_albums,
     build_rec_artists_common, build_rec_artists_recent, build_similar_albums_seeded,
-    build_weekly_exploration, build_weekly_jams, gather_history, is_cold_start, AlbumReco,
-    ArtistReco, ExternalCarousels, LastFmHandle, ListenBrainzHandle, LocalHistory, RecoCache,
-    RecoCatalog, RecoInputs, TrackReco,
+    build_weekly_exploration, build_weekly_jams, compose_artist_rails, gather_history,
+    is_cold_start, AlbumReco, ArtistReco, ExternalCarousels, LastFmHandle, ListenBrainzHandle,
+    LocalHistory, RecoCache, RecoCatalog, RecoInputs, TrackReco, ARTIST_DISPLAY_CAP,
 };
 use qbz_integrations::{LastFmClient, ListenBrainzClient, MusicBrainzClient};
 use qbz_models::{Album, Artist, Track};
@@ -31,6 +32,15 @@ use crate::artwork::{ArtworkJob, ArtworkTarget, ImageCache};
 use crate::{AlbumCardItem, AppWindow, DiscoverSection, ExternalRecoState, SlimItem};
 
 static CACHE_DIR: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+/// Retained per-rail overflow (validated candidates past the visible cap) for
+/// the two Recommended-Artist rails — (common, recent). Kept for live
+/// backfill after a "not interested" dismissal, so a replacement card needs
+/// no extra network. Rewritten on every rail paint (fresh build AND cached
+/// blob paint; old blobs carry no overflow, so they simply don't backfill
+/// until they expire).
+static ARTIST_OVERFLOW: Mutex<(Vec<ArtistReco>, Vec<ArtistReco>)> =
+    Mutex::new((Vec::new(), Vec::new()));
 
 pub fn init_for_user(base_dir: &Path) {
     if let Ok(mut g) = CACHE_DIR.lock() {
@@ -390,19 +400,21 @@ fn spawn(
             let history = gather_history(&inputs).await;
             let col = &collector;
             // Progressive: each branch paints its row AND collects it for the cache.
-            let b_common = async {
-                let r = build_rec_artists_common(&inputs, &history).await;
+            // The two artist rails build in parallel but paint TOGETHER through
+            // apply_artist_rails (the shared filter/dedup/backfill choke point —
+            // cross-rail dedup needs both pools). The collector stores the FULL
+            // validated pools (visible + overflow), so the results blob carries
+            // the backfill candidates too.
+            let b_artists = async {
+                let (common_pool, recent_pool) = tokio::join!(
+                    build_rec_artists_common(&inputs, &history),
+                    build_rec_artists_recent(&inputs, &history),
+                );
                 if let Ok(mut g) = col.lock() {
-                    g.rec_artists_common = r.clone();
+                    g.rec_artists_common = common_pool.clone();
+                    g.rec_artists_recent = recent_pool.clone();
                 }
-                apply_artists(&weak, &image_cache, r, ArtistRow::RecArtistsCommon);
-            };
-            let b_recent = async {
-                let r = build_rec_artists_recent(&inputs, &history).await;
-                if let Ok(mut g) = col.lock() {
-                    g.rec_artists_recent = r.clone();
-                }
-                apply_artists(&weak, &image_cache, r, ArtistRow::RecArtistsRecent);
+                apply_artist_rails(&weak, &image_cache, common_pool, recent_pool);
             };
             let b_albums = async {
                 let r = build_rec_albums(&inputs, &history).await;
@@ -439,7 +451,7 @@ fn spawn(
                 }
                 apply_albums(&weak, &image_cache, r, AlbumRow::DeepCuts);
             };
-            tokio::join!(b_common, b_recent, b_albums, b_fresh, b_explore, b_jams, b_deep);
+            tokio::join!(b_artists, b_albums, b_fresh, b_explore, b_jams, b_deep);
         }
 
         // 3. Store the built result for instant future opens (48h TTL). GUARD
@@ -522,13 +534,47 @@ fn clear_all_pending(w: &AppWindow) {
 /// their own per-week cache by `build_and_apply_weeklies`, so the blob can never
 /// pin a stale/empty weekly for the 48h window.
 fn apply_all(weak: &slint::Weak<AppWindow>, cache: &ImageCache, r: ExternalCarousels) {
-    apply_artists(weak, cache, r.rec_artists_common, ArtistRow::RecArtistsCommon);
-    apply_artists(weak, cache, r.rec_artists_recent, ArtistRow::RecArtistsRecent);
+    apply_artist_rails(weak, cache, r.rec_artists_common, r.rec_artists_recent);
     apply_albums(weak, cache, r.rec_albums, AlbumRow::RecAlbums);
     apply_albums(weak, cache, r.fresh_releases, AlbumRow::FreshReleases);
     apply_albums(weak, cache, r.deep_cut_albums, AlbumRow::DeepCuts);
     apply_albums(weak, cache, r.top_albums, AlbumRow::TopAlbums);
     apply_artists(weak, cache, r.top_artists, ArtistRow::TopArtists);
+}
+
+/// Fold the three per-user exclusion sources — followed artists, the app-wide
+/// blacklist, and the reco-scoped "not interested" dismissals — into one id
+/// set for the rail composition. Every source is independently fail-open (an
+/// unbound/unreadable store simply contributes nothing).
+fn artist_exclusions() -> HashSet<u64> {
+    let mut ids = crate::fav_cache::all_artists();
+    ids.extend(crate::artist_blacklist::ids_snapshot());
+    ids.extend(crate::reco_dismiss::ids_snapshot());
+    ids
+}
+
+/// THE paint choke point for the two Recommended-Artist rails — the fresh
+/// build AND the cached-blob paint both funnel through here. Composes the
+/// visible rows from the validated pools AFTER exclusion filtering +
+/// cross-rail dedup (common wins), takes the first ARTIST_DISPLAY_CAP
+/// survivors per rail, and retains the rest as backfill overflow for the
+/// "not interested" live replacement (compose_artist_rails does the split;
+/// the full pools ride the results blob, so a cached paint backfills too).
+fn apply_artist_rails(
+    weak: &slint::Weak<AppWindow>,
+    cache: &ImageCache,
+    common_pool: Vec<ArtistReco>,
+    recent_pool: Vec<ArtistReco>,
+) {
+    let excluded = artist_exclusions();
+    let (common, recent) =
+        compose_artist_rails(common_pool, recent_pool, &excluded, ARTIST_DISPLAY_CAP);
+    if let Ok(mut g) = ARTIST_OVERFLOW.lock() {
+        g.0 = common.overflow;
+        g.1 = recent.overflow;
+    }
+    apply_artists(weak, cache, common.visible, ArtistRow::RecArtistsCommon);
+    apply_artists(weak, cache, recent.visible, ArtistRow::RecArtistsRecent);
 }
 
 /// Build + paint the two Weekly rows from their own per-week cache (cheap on a
