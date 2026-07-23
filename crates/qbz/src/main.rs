@@ -12557,6 +12557,70 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         });
                     }
                 }
+                // "Not interested" (reco-scoped dismissal — NOT the app-wide
+                // blacklist): persist the dismissal, drop the card from the
+                // Recommendations rails live, and backfill the freed slot from
+                // the retained overflow. The artist stays visible everywhere
+                // else (search/home/label pages); future paints exclude it via
+                // the §B filter.
+                ("artist", "not-interested") => {
+                    if let Some(w) = weak.upgrade() {
+                        let snapshot =
+                            crate::external_reco::apply_artist_dismissal(&w, &image_cache, &id);
+                        match snapshot {
+                            Some((name, image)) => {
+                                if let Ok(aid) = id.parse::<u64>() {
+                                    crate::reco_dismiss::dismiss(aid, &name, &image);
+                                }
+                                crate::toast::info_weak(
+                                    &weak,
+                                    qbz_i18n::t_args(
+                                        "{} won't appear in Recommendations anymore",
+                                        &[&name],
+                                    ),
+                                );
+                            }
+                            None => {
+                                // Dismissed from a non-reco surface (search /
+                                // home / pinned card): nothing to remove live
+                                // — resolve the display name, then persist.
+                                let runtime = runtime.clone();
+                                let weak = weak.clone();
+                                let artist_id = id.clone();
+                                handle.spawn(async move {
+                                    let Ok(aid) = artist_id.parse::<u64>() else {
+                                        return;
+                                    };
+                                    let (name, image) = runtime
+                                        .core()
+                                        .get_artist(aid)
+                                        .await
+                                        .map(|a| {
+                                            (
+                                                a.name,
+                                                a.image
+                                                    .and_then(|i| i.best().cloned())
+                                                    .unwrap_or_default(),
+                                            )
+                                        })
+                                        .unwrap_or_default();
+                                    crate::reco_dismiss::dismiss(aid, &name, &image);
+                                    let msg = if name.is_empty() {
+                                        qbz_i18n::t("Artist dismissed from Recommendations")
+                                    } else {
+                                        qbz_i18n::t_args(
+                                            "{} won't appear in Recommendations anymore",
+                                            &[&name],
+                                        )
+                                    };
+                                    let _ = weak.upgrade_in_event_loop(move |w| {
+                                        crate::toast::info(&w, msg);
+                                    });
+                                });
+                            }
+                        }
+                    }
+                }
                 // === Label landing actions ===============================
                 ("label", "follow") => {
                     // Toggle the label favorite, optimistically flipping the
