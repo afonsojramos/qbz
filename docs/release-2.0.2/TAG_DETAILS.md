@@ -27,7 +27,7 @@ Full setup and usage instructions live in the daemon manual:
 
 ## Library, home & discovery
 
-  - **Library "All"** — a mixed feed with track cards, ownership-aware playlist cards, artist playlists, local favorites, and genre/sort controls. Just like the new "All" from the official app, but with Local library support. 
+  - **Library "All"** — a mixed feed with track cards, ownership-aware playlist cards, artist playlists, local favorites, and genre/sort controls. Just like the new "All" from the official app, but with Local library support (#320). 
   - **Pinned on Home** — a per-user Pinned section as a mixed carousel with pin affordances; recently-played rails auto-refresh. Chose what you want to see first, pin your current obsession or all time favorites in your Home or For You sections. 
   - **Playlist reorder** — drag-and-drop for custom-order tracks using the shared drag gesture, plus an optimistic sidebar rename. Fixing some regresion of lost features from the Tauri version. 
 
@@ -37,7 +37,7 @@ Full setup and usage instructions live in the daemon manual:
 
 At the opposite end of "no window at all," a touch-first face for touchscreens and small panels.
 
-  - **Opt-in profile** — set `QBZ_PROFILE=kiosk` for a big-target, touch-friendly interface built for a Raspberry Pi screen or a small display.
+  - **Opt-in profile** — set `QBZ_PROFILE=kiosk` for a big-target, touch-friendly interface built for a Raspberry Pi screen or a small display, I've been testing on that exactly and in a Steam Deck and I'm so happy with the results, hope you like it too.
   - **Its own shell** — a NavRail, touch scrolling, an on-screen keyboard, and lightweight Search / Library / Discover / Album / Artist views that only build what's on screen.
   - **A centerpiece Now Playing** — a dominant cover, a cover↔lyrics toggle with synced follow, and queue/history tabs.
   - **Switch on the fly** — a live Kiosk↔Desktop toggle in the Now Playing layout menu; boots windowed by default, fullscreen opt-in via `QBZ_KIOSK_FULLSCREEN`.
@@ -80,6 +80,6 @@ Instance-to-Instance Remote Control: Running parallel to Qobuz Connect, this wil
 ## What Won't Be Developed
 
   - A TUI Player or WebPlayer: The daemon covers most use cases and its documentation and design makes it easy to build custom controls with minimal effort—whether you want a Plasma widget or a simple web frontend, in example. 
-  If you are looking for a strictly CLI experience, I recommend checking out [Qobit](https://github.com/pierdom/qobit) (bit perfect is based on QBZ, thanks @pierdom for the attribution), [Hifi.rs](https://github.com/iamdb/hifi.rs), or its fork, [Qobine](https://github.com/SofusA/qobine).
+  If you are looking for a strictly CLI experience, I recommend checking out [Qobit](https://github.com/pierdom/qobit) (bit perfect is based on QBZ, thanks [@pierdom](https://github.com/pierdom/) for the attribution), [Hifi.rs](https://github.com/iamdb/hifi.rs), or its fork, [Qobine](https://github.com/SofusA/qobine).
   
 Full changelog: https://github.com/vicrodh/qbz/compare/v2.0.1...v2.0.2

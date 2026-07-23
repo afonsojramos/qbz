@@ -2,8 +2,9 @@
 
 A large maintenance release on top of the 2.0 native rebuild. Two brand-new
 ways to run QBZ — a fully headless daemon and a touch-first Kiosk mode — plus a
-new dynamic background, truthful casting/quality reporting, and a long run of
-audio, rendering, library and security work.
+new dynamic background, truthful casting/quality reporting, a Most Played
+Albums rail fed by your own play counts, selectable album grouping in the local
+library, and a long run of audio, rendering, library and security work.
 
 ## Headless daemon (qbzd) — new
 
@@ -55,6 +56,11 @@ Raspberry Pi, an LXC container, a NUC, a headless server).
 - LAN-first posture: control plane and login bind `0.0.0.0` by default; a
   family-aware bind fallback; frozen exit-code taxonomy verified by a P0
   acceptance script.
+- Spawn-and-ack on the load-bearing playback routes; daemon-originated queues
+  published to the Connect cloud; `device_present` reported while the device
+  is open; the persisted device name announced from every identity path.
+- Daemon token key derived without the XDG portal secret; bounded CMAF
+  fallback when the CDN header-floods a track.
 - Bit-perfect: plays through the same protected `qbz-audio` / `qbz-player`
   core as the desktop — ALSA direct, no forced resampling.
 
@@ -109,14 +115,24 @@ An opt-in touch-first interface for touchscreens and small panels
   hole closed.
 - Chromecast discovery id stability exposed; residual DLNA transport state
   cleared on connect; seek by fraction of the cast track duration; CSPRNG
-  media-path tokens and redacted URIs in logs.
+  media-path tokens and redacted URIs in logs, including the media-server
+  request logs.
+- DSD and hi-res PCM served to DLNA renderers (#646), with strict-renderer
+  compatibility (HQPlayer6) and a self-healing Play after natural
+  end-of-track.
 
 ## Audio & playback
 
 - ALSA: aliased ids open as raw `hw:`/`plughw:` (#641); fail closed when the
   exclusive rate is not exact; #508 ALSA-exclusive + streaming regression
   fixed; Flatpak `ReserveDevice1` own-name; D-Bus device-reservation name
-  failure treated as non-fatal; PipeWire no longer requires `pactl`.
+  failure treated as non-fatal; PipeWire no longer requires `pactl`; direct
+  stop, drain and EBADFD write recovery unstuck.
+- Continuous playback across sources: Plex tracks enqueued from MyQBZ
+  collections resolve the numeric rating key instead of the album-boundary
+  key — a Qobuz → Plex transition no longer 404s and leaves the previous
+  track playing under the new track's UI.
+- Playback-state tracking resumes when gapless lands late.
 - DacCapabilities expose detected-vs-fallback and backfill a stale limit flag.
 - Player: cancel superseded `play_track` completions; bump play generation on
   stop/DSD/streaming; clear streaming loaded state on setup failure; stop the
@@ -143,6 +159,18 @@ An opt-in touch-first interface for touchscreens and small panels
 
 ## Library
 
+- Selectable album-identity mode: group the Albums view by metadata or by
+  folder — a compilation with mixed track artists renders as one card and
+  multi-disc boxes merge — switched live from a header dropdown or Settings >
+  Local Library, persisted, no rescan; untagged albums directly under a
+  library root no longer inherit the root's name as artist.
+- Scanner reads album / Album Artist / date across ALL of a file's tags
+  (primary first), not just the primary one — repeatedly-retagged files with
+  the album only in a secondary tag no longer render as folder-name albums
+  with the oldest folder year (#447) or sort into Various Artists (#507).
+- Single-album play-next / queue from the album-card context menu on local
+  and Plex grids (#636).
+- Collapsable multi-artist header on the local album detail.
 - New "All" mixed feed with TrackCard, ownership-aware playlist cards, artist
   playlists, a library toggle, and local favorites; genre and sort controls.
 - Proper "All" list rows with rich rows and local art/badges; a LabelCard; live
@@ -151,11 +179,17 @@ An opt-in touch-first interface for touchscreens and small panels
 
 ## Home & discovery
 
+- Most Played Albums — a local play-count album store fed on every track
+  start; a carousel on Home and For You (off by default, self-hides while
+  empty) and a View-all page with search and per-card play counts.
+- Label pages reach web parity: header actions, a catalog/library toggle and
+  label cards.
 - Pinned section — a per-user store rendered as a mixed carousel with pin
   affordances.
 - ArtistGridCard for mixed carousels, used app-wide, and in the Scene view with
   genres as the subtitle.
-- Qobuz Playlists "View all" page with shared header tools.
+- Qobuz Playlists "View all" page with shared header tools; standalone
+  release-note links in What's New render as clickable.
 - Sort control for the Library Albums rail; auto-refreshing recently-played
   rails with a row refresh button.
 - Advanced sub-genre filter sends raw ids to the server (Tauri parity); artist
@@ -181,6 +215,9 @@ An opt-in touch-first interface for touchscreens and small panels
   menu anchored at the cursor.
 - Hover tooltip sized to its content so multi-line fits; sidebar dock margins,
   queue-count footer, macOS NPB-small corner.
+- macOS: traffic lights centered in the header (reached through the content
+  view's window); NPB-Small bottom clearance so the meta line clears the
+  window's bottom bezel, Rust-tunable via `QBZ_NPB_SMALL_EXTRA`.
 
 ## Scrobbling
 
@@ -213,6 +250,10 @@ An opt-in touch-first interface for touchscreens and small panels
 - `test-crates` workspace test workflow (non-UI crates) on pre-release
   integration; qbzd slint-free dep-graph gate.
 - Visual build progress in `slint-run` (start/ETA/ticker/final).
+- The apt repo update triggers from the aarch64 workflow too (#648); aarch64
+  qbzd cross-build script.
+- The in-repo Flatpak twin manifest drops the `org.freedesktop.secrets`
+  talk-name, matching the published Flathub manifest.
 - Dependency bumps (security and maintenance).
 
 **Full changelog:** https://github.com/vicrodh/qbz/compare/v2.0.1...v2.0.2
