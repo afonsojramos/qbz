@@ -4,13 +4,13 @@
 // install-method); hidden on native/dev installs.
 //
 // Flatpak rows: exclusive-DAC D-Bus reservation (the user-side fix for
-// discussion #641 — the Flathub manifest can't carry the wildcard own-name,
-// so the user grants it locally via `flatpak override`), direct sound-device
-// access (the user-side fix for #652 — without /dev/snd inside the sandbox
-// an ALSA "exclusive" output can't open hw:X,0 and silently falls back to
-// PipeWire; the owner decided against a manifest change to avoid Flathub
-// reviewer friction) and filesystem access for NAS/external music
-// libraries. Discord's IPC override stays in
+// discussion #641 AND issue #652 — the Flathub manifest can't carry the
+// wildcard own-name, so the user grants it locally via `flatpak override`;
+// without it PipeWire keeps the DAC and an "exclusive" ALSA output falls
+// back to PipeWire mixing) and filesystem access for NAS/external music
+// libraries. NOTE: the published manifest already ships --device=all
+// (flathub/com.blitzfc.qbz@11d38546, since 1.2.15) — /dev/snd IS exposed,
+// do not "fix" #652 with a device override. Discord's IPC override stays in
 // Integrations (already there). Snap rows: the audio interface connections
 // from the Tauri section (snap name is `qbz-player`).
 //
@@ -135,19 +135,10 @@ export component SandboxSettings inherits VerticalLayout {
 
         RowTitle { text: @tr("Exclusive DAC access (bit-perfect)"); }
         RowNote {
-            text: @tr("Recommended for exclusive mode: lets QBZ ask PipeWire to hand over the DAC cleanly (D-Bus device reservation).");
+            text: @tr("Recommended for exclusive mode: lets QBZ ask PipeWire to hand over the DAC cleanly (D-Bus device reservation). Without it, PipeWire keeps holding the DAC and other apps keep mixing through it even with ALSA + hw + Exclusive selected.");
         }
         CommandBlock {
             command: "flatpak override --user --own-name=org.freedesktop.ReserveDevice1.* com.blitzfc.qbz";
-        }
-        Rectangle { height: 8px; }
-
-        RowTitle { text: @tr("ALSA direct / exclusive DAC access"); }
-        RowNote {
-            text: @tr("Exclusive mode silently falls back to PipeWire without this grant: the sandbox cannot see the sound hardware (/dev/snd), so even with ALSA + hw + Exclusive selected other apps still mix through the DAC. Grants direct device access; restart QBZ afterwards.");
-        }
-        CommandBlock {
-            command: "flatpak override --user --device=all com.blitzfc.qbz";
         }
         Rectangle { height: 8px; }
 
