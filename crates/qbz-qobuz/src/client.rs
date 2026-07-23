@@ -13,7 +13,9 @@ use super::bundle::{self, BundleTokens};
 use super::endpoints::{self, paths};
 use super::error::{ApiError, Result};
 use super::forbidden_breaker::ForbiddenBreaker;
-use super::lyrics::{QobuzLyricsContent, QobuzLyricsDocument, QobuzLyricsUrls};
+use super::lyrics::{
+    merge_translation_into, QobuzLyricsContent, QobuzLyricsDocument, QobuzLyricsUrls,
+};
 use qbz_models::*;
 
 const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64; rv:120.0) Gecko/20100101 Firefox/120.0";
@@ -1486,16 +1488,65 @@ impl QobuzClient {
     /// — a pre-signed CloudFront URL (`Expires`/`Signature`/`Key-Pair-Id`);
     /// no `X-App-Id`/auth headers are sent (verified live 2026-06-10, HTTP
     /// 200 on a bare GET). `Ok(None)` = typed miss, same contract as
-    /// [`Self::get_lyrics_url`]; a document without `original` content also
-    /// counts as a miss.
+    /// [`Self::get_lyrics_url`]; a document without usable content counts as
+    /// a miss.
     ///
     /// `language` (ISO 639-1, API v10) requests a translation; `None` fetches
-    /// original-only (the default flow). When a translation was requested but
-    /// the document does not EMBED a `translation` block, the envelope's
+    /// original-only (the default flow). LIVE WIRE (verified 2026-07-22):
+    /// when a translation is requested AND available, `lyrics_url` points at
+    /// the TRANSLATED document (`<id>-<lang>.json`), which carries ONLY
+    /// `translation` and no `original` — so this fn then fetches the
+    /// original-only document too and merges both into one bilingual
+    /// document. When requested but NOT available the signed CDN URL 403s →
+    /// typed miss (fail soft). When the document has an `original` but does
+    /// not EMBED a `translation` block, the envelope's
     /// `translation_requested.lyrics_url` is fetched as a fallback and its
     /// content becomes the translation (fail soft: any gap in that fallback
     /// just leaves the document original-only).
     pub async fn get_lyrics(
+        &self,
+        track_id: u64,
+        language: Option<&str>,
+    ) -> Result<Option<QobuzLyricsDocument>> {
+        let doc = match self.fetch_lyrics_doc(track_id, language).await? {
+            Some(doc) => doc,
+            None => return Ok(None),
+        };
+
+        if language.is_some() && doc.original.is_none() && doc.translation.is_some() {
+            // Translation-only document (the common v10 live shape): fetch the
+            // original document separately and merge into one bilingual doc.
+            return match self.fetch_lyrics_doc(track_id, None).await? {
+                Some(mut original_doc) if original_doc.original.is_some() => {
+                    merge_translation_into(&mut original_doc, doc);
+                    Ok(Some(original_doc))
+                }
+                _ => {
+                    log::debug!(
+                        "[API] get_lyrics({}) translation found but original doc missing -> no lyrics",
+                        track_id
+                    );
+                    Ok(None)
+                }
+            };
+        }
+
+        // Preserve the original-only miss semantics: a document with neither
+        // `original` nor a mergeable `translation` is unusable.
+        if doc.original.is_none() {
+            log::debug!(
+                "[API] get_lyrics({}) document without original content -> no lyrics",
+                track_id
+            );
+            return Ok(None);
+        }
+        Ok(Some(doc))
+    }
+
+    /// One lyrics round trip (signed lyricsUrl + bare CDN GET). Accepts any
+    /// document carrying `original` OR `translation` content; the caller
+    /// decides which shapes are usable (see [`Self::get_lyrics`]).
+    async fn fetch_lyrics_doc(
         &self,
         track_id: u64,
         language: Option<&str>,
@@ -1521,8 +1572,8 @@ impl QobuzClient {
         }
         let body = response.text().await?;
         match serde_json::from_str::<QobuzLyricsDocument>(&body) {
-            Ok(mut doc) if doc.original.is_some() => {
-                if language.is_some() && doc.translation.is_none() {
+            Ok(mut doc) if doc.original.is_some() || doc.translation.is_some() => {
+                if language.is_some() && doc.original.is_some() && doc.translation.is_none() {
                     doc.translation = self
                         .fetch_translation_fallback(track_id, &urls)
                         .await;
@@ -1531,7 +1582,7 @@ impl QobuzClient {
             }
             Ok(_) => {
                 log::debug!(
-                    "[API] get_lyrics({}) document without original content -> no lyrics",
+                    "[API] get_lyrics({}) document without any lyrics content -> no lyrics",
                     track_id
                 );
                 Ok(None)

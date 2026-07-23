@@ -104,12 +104,30 @@ pub struct QobuzLyricsDocument {
     #[serde(default)]
     pub original: Option<QobuzLyricsContent>,
     /// Translated lyrics content (NEW in API v10) — same union shape as
-    /// `original`. Present only when a translation was requested via the
-    /// `language` query param AND the document embeds it; otherwise the
-    /// step-1 envelope's `translation_requested.lyrics_url` points at a
-    /// separate document. Absent on all pre-v10 captures.
+    /// `original`. LIVE WIRE (verified 2026-07-22): when `language` is
+    /// requested and available, the step-1 `lyrics_url` itself points at the
+    /// TRANSLATED document (`<id>-<lang>.json`), which carries ONLY this
+    /// `translation` block and no `original` — the client must fetch the
+    /// original document separately and merge. `translation_requested` was
+    /// not observed in practice (kept as a fallback source only).
     #[serde(default)]
     pub translation: Option<QobuzLyricsContent>,
+}
+
+/// Merge a translation-only document into its original document (v10 live
+/// wire: a `language` request returns a document carrying ONLY `translation`).
+/// Moves the `translation` block over and unions `translation_langs`.
+/// `original` keeps its own content/writers/publishers.
+pub fn merge_translation_into(
+    original: &mut QobuzLyricsDocument,
+    mut translated: QobuzLyricsDocument,
+) {
+    original.translation = translated.translation.take();
+    for lang in translated.translation_langs.drain(..) {
+        if !original.translation_langs.contains(&lang) {
+            original.translation_langs.push(lang);
+        }
+    }
 }
 
 /// One publisher credit inside [`QobuzLyricsDocument`] (live-only; not in the yaml).
@@ -257,6 +275,8 @@ mod tests {
         include_str!("../tests/fixtures/lyrics-doc-lsync-translation.json");
     const DOC_PLAIN_TRANSLATION: &str =
         include_str!("../tests/fixtures/lyrics-doc-plain-translation.json");
+    const DOC_TRANSLATION_ONLY: &str =
+        include_str!("../tests/fixtures/lyrics-doc-translation-only.json");
     const MISS_RESPONSE: &str = include_str!("../tests/fixtures/lyrics-miss-response.json");
 
     #[test]
@@ -451,6 +471,54 @@ mod tests {
             "original": {"type": "plain", "lang": "en", "lines": [{"line": "hi"}]}}"#;
         let doc: QobuzLyricsDocument = serde_json::from_str(json).expect("parse");
         assert!(doc.translation_langs.is_empty());
+    }
+
+    #[test]
+    fn deserialize_translation_only_document() {
+        // v10 LIVE WIRE (verified 2026-07-22, track 266725027 with
+        // language=es): a translation request returns a document carrying
+        // ONLY `translation` — no `original` at all.
+        let doc: QobuzLyricsDocument = serde_json::from_str(DOC_TRANSLATION_ONLY)
+            .expect("parse translation-only document");
+        assert!(doc.original.is_none(), "no original on the translated doc");
+        assert_eq!(doc.translation_langs.len(), 5);
+        let translation = doc.translation.expect("translation present");
+        assert!(translation.is_synced(), "lsync alias maps to Synced");
+        assert_eq!(translation.lang(), Some("es"));
+        match &translation {
+            QobuzLyricsContent::Synced { lines, .. } => {
+                assert_eq!(lines.len(), 4);
+                assert!(lines[1].start.is_none(), "gap line without stamps");
+                assert_eq!(lines[2].line, "Podría comerme a esa chica para el almuerzo");
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn merge_translation_into_original_document() {
+        // The get_lyrics merge path: original doc (9.x shape) + translation-
+        // only doc combine into one bilingual document.
+        let mut original: QobuzLyricsDocument =
+            serde_json::from_str(DOC_WSYNC).expect("parse original document");
+        assert!(original.translation.is_none());
+        let translated: QobuzLyricsDocument =
+            serde_json::from_str(DOC_TRANSLATION_ONLY).expect("parse translation-only document");
+
+        merge_translation_into(&mut original, translated);
+
+        assert!(original.original.is_some(), "original content kept");
+        let translation = original.translation.expect("merged translation");
+        assert_eq!(translation.lang(), Some("es"));
+        // translation_langs unioned WITHOUT duplicates (both fixtures carry
+        // the same 5 codes).
+        assert_eq!(original.translation_langs.len(), 5);
+        let mut sorted = original.translation_langs.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), original.translation_langs.len());
+        // Writers/publishers stay the original document's.
+        assert!(original.writers.is_some());
     }
 
     #[test]
