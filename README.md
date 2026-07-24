@@ -33,7 +33,15 @@ No API keys needed. No telemetry. No tracking. Just music.
 
 ## Why QBZ
 
-Browsers cap audio output at 48 kHz and resample everything through WebAudio. QBZ uses a native playback pipeline with direct device control so your DAC receives the original resolution — up to 24-bit / 192 kHz — with no forced resampling.
+QBZ exists as the player we wish a streaming company would give its users. It exists to fill the gap of an official client on Linux, because we don't like being second class citizens.
+
+But it is just as important to understand what QBZ is not, and never will be. It is not a web wrapper; I did not just package the web player and "Linuxify" it. It is not a download tool, and it never will be. I built QBZ and not TDL, SPTFY or DZR because I believe music belongs to the artists, and Qobuz is, so far, the fairest option and the one with the best quality. That is why QBZ exists.
+
+It will never have a built-in equalizer or DSP, either. The point is to send audio to your DAC untouched, bit for bit, and any processing would break that. If you want an EQ or effects, add them at the system level, for example with EasyEffects on PipeWire or a JACK graph, which make it easy.
+
+You can download songs to listen to them offline, but they carry the same locks as the official client and the same usage window once your membership expires.
+
+On the technical side: browsers cap audio output at 48 kHz and resample everything through WebAudio. QBZ uses a native playback pipeline with direct device control, so your DAC receives the original resolution, up to 24-bit / 192 kHz, with no forced resampling.
 
 ## Installation
 
@@ -196,18 +204,6 @@ Multi-device playback control using Qobuz's real-time streaming protocol. Consid
 - Server-authoritative queue sync across all devices
 - Bidirectional transport: play, pause, skip, seek, shuffle, repeat, volume
 
-### Headless Daemon (qbzd)
-
-Run QBZ without a screen: `qbzd` is a standalone ~25 MB binary (shipped inside the deb/rpm
-packages and as its own tarball) that turns any Linux box — a Raspberry Pi, a NAS, the
-living-room mini-PC — into a bit-perfect **Qobuz Connect endpoint** that appears in the
-official Qobuz apps like a hardware streamer.
-
-- Daemon + full CLI + terminal setup wizard (TUI) in one binary
-- Browser-based login that works over SSH; one-file settings hand-off from desktop QBZ
-- HiFi wizard with copyable audio-stack config blocks (clipboard works over SSH)
-- Full manual: **[Headless Daemon (qbzd) — Wiki](https://github.com/vicrodh/qbz/wiki/Headless-Daemon)**
-
 ### Casting
 
 - **Chromecast** and **DLNA/UPnP** discovery and streaming
@@ -247,8 +243,40 @@ official Qobuz apps like a hardware streamer.
 - Mini player
 - Album booklets download to your device — the old in-app PDF reader was dropped in 2.0 to keep the binary lean
 - Configurable keyboard shortcuts, UI scale presets (XS–XL)
-- **7 languages:** English, Spanish, German, French, Portuguese, Russian, Japanese
+- **8 languages:** English, Spanish, German, French, Portuguese, Russian, Japanese, Dutch
 - **Offline mode** usable without ever logging into Qobuz, with fully offline playlists and automatic reconnection
+
+## Headless Daemon (qbzd)
+
+<p align="center">
+  <img src="static/readme-qbzd.png" alt="qbzd — headless daemon CLI and TUI" width="760" />
+</p>
+
+Run QBZ without a screen: `qbzd` is a standalone ~25 MB binary (shipped inside the deb/rpm
+packages and as its own tarball) that turns any Linux box — a Raspberry Pi, a NAS, the
+living-room mini-PC — into a bit-perfect **Qobuz Connect endpoint** that appears in the
+official Qobuz apps like a hardware streamer.
+
+- Daemon + full CLI + terminal setup wizard (TUI) in one binary
+- Browser-based login that works over SSH; one-file settings hand-off from desktop QBZ
+- HiFi wizard with copyable audio-stack config blocks (clipboard works over SSH)
+- MPRIS out of the box, live JSON events (`qbzd watch`), service files for systemd/OpenRC/runit
+
+Full manual: **[Headless Daemon (qbzd) — Wiki](https://github.com/vicrodh/qbz/wiki/Headless-Daemon)**
+
+## Kiosk Mode
+
+For Raspberry screens and handheld consoles.
+
+<p align="center">
+  <img src="static/readme-kiosk.jpeg" alt="QBZ Kiosk Mode on a handheld console" width="720" />
+</p>
+
+A touch-first face for touchscreens and small panels: set `QBZ_PROFILE=kiosk` and QBZ boots
+a big-target shell with its own NavRail, touch scrolling, an on-screen keyboard, and a
+centerpiece Now Playing with cover↔lyrics toggle and queue/history tabs. Switch between
+Kiosk and Desktop live from the Now Playing layout menu; fullscreen is opt-in via
+`QBZ_KIOSK_FULLSCREEN=1`.
 
 ## Tech Stack
 
@@ -455,93 +483,6 @@ If QBZ fails to start, try `QBZ_RENDERER=software qbz` first.
 User guides, audio configuration, integrations, and troubleshooting: **[QBZ Wiki](https://github.com/vicrodh/qbz/wiki)** (work in progress).
 
 
-## Diagram
-
-As of 2.0 there is no webview and no IPC bridge: the Slint UI runs in the same process as the Rust core and calls it directly through callbacks/shared state.
-
-```mermaid
-flowchart TD
-
-subgraph group_ui["UI (Slint, in-process — no webview, no IPC)"]
-  node_ui_views["qbz-ui<br/>Slint views (.slint)"]
-  node_ui_bin["qbz binary<br/>entrypoint, window/renderer setup, wiring"]
-  node_ui_remote["Qconnect Transport<br/>in-process client<br/>[qconnect_transport.rs]"]
-end
-
-subgraph group_app["Application Layer (Rust, direct calls)"]
-  node_app_audio["Audio Orchestration<br/>backend + device mgmt"]
-  node_app_player["Player Orchestration<br/>playback engine"]
-  node_app_library["Library Orchestration<br/>library service"]
-  node_app_cache["Offline Cache<br/>local cache"]
-  node_app_cast["Casting<br/>device handoff"]
-  node_app_connect["Qconnect Service<br/>remote control bridge"]
-end
-
-subgraph group_crates["Rust Core Crates"]
-  node_rust_player["qbz-player<br/>playback core"]
-  node_rust_audio["qbz-audio<br/>audio backend"]
-  node_rust_cache["qbz-cache<br/>audio cache"]
-  node_rust_qobuz["qbz-qobuz<br/>api client"]
-  node_rust_library["qbz-library<br/>library index"]
-  node_rust_cast["qbz-cast<br/>cast stack"]
-  node_rust_connect["qconnect stack<br/>protocol stack"]
-  node_rust_integrations["qbz-integrations<br/>external services"]
-end
-
-subgraph group_packaging["Packaging"]
-  node_packaging_ci["Packaging & CI<br/>release automation<br/>[workflows]"]
-end
-
-node_ui_views -->|"callbacks / shared state"| node_ui_bin
-node_ui_remote -->|"bridges"| node_app_connect
-node_ui_bin -->|"drives, in-process"| node_app_player
-node_ui_bin -->|"queries, in-process"| node_app_library
-node_ui_bin -->|"controls, in-process"| node_app_audio
-node_ui_bin -->|"reads/writes, in-process"| node_app_cache
-node_ui_bin -->|"controls, in-process"| node_app_cast
-node_ui_bin -->|"syncs, in-process"| node_rust_integrations
-node_app_player -->|"uses"| node_rust_player
-node_app_audio -->|"uses"| node_rust_audio
-node_app_player -->|"prefetches"| node_rust_cache
-node_app_library -->|"indexes"| node_rust_library
-node_app_library -->|"enriches"| node_rust_qobuz
-node_app_cast -->|"delegates"| node_rust_cast
-node_app_connect -->|"implements"| node_rust_connect
-node_packaging_ci -.->|"builds"| node_ui_bin
-node_packaging_ci -.->|"bundles"| node_ui_views
-
-click node_ui_views "https://github.com/vicrodh/qbz/tree/main/crates/qbz-ui"
-click node_ui_bin "https://github.com/vicrodh/qbz/tree/main/crates/qbz/src"
-click node_ui_remote "https://github.com/vicrodh/qbz/blob/main/crates/qbz/src/qconnect_transport.rs"
-click node_app_audio "https://github.com/vicrodh/qbz/tree/main/crates/qbz-audio/src"
-click node_app_player "https://github.com/vicrodh/qbz/tree/main/crates/qbz-player/src"
-click node_app_library "https://github.com/vicrodh/qbz/tree/main/crates/qbz-library/src"
-click node_app_cache "https://github.com/vicrodh/qbz/tree/main/crates/qbz-offline-cache/src"
-click node_app_cast "https://github.com/vicrodh/qbz/tree/main/crates/qbz-cast/src"
-click node_app_connect "https://github.com/vicrodh/qbz/blob/main/crates/qbz/src/qconnect_transport.rs"
-click node_rust_player "https://github.com/vicrodh/qbz/tree/main/crates/qbz-player/src"
-click node_rust_audio "https://github.com/vicrodh/qbz/tree/main/crates/qbz-audio/src"
-click node_rust_cache "https://github.com/vicrodh/qbz/tree/main/crates/qbz-cache/src"
-click node_rust_qobuz "https://github.com/vicrodh/qbz/tree/main/crates/qbz-qobuz/src"
-click node_rust_library "https://github.com/vicrodh/qbz/tree/main/crates/qbz-library/src"
-click node_rust_cast "https://github.com/vicrodh/qbz/tree/main/crates/qbz-cast/src"
-click node_rust_connect "https://github.com/vicrodh/qbz/tree/main/crates/qconnect-protocol/src"
-click node_rust_integrations "https://github.com/vicrodh/qbz/tree/main/crates/qbz-integrations/src"
-click node_packaging_ci "https://github.com/vicrodh/qbz/blob/main/.github/workflows"
-
-classDef toneNeutral fill:#f8fafc,stroke:#334155,stroke-width:1.5px,color:#0f172a
-classDef toneBlue fill:#dbeafe,stroke:#2563eb,stroke-width:1.5px,color:#172554
-classDef toneAmber fill:#fef3c7,stroke:#d97706,stroke-width:1.5px,color:#78350f
-classDef toneMint fill:#dcfce7,stroke:#16a34a,stroke-width:1.5px,color:#14532d
-classDef toneRose fill:#ffe4e6,stroke:#e11d48,stroke-width:1.5px,color:#881337
-classDef toneIndigo fill:#e0e7ff,stroke:#4f46e5,stroke-width:1.5px,color:#312e81
-classDef toneTeal fill:#ccfbf1,stroke:#0f766e,stroke-width:1.5px,color:#134e4a
-class node_ui_views,node_ui_bin,node_ui_remote toneBlue
-class node_app_audio,node_app_player,node_app_library,node_app_cache,node_app_cast,node_app_connect toneAmber
-class node_rust_player,node_rust_audio,node_rust_cache,node_rust_qobuz,node_rust_library,node_rust_cast,node_rust_connect,node_rust_integrations toneMint
-class node_packaging_ci toneIndigo
-```
-
 ## Open Source
 
 QBZ is MIT-licensed. No telemetry, no tracking, no hidden services. Built for Linux and macOS audio enthusiasts.
@@ -564,13 +505,3 @@ Contributions welcome. Please read `CONTRIBUTING.md` before submitting issues or
 ## License
 
 MIT
-
-## Fancy charts
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=vicrodh/qbz&type=date&theme=dark&legend=top-left" />
-  <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=vicrodh/qbz&type=date&legend=top-left" />
-  <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=vicrodh/qbz&type=date&legend=top-left" />
-</picture>
-
-

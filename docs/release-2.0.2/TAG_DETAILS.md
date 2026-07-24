@@ -1,8 +1,12 @@
 # 2.0.2 — Rebuild 破 (You Can (Not) Advance)
 
-Oops, this release grew bigger than expected! Version 2.0.2 started as a maintenance patch but ended up pulling in several pending features that made perfect sense after the switch to Slint.
-Here are the main highlights:
-The QBZ Daemon: A highly requested, headless binary. While still an early version, it has the essentials to hook up your DAC to a Raspberry Pi and run QBZ directly from the terminal, fully supporting Qobuz Connect. Kiosk Mode: A simplified, touch-friendly UI—admittedly a personal treat for my own Raspberry Pi and HiFi hat setup. Desktop Improvements: A new dynamic album art background, heavy audio chain hardening, and better overall performance.
+Oops, this release grew bigger than expected! Version 2.0.2 started as a maintenance patch but ended up pulling in several pending features that made perfect sense after the switch to Slint. Here are the main highlights:
+
+The QBZ Daemon: A highly requested, headless binary. While still an early version, it has the essentials to hook up your DAC to a Raspberry Pi and run QBZ directly from the terminal, fully supporting Qobuz Connect.
+
+Kiosk Mode: A simplified, touch-friendly UI—admittedly a personal treat for my own Raspberry Pi and HiFi hat setup.
+
+Desktop Improvements: A new dynamic album art background, heavy audio chain hardening, and better overall performance.
 
 ---
 
@@ -63,7 +67,7 @@ The rest is the kind of work you feel more than see — the full list is in the 
   - **New Catppuccin themes** — Latte, Frappé and Macchiato, thanks to [@TerminalTilt](https://github.com/TerminalTilt); plus a searchable theme dropdown and light-theme legibility fixes.
   - **Interface** — a unified track context menu, cursor-anchored card menus, and assorted layout fixes.
   - **Tighter security** — secret files stored `0600`, redacted logs, and Last.fm token prefixes no longer logged.
-  - **Casting with guardails** - If your streamer/receiver doesn't support HiFi or strugle with certain high sample rates, this one is the one feature that you are looking for. 
+  - **Casting with guardails** — If your streamer/receiver doesn't support HiFi or strugle with certain high sample rates, this one is the one feature that you are looking for. 
   - **Under the hood** — a headless playback driver, a settings bundle engine, a Qobuz 403 circuit breaker, and routine dependency bumps.
 
 ---
@@ -76,6 +80,8 @@ Local Server Integration: Jellyfin and Navidrome support are up next.
 Headless Improvements: Hardening the daemon and gathering community feedback for future iterations.
 
 Instance-to-Instance Remote Control: Running parallel to Qobuz Connect, this will let you control one QBZ instance from another (e.g., controlling your bathroom's Raspberry Pi from your office desktop).
+
+---
 
 ## What Won't Be Developed
 

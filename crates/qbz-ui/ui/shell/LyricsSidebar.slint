@@ -23,7 +23,49 @@ import { IconButton } from "../primitives/BarControls.slint";
 import { LoadingSpinner } from "../primitives/LoadingSpinner.slint";
 import { LyricsLinesView } from "LyricsLinesView.slint";
 import { LyricsControlsPanel } from "LyricsControlsFlyout.slint";
-import { ShellState, LyricsState, ArtworkActions, AppearanceState } from "../state.slint";
+import { ShellState, LyricsState, ArtworkActions, AppearanceState, TooltipState } from "../state.slint";
+
+// Floating translate toggle (Qobuz v10, owner decisions 2026-07-22/23):
+// square ghost button anchored bottom-right of the lyrics body, overlaying
+// it. Styled after the Discover configurator gear (GearButton in
+// HomeView.slint): no border, bg lights up on hover; the accent tint is the
+// ON state. Tooltip rides the shared TooltipState channel.
+component TranslateButton inherits Rectangle {
+    width: 32px;
+    height: 32px;
+    border-radius: 4px;
+    background: ta.has-hover ? Theme.surface-hover : transparent;
+
+    QbzIcon {
+        source: @image-url("../assets/icons/translate.svg");
+        width: 20px;
+        height: 20px;
+        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
+        tint: LyricsState.show-translation
+            ? Theme.accent
+            : (ta.has-hover ? Theme.text-primary : Theme.text-muted);
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            LyricsState.toggle-translation();
+        }
+        changed has-hover => {
+            if (self.has-hover) {
+                TooltipState.text = LyricsState.show-translation
+                    ? @tr("Hide lyrics translation")
+                    : @tr("Show lyrics translation");
+                TooltipState.anchor-x = root.absolute-position.x + root.width / 2;
+                TooltipState.anchor-y = root.absolute-position.y;
+                TooltipState.show = true;
+            } else {
+                TooltipState.show = false;
+            }
+        }
+    }
+}
 
 component CloseButton inherits Rectangle {
     callback clicked();
@@ -128,9 +170,10 @@ export component LyricsSidebar inherits Rectangle {
                         x: 32px + 8px + 28px - 260px;
                         y: 32px + 8px;
                         width: 260px;
-                        // padding 28 + rows (22+30+30+44+22+30+34 = 212) +
-                        // spacing 12 x 6 = 72.
-                        height: 312px;
+                        // padding 28 + rows (22+30+30+30+44+22+22+30+34 =
+                        // 264, incl. lite-fill + translation language) +
+                        // spacing 12 x 8 = 96.
+                        height: 388px;
                         close-policy: PopupClosePolicy.close-on-click-outside;
                         LyricsControlsPanel { }
                     }
@@ -277,6 +320,14 @@ export component LyricsSidebar inherits Rectangle {
                 active-color: LyricsState.use-custom-color
                     ? LyricsState.custom-color
                     : Theme.accent;
+            }
+            // Floating translate toggle — bottom-right overlay of the lyrics
+            // body (mobile parity; NOT in the header, NOT in the flyout).
+            // Mounted only while the current doc advertises translations;
+            // otherwise the sidebar renders exactly as before.
+            if LyricsState.translation-available: TranslateButton {
+                x: parent.width - self.width - 12px;
+                y: parent.height - self.height - 12px;
             }
         }
 

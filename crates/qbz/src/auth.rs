@@ -132,6 +132,8 @@ where
     if let Some(dir) = crate::offline_mode::user_data_dir(user_id) {
         crate::offline_mode::init_for_user(&dir);
         crate::fav_cache::init_for_user(&dir);
+        // Reco-scoped "Not interested" dismissal store (reco rails only).
+        crate::reco_dismiss::init_for_user(&dir);
         // Recommendation event store (shared events.db with Tauri). Train
         // after init (off-thread) so the seeds reflect this session's events.
         crate::reco::init_for_user(&dir);
@@ -268,6 +270,9 @@ where
             if let Some(dir) = crate::offline_mode::user_data_dir(user_id) {
                 crate::offline_mode::init_for_user(&dir);
                 crate::fav_cache::init_for_user(&dir);
+                // Reco-scoped "Not interested" dismissal store (reco rails
+                // only).
+                crate::reco_dismiss::init_for_user(&dir);
                 // Recommendation event store (shared events.db with Tauri).
                 // Train after init (off-thread) so the seeds reflect this
                 // session's events.
@@ -337,6 +342,7 @@ where
     crate::offline::deactivate().await;
     crate::offline_mode::teardown();
     crate::fav_cache::teardown();
+    crate::reco_dismiss::teardown();
     crate::reco::teardown();
     runtime.core().clear_artist_vectors().await;
     crate::discover_prefs::teardown();

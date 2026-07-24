@@ -992,7 +992,8 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
 
     /// Get a track's lyrics document (synced/unsynced), or `None` if the track
     /// has none. Thin wrapper over `QobuzClient::get_lyrics` so headless callers
-    /// (qbzd) avoid the `client()` escape hatch.
+    /// (qbzd) avoid the `client()` escape hatch. Original-only fetch (no
+    /// translation target — the headless surface has no translation toggle).
     pub async fn get_lyrics(
         &self,
         track_id: u64,
@@ -1000,7 +1001,7 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
         let client = self.client.read().await;
         let client = client.as_ref().ok_or(CoreError::NotInitialized)?;
 
-        client.get_lyrics(track_id).await.map_err(CoreError::Api)
+        client.get_lyrics(track_id, None).await.map_err(CoreError::Api)
     }
 
     /// Get artist by ID

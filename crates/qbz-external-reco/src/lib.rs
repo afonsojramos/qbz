@@ -27,6 +27,7 @@ use qbz_integrations::{LastFmClient, ListenBrainzClient, MusicBrainzClient};
 use qbz_models::{Album, Artist, Track};
 
 pub use cache::RecoCache;
+pub use carousels::{compose_artist_rails, ArtistRailComposition, ARTIST_DISPLAY_CAP};
 pub use types::{
     AlbumReco, ArtistReco, ExternalCarousels, ExtHistory, LocalHistory, RecoSource, TrackReco,
 };
