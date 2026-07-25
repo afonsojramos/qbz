@@ -582,6 +582,18 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
         .await;
     }
 
+    /// Add a track at the END of the manual block ("Play later", #442):
+    /// after every play-next / play-later already queued, before the source
+    /// resumes. "Add to queue" stays untouched at the absolute end.
+    pub async fn add_track_later(&self, track: QueueTrack) {
+        let queue = self.queue.write().await;
+        queue.add_track_later(track);
+        self.emit(CoreEvent::QueueUpdated {
+            state: queue.get_state(),
+        })
+        .await;
+    }
+
     /// Set the entire queue (replaces existing)
     pub async fn set_queue(&self, tracks: Vec<QueueTrack>, start_index: Option<usize>) {
         // Any queue replacement drops the offline-only-playlist stamp; the

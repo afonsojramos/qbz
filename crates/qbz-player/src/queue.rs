@@ -36,6 +36,11 @@ struct InternalState {
     history: VecDeque<usize>,
     /// Track ID to stop after (optional)
     stop_after_track_id: Option<u64>,
+    /// Manual-block size (#442): how many entries right after `current_index`
+    /// were added by hand ("Play next" / "Play later"). The block always
+    /// plays before the source (album/playlist) resumes; "Add to queue" does
+    /// NOT extend it (it appends to the absolute end, untouched).
+    manual_next_count: usize,
 }
 
 /// Queue manager for handling playback queue
@@ -61,6 +66,7 @@ impl QueueManager {
                 repeat: RepeatMode::Off,
                 history: VecDeque::with_capacity(50),
                 stop_after_track_id: None,
+                manual_next_count: 0,
             }),
         }
     }
@@ -147,6 +153,8 @@ impl QueueManager {
         } else {
             state.tracks.insert(insert_index, track);
         }
+        // The track joins the manual block (#442).
+        state.manual_next_count += 1;
 
         if state.shuffle {
             for idx in state.shuffle_order.iter_mut() {
@@ -170,10 +178,51 @@ impl QueueManager {
         }
     }
 
+    /// Add a track at the END of the manual block (#442 "Play later"): after
+    /// every play-next / play-later already queued, before the source
+    /// (album/playlist) resumes. "Add to queue" stays untouched at the
+    /// absolute end. With shuffle on, degrades to play-next — the block
+    /// concept is meaningless once the order is reshuffled.
+    pub fn add_track_later(&self, track: QueueTrack) {
+        let mut state = self.state.lock().unwrap();
+        let insert_index = if state.shuffle {
+            state.current_index.map(|idx| idx + 1).unwrap_or(0)
+        } else {
+            state
+                .current_index
+                .map(|idx| idx + 1 + state.manual_next_count)
+                .unwrap_or(state.manual_next_count)
+        };
+        let insert_index = insert_index.min(state.tracks.len());
+        state.tracks.insert(insert_index, track);
+        state.manual_next_count += 1;
+
+        if state.shuffle {
+            for idx in state.shuffle_order.iter_mut() {
+                if *idx >= insert_index {
+                    *idx += 1;
+                }
+            }
+            let new_idx = insert_index;
+            let next_pos = if state.current_index.is_some() {
+                state.shuffle_position + 1
+            } else {
+                state.shuffle_order.len()
+            };
+            if next_pos >= state.shuffle_order.len() {
+                state.shuffle_order.push(new_idx);
+            } else {
+                state.shuffle_order.insert(next_pos, new_idx);
+            }
+        }
+    }
+
     /// Set the entire queue (replaces existing)
     pub fn set_queue(&self, new_tracks: Vec<QueueTrack>, start_index: Option<usize>) {
         let mut state = self.state.lock().unwrap();
         state.stop_after_track_id = None;
+        // A full replacement is a new source: the manual block dissolves (#442).
+        state.manual_next_count = 0;
         // Remap history by track id BEFORE replacing tracks so that legitimate
         // plays survive queue version bumps / reorders. Entries whose track is
         // no longer present are dropped. See bug #316.
@@ -259,6 +308,7 @@ impl QueueManager {
     pub fn clear(&self, keep_current: bool) {
         let mut state = self.state.lock().unwrap();
         state.stop_after_track_id = None;
+        state.manual_next_count = 0;
 
         if keep_current {
             // Keep the track at `current_index`, not always `tracks[0]`.
@@ -306,6 +356,13 @@ impl QueueManager {
         }
 
         let removed = state.tracks.remove(index);
+
+        // Removing an entry inside the manual block shrinks it (#442).
+        if let Some(curr_idx) = state.current_index {
+            if index > curr_idx && index <= curr_idx + state.manual_next_count {
+                state.manual_next_count = state.manual_next_count.saturating_sub(1);
+            }
+        }
 
         // Invalidate marker if the removed track matches
         if state.stop_after_track_id == Some(removed.id) {
@@ -722,6 +779,14 @@ impl QueueManager {
         };
 
         state.current_index = next_idx;
+        // Manual-block bookkeeping (#442): advancing past a manual entry
+        // shrinks the block; exhausting or wrapping the queue dissolves it.
+        match next_idx {
+            Some(0) | None => state.manual_next_count = 0,
+            Some(_) => {
+                state.manual_next_count = state.manual_next_count.saturating_sub(1)
+            }
+        }
         next_idx.and_then(|idx| state.tracks.get(idx).cloned())
     }
 
@@ -870,6 +935,8 @@ impl QueueManager {
         state.shuffle = enabled;
 
         if enabled {
+            // The manual block is meaningless once the order is reshuffled (#442).
+            state.manual_next_count = 0;
             Self::regenerate_shuffle_order_internal(&mut state);
 
             // Enabling shuffle during active playback must keep current track
@@ -1019,6 +1086,7 @@ impl QueueManager {
             repeat: state.repeat,
             total_tracks: state.tracks.len(),
             stop_after_track_id: state.stop_after_track_id,
+            manual_next_count: state.manual_next_count,
         }
     }
 
@@ -1078,6 +1146,7 @@ impl QueueManager {
             repeat: state.repeat,
             total_tracks: state.tracks.len(),
             stop_after_track_id: state.stop_after_track_id,
+            manual_next_count: state.manual_next_count,
         }
     }
 

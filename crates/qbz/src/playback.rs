@@ -4065,6 +4065,54 @@ pub fn play_track_next(
     });
 }
 
+/// Insert a single track at the END of the manual block ("Play later", #442):
+/// after every play-next / play-later already queued, before the source
+/// resumes. Mirrors `play_track_next`, routing to the peer's play-next as the
+/// best effort in QConnect CONTROLLER mode (the QConnect protocol has no
+/// "later" — play-next is the closest "soon" semantic a peer understands).
+pub fn play_track_later(
+    runtime: Runtime,
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+    track_id: u64,
+) {
+    handle.spawn(async move {
+        if let Some(svc) = crate::qconnect_service::service() {
+            if svc
+                .play_next_on_peer_if_active(track_id, Some("qobuz"))
+                .await
+            {
+                return;
+            }
+        }
+        let track = match runtime.core().get_track(track_id).await {
+            Ok(track) => track,
+            Err(e) => {
+                log::error!("[qbz-slint] playback: play-later get_track {track_id} failed: {e}");
+                return;
+            }
+        };
+        let (album_id, album_title, album_artwork) = match track.album.as_ref() {
+            Some(album) => (
+                album.id.clone(),
+                album.title.clone(),
+                album.image.best().cloned().unwrap_or_default(),
+            ),
+            None => (String::new(), String::new(), String::new()),
+        };
+        let album_artist = track
+            .performer
+            .as_ref()
+            .map(|p| p.name.clone())
+            .unwrap_or_default();
+        let queue_track =
+            make_queue_track(&track, &album_id, &album_title, &album_artist, &album_artwork, None);
+        runtime.core().add_track_later(queue_track).await;
+        refresh_sidebar(false);
+        crate::toast::success_weak(&weak, qbz_i18n::t("Added to play later"));
+    });
+}
+
 /// Play a whole playlist (by id) NOW — replace the queue with the playlist's
 /// tracks and start at the first one. Fetches the tracks fresh, so it works
 /// from any playlist CARD (Discover / Search / Label carousels) without a
@@ -4349,6 +4397,39 @@ pub fn enqueue_queue_tracks(
         }
         refresh_sidebar(false);
         crate::toast::success_weak(&weak, if next { qbz_i18n::t("Playing next") } else { qbz_i18n::t("Added to queue") });
+    });
+}
+
+/// Insert a batch of source-aware QueueTracks at the END of the manual block
+/// (#442 "Play later"): selection order is preserved (each insert appends to
+/// the block, no reverse needed). Peer best-effort = play-next batch — the
+/// QConnect protocol has no "later".
+pub fn enqueue_queue_tracks_later(
+    runtime: Runtime,
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+    tracks: Vec<QueueTrack>,
+) {
+    if tracks.is_empty() {
+        return;
+    }
+    let tracks = filter_blacklisted_queue(tracks);
+    if tracks.is_empty() {
+        return;
+    }
+    handle.spawn(async move {
+        if let Some(svc) = crate::qconnect_service::service() {
+            let routed: Vec<(u64, Option<String>)> =
+                tracks.iter().map(|qt| (qt.id, qt.source.clone())).collect();
+            if svc.play_next_batch_on_peer_if_active(&routed).await {
+                return;
+            }
+        }
+        for track in tracks {
+            runtime.core().add_track_later(track).await;
+        }
+        refresh_sidebar(false);
+        crate::toast::success_weak(&weak, qbz_i18n::t("Added to play later"));
     });
 }
 

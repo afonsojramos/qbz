@@ -113,6 +113,9 @@ component PmSearch inherits Rectangle {
 component PmMenuItem inherits Rectangle {
     in property <string> label;
     in property <bool> selected: false;
+    // Sort rows: "up" | "down" draws the direction chevron in place of the
+    // plain check on the active row (#657 caret).
+    in property <string> trailing-icon: "";
     // Collapse property — `for x: if c: El` is disallowed in Slint 1.16, so
     // a hidden item collapses to zero height instead (the sidebar pattern).
     in property <bool> shown: true;
@@ -137,7 +140,9 @@ component PmMenuItem inherits Rectangle {
         if root.selected: VerticalLayout {
             alignment: center;
             QbzIcon {
-                source: @image-url("../assets/icons/check.svg");
+                source: root.trailing-icon == "up" ? @image-url("../assets/icons/chevron-up.svg")
+                    : root.trailing-icon == "down" ? @image-url("../assets/icons/chevron-down.svg")
+                    : @image-url("../assets/icons/check.svg");
                 width: 13px;
                 height: 13px;
                 tint: Theme.accent;
@@ -1193,26 +1198,36 @@ export component PlaylistManagerView inherits Rectangle {
                                 PmMenuItem {
                                     label: @tr("Name A-Z");
                                     selected: PlaylistManagerState.sort == "name";
+                                    trailing-icon: PlaylistManagerState.sort == "name"
+                                        ? (PlaylistManagerState.sort-asc ? "up" : "down") : "";
                                     activated => { PlaylistManagerActions.set-sort("name"); }
                                 }
                                 PmMenuItem {
                                     label: @tr("Recent");
                                     selected: PlaylistManagerState.sort == "recent";
+                                    trailing-icon: PlaylistManagerState.sort == "recent"
+                                        ? (PlaylistManagerState.sort-asc ? "up" : "down") : "";
                                     activated => { PlaylistManagerActions.set-sort("recent"); }
                                 }
                                 PmMenuItem {
                                     label: @tr("Play Count");
                                     selected: PlaylistManagerState.sort == "playcount";
+                                    trailing-icon: PlaylistManagerState.sort == "playcount"
+                                        ? (PlaylistManagerState.sort-asc ? "up" : "down") : "";
                                     activated => { PlaylistManagerActions.set-sort("playcount"); }
                                 }
                                 PmMenuItem {
                                     label: @tr("Track Count");
                                     selected: PlaylistManagerState.sort == "tracks";
+                                    trailing-icon: PlaylistManagerState.sort == "tracks"
+                                        ? (PlaylistManagerState.sort-asc ? "up" : "down") : "";
                                     activated => { PlaylistManagerActions.set-sort("tracks"); }
                                 }
                                 PmMenuItem {
                                     label: @tr("Custom");
                                     selected: PlaylistManagerState.sort == "custom";
+                                    trailing-icon: PlaylistManagerState.sort == "custom"
+                                        ? (PlaylistManagerState.sort-asc ? "up" : "down") : "";
                                     activated => { PlaylistManagerActions.set-sort("custom"); }
                                 }
                             }

@@ -93,10 +93,11 @@ pub struct SidebarData {
 static EXPANDED: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
 /// Last loaded data, so expand/move rebuild without a refetch.
 static CACHE: LazyLock<Mutex<SidebarData>> = LazyLock::new(|| Mutex::new(SidebarData::default()));
-/// Active sort option, mirrored from `SidebarState.sort-option`. Session
-/// scope (Tauri persists in localStorage; we have no equivalent store
-/// here yet, so this matches the in-session behavior).
-static SORT: LazyLock<Mutex<String>> = LazyLock::new(|| Mutex::new("name".to_string()));
+/// Active sort option + direction, mirrored from `SidebarState.sort-option` /
+/// `.sort-asc`. Session scope (Tauri persists in localStorage; we have no
+/// equivalent store here yet, so this matches the in-session behavior).
+static SORT: LazyLock<Mutex<(String, bool)>> =
+    LazyLock::new(|| Mutex::new(("name".to_string(), true)));
 /// Active playlist-name search query (lowercased), mirrored from
 /// `SidebarState.search-query`. Filters the rebuilt list recursively.
 static SEARCH: LazyLock<Mutex<String>> = LazyLock::new(|| Mutex::new(String::new()));
@@ -111,16 +112,28 @@ pub fn set_loading(window: &AppWindow, loading: bool) {
 }
 
 /// Update the active sort option and re-render (matches Tauri's five
-/// options). Unknown values fall back to "name".
+/// options). Unknown values fall back to "name". PlaylistView-style toggle:
+/// re-selecting the ACTIVE option flips its direction (#657); a new option
+/// starts at its natural direction (`asc == true` everywhere: name A→Z,
+/// recent newest-first, tracks most-first, custom position asc).
 pub fn set_sort(window: &AppWindow, option: &str) {
     let opt = match option {
         "name" | "recent" | "tracks" | "playcount" | "custom" => option,
         _ => "name",
     };
+    let mut asc = true;
     if let Ok(mut s) = SORT.lock() {
-        *s = opt.to_string();
+        if s.0 == opt {
+            s.1 = !s.1;
+        } else {
+            s.0 = opt.to_string();
+            s.1 = true;
+        }
+        asc = s.1;
     }
-    window.global::<SidebarState>().set_sort_option(opt.into());
+    let st = window.global::<SidebarState>();
+    st.set_sort_option(opt.into());
+    st.set_sort_asc(asc);
     rebuild(window);
 }
 
@@ -133,20 +146,28 @@ pub fn set_search(window: &AppWindow, query: &str) {
     rebuild(window);
 }
 
-/// Order playlists by the active sort option, mirroring Tauri's
-/// comparators. `recent` keeps reverse insertion order (most-recently
-/// added first); `playcount` has no per-playlist count source here, so it
-/// stays stable like Tauri does when `play_count` is absent (0).
+/// Order playlists by the active sort option + direction, mirroring Tauri's
+/// comparators. `recent` keeps the API order, which IS newest-first (#657 —
+/// the old unconditional `.reverse()` was written when the list arrived
+/// oldest-first and had been flipping it to oldest-first ever since);
+/// `playcount` has no per-playlist count source here, so it also keeps the
+/// API order like Tauri does when `play_count` is absent. Every option's
+/// `asc == true` is its natural direction; `false` reverses it.
 fn sort_playlists(playlists: &[SidebarPlaylist]) -> Vec<SidebarPlaylist> {
-    let sort = SORT.lock().map(|s| s.clone()).unwrap_or_else(|_| "name".into());
+    let (sort, asc) = SORT
+        .lock()
+        .map(|s| s.clone())
+        .unwrap_or_else(|_| ("name".into(), true));
     let mut out: Vec<SidebarPlaylist> = playlists.to_vec();
     match sort.as_str() {
         "name" => out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase())),
-        "recent" => out.reverse(),
         "tracks" => out.sort_by(|a, b| b.tracks_count.cmp(&a.tracks_count)),
-        "playcount" => { /* no play_count source — stable, like Tauri's absent field */ }
         "custom" => out.sort_by(|a, b| a.position.cmp(&b.position)),
-        _ => out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase())),
+        // recent / playcount — API order (newest first).
+        _ => {}
+    }
+    if !asc {
+        out.reverse();
     }
     out
 }
@@ -403,6 +424,30 @@ pub fn rename_entry(window: &AppWindow, id: &str, name: &str) {
     if let (Ok(numeric), Ok(mut nd)) = (id.parse::<u64>(), NAME_DESC.lock()) {
         if let Some(entry) = nd.get_mut(&numeric) {
             entry.0 = name.to_string();
+        }
+    }
+    rebuild(window);
+}
+
+/// Optimistically INSERT a freshly-created Qobuz playlist row (import or
+/// duplicate-create) so the sidebar shows it instantly — the authoritative
+/// `getUserPlaylists` read lags the create by seconds (the import flow
+/// reconciles with a bounded retry, mirroring `reconcile_sidebar_after_rename`).
+/// Idempotent by id.
+pub fn insert_qobuz_entry(window: &AppWindow, id: u64, name: &str, tracks_count: u32) {
+    if let Ok(mut cache) = CACHE.lock() {
+        if !cache.playlists.iter().any(|p| p.id == id) {
+            cache.playlists.insert(
+                0,
+                SidebarPlaylist {
+                    id,
+                    name: name.to_string(),
+                    description: String::new(),
+                    tracks_count,
+                    cover_urls: Vec::new(),
+                    position: 0,
+                },
+            );
         }
     }
     rebuild(window);

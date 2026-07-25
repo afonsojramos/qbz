@@ -100,6 +100,10 @@ pub struct QueueState {
     pub repeat: RepeatMode,
     pub total_tracks: usize,
     pub stop_after_track_id: Option<u64>,
+    /// Manual-block size (#442): how many entries right after `current_index`
+    /// were hand-queued ("Play next" / "Play later") and play before the
+    /// source resumes.
+    pub manual_next_count: usize,
 }
 
 // ============ Playback State ============

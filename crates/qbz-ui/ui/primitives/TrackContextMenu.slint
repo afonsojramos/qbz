@@ -5,6 +5,7 @@
 
 import { ContextMenu } from "ContextMenu.slint";
 import { ContextMenuItem } from "ContextMenuItem.slint";
+import { QueueState } from "../state.slint";
 
 export component TrackContextMenu inherits PopupWindow {
     in property <string> track-id;
@@ -61,14 +62,15 @@ export component TrackContextMenu inherits PopupWindow {
 
     width: 224px;
     // Nav-only (blacklisted): only Go to album / Go to artist / Track info.
-    // Otherwise: 3 transient + optional favorite/mixtape/add-to-playlist/remove
-    // + optional go-to pair + the Qobuz block (4 fixed: QBZ radio, Qobuz
-    // radio, 2 shares; + 1-or-2 offline entries + optional track info).
+    // Otherwise: 4 transient (play/next/later/queue) + optional
+    // favorite/mixtape/add-to-playlist/remove + optional go-to pair + the
+    // Qobuz block (4 fixed: QBZ radio, Qobuz radio, 2 shares; + 1-or-2
+    // offline entries + optional track info).
     height: (root.nav-only
         ? ((root.go-album-action ? 1 : 0)
             + (root.go-artist-action ? 1 : 0)
             + (root.show-track-info ? 1 : 0))
-        : (3
+        : (4
             + (root.favorite-action ? 1 : 0)
             + (root.mixtape-action ? 1 : 0)
             + (root.playlist-action ? 1 : 0)
@@ -89,14 +91,31 @@ export component TrackContextMenu inherits PopupWindow {
         }
         if !root.nav-only: ContextMenuItem {
             icon: @image-url("../assets/icons/list-plus.svg");
-            label: @tr("Play next");
+            // #442 hint: where the track lands (1-based position in the
+            // queue) — only while a queue exists.
+            label: QueueState.queue-length > 0
+                ? @tr("Play next") + "  ·  #\{QueueState.queue-current-index + 2}"
+                : @tr("Play next");
             clicked => {
                 root.media-action("track", root.track-id, "play-next");
             }
         }
+        // #442 "Play later" — the end of the manual block (after every
+        // play-next / play-later already queued, before the source resumes).
+        if !root.nav-only: ContextMenuItem {
+            icon: @image-url("../assets/icons/list-plus.svg");
+            label: QueueState.queue-length > 0
+                ? @tr("Play later") + "  ·  #\{QueueState.queue-current-index + 2 + QueueState.manual-count}"
+                : @tr("Play later");
+            clicked => {
+                root.media-action("track", root.track-id, "play-later");
+            }
+        }
         if !root.nav-only: ContextMenuItem {
             icon: @image-url("../assets/icons/list-end.svg");
-            label: @tr("Add to queue");
+            label: QueueState.queue-length > 0
+                ? @tr("Add to queue") + "  ·  #\{QueueState.queue-length + 1}"
+                : @tr("Add to queue");
             clicked => {
                 root.media-action("track", root.track-id, "queue");
             }
