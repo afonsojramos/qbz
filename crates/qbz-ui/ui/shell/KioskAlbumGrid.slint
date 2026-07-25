@@ -8,7 +8,7 @@
 // plain full grid mounted every card at once and spiked CPU on entry — a Pi
 // can't afford that. Binds `[AlbumCardItem]` so artwork pushes land on the cards.
 import { Theme } from "../foundation/semantic-colors.slint";
-import { AlbumCardItem } from "../state.slint";
+import { AlbumCardItem, KioskNavState } from "../state.slint";
 import { KioskCard } from "KioskCard.slint";
 
 export component KioskAlbumGrid inherits Flickable {
@@ -25,6 +25,40 @@ export component KioskAlbumGrid inherits Flickable {
     viewport-width: self.width;
     viewport-height: root.rows * (root.card-h + root.gap) + root.pad;
 
+    // ---- Keyboard/gamepad nav (PR 2). The HOSTING VIEW publishes the grid
+    // geometry (tabs / columns / count) into KioskNavState; the grid only
+    // mirrors the focus index (ring + scroll-into-view) and answers the
+    // Enter pulse. The content index space skips `tabs` leading tab entries.
+    property <int> focused-item: KioskNavState.index - KioskNavState.tabs;
+    property <bool> item-focused: KioskNavState.nav-active
+        && KioskNavState.zone == "content"
+        && root.focused-item >= 0
+        && root.focused-item < root.albums.length;
+
+    // Scroll the focused card's row into view. viewport-y is WRITTEN from
+    // this callback (plain imperative assignment on a settled layout), never
+    // read by a binding that feeds layout — the AlbumCollectionView
+    // "Recursion detected" panic class.
+    property <length> focus-top: root.pad + Math.floor(root.focused-item / root.columns) * (root.card-h + root.gap);
+    property <int> nav-index-probe: KioskNavState.index;
+    changed nav-index-probe => {
+        if (root.item-focused) {
+            if (root.focus-top < -self.viewport-y) {
+                self.viewport-y = -(root.focus-top - 8px);
+            } else if (root.focus-top + root.card-h > -self.viewport-y + self.height) {
+                self.viewport-y = -(root.focus-top + root.card-h - self.height + 8px);
+            }
+        }
+    }
+
+    // Enter pulse → open the focused album.
+    property <int> act-probe: KioskNavState.activate-seq;
+    changed act-probe => {
+        if (root.item-focused) {
+            root.open(root.albums[root.focused-item].id);
+        }
+    }
+
     Rectangle {
         for album[i] in root.albums: slot := Rectangle {
             x: root.pad + Math.mod(i, root.columns) * (root.card-w + root.gap);
@@ -39,6 +73,7 @@ export component KioskAlbumGrid inherits Flickable {
                 width: root.card-w;
                 art-size: root.card-w;
                 album: album;
+                nav-focused: root.item-focused && root.focused-item == i;
                 clicked(id) => {
                     root.open(id);
                 }

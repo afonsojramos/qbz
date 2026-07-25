@@ -6,19 +6,32 @@
 // stack — lighter for a Pi. v1 covers the album-carousel rows (newReleases,
 // qobuzissimes, editorPicks, pressAwards, idealDiscography, mostStreamed); the
 // non-album rows (playlists, mixes, slim rails) are skipped for now.
+//
+// Keyboard/gamepad nav (PR 2): SHELF mode. The nav index space is the 3 tab
+// pills (indices 0-2) followed by one index per shelf (columns == 1, so
+// Up/Down walk shelves). Left/Right can't move the global index (that would
+// jump shelves), so the shell emits an `hmove` pulse that the focused shelf
+// consumes into its LOCAL card cursor. Sections with no albums render
+// nothing (the playlist/mix/slim rows above) — the focused shelf skips over
+// them in the last travel direction (`KioskNavState.dir`), since Slint has
+// no cross-loop accumulator to pre-compact the index space.
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Radius } from "../foundation/radius.slint";
-import { DiscoverState, HomeState, HomeActions } from "../state.slint";
+import { DiscoverState, HomeState, HomeActions, KioskNavState } from "../state.slint";
 import { KioskCard } from "KioskCard.slint";
 
 component TabPill inherits Rectangle {
     in property <string> label;
     in property <bool> active;
+    // Keyboard/gamepad nav (PR 2): this pill holds the shell focus ring.
+    in property <bool> nav-focused: false;
     callback clicked;
     horizontal-stretch: 0;
     height: 40px;
     border-radius: Radius.sm;
     background: root.active ? Theme.accent : ta.has-hover ? Theme.alpha-6 : transparent;
+    border-width: root.nav-focused ? 2px : 0px;
+    border-color: Theme.accent;
     HorizontalLayout {
         padding-left: 16px;
         padding-right: 16px;
@@ -43,7 +56,48 @@ export component KioskDiscover inherits Rectangle {
     callback media-action(string, string, string);
     callback discover-view-all(string, string);
 
-    Flickable {
+    // ---- Nav geometry publish (PR 2): 3 tab pills + one index per shelf.
+    // Re-published on tab switch and whenever the section set changes.
+    property <int> nav-section-count: (DiscoverState.active-tab == "editorPicks"
+        ? DiscoverState.editor-sections
+        : DiscoverState.active-tab == "forYou"
+            ? DiscoverState.foryou-sections
+            : DiscoverState.home-sections).length;
+    function publish-nav() {
+        KioskNavState.tabs = 3;
+        KioskNavState.shelves = true;
+        KioskNavState.columns = 1;
+        KioskNavState.count = 3 + root.nav-section-count;
+        KioskNavState.index = Math.max(0, Math.min(KioskNavState.index, KioskNavState.count - 1));
+    }
+    init => {
+        root.publish-nav();
+    }
+    property <int> nav-count-probe: root.nav-section-count;
+    changed nav-count-probe => {
+        root.publish-nav();
+    }
+    property <string> nav-tab-probe: DiscoverState.active-tab;
+    changed nav-tab-probe => {
+        root.publish-nav();
+    }
+
+    // Enter on a tab pill → the same tab switch the pills' TouchAreas drive.
+    property <int> act-probe: KioskNavState.activate-seq;
+    changed act-probe => {
+        if (KioskNavState.nav-active && KioskNavState.zone == "content"
+            && KioskNavState.index < KioskNavState.tabs) {
+            if (KioskNavState.index == 0) {
+                HomeActions.select-tab("home");
+            } else if (KioskNavState.index == 1) {
+                HomeActions.select-tab("editorPicks");
+            } else if (KioskNavState.index == 2) {
+                HomeActions.select-tab("forYou");
+            }
+        }
+    }
+
+    page-flick := Flickable {
         viewport-width: self.width;
         viewport-height: page.preferred-height;
 
@@ -68,16 +122,19 @@ export component KioskDiscover inherits Rectangle {
                         TabPill {
                             label: @tr("Home");
                             active: DiscoverState.active-tab == "home";
+                            nav-focused: KioskNavState.nav-active && KioskNavState.zone == "content" && KioskNavState.index == 0;
                             clicked => { HomeActions.select-tab("home"); }
                         }
                         TabPill {
                             label: @tr("Editor's Picks");
                             active: DiscoverState.active-tab == "editorPicks";
+                            nav-focused: KioskNavState.nav-active && KioskNavState.zone == "content" && KioskNavState.index == 1;
                             clicked => { HomeActions.select-tab("editorPicks"); }
                         }
                         TabPill {
                             label: @tr("For You");
                             active: DiscoverState.active-tab == "forYou";
+                            nav-focused: KioskNavState.nav-active && KioskNavState.zone == "content" && KioskNavState.index == 2;
                             clicked => { HomeActions.select-tab("forYou"); }
                         }
                     }
@@ -86,30 +143,111 @@ export component KioskDiscover inherits Rectangle {
 
             // Album shelves for the active tab. Only rows carrying album data
             // render (length > 0); playlist/mix/slim rows are skipped in v1.
-            for desc in (DiscoverState.active-tab == "editorPicks"
+            for desc[s] in (DiscoverState.active-tab == "editorPicks"
                     ? DiscoverState.editor-sections
                     : DiscoverState.active-tab == "forYou"
                         ? DiscoverState.foryou-sections
-                        : DiscoverState.home-sections): VerticalLayout {
+                        : DiscoverState.home-sections): shelf-vl := VerticalLayout {
+                // PR 2 — per-shelf nav state. `cursor` is the focused card
+                // inside this shelf; `shelf-focused` mirrors the global index.
+                property <int> cursor: 0;
+                property <bool> shelf-focused: KioskNavState.nav-active
+                    && KioskNavState.zone == "content"
+                    && KioskNavState.index - KioskNavState.tabs == s;
+
+                // Skip over shelves that render nothing (empty / non-album
+                // sections): nudge the index one more step in the last travel
+                // direction. The write re-fires the probes of the next shelf,
+                // so the cascade walks contiguous gaps and converges.
+                property <int> nav-skip-probe: KioskNavState.index;
+                changed nav-skip-probe => {
+                    if (KioskNavState.zone == "content" && KioskNavState.nav-active
+                        && KioskNavState.index - KioskNavState.tabs == s
+                        && desc.section.albums.length == 0 && KioskNavState.dir != 0) {
+                        KioskNavState.index = Math.max(KioskNavState.tabs,
+                            Math.min(KioskNavState.count - 1, KioskNavState.index + KioskNavState.dir));
+                    }
+                }
+
+                // Left/Right shelf move: the shell pulses `hmove`; the focused
+                // shelf consumes it into its cursor (and resets the pulse).
+                property <int> hmove-probe: KioskNavState.hmove;
+                changed hmove-probe => {
+                    if (self.shelf-focused && KioskNavState.hmove != 0
+                        && desc.section.albums.length > 0) {
+                        self.cursor = Math.clamp(self.cursor + KioskNavState.hmove,
+                            0, desc.section.albums.length - 1);
+                        KioskNavState.hmove = 0;
+                    }
+                }
+
+                // Enter pulse → open the cursor album.
+                property <int> act-probe: KioskNavState.activate-seq;
+                changed act-probe => {
+                    if (self.shelf-focused && desc.section.albums.length > 0
+                        && self.cursor < desc.section.albums.length) {
+                        root.album-clicked(desc.section.albums[self.cursor].id);
+                    }
+                }
+
+                // Keep the focused shelf's strip inside the page viewport.
+                // Page coords are fixed arithmetic: 16px pad + 50px tab row +
+                // 22px spacing, then a 240px pitch per shelf block (24px
+                // title + 12px + 182px strip + 22px spacing). viewport-y is
+                // WRITTEN from this callback on a settled layout, never read
+                // by a layout-feeding binding ("Recursion detected" class).
+                property <int> nav-index-probe: KioskNavState.index;
+                changed nav-index-probe => {
+                    if (self.shelf-focused && desc.section.albums.length > 0) {
+                        if (88px + s * 240px < -page-flick.viewport-y) {
+                            page-flick.viewport-y = -(88px + s * 240px - 8px);
+                        } else if (88px + s * 240px + 218px > -page-flick.viewport-y + page-flick.height) {
+                            page-flick.viewport-y = -(88px + s * 240px + 218px - page-flick.height + 8px);
+                        }
+                    }
+                }
+
                 if desc.section.albums.length > 0: VerticalLayout {
                     spacing: 12px;
 
-                    Text {
-                        text: desc.section.title;
-                        color: Theme.text-primary;
-                        font-size: 18px;
-                        font-weight: 600;
+                    // Fixed-height title wrapper (was a bare Text): makes the
+                    // shelf block a constant 218px so the scroll-into-view
+                    // arithmetic above stays exact.
+                    Rectangle {
+                        height: 24px;
+                        Text {
+                            text: desc.section.title;
+                            color: Theme.text-primary;
+                            font-size: 18px;
+                            font-weight: 600;
+                            vertical-alignment: center;
+                        }
                     }
 
-                    Flickable {
+                    strip-flick := Flickable {
                         height: 182px;
                         viewport-width: strip.preferred-width;
                         viewport-height: self.height;
+
+                        // Keep the cursor card inside the strip's horizontal
+                        // viewport (card pitch = 128px art + 14px spacing).
+                        property <int> cursor-probe: shelf-vl.cursor;
+                        changed cursor-probe => {
+                            if (shelf-vl.shelf-focused) {
+                                if (shelf-vl.cursor * 142px < -self.viewport-x) {
+                                    self.viewport-x = -(shelf-vl.cursor * 142px - 8px);
+                                } else if (shelf-vl.cursor * 142px + 128px > -self.viewport-x + self.width) {
+                                    self.viewport-x = -(shelf-vl.cursor * 142px + 128px - self.width + 8px);
+                                }
+                            }
+                        }
+
                         strip := HorizontalLayout {
                             spacing: 14px;
                             alignment: start;
-                            for album in desc.section.albums: KioskCard {
+                            for album[i] in desc.section.albums: KioskCard {
                                 album: album;
+                                nav-focused: shelf-vl.shelf-focused && i == shelf-vl.cursor;
                                 clicked(id) => {
                                     root.album-clicked(id);
                                 }

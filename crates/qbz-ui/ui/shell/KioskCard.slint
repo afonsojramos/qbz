@@ -13,9 +13,17 @@ export component KioskCard inherits Rectangle {
     in property <AlbumCardItem> album;
     in property <length> art-size: 128px;
     in property <bool> round: false;
+    // Keyboard/gamepad nav (PR 2): the hosting view sets this when the shell
+    // focus index lands on this card. A 3px accent ring + tint, readable at
+    // 10-foot distance.
+    in property <bool> nav-focused: false;
     callback clicked(string);
 
     width: root.art-size;
+    border-width: root.nav-focused ? 3px : 0px;
+    border-color: Theme.accent;
+    border-radius: Radius.sm;
+    background: root.nav-focused ? Theme.accent.with-alpha(0.12) : transparent;
 
     VerticalLayout {
         alignment: start;

@@ -8,20 +8,24 @@
 // panel).
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Radius } from "../foundation/radius.slint";
-import { NavState, ContentView, ImmersiveState, MyQbzBrandingState } from "../state.slint";
+import { NavState, ContentView, ImmersiveState, MyQbzBrandingState, KioskNavState } from "../state.slint";
 
 component NavTile inherits Rectangle {
     in property <image> icon;
     in property <string> label;
     in property <bool> active;
+    // Keyboard/gamepad nav (PR 2): this tile holds the shell focus ring.
+    in property <bool> nav-focused: false;
     callback clicked;
 
     border-radius: Radius.sm;
-    background: root.active
+    background: root.nav-focused
+        ? Theme.accent.with-alpha(0.22)
+        : root.active
         ? Theme.accent.with-alpha(0.12)
         : ta.has-hover ? Theme.alpha-6 : transparent;
-    border-width: root.active ? 1px : 0px;
-    border-color: Theme.accent.with-alpha(0.30);
+    border-width: root.nav-focused ? 2px : root.active ? 1px : 0px;
+    border-color: root.nav-focused ? Theme.accent : Theme.accent.with-alpha(0.30);
 
     VerticalLayout {
         alignment: center;
@@ -65,6 +69,20 @@ export component NavRail inherits Rectangle {
 
     background: Theme.surface-main;
 
+    // Keyboard/gamepad nav (PR 2): tile count for the shell's rail zone and
+    // the activation seam for Enter (the rail is always mounted, so the
+    // shell calls this directly instead of using the activate-seq pulse).
+    out property <int> tile-count: 7;
+    public function activate-index(i: int) {
+        if (i == 0) { root.discover(); }
+        else if (i == 1) { root.library(); }
+        else if (i == 2) { root.local-library(); }
+        else if (i == 3) { root.myqbz(); }
+        else if (i == 4) { root.playing(); }
+        else if (i == 5) { root.visualizer(); }
+        else if (i == 6) { root.menu(); }
+    }
+
     // 7 tiles, 8px outer padding, 6px gaps (6 gaps). Search is intentionally
     // absent — the back-bar carries a persistent search field, so a footer
     // Search tile is redundant.
@@ -87,6 +105,7 @@ export component NavRail inherits Rectangle {
         icon: @image-url("../assets/icons/compass.svg");
         label: @tr("Discover");
         active: NavState.view == ContentView.home;
+        nav-focused: KioskNavState.nav-active && KioskNavState.zone == "rail" && KioskNavState.index == 0;
         clicked => {
             root.discover();
         }
@@ -99,6 +118,7 @@ export component NavRail inherits Rectangle {
         icon: @image-url("../assets/icons/library-big.svg");
         label: @tr("Library");
         active: NavState.view == ContentView.favorites;
+        nav-focused: KioskNavState.nav-active && KioskNavState.zone == "rail" && KioskNavState.index == 1;
         clicked => {
             root.library();
         }
@@ -111,6 +131,7 @@ export component NavRail inherits Rectangle {
         icon: @image-url("../assets/icons/hard-drive.svg");
         label: @tr("Local Library");
         active: NavState.view == ContentView.local-library || NavState.view == ContentView.local-album;
+        nav-focused: KioskNavState.nav-active && KioskNavState.zone == "rail" && KioskNavState.index == 2;
         clicked => {
             root.local-library();
         }
@@ -125,6 +146,7 @@ export component NavRail inherits Rectangle {
         active: NavState.view == ContentView.mixtapes
             || NavState.view == ContentView.collections
             || NavState.view == ContentView.mixtape-detail;
+        nav-focused: KioskNavState.nav-active && KioskNavState.zone == "rail" && KioskNavState.index == 3;
         clicked => {
             root.myqbz();
         }
@@ -137,6 +159,7 @@ export component NavRail inherits Rectangle {
         icon: @image-url("../assets/icons/play-fill.svg");
         label: @tr("Now Playing");
         active: NavState.view == ContentView.now-playing;
+        nav-focused: KioskNavState.nav-active && KioskNavState.zone == "rail" && KioskNavState.index == 4;
         clicked => {
             root.playing();
         }
@@ -149,6 +172,7 @@ export component NavRail inherits Rectangle {
         icon: @image-url("../assets/icons/sliders-horizontal.svg");
         label: @tr("Visualizer");
         active: false;
+        nav-focused: KioskNavState.nav-active && KioskNavState.zone == "rail" && KioskNavState.index == 5;
         clicked => {
             root.visualizer();
         }
@@ -161,6 +185,7 @@ export component NavRail inherits Rectangle {
         icon: @image-url("../assets/icons/settings.svg");
         label: @tr("Settings");
         active: NavState.view == ContentView.settings;
+        nav-focused: KioskNavState.nav-active && KioskNavState.zone == "rail" && KioskNavState.index == 6;
         clicked => {
             root.menu();
         }

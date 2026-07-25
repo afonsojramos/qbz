@@ -7,15 +7,19 @@
 // QueueState.panel-opened() on init so the paginated queue slice is fresh.
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Radius } from "../foundation/radius.slint";
-import { NowPlayingState, QueueState, QueueItem, LyricsState, ShellState } from "../state.slint";
+import { NowPlayingState, QueueState, QueueItem, LyricsState, ShellState, KioskNavState } from "../state.slint";
 import { LyricsLinesView } from "LyricsLinesView.slint";
 
 component QueueRowLite inherits Rectangle {
     in property <QueueItem> item;
+    // Keyboard/gamepad nav (PR 2) — same ring idiom as KioskTrackRow.
+    in property <bool> nav-focused: false;
     callback play;
     height: 58px;
     border-radius: Radius.sm;
-    background: qrow.has-hover ? Theme.alpha-6 : transparent;
+    background: root.nav-focused ? Theme.accent.with-alpha(0.18) : qrow.has-hover ? Theme.alpha-6 : transparent;
+    border-width: root.nav-focused ? 2px : 0px;
+    border-color: Theme.accent;
     HorizontalLayout {
         padding-left: 8px;
         padding-right: 12px;
@@ -74,8 +78,15 @@ component QueueRowLite inherits Rectangle {
 component QueueTab inherits Rectangle {
     in property <string> label;
     in property <bool> active;
+    // Keyboard/gamepad nav (PR 2): this tab holds the shell focus ring.
+    // Only the right-panel Queue/History pair joins the nav model; the
+    // left Cover/Lyrics pair leaves this false.
+    in property <bool> nav-focused: false;
     callback picked;
     horizontal-stretch: 0;
+    border-width: root.nav-focused ? 2px : 0px;
+    border-color: Theme.accent;
+    border-radius: Radius.sm;
     HorizontalLayout {
         padding-left: 2px;
         padding-right: 2px;
@@ -115,11 +126,52 @@ export component KioskNowPlaying inherits Rectangle {
     // lightweight lyrics surface (no immersive visualizer needed, Pi-friendly).
     property <bool> show-lyrics: false;
 
+    // ---- Keyboard/gamepad nav (PR 2). The nav model is the right panel:
+    // 2 queue tabs (Up Next / History) followed by the active tab's rows as
+    // a 1-column list. Enter on a row plays it; Enter on a tab switches.
+    // The left panel (cover/lyrics toggle, artist link, seek) stays
+    // touch-only in v1; the transport row joins the "player" zone (ring
+    // below; Enter = play/pause handled by the shell).
+    function publish-nav() {
+        KioskNavState.tabs = 2;
+        KioskNavState.shelves = false;
+        KioskNavState.columns = 1;
+        KioskNavState.count = 2 + (QueueState.tab == 0
+            ? QueueState.upcoming-page.length
+            : QueueState.history.length);
+        KioskNavState.index = Math.max(0, Math.min(KioskNavState.index, KioskNavState.count - 1));
+    }
+    property <int> nav-tab-probe: QueueState.tab;
+    changed nav-tab-probe => {
+        root.publish-nav();
+    }
+    property <int> nav-len-probe: QueueState.upcoming-page.length + QueueState.history.length;
+    changed nav-len-probe => {
+        root.publish-nav();
+    }
+
+    // Enter pulse → queue tab switch / play the focused queue row.
+    property <int> act-probe: KioskNavState.activate-seq;
+    changed act-probe => {
+        if (KioskNavState.nav-active && KioskNavState.zone == "content") {
+            if (KioskNavState.index < KioskNavState.tabs) {
+                QueueState.set-tab(KioskNavState.index);
+            } else {
+                if (QueueState.tab == 0 && KioskNavState.index - 2 < QueueState.upcoming-page.length) {
+                    QueueState.play-upcoming(KioskNavState.index - 2);
+                } else if (QueueState.tab == 1 && KioskNavState.index - 2 < QueueState.history.length) {
+                    QueueState.play-history(KioskNavState.index - 2);
+                }
+            }
+        }
+    }
+
     init => {
         QueueState.panel-opened();
         // Mount in Cover mode — make sure a stale follow flag from a prior visit
         // doesn't keep the sync engine running.
         ShellState.kiosk-lyrics-follow = false;
+        root.publish-nav();
     }
 
     HorizontalLayout {
@@ -278,6 +330,12 @@ export component KioskNowPlaying inherits Rectangle {
                     // space on short windows).
                     Rectangle {
                         height: 46px;
+                        // PR 2 — the "player" zone ring (PlayerBarSmall is hidden
+                        // on this view, so the in-page transport carries it).
+                        border-width: KioskNavState.nav-active && KioskNavState.zone == "player" ? 3px : 0px;
+                        border-color: Theme.accent;
+                        border-radius: Radius.sm;
+                        background: KioskNavState.nav-active && KioskNavState.zone == "player" ? Theme.accent.with-alpha(0.08) : transparent;
                         HorizontalLayout {
                             alignment: center;
                             TransportControls {
@@ -321,6 +379,7 @@ export component KioskNowPlaying inherits Rectangle {
                     QueueTab {
                         label: @tr("Up Next");
                         active: QueueState.tab == 0;
+                        nav-focused: KioskNavState.nav-active && KioskNavState.zone == "content" && KioskNavState.index == 0;
                         picked => {
                             QueueState.set-tab(0);
                         }
@@ -328,6 +387,7 @@ export component KioskNowPlaying inherits Rectangle {
                     QueueTab {
                         label: @tr("History");
                         active: QueueState.tab == 1;
+                        nav-focused: KioskNavState.nav-active && KioskNavState.zone == "content" && KioskNavState.index == 1;
                         picked => {
                             QueueState.set-tab(1);
                         }
@@ -341,26 +401,66 @@ export component KioskNowPlaying inherits Rectangle {
                 // the page is cheap.)
                 Rectangle {
                     vertical-stretch: 1;
-                    if QueueState.tab == 0: Flickable {
+                    if QueueState.tab == 0: up-flick := Flickable {
                         viewport-width: self.width;
                         viewport-height: up-body.preferred-height;
+
+                        // PR 2 — scroll the focused row into view (60px
+                        // pitch: 58px row + 2px spacing). Written from a
+                        // callback on a settled layout.
+                        property <int> focused-item: KioskNavState.index - KioskNavState.tabs;
+                        property <bool> item-focused: KioskNavState.nav-active
+                            && KioskNavState.zone == "content"
+                            && self.focused-item >= 0
+                            && self.focused-item < QueueState.upcoming-page.length;
+                        property <int> nav-index-probe: KioskNavState.index;
+                        changed nav-index-probe => {
+                            if (self.item-focused) {
+                                if (self.focused-item * 60px < -self.viewport-y) {
+                                    self.viewport-y = -(self.focused-item * 60px - 8px);
+                                } else if (self.focused-item * 60px + 58px > -self.viewport-y + self.height) {
+                                    self.viewport-y = -(self.focused-item * 60px + 58px - self.height + 8px);
+                                }
+                            }
+                        }
+
                         up-body := VerticalLayout {
                             spacing: 2px;
                             for item[i] in QueueState.upcoming-page: QueueRowLite {
                                 item: item;
+                                nav-focused: up-flick.item-focused && up-flick.focused-item == i;
                                 play => {
                                     QueueState.play-upcoming(i);
                                 }
                             }
                         }
                     }
-                    if QueueState.tab == 1: Flickable {
+                    if QueueState.tab == 1: hist-flick := Flickable {
                         viewport-width: self.width;
                         viewport-height: hist-body.preferred-height;
+
+                        // PR 2 — same scroll-into-view as the Up Next list.
+                        property <int> focused-item: KioskNavState.index - KioskNavState.tabs;
+                        property <bool> item-focused: KioskNavState.nav-active
+                            && KioskNavState.zone == "content"
+                            && self.focused-item >= 0
+                            && self.focused-item < QueueState.history.length;
+                        property <int> nav-index-probe: KioskNavState.index;
+                        changed nav-index-probe => {
+                            if (self.item-focused) {
+                                if (self.focused-item * 60px < -self.viewport-y) {
+                                    self.viewport-y = -(self.focused-item * 60px - 8px);
+                                } else if (self.focused-item * 60px + 58px > -self.viewport-y + self.height) {
+                                    self.viewport-y = -(self.focused-item * 60px + 58px - self.height + 8px);
+                                }
+                            }
+                        }
+
                         hist-body := VerticalLayout {
                             spacing: 2px;
                             for item[i] in QueueState.history: QueueRowLite {
                                 item: item;
+                                nav-focused: hist-flick.item-focused && hist-flick.focused-item == i;
                                 play => {
                                     QueueState.play-history(i);
                                 }
