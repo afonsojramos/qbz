@@ -16,7 +16,7 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { NowPlayingState, ShellState } from "../state.slint";
+import { NowPlayingState, ShellState, AppearanceState } from "../state.slint";
 import { QbzIcon } from "QbzIcon.slint";
 
 // One equalizer bar — oscillates continuously while it is shown (a 1s
@@ -91,9 +91,21 @@ export component TrackPlayCell inherits Rectangle {
     // and it clears automatically when the flag clears.
     property <bool> is-loading: root.is-active && NowPlayingState.loading;
     property <bool> show-overlay: root.row-hovered || root.is-active;
-    // The animated bars show only while playing, the row is at rest, and the
-    // track isn't still fetching (the spinner wins during the fetch window).
-    property <bool> show-bars: root.is-playing && !root.row-hovered && !root.is-loading;
+    // The animated bars show only while playing, the row is at rest, the
+    // track isn't still fetching (the spinner wins during the fetch window),
+    // AND the user opted into the animation (Appearance settings). With the
+    // pref OFF the cell falls through to the static glyph below (the owner's
+    // 2026-07-24 spec: rest = play inside an accent ring, hover = pause).
+    property <bool> show-bars: root.is-playing && !root.row-hovered && !root.is-loading
+        && AppearanceState.play-indicator-animation;
+    // The glyph shows PAUSE only when the playing row is hovered (the click
+    // pauses). At rest the playing row shows PLAY — an affordance, not a
+    // state badge: the accent ring + the row's edge mark carry the state.
+    property <bool> show-pause: root.is-playing && root.row-hovered;
+    // Static-mode ring on the playing row (pref OFF): transparent fill,
+    // accent circumference + accent glyph. Anything else keeps the original
+    // alpha backing + text-primary glyph (legibility on every theme, #638).
+    property <bool> accent-ring: !AppearanceState.play-indicator-animation && root.is-playing;
 
     width: root.show-artwork ? root.art-size : root.number-width;
     height: root.show-artwork ? root.art-size : 40px;
@@ -146,7 +158,7 @@ export component TrackPlayCell inherits Rectangle {
                 : animation-tick() / 1ms) * 0.36) * 1deg;
         }
         if root.show-overlay && !root.show-bars && !root.is-loading: QbzIcon {
-            source: (root.is-playing && root.row-hovered)
+            source: root.show-pause
                 ? @image-url("../assets/icons/pause.svg")
                 : @image-url("../assets/icons/play-fill.svg");
             width: 20px;
@@ -191,26 +203,28 @@ export component TrackPlayCell inherits Rectangle {
         // no scrim like the artwork variant has). Fill/border/shadow use the
         // polarity-baked alpha ramp (black-alpha on light, white-alpha on dark)
         // and the glyph uses text-primary = the theme's max-contrast color. #638.
+        // On the playing row with the animation pref OFF the circle switches to
+        // the static ring: transparent fill, accent circumference + glyph.
         if root.show-overlay && !root.show-bars && !root.is-loading: Rectangle {
             width: 24px;
             height: 24px;
             border-radius: 12px;
             x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
             y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
-            background: Theme.alpha-10;
+            background: root.accent-ring ? transparent : Theme.alpha-10;
             border-width: 1px;
-            border-color: Theme.alpha-15;
+            border-color: root.accent-ring ? Theme.accent : Theme.alpha-15;
             drop-shadow-blur: 6px;
             drop-shadow-color: Theme.card-shadow;
             QbzIcon {
-                source: (root.is-playing && root.row-hovered)
+                source: root.show-pause
                     ? @image-url("../assets/icons/pause.svg")
                     : @image-url("../assets/icons/play-fill.svg");
                 width: 16px;
                 height: 16px;
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
-                tint: Theme.text-primary;
+                tint: root.accent-ring ? Theme.accent : Theme.text-primary;
             }
         }
     }

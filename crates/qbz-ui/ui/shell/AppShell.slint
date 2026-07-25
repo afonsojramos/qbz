@@ -189,9 +189,15 @@ export component AppShell inherits Rectangle {
     // ~4.5% CPU with a playlist view open on a 165 Hz monitor. When the
     // playing row is not on screen nothing reads the property, so the tick
     // dirties no binding and costs nothing.
+    //
+    // The playing arm is gated on AppearanceState.play-indicator-animation:
+    // with the pref OFF (default) the eq bars never mount, so the clock stays
+    // off while playing too — the static pause glyph + accent edge mark cost
+    // zero ticks (the CPU complaint the pref answers, 2026-07-24).
     Timer {
         interval: 125ms;
-        running: ShellState.reduce-motion || NowPlayingState.playing;
+        running: ShellState.reduce-motion
+            || (NowPlayingState.playing && AppearanceState.play-indicator-animation);
         triggered => {
             ShellState.coarse-tick-ms = Math.mod(ShellState.coarse-tick-ms + 125, 86400000);
         }
@@ -294,12 +300,14 @@ export component AppShell inherits Rectangle {
                     // libinput natural scrolling ON (GNOME default) fingers
                     // right yields NEGATIVE delta-x, hence the signs below.
                     // Under non-natural scrolling the mapping feels inverted
-                    // — accepted trade-off (distro scroll-direction setting
-                    // is not visible to the app).
-                    if (swipe-accum < 0 && NavState.can-back) {
+                    // — the AppearanceState.invert-swipe-navigation pref
+                    // (#653 follow-up) flips the mapping for those users.
+                    if ((AppearanceState.invert-swipe-navigation ? -swipe-accum : swipe-accum) < 0
+                        && NavState.can-back) {
                         NavState.request-back();
                     }
-                    if (swipe-accum > 0 && NavState.can-forward) {
+                    if ((AppearanceState.invert-swipe-navigation ? -swipe-accum : swipe-accum) > 0
+                        && NavState.can-forward) {
                         NavState.request-forward();
                     }
                     swipe-fired = true;
