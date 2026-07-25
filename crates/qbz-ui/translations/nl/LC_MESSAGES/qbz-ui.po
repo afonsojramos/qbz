@@ -4825,3 +4825,51 @@ msgstr "Artiest afgewezen voor Aanbevelingen"
 
 msgid "{} restored to Recommendations"
 msgstr "{} hersteld in Aanbevelingen"
+
+msgid "LIBRARY › ALL"
+msgstr "BIBLIOTHEEK › ALLES"
+
+msgid "Show local files & Plex"
+msgstr "Lokale bestanden en Plex tonen"
+
+msgid "Include your favorited local files and Plex items in the Library All feed."
+msgstr "Toon je favoriete lokale bestanden en Plex-items in de Bibliotheek-feed Alles."
+
+msgid "Play indicator animation"
+msgstr "Afspeelindicator-animatie"
+
+msgid "Animate the now-playing row with equalizer bars. Off (default) shows a static pause icon with an accent edge mark — lighter on CPU."
+msgstr "Animeert de nu-spelende rij met equalizerbalken. Uit (standaard) toont een statisch pauze-icoon met een accentmarkering op de rand — lichter voor de CPU."
+
+msgid "Invert swipe navigation direction"
+msgstr "Veegnavigatierichting omkeren"
+
+msgid "Swap the two-finger touchpad swipe: left goes back, right goes forward."
+msgstr "Wisselt de tweevingerveeg op het touchpad om: links gaat terug, rechts gaat vooruit."
+
+msgid "Local items in Library All"
+msgstr "Lokale items in Bibliotheek › Alles"
+
+msgid "Favorited items only: what you hearted. Entire local library: every folder and Plex album, artist and track."
+msgstr "Alleen favorieten: wat je hebt gemarkeerd. Hele lokale bibliotheek: elk album, artiest en nummer uit mappen en Plex."
+
+msgid "Favorited items only"
+msgstr "Alleen favorieten"
+
+msgid "Entire local library"
+msgstr "Hele lokale bibliotheek"
+
+msgid "Select multiple albums"
+msgstr "Meerdere albums selecteren"
+
+msgid "Play later"
+msgstr "Later afspelen"
+
+msgid "Added to play later"
+msgstr "Toegevoegd voor later"
+
+msgid "Next in queue"
+msgstr "Volgende in de wachtrij"
+
+msgid "Next up"
+msgstr "Hierna"

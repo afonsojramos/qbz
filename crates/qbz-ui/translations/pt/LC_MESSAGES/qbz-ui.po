@@ -4813,3 +4813,51 @@ msgstr "Artista dispensado das Recomendações"
 
 msgid "{} restored to Recommendations"
 msgstr "{} restaurado em Recomendações"
+
+msgid "LIBRARY › ALL"
+msgstr "BIBLIOTECA › TUDO"
+
+msgid "Show local files & Plex"
+msgstr "Mostrar ficheiros locais e Plex"
+
+msgid "Include your favorited local files and Plex items in the Library All feed."
+msgstr "Inclui os seus ficheiros locais e itens do Plex favoritos no feed Tudo da biblioteca."
+
+msgid "Play indicator animation"
+msgstr "Animação do indicador de reprodução"
+
+msgid "Animate the now-playing row with equalizer bars. Off (default) shows a static pause icon with an accent edge mark — lighter on CPU."
+msgstr "Anima a linha em reprodução com barras de equalizador. Desligado (padrão) mostra um ícone de pausa estático com uma marca de destaque na borda — mais leve para a CPU."
+
+msgid "Invert swipe navigation direction"
+msgstr "Inverter a direção do gesto de navegação"
+
+msgid "Swap the two-finger touchpad swipe: left goes back, right goes forward."
+msgstr "Troca o deslizar com dois dedos no touchpad: esquerda volta, direita avança."
+
+msgid "Local items in Library All"
+msgstr "Itens locais na Biblioteca Tudo"
+
+msgid "Favorited items only: what you hearted. Entire local library: every folder and Plex album, artist and track."
+msgstr "Somente favoritos: o que você marcou. Toda a biblioteca local: cada álbum, artista e faixa das pastas e do Plex."
+
+msgid "Favorited items only"
+msgstr "Somente favoritos"
+
+msgid "Entire local library"
+msgstr "Toda a biblioteca local"
+
+msgid "Select multiple albums"
+msgstr "Selecionar vários álbuns"
+
+msgid "Play later"
+msgstr "Tocar depois"
+
+msgid "Added to play later"
+msgstr "Adicionado para depois"
+
+msgid "Next in queue"
+msgstr "A seguir na fila"
+
+msgid "Next up"
+msgstr "A seguir"
