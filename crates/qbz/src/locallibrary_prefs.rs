@@ -100,6 +100,12 @@ pub fn ephemeral_path() -> Option<String> {
     read().ephemeral_folder.filter(|s| !s.is_empty())
 }
 
+/// The persisted album-identity mode ("folder" | "metadata") — the feed
+/// loader reads it without a window handle (Settings/Library-All scope).
+pub fn albums_id_mode() -> String {
+    read().albums_id_mode
+}
+
 /// Persist (or clear) the ephemeral-folder path (read-modify-write).
 pub fn save_ephemeral_path(path: Option<&str>) {
     let mut p = read();

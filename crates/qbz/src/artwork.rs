@@ -137,9 +137,11 @@ pub enum ArtworkTarget {
     /// main-column Playlists carousel). Single cover (slot 0), like
     /// `LabelPlaylistCover`.
     ArtistPlaylistCover { index: usize },
-    /// A card in the Library "All" mixed feed (`LibraryAllState.items-visible[index]`).
-    /// Dispatched against the VISIBLE model, re-dispatched on each derive.
-    LibraryAllCover { index: usize },
+    /// A card in the Library "All" mixed feed, keyed by `kind:id` (Qobuz
+    /// numeric ids overlap across entity types). Id-keyed + generation-guarded
+    /// so a derive re-sort between dispatch and apply cannot land a cover on
+    /// the wrong card; applied onto BOTH `items` and `items-visible`.
+    LibraryAllById { key: String, gen: u64 },
     /// A row in `ArtistState.library-tracks[index]` — the ArtistPage
     /// "In library" track list (library_by_artist seed). Row thumbnail.
     ArtistLibraryTrack { index: usize },
@@ -1264,12 +1266,16 @@ fn apply_artwork(
                 model.set_row_data(index, item);
             }
         }
-        ArtworkTarget::LibraryAllCover { index } => {
-            let model = window.global::<crate::LibraryAllState>().get_items_visible();
-            if let Some(mut item) = model.row_data(index) {
-                item.image = image;
-                model.set_row_data(index, item);
+        ArtworkTarget::LibraryAllById { key, gen } => {
+            // The job is done either way — free its in-flight slot so the
+            // window dispatcher can re-request it after an eviction.
+            crate::library_all::artwork_job_done(&key);
+            // Drop the cover if a reload superseded the set it belongs to.
+            if !crate::library_all::library_all_gen_current(gen) {
+                return;
             }
+            // Set by key onto the full set + visible rows.
+            crate::library_all::set_library_all_artwork(window, &key, image);
         }
         ArtworkTarget::ArtistLibraryTrack { index } => {
             let model = window.global::<ArtistState>().get_library_tracks();

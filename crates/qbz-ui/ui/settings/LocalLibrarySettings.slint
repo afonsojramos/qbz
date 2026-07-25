@@ -9,7 +9,7 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { LibraryFoldersState, LibraryManageActions, LibraryScanState, PlexSettingsState, PlexAuthActions , UiFocusState, LocalLibraryState, LocalLibraryActions } from "../state.slint";
+import { LibraryFoldersState, LibraryManageActions, LibraryScanState, PlexSettingsState, PlexAuthActions , UiFocusState, LocalLibraryState, LocalLibraryActions, LibraryAllState, LibraryAllActions } from "../state.slint";
 import { SettingRow } from "SettingRow.slint";
 import { QbzIcon } from "../primitives/QbzIcon.slint";
 import { QbzCheckbox } from "../primitives/QbzCheckbox.slint";
@@ -441,6 +441,33 @@ export component LocalLibrarySettings inherits VerticalLayout {
                 current-index: LocalLibraryState.albums-id-mode == "metadata" ? 1 : 0;
                 selected(i) => {
                     LocalLibraryActions.albums-set-id-mode(i == 1 ? "metadata" : "folder");
+                }
+            }
+        }
+    }
+
+    Rectangle { height: 22px; }
+
+    // --- Library › All feed -------------------------------------------------
+    // The All view's toolbar hard-drive toggle filters local items in/out;
+    // THIS row picks what "local" means in the feed (owner 2026-07-24):
+    // hearted items only, or the entire local library.
+    GroupHeader { text: @tr("LIBRARY › ALL"); }
+    SettingRow {
+        label: @tr("Local items in Library All");
+        description: @tr("Favorited items only: what you hearted. Entire local library: every folder and Plex album, artist and track.");
+        VerticalLayout {
+            alignment: center;
+            QbzSelect {
+                menu-width: 210px;
+                sm: true;
+                options: [
+                    @tr("Favorited items only"),
+                    @tr("Entire local library"),
+                ];
+                current-index: LibraryAllState.local-scope == "all" ? 1 : 0;
+                selected(i) => {
+                    LibraryAllActions.set-local-scope(i == 1 ? "all" : "favorites");
                 }
             }
         }

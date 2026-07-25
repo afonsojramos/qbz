@@ -677,7 +677,7 @@ pub fn clear_album_filter(window: &AppWindow) {
 /// disabled OR the data dir is unavailable, so the Albums union degrades to
 /// local-only (identical behaviour to before Plex existed). Mirrors the Tauri
 /// command's resolution (`commands_v2/library.rs`).
-fn plex_cache_db_path() -> Option<std::path::PathBuf> {
+pub(crate) fn plex_cache_db_path() -> Option<std::path::PathBuf> {
     if !crate::plex_settings::get().enabled {
         return None;
     }
@@ -737,7 +737,7 @@ pub fn invalidate_artists(window: &AppWindow) {
 /// one shot (search/sort/filter/group are all derived client-side over the
 /// cached set in `derive_albums`), so we request a single large page rather
 /// than truly paginating. `total` from the page is informational here.
-const ALBUMS_FULL_LOAD_LIMIT: u64 = 1_000_000;
+pub(crate) const ALBUMS_FULL_LOAD_LIMIT: u64 = 1_000_000;
 
 /// The user's album-identity mode (Albums tab dropdown / Settings, persisted
 /// in locallibrary_ui.json). Read on the UI thread and captured into the
