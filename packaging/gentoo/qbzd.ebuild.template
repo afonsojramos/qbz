@@ -1,0 +1,79 @@
+# Copyright 2024-2026 Gentoo Authors
+# Distributed under the terms of the MIT License
+
+EAPI=8
+
+inherit xdg
+
+DESCRIPTION="QBZ headless Qobuz daemon for servers and appliances (source build)"
+HOMEPAGE="https://qbz.lol https://github.com/vicrodh/qbz"
+
+MY_PV="${PV}"
+SRC_URI="https://github.com/vicrodh/qbz/archive/refs/tags/v${MY_PV}.tar.gz -> ${P}.tar.gz"
+
+LICENSE="MIT"
+SLOT="0"
+KEYWORDS="~amd64 ~arm64"
+IUSE="pipewire pulseaudio"
+RESTRICT="mirror network-sandbox"
+
+# qbzd is slint-free: the measured link set is libasound only. pipewire /
+# pulseaudio are the runtime device-enumeration helpers (bit-perfect
+# sample-rate queries and DAC detection, same audio stack as the desktop).
+RDEPEND="
+	media-libs/alsa-lib
+	pipewire? (
+		media-video/pipewire[pipewire-alsa]
+	)
+	pulseaudio? (
+		media-libs/libpulse
+	)
+"
+
+BDEPEND="
+	dev-lang/rust
+	virtual/pkgconfig
+"
+
+PDEPEND="
+	media-sound/alsa-utils
+"
+
+S="${WORKDIR}/qbz-${MY_PV}"
+
+src_compile() {
+	# qbzd is minutes-class (no qbz_ui compilation unit) — the default job
+	# count is fine here, unlike the desktop package.
+	cargo build --release \
+		--manifest-path crates/Cargo.toml -p qbzd || die "cargo build failed"
+}
+
+src_install() {
+	dobin "crates/target/release/qbzd"
+
+	# systemd USER unit (opt-in; needs `loginctl enable-linger` to outlive
+	# the login session).
+	insinto /usr/lib/systemd/user
+	doins crates/qbzd/service/qbzd.service
+
+	# Shell completions shipped by the daemon itself.
+	"crates/target/release/qbzd" completions bash > "${T}/qbzd.bash" || die
+	"crates/target/release/qbzd" completions zsh  > "${T}/_qbzd" || die
+	"crates/target/release/qbzd" completions fish > "${T}/qbzd.fish" || die
+	insinto /usr/share/bash-completion/completions
+	newins "${T}/qbzd.bash" qbzd
+	insinto /usr/share/zsh/site-functions
+	newins "${T}/_qbzd" _qbzd
+	insinto /usr/share/fish/vendor_completions.d
+	newins "${T}/qbzd.fish" qbzd
+}
+
+pkg_postinst() {
+	elog "Run 'qbzd' once for the setup wizard (or 'qbzd tui')."
+	elog "Optional user service (starts at login):"
+	elog "  systemctl --user enable --now qbzd.service"
+	elog "  loginctl enable-linger \${USER}   # keep it running after logout"
+	elog ""
+	elog "For bit-perfect audio playback, ensure your user is in the 'audio' group:"
+	elog "  usermod -aG audio \${USER}"
+}
