@@ -110,14 +110,15 @@ export component PlaylistDuplicateConfirmModal inherits Rectangle {
                         }
                     }
                     // Add only new tracks — skips the duplicates
-                    // (executeAddTracks(true)). Disabled when there is
-                    // nothing left to add (all dupes).
+                    // (executeAddTracks(true)). Always the primary continue
+                    // action (#655): with all-dupes it adds zero and closes
+                    // (the Rust arm handles the empty set), so it must not
+                    // disable — the mixed-case primary disappearing under
+                    // the user's finger was the bug.
                     QbzPrimaryButton {
                         label: DuplicateConfirmState.busy ? @tr("Adding...") : @tr("Add only new tracks");
                         height: 34px;
-                        enabled: !DuplicateConfirmState.busy
-                            && DuplicateConfirmState.duplicate-count
-                                < DuplicateConfirmState.total-count;
+                        enabled: !DuplicateConfirmState.busy;
                         clicked => {
                             DuplicateConfirmActions.add-new-only();
                         }

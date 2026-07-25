@@ -67,6 +67,26 @@ impl core::fmt::Display for FrameSkipped {
 
 impl std::error::Error for FrameSkipped {}
 
+/// QBZ vendor patch (issue #558): presented-frames counter feeding the
+/// render-liveness watchdog in the qbz crate. A backend can be ALIVE yet
+/// wedged — the #558 Outdated-surface skip loop above skips every frame
+/// forever while the process looks healthy, and the crash-chain ladder only
+/// escalates on DEATH, so a silent wedge never degrades. The watchdog reads
+/// this a few seconds after startup: zero presented frames with a visible
+/// window = escalate the degradation ladder and restart on the next rung.
+static FRAMES_PRESENTED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// Total frames successfully presented by the active backend since process
+/// start. Read by the qbz render-liveness watchdog (#558).
+pub fn frames_presented() -> u64 {
+    FRAMES_PRESENTED.load(core::sync::atomic::Ordering::Relaxed)
+}
+
+/// Watchdog hook — each backend's `present_surface` calls this on success.
+pub(crate) fn note_frame_presented() {
+    FRAMES_PRESENTED.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+}
+
 pub trait GraphicsBackend {
     type Renderer: femtovg::Renderer + TextureImporter;
     type WindowSurface: WindowSurface<Self::Renderer>;
