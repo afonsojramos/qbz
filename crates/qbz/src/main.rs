@@ -62,6 +62,8 @@ mod library_by_artist;
 mod library_by_label;
 mod link_resolver;
 mod miniplayer;
+mod gamepad;
+mod steam_osk;
 mod location_view;
 mod mix;
 mod musician;
@@ -249,13 +251,15 @@ fn init_shell_for_user(
     // Create the system tray from this user's persisted settings (gated by
     // enable_tray). Reflects the chosen icon variant. On Linux the ksni
     // service runs on its own thread; macOS/Windows are no-ops until the
-    // tray-icon slice lands.
+    // tray-icon slice lands. Suppressed under gamescope (Steam Deck Game
+    // Mode): extra mapped windows / tray surfaces can steal gamescope's
+    // focused-window pick (Steam Deck plan PR 1).
     tray::init(
         runtime.clone(),
         weak.clone(),
         tokio::runtime::Handle::current(),
         tray.tray_icon_theme.clone(),
-        tray.enable_tray,
+        tray.enable_tray && !in_gamescope(),
     );
 
     // System media controls — MPRIS on Linux (publishes DesktopEntry so GNOME
@@ -2230,6 +2234,13 @@ fn toggle_track_favorite(
     handle: tokio::runtime::Handle,
     id: String,
 ) {
+    // Local/Plex rows route to the local-favorites store — their ids are file
+    // paths / plex keys, dead on the Qobuz favorite API (works offline too).
+    if let Some(w) = weak.upgrade() {
+        if library_all::toggle_local_feed_favorite(&w, "track", &id).is_some() {
+            return;
+        }
+    }
     if offline_mode::engine().is_offline() {
         if let Some(w) = weak.upgrade() {
             toast::info(&w, "Not available offline");
@@ -2246,6 +2257,8 @@ fn toggle_track_favorite(
     }
     if let Some(w) = weak.upgrade() {
         set_row_favorite(&w, &id, make_fav);
+        // Library "All" carries its own item struct — flip its heart too.
+        library_all::set_feed_favorite(&w, "track", &id, make_fav);
     }
     handle.spawn(async move {
         let res = if make_fav {
@@ -2270,6 +2283,7 @@ fn toggle_track_favorite(
             }
             let _ = weak.upgrade_in_event_loop(move |w| {
                 set_row_favorite(&w, &id, was_fav);
+                library_all::set_feed_favorite(&w, "track", &id, was_fav);
             });
         }
     });
@@ -4280,15 +4294,13 @@ fn navigate_library_all(
         });
         match library_all::load_library_all(&runtime).await {
             Ok(feed) => {
-                let weak_j = weak.clone();
                 let ic = image_cache.clone();
                 let _ = weak.upgrade_in_event_loop(move |w| {
+                    // Reset the windowed artwork pipeline (gen bump + cache
+                    // ctx) BEFORE the new set lands; the derive inside apply
+                    // then dispatches covers for the current window only.
+                    library_all::begin_library_all_artwork(ic.clone());
                     library_all::apply_library_all(&w, feed);
-                    let jobs = library_all::artwork_jobs(&w);
-                    // Mixed payload (Qobuz http / local fs / Plex /library/) —
-                    // route each cover by scheme so local/Plex covers decode.
-                    let plex = crate::plex_settings::get();
-                    artwork::spawn_search_loads(jobs, plex.base_url, plex.token, weak_j.clone(), ic.clone());
                 });
             }
             Err(e) => {
@@ -4868,6 +4880,63 @@ fn reconcile_sidebar_after_rename(
     });
 }
 
+/// Sidebar refresh after a playlist IMPORT (owner 2026-07-24): the
+/// authoritative `getUserPlaylists` read lags the create by seconds, so a
+/// single immediate reload shows nothing new (the user had to refresh
+/// manually). Optimistically insert the imported row NOW, then bounded-retry
+/// the load until the API lists the imported ids — the rename reconcile's
+/// schedule, with the optimistic row re-inserted if the API never catches up
+/// inside the window (a later natural load reconciles it for real).
+fn reconcile_sidebar_after_import(
+    runtime: Arc<AppRuntime<SlintAdapter>>,
+    weak: slint::Weak<AppWindow>,
+    handle: &tokio::runtime::Handle,
+    ids: Vec<u64>,
+    name: String,
+    tracks_count: u32,
+) {
+    const MAX_ATTEMPTS: u32 = 6;
+    if ids.is_empty() {
+        return;
+    }
+    // Optimistic insert NOW (single-playlist imports only — multi-part
+    // imports get their per-part names from the API once it catches up).
+    if ids.len() == 1 {
+        let n = name.clone();
+        let _ = weak.upgrade_in_event_loop(move |w| {
+            sidebar::insert_qobuz_entry(&w, ids[0], &n, tracks_count);
+        });
+    }
+    handle.spawn(async move {
+        let mut attempt = 0u32;
+        loop {
+            attempt += 1;
+            let data = sidebar::load(&runtime).await;
+            let present = ids
+                .iter()
+                .all(|id| data.playlists.iter().any(|p| p.id == *id));
+            if present || attempt >= MAX_ATTEMPTS {
+                if !present {
+                    log::warn!(
+                        "[playlist-import] sidebar list still missing the imported playlist \
+                         after {attempt} attempts; the optimistic row stays until the next load"
+                    );
+                }
+                let name2 = name.clone();
+                let _ = weak.upgrade_in_event_loop(move |w| {
+                    sidebar::apply(&w, data);
+                    if !present && ids.len() == 1 {
+                        sidebar::insert_qobuz_entry(&w, ids[0], &name2, tracks_count);
+                    }
+                    refresh_sidebar_covers(&w);
+                });
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(attempt as u64)).await;
+        }
+    });
+}
+
 /// (Re)spawn the per-playlist micro-collage cover downloads for the
 /// current `SidebarState.entries`. Called after any rebuild that replaces
 /// the rows (load / toggle / move / sort / search), since `set_row_data`
@@ -5192,7 +5261,18 @@ fn wire_playlist_manager(
             .global::<PlaylistManagerActions>()
             .on_set_sort(move |value| {
                 if let Some(w) = weak.upgrade() {
-                    w.global::<PlaylistManagerState>().set_sort(value);
+                    // PlaylistView-style toggle: re-selecting the ACTIVE
+                    // option flips its direction (#657 caret); a new option
+                    // starts at its natural direction.
+                    let st = w.global::<PlaylistManagerState>();
+                    let cur = st.get_sort().to_string();
+                    let asc = if cur == value.as_str() {
+                        !st.get_sort_asc()
+                    } else {
+                        true
+                    };
+                    st.set_sort(value);
+                    st.set_sort_asc(asc);
                     playlist_manager::rebuild(&w);
                     refresh_pm_covers(&w);
                 }
@@ -6994,6 +7074,96 @@ pub fn renderer_decision_summary() -> (String, String) {
     }
 }
 
+/// #558 render-liveness watchdog. A backend can be ALIVE yet wedged: the
+/// vendored femtovg-wgpu skip loop (Outdated surface after reconfigure, the
+/// UI-scale/resize race that never settles on the reporter's legacy NVIDIA
+/// stack) skips EVERY frame forever while the process looks healthy — and
+/// the crash-chain ladder only escalates on DEATH, so a silent wedge never
+/// degrades. Eight seconds after the window is up, read the presented-frames
+/// counter: zero frames with a visible window = re-arm the startup sentinel
+/// with the CURRENT rung's key and restart. The existing ladder in
+/// `renderer_tier_from_prefs` then walks the next rung exactly as if the
+/// wedged boot had died (auto-wgpu → alt adapter → GL → software; manual
+/// picks revert to auto), and its own toasts explain the switch. Software
+/// is the floor that cannot fail, so every wedged boot lands somewhere
+/// usable — a music player must never strand a user on a blank window
+/// debugging GPU tiers.
+fn arm_render_liveness_watchdog(window: &AppWindow) {
+    // The ladder lives on Linux (macOS has no GL tier); the floor needs no
+    // watchdog.
+    if cfg!(not(target_os = "linux")) {
+        return;
+    }
+    let Some(decision) = RENDERER_DECISION.get() else {
+        return;
+    };
+    let tier = decision.tier;
+    if tier == "software" {
+        return;
+    }
+    let weak = window.as_weak();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(8));
+        if i_slint_renderer_femtovg::frames_presented() > 0 {
+            return;
+        }
+        // The window may legitimately present nothing while hidden (closed
+        // to tray inside the 8s window) — never degrade on a false positive.
+        // (upgrade_in_event_loop's closure returns (), so the read rides an
+        // Arc slot rather than the Result.)
+        let visible = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let slot = visible.clone();
+        let _ = weak.upgrade_in_event_loop(move |w| {
+            slot.store(
+                w.window().is_visible(),
+                std::sync::atomic::Ordering::Relaxed,
+            );
+        });
+        if !visible.load(std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
+        // Re-arm the sentinel with the current rung's key so the NEXT boot's
+        // ladder walks one rung down:
+        //   auto wgpu        -> "auto-wgpu"      (next: alt adapter)
+        //   auto wgpu (alt)  -> "auto-wgpu-alt"  (next: persist GL)
+        //   ladder GL        -> "auto-gl"        (next: persist software)
+        //   manual wgpu/gl   -> the literal key  (next: revert to auto)
+        let prefs = crate::ui_prefs::load();
+        let sentinel_key = match prefs.renderer.as_str() {
+            "auto" => {
+                if WGPU_ALT_ADAPTER.load(std::sync::atomic::Ordering::Relaxed) {
+                    "auto-wgpu-alt"
+                } else {
+                    "auto-wgpu"
+                }
+            }
+            "gl" if !prefs.renderer_auto_degraded.is_empty() => "auto-gl",
+            manual => {
+                // Only meaningful for the wgpu/gl manual picks; the software
+                // floor never reaches the watchdog.
+                manual
+            }
+        };
+        log::warn!(
+            "[renderer-watchdog] 0 presented frames 8s after window-ready on tier \
+             {tier} — re-arming sentinel '{sentinel_key}' and restarting so the \
+             ladder walks one rung (#558)"
+        );
+        arm_renderer_sentinel(sentinel_key);
+        // Restart into the next rung. The delayed detached re-spawn keeps the
+        // single-instance guard from seeing this process as primary (the child
+        // must start AFTER we have fully exited).
+        if let Ok(exe) = std::env::current_exe() {
+            let mut cmd = format!("sleep 1; exec '{}'", exe.display());
+            for a in std::env::args().skip(1) {
+                cmd.push_str(&format!(" '{}'", a.replace('\'', "'\\''")));
+            }
+            let _ = std::process::Command::new("/bin/sh").arg("-c").arg(&cmd).spawn();
+        }
+        std::process::exit(0);
+    });
+}
+
 /// Startup auto-revert sentinel for a persisted (non-auto) renderer override.
 /// Armed BEFORE the risky backend init, disarmed a few seconds after the main
 /// window is up. If it survives to the next start, that start reverts the
@@ -8036,11 +8206,25 @@ pub(crate) fn restore_main_window_geometry(window: &AppWindow) {
     if has_saved_size || ui_scale_factor > 1.0 {
         let mut w = if has_saved_size { prefs.window_width } else { 1180.0 };
         let mut h = if has_saved_size { prefs.window_height } else { 760.0 };
-        let slint_scale = (window.window().scale_factor() as f64).max(0.01);
         window.window().with_winit_window(|win| {
             if let Some(mon) = win.current_monitor() {
-                let avail_w = (mon.size().width as f64 / slint_scale) as f32;
-                let avail_h = (mon.size().height as f64 / slint_scale) as f32;
+                // Effective Slint scale for the clamp: NEVER
+                // `window.scale_factor()` here — pre-creation on X11 it
+                // reports the X11/XWayland DPI (Xft.dpi), which can be
+                // wildly different from the monitor the window actually
+                // lands on (#654: the clamp shrank restored windows by that
+                // bogus factor and the Resized handler then re-saved the
+                // shrunken size — geometry "lost" on every restart).
+                // Default: the TARGET monitor's real DPR. Preset active:
+                // Slint's scale is last_dpr × preset (the env override
+                // ignores the compositor DPR entirely — see main()).
+                let eff_scale = if ui_scale_factor > 1.0 {
+                    prefs.last_dpr.max(0.5) as f64 * ui_scale_factor as f64
+                } else {
+                    mon.scale_factor()
+                };
+                let avail_w = (mon.size().width as f64 / eff_scale) as f32;
+                let avail_h = (mon.size().height as f64 / eff_scale) as f32;
                 if avail_w >= min_logical_w {
                     w = w.min(avail_w);
                 }
@@ -8081,7 +8265,69 @@ pub(crate) fn restore_main_window_geometry(window: &AppWindow) {
     }
 }
 
+/// Steam Deck Game Mode (gamescope) quirks — PR 1 of the Steam Deck plan
+/// (qbz-nix-docs/steam-deck/STEAM_DECK_GAME_MODE_PLAN.md §5). Runs at the
+/// very top of main(), BEFORE any Slint/winit initialization: it rewrites
+/// the environment those layers read.
+///
+/// In Game Mode QBZ runs as an XWayland client inside gamescope, which
+/// exports DISPLAY + GAMESCOPE_WAYLAND_DISPLAY but NOT WAYLAND_DISPLAY.
+/// winit's X11 DPI heuristic invents bogus scale factors on the Deck panel
+/// (winit #2401) and gamescope's focused-window scaling inverse-transforms
+/// pointer/touch through that scale (gamescope #1208/#1242) — clicks land
+/// offset. The fix is an identity transform: X11 backend + scale 1 +
+/// fullscreen kiosk, with UI legibility coming from QBZ's own ui_scale
+/// preset, never the OS scale factor.
+#[cfg(target_os = "linux")]
+fn apply_gamescope_quirks() -> bool {
+    let detected = std::env::var_os("GAMESCOPE_WAYLAND_DISPLAY").is_some()
+        || std::env::var("XDG_CURRENT_DESKTOP")
+            .map(|v| v.to_ascii_lowercase().contains("gamescope"))
+            .unwrap_or(false)
+        || std::env::var("XDG_SESSION_DESKTOP")
+            .map(|v| v.to_ascii_lowercase().contains("gamescope"))
+            .unwrap_or(false);
+    if !detected {
+        return false;
+    }
+    // winit's Wayland backend under gamescope produces an invisible window
+    // (winit #4152) — force the X11 path.
+    std::env::remove_var("WAYLAND_DISPLAY");
+    // Identity transform; a user-set value always wins.
+    if std::env::var_os("WINIT_X11_SCALE_FACTOR").is_none() {
+        std::env::set_var("WINIT_X11_SCALE_FACTOR", "1");
+    }
+    // Appliance defaults: kiosk profile + fullscreen (an explicit user
+    // choice always wins). No hardcoded 1280×800 — fullscreen adapts when
+    // docked.
+    if std::env::var_os("QBZ_PROFILE").is_none() {
+        std::env::set_var("QBZ_PROFILE", "kiosk");
+    }
+    if std::env::var_os("QBZ_KIOSK_FULLSCREEN").is_none() {
+        std::env::set_var("QBZ_KIOSK_FULLSCREEN", "1");
+    }
+    // Marker for the later gates (tray + miniplayer suppression) — extra
+    // mapped windows can steal gamescope's focused-window pick.
+    std::env::set_var("QBZ_GAMESCOPE", "1");
+    true
+}
+
+/// True when running under gamescope (Steam Deck Game Mode). Stateless:
+/// `apply_gamescope_quirks` sets the marker at boot, and the raw
+/// `GAMESCOPE_WAYLAND_DISPLAY` env is inherited by the watchdog's re-spawn.
+pub(crate) fn in_gamescope() -> bool {
+    std::env::var_os("QBZ_GAMESCOPE").is_some()
+        || std::env::var_os("GAMESCOPE_WAYLAND_DISPLAY").is_some()
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Steam Deck Game Mode (gamescope) quirks — PR 1 of the Steam Deck plan
+    // (qbz-nix-docs/steam-deck/STEAM_DECK_GAME_MODE_PLAN.md §5). FIRST: it
+    // rewrites the environment (WAYLAND_DISPLAY / WINIT_X11_SCALE_FACTOR /
+    // kiosk profile + fullscreen) before the scale block, the logger, or ANY
+    // Slint/winit initialization reads it.
+    #[cfg(target_os = "linux")]
+    let gamescope = apply_gamescope_quirks();
     // UI SCALE PRESET — must run FIRST: SLINT_SCALE_FACTOR has to be in the
     // environment before the backend/window exist (winit reads it at window
     // creation), and `set_var` must run before any thread spawns (the tokio
@@ -8104,6 +8350,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // file, all redacted at the write choke point. Feeds the in-app log viewer and
     // the diagnostics bundle. Honours RUST_LOG (default "info").
     qbz_log::install("info");
+    #[cfg(target_os = "linux")]
+    if gamescope {
+        log::info!(
+            "[gamescope] Steam Game Mode detected: X11 backend, scale 1, kiosk fullscreen, tray+miniplayer suppressed"
+        );
+    }
     if ui_scale_factor != 1.0 {
         log::info!(
             "[ui-scale] preset factor {ui_scale_factor} -> SLINT_SCALE_FACTOR={}",
@@ -8234,6 +8486,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Event-loop responsiveness watchdog (#555): background probe thread,
     // read by the Diagnostics panel. Detection only — never switches tiers.
     ui_watchdog::spawn();
+    // Gamepad nav (Steam Deck plan PR 3): gilrs thread feeding synthetic
+    // arrow/Enter/Escape keys into PR 2's kiosk FocusScope. Only on the
+    // kiosk profile or when forced — a desktop session has no use for it.
+    if kiosk_profile_active() || std::env::var_os("QBZ_GAMEPAD").is_some() {
+        gamepad::spawn(window.as_weak());
+    }
+    // Steam OSK (Steam Deck plan PR 4): open/close the Steam keyboard as text
+    // fields gain/lose focus. The gate (SteamDeck env / QBZ_STEAM_OSK) is
+    // checked inside, so this is always safe to wire.
+    window.global::<UiFocusState>().on_osk(move |focused, mode| {
+        steam_osk::focus_changed(focused, mode);
+    });
     // Persist the REAL compositor DPR as `last_dpr` once the surface is
     // mapped (winit reports the true value there — unlike right after
     // creation on Wayland). Read from the WINIT window, not the Slint one:
@@ -8489,6 +8753,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         appearance.set_local_library_track_artwork(prefs.local_library_track_artwork);
         appearance.set_in_app_toasts(prefs.in_app_toasts);
         appearance.set_theme_filter(prefs.theme_filter);
+        appearance.set_play_indicator_animation(prefs.play_indicator_animation);
+        appearance.set_invert_swipe_navigation(prefs.invert_swipe_navigation);
         window
             .global::<SidebarState>()
             .set_playlist_collage(prefs.sidebar_playlist_collage);
@@ -10948,6 +11214,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 prefs.in_app_toasts = value;
                 crate::ui_prefs::save(&prefs);
             }
+            "play-indicator-animation" => {
+                let mut prefs = crate::ui_prefs::load();
+                prefs.play_indicator_animation = value;
+                crate::ui_prefs::save(&prefs);
+            }
+            "invert-swipe-navigation" => {
+                let mut prefs = crate::ui_prefs::load();
+                prefs.invert_swipe_navigation = value;
+                crate::ui_prefs::save(&prefs);
+            }
             other => log::debug!("[qbz-slint] unhandled appearance-bool '{other}'"),
         });
         let theme_weak = window.as_weak();
@@ -11427,7 +11703,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 ("npb-view", "miniplayer") => {
-                    crate::miniplayer::enter();
+                    // Suppressed under gamescope (Steam Deck Game Mode PR 1):
+                    // an extra mapped window can steal the focused-window pick.
+                    if !in_gamescope() {
+                        crate::miniplayer::enter();
+                    }
                 }
                 // Large (mode 3) — docks the cover + spectrum at the bottom of
                 // the OPEN sidebar, so force the sidebar to its open state before
@@ -11733,6 +12013,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     id.clone(),
                 ),
                 ("album", "favorite") => {
+                    // Local/Plex feed rows route to the local-favorites store —
+                    // group keys are dead on the Qobuz favorite API.
+                    if let Some(w) = weak.upgrade() {
+                        if library_all::toggle_local_feed_favorite(&w, "album", &id).is_some() {
+                            return;
+                        }
+                    }
                     // Album-card heart + "…" menu entry: a TRUE TOGGLE keyed
                     // off the favorite-album cache (filled heart → remove,
                     // empty → add), mirroring the header "favorite-toggle"
@@ -11748,6 +12035,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let new_state = !was_fav;
                     if let Some(w) = weak.upgrade() {
                         set_album_row_favorite(&w, &id, new_state);
+                        // The Library "All" feed has its own item struct — it
+                        // doesn't ride set_album_row_favorite's AlbumCardItem
+                        // flips, so flip its heart here too.
+                        library_all::set_feed_favorite(&w, "album", &id, new_state);
                     }
                     let runtime = runtime.clone();
                     let weak = weak.clone();
@@ -11789,6 +12080,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 // pre-click state.
                                 let _ = weak.upgrade_in_event_loop(move |w| {
                                     set_album_row_favorite(&w, &album_id, was_fav);
+                                    library_all::set_feed_favorite(
+                                        &w, "album", &album_id, was_fav,
+                                    );
                                 });
                             }
                         }
@@ -11971,6 +12265,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     if let Ok(track_id) = id.parse::<u64>() {
                         playback::play_track_next(
+                            runtime.clone(),
+                            weak.clone(),
+                            handle.clone(),
+                            track_id,
+                        );
+                    }
+                }
+                ("track", "play-later") => {
+                    // #442 "Play later" — the end of the manual block (after
+                    // every play-next / play-later already queued), with the
+                    // same source-typed seam as play-next.
+                    if let Some(w) = weak.upgrade() {
+                        if snapshot_detail_open(&w) {
+                            if let Some(qt) = local_playlist::queue_track_for_row(&id) {
+                                if matches!(qt.source.as_deref(), Some("local") | Some("plex")) {
+                                    playback::enqueue_queue_tracks_later(
+                                        runtime.clone(),
+                                        weak.clone(),
+                                        handle.clone(),
+                                        vec![qt],
+                                    );
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                    if let Ok(track_id) = id.parse::<u64>() {
+                        playback::play_track_later(
                             runtime.clone(),
                             weak.clone(),
                             handle.clone(),
@@ -12554,6 +12876,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     id.clone(),
                 ),
                 ("artist", "follow") => {
+                    // Local artists are name-keyed — the local-favorites store,
+                    // never the Qobuz API (the parse below would just no-op).
+                    if let Some(w) = weak.upgrade() {
+                        if library_all::toggle_local_feed_favorite(&w, "artist", &id).is_some() {
+                            return;
+                        }
+                    }
                     // Toggle the artist follow (= Qobuz artist favorite). State
                     // source = the in-memory artist fav cache (seeded by search +
                     // the artist page). Optimistic flip on the cache + every
@@ -12564,6 +12893,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let make = !following;
                         crate::fav_cache::set_artist(aid, make);
                         search::mark_artist_followed(&w, &id, make);
+                        // Library "All" carries its own item struct — flip its
+                        // follow state too.
+                        library_all::set_feed_favorite(&w, "artist", &id, make);
                         let ast = w.global::<ArtistState>();
                         if ast.get_id().as_str() == id.as_str() {
                             ast.set_is_following(make);
@@ -12593,6 +12925,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     crate::fav_cache::set_artist(aid, following);
                                     let _ = weak.upgrade_in_event_loop(move |w| {
                                         search::mark_artist_followed(&w, &artist_id, following);
+                                        library_all::set_feed_favorite(
+                                            &w,
+                                            "artist",
+                                            &artist_id,
+                                            following,
+                                        );
                                         let ast = w.global::<ArtistState>();
                                         if ast.get_id().as_str() == artist_id.as_str() {
                                             ast.set_is_following(following);
@@ -12914,6 +13252,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                     });
+                }
+                ("album", "toggle-select") => {
+                    // Albums LIST-mode multi-select (Favorites): flip the row
+                    // across the flat + grouped models.
+                    if let Some(w) = weak.upgrade() {
+                        favorites::toggle_select_album(&w, &id);
+                    }
                 }
                 ("track", "toggle-select") => {
                     // Plain / Ctrl+Click = single per-row toggle; Shift+Click =
@@ -17259,7 +17604,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if genre_filter::current_context() == "library-all" {
                     let runtime_f = runtime.clone();
                     let weak_f = weak.clone();
-                    let image_cache_f = image_cache.clone();
                     let id_f = id.to_string();
                     handle.spawn(async move {
                         if !was_selected {
@@ -17269,16 +17613,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         let _ = weak_f.upgrade_in_event_loop(move |w| {
                             genre_filter::apply_state(&w);
+                            // derive re-dispatches covers for the window itself.
                             library_all::derive(&w);
-                            let jobs = library_all::artwork_jobs(&w);
-                            let plex = crate::plex_settings::get();
-                            artwork::spawn_search_loads(
-                                jobs,
-                                plex.base_url,
-                                plex.token,
-                                w.as_weak(),
-                                image_cache_f.clone(),
-                            );
                         });
                     });
                     return;
@@ -17413,16 +17749,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 };
                 genre_filter::apply_state(&w);
                 if genre_filter::current_context() == "library-all" {
+                    // derive re-dispatches covers for the window itself.
                     library_all::derive(&w);
-                    let jobs = library_all::artwork_jobs(&w);
-                    let plex = crate::plex_settings::get();
-                    artwork::spawn_search_loads(
-                        jobs,
-                        plex.base_url,
-                        plex.token,
-                        w.as_weak(),
-                        image_cache.clone(),
-                    );
                     return;
                 }
                 if genre_filter::current_context() == "favorites" {
@@ -21413,7 +21741,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 if summary.matched_tracks > 0 {
                                     toast::show(&w, "Playlist imported", ToastKind::Success);
                                 }
-                                load_sidebar_playlists(r2.clone(), weak2.clone(), &h2);
+                                // Sidebar refresh with API-lag tolerance:
+                                // optimistic row now, bounded-retry reload
+                                // until the API lists the new playlist.
+                                reconcile_sidebar_after_import(
+                                    r2.clone(),
+                                    weak2.clone(),
+                                    &h2,
+                                    summary.qobuz_playlist_ids.clone(),
+                                    summary.playlist_name.clone(),
+                                    summary.matched_tracks as u32,
+                                );
                                 if let Some(first) = summary.qobuz_playlist_ids.first() {
                                     // Navigate only while the modal is still
                                     // open AND this run is current (§1.8).
@@ -21884,31 +22222,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             });
     }
+    {
+        // All-feed ArtistGridCard follow button → the shared ("artist", …)
+        // media-action arm (optimistic flip + rollback live there).
+        let weak = window.as_weak();
+        window
+            .global::<FavoritesActions>()
+            .on_artist_action(move |id, action| {
+                if let Some(w) = weak.upgrade() {
+                    w.invoke_media_action("artist".into(), id, action);
+                }
+            });
+    }
     // ── Library "All" mixed feed — toolbar handlers ──
     {
         let weak = window.as_weak();
-        let image_cache = image_cache.clone();
         window.global::<LibraryAllActions>().on_search(move |q| {
             if let Some(w) = weak.upgrade() {
                 w.global::<LibraryAllState>().set_search(q);
+                // derive re-dispatches covers for the current window itself.
                 library_all::derive(&w);
-                let jobs = library_all::artwork_jobs(&w);
-                let plex = crate::plex_settings::get();
-                artwork::spawn_search_loads(jobs, plex.base_url, plex.token, weak.clone(), image_cache.clone());
             }
         });
     }
     {
         let weak = window.as_weak();
-        let image_cache = image_cache.clone();
         window.global::<LibraryAllActions>().on_set_sort(move |key| {
             if let Some(w) = weak.upgrade() {
                 // Re-selecting the active field toggles asc/desc (PlaylistView
                 // pattern); a new field resets to its natural direction.
                 library_all::set_sort(&w, key.as_str());
-                let jobs = library_all::artwork_jobs(&w);
-                let plex = crate::plex_settings::get();
-                artwork::spawn_search_loads(jobs, plex.base_url, plex.token, weak.clone(), image_cache.clone());
             }
         });
     }
@@ -21922,7 +22265,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     {
         let weak = window.as_weak();
-        let image_cache = image_cache.clone();
         window
             .global::<LibraryAllActions>()
             .on_toggle_source(move |which| {
@@ -21932,13 +22274,54 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "purchases" => st.set_show_purchases(!st.get_show_purchases()),
                         "favorites" => st.set_show_favorites(!st.get_show_favorites()),
                         "following" => st.set_show_following(!st.get_show_following()),
-                        "local" => st.set_show_local(!st.get_show_local()),
+                        "local" => {
+                            st.set_show_local(!st.get_show_local());
+                            // The toolbar filter is the persisted one (owner
+                            // 2026-07-24: the toggle stays in the view).
+                            favorites_prefs::save(&w);
+                        }
                         _ => {}
                     }
                     library_all::derive(&w);
-                    let jobs = library_all::artwork_jobs(&w);
-                    let plex = crate::plex_settings::get();
-                    artwork::spawn_search_loads(jobs, plex.base_url, plex.token, weak.clone(), image_cache.clone());
+                }
+            });
+    }
+    {
+        // Settings > Local Library: the local SCOPE of the feed (favorites ⇄
+        // whole local library). Persist + reload the feed.
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
+        window
+            .global::<LibraryAllActions>()
+            .on_set_local_scope(move |scope| {
+                let scope = if scope.as_str() == "all" {
+                    "all"
+                } else {
+                    "favorites"
+                };
+                if let Some(w) = weak.upgrade() {
+                    w.global::<LibraryAllState>().set_local_scope(scope.into());
+                }
+                favorites_prefs::set_local_scope(scope);
+                navigate_library_all(
+                    runtime.clone(),
+                    weak.clone(),
+                    &handle,
+                    image_cache.clone(),
+                );
+            });
+    }
+    {
+        // Windowed grid/list: dispatch covers for the reported row band and
+        // evict the ones far outside it.
+        let weak = window.as_weak();
+        window
+            .global::<LibraryAllActions>()
+            .on_window_changed(move |first, last| {
+                if let Some(w) = weak.upgrade() {
+                    library_all::window_changed(&w, first, last);
                 }
             });
     }
@@ -21989,10 +22372,109 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .on_albums_set_view(move |v| {
                 if let Some(w) = weak.upgrade() {
                     w.global::<FavoritesState>().set_albums_view_mode(v);
+                    // Multi-select is list-mode only — leaving it clears it.
+                    if w.global::<FavoritesState>().get_albums_view_mode().as_str() != "list" {
+                        favorites::set_albums_multi_select(&w, false);
+                    }
                     // Switching to the (non-windowed) list view needs covers
                     // the grid's window may have evicted.
                     favorites::albums_view_mode_changed(&w);
                     favorites_prefs::save(&w);
+                }
+            });
+    }
+    {
+        // Albums LIST-mode multi-select: enter/leave the edit mode.
+        let weak = window.as_weak();
+        window
+            .global::<FavoritesActions>()
+            .on_albums_toggle_multi_select(move || {
+                if let Some(w) = weak.upgrade() {
+                    let on = !w.global::<FavoritesState>().get_albums_multi_select();
+                    favorites::set_albums_multi_select(&w, on);
+                }
+            });
+    }
+    {
+        // Albums LIST-mode bulk bar: select-all / play-next / queue /
+        // remove-selected (bulk un-favorite) / clear.
+        let runtime = app_runtime.clone();
+        let weak = window.as_weak();
+        let handle = tokio_rt.handle().clone();
+        let image_cache = image_cache.clone();
+        window
+            .global::<FavoritesActions>()
+            .on_albums_bulk_action(move |action| {
+                let Some(w) = weak.upgrade() else {
+                    return;
+                };
+                match action.as_str() {
+                    "select-all" => favorites::select_all_albums(&w),
+                    "clear" => favorites::clear_albums_selection(&w),
+                    "queue" => {
+                        for id in favorites::selected_album_ids(&w) {
+                            playback::enqueue_album(
+                                runtime.clone(),
+                                weak.clone(),
+                                handle.clone(),
+                                id,
+                            );
+                        }
+                    }
+                    "play-next" => {
+                        // Each album inserts right after the current track —
+                        // iterate in REVERSE so the queue order matches the
+                        // selection order.
+                        let mut ids = favorites::selected_album_ids(&w);
+                        ids.reverse();
+                        for id in ids {
+                            playback::enqueue_album_next(
+                                runtime.clone(),
+                                weak.clone(),
+                                handle.clone(),
+                                id,
+                            );
+                        }
+                    }
+                    "remove-selected" => {
+                        // Offline = read-only hearts (same rule as tracks).
+                        if offline_mode::engine().is_offline() {
+                            toast::info(&w, "Not available offline");
+                            return;
+                        }
+                        let ids = favorites::selected_album_ids(&w);
+                        if ids.is_empty() {
+                            return;
+                        }
+                        let runtime = runtime.clone();
+                        let weak = weak.clone();
+                        let handle = handle.clone();
+                        let image_cache = image_cache.clone();
+                        handle.clone().spawn(async move {
+                            for id in &ids {
+                                if let Err(e) =
+                                    runtime.core().remove_favorite("album", id).await
+                                {
+                                    log::error!(
+                                        "[qbz-slint] bulk remove favorite album {id} failed: {e}"
+                                    );
+                                }
+                                crate::fav_cache::set_album(id, false);
+                            }
+                            let _ = weak.upgrade_in_event_loop(|w| {
+                                favorites::set_albums_multi_select(&w, false);
+                            });
+                            navigate_favorites(
+                                runtime.clone(),
+                                weak.clone(),
+                                &handle,
+                                image_cache.clone(),
+                                favorites::FavTab::Albums,
+                                "albums",
+                            );
+                        });
+                    }
+                    _ => {}
                 }
             });
     }
@@ -22536,6 +23018,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     log::info!("[qbz-slint] window ready");
+    // #558 render-liveness watchdog: if the backend is alive but wedged (zero
+    // presented frames 8s from now), self-degrade one rung and restart.
+    arm_render_liveness_watchdog(&window);
     // NOT `window.run()`: that quits the event loop when the last window
     // closes, which would kill the app the moment the window hides to tray.
     // `run_event_loop_until_quit()` keeps the loop alive until an explicit
