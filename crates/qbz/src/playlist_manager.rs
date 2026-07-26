@@ -625,7 +625,7 @@ pub fn rebuild(window: &AppWindow) {
     // Tree rows (folder headers + nested + root playlists). Built only
     // when the tree view is active; otherwise an empty model.
     let tree = if folder_mode && view_mode == "tree" {
-        build_tree(&data, &query, &filter, &sort)
+        build_tree(&data, &query, &filter, &sort, sort_asc)
     } else {
         Vec::new()
     };
@@ -677,7 +677,7 @@ pub fn search_menu_folders(window: &AppWindow, query: &str) {
 
 /// Flatten folders + their (expanded) playlists + root playlists into the
 /// tree model. Auto-expands all folders the first time the tree opens.
-fn build_tree(data: &PmData, query: &str, filter: &str, sort: &str) -> Vec<PmTreeRow> {
+fn build_tree(data: &PmData, query: &str, filter: &str, sort: &str, sort_asc: bool) -> Vec<PmTreeRow> {
     // Auto-expand on first tree open (Tauri's treeInitialized).
     {
         let mut init = TREE_INIT.lock().unwrap_or_else(|e| e.into_inner());

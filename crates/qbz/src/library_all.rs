@@ -382,10 +382,8 @@ fn all_local_blocking() -> Vec<Feed> {
             plex_path.as_deref(),
             group_mode,
         )
-        .ok()
         .map(|p| p.albums)
     })
-    .flatten()
     .unwrap_or_default();
     let n = albums.len();
     for (i, a) in albums.into_iter().enumerate() {
@@ -419,8 +417,7 @@ fn all_local_blocking() -> Vec<Feed> {
 
     // --- Artists — local DB names + names that only exist on Plex tracks
     // (a local + Plex artist of the same name counts once). ---
-    let local_artist_names: Vec<String> = crate::library_db::with_db(|db| db.get_artists().ok())
-        .flatten()
+    let local_artist_names: Vec<String> = crate::library_db::with_db(|db| db.get_artists())
         .unwrap_or_default()
         .into_iter()
         .map(|a| a.name)
@@ -477,9 +474,7 @@ fn all_local_blocking() -> Vec<Feed> {
     loop {
         let rows = crate::library_db::with_db(|db| {
             db.search_with_filter_page("", offset, PAGE, false, exclude_network, "default")
-                .ok()
-        })
-        .flatten();
+        });
         let Some(rows) = rows else { break };
         let full = rows.len() as u64 == PAGE;
         tracks.extend(rows);

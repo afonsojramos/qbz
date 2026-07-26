@@ -4899,12 +4899,14 @@ fn reconcile_sidebar_after_import(
     if ids.is_empty() {
         return;
     }
+    let first = ids[0];
+    let single = ids.len() == 1;
     // Optimistic insert NOW (single-playlist imports only — multi-part
     // imports get their per-part names from the API once it catches up).
-    if ids.len() == 1 {
+    if single {
         let n = name.clone();
         let _ = weak.upgrade_in_event_loop(move |w| {
-            sidebar::insert_qobuz_entry(&w, ids[0], &n, tracks_count);
+            sidebar::insert_qobuz_entry(&w, first, &n, tracks_count);
         });
     }
     handle.spawn(async move {
@@ -4925,8 +4927,8 @@ fn reconcile_sidebar_after_import(
                 let name2 = name.clone();
                 let _ = weak.upgrade_in_event_loop(move |w| {
                     sidebar::apply(&w, data);
-                    if !present && ids.len() == 1 {
-                        sidebar::insert_qobuz_entry(&w, ids[0], &name2, tracks_count);
+                    if !present && single {
+                        sidebar::insert_qobuz_entry(&w, first, &name2, tracks_count);
                     }
                     refresh_sidebar_covers(&w);
                 });
