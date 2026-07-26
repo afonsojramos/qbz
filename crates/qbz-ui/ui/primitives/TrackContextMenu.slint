@@ -90,12 +90,8 @@ export component TrackContextMenu inherits PopupWindow {
             }
         }
         if !root.nav-only: ContextMenuItem {
-            icon: @image-url("../assets/icons/list-plus.svg");
-            // #442 hint: where the track lands (1-based position in the
-            // queue) — only while a queue exists.
-            label: QueueState.queue-length > 0
-                ? @tr("Play next") + "  ·  #\{QueueState.queue-current-index + 2}"
-                : @tr("Play next");
+            icon: @image-url("../assets/icons/list-start.svg");
+            label: @tr("Play next");
             clicked => {
                 root.media-action("track", root.track-id, "play-next");
             }
@@ -104,18 +100,14 @@ export component TrackContextMenu inherits PopupWindow {
         // play-next / play-later already queued, before the source resumes).
         if !root.nav-only: ContextMenuItem {
             icon: @image-url("../assets/icons/list-plus.svg");
-            label: QueueState.queue-length > 0
-                ? @tr("Play later") + "  ·  #\{QueueState.queue-current-index + 2 + QueueState.manual-count}"
-                : @tr("Play later");
+            label: @tr("Play later");
             clicked => {
                 root.media-action("track", root.track-id, "play-later");
             }
         }
         if !root.nav-only: ContextMenuItem {
             icon: @image-url("../assets/icons/list-end.svg");
-            label: QueueState.queue-length > 0
-                ? @tr("Add to queue") + "  ·  #\{QueueState.queue-length + 1}"
-                : @tr("Add to queue");
+            label: @tr("Add to queue");
             clicked => {
                 root.media-action("track", root.track-id, "queue");
             }

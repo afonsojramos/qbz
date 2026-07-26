@@ -4496,6 +4496,20 @@ pub fn toggle_play_pause(
             crate::session_persist::capture_and_save(&runtime).await;
             return;
         }
+        // Not playing — but a LOAD may be in flight: the engine reports
+        // is_playing=false until the stream starts, so a pause issued during
+        // the load window used to fall into the resume branch below and get
+        // swallowed (the track started anyway; the sleep inhibitor then
+        // stayed held with no successful pause to release it — #661).
+        // Cancelling the in-flight play is the only sane "pause" there.
+        let pending = PENDING_PLAY_ID.load(std::sync::atomic::Ordering::Relaxed);
+        if pending != 0 {
+            if let Err(e) = runtime.core().stop() {
+                log::error!("[qbz-slint] playback: stop-during-load failed: {e}");
+            }
+            clear_loading(&weak, pending);
+            return;
+        }
         // Not playing: resume an existing stream, or cold-start the current
         // queue track when nothing is loaded.
         if runtime.core().player().has_loaded_audio() {

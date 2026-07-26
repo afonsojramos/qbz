@@ -657,3 +657,6 @@ msgstr "Next in queue"
 
 msgid "Next up"
 msgstr "Next up"
+
+msgid "Removed {} tracks from favorites"
+msgstr "Removed {} tracks from favorites"

@@ -4875,3 +4875,6 @@ msgstr "Далее в очереди"
 
 msgid "Next up"
 msgstr "Далее"
+
+msgid "Removed {} tracks from favorites"
+msgstr "{} треков удалено из избранного"

@@ -4873,3 +4873,6 @@ msgstr "Volgende in de wachtrij"
 
 msgid "Next up"
 msgstr "Hierna"
+
+msgid "Removed {} tracks from favorites"
+msgstr "{} nummers verwijderd uit favorieten"

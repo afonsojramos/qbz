@@ -4849,3 +4849,6 @@ msgstr "キューの次"
 
 msgid "Next up"
 msgstr "次に再生"
+
+msgid "Removed {} tracks from favorites"
+msgstr "{} トラックをお気に入りから削除しました"

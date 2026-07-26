@@ -4861,3 +4861,6 @@ msgstr "Suivant dans la file d'attente"
 
 msgid "Next up"
 msgstr "À suivre"
+
+msgid "Removed {} tracks from favorites"
+msgstr "{} pistes retirées des favoris"

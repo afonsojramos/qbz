@@ -4861,3 +4861,6 @@ msgstr "Als Nächstes in der Warteschlange"
 
 msgid "Next up"
 msgstr "Als Nächstes"
+
+msgid "Removed {} tracks from favorites"
+msgstr "{} Titel aus Favoriten entfernt"

@@ -4891,3 +4891,6 @@ msgstr "Siguiente en la cola"
 
 msgid "Next up"
 msgstr "A continuación"
+
+msgid "Removed {} tracks from favorites"
+msgstr "Se quitaron {} tracks de favoritos"

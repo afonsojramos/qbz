@@ -315,14 +315,14 @@ export component PlaylistView inherits Rectangle {
     // Remove owner-only — followed playlists keep the queueing actions.
     property <[BulkAction]> bulk-actions-owner: [
         { id: "select-all", label: @tr("Select all"), icon: @image-url("../assets/icons/square-check-big.svg"), danger: false, needs-selection: false },
-        { id: "play-next-selected", label: @tr("Play next"), icon: @image-url("../assets/icons/list-plus.svg"), danger: false, needs-selection: true },
+        { id: "play-next-selected", label: @tr("Play next"), icon: @image-url("../assets/icons/list-start.svg"), danger: false, needs-selection: true },
         { id: "queue-selected", label: @tr("Add to queue"), icon: @image-url("../assets/icons/list-end.svg"), danger: false, needs-selection: true },
         { id: "add-selected-to-playlist", label: @tr("Add to playlist"), icon: @image-url("../assets/icons/list-music.svg"), danger: false, needs-selection: true },
         { id: "remove-selected", label: @tr("Remove"), icon: @image-url("../assets/icons/trash-2.svg"), danger: true, needs-selection: true },
     ];
     property <[BulkAction]> bulk-actions-follower: [
         { id: "select-all", label: @tr("Select all"), icon: @image-url("../assets/icons/square-check-big.svg"), danger: false, needs-selection: false },
-        { id: "play-next-selected", label: @tr("Play next"), icon: @image-url("../assets/icons/list-plus.svg"), danger: false, needs-selection: true },
+        { id: "play-next-selected", label: @tr("Play next"), icon: @image-url("../assets/icons/list-start.svg"), danger: false, needs-selection: true },
         { id: "queue-selected", label: @tr("Add to queue"), icon: @image-url("../assets/icons/list-end.svg"), danger: false, needs-selection: true },
         { id: "add-selected-to-playlist", label: @tr("Add to playlist"), icon: @image-url("../assets/icons/list-music.svg"), danger: false, needs-selection: true },
     ];

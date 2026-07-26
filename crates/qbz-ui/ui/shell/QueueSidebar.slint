@@ -621,17 +621,31 @@ export component QueueSidebar inherits Rectangle {
                                 for item[idx] in QueueState.upcoming-page: VerticalLayout {
                                     spacing: 0px;
                                     // #442 section header above the row (only on
-                                    // marked rows; "" everywhere else).
-                                    if item.section != "": Text {
-                                        text: item.section == "next-in-queue"
-                                            ? @tr("Next in queue")
-                                            : @tr("Next up");
-                                        color: Theme.text-muted;
-                                        font-size: 11px;
-                                        font-weight: Typography.semibold;
-                                        letter-spacing: 0.5px;
+                                    // marked rows; "" everywhere else). The
+                                    // indent icon marks the manual block's
+                                    // insertion point (list-indent-increase).
+                                    if item.section != "": HorizontalLayout {
+                                        spacing: 6px;
                                         height: 22px;
-                                        vertical-alignment: center;
+                                        if item.section == "next-in-queue": VerticalLayout {
+                                            alignment: center;
+                                            QbzIcon {
+                                                source: @image-url("../assets/icons/list-indent-increase.svg");
+                                                width: 13px;
+                                                height: 13px;
+                                                tint: Theme.accent;
+                                            }
+                                        }
+                                        Text {
+                                            text: item.section == "next-in-queue"
+                                                ? @tr("Next in queue")
+                                                : @tr("Next up");
+                                            color: Theme.text-muted;
+                                            font-size: 11px;
+                                            font-weight: Typography.semibold;
+                                            letter-spacing: 0.5px;
+                                            vertical-alignment: center;
+                                        }
                                     }
                                     QueueRow {
                                     item: item;

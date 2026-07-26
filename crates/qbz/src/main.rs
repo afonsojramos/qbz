@@ -19164,6 +19164,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         playback::enqueue_local_tracks(runtime.clone(), handle.clone(), rows, true);
                         local_library::clear_tracks_selection(&w);
                     }
+                    "remove-favorites" => {
+                        // Bulk local un-favorite (owner 2026-07-26): drop every
+                        // selected row from the local-favorites store (the
+                        // All-feed reads it back), flip the row hearts live.
+                        let rows = local_library::selected_local_tracks(&w);
+                        let model = w.global::<LocalLibraryState>().get_tracks();
+                        let n = rows.len();
+                        for t in &rows {
+                            let key = if t.source.as_deref() == Some("plex") {
+                                format!("plex:{}", t.file_path)
+                            } else {
+                                t.file_path.clone()
+                            };
+                            let _ = crate::local_favorites::unfavorite("track", &key);
+                            let row_id = t.id.to_string();
+                            for i in 0..model.row_count() {
+                                if let Some(mut item) = model.row_data(i) {
+                                    if item.id.as_str() == row_id {
+                                        item.is_favorite = false;
+                                        model.set_row_data(i, item);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        local_library::clear_tracks_selection(&w);
+                        crate::toast::success(
+                            &w,
+                            qbz_i18n::t_args("Removed {} tracks from favorites", &[&n.to_string()]),
+                        );
+                    }
                     "add-to-playlist" => {
                         // Source-aware refs: Plex rows ride as "plex:<key>",
                         // the rest as library row ids (resolved at insert).

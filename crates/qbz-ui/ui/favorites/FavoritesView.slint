@@ -1482,7 +1482,7 @@ export component FavoritesView inherits Rectangle {
                                             }
                                         }
                                         if item.kind == "track" || item.kind == "album" || item.kind == "playlist": ContextMenuItem {
-                                            icon: @image-url("../assets/icons/list-plus.svg");
+                                            icon: @image-url("../assets/icons/list-start.svg");
                                             label: @tr("Play next");
                                             clicked => {
                                                 if (item.kind == "track") { FavoritesActions.track-action(item.id, "play-next"); }
@@ -1562,7 +1562,7 @@ export component FavoritesView inherits Rectangle {
                     selected-count: FavoritesState.tracks-selected-count;
                     actions: [
                         { id: "select-all", label: @tr("Select all"), icon: @image-url("../assets/icons/square-check-big.svg"), danger: false, needs-selection: false },
-                        { id: "play-next", label: @tr("Play next"), icon: @image-url("../assets/icons/list-plus.svg"), danger: false, needs-selection: true },
+                        { id: "play-next", label: @tr("Play next"), icon: @image-url("../assets/icons/list-start.svg"), danger: false, needs-selection: true },
                         { id: "queue", label: @tr("Add to queue"), icon: @image-url("../assets/icons/list-end.svg"), danger: false, needs-selection: true },
                         { id: "add-to-playlist", label: @tr("Add to playlist"), icon: @image-url("../assets/icons/list-music.svg"), danger: false, needs-selection: true },
                         { id: "add-to-mixtape", label: @tr("Add to Mixtape/Collection"), icon: @image-url("../assets/icons/cassette-tape.svg"), danger: false, needs-selection: true },
@@ -1726,7 +1726,7 @@ export component FavoritesView inherits Rectangle {
                                 selected-count: FavoritesState.albums-selected-count;
                                 actions: [
                                     { id: "select-all", label: @tr("Select all"), icon: @image-url("../assets/icons/square-check-big.svg"), danger: false, needs-selection: false },
-                                    { id: "play-next", label: @tr("Play next"), icon: @image-url("../assets/icons/list-plus.svg"), danger: false, needs-selection: true },
+                                    { id: "play-next", label: @tr("Play next"), icon: @image-url("../assets/icons/list-start.svg"), danger: false, needs-selection: true },
                                     { id: "queue", label: @tr("Add to queue"), icon: @image-url("../assets/icons/list-end.svg"), danger: false, needs-selection: true },
                                     { id: "remove-selected", label: @tr("Remove from Library"), icon: @image-url("../assets/icons/trash-2.svg"), danger: true, needs-selection: true },
                                     { id: "clear", label: @tr("Clear"), icon: @image-url("../assets/icons/x.svg"), danger: false, needs-selection: true },

@@ -53,7 +53,7 @@ export component AlbumContextMenu inherits PopupWindow {
 
     ContextMenu {
         ContextMenuItem {
-            icon: @image-url("../assets/icons/list-plus.svg");
+            icon: @image-url("../assets/icons/list-start.svg");
             label: @tr("Play next");
             clicked => {
                 root.media-action("album", root.album-id, "play-next");

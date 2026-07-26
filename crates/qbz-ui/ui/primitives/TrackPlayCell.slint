@@ -212,7 +212,9 @@ export component TrackPlayCell inherits Rectangle {
             x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
             y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
             background: root.accent-ring ? transparent : Theme.alpha-10;
-            border-width: 1px;
+            // 1.5px like CircleAction's header rings — a 1px stroked circle
+            // aliases badly in femtovg (owner screenshot 2026-07-26).
+            border-width: 1.5px;
             border-color: root.accent-ring ? Theme.accent : Theme.alpha-15;
             drop-shadow-blur: 6px;
             drop-shadow-color: Theme.card-shadow;
