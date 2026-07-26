@@ -885,9 +885,18 @@ impl AlsaDirectStream {
         use alsa::mixer::SelemChannelId::*;
         use alsa::mixer::{Mixer, SelemId};
 
-        // Open mixer for device
-        let mixer = Mixer::new(&self.device_id, false)
-            .map_err(|e| format!("Failed to open mixer for {}: {}", self.device_id, e))?;
+        // Mixer controls live on the CARD ctl device, not on the PCM alias the
+        // stream opened: `iec958:CARD=x,DEV=0` (HiFiBerry Digi, #331/#659),
+        // `hdmi:`, `front:`… are PCM plugin ids the mixer can't attach to, and
+        // a `DEV`-qualified `hw:` id isn't a valid ctl name either. Open the
+        // mixer on the derived `hw:CARD=<name>` instead.
+        let ctl_name = mixer_ctl_name(&self.device_id);
+        let mixer = Mixer::new(&ctl_name, false).map_err(|e| {
+            format!(
+                "Failed to open mixer for {} (ctl {}): {}",
+                self.device_id, ctl_name, e
+            )
+        })?;
 
         // Try to find a volume control element
         // Common names: "Master", "PCM", "Speaker", "Headphone"
@@ -968,5 +977,66 @@ impl AlsaDirectStream {
     /// Check if device is a bit-perfect hardware device (always false on non-Linux)
     pub fn is_hw_device(_device_id: &str) -> bool {
         false
+    }
+}
+
+/// Derive the ALSA **card** ctl id from a PCM device id for mixer access.
+///
+/// Mixer elements are per-card; attaching a mixer to a PCM plugin alias
+/// (`iec958:`, `hdmi:`, `front:`, `sysdefault:`…) or a `DEV`-qualified `hw:`
+/// id fails. Maps every shape to `hw:CARD=<name>` when a `CARD=` argument is
+/// present, to `hw:<n>` for the numeric `hw:N,M` / `plughw:N,M` forms, and
+/// falls back to the raw id otherwise (e.g. `default` — which then fails with
+/// the same "no mixer" outcome as before, no regression).
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn mixer_ctl_name(device_id: &str) -> String {
+    if let Some((_, args)) = device_id.split_once(':') {
+        for arg in args.split(',') {
+            if let Some(name) = arg.trim().strip_prefix("CARD=") {
+                if !name.is_empty() {
+                    return format!("hw:CARD={name}");
+                }
+            }
+        }
+        // Numeric form: `hw:1,0` / `plughw:1` → `hw:1` (card index only).
+        if let Some(first) = args.split(',').next() {
+            let first = first.trim();
+            if first.parse::<u32>().is_ok() {
+                return format!("hw:{first}");
+            }
+        }
+    }
+    device_id.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::mixer_ctl_name;
+
+    #[test]
+    fn mixer_ctl_name_maps_card_forms() {
+        // HiFiBerry Digi S/PDIF (#331/#659) and other plugin aliases.
+        assert_eq!(
+            mixer_ctl_name("iec958:CARD=sndrpihifiberry,DEV=0"),
+            "hw:CARD=sndrpihifiberry"
+        );
+        assert_eq!(mixer_ctl_name("hw:CARD=C20,DEV=0"), "hw:CARD=C20");
+        assert_eq!(mixer_ctl_name("front:CARD=PCH,DEV=0"), "hw:CARD=PCH");
+        assert_eq!(mixer_ctl_name("hdmi:CARD=NVidia,DEV=1"), "hw:CARD=NVidia");
+        assert_eq!(
+            mixer_ctl_name("sysdefault:CARD=DacMagic,DEV=0"),
+            "hw:CARD=DacMagic"
+        );
+        // CARD= in a non-first position.
+        assert_eq!(mixer_ctl_name("hw:DEV=0,CARD=DacMagic"), "hw:CARD=DacMagic");
+    }
+
+    #[test]
+    fn mixer_ctl_name_numeric_and_fallback() {
+        assert_eq!(mixer_ctl_name("hw:1,0"), "hw:1");
+        assert_eq!(mixer_ctl_name("plughw:2"), "hw:2");
+        // No CARD= and no numeric arg → unchanged.
+        assert_eq!(mixer_ctl_name("default"), "default");
+        assert_eq!(mixer_ctl_name("pulse"), "pulse");
     }
 }
