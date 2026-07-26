@@ -256,6 +256,9 @@ enum ConfigCmd { Path, Show { #[arg(long)] json: bool } }
 
 #[tokio::main]
 async fn main() {
+    // Install the rustls process-level `CryptoProvider`
+    qbz_app::ensure_crypto_provider();
+
     let cli = Cli::parse();
     let code = match cli.cmd {
         Cmd::Version { json } => {
