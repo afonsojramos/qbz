@@ -4852,3 +4852,6 @@ msgstr "次に再生"
 
 msgid "Removed {} tracks from favorites"
 msgstr "{} トラックをお気に入りから削除しました"
+
+msgid "Removing {} tracks from favorites…"
+msgstr "{} トラックをお気に入りから削除中…"

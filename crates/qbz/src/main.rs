@@ -19165,35 +19165,64 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         local_library::clear_tracks_selection(&w);
                     }
                     "remove-favorites" => {
-                        // Bulk local un-favorite (owner 2026-07-26): drop every
-                        // selected row from the local-favorites store (the
-                        // All-feed reads it back), flip the row hearts live.
+                        // Bulk local un-favorite: ONE model pass (the first
+                        // cut looped the whole model per selected row and
+                        // froze the UI thread on big libraries — owner
+                        // 2026-07-26). Hearts hollow instantly; the store
+                        // mutations ride a blocking thread with progress
+                        // toasts so the user always knows it's working.
                         let rows = local_library::selected_local_tracks(&w);
-                        let model = w.global::<LocalLibraryState>().get_tracks();
                         let n = rows.len();
+                        if n == 0 {
+                            return;
+                        }
+                        let ids: std::collections::HashSet<String> =
+                            rows.iter().map(|t| t.id.to_string()).collect();
+                        let mut keys = Vec::with_capacity(n);
                         for t in &rows {
-                            let key = if t.source.as_deref() == Some("plex") {
+                            keys.push(if t.source.as_deref() == Some("plex") {
                                 format!("plex:{}", t.file_path)
                             } else {
                                 t.file_path.clone()
-                            };
-                            let _ = crate::local_favorites::unfavorite("track", &key);
-                            let row_id = t.id.to_string();
-                            for i in 0..model.row_count() {
-                                if let Some(mut item) = model.row_data(i) {
-                                    if item.id.as_str() == row_id {
-                                        item.is_favorite = false;
-                                        model.set_row_data(i, item);
-                                        break;
-                                    }
+                            });
+                        }
+                        let model = w.global::<LocalLibraryState>().get_tracks();
+                        for i in 0..model.row_count() {
+                            if let Some(mut item) = model.row_data(i) {
+                                if item.is_favorite && ids.contains(item.id.as_str()) {
+                                    item.is_favorite = false;
+                                    model.set_row_data(i, item);
                                 }
                             }
                         }
                         local_library::clear_tracks_selection(&w);
-                        crate::toast::success(
+                        crate::toast::info(
                             &w,
-                            qbz_i18n::t_args("Removed {} tracks from favorites", &[&n.to_string()]),
+                            qbz_i18n::t_args(
+                                "Removing {} tracks from favorites…",
+                                &[&n.to_string()],
+                            ),
                         );
+                        let weak2 = weak.clone();
+                        handle.spawn(async move {
+                            let keys2 = keys.clone();
+                            tokio::task::spawn_blocking(move || {
+                                for k in &keys2 {
+                                    let _ = crate::local_favorites::unfavorite("track", k);
+                                }
+                            })
+                            .await
+                            .ok();
+                            let _ = weak2.upgrade_in_event_loop(|w| {
+                                crate::toast::success(
+                                    &w,
+                                    qbz_i18n::t_args(
+                                        "Removed {} tracks from favorites",
+                                        &[&n.to_string()],
+                                    ),
+                                );
+                            });
+                        });
                     }
                     "add-to-playlist" => {
                         // Source-aware refs: Plex rows ride as "plex:<key>",
@@ -22794,10 +22823,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if ids.is_empty() {
                             return;
                         }
+                        // Progress feedback (owner 2026-07-26): an up-front
+                        // toast, and a 150 ms courtesy delay between API
+                        // calls so a big selection isn't a burst at Qobuz.
                         let runtime = runtime.clone();
                         let weak = weak.clone();
                         let handle = handle.clone();
                         let image_cache = image_cache.clone();
+                        crate::toast::info(
+                            &w,
+                            qbz_i18n::t_args(
+                                "Removing {} tracks from favorites…",
+                                &[&ids.len().to_string()],
+                            ),
+                        );
                         handle.clone().spawn(async move {
                             for id in &ids {
                                 if let Err(e) =
@@ -22810,6 +22849,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 if let Ok(tid) = id.parse::<u64>() {
                                     crate::fav_cache::set(tid, false);
                                 }
+                                tokio::time::sleep(
+                                    std::time::Duration::from_millis(150),
+                                )
+                                .await;
                             }
                             let _ = weak.upgrade_in_event_loop(|w| {
                                 favorites::set_multi_select(&w, false);

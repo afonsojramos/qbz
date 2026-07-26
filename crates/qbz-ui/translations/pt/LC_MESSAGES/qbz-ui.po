@@ -4864,3 +4864,6 @@ msgstr "A seguir"
 
 msgid "Removed {} tracks from favorites"
 msgstr "{} faixas removidas dos favoritos"
+
+msgid "Removing {} tracks from favorites…"
+msgstr "Removendo {} faixas dos favoritos…"

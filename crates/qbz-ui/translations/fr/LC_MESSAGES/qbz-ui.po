@@ -4864,3 +4864,6 @@ msgstr "À suivre"
 
 msgid "Removed {} tracks from favorites"
 msgstr "{} pistes retirées des favoris"
+
+msgid "Removing {} tracks from favorites…"
+msgstr "Suppression de {} pistes des favoris…"

@@ -660,3 +660,6 @@ msgstr "Next up"
 
 msgid "Removed {} tracks from favorites"
 msgstr "Removed {} tracks from favorites"
+
+msgid "Removing {} tracks from favorites…"
+msgstr "Removing {} tracks from favorites…"

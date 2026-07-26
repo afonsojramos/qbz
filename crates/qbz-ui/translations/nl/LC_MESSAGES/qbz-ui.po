@@ -4876,3 +4876,6 @@ msgstr "Hierna"
 
 msgid "Removed {} tracks from favorites"
 msgstr "{} nummers verwijderd uit favorieten"
+
+msgid "Removing {} tracks from favorites…"
+msgstr "{} nummers worden verwijderd uit favorieten…"

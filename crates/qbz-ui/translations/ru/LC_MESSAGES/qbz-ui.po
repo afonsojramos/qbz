@@ -4878,3 +4878,6 @@ msgstr "Далее"
 
 msgid "Removed {} tracks from favorites"
 msgstr "{} треков удалено из избранного"
+
+msgid "Removing {} tracks from favorites…"
+msgstr "Удаление {} треков из избранного…"
