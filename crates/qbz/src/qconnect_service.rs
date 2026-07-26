@@ -305,6 +305,146 @@ pub struct SlintQconnectService {
     /// echo `QueueUpdated` lands (which would otherwise double-push on the next
     /// track tick). Cleared on disconnect.
     last_pushed_queue_ids: Mutex<Option<Vec<u64>>>,
+    /// Controller-mode mirror of the local queue's manual block (#442 "Play
+    /// later"): steers `insert_after` for play-later routing. See the struct
+    /// docs on `ControllerManualBlock`.
+    controller_manual: Mutex<ControllerManualBlock>,
+}
+
+/// Controller-mode mirror of the local queue's manual block (#442 "Play later").
+///
+/// The QConnect protocol has no "later" concept and the peer's queue carries no
+/// manual-block metadata; worse, every cloud echo re-materializes the LOCAL core
+/// queue via `materialize_remote_queue`, resetting its `manual_next_count` — so
+/// the block tail is tracked HERE instead. Every play-next / play-later routed
+/// to the peer is recorded as a PENDING insert (anchor + track ids); the next
+/// `reconcile` confirms it against the fresh snapshot once the echo lands (the
+/// inserted ids show up after the anchor we used). The tail is dropped when the
+/// renderer's current track advances at/past it, and everything resets when the
+/// queue's major version changes (a wholesale replace wipes the block).
+/// Best-effort by design: it only steers `insert_after`; the cloud remains the
+/// source of truth.
+#[derive(Default)]
+struct ControllerManualBlock {
+    /// queue_item_id of the deepest confirmed manual item (the block tail).
+    tail_qid: Option<u64>,
+    /// Renderer current-track qid at the last reconcile (advance detection).
+    current_qid: Option<u64>,
+    /// Queue major version at the last reconcile (replace detection).
+    queue_major: Option<u64>,
+    /// Sent-but-unconfirmed inserts: (insert_after anchor we used, track ids).
+    pending: Vec<(u64, Vec<u64>)>,
+}
+
+impl ControllerManualBlock {
+    /// Reconcile with the latest peer snapshot BEFORE computing a new anchor.
+    fn reconcile(&mut self, renderer: &QConnectRendererState, queue: &QConnectQueueState) {
+        let items = &queue.queue_items;
+
+        // Queue replaced wholesale → the block is gone.
+        if self.queue_major != Some(queue.version.major) {
+            self.queue_major = Some(queue.version.major);
+            self.current_qid = renderer.current_track.as_ref().map(|i| i.queue_item_id);
+            self.tail_qid = None;
+            self.pending.clear();
+            return;
+        }
+
+        // Advance detection: the current track moving consumes manual items.
+        // The tail only survives while it sits strictly AFTER the current track.
+        let new_current = renderer.current_track.as_ref().map(|i| i.queue_item_id);
+        if new_current != self.current_qid {
+            if let (Some(tail), Some(cur)) = (self.tail_qid, new_current) {
+                let tail_pos = items.iter().position(|i| i.queue_item_id == tail);
+                let cur_pos = items.iter().position(|i| i.queue_item_id == cur);
+                let tail_still_ahead = matches!((tail_pos, cur_pos), (Some(t), Some(c)) if t > c);
+                if !tail_still_ahead {
+                    self.tail_qid = None;
+                }
+            } else {
+                self.tail_qid = None;
+            }
+            self.current_qid = new_current;
+        }
+
+        // Confirm pendings against the snapshot: the echo has landed once the
+        // inserted ids show up shortly after the anchor we used. The small scan
+        // window tolerates a play-next interleaving between two play-laters
+        // (which pushes an earlier play-later one position deeper).
+        let mut confirmed: Vec<u64> = Vec::new();
+        self.pending.retain(|(anchor, ids)| {
+            let Some(anchor_pos) = items.iter().position(|i| i.queue_item_id == *anchor) else {
+                return false; // anchor gone — the queue moved on; drop.
+            };
+            let window_end = (anchor_pos + 1 + ids.len() + 2).min(items.len());
+            let window = &items[anchor_pos + 1..window_end];
+            match ids.last() {
+                Some(last_id) => match window.iter().find(|i| i.track_id == *last_id) {
+                    Some(item) => {
+                        confirmed.push(item.queue_item_id);
+                        false // confirmed → drop from pending
+                    }
+                    None => true, // echo not here yet
+                },
+                None => false,
+            }
+        });
+        // Raise the tail to the DEEPEST confirmed item — never lower it (two
+        // rapid inserts confirm in send order, but the second anchor sits
+        // shallower when its echo landed first).
+        let deepest = confirmed
+            .into_iter()
+            .filter_map(|qid| {
+                items
+                    .iter()
+                    .position(|i| i.queue_item_id == qid)
+                    .map(|pos| (pos, qid))
+            })
+            .max_by_key(|(pos, _)| *pos);
+        if let Some((pos, qid)) = deepest {
+            let raises = self
+                .tail_qid
+                .and_then(|tail| items.iter().position(|i| i.queue_item_id == tail))
+                .map(|tail_pos| pos > tail_pos)
+                .unwrap_or(true);
+            if raises {
+                self.tail_qid = Some(qid);
+            }
+        }
+    }
+
+    /// queue_item_id AFTER which a play-later insert lands: the confirmed block
+    /// tail while it is still ahead of the current track, else the current
+    /// track itself (degrades to play-next — also under shuffle, mirroring the
+    /// local `add_track_later` shuffle fallback).
+    fn later_anchor(
+        &self,
+        renderer: &QConnectRendererState,
+        queue: &QConnectQueueState,
+    ) -> Option<u64> {
+        let current = renderer.current_track.as_ref()?.queue_item_id;
+        if queue.shuffle_mode {
+            return Some(current);
+        }
+        let items = &queue.queue_items;
+        if let Some(tail) = self.tail_qid {
+            let cur_pos = items.iter().position(|i| i.queue_item_id == current);
+            let tail_pos = items.iter().position(|i| i.queue_item_id == tail);
+            if let (Some(c), Some(t)) = (cur_pos, tail_pos) {
+                if t > c {
+                    return Some(tail);
+                }
+            }
+        }
+        Some(current)
+    }
+
+    /// Record a just-sent insert so the next reconcile can confirm its echo.
+    fn note_sent(&mut self, anchor: Option<u64>, ids: Vec<u64>) {
+        if let (Some(anchor), false) = (anchor, ids.is_empty()) {
+            self.pending.push((anchor, ids));
+        }
+    }
 }
 
 /// Slint-local mirror of the Tauri `QconnectVisibleQueueProjection` reduced to
@@ -450,6 +590,7 @@ impl SlintQconnectService {
             window,
             custom_device_name: Arc::new(tokio::sync::RwLock::new(saved_name)),
             last_pushed_queue_ids: Mutex::new(None),
+            controller_manual: Mutex::new(ControllerManualBlock::default()),
         }
     }
 
@@ -1155,6 +1296,7 @@ impl SlintQconnectService {
                     &self.window,
                     format!("-> play_next QueueInsertTracks {track_id} after={insert_after:?}"),
                 );
+                self.note_controller_insert(insert_after, &[track_id]).await;
             }
             Err(err) => {
                 log::warn!("[QConnect] play_next_on_peer: insert failed: {err}");
@@ -1330,7 +1472,8 @@ impl SlintQconnectService {
                     .and_then(|item| i64::try_from(item.queue_item_id).ok())
             });
 
-        let ids: Vec<i64> = tracks.iter().map(|(id, _)| *id as i64).collect();
+        let ids_u64: Vec<u64> = tracks.iter().map(|(id, _)| *id).collect();
+        let ids: Vec<i64> = ids_u64.iter().map(|id| *id as i64).collect();
         let count = ids.len();
         let mut payload = json!({
             "track_ids": ids,
@@ -1354,9 +1497,167 @@ impl SlintQconnectService {
                     &self.window,
                     format!("-> play_next QueueInsertTracks {count} tracks after={insert_after:?}"),
                 );
+                self.note_controller_insert(insert_after, &ids_u64).await;
             }
             Err(err) => {
                 log::warn!("[QConnect] play_next_batch_on_peer: insert failed: {err}");
+            }
+        }
+        true
+    }
+
+    /// Resolve the `insert_after` anchor for a controller-mode PLAY-LATER: the
+    /// manual-block tail while it is still ahead of the peer's current track,
+    /// else the current track itself (degrades to play-next). Reconciles the
+    /// `ControllerManualBlock` against the freshest snapshot first. `None` when
+    /// no snapshot is available (the command then omits `insert_after`, same as
+    /// the play-next path).
+    async fn controller_later_anchor(&self) -> Option<i64> {
+        let (renderer, queue, _session) = self
+            .effective_remote_renderer_snapshot()
+            .await
+            .ok()
+            .flatten()?;
+        let mut guard = self.controller_manual.lock().await;
+        guard.reconcile(&renderer, &queue);
+        guard
+            .later_anchor(&renderer, &queue)
+            .and_then(|qid| i64::try_from(qid).ok())
+    }
+
+    /// Record a just-sent controller-mode insert (play-next or play-later) so
+    /// the next `controller_later_anchor` can confirm its echo and keep the
+    /// manual-block tail past it.
+    async fn note_controller_insert(&self, anchor: Option<i64>, ids: &[u64]) {
+        let anchor = anchor.and_then(|v| u64::try_from(v).ok());
+        let mut guard = self.controller_manual.lock().await;
+        guard.note_sent(anchor, ids.to_vec());
+    }
+
+    /// Controller play-LATER routing (#442): when QBZ is CONTROLLING a peer
+    /// renderer, insert the track at the END of the peer's manual block (after
+    /// every play-next / play-later already routed, before the source resumes)
+    /// instead of right after the current track. The protocol has no "later" —
+    /// the position is steered via `insert_after` against the tracked block
+    /// tail (`ControllerManualBlock`); best-effort, the cloud stays the source
+    /// of truth. Same admission + echo contract as `play_next_on_peer_if_active`.
+    pub async fn play_later_on_peer_if_active(&self, track_id: u64, source: Option<&str>) -> bool {
+        let peer_active = self.is_peer_renderer_active().await;
+        if !peer_active {
+            return false;
+        }
+
+        if !self.is_track_castable(track_id, source) {
+            log::info!(
+                "[QConnect] play_later_on_peer: track {track_id} not Qobuz-castable; refusing"
+            );
+            crate::toast::error_weak(&self.window, qbz_i18n::t("Track not castable to Qobuz Connect"));
+            dev_push_event(
+                &self.window,
+                format!("-> play_later REFUSED (non-Qobuz track {track_id})"),
+            );
+            return true;
+        }
+
+        let insert_after = self.controller_later_anchor().await;
+
+        let mut payload = json!({
+            "track_ids": [track_id as i64],
+            "context_uuid": Uuid::new_v4().to_string(),
+            "autoplay_reset": false,
+            "autoplay_loading": false,
+        });
+        if let Some(insert_after) = insert_after {
+            payload["insert_after"] = json!(insert_after);
+        }
+
+        match self
+            .send_command(QueueCommandType::CtrlSrvrQueueInsertTracks, payload)
+            .await
+        {
+            Ok(_) => {
+                log::info!(
+                    "[QConnect] play_later_on_peer: inserted track {track_id} (after={insert_after:?})"
+                );
+                dev_push_event(
+                    &self.window,
+                    format!("-> play_later QueueInsertTracks {track_id} after={insert_after:?}"),
+                );
+                self.note_controller_insert(insert_after, &[track_id]).await;
+            }
+            Err(err) => {
+                log::warn!("[QConnect] play_later_on_peer: insert failed: {err}");
+                // Still handled: a peer owns playback; never fall back to local.
+            }
+        }
+        true
+    }
+
+    /// Controller play-LATER routing for a MULTI-track batch (#442). Same
+    /// all-or-nothing admission as `play_next_batch_on_peer_if_active`; the
+    /// whole block lands after the manual-block tail in NATURAL order (the
+    /// server preserves list order), mirroring the local
+    /// `enqueue_queue_tracks_later` semantics.
+    pub async fn play_later_batch_on_peer_if_active(
+        &self,
+        tracks: &[(u64, Option<String>)],
+    ) -> bool {
+        if !self.is_peer_renderer_active().await {
+            return false;
+        }
+        if tracks.is_empty() {
+            return false;
+        }
+
+        if let Some((bad_id, _)) = tracks
+            .iter()
+            .find(|(id, source)| !self.is_track_castable(*id, source.as_deref()))
+        {
+            log::info!(
+                "[QConnect] play_later_batch_on_peer: track {bad_id} not Qobuz-castable; refusing whole batch"
+            );
+            crate::toast::error_weak(&self.window, qbz_i18n::t("Some tracks can't be cast to Qobuz Connect"));
+            dev_push_event(
+                &self.window,
+                format!(
+                    "-> play_later REFUSED (non-Qobuz track {bad_id} in batch of {})",
+                    tracks.len()
+                ),
+            );
+            return true;
+        }
+
+        let insert_after = self.controller_later_anchor().await;
+
+        let ids_u64: Vec<u64> = tracks.iter().map(|(id, _)| *id).collect();
+        let ids: Vec<i64> = ids_u64.iter().map(|id| *id as i64).collect();
+        let count = ids.len();
+        let mut payload = json!({
+            "track_ids": ids,
+            "context_uuid": Uuid::new_v4().to_string(),
+            "autoplay_reset": false,
+            "autoplay_loading": false,
+        });
+        if let Some(insert_after) = insert_after {
+            payload["insert_after"] = json!(insert_after);
+        }
+
+        match self
+            .send_command(QueueCommandType::CtrlSrvrQueueInsertTracks, payload)
+            .await
+        {
+            Ok(_) => {
+                log::info!(
+                    "[QConnect] play_later_batch_on_peer: inserted {count} tracks (after={insert_after:?})"
+                );
+                dev_push_event(
+                    &self.window,
+                    format!("-> play_later QueueInsertTracks {count} tracks after={insert_after:?}"),
+                );
+                self.note_controller_insert(insert_after, &ids_u64).await;
+            }
+            Err(err) => {
+                log::warn!("[QConnect] play_later_batch_on_peer: insert failed: {err}");
             }
         }
         true
