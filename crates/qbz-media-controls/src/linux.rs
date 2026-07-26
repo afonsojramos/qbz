@@ -105,6 +105,9 @@ fn build_metadata(meta: &TrackMeta) -> Metadata {
     if let Some(url) = &meta.art_url {
         b = b.art_url(url.clone());
     }
+    if let Some(url) = &meta.url {
+        b = b.url(url.clone());
+    }
     b.build()
 }
 

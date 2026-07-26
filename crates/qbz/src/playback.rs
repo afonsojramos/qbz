@@ -2213,6 +2213,7 @@ pub(crate) async fn refresh_now_playing_meta(runtime: &Runtime, weak: &slint::We
                 album: album_display.clone(),
                 duration: (duration > 0).then(|| std::time::Duration::from_secs(duration as u64)),
                 art_url: mpris_art,
+                url: qbz_media_controls::xesam_url_for(track.source.as_deref(), track.id),
             });
         }
         mc.set_playback(
