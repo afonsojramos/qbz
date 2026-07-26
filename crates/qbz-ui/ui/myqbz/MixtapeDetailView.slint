@@ -462,12 +462,12 @@ component DetailRow inherits Rectangle {
                                 chosen => { MyQbzDetailActions.play-item(root.item.source-item-id); }
                             }
                             RowMenuItem {
-                                icon: @image-url("../assets/icons/list-music.svg");
+                                icon: @image-url("../assets/icons/list-start.svg");
                                 label: @tr("Play next");
                                 chosen => { MyQbzDetailActions.item-action(root.item.source-item-id, "play-next"); }
                             }
                             RowMenuItem {
-                                icon: @image-url("../assets/icons/list-music.svg");
+                                icon: @image-url("../assets/icons/list-end.svg");
                                 label: @tr("Add to queue");
                                 chosen => { MyQbzDetailActions.item-action(root.item.source-item-id, "add-to-queue"); }
                             }
