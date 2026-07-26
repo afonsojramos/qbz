@@ -19213,7 +19213,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             })
                             .await
                             .ok();
-                            let _ = weak2.upgrade_in_event_loop(|w| {
+                            let _ = weak2.upgrade_in_event_loop(move |w| {
                                 crate::toast::success(
                                     &w,
                                     qbz_i18n::t_args(
