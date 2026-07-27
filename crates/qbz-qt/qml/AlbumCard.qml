@@ -113,7 +113,9 @@ Rectangle {
                 anchors.fill: parent
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
-                onClicked: QbzBridge.playAlbum(root.albumId)
+                // Phase 8: the card opens the album view (the overlay play
+                // button carries the play affordance).
+                onClicked: QbzBridge.openAlbum(root.albumId)
             }
 
             // Pin badge — top-right. Filled accent pin always visible when
@@ -285,12 +287,13 @@ Rectangle {
                                 onClicked: {
                                     albumMenu.close()
                                     var a = modelData.action
-                                    if (a === "play") QbzBridge.playAlbum(root.albumId)
+                                    if (a === "open") QbzBridge.openAlbum(root.albumId)
+                                    else if (a === "play") QbzBridge.playAlbum(root.albumId)
                                     else if (a === "next") QbzBridge.enqueueAlbum(root.albumId, "next")
                                     else if (a === "queue") QbzBridge.enqueueAlbum(root.albumId, "later")
                                     else if (a === "favorite") root.toggleFavorite()
-                                    // "open" (no album page) + "block" (no
-                                    // blacklist store): inert — POC-NOTE.
+                                    // "block" (no blacklist store): inert —
+                                    // POC-NOTE.
                                 }
                             }
                         }
@@ -376,7 +379,7 @@ Rectangle {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: QbzBridge.playAlbum(root.albumId)
+                        onClicked: QbzBridge.openAlbum(root.albumId)
                     }
                 }
                 Text {
@@ -393,6 +396,7 @@ Rectangle {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: root.artistId !== "" ? Qt.PointingHandCursor : Qt.ArrowCursor
+                        onClicked: if (root.artistId !== "") QbzBridge.openArtist(root.artistId)
                     }
                 }
             }

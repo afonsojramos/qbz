@@ -218,6 +218,14 @@ fn build_sections(
     out
 }
 
+/// The last built sections (clone), for debug/probe entry points.
+static LAST_SECTIONS: std::sync::Mutex<Vec<HomeSection>> = std::sync::Mutex::new(Vec::new());
+
+pub fn with_sections<R>(f: impl FnOnce(&[HomeSection]) -> R) -> R {
+    let guard = LAST_SECTIONS.lock().unwrap();
+    f(&guard)
+}
+
 /// Fetch the discover index (UNFILTERED — genre filter out of scope) and
 /// the personalized rails concurrently (mirrors home.rs's `join!`), then
 /// map everything into plain rows.
@@ -238,12 +246,14 @@ where
         release_watch.len(),
         top_artists.len(),
     );
-    Ok(build_sections(
+    let built = build_sections(
         response.containers,
         favorite_albums,
         release_watch,
         top_artists,
-    ))
+    );
+    *LAST_SECTIONS.lock().unwrap() = built.clone();
+    Ok(built)
 }
 
 // ---------------------------------------------------------------------------

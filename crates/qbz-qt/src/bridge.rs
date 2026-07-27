@@ -113,6 +113,16 @@ pub mod qbz_bridge {
         // {tracks, albums, artists, playlists, labels, all} — tab badges.
         #[qproperty(QString, library_counts_json)]
 
+        // --- Album / Artist detail views (phase 8) -------------------------
+        #[qproperty(bool, album_loading)]
+        #[qproperty(QString, album_json)]
+        #[qproperty(bool, artist_loading)]
+        #[qproperty(QString, artist_json)]
+        // The id backing the current "album"/"artist" view ("" = none).
+        #[qproperty(QString, view_param_id)]
+        // Now-playing track id (playing-row indicator in track lists).
+        #[qproperty(QString, np_track_id)]
+
         // --- Sidebar playlist tree ---------------------------------------
         // One JSON document: the flattened entries (folders + playlists,
         // expand/sort/search applied Rust-side — sidebar_qt.rs).
@@ -201,6 +211,25 @@ pub mod qbz_bridge {
         #[qinvokable]
         fn play_album(self: Pin<&mut QbzBridge>, album_id: QString);
 
+        /// AlbumView header Shuffle.
+        #[qinvokable]
+        fn play_album_shuffled(self: Pin<&mut QbzBridge>, album_id: QString);
+        /// AlbumView row play: the album starting AT this track.
+        #[qinvokable]
+        fn play_album_from(self: Pin<&mut QbzBridge>, album_id: QString, track_id: QString);
+        /// AlbumView row "Play next" ("next") / "Add to queue" ("later").
+        #[qinvokable]
+        fn enqueue_album_track(self: Pin<&mut QbzBridge>, album_id: QString, track_id: QString, mode: QString);
+        /// ArtistView Popular Tracks row play (whole list as the queue).
+        #[qinvokable]
+        fn play_artist_track(self: Pin<&mut QbzBridge>, track_id: QString);
+        /// ArtistView "Play all" (shuffle=false) / "Shuffle all" (true).
+        #[qinvokable]
+        fn play_artist_top(self: Pin<&mut QbzBridge>, shuffle: bool);
+        /// ArtistView ⋯ "Add all to queue" — appends the top-tracks queue.
+        #[qinvokable]
+        fn enqueue_artist_top(self: Pin<&mut QbzBridge>);
+
         /// Sidebar navigation: record a content view ("home" | "library")
         /// and lazy-load its data on first visit.
         #[qinvokable]
@@ -265,6 +294,19 @@ pub mod qbz_bridge {
         /// collage is url-keyed, unlike the feed's artKey).
         #[qinvokable]
         fn sidebar_artwork_window(self: Pin<&mut QbzBridge>, urls_json: QString);
+
+        /// Open the album detail view (pushes "album" on the nav stack).
+        #[qinvokable]
+        fn open_album(self: Pin<&mut QbzBridge>, album_id: QString);
+        /// Open the artist detail view (pushes "artist" on the nav stack).
+        #[qinvokable]
+        fn open_artist(self: Pin<&mut QbzBridge>, artist_id: QString);
+        /// ArtistView per-section "Load more" — the next releases page.
+        #[qinvokable]
+        fn load_release_section(self: Pin<&mut QbzBridge>, artist_id: QString, release_type: QString, offset: i32);
+        /// Emitted with the next page of a releases bucket.
+        #[qsignal]
+        fn release_section_ready(self: Pin<&mut QbzBridge>, release_type: QString, cards_json: QString, has_more: bool);
     }
 
     impl cxx_qt::Threading for QbzBridge {}
@@ -326,6 +368,12 @@ pub struct QbzBridgeRust {
     sidebar_json: QString,
     sidebar_sort_by: QString,
     sidebar_sort_asc: bool,
+    album_loading: bool,
+    album_json: QString,
+    artist_loading: bool,
+    artist_json: QString,
+    view_param_id: QString,
+    np_track_id: QString,
 }
 
 impl Default for QbzBridgeRust {
@@ -377,6 +425,12 @@ impl Default for QbzBridgeRust {
             sidebar_json: QString::from("[]"),
             sidebar_sort_by: QString::from("name"),
             sidebar_sort_asc: true,
+            album_loading: false,
+            album_json: QString::from("{}"),
+            artist_loading: false,
+            artist_json: QString::from("{}"),
+            view_param_id: QString::default(),
+            np_track_id: QString::default(),
         }
     }
 }
@@ -480,6 +534,36 @@ impl qbz_bridge::QbzBridge {
         crate::play_album(album_id.to_string());
     }
 
+    pub fn play_album_shuffled(self: Pin<&mut Self>, album_id: QString) {
+        crate::play_album_shuffled(album_id.to_string());
+    }
+
+    pub fn play_album_from(self: Pin<&mut Self>, album_id: QString, track_id: QString) {
+        if let Ok(tid) = track_id.to_string().parse::<u64>() {
+            crate::play_album_from_track(album_id.to_string(), tid);
+        }
+    }
+
+    pub fn enqueue_album_track(self: Pin<&mut Self>, album_id: QString, track_id: QString, mode: QString) {
+        if let Ok(tid) = track_id.to_string().parse::<u64>() {
+            crate::enqueue_album_track(album_id.to_string(), tid, mode.to_string());
+        }
+    }
+
+    pub fn play_artist_track(self: Pin<&mut Self>, track_id: QString) {
+        if let Ok(tid) = track_id.to_string().parse::<u64>() {
+            crate::play_artist_track(tid);
+        }
+    }
+
+    pub fn play_artist_top(self: Pin<&mut Self>, shuffle: bool) {
+        crate::play_artist_top(shuffle);
+    }
+
+    pub fn enqueue_artist_top(self: Pin<&mut Self>) {
+        crate::enqueue_artist_top();
+    }
+
     pub fn navigate_to(self: Pin<&mut Self>, view: QString) {
         crate::navigate_to(&view.to_string());
     }
@@ -538,5 +622,17 @@ impl qbz_bridge::QbzBridge {
 
     pub fn sidebar_artwork_window(self: Pin<&mut Self>, urls_json: QString) {
         crate::sidebar_artwork_window(urls_json.to_string());
+    }
+
+    pub fn open_album(self: Pin<&mut Self>, album_id: QString) {
+        crate::open_album(album_id.to_string());
+    }
+
+    pub fn open_artist(self: Pin<&mut Self>, artist_id: QString) {
+        crate::open_artist(artist_id.to_string());
+    }
+
+    pub fn load_release_section(self: Pin<&mut Self>, artist_id: QString, release_type: QString, offset: i32) {
+        crate::load_release_section(artist_id.to_string(), release_type.to_string(), offset);
     }
 }

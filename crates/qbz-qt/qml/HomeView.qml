@@ -236,8 +236,8 @@ Rectangle {
             anchors.fill: parent
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
-            // Phase 4: slim rows are albums — click plays (page out of scope).
-            onClicked: QbzBridge.playAlbum(card.id)
+            // Phase 8: slim rows are albums — click opens the album view.
+            onClicked: QbzBridge.openAlbum(card.id)
         }
     }
 
@@ -368,7 +368,7 @@ Rectangle {
                 MouseArea {
                     anchors.fill: parent
                     cursorShape: Qt.PointingHandCursor
-                    // POC-NOTE: artist page out of scope — inert.
+                    onClicked: QbzBridge.openArtist(card.id)
                 }
             }
             Text {

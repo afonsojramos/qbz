@@ -476,9 +476,10 @@ Rectangle {
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
                     onClicked: {
-                        if (item.kind === "album") QbzBridge.playAlbum(item.id)
+                        if (item.kind === "album") QbzBridge.openAlbum(item.id)
                         else if (item.kind === "track") QbzBridge.playTrack(item.id)
-                        // artist/playlist/label pages: out of scope (POC-NOTE).
+                        else if (item.kind === "artist") QbzBridge.openArtist(item.id)
+                        // playlist/label pages: out of scope (POC-NOTE).
                     }
                 }
             }
@@ -530,7 +531,7 @@ Rectangle {
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
             onClicked: {
-                if (item.kind === "album") QbzBridge.playAlbum(item.id)
+                if (item.kind === "album") QbzBridge.openAlbum(item.id)
                 else if (item.kind === "track") QbzBridge.playTrack(item.id)
             }
         }

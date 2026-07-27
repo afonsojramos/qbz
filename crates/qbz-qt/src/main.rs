@@ -15,6 +15,8 @@ mod library_qt;
 mod nav_qt;
 mod now_playing;
 mod offline_fwd;
+mod album_qt;
+mod artist_qt;
 mod playback_qt;
 mod sidebar_qt;
 
@@ -126,7 +128,6 @@ fn enter_shell(session: auth_qt::SessionInfo) {
     playback_qt::start_poll_loop(app());
     // Phase 7: the sidebar playlist tree.
     load_sidebar_once();
-
     ui(move |mut b| {
                 b.as_mut().set_session_user_name(QString::from(session.display_name.as_str()));
         b.as_mut().set_session_subscription(QString::from(session.subscription.as_str()));
@@ -322,6 +323,7 @@ pub(crate) fn sidebar_toggle_folder(id: &str) {
 /// url-keyed). Disk hits emit immediately; misses download then emit.
 pub(crate) fn sidebar_artwork_window(urls_json: String) {
     let urls: Vec<String> = serde_json::from_str(&urls_json).unwrap_or_default();
+    log::debug!("[qbz-qt] sidebar artwork window: {} urls", urls.len());
     let mut missing: Vec<String> = Vec::new();
     for url in urls {
         let path = artwork_qt::cached_path(&url);
@@ -342,6 +344,84 @@ pub(crate) fn sidebar_artwork_window(urls_json: String) {
             if !path.is_empty() {
                 emit_library_artwork(url, path);
             }
+        }
+    });
+}
+
+// ============================ Album / Artist views (phase 8) ==============
+
+/// Open the album detail view: push the nav entry, then fetch + publish.
+pub(crate) fn open_album(album_id: String) {
+    if offline_fwd::engine().status().is_offline() {
+        return;
+    }
+    nav_qt::record("album");
+    let runtime = app();
+    let param = album_id.clone();
+    ui(move |mut b| {
+        b.as_mut().set_album_loading(true);
+        b.as_mut().set_view_param_id(QString::from(param.as_str()));
+    });
+    spawn(async move {
+        match album_qt::load_album_view(&runtime, &album_id).await {
+            Ok(json) => {
+                                ui(move |mut b| {
+                    b.as_mut().set_album_json(QString::from(json.as_str()));
+                    b.as_mut().set_album_loading(false);
+                })
+            },
+            Err(e) => {
+                log::warn!("[qbz-qt] album view load failed: {e}");
+                ui(move |mut b| b.as_mut().set_album_loading(false));
+            }
+        }
+    });
+}
+
+/// Open the artist detail view: push the nav entry, then fetch + publish.
+pub(crate) fn open_artist(artist_id: String) {
+    if offline_fwd::engine().status().is_offline() {
+        return;
+    }
+    nav_qt::record("artist");
+    let runtime = app();
+    let param = artist_id.clone();
+    ui(move |mut b| {
+        b.as_mut().set_artist_loading(true);
+        b.as_mut().set_view_param_id(QString::from(param.as_str()));
+    });
+    spawn(async move {
+        match artist_qt::load_artist_view(&runtime, &artist_id).await {
+            Ok(json) => ui(move |mut b| {
+                b.as_mut().set_artist_json(QString::from(json.as_str()));
+                b.as_mut().set_artist_loading(false);
+            }),
+            Err(e) => {
+                log::warn!("[qbz-qt] artist view load failed: {e}");
+                ui(move |mut b| b.as_mut().set_artist_loading(false));
+            }
+        }
+    });
+}
+
+/// ArtistView "Load more" for one releases bucket (page 20, has_more).
+pub(crate) fn load_release_section(artist_id: String, release_type: String, offset: i32) {
+    let runtime = app();
+    spawn(async move {
+        match artist_qt::load_release_page(&runtime, &artist_id, &release_type, offset.max(0) as u32)
+            .await
+        {
+            Ok((cards, has_more)) => {
+                let json = serde_json::to_string(&cards).unwrap_or_else(|_| "[]".into());
+                ui(move |mut b| {
+                    b.as_mut().release_section_ready(
+                        QString::from(release_type.as_str()),
+                        QString::from(json.as_str()),
+                        has_more,
+                    );
+                });
+            }
+            Err(e) => log::warn!("[qbz-qt] release page load failed: {e}"),
         }
     });
 }
@@ -384,6 +464,69 @@ pub(crate) fn toggle_pin(kind: String, id: String, title: String, subtitle: Stri
             b.as_mut().pin_changed(QString::from(key.as_str()), value);
         });
     }
+}
+
+/// AlbumView header Shuffle.
+pub(crate) fn play_album_shuffled(album_id: String) {
+    let runtime = app();
+    spawn(async move {
+        if let Err(e) = playback_qt::play_album_shuffled(&runtime, &album_id).await {
+            log::error!("[qbz-qt] play_album_shuffled failed: {e}");
+        }
+    });
+}
+
+/// AlbumView row play (album from the clicked track).
+pub(crate) fn play_album_from_track(album_id: String, track_id: u64) {
+    let runtime = app();
+    spawn(async move {
+        if let Err(e) = playback_qt::play_album_from_track(&runtime, &album_id, track_id).await {
+            log::error!("[qbz-qt] play_album_from_track failed: {e}");
+        }
+    });
+}
+
+/// AlbumView row "Play next" / "Add to queue".
+pub(crate) fn enqueue_album_track(album_id: String, track_id: u64, mode: String) {
+    let runtime = app();
+    spawn(async move {
+        if let Err(e) = playback_qt::enqueue_album_track(&runtime, &album_id, track_id, &mode).await {
+            log::error!("[qbz-qt] enqueue_album_track failed: {e}");
+        }
+    });
+}
+
+/// ArtistView Popular Tracks row play (the whole list as the queue).
+pub(crate) fn play_artist_track(track_id: u64) {
+    let runtime = app();
+    spawn(async move {
+        let (queue, start) = artist_qt::top_queue(Some(track_id));
+        if let Err(e) = playback_qt::play_track_list(&runtime, queue, start, false).await {
+            log::error!("[qbz-qt] play_artist_track failed: {e}");
+        }
+    });
+}
+
+/// ArtistView "Play all" / "Shuffle all".
+pub(crate) fn play_artist_top(shuffle: bool) {
+    let runtime = app();
+    spawn(async move {
+        let (queue, start) = artist_qt::top_queue(None);
+        if let Err(e) = playback_qt::play_track_list(&runtime, queue, start, shuffle).await {
+            log::error!("[qbz-qt] play_artist_top failed: {e}");
+        }
+    });
+}
+
+/// ArtistView ⋯ "Add all to queue".
+pub(crate) fn enqueue_artist_top() {
+    let runtime = app();
+    spawn(async move {
+        let (queue, _) = artist_qt::top_queue(None);
+        if let Err(e) = playback_qt::enqueue_track_list(&runtime, queue).await {
+            log::error!("[qbz-qt] enqueue_artist_top failed: {e}");
+        }
+    });
 }
 
 /// Track-row click (Library tracks): one-track queue through the core.
@@ -540,7 +683,7 @@ fn log_rss(mark: &str) {
 /// from the Slint round). Disk hits emit immediately.
 pub(crate) fn library_artwork_window(keys_json: String) {
     let keys: Vec<String> = serde_json::from_str(&keys_json).unwrap_or_default();
-    log::debug!("[qbz-qt] library_artwork_window: {} keys", keys.len());
+    log::debug!("[qbz-qt] artwork window: {} keys", keys.len());
     if keys.is_empty() {
         return;
     }

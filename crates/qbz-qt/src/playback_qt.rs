@@ -23,6 +23,7 @@ use std::sync::Arc;
 
 use qbz_app::shell::AppRuntime;
 use qbz_core::LoggingAdapter;
+use cxx_qt_lib::QString;
 use qbz_models::{Quality, QueueTrack, RepeatMode};
 
 /// The request tier for every play: the ui_prefs default ("hires_plus").
@@ -130,11 +131,23 @@ pub async fn play_album(
     runtime: &Arc<AppRuntime<LoggingAdapter>>,
     album_id: &str,
 ) -> Result<(), String> {
-    log::info!("[qbz-qt] play_album: resolving {album_id}");
+    play_album_from(runtime, album_id, 0).await
+}
+
+/// Play an album starting at track `start_index` (AlbumView row play —
+/// Slint's play_album_from semantics: the queue keeps the whole album,
+/// the cursor starts at the clicked track).
+pub async fn play_album_from(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    album_id: &str,
+    start_index: usize,
+) -> Result<(), String> {
+    log::info!("[qbz-qt] play_album: resolving {album_id} (start {start_index})");
     let tracks = fetch_album_queue(runtime, album_id).await?;
-    let first_id = tracks[0].id;
+    let start = start_index.min(tracks.len() - 1);
+    let first_id = tracks[start].id;
     let count = tracks.len();
-    runtime.core().set_queue(tracks, Some(0)).await;
+    runtime.core().set_queue(tracks, Some(start)).await;
     publish_queue(runtime).await;
     log::info!("[qbz-qt] play_album: queue set ({count} tracks), playing track {first_id}");
     runtime
@@ -145,6 +158,100 @@ pub async fn play_album(
     log::info!("[qbz-qt] play_album: play_track_resolved started for {first_id}");
     refresh_now_playing(runtime).await;
     Ok(())
+}
+
+/// AlbumView row play: play the album starting AT the clicked track
+/// (Slint play_album_from: the queue keeps the whole album).
+pub async fn play_album_from_track(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    album_id: &str,
+    track_id: u64,
+) -> Result<(), String> {
+    let tracks = fetch_album_queue(runtime, album_id).await?;
+    let start = tracks.iter().position(|t| t.id == track_id).unwrap_or(0);
+    let first_id = tracks[start].id;
+    runtime.core().set_queue(tracks, Some(start)).await;
+    publish_queue(runtime).await;
+    runtime
+        .core()
+        .play_track_resolved(first_id, POC_QUALITY, None, None, 0)
+        .await
+        .map_err(|e| format!("play_track {first_id} failed: {e}"))?;
+    refresh_now_playing(runtime).await;
+    Ok(())
+}
+
+/// Play a pre-built queue starting at `start` (ArtistView Popular Tracks:
+/// the visible list becomes the queue, anchored at the clicked track).
+pub async fn play_track_list(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    tracks: Vec<QueueTrack>,
+    start: usize,
+    shuffle: bool,
+) -> Result<(), String> {
+    if tracks.is_empty() {
+        return Err("empty track list".to_string());
+    }
+    if shuffle {
+        runtime.core().set_shuffle(true).await;
+        crate::now_playing::set_shuffle(true);
+    }
+    let start = start.min(tracks.len() - 1);
+    let first_id = tracks[start].id;
+    runtime.core().set_queue(tracks, Some(start)).await;
+    publish_queue(runtime).await;
+    runtime
+        .core()
+        .play_track_resolved(first_id, POC_QUALITY, None, None, 0)
+        .await
+        .map_err(|e| format!("play_track {first_id} failed: {e}"))?;
+    refresh_now_playing(runtime).await;
+    Ok(())
+}
+
+/// Append a pre-built queue to the current one ("Add all to queue").
+pub async fn enqueue_track_list(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    tracks: Vec<QueueTrack>,
+) -> Result<(), String> {
+    if tracks.is_empty() {
+        return Err("empty track list".to_string());
+    }
+    runtime.core().add_tracks(tracks).await;
+    publish_queue(runtime).await;
+    Ok(())
+}
+
+/// One track from an album context into the queue ("Play next" / "Add to
+/// queue" on an AlbumView row).
+pub async fn enqueue_album_track(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    album_id: &str,
+    track_id: u64,
+    mode: &str,
+) -> Result<(), String> {
+    let tracks = fetch_album_queue(runtime, album_id).await?;
+    let Some(track) = tracks.into_iter().find(|t| t.id == track_id) else {
+        return Err(format!("track {track_id} not in album {album_id}"));
+    };
+    if mode == "next" {
+        runtime.core().add_track_next(track).await;
+    } else {
+        runtime.core().add_track(track).await;
+    }
+    publish_queue(runtime).await;
+    Ok(())
+}
+
+/// Shuffle-play an album (AlbumView header Shuffle): enable shuffle, then
+/// play — the core queue owns the shuffled order.
+pub async fn play_album_shuffled(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    album_id: &str,
+) -> Result<(), String> {
+    runtime.core().set_shuffle(true).await;
+    crate::now_playing::set_shuffle(true);
+    play_album(runtime, album_id).await
 }
 
 /// Play a single track as a one-element queue (Library track rows). The
@@ -316,12 +423,19 @@ pub async fn refresh_now_playing(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
     let state = runtime.core().get_queue_state().await;
     let Some(track) = state.current_track else {
         crate::now_playing::clear_track();
+        crate::ui(move |mut b| {
+            b.as_mut().set_np_track_id(QString::from(""));
+        });
         return;
     };
     let title = match track.version.as_deref().filter(|v| !v.is_empty()) {
         Some(version) => format!("{} ({version})", track.title),
         None => track.title.clone(),
     };
+    let track_id_str = track.id.to_string();
+    crate::ui(move |mut b| {
+        b.as_mut().set_np_track_id(QString::from(track_id_str.as_str()));
+    });
     log::info!(
         "[qbz-qt] now playing: '{title}' — {} ({}s)",
         track.artist,
