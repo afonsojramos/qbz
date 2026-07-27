@@ -1,9 +1,10 @@
 //! My QBZ — Collection / Mixtape DETAIL **playback** (Phase-2 Slice 5).
 //!
 //! Wires the detail view's hero Play / Shuffle CTAs, the per-row Play action,
-//! and the per-row context menu (play / play-next / add-to-queue) to the
-//! shared `qbz-mixtape` ENQUEUE resolver, then drives the already-shared
-//! `qbz-core` queue + `qbz-app` `RuntimeManager` queue-source stamp.
+//! and the per-row context menu (play / play-next / play-later /
+//! add-to-queue) to the shared `qbz-mixtape` ENQUEUE resolver, then drives
+//! the already-shared `qbz-core` queue + `qbz-app` `RuntimeManager`
+//! queue-source stamp.
 //!
 //! Behavior is 1:1 with Tauri's `v2_enqueue_collection` /
 //! `v2_enqueue_collection_item` (spec 40 §5/§6, gotchas §9):
@@ -47,6 +48,9 @@ enum RowMode {
     Play,
     /// Insert the item's resolved tracks immediately after the current track.
     PlayNext,
+    /// Insert the item's resolved tracks at the END of the manual block
+    /// (#442 "Play later") — NATURAL order, each insert appends to the block.
+    PlayLater,
     /// Append the item's resolved tracks at the end of the queue.
     AddToQueue,
 }
@@ -56,6 +60,7 @@ impl RowMode {
         match action {
             "play" => Some(Self::Play),
             "play-next" | "play_next" => Some(Self::PlayNext),
+            "play-later" | "play_later" => Some(Self::PlayLater),
             "add-to-queue" | "add_to_queue" | "append" => Some(Self::AddToQueue),
             _ => None,
         }
@@ -381,7 +386,8 @@ pub fn play_item(
 }
 
 /// Per-row context-menu action (`on_item_action`): play / play-next /
-/// add-to-queue for the single item identified by `source_item_id`.
+/// play-later / add-to-queue for the single item identified by
+/// `source_item_id`.
 pub fn item_action(
     runtime: Runtime,
     weak: slint::Weak<AppWindow>,
@@ -435,6 +441,16 @@ pub fn item_action(
                 refresh_sidebar(false);
                 crate::toast::success_weak(&weak, qbz_i18n::t("Playing next"));
             }
+            RowMode::PlayLater => {
+                // #442: NATURAL order — each insert appends to the END of the
+                // manual block (after every play-next/play-later already
+                // queued, before the source resumes).
+                for track in tracks {
+                    runtime.core().add_track_later(track).await;
+                }
+                refresh_sidebar(false);
+                crate::toast::success_weak(&weak, qbz_i18n::t("Added to play later"));
+            }
             RowMode::AddToQueue => {
                 runtime.core().add_tracks(tracks).await;
                 refresh_sidebar(false);
@@ -444,24 +460,70 @@ pub fn item_action(
     });
 }
 
+/// The bulk-bar queue placement (spec 12 §13.1 + #442 "Play later").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BulkEnqueueMode {
+    /// Append the batch at the end of the queue.
+    Append,
+    /// Insert the whole batch immediately after the current track, in REVERSE
+    /// so the first resolved track lands first (same rule as per-row PlayNext).
+    Next,
+    /// Insert the batch at the END of the manual block (#442 "Play later") —
+    /// NATURAL order, each `add_track_later` appends to the block.
+    Later,
+}
+
 /// **Bulk** enqueue for the detail select-mode bulk bar (spec 12 §13.1 Add to
-/// queue / Play next). Resolves EACH selected `MixtapeCollectionItem` through
-/// the same `ProdItemResolver` the per-row path uses (so Qobuz albums/tracks/
-/// playlists + local/Plex all resolve), flattens them in selection order, then:
-/// - **play_next = true**: insert the whole batch immediately after the current
-///   track, in REVERSE so the first resolved track lands first (same rule as the
-///   per-row `PlayNext`).
-/// - **play_next = false**: append the batch at the end of the queue.
-///
-/// Never replaces the queue and never stamps the queue-source collection
-/// (append/play-next preserve context, mirroring the per-row contract). Items
-/// that resolve to nothing are logged + skipped; an all-empty batch toasts.
+/// queue / Play next): `play_next` selects [`BulkEnqueueMode::Next`] over
+/// [`BulkEnqueueMode::Append`]. See `bulk_enqueue_inner` for the contract.
 pub fn bulk_enqueue(
     runtime: Runtime,
     weak: slint::Weak<AppWindow>,
     handle: tokio::runtime::Handle,
     items: Vec<MixtapeCollectionItem>,
     play_next: bool,
+) {
+    let mode = if play_next {
+        BulkEnqueueMode::Next
+    } else {
+        BulkEnqueueMode::Append
+    };
+    bulk_enqueue_inner(runtime, weak, handle, items, mode);
+}
+
+/// #442 "Play later" bulk enqueue (spec 12 §13.1 bar entry): same resolve +
+/// flatten as `bulk_enqueue`, placed at the END of the manual block.
+pub fn bulk_enqueue_later(
+    runtime: Runtime,
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+    items: Vec<MixtapeCollectionItem>,
+) {
+    bulk_enqueue_inner(runtime, weak, handle, items, BulkEnqueueMode::Later);
+}
+
+/// **Bulk** enqueue for the detail select-mode bulk bar (spec 12 §13.1 Add to
+/// queue / Play next / Play later). Resolves EACH selected
+/// `MixtapeCollectionItem` through the same `ProdItemResolver` the per-row
+/// path uses (so Qobuz albums/tracks/playlists + local/Plex all resolve),
+/// flattens them in selection order, then places the batch per `mode`:
+/// - **Next**: insert the whole batch immediately after the current track, in
+///   REVERSE so the first resolved track lands first (same rule as the per-row
+///   `PlayNext`).
+/// - **Later**: insert at the END of the manual block in NATURAL order (each
+///   `add_track_later` appends — #442).
+/// - **Append**: append the batch at the end of the queue.
+///
+/// Never replaces the queue and never stamps the queue-source collection
+/// (append/play-next/play-later preserve context, mirroring the per-row
+/// contract). Items that resolve to nothing are logged + skipped; an
+/// all-empty batch toasts.
+fn bulk_enqueue_inner(
+    runtime: Runtime,
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+    items: Vec<MixtapeCollectionItem>,
+    mode: BulkEnqueueMode,
 ) {
     if items.is_empty() {
         return;
@@ -510,18 +572,30 @@ pub fn bulk_enqueue(
             return;
         }
 
-        if play_next {
-            // REVERSE so the first resolved track lands immediately after the
-            // current track (spec §9.8).
-            for track in tracks.into_iter().rev() {
-                runtime.core().add_track_next(track).await;
+        match mode {
+            BulkEnqueueMode::Next => {
+                // REVERSE so the first resolved track lands immediately after the
+                // current track (spec §9.8).
+                for track in tracks.into_iter().rev() {
+                    runtime.core().add_track_next(track).await;
+                }
+                refresh_sidebar(false);
+                crate::toast::success_weak(&weak, qbz_i18n::t("Playing next"));
             }
-            refresh_sidebar(false);
-            crate::toast::success_weak(&weak, qbz_i18n::t("Playing next"));
-        } else {
-            runtime.core().add_tracks(tracks).await;
-            refresh_sidebar(false);
-            crate::toast::success_weak(&weak, qbz_i18n::t("Added to queue"));
+            BulkEnqueueMode::Later => {
+                // #442: NATURAL order — each insert appends to the END of the
+                // manual block.
+                for track in tracks {
+                    runtime.core().add_track_later(track).await;
+                }
+                refresh_sidebar(false);
+                crate::toast::success_weak(&weak, qbz_i18n::t("Added to play later"));
+            }
+            BulkEnqueueMode::Append => {
+                runtime.core().add_tracks(tracks).await;
+                refresh_sidebar(false);
+                crate::toast::success_weak(&weak, qbz_i18n::t("Added to queue"));
+            }
         }
     });
 }

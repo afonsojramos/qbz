@@ -262,6 +262,12 @@ jobs:
             -t "dist/QBZ_${VERSION}_amd64.deb"
           nfpm package -f packaging/nfpm/nfpm.yaml -p rpm \
             -t "dist/QBZ-${VERSION}-1.x86_64.rpm"
+          # Standalone qbzd packages (daemon-only — the independent deb/rpm
+          # the owner asked for; rides the same staged ./qbzd).
+          nfpm package -f packaging/nfpm/nfpm-qbzd.yaml -p deb \
+            -t "dist/qbzd_${VERSION}_amd64.deb"
+          nfpm package -f packaging/nfpm/nfpm-qbzd.yaml -p rpm \
+            -t "dist/qbzd-${VERSION}-1.x86_64.rpm"
 
       - name: Build AppImage
         run: |
@@ -370,5 +376,18 @@ jobs:
         with:
           token: ${{ secrets.APT_REPO_TOKEN }}
           repository: vicrodh/qbz-apt
+          event-type: new-release
+          client-payload: '{"tag": "${{ github.ref_name }}"}'
+
+      # Our own RPM repo (qbz-rpm — mirrors qbz-apt's flow with createrepo).
+      # continue-on-error until the token scope covers the new repo (the PAT
+      # was minted for qbz-apt only).
+      - name: Trigger RPM repo update
+        if: startsWith(github.ref, 'refs/tags/')
+        continue-on-error: true
+        uses: peter-evans/repository-dispatch@v4
+        with:
+          token: ${{ secrets.APT_REPO_TOKEN }}
+          repository: vicrodh/qbz-rpm
           event-type: new-release
           client-payload: '{"tag": "${{ github.ref_name }}"}'

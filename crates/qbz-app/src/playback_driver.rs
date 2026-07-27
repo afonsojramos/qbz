@@ -561,8 +561,22 @@ async fn prefetch_successors<A: FrontendAdapter + Send + Sync + 'static>(
     runtime: &AppRuntime<A>,
     quality: Quality,
 ) {
+    // Memory-pressure watchdog: critical pressure latched a halt — do not
+    // start a new download (issue #660).
+    if crate::memory_watchdog::prefetch_halted() {
+        log::debug!("[qbzd] driver: prefetch skipped — memory-pressure halt active");
+        return;
+    }
+    let profile = qbz_core::system_capabilities::memory_profile();
     let core = runtime.core();
-    let upcoming = core.peek_upcoming(1).await;
+    // Depth honors the profile's prefetch_count cap. The daemon's
+    // historical depth is 1 successor per advance, which is within BOTH
+    // classes' caps (LowMemory 1, Normal 5), so this changes nothing today
+    // and clamps automatically if the depth ever grows. There is no
+    // concurrency loop here — the single prefetch below is awaited — so
+    // max_concurrent_prefetch (>= 1 in both classes) is trivially honored.
+    let depth = 1usize.min(profile.prefetch_count);
+    let upcoming = core.peek_upcoming(depth).await;
     let Some(next) = upcoming.into_iter().next() else {
         return;
     };
@@ -578,8 +592,31 @@ async fn prefetch_successors<A: FrontendAdapter + Send + Sync + 'static>(
     let Some(client) = guard.as_ref() else {
         return;
     };
-    if let Err(e) = player.prefetch_into_cache(client, next.id, quality).await {
+    // Quality cap: the LowMemory profile disallows HiRes prefetch entirely
+    // (~60 MB/track → ~15 MB at Lossless); the watchdog additionally pauses
+    // HiRes prefetch on low-pressure ticks. This caps only the warm-ahead
+    // copy — playback of the user's selected quality is unaffected.
+    let allow_hires =
+        profile.allow_hires_prefetch && !crate::memory_watchdog::hires_prefetch_paused();
+    let prefetch_quality = cap_prefetch_quality(quality, allow_hires);
+    if let Err(e) = player
+        .prefetch_into_cache(client, next.id, prefetch_quality)
+        .await
+    {
         log::debug!("[qbzd] driver: prefetch track {} failed: {e}", next.id);
+    }
+}
+
+/// Pure prefetch-quality cap: when HiRes prefetch is disallowed (LowMemory
+/// profile or a low-pressure watchdog tick), HiRes/UltraHiRes warm-aheads
+/// downgrade to Lossless; anything else passes through unchanged.
+fn cap_prefetch_quality(requested: Quality, allow_hires: bool) -> Quality {
+    if allow_hires {
+        return requested;
+    }
+    match requested {
+        Quality::HiRes | Quality::UltraHiRes => Quality::Lossless,
+        q => q,
     }
 }
 
@@ -889,5 +926,31 @@ mod tests {
         let a = plan_tick(&s, &ev(1, false, 580, 0), &q(1, &[(2, true)], "off", None), None);
         assert!(!a.contains(&DriverAction::AdvanceAndPlay));
         assert!(a.contains(&DriverAction::ReportEdge)); // play-state edge
+    }
+
+    #[test]
+    fn prefetch_quality_uncapped_when_hires_allowed() {
+        // Normal profile, healthy pressure: every tier passes through.
+        for q in [
+            Quality::Mp3,
+            Quality::Lossless,
+            Quality::HiRes,
+            Quality::UltraHiRes,
+        ] {
+            assert_eq!(cap_prefetch_quality(q, true), q);
+        }
+    }
+
+    #[test]
+    fn prefetch_quality_caps_hires_to_lossless_when_disallowed() {
+        // LowMemory profile / low-pressure tick: HiRes warm-aheads shrink.
+        assert_eq!(cap_prefetch_quality(Quality::HiRes, false), Quality::Lossless);
+        assert_eq!(
+            cap_prefetch_quality(Quality::UltraHiRes, false),
+            Quality::Lossless
+        );
+        // Lower tiers are untouched.
+        assert_eq!(cap_prefetch_quality(Quality::Lossless, false), Quality::Lossless);
+        assert_eq!(cap_prefetch_quality(Quality::Mp3, false), Quality::Mp3);
     }
 }

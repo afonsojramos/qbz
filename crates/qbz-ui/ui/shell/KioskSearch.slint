@@ -8,7 +8,7 @@
 import { ListView } from "std-widgets.slint";
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Radius } from "../foundation/radius.slint";
-import { SearchState, SearchActions } from "../state.slint";
+import { SearchState, SearchActions, KioskNavState } from "../state.slint";
 import { KioskAlbumGrid } from "KioskAlbumGrid.slint";
 import { KioskArtistCard } from "KioskArtistCard.slint";
 import { KioskTrackRow } from "KioskTrackRow.slint";
@@ -17,9 +17,14 @@ import { KioskCard } from "KioskCard.slint";
 component SearchTab inherits Rectangle {
     in property <string> label;
     in property <int> index;
+    // Keyboard/gamepad nav (PR 2): this tab holds the shell focus ring.
+    in property <bool> nav-focused: false;
     callback picked(int);
     property <bool> active: SearchState.tab == root.index;
     horizontal-stretch: 0;
+    border-width: root.nav-focused ? 2px : 0px;
+    border-color: Theme.accent;
+    border-radius: Radius.sm;
     HorizontalLayout {
         padding-left: 2px;
         padding-right: 2px;
@@ -89,6 +94,55 @@ export component KioskSearch inherits Rectangle {
 
     property <length> pad: 16px;
 
+    // ---- Keyboard/gamepad nav (PR 2). The index space is the 5 tabs
+    // (All/Albums/Tracks/Artists/Playlists) followed by the active tab's
+    // items as a uniform grid. The All dashboard publishes NO items in v1
+    // (tabs only — its hero/preview mosaic isn't a uniform grid); the tab
+    // strips remain fully reachable. Containers mirror the focus index and
+    // answer the Enter pulse; the albums grid wires itself (KioskAlbumGrid).
+    function publish-nav() {
+        KioskNavState.tabs = 5;
+        KioskNavState.shelves = false;
+        if (SearchState.tab == 1) {
+            KioskNavState.columns = 6;
+            KioskNavState.count = 5 + SearchState.albums.length;
+        } else if (SearchState.tab == 2) {
+            KioskNavState.columns = 1;
+            KioskNavState.count = 5 + SearchState.tracks.length;
+        } else if (SearchState.tab == 3) {
+            KioskNavState.columns = 7;
+            KioskNavState.count = 5 + SearchState.artists.length;
+        } else if (SearchState.tab == 4) {
+            KioskNavState.columns = 6;
+            KioskNavState.count = 5 + SearchState.playlists.length;
+        } else {
+            KioskNavState.columns = 1;
+            KioskNavState.count = 5;
+        }
+        KioskNavState.index = Math.max(0, Math.min(KioskNavState.index, KioskNavState.count - 1));
+    }
+    init => {
+        root.publish-nav();
+    }
+    property <int> nav-tab-probe: SearchState.tab;
+    changed nav-tab-probe => {
+        root.publish-nav();
+    }
+    property <int> nav-len-probe: SearchState.albums.length + SearchState.tracks.length
+        + SearchState.artists.length + SearchState.playlists.length;
+    changed nav-len-probe => {
+        root.publish-nav();
+    }
+
+    // Enter on a tab → the same switch the tab TouchAreas drive.
+    property <int> act-probe: KioskNavState.activate-seq;
+    changed act-probe => {
+        if (KioskNavState.nav-active && KioskNavState.zone == "content"
+            && KioskNavState.index < KioskNavState.tabs) {
+            SearchActions.tab-changed(KioskNavState.index);
+        }
+    }
+
     VerticalLayout {
         spacing: 0px;
 
@@ -101,11 +155,11 @@ export component KioskSearch inherits Rectangle {
                 padding-right: root.pad;
                 spacing: 22px;
                 alignment: start;
-                SearchTab { label: @tr("All"); index: 0; picked(i) => { SearchActions.tab-changed(i); } }
-                SearchTab { label: @tr("Albums"); index: 1; picked(i) => { SearchActions.tab-changed(i); } }
-                SearchTab { label: @tr("Tracks"); index: 2; picked(i) => { SearchActions.tab-changed(i); } }
-                SearchTab { label: @tr("Artists"); index: 3; picked(i) => { SearchActions.tab-changed(i); } }
-                SearchTab { label: @tr("Playlists"); index: 4; picked(i) => { SearchActions.tab-changed(i); } }
+                SearchTab { label: @tr("All"); index: 0; nav-focused: KioskNavState.nav-active && KioskNavState.zone == "content" && KioskNavState.index == 0; picked(i) => { SearchActions.tab-changed(i); } }
+                SearchTab { label: @tr("Albums"); index: 1; nav-focused: KioskNavState.nav-active && KioskNavState.zone == "content" && KioskNavState.index == 1; picked(i) => { SearchActions.tab-changed(i); } }
+                SearchTab { label: @tr("Tracks"); index: 2; nav-focused: KioskNavState.nav-active && KioskNavState.zone == "content" && KioskNavState.index == 2; picked(i) => { SearchActions.tab-changed(i); } }
+                SearchTab { label: @tr("Artists"); index: 3; nav-focused: KioskNavState.nav-active && KioskNavState.zone == "content" && KioskNavState.index == 3; picked(i) => { SearchActions.tab-changed(i); } }
+                SearchTab { label: @tr("Playlists"); index: 4; nav-focused: KioskNavState.nav-active && KioskNavState.zone == "content" && KioskNavState.index == 4; picked(i) => { SearchActions.tab-changed(i); } }
             }
             Rectangle {
                 y: parent.height - 1px;
@@ -365,9 +419,33 @@ export component KioskSearch inherits Rectangle {
             }
 
             // Tracks — windowed list (ListView mounts only the visible band).
-            if SearchState.tab == 2: ListView {
-                for track in SearchState.tracks: KioskTrackRow {
+            if SearchState.tab == 2: tracks-list := ListView {
+                // PR 2 — focus ring + Enter + scroll-into-view (62px rows).
+                property <int> focused-item: KioskNavState.index - KioskNavState.tabs;
+                property <bool> item-focused: KioskNavState.nav-active
+                    && KioskNavState.zone == "content"
+                    && self.focused-item >= 0
+                    && self.focused-item < SearchState.tracks.length;
+                property <int> nav-index-probe: KioskNavState.index;
+                changed nav-index-probe => {
+                    if (self.item-focused) {
+                        if (self.focused-item * 62px < -self.viewport-y) {
+                            self.viewport-y = -(self.focused-item * 62px - 8px);
+                        } else if (self.focused-item * 62px + 62px > -self.viewport-y + self.height) {
+                            self.viewport-y = -(self.focused-item * 62px + 62px - self.height + 8px);
+                        }
+                    }
+                }
+                property <int> act-probe: KioskNavState.activate-seq;
+                changed act-probe => {
+                    if (self.item-focused) {
+                        root.media-action("track", SearchState.tracks[self.focused-item].id, "play");
+                    }
+                }
+
+                for track[i] in SearchState.tracks: KioskTrackRow {
                     track: track;
+                    nav-focused: tracks-list.item-focused && tracks-list.focused-item == i;
                     play(id) => {
                         root.media-action("track", id, "play");
                     }
@@ -381,6 +459,31 @@ export component KioskSearch inherits Rectangle {
                 property <length> cell: (self.width - 2 * root.pad - (self.cols - 1) * self.gap) / self.cols;
                 viewport-width: self.width;
                 viewport-height: Math.ceil(SearchState.artists.length / self.cols) * (self.cell + 26px + self.gap) + root.pad;
+
+                // PR 2 — focus ring + Enter + scroll-into-view.
+                property <int> focused-item: KioskNavState.index - KioskNavState.tabs;
+                property <bool> item-focused: KioskNavState.nav-active
+                    && KioskNavState.zone == "content"
+                    && self.focused-item >= 0
+                    && self.focused-item < SearchState.artists.length;
+                property <length> focus-top: root.pad + Math.floor(self.focused-item / self.cols) * (self.cell + 26px + self.gap);
+                property <int> nav-index-probe: KioskNavState.index;
+                changed nav-index-probe => {
+                    if (self.item-focused) {
+                        if (self.focus-top < -self.viewport-y) {
+                            self.viewport-y = -(self.focus-top - 8px);
+                        } else if (self.focus-top + self.cell + 26px > -self.viewport-y + self.height) {
+                            self.viewport-y = -(self.focus-top + self.cell + 26px - self.height + 8px);
+                        }
+                    }
+                }
+                property <int> act-probe: KioskNavState.activate-seq;
+                changed act-probe => {
+                    if (self.item-focused) {
+                        root.open-artist(SearchState.artists[self.focused-item].id);
+                    }
+                }
+
                 Rectangle {
                     for artist[i] in SearchState.artists: KioskArtistCard {
                         x: root.pad + Math.mod(i, agrid.cols) * (agrid.cell + agrid.gap);
@@ -389,6 +492,7 @@ export component KioskSearch inherits Rectangle {
                         id: artist.id;
                         name: artist.title;
                         avatar: artist.artwork;
+                        nav-focused: agrid.item-focused && agrid.focused-item == i;
                         clicked(id) => {
                             root.open-artist(id);
                         }
@@ -403,11 +507,40 @@ export component KioskSearch inherits Rectangle {
                 property <length> cell: (self.width - 2 * root.pad - (self.cols - 1) * self.gap) / self.cols;
                 viewport-width: self.width;
                 viewport-height: Math.ceil(SearchState.playlists.length / self.cols) * (self.cell + 42px + self.gap) + root.pad;
+
+                // PR 2 — focus ring + Enter + scroll-into-view.
+                property <int> focused-item: KioskNavState.index - KioskNavState.tabs;
+                property <bool> item-focused: KioskNavState.nav-active
+                    && KioskNavState.zone == "content"
+                    && self.focused-item >= 0
+                    && self.focused-item < SearchState.playlists.length;
+                property <length> focus-top: root.pad + Math.floor(self.focused-item / self.cols) * (self.cell + 42px + self.gap);
+                property <int> nav-index-probe: KioskNavState.index;
+                changed nav-index-probe => {
+                    if (self.item-focused) {
+                        if (self.focus-top < -self.viewport-y) {
+                            self.viewport-y = -(self.focus-top - 8px);
+                        } else if (self.focus-top + self.cell + 42px > -self.viewport-y + self.height) {
+                            self.viewport-y = -(self.focus-top + self.cell + 42px - self.height + 8px);
+                        }
+                    }
+                }
+                property <int> act-probe: KioskNavState.activate-seq;
+                changed act-probe => {
+                    if (self.item-focused) {
+                        root.media-action("playlist", SearchState.playlists[self.focused-item].id, "open");
+                    }
+                }
+
                 Rectangle {
                     for pl[i] in SearchState.playlists: Rectangle {
                         x: root.pad + Math.mod(i, pgrid.cols) * (pgrid.cell + pgrid.gap);
                         y: root.pad + Math.floor(i / pgrid.cols) * (pgrid.cell + 42px + pgrid.gap);
                         width: pgrid.cell;
+                        border-width: pgrid.item-focused && pgrid.focused-item == i ? 3px : 0px;
+                        border-color: Theme.accent;
+                        border-radius: Radius.sm;
+                        background: pgrid.item-focused && pgrid.focused-item == i ? Theme.accent.with-alpha(0.12) : transparent;
                         VerticalLayout {
                             alignment: start;
                             spacing: 7px;

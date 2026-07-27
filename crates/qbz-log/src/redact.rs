@@ -78,6 +78,40 @@ fn has_redaction_candidate(lower: &str) -> bool {
     NEEDLES.iter().any(|n| lower.contains(n))
 }
 
+/// IPv4 octet (0-255) — the range guard is what keeps version strings
+/// ("1.16.1", "8.2.0") and timestamps out of the mask.
+const OCTET: &str = r"(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])";
+
+/// IP-masking patterns (owner 2026-07-24): ANY address — LAN or public — is
+/// masked to its LAST segment only (`192.168.178.211` → `*.*.*.211`), so
+/// uploaded logs stop leaking the user's network topology. The port survives.
+///
+/// IPv6 groups must START with a 4-hex-digit group — that is what keeps time
+/// strings ("11:41:48.054") and MAC addresses out of the mask (regex has no
+/// lookaround, so the width anchor does the disambiguation).
+fn ip_patterns() -> &'static Vec<Regex> {
+    static PATTERNS: OnceLock<Vec<Regex>> = OnceLock::new();
+    PATTERNS.get_or_init(|| {
+        [
+            // IPv4: mask the first three octets, keep the last (capture 1).
+            format!(r"\b(?:{OCTET}\.){{3}}({OCTET})\b"),
+            // IPv6 full form (first group 4 hex wide — see the doc above).
+            r"\b[0-9a-fA-F]{4}:(?:[0-9a-fA-F]{1,4}:){1,6}([0-9a-fA-F]{1,4})\b".to_string(),
+            // IPv6 `::`-compressed form (same 4-wide anchor).
+            r"\b[0-9a-fA-F]{4}(?::[0-9a-fA-F]{0,4})*::(?:[0-9a-fA-F]{1,4}:)*([0-9a-fA-F]{1,4})\b".to_string(),
+        ]
+        .iter()
+        .filter_map(|p| Regex::new(p).ok())
+        .collect()
+    })
+}
+
+/// Cheap pre-check for the IP layer: a dot or colon and a digit, O(n). (The
+/// colon is required — IPv6 has no dots.)
+fn has_ip_candidate(line: &str) -> bool {
+    (line.contains('.') || line.contains(':')) && line.bytes().any(|b| b.is_ascii_digit())
+}
+
 /// Redact secrets from a single log line. Literal live-secret layer first, then regex.
 pub fn redact(line: &str) -> String {
     let mut out = line.to_string();
@@ -99,6 +133,16 @@ pub fn redact(line: &str) -> String {
                 out = re
                     .replace_all(&out, format!("${{1}}{REPLACEMENT}").as_str())
                     .into_owned();
+            }
+        }
+    }
+
+    // Layer 3 — IP masking (`*.*.*.<last>` for v4, `*:*:<last>` for v6).
+    if has_ip_candidate(&out) {
+        for (i, re) in ip_patterns().iter().enumerate() {
+            if re.is_match(&out) {
+                let replacement = if i == 0 { "*.*.*.${1}" } else { "*:*:${1}" };
+                out = re.replace_all(&out, replacement).into_owned();
             }
         }
     }
@@ -140,5 +184,39 @@ mod tests {
         register_secret("abc".into()); // < MIN_SECRET_LEN -> not registered
         let r = redact("value abc here");
         assert!(r.contains("abc"), "short value should not be scrubbed: {r}");
+    }
+
+    #[test]
+    fn masks_ipv4_keep_last_octet() {
+        let r = redact("DLNA: Set URI to http://192.168.178.211:9876/audio/***/235314822");
+        assert_eq!(
+            r,
+            "DLNA: Set URI to http://*.*.*.211:9876/audio/***/235314822"
+        );
+        // Public addresses get the same treatment.
+        let r = redact("dial 203.0.113.9 failed");
+        assert!(r.contains("*.*.*.9"), "public IPv4 survived: {r}");
+        assert!(!r.contains("203.0.113"), "public IPv4 leaked: {r}");
+    }
+
+    #[test]
+    fn ip_mask_leaves_versions_and_timestamps_alone() {
+        for s in [
+            "2026-07-24 11:41:48.054 INFO qbz",
+            "bundle 8.2.0-b034",
+            "slint 1.16.1",
+            "kernel 6.17.0-40-generic",
+            "rate 44.1kHz 24-bit / 192 kHz",
+        ] {
+            assert_eq!(redact(s), s, "non-IP was mangled: {s}");
+        }
+    }
+
+    #[test]
+    fn masks_ipv6() {
+        let r = redact("bind fe80:0000:0000:0000:0224:a4ff:fe12:3456 up");
+        assert!(r.contains("*:*:3456"), "full IPv6 survived: {r}");
+        let r2 = redact("bind fe80::224:a4ff:fe12:3456 up");
+        assert!(r2.contains("*:*:3456"), "compressed IPv6 survived: {r2}");
     }
 }

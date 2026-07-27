@@ -310,19 +310,22 @@ export component PlaylistView inherits Rectangle {
     property <bool> show-upload-confirm: false;
 
     // Bulk-bar action sets (typed properties — a ternary over bare array
-    // literals can't coerce to [BulkAction]). Tauri parity (spec §1.5):
-    // Play next / Add to queue / Add to playlist over the selection,
-    // Remove owner-only — followed playlists keep the queueing actions.
+    // literals can't coerce to [BulkAction]). Tauri parity (spec §1.5) + #442:
+    // Play next / Play later / Add to queue / Add to playlist over the
+    // selection, Remove owner-only — followed playlists keep the queueing
+    // actions.
     property <[BulkAction]> bulk-actions-owner: [
         { id: "select-all", label: @tr("Select all"), icon: @image-url("../assets/icons/square-check-big.svg"), danger: false, needs-selection: false },
-        { id: "play-next-selected", label: @tr("Play next"), icon: @image-url("../assets/icons/list-plus.svg"), danger: false, needs-selection: true },
+        { id: "play-next-selected", label: @tr("Play next"), icon: @image-url("../assets/icons/list-start.svg"), danger: false, needs-selection: true },
+        { id: "play-later-selected", label: @tr("Play later"), icon: @image-url("../assets/icons/list-plus.svg"), danger: false, needs-selection: true },
         { id: "queue-selected", label: @tr("Add to queue"), icon: @image-url("../assets/icons/list-end.svg"), danger: false, needs-selection: true },
         { id: "add-selected-to-playlist", label: @tr("Add to playlist"), icon: @image-url("../assets/icons/list-music.svg"), danger: false, needs-selection: true },
         { id: "remove-selected", label: @tr("Remove"), icon: @image-url("../assets/icons/trash-2.svg"), danger: true, needs-selection: true },
     ];
     property <[BulkAction]> bulk-actions-follower: [
         { id: "select-all", label: @tr("Select all"), icon: @image-url("../assets/icons/square-check-big.svg"), danger: false, needs-selection: false },
-        { id: "play-next-selected", label: @tr("Play next"), icon: @image-url("../assets/icons/list-plus.svg"), danger: false, needs-selection: true },
+        { id: "play-next-selected", label: @tr("Play next"), icon: @image-url("../assets/icons/list-start.svg"), danger: false, needs-selection: true },
+        { id: "play-later-selected", label: @tr("Play later"), icon: @image-url("../assets/icons/list-plus.svg"), danger: false, needs-selection: true },
         { id: "queue-selected", label: @tr("Add to queue"), icon: @image-url("../assets/icons/list-end.svg"), danger: false, needs-selection: true },
         { id: "add-selected-to-playlist", label: @tr("Add to playlist"), icon: @image-url("../assets/icons/list-music.svg"), danger: false, needs-selection: true },
     ];

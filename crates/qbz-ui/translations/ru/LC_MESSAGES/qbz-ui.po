@@ -4827,3 +4827,57 @@ msgstr "Исполнитель отклонён из Рекомендаций"
 
 msgid "{} restored to Recommendations"
 msgstr "{} возвращён в Рекомендации"
+
+msgid "LIBRARY › ALL"
+msgstr "БИБЛИОТЕКА › ВСЁ"
+
+msgid "Show local files & Plex"
+msgstr "Показывать локальные файлы и Plex"
+
+msgid "Include your favorited local files and Plex items in the Library All feed."
+msgstr "Показывать избранные локальные файлы и элементы Plex в ленте «Всё» библиотеки."
+
+msgid "Play indicator animation"
+msgstr "Анимация индикатора воспроизведения"
+
+msgid "Animate the now-playing row with equalizer bars. Off (default) shows a static pause icon with an accent edge mark — lighter on CPU."
+msgstr "Анимирует строку воспроизведения полосами эквалайзера. Выкл. (по умолчанию) — статичный значок паузы с акцентной меткой на краю строки, легче для CPU."
+
+msgid "Invert swipe navigation direction"
+msgstr "Инвертировать направление жеста навигации"
+
+msgid "Swap the two-finger touchpad swipe: left goes back, right goes forward."
+msgstr "Меняет местами свайп двумя пальцами по тачпаду: влево — назад, вправо — вперёд."
+
+msgid "Local items in Library All"
+msgstr "Локальные элементы в «Всё» библиотеки"
+
+msgid "Favorited items only: what you hearted. Entire local library: every folder and Plex album, artist and track."
+msgstr "Только избранное: отмеченное вами. Вся локальная библиотека: каждый альбом, исполнитель и трек из папок и Plex."
+
+msgid "Favorited items only"
+msgstr "Только избранное"
+
+msgid "Entire local library"
+msgstr "Вся локальная библиотека"
+
+msgid "Select multiple albums"
+msgstr "Выбрать несколько альбомов"
+
+msgid "Play later"
+msgstr "Слушать позже"
+
+msgid "Added to play later"
+msgstr "Добавлено «на позже»"
+
+msgid "Next in queue"
+msgstr "Далее в очереди"
+
+msgid "Next up"
+msgstr "Далее"
+
+msgid "Removed {} tracks from favorites"
+msgstr "{} треков удалено из избранного"
+
+msgid "Removing {} tracks from favorites…"
+msgstr "Удаление {} треков из избранного…"

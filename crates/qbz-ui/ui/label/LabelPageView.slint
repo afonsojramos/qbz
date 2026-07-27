@@ -201,9 +201,9 @@ export component LabelPageView inherits Rectangle {
                                 root.media-action("label", LabelState.id, "shuffle");
                             }
                         }
-                        // ⋯ Overflow — Play next / Add to queue / Share (the
-                        // Qobuz web label menu). Share is Qobuz-link only:
-                        // Song.link/Album.link have no label equivalent.
+                        // ⋯ Overflow — Play next / Play later / Add to queue /
+                        // Share (the Qobuz web label menu). Share is Qobuz-link
+                        // only: Song.link/Album.link have no label equivalent.
                         Rectangle {
                             width: 32px;
                             height: 32px;
@@ -222,14 +222,21 @@ export component LabelPageView inherits Rectangle {
                                 x: 0px;
                                 y: 38px;
                                 width: 224px;
-                                height: 3 * 33px + 10px;
+                                height: 4 * 33px + 10px;
                                 close-policy: close-on-click;
                                 ContextMenu {
                                     ContextMenuItem {
-                                        icon: @image-url("../assets/icons/list-plus.svg");
+                                        icon: @image-url("../assets/icons/list-start.svg");
                                         label: @tr("Play next");
                                         clicked => {
                                             root.media-action("label", "", "top-play-next");
+                                        }
+                                    }
+                                    ContextMenuItem {
+                                        icon: @image-url("../assets/icons/list-plus.svg");
+                                        label: @tr("Play later");
+                                        clicked => {
+                                            root.media-action("label", "", "top-play-later");
                                         }
                                     }
                                     ContextMenuItem {
@@ -363,14 +370,21 @@ export component LabelPageView inherits Rectangle {
                                 x: 32px - self.width;
                                 y: 38px;
                                 width: 224px;
-                                height: 2 * 33px + 10px;
+                                height: 3 * 33px + 10px;
                                 close-policy: close-on-click;
                                 ContextMenu {
                                     ContextMenuItem {
-                                        icon: @image-url("../assets/icons/list-plus.svg");
+                                        icon: @image-url("../assets/icons/list-start.svg");
                                         label: @tr("Play next");
                                         clicked => {
                                             root.media-action("label", "", "top-play-next");
+                                        }
+                                    }
+                                    ContextMenuItem {
+                                        icon: @image-url("../assets/icons/list-plus.svg");
+                                        label: @tr("Play later");
+                                        clicked => {
+                                            root.media-action("label", "", "top-play-later");
                                         }
                                     }
                                     ContextMenuItem {
@@ -395,7 +409,8 @@ export component LabelPageView inherits Rectangle {
                 selected-count: LabelState.selected-count;
                 actions: [
                     { id: "select-all", label: @tr("Select all"), icon: @image-url("../assets/icons/square-check-big.svg"), danger: false, needs-selection: false },
-                    { id: "play-next", label: @tr("Play next"), icon: @image-url("../assets/icons/list-plus.svg"), danger: false, needs-selection: true },
+                    { id: "play-next", label: @tr("Play next"), icon: @image-url("../assets/icons/list-start.svg"), danger: false, needs-selection: true },
+                    { id: "play-later", label: @tr("Play later"), icon: @image-url("../assets/icons/list-plus.svg"), danger: false, needs-selection: true },
                     { id: "queue", label: @tr("Add to queue"), icon: @image-url("../assets/icons/list-end.svg"), danger: false, needs-selection: true },
                     { id: "add-to-playlist", label: @tr("Add to playlist"), icon: @image-url("../assets/icons/list-music.svg"), danger: false, needs-selection: true },
                     { id: "add-to-mixtape", label: @tr("Add to Mixtape/Collection"), icon: @image-url("../assets/icons/cassette-tape.svg"), danger: false, needs-selection: true },

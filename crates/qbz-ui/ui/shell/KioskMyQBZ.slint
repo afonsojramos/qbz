@@ -3,15 +3,24 @@
 // Collections (separate ContentView routes); simple cover cards, tap opens the
 // detail. Covers are push-only. Mounted for both ContentView.mixtapes and
 // ContentView.collections.
+//
+// Keyboard/gamepad nav (PR 2): the index space is the 2 tabs followed by the
+// active list as a 6-column grid. Enter on a tab routes through the same
+// header-menu navigation the tab TouchAreas use.
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Radius } from "../foundation/radius.slint";
-import { MyQbzState, MyQbzActions, MixtapeCardItem, NavState, ContentView } from "../state.slint";
+import { MyQbzState, MyQbzActions, MixtapeCardItem, NavState, ContentView, KioskNavState } from "../state.slint";
 
 component MyQbzTab inherits Rectangle {
     in property <string> label;
     in property <bool> active;
+    // Keyboard/gamepad nav (PR 2): this tab holds the shell focus ring.
+    in property <bool> nav-focused: false;
     callback picked;
     horizontal-stretch: 0;
+    border-width: root.nav-focused ? 2px : 0px;
+    border-color: Theme.accent;
+    border-radius: Radius.sm;
     HorizontalLayout {
         padding-left: 2px;
         padding-right: 2px;
@@ -40,8 +49,14 @@ component MyQbzTab inherits Rectangle {
 component MyQbzCardLite inherits Rectangle {
     in property <MixtapeCardItem> item;
     in property <length> size: 150px;
+    // Keyboard/gamepad nav (PR 2) — same ring idiom as KioskCard.
+    in property <bool> nav-focused: false;
     callback clicked(string);
     width: root.size;
+    border-width: root.nav-focused ? 3px : 0px;
+    border-color: Theme.accent;
+    border-radius: Radius.sm;
+    background: root.nav-focused ? Theme.accent.with-alpha(0.12) : transparent;
     VerticalLayout {
         alignment: start;
         spacing: 7px;
@@ -94,6 +109,37 @@ export component KioskMyQBZ inherits Rectangle {
     property <length> pad: 16px;
     property <bool> on-collections: NavState.view == ContentView.collections;
 
+    // ---- Nav geometry publish (PR 2): 2 tabs + the active list.
+    function publish-nav() {
+        KioskNavState.tabs = 2;
+        KioskNavState.shelves = false;
+        KioskNavState.columns = 6;
+        KioskNavState.count = 2 + (root.on-collections
+            ? MyQbzState.collections.length
+            : MyQbzState.mixtapes.length);
+        KioskNavState.index = Math.max(0, Math.min(KioskNavState.index, KioskNavState.count - 1));
+    }
+    init => {
+        root.publish-nav();
+    }
+    property <int> nav-len-probe: MyQbzState.collections.length + MyQbzState.mixtapes.length;
+    changed nav-len-probe => {
+        root.publish-nav();
+    }
+
+    // Enter on a tab → the same route the tab TouchAreas navigate to.
+    property <int> act-probe: KioskNavState.activate-seq;
+    changed act-probe => {
+        if (KioskNavState.nav-active && KioskNavState.zone == "content"
+            && KioskNavState.index < KioskNavState.tabs) {
+            if (KioskNavState.index == 0) {
+                root.navigate("myqbz-mixtapes");
+            } else if (KioskNavState.index == 1) {
+                root.navigate("myqbz-collections");
+            }
+        }
+    }
+
     VerticalLayout {
         spacing: 0px;
 
@@ -108,6 +154,7 @@ export component KioskMyQBZ inherits Rectangle {
                 MyQbzTab {
                     label: @tr("Mixtapes");
                     active: !root.on-collections;
+                    nav-focused: KioskNavState.nav-active && KioskNavState.zone == "content" && KioskNavState.index == 0;
                     picked => {
                         root.navigate("myqbz-mixtapes");
                     }
@@ -115,6 +162,7 @@ export component KioskMyQBZ inherits Rectangle {
                 MyQbzTab {
                     label: @tr("Collections");
                     active: root.on-collections;
+                    nav-focused: KioskNavState.nav-active && KioskNavState.zone == "content" && KioskNavState.index == 1;
                     picked => {
                         root.navigate("myqbz-collections");
                     }
@@ -136,12 +184,44 @@ export component KioskMyQBZ inherits Rectangle {
                 property <length> cell: (self.width - 2 * root.pad - (self.cols - 1) * self.gap) / self.cols;
                 viewport-width: self.width;
                 viewport-height: Math.ceil((root.on-collections ? MyQbzState.collections.length : MyQbzState.mixtapes.length) / self.cols) * (self.cell + 44px + self.gap) + root.pad;
+
+                // PR 2 — focus ring + Enter + scroll-into-view.
+                property <int> focused-item: KioskNavState.index - KioskNavState.tabs;
+                property <bool> item-focused: KioskNavState.nav-active
+                    && KioskNavState.zone == "content"
+                    && self.focused-item >= 0
+                    && self.focused-item < (root.on-collections
+                        ? MyQbzState.collections.length
+                        : MyQbzState.mixtapes.length);
+                property <length> focus-top: root.pad + Math.floor(self.focused-item / self.cols) * (self.cell + 44px + self.gap);
+                property <int> nav-index-probe: KioskNavState.index;
+                changed nav-index-probe => {
+                    if (self.item-focused) {
+                        if (self.focus-top < -self.viewport-y) {
+                            self.viewport-y = -(self.focus-top - 8px);
+                        } else if (self.focus-top + self.cell + 44px > -self.viewport-y + self.height) {
+                            self.viewport-y = -(self.focus-top + self.cell + 44px - self.height + 8px);
+                        }
+                    }
+                }
+                property <int> act-probe: KioskNavState.activate-seq;
+                changed act-probe => {
+                    if (self.item-focused) {
+                        if (root.on-collections) {
+                            MyQbzActions.open-card(MyQbzState.collections[self.focused-item].id);
+                        } else {
+                            MyQbzActions.open-card(MyQbzState.mixtapes[self.focused-item].id);
+                        }
+                    }
+                }
+
                 Rectangle {
                     for item[i] in (root.on-collections ? MyQbzState.collections : MyQbzState.mixtapes): MyQbzCardLite {
                         x: root.pad + Math.mod(i, grid.cols) * (grid.cell + grid.gap);
                         y: root.pad + Math.floor(i / grid.cols) * (grid.cell + 44px + grid.gap);
                         size: grid.cell;
                         item: item;
+                        nav-focused: grid.item-focused && grid.focused-item == i;
                         clicked(id) => {
                             MyQbzActions.open-card(id);
                         }

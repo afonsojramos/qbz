@@ -440,9 +440,9 @@ component DetailRow inherits Rectangle {
                     width: 184px;
                     // Explicit height: without it the PopupWindow's box does not
                     // resolve and the in-flow rows below paint over it (the only
-                    // PopupWindow in the codebase that omitted this). 4 items
-                    // (32px) + 1 separator (1px) + padding (8px) + spacing (4px).
-                    height: 145px;
+                    // PopupWindow in the codebase that omitted this). 5 items
+                    // (32px) + 1 separator (1px) + padding (8px) + spacing (5px).
+                    height: 178px;
                     // Act-and-dismiss menu — match the app idiom (close on any
                     // click; items also act before the implicit close).
                     close-policy: PopupClosePolicy.close-on-click;
@@ -462,12 +462,17 @@ component DetailRow inherits Rectangle {
                                 chosen => { MyQbzDetailActions.play-item(root.item.source-item-id); }
                             }
                             RowMenuItem {
-                                icon: @image-url("../assets/icons/list-music.svg");
+                                icon: @image-url("../assets/icons/list-start.svg");
                                 label: @tr("Play next");
                                 chosen => { MyQbzDetailActions.item-action(root.item.source-item-id, "play-next"); }
                             }
                             RowMenuItem {
-                                icon: @image-url("../assets/icons/list-music.svg");
+                                icon: @image-url("../assets/icons/list-plus.svg");
+                                label: @tr("Play later");
+                                chosen => { MyQbzDetailActions.item-action(root.item.source-item-id, "play-later"); }
+                            }
+                            RowMenuItem {
+                                icon: @image-url("../assets/icons/list-end.svg");
                                 label: @tr("Add to queue");
                                 chosen => { MyQbzDetailActions.item-action(root.item.source-item-id, "add-to-queue"); }
                             }
@@ -1233,10 +1238,11 @@ export component MixtapeDetailView inherits Rectangle {
     // Spec 12 §13: a bottom-docked bar that appears while items are selected
     // (placement='bottom' default). Mirrors the local-library MultiSelectBar
     // chrome (a flat [BulkAction] row — the §13.1 split-queue dropdown isn't
-    // expressible in MultiSelectBar, so its two actions are flattened to the
-    // adjacent "Add to queue" + "Play next" buttons, same idiom the Local
-    // Library tracks bar uses). The §13.1 action set, in order: Add to queue
-    // (play-later), Play next, Add to playlist, Add to Mixtape/Collection,
+    // expressible in MultiSelectBar, so its queue actions are flattened to
+    // adjacent buttons, same idiom the Local Library tracks bar uses). The
+    // action set, in order: Add to queue, Play later (#442 — the manual-block
+    // tail; §13.1's own "play-later" label mapped to plain append before
+    // #442 existed), Play next, Add to playlist, Add to Mixtape/Collection,
     // Remove from this collection (danger), Clear (exit-select). The bar emits
     // the id; the Rust side routes it.
     if MyQbzDetailState.select-mode && MyQbzDetailState.selected-count > 0: Rectangle {
@@ -1251,7 +1257,8 @@ export component MixtapeDetailView inherits Rectangle {
             selected-count: MyQbzDetailState.selected-count;
             actions: [
                 { id: "add-to-queue", label: @tr("Add to queue"), icon: @image-url("../assets/icons/list-end.svg"), danger: false, needs-selection: true },
-                { id: "play-next", label: @tr("Play next"), icon: @image-url("../assets/icons/list-plus.svg"), danger: false, needs-selection: true },
+                { id: "play-later", label: @tr("Play later"), icon: @image-url("../assets/icons/list-plus.svg"), danger: false, needs-selection: true },
+                { id: "play-next", label: @tr("Play next"), icon: @image-url("../assets/icons/list-start.svg"), danger: false, needs-selection: true },
                 { id: "add-to-playlist", label: @tr("Add to playlist"), icon: @image-url("../assets/icons/list-music.svg"), danger: false, needs-selection: true },
                 { id: "add-to-mixtape", label: @tr("Add to Mixtape/Collection"), icon: @image-url("../assets/icons/cassette-tape.svg"), danger: false, needs-selection: true },
                 { id: "remove-selected", label: @tr("Remove"), icon: @image-url("../assets/icons/trash-2.svg"), danger: true, needs-selection: true },

@@ -209,6 +209,9 @@ impl GraphicsBackend for WGPUBackend {
         surface: Self::WindowSurface,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         surface.surface_texture.present();
+        // QBZ vendor patch (#558): count presented frames for the
+        // render-liveness watchdog.
+        crate::note_frame_presented();
         Ok(())
     }
 

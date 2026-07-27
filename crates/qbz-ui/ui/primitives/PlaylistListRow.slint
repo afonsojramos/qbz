@@ -115,7 +115,8 @@ export component PlaylistListRow inherits Rectangle {
                     x: -166px;
                     y: 32px;
                     width: 196px;
-                    height: 150px;
+                    // 5 rows x 33px + ContextMenu's 5/5 padding.
+                    height: 5 * 33px + 10px;
                     ContextMenu {
                         ContextMenuItem {
                             icon: @image-url("../assets/icons/play.svg");
@@ -125,10 +126,17 @@ export component PlaylistListRow inherits Rectangle {
                             }
                         }
                         ContextMenuItem {
-                            icon: @image-url("../assets/icons/list-plus.svg");
+                            icon: @image-url("../assets/icons/list-start.svg");
                             label: @tr("Play next");
                             clicked => {
                                 root.media-action("playlist", root.playlist.id, "play-next");
+                            }
+                        }
+                        ContextMenuItem {
+                            icon: @image-url("../assets/icons/list-plus.svg");
+                            label: @tr("Play later");
+                            clicked => {
+                                root.media-action("playlist", root.playlist.id, "play-later");
                             }
                         }
                         ContextMenuItem {

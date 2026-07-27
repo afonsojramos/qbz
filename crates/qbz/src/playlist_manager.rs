@@ -320,8 +320,10 @@ pub fn reset_session(_window: &AppWindow) {
 
 /// Order playlists by the active sort (mirrors `applySortToList`):
 /// name (locale-ish), playcount desc, tracks (remote+local) desc, custom
-/// (position asc); `recent` keeps the API order.
-fn sort_playlists(list: &mut Vec<PmPlaylist>, sort: &str) {
+/// (position asc); `recent` keeps the API order (which IS newest-first —
+/// #657). Every option's `asc == true` is its natural direction; `false`
+/// reverses it (re-selecting the menu option flips the direction).
+fn sort_playlists(list: &mut Vec<PmPlaylist>, sort: &str, asc: bool) {
     match sort {
         "name" => list.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase())),
         "playcount" => list.sort_by(|a, b| b.play_count.cmp(&a.play_count)),
@@ -329,6 +331,9 @@ fn sort_playlists(list: &mut Vec<PmPlaylist>, sort: &str) {
         "custom" => list.sort_by(|a, b| a.position.cmp(&b.position)),
         // "recent" — keep insertion (API) order.
         _ => {}
+    }
+    if !asc {
+        list.reverse();
     }
 }
 
@@ -390,8 +395,9 @@ impl PmEntry<'_> {
 }
 
 /// `sort_playlists`, over the merged Qobuz + local display set (same
-/// comparators; see `PmEntry` for the missing-stat rules).
-fn sort_entries(list: &mut [PmEntry], sort: &str) {
+/// comparators; see `PmEntry` for the missing-stat rules). `asc == false`
+/// reverses the option's natural direction (#657 caret).
+fn sort_entries(list: &mut [PmEntry], sort: &str, asc: bool) {
     match sort {
         "name" => list.sort_by_key(|e| e.name_lower()),
         "playcount" => list.sort_by(|a, b| b.play_count().cmp(&a.play_count())),
@@ -399,6 +405,9 @@ fn sort_entries(list: &mut [PmEntry], sort: &str) {
         "custom" => list.sort_by_key(|e| e.position()),
         // "recent" — Qobuz keeps API order, locals stay after it.
         _ => {}
+    }
+    if !asc {
+        list.reverse();
     }
 }
 
@@ -576,6 +585,7 @@ pub fn rebuild(window: &AppWindow) {
     let query = state.get_search_query().trim().to_lowercase();
     let filter = state.get_filter().to_string();
     let sort = state.get_sort().to_string();
+    let sort_asc = state.get_sort_asc();
     let view_mode = state.get_view_mode().to_string();
     let folder_mode = state.get_folder_mode();
 
@@ -608,14 +618,14 @@ pub fn rebuild(window: &AppWindow) {
     // Qobuz set (B4) — see `PmEntry` for the missing-stat sort rules.
     let mut entries: Vec<PmEntry> = filtered.iter().map(PmEntry::Qobuz).collect();
     entries.extend(local_entries(&data, &query, &filter).into_iter().map(PmEntry::Local));
-    sort_entries(&mut entries, &sort);
+    sort_entries(&mut entries, &sort, sort_asc);
     let playlist_items: Vec<PmPlaylistItem> = entries.iter().map(|e| e.item()).collect();
     let visible_count = playlist_items.len();
 
     // Tree rows (folder headers + nested + root playlists). Built only
     // when the tree view is active; otherwise an empty model.
     let tree = if folder_mode && view_mode == "tree" {
-        build_tree(&data, &query, &filter, &sort)
+        build_tree(&data, &query, &filter, &sort, sort_asc)
     } else {
         Vec::new()
     };
@@ -667,7 +677,7 @@ pub fn search_menu_folders(window: &AppWindow, query: &str) {
 
 /// Flatten folders + their (expanded) playlists + root playlists into the
 /// tree model. Auto-expands all folders the first time the tree opens.
-fn build_tree(data: &PmData, query: &str, filter: &str, sort: &str) -> Vec<PmTreeRow> {
+fn build_tree(data: &PmData, query: &str, filter: &str, sort: &str, sort_asc: bool) -> Vec<PmTreeRow> {
     // Auto-expand on first tree open (Tauri's treeInitialized).
     {
         let mut init = TREE_INIT.lock().unwrap_or_else(|e| e.into_inner());
@@ -714,7 +724,7 @@ fn build_tree(data: &PmData, query: &str, filter: &str, sort: &str) -> Vec<PmTre
         if (searching || offline) && members.is_empty() {
             continue;
         }
-        sort_playlists(&mut members, sort);
+        sort_playlists(&mut members, sort, sort_asc);
         let is_exp = searching || expanded.contains(&f.id);
         rows.push(PmTreeRow {
             kind: "folder".into(),
@@ -747,7 +757,7 @@ fn build_tree(data: &PmData, query: &str, filter: &str, sort: &str) -> Vec<PmTre
         .collect();
     let mut entries: Vec<PmEntry> = root.iter().map(PmEntry::Qobuz).collect();
     entries.extend(local_entries(data, query, filter).into_iter().map(PmEntry::Local));
-    sort_entries(&mut entries, sort);
+    sort_entries(&mut entries, sort, sort_asc);
     for e in &entries {
         rows.push(PmTreeRow {
             kind: "playlist".into(),

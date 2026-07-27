@@ -4813,3 +4813,57 @@ msgstr "Künstler aus Empfehlungen abgelehnt"
 
 msgid "{} restored to Recommendations"
 msgstr "{} wieder in Empfehlungen aufgenommen"
+
+msgid "LIBRARY › ALL"
+msgstr "BIBLIOTHEK › ALLE"
+
+msgid "Show local files & Plex"
+msgstr "Lokale Dateien & Plex anzeigen"
+
+msgid "Include your favorited local files and Plex items in the Library All feed."
+msgstr "Zeigt deine favorisierten lokalen Dateien und Plex-Elemente im Bibliotheksfeed Alle an."
+
+msgid "Play indicator animation"
+msgstr "Wiedergabeindikator-Animation"
+
+msgid "Animate the now-playing row with equalizer bars. Off (default) shows a static pause icon with an accent edge mark — lighter on CPU."
+msgstr "Animiert die gerade spielende Zeile mit Equalizer-Balken. Aus (Standard) zeigt ein statisches Pause-Symbol mit einer Akzentmarkierung am Rand — schont die CPU."
+
+msgid "Invert swipe navigation direction"
+msgstr "Wischrichtung für Navigation umkehren"
+
+msgid "Swap the two-finger touchpad swipe: left goes back, right goes forward."
+msgstr "Vertauscht den Zwei-Finger-Wisch auf dem Touchpad: links geht zurück, rechts geht vorwärts."
+
+msgid "Local items in Library All"
+msgstr "Lokale Elemente in Bibliothek › Alle"
+
+msgid "Favorited items only: what you hearted. Entire local library: every folder and Plex album, artist and track."
+msgstr "Nur Favoriten: was du markiert hast. Gesamte lokale Bibliothek: jedes Album, jeder Künstler und jeder Titel aus Ordnern und Plex."
+
+msgid "Favorited items only"
+msgstr "Nur Favoriten"
+
+msgid "Entire local library"
+msgstr "Gesamte lokale Bibliothek"
+
+msgid "Select multiple albums"
+msgstr "Mehrere Alben auswählen"
+
+msgid "Play later"
+msgstr "Später abspielen"
+
+msgid "Added to play later"
+msgstr "Für später hinzugefügt"
+
+msgid "Next in queue"
+msgstr "Als Nächstes in der Warteschlange"
+
+msgid "Next up"
+msgstr "Als Nächstes"
+
+msgid "Removed {} tracks from favorites"
+msgstr "{} Titel aus Favoriten entfernt"
+
+msgid "Removing {} tracks from favorites…"
+msgstr "{} Titel werden aus Favoriten entfernt…"

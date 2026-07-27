@@ -89,6 +89,9 @@ struct RowData {
     artwork_url: String,
     playing: bool,
     is_ephemeral: bool,
+    // #442 section header drawn ABOVE this row: "" | "next-in-queue" (first
+    // manual row) | "next-up" (first row after the manual block).
+    section: String,
 }
 
 /// `M:SS` duration string.
@@ -144,6 +147,7 @@ fn row_from(track: &QueueTrack, playing: bool) -> RowData {
         playing,
         is_ephemeral: track.source.as_deref() == Some("ephemeral")
             || crate::ephemeral::is_ephemeral_id(track.id as i64),
+        section: String::new(),
     }
 }
 
@@ -258,7 +262,21 @@ impl QueueController {
 
         let page_rows: Vec<RowData> = filtered[start..end]
             .iter()
-            .map(|t| row_from(t, false))
+            .enumerate()
+            .map(|(i, t)| {
+                let mut r = row_from(t, false);
+                // #442 section markers — only on the unfiltered list (a
+                // search result has no meaningful sections).
+                if query.is_empty() {
+                    let g = start + i;
+                    if state.manual_next_count > 0 && g == 0 {
+                        r.section = "next-in-queue".into();
+                    } else if g == state.manual_next_count {
+                        r.section = "next-up".into();
+                    }
+                }
+                r
+            })
             .collect();
 
         // page-start / page-end are 1-based for the human-readable counter.
@@ -436,6 +454,25 @@ impl QueueController {
             qs.set_page_count(page_count as i32);
             qs.set_page_start(page_start as i32);
             qs.set_page_end(page_end as i32);
+            qs.set_page_section_count(
+                page_rows.iter().filter(|r| !r.section.is_empty()).count() as i32
+            );
+            // #442 drag-math aids (see QueueSidebar's headers-above).
+            qs.set_page_manual_header(
+                query.is_empty() && state.manual_next_count > 0 && start == 0
+            );
+            qs.set_page_manual_pos(if query.is_empty()
+                && state.manual_next_count >= start
+                && state.manual_next_count < end
+            {
+                (state.manual_next_count - start) as i32
+            } else {
+                -1
+            });
+            // #442 menu-hint numbers (TrackContextMenu suffix).
+            qs.set_queue_length(state.total_tracks as i32);
+            qs.set_queue_current_index(state.current_index.map(|i| i as i32).unwrap_or(-1));
+            qs.set_manual_count(state.manual_next_count as i32);
 
             let history_items: Vec<QueueItem> =
                 history_rows.iter().map(|r| to_item_reuse(r, &prior_all)).collect();
@@ -982,6 +1019,7 @@ fn to_item_reuse(
         duration: row.duration.clone().into(),
         explicit: row.explicit,
         is_ephemeral: row.is_ephemeral,
+        section: row.section.clone().into(),
     }
 }
 

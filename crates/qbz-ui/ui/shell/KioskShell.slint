@@ -19,7 +19,7 @@ import { LineEdit } from "std-widgets.slint";
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Layout } from "../foundation/layout.slint";
 import { Radius } from "../foundation/radius.slint";
-import { NavState, ContentView, OfflineState, PlaylistState, PurchaseDetailState, SearchActions, UiFocusState, AppearanceState, ImmersiveState } from "../state.slint";
+import { NavState, ContentView, OfflineState, PlaylistState, PurchaseDetailState, SearchActions, UiFocusState, AppearanceState, ImmersiveState, NowPlayingState, KioskNavState } from "../state.slint";
 import { ImmersiveView } from "../immersive/ImmersiveView.slint";
 import { PlayerBarSmall } from "PlayerBarSmall.slint";
 import { NavRail } from "NavRail.slint";
@@ -73,6 +73,131 @@ export component KioskShell inherits Rectangle {
     callback logout();
     callback close-app();
     callback recovery-login();
+    // Keyboard/gamepad nav (PR 2): emitted by the root FocusScope on Enter.
+    // The internal dispatch runs through nav-activate() below; this public
+    // seam exists so an outer layer (or a future gamepad driver) can observe
+    // or trigger the same "activate the focused item" request.
+    callback activate-focused();
+
+    // ---- Kiosk keyboard navigation (Steam Deck Game Mode plan, PR 2) ----
+    // One root FocusScope drives the whole kiosk: arrows move a focus ring
+    // through three zones — rail (bottom NavRail) → content (the mounted
+    // view's items) → player (the transport bar) — Enter activates the
+    // focused item, Esc goes back. The zone model lives in KioskNavState
+    // (state.slint); the mounted content view publishes its geometry there
+    // (tabs / columns / count / shelves) and mirrors `index` onto its focus
+    // rings. Pure Slint: PR 3's gamepad feeds this same path by injecting
+    // synthetic key events, so nothing here is keyboard-specific.
+    //
+    // Zone cycle (Down): rail → content → player → rail; Up reverses. The
+    // content index space is `tabs` leading tab-strip entries followed by
+    // the item rows (a `columns`-wide grid; columns == 1 = list/shelves).
+    function nav-left() {
+        KioskNavState.nav-active = true;
+        KioskNavState.dir = 0;
+        if (KioskNavState.zone == "rail") {
+            KioskNavState.index = Math.max(0, KioskNavState.index - 1);
+        } else if (KioskNavState.zone == "content") {
+            if (KioskNavState.index < KioskNavState.tabs) {
+                KioskNavState.index = Math.max(0, KioskNavState.index - 1);
+            } else if (KioskNavState.shelves) {
+                KioskNavState.hmove = -1;
+            } else if (Math.mod(KioskNavState.index - KioskNavState.tabs, KioskNavState.columns) > 0) {
+                KioskNavState.index = KioskNavState.index - 1;
+            }
+        }
+    }
+    function nav-right() {
+        KioskNavState.nav-active = true;
+        KioskNavState.dir = 0;
+        if (KioskNavState.zone == "rail") {
+            KioskNavState.index = Math.min(rail.tile-count - 1, KioskNavState.index + 1);
+        } else if (KioskNavState.zone == "content") {
+            if (KioskNavState.index < KioskNavState.tabs) {
+                KioskNavState.index = Math.min(KioskNavState.tabs - 1, KioskNavState.index + 1);
+            } else if (KioskNavState.shelves) {
+                KioskNavState.hmove = 1;
+            } else if (Math.mod(KioskNavState.index - KioskNavState.tabs, KioskNavState.columns) < KioskNavState.columns - 1
+                && KioskNavState.index + 1 < KioskNavState.count) {
+                KioskNavState.index = KioskNavState.index + 1;
+            }
+        }
+    }
+    function nav-up() {
+        KioskNavState.nav-active = true;
+        KioskNavState.dir = -1;
+        if (KioskNavState.zone == "content") {
+            if (KioskNavState.index >= KioskNavState.tabs + KioskNavState.columns) {
+                KioskNavState.index = KioskNavState.index - KioskNavState.columns;
+            } else if (KioskNavState.index >= KioskNavState.tabs) {
+                // Grid row 0 → the tab strip above it (column → tab).
+                KioskNavState.index = Math.min(KioskNavState.tabs - 1, KioskNavState.index - KioskNavState.tabs);
+            } else {
+                // Tab strip (top of the cycle) → wrap down to the rail.
+                KioskNavState.zone = "rail";
+                KioskNavState.index = 0;
+            }
+        } else if (KioskNavState.zone == "rail") {
+            KioskNavState.zone = "player";
+            KioskNavState.index = 0;
+        } else {
+            KioskNavState.zone = "content";
+            KioskNavState.index = 0;
+        }
+    }
+    function nav-down() {
+        KioskNavState.nav-active = true;
+        KioskNavState.dir = 1;
+        if (KioskNavState.zone == "content") {
+            if (KioskNavState.index < KioskNavState.tabs) {
+                // Tab strip → the first item row (or the player bar when the
+                // view carries no items).
+                if (KioskNavState.count > KioskNavState.tabs) {
+                    KioskNavState.index = KioskNavState.tabs;
+                } else {
+                    KioskNavState.zone = "player";
+                    KioskNavState.index = 0;
+                }
+            } else if (KioskNavState.index + KioskNavState.columns < KioskNavState.count) {
+                KioskNavState.index = KioskNavState.index + KioskNavState.columns;
+            } else {
+                KioskNavState.zone = "player";
+                KioskNavState.index = 0;
+            }
+        } else if (KioskNavState.zone == "player") {
+            KioskNavState.zone = "rail";
+            KioskNavState.index = 0;
+        } else {
+            KioskNavState.zone = "content";
+            KioskNavState.index = 0;
+        }
+    }
+    function nav-activate() {
+        KioskNavState.nav-active = true;
+        if (KioskNavState.zone == "player") {
+            // The transport is ONE focusable unit: Enter = play/pause.
+            if (NowPlayingState.has-track) {
+                NowPlayingState.toggle-play();
+            }
+        } else if (KioskNavState.zone == "rail") {
+            rail.activate-index(KioskNavState.index);
+        } else {
+            // Content views own their activation. They are conditionally
+            // mounted (can't be addressed from here), so the request goes
+            // out as a pulse the mounted view answers via a changed probe.
+            KioskNavState.activate-seq = KioskNavState.activate-seq + 1;
+        }
+    }
+
+    // Reset the nav model on every view switch: focus lands on the new
+    // view's content, parked at the first item.
+    property <ContentView> nav-view-probe: NavState.view;
+    changed nav-view-probe => {
+        KioskNavState.zone = "content";
+        KioskNavState.index = 0;
+        KioskNavState.dir = 0;
+        KioskNavState.hmove = 0;
+    }
 
     // Kiosk chrome heights. The back bar + transport are one header-row tall
     // each; the NavRail is a fat touch target.
@@ -180,6 +305,9 @@ export component KioskShell inherits Rectangle {
                         // on-screen keyboard (squeekboard) closes. Otherwise the
                         // search field keeps focus forever and the OSK never hides.
                         search-field.clear-focus();
+                        // Hand keyboard focus back to the nav scope so arrows
+                        // keep working after a search (PR 2).
+                        keys.focus();
                     }
                 }
             }
@@ -203,7 +331,11 @@ export component KioskShell inherits Rectangle {
             // BEHIND the views (which handle their own taps); it only catches
             // empty-area taps.
             dismiss-osk-ta := TouchArea {
-                clicked => { search-field.clear-focus(); }
+                clicked => {
+                    search-field.clear-focus();
+                    // Same hand-back as the accepted path (PR 2).
+                    keys.focus();
+                }
             }
             VerticalLayout {
                 vertical-stretch: 1;
@@ -500,7 +632,7 @@ export component KioskShell inherits Rectangle {
 
         // --- Bottom NavRail (net-new). Each tile maps to the real route the
         // Sidebar/Rust dispatcher already uses. ------------------------------
-        NavRail {
+        rail := NavRail {
             height: root.navrail-height;
             discover => {
                 root.header-menu-navigate("discover-home");
@@ -523,6 +655,82 @@ export component KioskShell inherits Rectangle {
             menu => {
                 NavState.request-settings();
             }
+        }
+    }
+
+    // --- Player-zone focus ring (PR 2). The transport bar is ONE focusable
+    // unit (Enter toggles play/pause, handled in nav-activate). Drawn as an
+    // overlay on the bar's exact slot (above the NavRail); the Now Playing
+    // view hides PlayerBarSmall and draws its own ring on its in-page
+    // transport row instead.
+    if NavState.view != ContentView.now-playing
+        && KioskNavState.nav-active
+        && KioskNavState.zone == "player": Rectangle {
+        x: 0;
+        y: root.height - root.navrail-height - Layout.header-height;
+        width: root.width;
+        height: Layout.header-height;
+        border-width: 3px;
+        border-color: Theme.accent;
+        border-radius: Radius.sm;
+        background: Theme.accent.with-alpha(0.08);
+    }
+
+    // --- Root nav FocusScope (PR 2). Holds keyboard focus for the whole
+    // kiosk; TouchAreas never take focus, so it survives card/tile taps and
+    // only yields to the search LineEdit (which then sets
+    // UiFocusState.text-input-focused and every key is rejected here — typing
+    // must never navigate). Rejected keys keep their normal path.
+    keys := FocusScope {
+        key-pressed(event) => {
+            if (UiFocusState.text-input-focused) {
+                return reject;
+            }
+            // The immersive visualizer overlay owns its own keys while open.
+            if (ImmersiveState.open) {
+                return reject;
+            }
+            if (event.text == Key.LeftArrow) {
+                root.nav-left();
+                return accept;
+            }
+            if (event.text == Key.RightArrow) {
+                root.nav-right();
+                return accept;
+            }
+            if (event.text == Key.UpArrow) {
+                root.nav-up();
+                return accept;
+            }
+            if (event.text == Key.DownArrow) {
+                root.nav-down();
+                return accept;
+            }
+            if (event.text == Key.Return) {
+                root.activate-focused();
+                root.nav-activate();
+                return accept;
+            }
+            if (event.text == Key.Escape) {
+                if (NavState.can-back) {
+                    NavState.request-back();
+                    return accept;
+                }
+                return reject;
+            }
+            return reject;
+        }
+    }
+
+    // Deferred mount focus — synchronous focus during the initial layout
+    // races it; a one-shot timer grabs it a tick later (the desktop modal
+    // idiom, e.g. KeyboardShortcutsModal).
+    focus-timer := Timer {
+        interval: 30ms;
+        running: true;
+        triggered => {
+            self.running = false;
+            keys.focus();
         }
     }
 

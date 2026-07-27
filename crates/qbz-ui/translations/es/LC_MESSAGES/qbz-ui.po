@@ -4843,3 +4843,57 @@ msgstr "Artista descartado de Recomendaciones"
 
 msgid "{} restored to Recommendations"
 msgstr "{} restaurado en Recomendaciones"
+
+msgid "LIBRARY › ALL"
+msgstr "BIBLIOTECA › TODOS"
+
+msgid "Show local files & Plex"
+msgstr "Mostrar archivos locales y Plex"
+
+msgid "Include your favorited local files and Plex items in the Library All feed."
+msgstr "Incluye tus archivos locales y elementos de Plex favoritos en el feed Todos de la biblioteca."
+
+msgid "Play indicator animation"
+msgstr "Animación del indicador de reproducción"
+
+msgid "Animate the now-playing row with equalizer bars. Off (default) shows a static pause icon with an accent edge mark — lighter on CPU."
+msgstr "Anima la fila en reproducción con barras de ecualizador. Apagado (default) muestra un ícono de pausa estático con una marca de acento en el borde — más ligero en CPU."
+
+msgid "Invert swipe navigation direction"
+msgstr "Invertir la dirección del gesto de navegación"
+
+msgid "Swap the two-finger touchpad swipe: left goes back, right goes forward."
+msgstr "Invierte el deslizamiento con dos dedos del trackpad: izquierda va atrás, derecha va adelante."
+
+msgid "Local items in Library All"
+msgstr "Elementos locales en Biblioteca Todo"
+
+msgid "Favorited items only: what you hearted. Entire local library: every folder and Plex album, artist and track."
+msgstr "Solo favoritos: lo que marcaste con corazón. Toda la biblioteca local: cada álbum, artista y track de carpetas y Plex."
+
+msgid "Favorited items only"
+msgstr "Solo favoritos"
+
+msgid "Entire local library"
+msgstr "Toda la biblioteca local"
+
+msgid "Select multiple albums"
+msgstr "Seleccionar varios álbumes"
+
+msgid "Play later"
+msgstr "Reproducir después"
+
+msgid "Added to play later"
+msgstr "Agregado para después"
+
+msgid "Next in queue"
+msgstr "Siguiente en la cola"
+
+msgid "Next up"
+msgstr "A continuación"
+
+msgid "Removed {} tracks from favorites"
+msgstr "Se quitaron {} tracks de favoritos"
+
+msgid "Removing {} tracks from favorites…"
+msgstr "Quitando {} tracks de favoritos…"

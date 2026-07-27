@@ -129,9 +129,9 @@ export component TransportControls inherits HorizontalLayout {
             }
             add-menu := PopupWindow {
                 x: 0px;
-                y: -222px;
+                y: -255px;
                 width: 232px;
-                height: 214px;
+                height: 247px;
                 close-policy: close-on-click;
                 ContextMenu {
                     ContextMenuItem {
@@ -157,6 +157,13 @@ export component TransportControls inherits HorizontalLayout {
                     }
                     ContextMenuItem {
                         icon: @image-url("../assets/icons/list-plus.svg");
+                        label: @tr("Play later");
+                        clicked => {
+                            root.media-action("track", NowPlayingState.track-id, "play-later");
+                        }
+                    }
+                    ContextMenuItem {
+                        icon: @image-url("../assets/icons/list-start.svg");
                         label: @tr("Play next");
                         clicked => {
                             root.media-action("track", NowPlayingState.track-id, "play-next");

@@ -616,6 +616,28 @@ export component AppearanceSettings inherits VerticalLayout {
             }
         }
     }
+    SettingRow {
+        label: @tr("Play indicator animation");
+        description: @tr("Animate the now-playing row with equalizer bars. Off (default) shows a static pause icon with an accent edge mark — lighter on CPU.");
+        QbzToggle {
+            checked: AppearanceState.play-indicator-animation;
+            toggled(v) => {
+                AppearanceState.play-indicator-animation = v;
+                AppearanceState.appearance-bool("play-indicator-animation", v);
+            }
+        }
+    }
+    SettingRow {
+        label: @tr("Invert swipe navigation direction");
+        description: @tr("Swap the two-finger touchpad swipe: left goes back, right goes forward.");
+        QbzToggle {
+            checked: AppearanceState.invert-swipe-navigation;
+            toggled(v) => {
+                AppearanceState.invert-swipe-navigation = v;
+                AppearanceState.appearance-bool("invert-swipe-navigation", v);
+            }
+        }
+    }
 
     Rectangle { height: 12px; }
     Divider { }

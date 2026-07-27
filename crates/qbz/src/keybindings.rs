@@ -545,6 +545,11 @@ fn toggle_immersive(window: &AppWindow) {
 }
 
 fn toggle_miniplayer() {
+    // Suppressed under gamescope (Steam Deck Game Mode PR 1): an extra
+    // mapped window can steal the compositor's focused-window pick.
+    if crate::in_gamescope() {
+        return;
+    }
     if crate::miniplayer::is_open() {
         crate::miniplayer::exit();
     } else {

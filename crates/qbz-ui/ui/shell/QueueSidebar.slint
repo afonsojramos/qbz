@@ -382,9 +382,21 @@ export component QueueSidebar inherits Rectangle {
     // Pointer window-Y -> insertion slot [0..N]. Rows are a fixed 44px stacked
     // with 0 spacing; the +0.5 row rounds the boundary to row centers (top half
     // of row k -> slot k, bottom half -> slot k+1).
+    // #442: section headers (22px) above row/slot index i — every drag
+    // computation below adds them to the uniform 44px strides.
+    pure function headers-above(i: int) -> int {
+        return (QueueState.page-manual-header && i >= 1 ? 1 : 0)
+            + (QueueState.page-manual-pos >= 0 && i > QueueState.page-manual-pos ? 1 : 0);
+    }
     pure function slot-from-pointer(win-y: length) -> int {
+        // One header-adjustment pass: with at most 2 headers and 44px rows,
+        // adjusting by the headers below the RAW slot lands on the right gap
+        // (boundary cases round to a row gap either way).
         return Math.max(0, Math.min(QueueState.upcoming-page.length,
-            Math.floor((win-y - root.reorder-list-top) / 44px + 0.5)));
+            Math.floor((win-y - root.reorder-list-top
+                - root.headers-above(
+                    Math.floor((win-y - root.reorder-list-top) / 44px + 0.5)) * 22px)
+                / 44px + 0.5)));
     }
     function commit-reorder() {
         root.reorder-active = false;
@@ -597,14 +609,45 @@ export component QueueSidebar inherits Rectangle {
                             letter-spacing: 0.5px;
                         }
                         // Page of upcoming rows + drop-indicator overlay. Explicit
-                        // height (rows are a fixed 44px, spacing 0) so the wrapping
-                        // Rectangle does not collapse — a VerticalLayout does not
-                        // auto-size its parent Rectangle.
+                        // height (rows are a fixed 44px, spacing 0; #442 section
+                        // headers are 22px each) so the wrapping Rectangle does
+                        // not collapse — a VerticalLayout does not auto-size its
+                        // parent Rectangle.
                         Rectangle {
-                            height: QueueState.upcoming-page.length * 44px;
+                            height: QueueState.upcoming-page.length * 44px
+                                + QueueState.page-section-count * 22px;
                             VerticalLayout {
                                 spacing: 0px;
-                                for item[idx] in QueueState.upcoming-page: QueueRow {
+                                for item[idx] in QueueState.upcoming-page: VerticalLayout {
+                                    spacing: 0px;
+                                    // #442 section header above the row (only on
+                                    // marked rows; "" everywhere else). The
+                                    // indent icon marks the manual block's
+                                    // insertion point (list-indent-increase).
+                                    if item.section != "": HorizontalLayout {
+                                        spacing: 6px;
+                                        height: 22px;
+                                        if item.section == "next-in-queue": VerticalLayout {
+                                            alignment: center;
+                                            QbzIcon {
+                                                source: @image-url("../assets/icons/list-indent-increase.svg");
+                                                width: 13px;
+                                                height: 13px;
+                                                tint: Theme.accent;
+                                            }
+                                        }
+                                        Text {
+                                            text: item.section == "next-in-queue"
+                                                ? @tr("Next in queue")
+                                                : @tr("Next up");
+                                            color: Theme.text-muted;
+                                            font-size: 11px;
+                                            font-weight: Typography.semibold;
+                                            letter-spacing: 0.5px;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                    QueueRow {
                                     item: item;
                                     index: QueueState.page-start - 1 + idx;
                                     page-local-index: idx;
@@ -627,7 +670,8 @@ export component QueueSidebar inherits Rectangle {
                                         root.reorder-active = true;
                                         root.reorder-from = local-idx;
                                         root.reorder-over = local-idx;
-                                        root.reorder-list-top = row-top - local-idx * 44px;
+                                        root.reorder-list-top = row-top
+                                            - (local-idx * 44px + root.headers-above(local-idx) * 22px);
                                     }
                                     drag-update(pointer-y) => {
                                         root.reorder-over = root.slot-from-pointer(pointer-y);
@@ -638,13 +682,15 @@ export component QueueSidebar inherits Rectangle {
                                     }
                                 }
                             }
+                            }
                             // Drop indicator: a 2px accent line at the insertion
                             // slot, hidden for the two no-op slots (from, from+1).
                             if root.reorder-active
                                 && root.reorder-over != root.reorder-from
                                 && root.reorder-over != root.reorder-from + 1: Rectangle {
                                 x: 0;
-                                y: root.reorder-over * 44px - 1px;
+                                y: root.reorder-over * 44px
+                                    + root.headers-above(root.reorder-over) * 22px - 1px;
                                 width: parent.width;
                                 height: 2px;
                                 background: Theme.accent;

@@ -18,7 +18,7 @@
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Typography } from "../foundation/typography.slint";
 import { Radius } from "../foundation/radius.slint";
-import { TrackItem, DragActions, NowPlayingState, NavState, TooltipState, ShellState, TrackMenuState } from "../state.slint";
+import { TrackItem, DragActions, NowPlayingState, NavState, TooltipState, ShellState, TrackMenuState, AppearanceState } from "../state.slint";
 import { QbzIcon } from "QbzIcon.slint";
 import { TrackPlayCell } from "TrackPlayCell.slint";
 import { QualityBadgeFull } from "QualityBadgeFull.slint";
@@ -110,6 +110,12 @@ export component TrackRow inherits Rectangle {
 
     height: 50px;
     border-radius: 8px;
+    // This row IS the now-playing track (mirrors TrackPlayCell's is-active —
+    // offline-cache rows publish the catalog id in track-id but the local row
+    // id in local-track-id). Drives the static playing affordance.
+    property <bool> is-active: NowPlayingState.has-track
+        && (NowPlayingState.track-id == root.track.id
+            || (NowPlayingState.local-track-id != "" && NowPlayingState.local-track-id == root.track.id));
     // Hover uses the polarity-baked alpha ramp so the hover state is visible on
     // light themes too (the old #ffffff16 was invisible white-on-white there;
     // near-identical on dark). Zebra kept as-is to avoid a visible dark-theme
@@ -117,6 +123,18 @@ export component TrackRow inherits Rectangle {
     background: root.row-hovered
         ? Theme.alpha-8
         : (Math.mod(root.index, 2) == 1 ? #ffffff07 : transparent);
+
+    // Static now-playing mark (animation pref OFF, owner mockup 2026-07-24):
+    // an accent pill on the row's left edge. With the pref ON the animated
+    // eq bars in the play cell carry the state instead.
+    if !AppearanceState.play-indicator-animation && root.is-active: Rectangle {
+        x: 2px;
+        y: 7px;
+        width: 3px;
+        height: parent.height - 14px;
+        border-radius: 1.5px;
+        background: Theme.accent;
+    }
 
     // Background TouchArea — also the drag source. Pressing the row
     // body (not the play/fav/more controls, which sit on top) and

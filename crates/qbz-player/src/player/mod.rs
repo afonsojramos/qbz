@@ -13,6 +13,11 @@
 mod playback_engine;
 mod streaming_source;
 
+pub mod memory_tuning;
+
+pub use memory_tuning::{
+    apply_memory_tuning, audio_cache_l1_max_bytes, is_low_memory_class, oversized_for_l1,
+};
 pub use streaming_source::{
     max_initial_buffer_bytes, set_max_initial_buffer_bytes, BufferWriter, BufferedMediaSource,
     InMemorySource, IncrementalStreamingSource, StreamingConfig,
@@ -1603,6 +1608,11 @@ impl Player {
             const PAUSE_SUSPEND_DELAY_MS: u64 = 2000;
             let mut pause_suspend_deadline: Option<Instant> = None;
             let mut last_empty_check = Instant::now();
+            // Latch so the low-memory oversized-track promotion skip logs
+            // once per track instead of on every 500 ms idle tick. Reset
+            // whenever the streaming source is absent or still downloading
+            // (i.e. the next track re-arms the log).
+            let mut low_mem_promotion_skip_logged = false;
             // Current track's normalization gain factor (stored for reuse on resume/seek)
             let mut current_normalization_gain: Option<f32> = None;
             // Current track's dynamic gain atomic (shared with DynamicAmplify + LoudnessAnalyzer)
@@ -3721,18 +3731,59 @@ impl Player {
                                 if let Some(streaming_src) = current_streaming_source.as_ref() {
                                     if streaming_src.is_complete() {
                                         if current_audio_data.is_none() {
-                                            if let Some(full_data) =
-                                                streaming_src.take_complete_data()
-                                            {
-                                                log::info!(
-                                                    "Streaming promotion: full track buffered ({} bytes), enabling cached transition path",
-                                                    full_data.len()
-                                                );
-                                                current_audio_data = Some(full_data);
+                                            // Low-memory profile + oversized
+                                            // track: skip the promotion clone
+                                            // (take_complete_data copies the
+                                            // whole buffer — a persistent 2x
+                                            // RSS for the rest of the track)
+                                            // and KEEP the streaming source:
+                                            // seek/resume then read the
+                                            // single buffered copy. The
+                                            // gapless pre-queue gate below
+                                            // requires the source cleared, so
+                                            // such a track transitions with a
+                                            // small gap instead of gapless —
+                                            // accepted trade vs. an OOM kill
+                                            // on 1 GB hosts (issue #660). The
+                                            // L2 disk copy is written by the
+                                            // CMAF feeder task, off this
+                                            // thread.
+                                            let skip_promotion =
+                                                memory_tuning::is_low_memory_class()
+                                                    && memory_tuning::oversized_for_l1(
+                                                        streaming_src.buffer_size(),
+                                                        memory_tuning::audio_cache_l1_max_bytes(),
+                                                    );
+                                            if skip_promotion {
+                                                if !low_mem_promotion_skip_logged {
+                                                    low_mem_promotion_skip_logged = true;
+                                                    log::info!(
+                                                        "Streaming promotion skipped (low-memory host): {} bytes exceeds the oversized threshold — keeping the single buffered copy",
+                                                        streaming_src.buffer_size()
+                                                    );
+                                                }
+                                            } else {
+                                                if let Some(full_data) =
+                                                    streaming_src.take_complete_data()
+                                                {
+                                                    log::info!(
+                                                        "Streaming promotion: full track buffered ({} bytes), enabling cached transition path",
+                                                        full_data.len()
+                                                    );
+                                                    current_audio_data = Some(full_data);
+                                                }
+                                                clear_streaming_source = true;
                                             }
+                                        } else {
+                                            clear_streaming_source = true;
                                         }
-                                        clear_streaming_source = true;
+                                    } else {
+                                        // Still downloading: re-arm the
+                                        // skip log for the next track.
+                                        low_mem_promotion_skip_logged = false;
                                     }
+                                } else {
+                                    low_mem_promotion_skip_logged = false;
                                 }
                                 if clear_streaming_source {
                                     current_streaming_source = None;
@@ -3992,17 +4043,21 @@ impl Player {
             }
         });
 
-        // Two-level playback cache: L1 in memory (~400 MB), L2 on disk
-        // (~800 MB). A disk-cache failure degrades to L1-only rather than
-        // aborting player creation.
+        // Two-level playback cache: L1 in memory, L2 on disk (~800 MB). The
+        // L1 budget comes from the host memory profile pushed down via
+        // `memory_tuning` at process start (400 MB Normal / 50 MB LowMemory)
+        // — on a 1 GB host the historical 400 MB hardcode alone could eat
+        // 40 % of RAM (issue #660). A disk-cache failure degrades to
+        // L1-only rather than aborting player creation.
+        let l1_max_bytes = memory_tuning::audio_cache_l1_max_bytes();
         let audio_cache = match qbz_cache::PlaybackCache::new(800 * 1024 * 1024) {
             Ok(pc) => Arc::new(qbz_cache::AudioCache::with_playback_cache(
-                400 * 1024 * 1024,
+                l1_max_bytes,
                 Arc::new(pc),
             )),
             Err(e) => {
                 log::warn!("Playback disk cache unavailable: {e}; memory cache only");
-                Arc::new(qbz_cache::AudioCache::new(400 * 1024 * 1024))
+                Arc::new(qbz_cache::AudioCache::new(l1_max_bytes))
             }
         };
 
@@ -4188,6 +4243,7 @@ impl Player {
                         track_id,
                         cache,
                         skip_cache,
+                        total_flac_size,
                     )
                     .await
                     {
@@ -4382,6 +4438,13 @@ impl Player {
         self.audio_cache.clear();
     }
 
+    /// Drop only the L1 in-memory entries, keeping the L2 disk cache. The
+    /// memory-pressure watchdog's relief valve (issue #660): freeing RAM is
+    /// what relieves the pressure; the disk files cost nothing to keep.
+    pub fn evict_l1_audio_cache(&self) {
+        self.audio_cache.evict_all_memory();
+    }
+
     /// Fetch a track's audio bytes for a gapless handoff: L1 memory →
     /// L2 disk → CMAF `download_full` (legacy full download as fallback).
     /// Does not start playback — the caller passes the bytes to
@@ -4572,6 +4635,13 @@ impl Player {
     /// then fetches each audio segment, decrypts encrypted frames, and pushes
     /// the resulting FLAC frame data to the streaming buffer. The player
     /// starts playing as soon as enough data is buffered.
+    ///
+    /// `expected_total_bytes` is the assembled FLAC size known from the
+    /// segment table; on a LowMemory host it decides up front whether the
+    /// track is oversized for the L1 budget, in which case NO parallel RAM
+    /// accumulator is built and the finished track goes straight to the L2
+    /// disk cache, streamed out of the playback buffer in chunks (issue
+    /// #660).
     async fn cmaf_stream_segments(
         url_template: &str,
         n_segments: u8,
@@ -4581,6 +4651,7 @@ impl Player {
         track_id: u64,
         cache: Arc<qbz_cache::AudioCache>,
         skip_cache: bool,
+        expected_total_bytes: u64,
     ) -> Result<(), String> {
         struct FailGuard {
             writer: BufferWriter,
@@ -4615,11 +4686,21 @@ impl Player {
         let mut total_written: u64 = flac_header.len() as u64;
         // Accumulate the assembled FLAC (header + decrypted frames) so the
         // finished track can be cached for instant replay. Empty when
-        // `skip_cache` (streaming_only) is set.
-        let mut cache_data: Vec<u8> = if skip_cache {
-            Vec::new()
-        } else {
+        // `skip_cache` (streaming_only) is set — and never built at all for
+        // an oversized track on a LowMemory host, where a second full copy
+        // of the track in RAM next to the playback buffer is the issue #660
+        // OOM recipe; that track goes to the L2 disk cache at the end.
+        let low_mem_oversized = !skip_cache
+            && memory_tuning::is_low_memory_class()
+            && memory_tuning::oversized_for_l1(
+                expected_total_bytes as usize,
+                memory_tuning::audio_cache_l1_max_bytes(),
+            );
+        let accumulate_cache = !skip_cache && !low_mem_oversized;
+        let mut cache_data: Vec<u8> = if accumulate_cache {
             flac_header.clone()
+        } else {
+            Vec::new()
         };
         let start = Instant::now();
 
@@ -4655,7 +4736,7 @@ impl Player {
                     let _ = writer.error(msg.clone());
                     return Err(msg);
                 }
-                if !skip_cache {
+                if accumulate_cache {
                     cache_data.extend_from_slice(&frame);
                 }
                 total_written += frame.len() as u64;
@@ -4670,7 +4751,7 @@ impl Player {
                     let _ = writer.error(msg.clone());
                     return Err(msg);
                 }
-                if !skip_cache {
+                if accumulate_cache {
                     cache_data.extend_from_slice(trailing);
                 }
                 total_written += trailing.len() as u64;
@@ -4716,10 +4797,32 @@ impl Player {
 
         // Cache the assembled FLAC (header + decrypted frames) for instant
         // replay on the next play of this track.
-        if !skip_cache && !cache_data.is_empty() {
+        if accumulate_cache && !cache_data.is_empty() {
             let bytes = cache_data.len();
             cache.insert(track_id, cache_data);
             log::info!("[CMAF-STREAM] Track {} cached ({} bytes)", track_id, bytes);
+        } else if low_mem_oversized {
+            // Oversized track on a low-memory host: no RAM accumulator was
+            // built. Persist straight to the L2 disk playback cache,
+            // streamed out of the playback buffer in chunks — no second
+            // full in-RAM copy, and the per-chunk lock keeps the audio
+            // reader starved for at most ~1 MB of writes at a time.
+            if let Some(playback_cache) = cache.get_playback_cache() {
+                playback_cache.insert_from(track_id, total_written, |file| {
+                    writer.write_buffered_to(file)
+                });
+                log::info!(
+                    "[CMAF-STREAM] Track {} persisted to L2 disk cache only ({} bytes, low-memory oversized)",
+                    track_id,
+                    total_written
+                );
+            } else {
+                log::info!(
+                    "[CMAF-STREAM] Track {} ({} bytes) oversized for low-memory L1 and no disk cache available — not cached",
+                    track_id,
+                    total_written
+                );
+            }
         }
 
         Ok(())
@@ -5130,8 +5233,9 @@ impl Player {
         // unlike `speed_mbps`, which is estimated from the tiny init fetch and
         // is latency-dominated — it lands on the slowest ladder rung for every
         // connection. Clamped to 256KB (format-detection minimum) .. 8MB (the
-        // process-wide ladder cap has no desktop caller, so this is the
-        // effective ceiling protecting low-memory hosts).
+        // process-wide ladder cap is set from the host memory profile at
+        // process start, so on a LowMemory host `from_speed_mbps` already
+        // clamped lower; the 8MB ceiling here is the last line of defense).
         let user_secs = self
             .audio_settings
             .lock()

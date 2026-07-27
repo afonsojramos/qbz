@@ -2213,6 +2213,7 @@ pub(crate) async fn refresh_now_playing_meta(runtime: &Runtime, weak: &slint::We
                 album: album_display.clone(),
                 duration: (duration > 0).then(|| std::time::Duration::from_secs(duration as u64)),
                 art_url: mpris_art,
+                url: qbz_media_controls::xesam_url_for(track.source.as_deref(), track.id),
             });
         }
         mc.set_playback(
@@ -3020,6 +3021,7 @@ pub fn enqueue_artist_top_selected(
                 return;
             }
         }
+        let added_castable = batch_all_qconnect_castable(&tracks);
         if next {
             for track in tracks.into_iter().rev() {
                 runtime.core().add_track_next(track).await;
@@ -3027,8 +3029,51 @@ pub fn enqueue_artist_top_selected(
         } else {
             runtime.core().add_tracks(tracks).await;
         }
+        sync_qconnect_after_add(added_castable).await;
         refresh_sidebar(false);
         crate::toast::success_weak(&weak, if next { qbz_i18n::t("Playing next") } else { qbz_i18n::t("Added to queue") });
+    });
+}
+
+/// Play-later variant of `enqueue_artist_top_selected` (#442): same
+/// re-fetch + id filter + page order, but the selection lands at the END of
+/// the manual block — NATURAL order (each `add_track_later` appends, no
+/// reverse) and the QConnect batch rides `play_later_batch_on_peer_if_active`.
+pub fn enqueue_artist_top_later(
+    runtime: Runtime,
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+    artist_id: String,
+    ids: Vec<String>,
+) {
+    if ids.is_empty() {
+        return;
+    }
+    handle.spawn(async move {
+        let Some(all) = fetch_artist_top_for_play(&runtime, &weak, &artist_id).await else {
+            return;
+        };
+        let want: std::collections::HashSet<u64> =
+            ids.iter().filter_map(|s| s.parse::<u64>().ok()).collect();
+        let tracks: Vec<QueueTrack> =
+            all.into_iter().filter(|qt| want.contains(&qt.id)).collect();
+        if tracks.is_empty() {
+            return;
+        }
+        if let Some(svc) = crate::qconnect_service::service() {
+            let routed: Vec<(u64, Option<String>)> =
+                tracks.iter().map(|qt| (qt.id, qt.source.clone())).collect();
+            if svc.play_later_batch_on_peer_if_active(&routed).await {
+                return;
+            }
+        }
+        let added_castable = batch_all_qconnect_castable(&tracks);
+        for track in tracks {
+            runtime.core().add_track_later(track).await;
+        }
+        sync_qconnect_after_add(added_castable).await;
+        refresh_sidebar(false);
+        crate::toast::success_weak(&weak, qbz_i18n::t("Added to play later"));
     });
 }
 
@@ -3858,7 +3903,9 @@ pub fn enqueue_album(runtime: Runtime, weak: slint::Weak<AppWindow>, handle: tok
                 return;
             }
         }
+        let added_castable = batch_all_qconnect_castable(&tracks);
         runtime.core().add_tracks(tracks).await;
+        sync_qconnect_after_add(added_castable).await;
         refresh_sidebar(false);
         crate::toast::success_weak(&weak, qbz_i18n::t("Added to queue"));
     });
@@ -3962,12 +4009,105 @@ pub fn enqueue_album_next(
             }
         }
         // Insert in reverse so the tracks end up in the correct order.
+        let added_castable = batch_all_qconnect_castable(&tracks);
         for track in tracks.into_iter().rev() {
             runtime.core().add_track_next(track).await;
         }
+        sync_qconnect_after_add(added_castable).await;
         refresh_sidebar(false);
         crate::toast::success_weak(&weak, qbz_i18n::t("Playing next"));
     });
+}
+
+/// Insert an album's tracks at the END of the manual block ("Play later",
+/// #442): after every play-next / play-later already queued, before the
+/// source resumes. Unlike play-next there is NO reverse — each
+/// `add_track_later` appends to the block, so the natural order is preserved.
+pub fn enqueue_album_later(
+    runtime: Runtime,
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+    album_id: String,
+) {
+    handle.spawn(async move {
+        let album = match runtime.core().get_album(&album_id).await {
+            Ok(album) => album,
+            Err(e) => {
+                log::error!("[qbz-slint] playback: play-later get_album {album_id} failed: {e}");
+                return;
+            }
+        };
+        let album_title = album.title.clone();
+        let album_artist = album.artist.name.clone();
+        let album_artwork = album.image.best().cloned().unwrap_or_default();
+        crate::recently::remember_album_meta(&album.id, album_card_meta(&album));
+        // Drop blacklisted tracks (composer-aware, album-primary fallback)
+        // before play-later — same predicate as album play-all (D-FIX-b).
+        let album_primary = Some(album.artist.id);
+        let tracks: Vec<QueueTrack> = album
+            .tracks
+            .as_ref()
+            .map(|container| container.items.as_slice())
+            .unwrap_or_default()
+            .iter()
+            .filter(|track| !track_is_blacklisted_full(track, album_primary))
+            .map(|track| {
+                make_queue_track(track, &album.id, &album_title, &album_artist, &album_artwork, album.version.as_deref())
+            })
+            .collect();
+        if tracks.is_empty() {
+            return;
+        }
+        // QConnect CONTROLLER mode: route the whole album to the peer's
+        // manual-block tail. All-or-nothing admission inside the router;
+        // false when no peer is active, so the local loop runs unchanged.
+        if let Some(svc) = crate::qconnect_service::service() {
+            let routed: Vec<(u64, Option<String>)> =
+                tracks.iter().map(|qt| (qt.id, qt.source.clone())).collect();
+            if svc.play_later_batch_on_peer_if_active(&routed).await {
+                return;
+            }
+        }
+        // NATURAL order — each insert appends to the manual block.
+        let added_castable = batch_all_qconnect_castable(&tracks);
+        for track in tracks {
+            runtime.core().add_track_later(track).await;
+        }
+        sync_qconnect_after_add(added_castable).await;
+        refresh_sidebar(false);
+        crate::toast::success_weak(&weak, qbz_i18n::t("Added to play later"));
+    });
+}
+
+/// QConnect sync-on-add predicate (#442): true when EVERY track of an added
+/// batch is Qobuz-castable (mirrors `sync_local_queue_if_changed`'s
+/// all-or-nothing admission — `local` / `plex` refused, offline
+/// `qobuz_download` eligible). A non-castable batch skips the post-add push so
+/// a local/plex add never trips the refusal toast on every click; the next
+/// track tick already surfaces that state.
+pub(crate) fn batch_all_qconnect_castable(tracks: &[QueueTrack]) -> bool {
+    tracks.iter().all(|qt| {
+        qt.id > 0
+            && !matches!(
+                qt.source.as_deref().map(|s| s.to_ascii_lowercase()).as_deref(),
+                Some("local") | Some("plex")
+            )
+    })
+}
+
+/// QConnect sync-on-add (#442): after a local queue ADD (play-next / play-later
+/// / add-to-queue), push the updated queue to the session immediately so a
+/// connected controller sees the new item AT its position — previously it only
+/// re-synced on the next track transition. `sync_local_queue_if_changed`
+/// self-gates (no-op when not connected, when a peer owns playback, or when the
+/// queue is unchanged), so this is cheap in every non-renderer situation.
+pub(crate) async fn sync_qconnect_after_add(added_castable: bool) {
+    if !added_castable {
+        return;
+    }
+    if let Some(svc) = crate::qconnect_service::service() {
+        svc.sync_local_queue_if_changed().await;
+    }
 }
 
 /// Enqueue a single track at the end of the current queue.
@@ -4010,6 +4150,8 @@ pub fn enqueue_track(runtime: Runtime, weak: slint::Weak<AppWindow>, handle: tok
         let queue_track =
             make_queue_track(&track, &album_id, &album_title, &album_artist, &album_artwork, None);
         runtime.core().add_track(queue_track).await;
+        // QConnect sync-on-add (#442): single catalog track — always castable.
+        sync_qconnect_after_add(true).await;
         refresh_sidebar(false);
         crate::toast::success_weak(&weak, qbz_i18n::t("Added to queue"));
     });
@@ -4060,8 +4202,65 @@ pub fn play_track_next(
         let queue_track =
             make_queue_track(&track, &album_id, &album_title, &album_artist, &album_artwork, None);
         runtime.core().add_track_next(queue_track).await;
+        // QConnect sync-on-add (#442): single catalog track — always castable.
+        sync_qconnect_after_add(true).await;
         refresh_sidebar(false);
         crate::toast::success_weak(&weak, qbz_i18n::t("Playing next"));
+    });
+}
+
+/// Insert a single track at the END of the manual block ("Play later", #442):
+/// after every play-next / play-later already queued, before the source
+/// resumes. In QConnect CONTROLLER mode it routes to the peer's manual-block
+/// tail (`play_later_on_peer_if_active` steers `insert_after`; the protocol
+/// has no "later" — best-effort positionally, the cloud stays authoritative).
+pub fn play_track_later(
+    runtime: Runtime,
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+    track_id: u64,
+) {
+    handle.spawn(async move {
+        if let Some(svc) = crate::qconnect_service::service() {
+            // Single-track play-later always builds a Qobuz catalog track
+            // (`make_queue_track` source = "qobuz"), so it is always castable.
+            if svc
+                .play_later_on_peer_if_active(track_id, Some("qobuz"))
+                .await
+            {
+                return;
+            }
+        }
+        let track = match runtime.core().get_track(track_id).await {
+            Ok(track) => track,
+            Err(e) => {
+                log::error!("[qbz-slint] playback: play-later get_track {track_id} failed: {e}");
+                return;
+            }
+        };
+        let (album_id, album_title, album_artwork) = match track.album.as_ref() {
+            Some(album) => (
+                album.id.clone(),
+                album.title.clone(),
+                album.image.best().cloned().unwrap_or_default(),
+            ),
+            None => (String::new(), String::new(), String::new()),
+        };
+        let album_artist = track
+            .performer
+            .as_ref()
+            .map(|p| p.name.clone())
+            .unwrap_or_default();
+        let queue_track =
+            make_queue_track(&track, &album_id, &album_title, &album_artist, &album_artwork, None);
+        runtime.core().add_track_later(queue_track).await;
+        // QConnect sync-on-add (#442): push the updated queue to the session
+        // immediately so controllers see the new item AT its manual-block
+        // position — previously they only re-synced on the next track
+        // transition. Single catalog track — always castable.
+        sync_qconnect_after_add(true).await;
+        refresh_sidebar(false);
+        crate::toast::success_weak(&weak, qbz_i18n::t("Added to play later"));
     });
 }
 
@@ -4178,6 +4377,7 @@ pub fn enqueue_playlist(
                 return;
             }
         }
+        let added_castable = batch_all_qconnect_castable(&tracks);
         if next {
             // Reverse so the inserted block keeps the playlist's order.
             for track in tracks.into_iter().rev() {
@@ -4186,8 +4386,73 @@ pub fn enqueue_playlist(
         } else {
             runtime.core().add_tracks(tracks).await;
         }
+        sync_qconnect_after_add(added_castable).await;
         refresh_sidebar(false);
         crate::toast::success_weak(&weak, if next { qbz_i18n::t("Playing next") } else { qbz_i18n::t("Added to queue") });
+    });
+}
+
+/// Insert a whole playlist (by id) at the END of the manual block ("Play
+/// later", #442). Mirrors `enqueue_playlist` — same fetch + mixed-sidecar
+/// interleave + blacklist filter + QConnect batch routing — but the local
+/// insert loops `add_track_later` in NATURAL order (each insert appends to
+/// the block; successive later-inserts keep FIFO order, no reverse).
+pub fn enqueue_playlist_later(
+    runtime: Runtime,
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+    playlist_id: String,
+) {
+    let Ok(pid) = playlist_id.parse::<u64>() else {
+        return;
+    };
+    handle.spawn(async move {
+        let playlist = match runtime.core().get_playlist(pid).await {
+            Ok(playlist) => playlist,
+            Err(e) => {
+                log::error!("[qbz-slint] playback: play-later get_playlist {pid} failed: {e}");
+                return;
+            }
+        };
+        let qobuz_tracks: Vec<Track> = playlist.tracks.map(|c| c.items).unwrap_or_default();
+        // Same mixed-playlist merge as `enqueue_playlist` (see its MIXED
+        // comment): interleave the local/Plex sidecar rows at their stored
+        // slots so every row keeps its source. Pure-Qobuz playlists read an
+        // empty sidecar.
+        let qobuz_count = qobuz_tracks.len() as u32;
+        let sidecar = tokio::task::spawn_blocking(move || {
+            crate::local_playlist::read_sidecar_rows_blocking(pid, qobuz_count, true)
+        })
+        .await
+        .unwrap_or_default();
+        let rows = crate::playlist::interleave_rows(qobuz_tracks, sidecar);
+        // Drop blacklisted Qobuz rows (performer; local/Plex rows kept by the
+        // source guard). Silent early-return when nothing playable remains.
+        let tracks: Vec<QueueTrack> = filter_blacklisted_queue(
+            rows.iter()
+                .filter_map(|row| crate::local_playlist::row_queue_track(&row.item))
+                .collect(),
+        );
+        if tracks.is_empty() {
+            return;
+        }
+        // QConnect CONTROLLER mode: route the whole playlist to the peer's
+        // manual-block tail. All-or-nothing admission inside the router;
+        // false when no peer is active, so the local loop runs unchanged.
+        if let Some(svc) = crate::qconnect_service::service() {
+            let routed: Vec<(u64, Option<String>)> =
+                tracks.iter().map(|qt| (qt.id, qt.source.clone())).collect();
+            if svc.play_later_batch_on_peer_if_active(&routed).await {
+                return;
+            }
+        }
+        let added_castable = batch_all_qconnect_castable(&tracks);
+        for track in tracks {
+            runtime.core().add_track_later(track).await;
+        }
+        sync_qconnect_after_add(added_castable).await;
+        refresh_sidebar(false);
+        crate::toast::success_weak(&weak, qbz_i18n::t("Added to play later"));
     });
 }
 
@@ -4273,6 +4538,7 @@ pub fn enqueue_tracks(
         } else {
             tracks
         };
+        let mut added: Vec<QueueTrack> = Vec::with_capacity(ordered.len());
         for track in ordered {
             let (album_id, album_title, album_artwork) = track
                 .album
@@ -4293,11 +4559,72 @@ pub fn enqueue_tracks(
             let qt =
                 make_queue_track(&track, &album_id, &album_title, &album_artist, &album_artwork, None);
             if next {
-                runtime.core().add_track_next(qt).await;
+                runtime.core().add_track_next(qt.clone()).await;
             } else {
-                runtime.core().add_track(qt).await;
+                runtime.core().add_track(qt.clone()).await;
+            }
+            added.push(qt);
+        }
+        sync_qconnect_after_add(batch_all_qconnect_castable(&added)).await;
+        refresh_sidebar(false);
+    });
+}
+
+/// Play-later variant of `enqueue_tracks` (#442): the catalog Track batch
+/// lands at the END of the manual block in NATURAL order (each
+/// `add_track_later` appends to the block — no reverse, unlike play-next).
+/// Same blacklist filter + QConnect controller routing (play_later batch).
+pub fn enqueue_tracks_later(
+    runtime: Runtime,
+    handle: tokio::runtime::Handle,
+    tracks: Vec<qbz_models::Track>,
+) {
+    if tracks.is_empty() {
+        return;
+    }
+    // Drop blacklisted tracks (performer OR composer — D-FEAT) from the bulk
+    // batch before routing/enqueueing. Silent early-return when 0 remain.
+    let tracks: Vec<qbz_models::Track> = tracks
+        .into_iter()
+        .filter(|track| !track_is_blacklisted_full(track, None))
+        .collect();
+    if tracks.is_empty() {
+        return;
+    }
+    handle.spawn(async move {
+        // QConnect CONTROLLER mode: same all-or-nothing batch admission as
+        // `enqueue_tracks`, routed to the peer's manual-block tail.
+        if let Some(svc) = crate::qconnect_service::service() {
+            let routed: Vec<(u64, Option<String>)> =
+                tracks.iter().map(|track| (track.id, None)).collect();
+            if svc.play_later_batch_on_peer_if_active(&routed).await {
+                return;
             }
         }
+        let mut added: Vec<QueueTrack> = Vec::with_capacity(tracks.len());
+        for track in tracks {
+            let (album_id, album_title, album_artwork) = track
+                .album
+                .as_ref()
+                .map(|a| {
+                    (
+                        a.id.clone(),
+                        a.title.clone(),
+                        a.image.best().cloned().unwrap_or_default(),
+                    )
+                })
+                .unwrap_or_default();
+            let album_artist = track
+                .performer
+                .as_ref()
+                .map(|p| p.name.clone())
+                .unwrap_or_default();
+            let qt =
+                make_queue_track(&track, &album_id, &album_title, &album_artist, &album_artwork, None);
+            runtime.core().add_track_later(qt.clone()).await;
+            added.push(qt);
+        }
+        sync_qconnect_after_add(batch_all_qconnect_castable(&added)).await;
         refresh_sidebar(false);
     });
 }
@@ -4339,6 +4666,7 @@ pub fn enqueue_queue_tracks(
                 return;
             }
         }
+        let added_castable = batch_all_qconnect_castable(&tracks);
         if next {
             // Reverse so the inserted block keeps the selection's order.
             for track in tracks.into_iter().rev() {
@@ -4347,8 +4675,45 @@ pub fn enqueue_queue_tracks(
         } else {
             runtime.core().add_tracks(tracks).await;
         }
+        sync_qconnect_after_add(added_castable).await;
         refresh_sidebar(false);
         crate::toast::success_weak(&weak, if next { qbz_i18n::t("Playing next") } else { qbz_i18n::t("Added to queue") });
+    });
+}
+
+/// Insert a batch of source-aware QueueTracks at the END of the manual block
+/// (#442 "Play later"): selection order is preserved (each insert appends to
+/// the block, no reverse needed). QConnect CONTROLLER mode routes the whole
+/// batch to the peer's manual-block tail (`play_later_batch_on_peer_if_active`
+/// — the protocol has no "later"; `insert_after` is steered best-effort).
+pub fn enqueue_queue_tracks_later(
+    runtime: Runtime,
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+    tracks: Vec<QueueTrack>,
+) {
+    if tracks.is_empty() {
+        return;
+    }
+    let tracks = filter_blacklisted_queue(tracks);
+    if tracks.is_empty() {
+        return;
+    }
+    handle.spawn(async move {
+        if let Some(svc) = crate::qconnect_service::service() {
+            let routed: Vec<(u64, Option<String>)> =
+                tracks.iter().map(|qt| (qt.id, qt.source.clone())).collect();
+            if svc.play_later_batch_on_peer_if_active(&routed).await {
+                return;
+            }
+        }
+        let added_castable = batch_all_qconnect_castable(&tracks);
+        for track in tracks {
+            runtime.core().add_track_later(track).await;
+        }
+        sync_qconnect_after_add(added_castable).await;
+        refresh_sidebar(false);
+        crate::toast::success_weak(&weak, qbz_i18n::t("Added to play later"));
     });
 }
 
@@ -4373,14 +4738,42 @@ pub fn enqueue_local_tracks(
         } else {
             tracks
         };
-        for track in &ordered {
-            let qt = local_queue_track(track);
+        // qobuz_download rows ARE Qobuz-castable (the sync pushes their real
+        // Qobuz id); plain `local` rows skip the post-add push (#442).
+        let qts: Vec<QueueTrack> = ordered.iter().map(local_queue_track).collect();
+        let added_castable = batch_all_qconnect_castable(&qts);
+        for qt in qts {
             if next {
                 runtime.core().add_track_next(qt).await;
             } else {
                 runtime.core().add_track(qt).await;
             }
         }
+        sync_qconnect_after_add(added_castable).await;
+        refresh_sidebar(false);
+    });
+}
+
+/// Play-later variant of `enqueue_local_tracks` (#442): the LocalLibrary
+/// batch lands at the END of the manual block in NATURAL order (each
+/// `add_track_later` appends — no reverse). Same `local_queue_track`
+/// source-aware build; qobuz_download rows stay Qobuz-castable for the
+/// post-add sync, plain `local` rows skip it.
+pub fn enqueue_local_tracks_later(
+    runtime: Runtime,
+    handle: tokio::runtime::Handle,
+    tracks: Vec<qbz_library::LocalTrack>,
+) {
+    if tracks.is_empty() {
+        return;
+    }
+    handle.spawn(async move {
+        let qts: Vec<QueueTrack> = tracks.iter().map(local_queue_track).collect();
+        let added_castable = batch_all_qconnect_castable(&qts);
+        for qt in qts {
+            runtime.core().add_track_later(qt).await;
+        }
+        sync_qconnect_after_add(added_castable).await;
         refresh_sidebar(false);
     });
 }
@@ -4413,6 +4806,20 @@ pub fn toggle_play_pause(
             // Persist the paused position so a restart resumes near where the
             // user stopped (no-op unless `persist_session` is on).
             crate::session_persist::capture_and_save(&runtime).await;
+            return;
+        }
+        // Not playing — but a LOAD may be in flight: the engine reports
+        // is_playing=false until the stream starts, so a pause issued during
+        // the load window used to fall into the resume branch below and get
+        // swallowed (the track started anyway; the sleep inhibitor then
+        // stayed held with no successful pause to release it — #661).
+        // Cancelling the in-flight play is the only sane "pause" there.
+        let pending = PENDING_PLAY_ID.load(std::sync::atomic::Ordering::Relaxed);
+        if pending != 0 {
+            if let Err(e) = runtime.core().stop() {
+                log::error!("[qbz-slint] playback: stop-during-load failed: {e}");
+            }
+            clear_loading(&weak, pending);
             return;
         }
         // Not playing: resume an existing stream, or cold-start the current

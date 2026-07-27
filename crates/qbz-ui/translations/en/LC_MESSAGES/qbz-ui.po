@@ -609,3 +609,57 @@ msgstr "Artist dismissed from Recommendations"
 
 msgid "{} restored to Recommendations"
 msgstr "{} restored to Recommendations"
+
+msgid "LIBRARY › ALL"
+msgstr "LIBRARY › ALL"
+
+msgid "Show local files & Plex"
+msgstr "Show local files & Plex"
+
+msgid "Include your favorited local files and Plex items in the Library All feed."
+msgstr "Include your favorited local files and Plex items in the Library All feed."
+
+msgid "Play indicator animation"
+msgstr "Play indicator animation"
+
+msgid "Animate the now-playing row with equalizer bars. Off (default) shows a static pause icon with an accent edge mark — lighter on CPU."
+msgstr "Animate the now-playing row with equalizer bars. Off (default) shows a static pause icon with an accent edge mark — lighter on CPU."
+
+msgid "Invert swipe navigation direction"
+msgstr "Invert swipe navigation direction"
+
+msgid "Swap the two-finger touchpad swipe: left goes back, right goes forward."
+msgstr "Swap the two-finger touchpad swipe: left goes back, right goes forward."
+
+msgid "Local items in Library All"
+msgstr "Local items in Library All"
+
+msgid "Favorited items only: what you hearted. Entire local library: every folder and Plex album, artist and track."
+msgstr "Favorited items only: what you hearted. Entire local library: every folder and Plex album, artist and track."
+
+msgid "Favorited items only"
+msgstr "Favorited items only"
+
+msgid "Entire local library"
+msgstr "Entire local library"
+
+msgid "Select multiple albums"
+msgstr "Select multiple albums"
+
+msgid "Play later"
+msgstr "Play later"
+
+msgid "Added to play later"
+msgstr "Added to play later"
+
+msgid "Next in queue"
+msgstr "Next in queue"
+
+msgid "Next up"
+msgstr "Next up"
+
+msgid "Removed {} tracks from favorites"
+msgstr "Removed {} tracks from favorites"
+
+msgid "Removing {} tracks from favorites…"
+msgstr "Removing {} tracks from favorites…"

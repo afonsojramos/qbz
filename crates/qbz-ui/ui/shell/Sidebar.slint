@@ -26,6 +26,9 @@ component MenuItem inherits Rectangle {
     in property <bool> selected: false;
     in property <image> icon;
     in property <bool> has-icon: false;
+    // Sort rows: "up" | "down" draws the direction chevron in place of the
+    // plain check on the active row (#657 caret).
+    in property <string> trailing-icon: "";
     // When false the row is muted and ignores clicks (Import while
     // offline). Same pattern as ContextMenuItem's enabled.
     in property <bool> enabled: true;
@@ -56,11 +59,13 @@ component MenuItem inherits Rectangle {
             horizontal-stretch: 1;
             overflow: elide;
         }
-        // Selected check (sort options).
+        // Selected check — or the direction chevron on a sort row.
         if root.selected: VerticalLayout {
             alignment: center;
             QbzIcon {
-                source: @image-url("../assets/icons/check.svg");
+                source: root.trailing-icon == "up" ? @image-url("../assets/icons/chevron-up.svg")
+                    : root.trailing-icon == "down" ? @image-url("../assets/icons/chevron-down.svg")
+                    : @image-url("../assets/icons/check.svg");
                 width: 13px;
                 height: 13px;
                 tint: Theme.accent;
@@ -946,26 +951,36 @@ export component Sidebar inherits Rectangle {
                         MenuItem {
                             label: @tr("Name (A-Z)");
                             selected: SidebarState.sort-option == "name";
+                            trailing-icon: SidebarState.sort-option == "name"
+                                ? (SidebarState.sort-asc ? "up" : "down") : "";
                             activated => { SidebarActions.set-sort("name"); }
                         }
                         MenuItem {
                             label: @tr("Recent");
                             selected: SidebarState.sort-option == "recent";
+                            trailing-icon: SidebarState.sort-option == "recent"
+                                ? (SidebarState.sort-asc ? "up" : "down") : "";
                             activated => { SidebarActions.set-sort("recent"); }
                         }
                         MenuItem {
                             label: @tr("# of tracks");
                             selected: SidebarState.sort-option == "tracks";
+                            trailing-icon: SidebarState.sort-option == "tracks"
+                                ? (SidebarState.sort-asc ? "up" : "down") : "";
                             activated => { SidebarActions.set-sort("tracks"); }
                         }
                         MenuItem {
                             label: @tr("Play Count");
                             selected: SidebarState.sort-option == "playcount";
+                            trailing-icon: SidebarState.sort-option == "playcount"
+                                ? (SidebarState.sort-asc ? "up" : "down") : "";
                             activated => { SidebarActions.set-sort("playcount"); }
                         }
                         MenuItem {
                             label: @tr("Custom");
                             selected: SidebarState.sort-option == "custom";
+                            trailing-icon: SidebarState.sort-option == "custom"
+                                ? (SidebarState.sort-asc ? "up" : "down") : "";
                             activated => { SidebarActions.set-sort("custom"); }
                         }
                         Rectangle {

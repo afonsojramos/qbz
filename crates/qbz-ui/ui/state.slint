@@ -1029,12 +1029,12 @@ export global AlbumActions {
     // Toggle multi-select (track selection) mode on the album track list.
     callback toggle-multi-select();
     // Bulk-bar action over the selected rows (id = "select-all" | "play-next"
-    // | "queue" | "add-to-playlist" | "add-to-favorites" | "make-offline" |
-    // "clear").
+    // | "play-later" | "queue" | "add-to-playlist" | "add-to-favorites" |
+    // "make-offline" | "clear").
     callback bulk-action(string);
     // Per-disc context-menu action on a multi-disc album's "Disc N" header —
     // scoped to that disc's tracks only (action = "play" | "shuffle" | "queue"
-    // | "play-next"). The whole-album header buttons are unaffected.
+    // | "play-later" | "play-next"). The whole-album header buttons are unaffected.
     callback disc-action(int /* disc number */, string /* action */);
     // Open an external link (Last.fm / Discogs / MusicBrainz) in the system
     // browser. The url is prebuilt by the controller (AlbumState.*-url).
@@ -1365,13 +1365,13 @@ export global LocalLibraryActions {
     callback open-album(string /* album id */);
     // Open an artist (lands with the Artists slice).
     callback open-artist(string /* artist id */);
-    // Per-card action (play / queue / play-next / toggle-select). The Albums
-    // grid honors the shared AlbumCollectionView contract.
+    // Per-card action (play / queue / play-next / play-later / toggle-select).
+    // The Albums grid honors the shared AlbumCollectionView contract.
     callback album-action(string /* album id */, string /* action */);
     // Toggle the Albums-grid multi-select mode.
     callback albums-toggle-multi-select();
     // Albums bulk bar action: select-all | clear | queue | play-next |
-    // add-to-playlist | add-to-mixtape.
+    // play-later | add-to-playlist | add-to-mixtape.
     callback albums-bulk-action(string /* action */);
     // Windowed grid: the visible row band changed (item indices into
     // albums-visible, prefetch margin included) — dispatch artwork for it.
@@ -1381,7 +1381,7 @@ export global LocalLibraryActions {
     callback tracks-search(string /* query */);
     callback tracks-load-more();
     callback tracks-retry();
-    // Per-row play/queue/toggle-select (action: play|play-next|queue|toggle-select).
+    // Per-row play/queue/toggle-select (action: play|play-next|play-later|queue|toggle-select).
     callback track-action(string /* track id */, string /* action */);
     // Group-by mode (off|album|artist|name), persisted.
     callback tracks-set-group(string /* mode */);
@@ -1389,7 +1389,7 @@ export global LocalLibraryActions {
     callback tracks-set-sort(string /* key */);
     // Toggle the multi-select checkbox column.
     callback tracks-toggle-multi-select();
-    // Bulk bar action: select-all | clear | queue | play-next | add-to-playlist.
+    // Bulk bar action: select-all | clear | queue | play-next | play-later | add-to-playlist.
     callback tracks-bulk-action(string /* action */);
 
     // --- Folders tab ---
@@ -1416,7 +1416,7 @@ export global LocalLibraryActions {
     callback folders-toggle-select-mode();
     callback folders-toggle-folder-select(string /* folder path */);
     callback folders-toggle-track-select(string /* track path */);
-    callback folders-bulk-action(string /* select-all|clear|queue|play-next|add-to-playlist */);
+    callback folders-bulk-action(string /* select-all|clear|queue|play-next|play-later|add-to-playlist */);
 
     // --- Ephemeral folder (ad-hoc play) ---
     // Open the native folder picker → scan → show the ephemeral pane.
@@ -1501,8 +1501,8 @@ export global LocalAlbumActions {
     callback add-to-playlist();
     callback add-to-mixtape();
     callback play-track(string /* track id */);
-    // Per-row context-menu actions beyond "play" (play-next / queue /
-    // add-to-playlist) — resolved against the open version's track cache.
+    // Per-row context-menu actions beyond "play" (play-next / play-later /
+    // queue / add-to-playlist) — resolved against the open version's track cache.
     callback track-menu-action(string /* track id */, string /* action */);
     callback select-version(int);
     // Client-side track filter (mirrors AlbumActions.search), applied over the
@@ -1510,7 +1510,8 @@ export global LocalAlbumActions {
     callback search(string /* query */);
     // Per-disc context-menu action on a multi-disc local album's "Disc N"
     // header — scoped to that disc's tracks only (action = "play" | "shuffle" |
-    // "queue" | "play-next"). The whole-album header buttons are unaffected.
+    // "queue" | "play-later" | "play-next"). The whole-album header buttons are
+    // unaffected.
     callback disc-action(int /* disc number */, string /* action */);
 }
 
@@ -1933,6 +1934,10 @@ export global SidebarState {
     // Active sort option: "name" | "recent" | "tracks" | "playcount"
     // | "custom" (mirrors Tauri's SortOption). Persisted by crate::sidebar.
     in-out property <string> sort-option: "name";
+    // Direction of the active sort (re-selecting the option in the menu
+    // flips it). true = the option's natural direction (name A→Z, recent
+    // newest-first, tracks most-first, custom position asc).
+    in-out property <bool> sort-asc: true;
     // Micro-collage of track covers on playlist rows. Opt-out (ON by
     // default) to match Tauri's `sidebarPlaylistCollage`. The Settings >
     // Appearance toggle wires into this in a later step.
@@ -2315,6 +2320,10 @@ export global PlaylistManagerState {
     in-out property <string> filter: "all";
     // "name" | "recent" | "playcount" | "tracks" | "custom".
     in-out property <string> sort: "name";
+    // Direction of the active sort (re-selecting the menu option flips it).
+    // true = natural direction (name A→Z, recent newest-first, playcount /
+    // tracks most-first, custom position asc).
+    in-out property <bool> sort-asc: true;
     // "grid" | "list" | "tree".
     in-out property <string> view-mode: "grid";
     // Folder mode on (folders shown + folder filtering) vs flat.
@@ -3236,6 +3245,12 @@ export global AppearanceState {
     in-out property <bool> intelligent-search: true;
     // Player volume +/- stepper buttons — opt-in, hidden by default.
     in-out property <bool> show-volume-steppers: false;
+    // Animate the now-playing row's equalizer bars. Default OFF — a static
+    // pause glyph + accent left-edge mark instead (CPU on some machines).
+    in-out property <bool> play-indicator-animation: false;
+    // Invert the two-finger touchpad swipe navigation (#653). Default OFF =
+    // natural-scrolling convention (fingers right = back, left = forward).
+    in-out property <bool> invert-swipe-navigation: false;
 
     // --- NOTIFICATIONS -----------------------------------------------------
     in-out property <bool> in-app-toasts: true;
@@ -3476,6 +3491,50 @@ export global NavState {
     in-out property <length> scroll-restore: 0;
 }
 
+// Kiosk keyboard/gamepad navigation model (Steam Deck Game Mode plan, PR 2 —
+// feature/internal/kiosk-key-nav). Pure Slint: the root FocusScope in
+// KioskShell drives these properties from arrow/Enter/Esc keys; PR 3's
+// gamepad layer injects the same synthetic key events, so nothing here is
+// keyboard-specific. Additive with safe defaults — the desktop AppShell never
+// touches this global.
+//
+// Zone flow: "rail" (bottom NavRail tiles) → "content" (the mounted view's
+// navigable items) → "player" (the transport bar, one focusable unit).
+// Down advances rail→content→player→rail; Up reverses. `index` is the
+// focused item inside the zone. For content, the index space is
+// `tabs` leading tab-strip entries followed by the item rows laid out as a
+// `columns`-wide grid (`columns == 1` = vertical list or card shelves);
+// the mounted view publishes `tabs` / `columns` / `count` / `shelves`
+// whenever its tab or data changes. `nav-active` latches true on the first
+// nav key and gates every focus-ring rendering (touch-only sessions never
+// show a ring).
+export global KioskNavState {
+    in-out property <string> zone: "content";   // "rail" | "content" | "player"
+    in-out property <int> index: 0;
+    in-out property <int> columns: 1;
+    in-out property <int> count: 0;             // tabs + item count of the mounted content view
+    in-out property <bool> nav-active: false;
+    // Leading tab-strip entries inside the content index space (0 = the view
+    // has no tabs). Owned by the mounted view, never by shared grids.
+    in-out property <int> tabs: 0;
+    // Shelf mode (Discover / Artist): each content row is a horizontal card
+    // strip with its own cursor, so Left/Right can't move `index` (that
+    // would jump shelves). The shell emits an `hmove` pulse instead and the
+    // focused shelf consumes it into its local cursor.
+    in-out property <bool> shelves: false;
+    in-out property <int> hmove: 0;             // pending shelf move: -1 | +1 (consumer resets to 0)
+    // Last vertical move direction (-1 up / +1 down / 0 none). Shelf views
+    // skip non-navigable rows (e.g. playlist/mix sections that render no
+    // album strip) by nudging `index` one more step this way.
+    in-out property <int> dir: 0;
+    // Enter pulse: the shell increments this instead of calling into views
+    // (conditionally-mounted children can't be addressed). The mounted zone
+    // owner (view, grid or list) reacts via a `changed` probe, checks the
+    // zone, and activates `index`. NavRail is always mounted, so the shell
+    // calls its `activate-index()` directly instead.
+    in-out property <int> activate-seq: 0;
+}
+
 // Artist detail screen state.
 // One label row in the artist network sidebar's Labels section.
 export struct LabelEntry {
@@ -3601,8 +3660,8 @@ export global ArtistActions {
     // Toggle Popular Tracks multi-select mode.
     callback toggle-top-tracks-select();
     // Bulk-bar action over the selected Popular Tracks (id = "select-all" |
-    // "play-next" | "queue" | "add-to-playlist" | "add-to-favorites" |
-    // "clear").
+    // "play-next" | "play-later" | "queue" | "add-to-playlist" |
+    // "add-to-favorites" | "clear").
     callback top-tracks-bulk-action(string);
     // Popular Tracks section "more" menu (id = "next-all" | "queue-all" |
     // "shuffle-all" | "playlist-all").
@@ -4145,6 +4204,9 @@ export struct QueueItem {
     explicit: bool,
     // From an ephemeral folder — gates persistence actions in the row menu.
     is-ephemeral: bool,
+    // #442 section header drawn ABOVE this row: "" | "next-in-queue" (first
+    // hand-queued row) | "next-up" (first row after the manual block).
+    section: string,
 }
 
 // ImmersiveView audio visualizers. Driven at ~30fps by the Rust drain
@@ -4772,6 +4834,19 @@ export global QueueState {
     in property <int> page-start: 0;
     // Index of the last upcoming entry shown, 1-based, for the counter.
     in property <int> page-end: 0;
+    // #442 section headers present in the current page (0-2: "Next in queue"
+    // and/or "Next up") — the sidebar adds their height to the rows block.
+    in property <int> page-section-count: 0;
+    // #442 drag-math aids: the "Next in queue" header sits above the page's
+    // first row, and the page-local index of the "Next up" row (-1 = not in
+    // this page).
+    in property <bool> page-manual-header: false;
+    in property <int> page-manual-pos: -1;
+    // #442 menu-hint numbers (TrackContextMenu "where does it land" suffix):
+    // total queue length, current index (-1 = none), manual-block size.
+    in property <int> queue-length: 0;
+    in property <int> queue-current-index: -1;
+    in property <int> manual-count: 0;
 
     // --- History tab -----------------------------------------------------
     in property <[QueueItem]> history: [];
@@ -5072,6 +5147,11 @@ export global FavoritesState {
     in property <[AlbumCardItem]> albums-visible: []; // after search + sort (flat render)
     in property <[DiscoverSection]> albums-grouped: []; // group-by sections
     in-out property <string> albums-view-mode: "grid"; // "grid" | "list"
+    // Albums LIST-mode multi-select (owner 2026-07-24): checkbox column on
+    // the rows + the bulk bar (un-favorite / play-next / play-later / queue).
+    // List only — switching to grid forces it off.
+    in-out property <bool> albums-multi-select: false;
+    in property <int> albums-selected-count: 0;
     in-out property <string> albums-search: "";
     in-out property <string> albums-sort-by: "default"; // default|title-asc|title-desc|artist-asc
     in-out property <string> albums-group-mode: "off"; // off|alpha|artist
@@ -5132,7 +5212,15 @@ export global FavoritesActions {
     callback shuffle-tracks();
     callback toggle-multi-select();
     callback bulk-action(string /* select-all | remove-selected | clear */);
+    // Albums list-mode multi-select: toggle the edit mode + the bulk bar
+    // actions (select-all | play-next | play-later | queue | remove-selected | clear).
+    callback albums-toggle-multi-select();
+    callback albums-bulk-action(string);
     callback album-action(string /* album id */, string /* action */);
+    // Generic artist action route (the All feed's ArtistGridCard follow
+    // button) — forwarded to the shared media-action ("artist", id, action)
+    // arm, which owns the optimistic flip + rollback.
+    callback artist-action(string /* artist id */, string /* action */);
     callback albums-search(string /* query */);
     callback search-labels(string /* query */);
     callback playlists-set-sub-tab(string /* favorites | following */);
@@ -5140,7 +5228,7 @@ export global FavoritesActions {
     callback labels-random();
     callback search-playlists(string /* query */);
     callback playlists-set-view(string /* grid | list */);
-    callback playlist-action(string /* playlist id */, string /* play | play-next | queue | share | favorite | follow | unfollow | copy */);
+    callback playlist-action(string /* playlist id */, string /* play | play-next | play-later | queue | share | favorite | follow | unfollow | copy */);
     callback search-artists(string /* query */);
     callback artists-set-view(string /* grid | sidepanel */);
     callback artists-set-group(string /* off | alpha */);
@@ -5209,9 +5297,14 @@ export global LibraryAllState {
     in-out property <bool> show-purchases: true;
     in-out property <bool> show-favorites: true;
     in-out property <bool> show-following: true;
-    // "show local" — includes local files + Plex (Phase 2). Off until the
-    // local-favorites layer lands.
-    in-out property <bool> show-local: false;
+    // "show local" — includes local files + Plex (the local-favorites layer).
+    // ON by default (users expect their local items in All); toggled from
+    // Settings > Local Library, persisted in favorites_ui.json.
+    in-out property <bool> show-local: true;
+    // What "local" means in the feed: "favorites" (hearted items only) |
+    // "all" (the whole local library). Display state for the Settings
+    // selector; the loader reads the persisted pref directly.
+    in-out property <string> local-scope: "favorites";
     in property <int> total: 0;                        // badge count (deduped union)
     in property <bool> loading: false;
     in property <string> load-error: "";
@@ -5223,6 +5316,14 @@ export global LibraryAllActions {
     callback set-sort(string /* date | title | artist */);
     callback set-view(string /* grid | list */);
     callback toggle-source(string /* purchases | favorites | following | local */);
+    // Settings > Local Library: what "local" means in the feed —
+    // "favorites" (hearted items only) | "all" (the whole local library).
+    // Reloads the feed.
+    callback set-local-scope(string);
+    // Viewport windowing: the grid/list report the mounted row band (item
+    // indices, prefetch margin included) so Rust dispatches covers only for
+    // the visible window and evicts far outside it.
+    callback window-changed(int /* first index */, int /* last index */);
     callback open-item(string /* kind */, string /* id */);
     callback media-action(string /* kind */, string /* id */, string /* action */);
     callback retry();

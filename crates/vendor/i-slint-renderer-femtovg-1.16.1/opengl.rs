@@ -196,7 +196,13 @@ impl GraphicsBackend for OpenGLBackend {
         &self,
         _surface: GLWindowSurface,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.opengl_context.borrow().swap_buffers()
+        let result = self.opengl_context.borrow().swap_buffers();
+        if result.is_ok() {
+            // QBZ vendor patch (#558): count presented frames for the
+            // render-liveness watchdog.
+            crate::note_frame_presented();
+        }
+        result
     }
 
     #[cfg(not(target_family = "wasm"))]

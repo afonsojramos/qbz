@@ -11,4 +11,12 @@
 // the user is typing (mirrors the Tauri `isInputTarget` check).
 export global UiFocusState {
     in-out property <bool> text-input-focused: false;
+    // Steam Deck OSK (Steam plan PR 4): fired on every focus transition so
+    // Rust (steam_osk) can open/close the Steam OSK — every text field rides
+    // it with zero per-field wiring. Mode: 0 = single-line (all fields today).
+    in-out property <int> osk-mode: 0;
+    callback osk(bool /* focused */, int /* mode */);
+    changed text-input-focused => {
+        root.osk(root.text-input-focused, root.osk-mode);
+    }
 }

@@ -225,6 +225,7 @@ fn track_meta(t: &QueueTrack) -> TrackMeta {
         album: t.album.clone(),
         duration: (t.duration_secs > 0).then(|| Duration::from_secs(t.duration_secs)),
         art_url: t.artwork_url.clone(),
+        url: qbz_media_controls::xesam_url_for(t.source.as_deref(), t.id),
     }
 }
 

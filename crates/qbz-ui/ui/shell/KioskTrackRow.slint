@@ -8,11 +8,15 @@ import { TrackItem } from "../state.slint";
 
 export component KioskTrackRow inherits Rectangle {
     in property <TrackItem> track;
+    // Keyboard/gamepad nav (PR 2) — same ring idiom as KioskCard.
+    in property <bool> nav-focused: false;
     callback play(string);
 
     height: 62px;
     border-radius: Radius.sm;
-    background: ta.has-hover ? Theme.alpha-6 : transparent;
+    background: root.nav-focused ? Theme.accent.with-alpha(0.18) : ta.has-hover ? Theme.alpha-6 : transparent;
+    border-width: root.nav-focused ? 2px : 0px;
+    border-color: Theme.accent;
 
     HorizontalLayout {
         padding-left: 8px;

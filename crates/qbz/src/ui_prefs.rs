@@ -406,6 +406,16 @@ pub struct UiPrefs {
     /// per-machine app preference — your Discord client is per-machine.)
     #[serde(default)]
     pub discord_rpc_enabled: bool,
+    /// Animate the now-playing row's equalizer bars. Default OFF — a static
+    /// pause glyph + accent edge mark instead; the animated bars hold
+    /// measurable CPU on some machines (owner call 2026-07-24).
+    #[serde(default)]
+    pub play_indicator_animation: bool,
+    /// Invert the two-finger touchpad swipe navigation direction (#653).
+    /// Default OFF = the natural-scrolling convention (fingers right = back,
+    /// fingers left = forward).
+    #[serde(default)]
+    pub invert_swipe_navigation: bool,
     /// Show the opt-in "Purchases" navigation entry (sidebar / header). Default
     /// OFF — the whole DRM-free Purchases feature is hidden until the user
     /// enables it (mirrors Tauri `showPurchases`, default `false`). Re-seeded
@@ -772,6 +782,8 @@ impl Default for UiPrefs {
             system_notifications: default_system_notifications(),
             musicbrainz_enabled: default_musicbrainz_enabled(),
             discord_rpc_enabled: false,
+            play_indicator_animation: false,
+            invert_swipe_navigation: false,
             show_purchases: false,
             nav_tb_purchases: false,
             use_system_title_bar: default_use_system_title_bar(),

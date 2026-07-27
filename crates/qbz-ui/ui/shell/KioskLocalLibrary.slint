@@ -5,10 +5,15 @@
 // (open-album routes to ContentView.local-album in Rust). v1 simplifications:
 // no album-window / tracks-load-more hooks yet (first band loads), folders as a
 // flat grid.
+//
+// Keyboard/gamepad nav (PR 2): same model as KioskLibrary — the index space
+// is the 4 tabs followed by the active tab's items as a uniform grid
+// (tracks = a 1-column list). The view publishes the geometry; containers
+// mirror the focus index and answer the Enter pulse.
 import { ListView } from "std-widgets.slint";
 import { Theme } from "../foundation/semantic-colors.slint";
 import { Radius } from "../foundation/radius.slint";
-import { LocalLibraryState, LocalLibraryActions } from "../state.slint";
+import { LocalLibraryState, LocalLibraryActions, KioskNavState } from "../state.slint";
 import { KioskAlbumGrid } from "KioskAlbumGrid.slint";
 import { KioskArtistCard } from "KioskArtistCard.slint";
 import { KioskTrackRow } from "KioskTrackRow.slint";
@@ -16,9 +21,14 @@ import { KioskTrackRow } from "KioskTrackRow.slint";
 component LLTab inherits Rectangle {
     in property <string> label;
     in property <string> id;
+    // Keyboard/gamepad nav (PR 2): this tab holds the shell focus ring.
+    in property <bool> nav-focused: false;
     callback picked(string);
     property <bool> active: LocalLibraryState.active-tab == root.id;
     horizontal-stretch: 0;
+    border-width: root.nav-focused ? 2px : 0px;
+    border-color: Theme.accent;
+    border-radius: Radius.sm;
     HorizontalLayout {
         padding-left: 2px;
         padding-right: 2px;
@@ -47,6 +57,57 @@ component LLTab inherits Rectangle {
 export component KioskLocalLibrary inherits Rectangle {
     property <length> pad: 16px;
 
+    // ---- Nav geometry publish (PR 2): 4 tabs + the active tab's items.
+    function publish-nav() {
+        KioskNavState.tabs = 4;
+        KioskNavState.shelves = false;
+        if (LocalLibraryState.active-tab == "albums") {
+            KioskNavState.columns = 6;
+            KioskNavState.count = 4 + LocalLibraryState.albums-visible.length;
+        } else if (LocalLibraryState.active-tab == "artists") {
+            KioskNavState.columns = 7;
+            KioskNavState.count = 4 + LocalLibraryState.artists.length;
+        } else if (LocalLibraryState.active-tab == "folders") {
+            KioskNavState.columns = 6;
+            KioskNavState.count = 4 + LocalLibraryState.folders-visible.length;
+        } else {
+            KioskNavState.columns = 1;
+            KioskNavState.count = 4 + LocalLibraryState.tracks-visible.length;
+        }
+        KioskNavState.index = Math.max(0, Math.min(KioskNavState.index, KioskNavState.count - 1));
+    }
+    init => {
+        root.publish-nav();
+    }
+    property <string> nav-tab-probe: LocalLibraryState.active-tab;
+    changed nav-tab-probe => {
+        root.publish-nav();
+    }
+    property <int> nav-len-probe: LocalLibraryState.albums-visible.length
+        + LocalLibraryState.artists.length
+        + LocalLibraryState.folders-visible.length
+        + LocalLibraryState.tracks-visible.length;
+    changed nav-len-probe => {
+        root.publish-nav();
+    }
+
+    // Enter on a tab → the same switch the tab TouchAreas drive.
+    property <int> act-probe: KioskNavState.activate-seq;
+    changed act-probe => {
+        if (KioskNavState.nav-active && KioskNavState.zone == "content"
+            && KioskNavState.index < KioskNavState.tabs) {
+            if (KioskNavState.index == 0) {
+                LocalLibraryActions.select-tab("albums");
+            } else if (KioskNavState.index == 1) {
+                LocalLibraryActions.select-tab("artists");
+            } else if (KioskNavState.index == 2) {
+                LocalLibraryActions.select-tab("folders");
+            } else if (KioskNavState.index == 3) {
+                LocalLibraryActions.select-tab("tracks");
+            }
+        }
+    }
+
     VerticalLayout {
         spacing: 0px;
 
@@ -58,10 +119,10 @@ export component KioskLocalLibrary inherits Rectangle {
                 padding-right: root.pad;
                 spacing: 22px;
                 alignment: start;
-                LLTab { label: @tr("Albums"); id: "albums"; picked(t) => { LocalLibraryActions.select-tab(t); } }
-                LLTab { label: @tr("Artists"); id: "artists"; picked(t) => { LocalLibraryActions.select-tab(t); } }
-                LLTab { label: @tr("Folders"); id: "folders"; picked(t) => { LocalLibraryActions.select-tab(t); } }
-                LLTab { label: @tr("Tracks"); id: "tracks"; picked(t) => { LocalLibraryActions.select-tab(t); } }
+                LLTab { label: @tr("Albums"); id: "albums"; nav-focused: KioskNavState.nav-active && KioskNavState.zone == "content" && KioskNavState.index == 0; picked(t) => { LocalLibraryActions.select-tab(t); } }
+                LLTab { label: @tr("Artists"); id: "artists"; nav-focused: KioskNavState.nav-active && KioskNavState.zone == "content" && KioskNavState.index == 1; picked(t) => { LocalLibraryActions.select-tab(t); } }
+                LLTab { label: @tr("Folders"); id: "folders"; nav-focused: KioskNavState.nav-active && KioskNavState.zone == "content" && KioskNavState.index == 2; picked(t) => { LocalLibraryActions.select-tab(t); } }
+                LLTab { label: @tr("Tracks"); id: "tracks"; nav-focused: KioskNavState.nav-active && KioskNavState.zone == "content" && KioskNavState.index == 3; picked(t) => { LocalLibraryActions.select-tab(t); } }
             }
             Rectangle {
                 y: parent.height - 1px;
@@ -94,6 +155,32 @@ export component KioskLocalLibrary inherits Rectangle {
                 property <length> cell: (self.width - 2 * root.pad - (self.cols - 1) * self.gap) / self.cols;
                 viewport-width: self.width;
                 viewport-height: Math.ceil(LocalLibraryState.artists.length / self.cols) * (self.cell + 26px + self.gap) + root.pad;
+
+                // PR 2 — focus ring + Enter + scroll-into-view.
+                property <int> focused-item: KioskNavState.index - KioskNavState.tabs;
+                property <bool> item-focused: KioskNavState.nav-active
+                    && KioskNavState.zone == "content"
+                    && self.focused-item >= 0
+                    && self.focused-item < LocalLibraryState.artists.length;
+                property <length> focus-top: root.pad + Math.floor(self.focused-item / self.cols) * (self.cell + 26px + self.gap);
+                property <int> nav-index-probe: KioskNavState.index;
+                changed nav-index-probe => {
+                    if (self.item-focused) {
+                        if (self.focus-top < -self.viewport-y) {
+                            self.viewport-y = -(self.focus-top - 8px);
+                        } else if (self.focus-top + self.cell + 26px > -self.viewport-y + self.height) {
+                            self.viewport-y = -(self.focus-top + self.cell + 26px - self.height + 8px);
+                        }
+                    }
+                }
+                property <int> act-probe: KioskNavState.activate-seq;
+                changed act-probe => {
+                    if (self.item-focused) {
+                        // The TouchArea path passes the artist NAME as id.
+                        LocalLibraryActions.open-artist(LocalLibraryState.artists[self.focused-item].name);
+                    }
+                }
+
                 Rectangle {
                     for artist[i] in LocalLibraryState.artists: KioskArtistCard {
                         x: root.pad + Math.mod(i, arts.cols) * (arts.cell + arts.gap);
@@ -102,6 +189,7 @@ export component KioskLocalLibrary inherits Rectangle {
                         id: artist.name;
                         name: artist.display-name;
                         avatar: artist.image;
+                        nav-focused: arts.item-focused && arts.focused-item == i;
                         clicked(id) => {
                             LocalLibraryActions.open-artist(id);
                         }
@@ -109,9 +197,33 @@ export component KioskLocalLibrary inherits Rectangle {
                 }
             }
 
-            if LocalLibraryState.active-tab == "tracks": ListView {
-                for track in LocalLibraryState.tracks-visible: KioskTrackRow {
+            if LocalLibraryState.active-tab == "tracks": tracks-list := ListView {
+                // PR 2 — focus ring + Enter + scroll-into-view (62px rows).
+                property <int> focused-item: KioskNavState.index - KioskNavState.tabs;
+                property <bool> item-focused: KioskNavState.nav-active
+                    && KioskNavState.zone == "content"
+                    && self.focused-item >= 0
+                    && self.focused-item < LocalLibraryState.tracks-visible.length;
+                property <int> nav-index-probe: KioskNavState.index;
+                changed nav-index-probe => {
+                    if (self.item-focused) {
+                        if (self.focused-item * 62px < -self.viewport-y) {
+                            self.viewport-y = -(self.focused-item * 62px - 8px);
+                        } else if (self.focused-item * 62px + 62px > -self.viewport-y + self.height) {
+                            self.viewport-y = -(self.focused-item * 62px + 62px - self.height + 8px);
+                        }
+                    }
+                }
+                property <int> act-probe: KioskNavState.activate-seq;
+                changed act-probe => {
+                    if (self.item-focused) {
+                        LocalLibraryActions.track-action(LocalLibraryState.tracks-visible[self.focused-item].id, "play");
+                    }
+                }
+
+                for track[i] in LocalLibraryState.tracks-visible: KioskTrackRow {
                     track: track;
+                    nav-focused: tracks-list.item-focused && tracks-list.focused-item == i;
                     play(id) => {
                         LocalLibraryActions.track-action(id, "play");
                     }

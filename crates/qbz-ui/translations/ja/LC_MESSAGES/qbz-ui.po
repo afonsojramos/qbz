@@ -4801,3 +4801,57 @@ msgstr "アーティストをおすすめから除外しました"
 
 msgid "{} restored to Recommendations"
 msgstr "{} をおすすめに復元しました"
+
+msgid "LIBRARY › ALL"
+msgstr "ライブラリ › すべて"
+
+msgid "Show local files & Plex"
+msgstr "ローカルファイルと Plex を表示"
+
+msgid "Include your favorited local files and Plex items in the Library All feed."
+msgstr "お気に入りのローカルファイルと Plex のアイテムをライブラリの「すべて」フィードに含めます。"
+
+msgid "Play indicator animation"
+msgstr "再生インジケーターのアニメーション"
+
+msgid "Animate the now-playing row with equalizer bars. Off (default) shows a static pause icon with an accent edge mark — lighter on CPU."
+msgstr "再生中の行をイコライザーバーでアニメーション表示します。オフ（デフォルト）では静的な一時停止アイコンと行の端にアクセントマークを表示し、CPU負荷を抑えます。"
+
+msgid "Invert swipe navigation direction"
+msgstr "スワイプナビゲーションの方向を反転"
+
+msgid "Swap the two-finger touchpad swipe: left goes back, right goes forward."
+msgstr "トラックパッドの2本指スワイプを入れ替えます：左で戻る、右で進む。"
+
+msgid "Local items in Library All"
+msgstr "ライブラリ「すべて」のローカル項目"
+
+msgid "Favorited items only: what you hearted. Entire local library: every folder and Plex album, artist and track."
+msgstr "お気に入りのみ：ハートを付けた項目。ローカルライブラリ全体：フォルダと Plex のすべてのアルバム・アーティスト・トラック。"
+
+msgid "Favorited items only"
+msgstr "お気に入りのみ"
+
+msgid "Entire local library"
+msgstr "ローカルライブラリ全体"
+
+msgid "Select multiple albums"
+msgstr "複数のアルバムを選択"
+
+msgid "Play later"
+msgstr "後で再生"
+
+msgid "Added to play later"
+msgstr "「後で再生」に追加しました"
+
+msgid "Next in queue"
+msgstr "キューの次"
+
+msgid "Next up"
+msgstr "次に再生"
+
+msgid "Removed {} tracks from favorites"
+msgstr "{} トラックをお気に入りから削除しました"
+
+msgid "Removing {} tracks from favorites…"
+msgstr "{} トラックをお気に入りから削除中…"

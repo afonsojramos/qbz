@@ -1611,6 +1611,127 @@ pub fn selected_tracks(window: &AppWindow) -> Vec<Track> {
         .unwrap_or_default()
 }
 
+// ---- Albums LIST-mode multi-select (mirrors the tracks section) ---------
+// Selection lives on AlbumCardItem.selected in `albums-visible` (flat) and
+// each `albums-grouped` section model (grouped list renders the same rows).
+
+/// Enter/leave albums multi-select; leaving clears the selection.
+pub fn set_albums_multi_select(window: &AppWindow, on: bool) {
+    window.global::<FavoritesState>().set_albums_multi_select(on);
+    crate::selection::clear_anchor();
+    if !on {
+        clear_albums_selection(window);
+    }
+}
+
+/// Flip one album's `selected` across the flat + grouped models.
+pub fn toggle_select_album(window: &AppWindow, id: &str) {
+    let st = window.global::<FavoritesState>();
+    let flip = |model: &slint::ModelRc<AlbumCardItem>| {
+        for i in 0..model.row_count() {
+            if let Some(mut item) = model.row_data(i) {
+                if item.id.as_str() == id {
+                    item.selected = !item.selected;
+                    model.set_row_data(i, item);
+                    break;
+                }
+            }
+        }
+    };
+    flip(&st.get_albums_visible());
+    let grouped = st.get_albums_grouped();
+    for s in 0..grouped.row_count() {
+        if let Some(section) = grouped.row_data(s) {
+            flip(&section.albums);
+        }
+    }
+    recount_albums_selected(window);
+}
+
+/// Recount selected album rows into `albums-selected-count`.
+pub fn recount_albums_selected(window: &AppWindow) {
+    let st = window.global::<FavoritesState>();
+    let visible = st.get_albums_visible();
+    let mut count = (0..visible.row_count())
+        .filter(|&i| visible.row_data(i).map(|a| a.selected).unwrap_or(false))
+        .count();
+    let grouped = st.get_albums_grouped();
+    for s in 0..grouped.row_count() {
+        if let Some(section) = grouped.row_data(s) {
+            let albums = section.albums;
+            count += (0..albums.row_count())
+                .filter(|&i| albums.row_data(i).map(|a| a.selected).unwrap_or(false))
+                .count();
+        }
+    }
+    st.set_albums_selected_count(count as i32);
+}
+
+/// Select-all toggle on the flat visible set (or clear when all selected).
+pub fn select_all_albums(window: &AppWindow) {
+    let model = window.global::<FavoritesState>().get_albums_visible();
+    let total = model.row_count();
+    let selected = (0..total)
+        .filter(|&i| model.row_data(i).map(|a| a.selected).unwrap_or(false))
+        .count();
+    let target = selected != total;
+    for i in 0..total {
+        if let Some(mut item) = model.row_data(i) {
+            if item.selected != target {
+                item.selected = target;
+                model.set_row_data(i, item);
+            }
+        }
+    }
+    recount_albums_selected(window);
+}
+
+/// Deselect every album row (flat + grouped).
+pub fn clear_albums_selection(window: &AppWindow) {
+    let st = window.global::<FavoritesState>();
+    let clear = |model: &slint::ModelRc<AlbumCardItem>| {
+        for i in 0..model.row_count() {
+            if let Some(mut item) = model.row_data(i) {
+                if item.selected {
+                    item.selected = false;
+                    model.set_row_data(i, item);
+                }
+            }
+        }
+    };
+    clear(&st.get_albums_visible());
+    let grouped = st.get_albums_grouped();
+    for s in 0..grouped.row_count() {
+        if let Some(section) = grouped.row_data(s) {
+            clear(&section.albums);
+        }
+    }
+    st.set_albums_selected_count(0);
+}
+
+/// The ids of the currently-selected album rows (flat + grouped).
+pub fn selected_album_ids(window: &AppWindow) -> Vec<String> {
+    let st = window.global::<FavoritesState>();
+    let mut ids: Vec<String> = (0..st.get_albums_visible().row_count())
+        .filter_map(|i| st.get_albums_visible().row_data(i))
+        .filter(|a| a.selected)
+        .map(|a| a.id.to_string())
+        .collect();
+    let grouped = st.get_albums_grouped();
+    for s in 0..grouped.row_count() {
+        if let Some(section) = grouped.row_data(s) {
+            ids.extend(
+                (0..section.albums.row_count())
+                    .filter_map(|i| section.albums.row_data(i))
+                    .filter(|a| a.selected)
+                    .map(|a| a.id.to_string()),
+            );
+        }
+    }
+    ids
+}
+
+
 pub fn reset_loading(window: &AppWindow) {
     let state = window.global::<FavoritesState>();
     state.set_loading(true);

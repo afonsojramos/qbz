@@ -318,6 +318,11 @@ mod tests {
     }
 
     fn test_runtime() -> AppRuntime<NoOpAdapter> {
+        // QbzCore builds a reqwest client (MusicBrainz); since reqwest no
+        // longer pulls a rustls provider (#663), tests must install the
+        // process-level one explicitly, exactly like the real binaries do at
+        // startup — otherwise Client construction panics with "No provider set".
+        crate::ensure_crypto_provider();
         AppRuntime::with_audio_settings(NoOpAdapter, None, AudioSettings::default(), None)
     }
 

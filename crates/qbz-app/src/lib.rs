@@ -1,4 +1,5 @@
 pub mod diagnostics;
+pub mod memory_watchdog;
 pub mod offline_mode;
 pub mod graphics_autoconfig;
 pub mod playback_context;

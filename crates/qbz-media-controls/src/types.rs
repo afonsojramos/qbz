@@ -13,6 +13,26 @@ pub struct TrackMeta {
     /// is NOT the application icon (that is resolved by GNOME from the MPRIS
     /// `DesktopEntry` property → the installed .desktop → `Icon=`).
     pub art_url: Option<String>,
+    /// `xesam:url` (#658) — the track's PUBLIC web link so external scripts
+    /// (playerctl widgets, handoff automation, scrobblers) can identify the
+    /// exact song: `https://open.qobuz.com/track/<id>` for Qobuz catalog rows
+    /// (offline `qobuz_download` keeps its real Qobuz id, so it qualifies too).
+    /// None for local/Plex rows — QueueTrack carries no file path to map to a
+    /// file:// URI.
+    pub url: Option<String>,
+}
+
+/// Build the `xesam:url` for a queue track (#658): the public Qobuz web link
+/// (`https://open.qobuz.com/track/<id>`) for catalog tracks — offline
+/// `qobuz_download` rows qualify too, their id IS the real Qobuz id. None for
+/// `local` / `plex` rows: QueueTrack carries no file path to map to a file://
+/// URI, and a synthetic local id would produce a bogus Qobuz link.
+pub fn xesam_url_for(source: Option<&str>, track_id: u64) -> Option<String> {
+    match source.map(|s| s.to_ascii_lowercase()) {
+        Some(ref s) if s == "local" || s == "plex" => None,
+        _ if track_id > 0 => Some(format!("https://open.qobuz.com/track/{track_id}")),
+        _ => None,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
