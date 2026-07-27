@@ -162,7 +162,9 @@ Rectangle {
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
-                    // POC-NOTE: the album page is out of scope — inert.
+                    // Phase 4: a card click plays the album (the album page
+                    // itself is out of scope — POC-NOTE).
+                    onClicked: QbzBridge.playAlbum(card.id)
                 }
                 // Hover action buttons — favorite / play / more (INERT;
                 // POC-NOTE: playback + favorites land in later phases).
@@ -208,7 +210,13 @@ Rectangle {
                             anchors.centerIn: parent
                             tintName: "black"
                         }
-                        MouseArea { id: playOvArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor }
+                        MouseArea {
+                            id: playOvArea
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: QbzBridge.playAlbum(card.id)
+                        }
                     }
                     Rectangle {
                         width: 36
@@ -437,7 +445,8 @@ Rectangle {
             anchors.fill: parent
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
-            // POC-NOTE: album page out of scope — inert.
+            // Phase 4: slim rows are albums — click plays (page out of scope).
+            onClicked: QbzBridge.playAlbum(card.id)
         }
     }
 

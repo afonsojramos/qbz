@@ -13,6 +13,7 @@ mod home_qt;
 mod nav_qt;
 mod now_playing;
 mod offline_fwd;
+mod playback_qt;
 
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -118,6 +119,8 @@ fn enter_shell(session: auth_qt::SessionInfo) {
     // engine gates Qobuz calls anyway, and the view shows the offline
     // placeholder instead).
     load_home_once();
+    // Phase 4: the 1 Hz playback state pump (idempotent).
+    playback_qt::start_poll_loop(app());
     ui(move |mut b| {
                 b.as_mut().set_session_user_name(QString::from(session.display_name.as_str()));
         b.as_mut().set_session_subscription(QString::from(session.subscription.as_str()));
@@ -246,6 +249,60 @@ fn load_home_once() {
     reload_home();
 }
 
+// ============================ Playback (phase 4) ===========================
+
+/// Album-card click on Home: resolve + enqueue + play through the core.
+pub(crate) fn play_album(album_id: String) {
+    let runtime = app();
+    spawn(async move {
+        if let Err(e) = playback_qt::play_album(&runtime, &album_id).await {
+            log::error!("[qbz-qt] play_album failed: {e}");
+        }
+    });
+}
+
+pub(crate) fn transport_toggle_play() {
+    let runtime = app();
+    spawn(async move { playback_qt::toggle_play(&runtime).await });
+}
+
+pub(crate) fn transport_next() {
+    let runtime = app();
+    spawn(async move { playback_qt::next(&runtime).await });
+}
+
+pub(crate) fn transport_previous() {
+    let runtime = app();
+    spawn(async move { playback_qt::previous(&runtime).await });
+}
+
+pub(crate) fn transport_seek(frac: f32) {
+    let runtime = app();
+    spawn(async move { playback_qt::seek_frac(&runtime, frac).await });
+}
+
+pub(crate) fn transport_set_volume(volume: f32) {
+    // Local model first (instant UI), then the engine.
+    now_playing::set_volume(volume);
+    let runtime = app();
+    spawn(async move { playback_qt::set_volume(&runtime, volume).await });
+}
+
+pub(crate) fn transport_toggle_mute() {
+    let runtime = app();
+    spawn(async move { playback_qt::toggle_mute(&runtime).await });
+}
+
+pub(crate) fn transport_toggle_shuffle() {
+    let runtime = app();
+    spawn(async move { playback_qt::toggle_shuffle(&runtime).await });
+}
+
+pub(crate) fn transport_cycle_repeat() {
+    let runtime = app();
+    spawn(async move { playback_qt::cycle_repeat(&runtime).await });
+}
+
 /// `reloadHome()` invokable / auto-load worker: fetch + publish + artwork.
 pub(crate) fn reload_home() {
     if offline_fwd::engine().status().is_offline() {
@@ -264,6 +321,7 @@ pub(crate) fn reload_home() {
                 // artwork_qt.rs — per-row model updates are the follow-up).
                 let missing = artwork_qt::attach_cached(&mut sections);
                 let count: usize = sections.iter().map(|s| s.items.len()).sum();
+
                 publish_home_sections(&sections);
                 log::info!(
                     "[qbz-qt] home published: {} sections, {} cards, {} artwork misses",
@@ -280,6 +338,7 @@ pub(crate) fn reload_home() {
                         log::info!("[qbz-qt] home republished after artwork downloads");
                     });
                 }
+
                 ui(|mut b| b.as_mut().set_home_loading(false));
             }
             Err(e) => {
@@ -298,6 +357,21 @@ fn publish_home_sections(sections: &[home_qt::HomeSection]) {
     ui(move |mut b| {
         b.as_mut().set_home_sections_json(QString::from(json.as_str()));
     });
+}
+
+/// Build the bridge's `queueModel` QVariantList from per-row JSON strings
+/// (each QVariant carries one QString — see the nesting POC-NOTE in
+/// playback_qt.rs `publish_queue`).
+pub(crate) fn json_rows_to_qvariant_list(
+    rows: Vec<String>,
+) -> cxx_qt_lib::QList<cxx_qt_lib::QVariant> {
+    let mut list = cxx_qt_lib::QList::<cxx_qt_lib::QVariant>::default();
+    for row in rows {
+        list.append(<QString as cxx_qt_lib::QVariantValue>::construct(&QString::from(
+            row.as_str(),
+        )));
+    }
+    list
 }
 
 fn main() {

@@ -178,6 +178,11 @@ pub mod qbz_bridge {
         /// index + rails and republish `homeSectionsJson`.
         #[qinvokable]
         fn reload_home(self: Pin<&mut QbzBridge>);
+
+        /// Album-card click on Home: resolve the album's tracks, enqueue,
+        /// and play through the core's resolved path.
+        #[qinvokable]
+        fn play_album(self: Pin<&mut QbzBridge>, album_id: QString);
     }
 
     impl cxx_qt::Threading for QbzBridge {}
@@ -340,38 +345,42 @@ impl qbz_bridge::QbzBridge {
     }
 
     pub fn toggle_play(self: Pin<&mut Self>) {
-        crate::now_playing::toggle_play();
+        crate::transport_toggle_play();
     }
 
     pub fn next(self: Pin<&mut Self>) {
-        crate::now_playing::next();
+        crate::transport_next();
     }
 
     pub fn previous(self: Pin<&mut Self>) {
-        crate::now_playing::previous();
+        crate::transport_previous();
     }
 
     pub fn seek(self: Pin<&mut Self>, frac: f32) {
-        crate::now_playing::seek(frac);
+        crate::transport_seek(frac);
     }
 
     pub fn set_volume(self: Pin<&mut Self>, volume: f32) {
-        crate::now_playing::set_volume(volume);
+        crate::transport_set_volume(volume);
     }
 
     pub fn toggle_mute(self: Pin<&mut Self>) {
-        crate::now_playing::toggle_mute();
+        crate::transport_toggle_mute();
     }
 
     pub fn toggle_shuffle(self: Pin<&mut Self>) {
-        crate::now_playing::toggle_shuffle();
+        crate::transport_toggle_shuffle();
     }
 
     pub fn cycle_repeat(self: Pin<&mut Self>) {
-        crate::now_playing::cycle_repeat();
+        crate::transport_cycle_repeat();
     }
 
     pub fn reload_home(self: Pin<&mut Self>) {
         crate::reload_home();
+    }
+
+    pub fn play_album(self: Pin<&mut Self>, album_id: QString) {
+        crate::play_album(album_id.to_string());
     }
 }

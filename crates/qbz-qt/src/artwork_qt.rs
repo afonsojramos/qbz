@@ -109,3 +109,42 @@ pub async fn download_missing(urls: Vec<String>) {
         let _ = handle.await;
     }
 }
+
+// ---------------------------------------------------------------------------
+// Now-playing artwork (phase 4)
+// ---------------------------------------------------------------------------
+
+/// `file://<cached path>` when the url is already on disk ("" otherwise) —
+/// synchronous, no download. Used for queue rows.
+pub fn cached_path(url: &str) -> String {
+    if url.is_empty() {
+        return String::new();
+    }
+    cache()
+        .and_then(|c| c.lock().unwrap().get(url))
+        .map(|p| format!("file://{}", p.display()))
+        .unwrap_or_default()
+}
+
+/// Attach the current track's artwork to the NowPlayingModel: disk hit
+/// applies immediately; a miss downloads in the background and then
+/// republishes (mirrors `attach_cached` + `download_missing` for one url).
+pub fn attach_now_playing(url: &str) {
+    if url.is_empty() {
+        crate::now_playing::set_artwork_path(String::new());
+        return;
+    }
+    let hit = cached_path(url);
+    if !hit.is_empty() {
+        crate::now_playing::set_artwork_path(hit);
+        return;
+    }
+    let url = url.to_string();
+    crate::spawn(async move {
+        download_missing(vec![url.clone()]).await;
+        let path = cached_path(&url);
+        if !path.is_empty() {
+            crate::now_playing::set_artwork_path(path);
+        }
+    });
+}

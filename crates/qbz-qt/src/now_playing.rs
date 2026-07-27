@@ -21,6 +21,8 @@ pub struct NowPlayingModel {
     pub duration_secs: i32,
     pub playing: bool,
     pub loading: bool,
+    /// Streaming buffer fill 0..1 (seekbar cache overlay); 0 = not streaming.
+    pub cache: f32,
     pub volume: f32,
     pub muted: bool,
     pub shuffle: bool,
@@ -43,6 +45,7 @@ impl Default for NowPlayingModel {
             duration_secs: 0,
             playing: false,
             loading: false,
+            cache: 0.0,
             volume: 1.0,
             muted: false,
             shuffle: false,
@@ -62,6 +65,7 @@ static MODEL: Mutex<NowPlayingModel> = Mutex::new(NowPlayingModel {
     duration_secs: 0,
     playing: false,
     loading: false,
+    cache: 0.0,
     volume: 1.0,
     muted: false,
     shuffle: false,
@@ -127,34 +131,132 @@ pub fn set_volume(volume: f32) {
     });
 }
 
-pub fn toggle_mute() {
-    mutate(|m| m.muted = !m.muted);
+pub fn set_muted(muted: bool) {
+    mutate(|m| m.muted = muted);
 }
 
-pub fn toggle_shuffle() {
-    mutate(|m| m.shuffle = !m.shuffle);
+pub fn set_shuffle(shuffle: bool) {
+    mutate(|m| m.shuffle = shuffle);
 }
 
-pub fn cycle_repeat() {
-    mutate(|m| m.repeat_mode = (m.repeat_mode + 1) % 3);
+pub fn set_repeat_mode(mode: i32) {
+    mutate(|m| m.repeat_mode = mode);
 }
 
-// --- Transport (log-and-noop until phase 4) ------------------------------
-
-pub fn toggle_play() {
-    // POC-NOTE: no player wired — phase 4 replaces this with the core
-    // playback command through AppRuntime.
-    log::info!("[qbz-qt] transport toggle-play (no-op until phase 4)");
+pub fn repeat_mode() -> i32 {
+    MODEL.lock().unwrap().repeat_mode
 }
 
-pub fn next() {
-    log::info!("[qbz-qt] transport next (no-op until phase 4)");
+pub fn set_playing(playing: bool) {
+    mutate(|m| m.playing = playing);
 }
 
-pub fn previous() {
-    log::info!("[qbz-qt] transport previous (no-op until phase 4)");
+// --- Track meta + position (phase 4: fed by the poll pump) ---------------
+
+/// Current-track metadata as published by the playback controller.
+pub struct TrackMeta {
+    pub title: String,
+    pub artist: String,
+    pub duration_secs: i32,
+    pub quality_tier: String,
+    pub quality_label: String,
+    pub artwork_url: String,
+    pub shuffle: bool,
+    pub repeat_mode: i32,
 }
 
-pub fn seek(frac: f32) {
-    log::info!("[qbz-qt] transport seek({frac:.3}) (no-op until phase 4)");
+/// A new current track: full meta swap (art path attaches separately via
+/// the artwork pipeline — see `artwork_qt::attach_now_playing`).
+pub fn set_track(meta: TrackMeta) {
+    mutate(|m| {
+        m.has_track = true;
+        m.title = meta.title;
+        m.artist = meta.artist;
+        m.duration_secs = meta.duration_secs;
+        m.elapsed_secs = 0;
+        m.quality_tier = meta.quality_tier;
+        m.quality_label = meta.quality_label;
+        m.artwork_path = String::new();
+        m.loading = true;
+        m.playing = true;
+        m.shuffle = meta.shuffle;
+        m.repeat_mode = meta.repeat_mode;
+    });
+    // Stash the url out-of-band so the artwork pipeline can resolve it
+    // without a second full publish.
+    *ARTWORK_URL.lock().unwrap() = meta.artwork_url;
+}
+
+/// No current track (queue cleared / finished): back to the idle bar.
+pub fn clear_track() {
+    mutate(|m| {
+        *m = NowPlayingModel {
+            volume: m.volume,
+            muted: m.muted,
+            ..NowPlayingModel::default()
+        };
+    });
+}
+
+/// The artwork url of the current track, stashed for the artwork pipeline.
+static ARTWORK_URL: Mutex<String> = Mutex::new(String::new());
+
+/// Attach a resolved artwork path to the current track (artwork pipeline).
+pub fn set_artwork_path(path: String) {
+    mutate(|m| m.artwork_path = path);
+}
+
+/// 1 Hz position push from the poll pump. `has_audio` = the engine
+/// surfaced a track id (clears the loading spinner).
+pub fn set_position(elapsed_secs: i32, duration_secs: i32, playing: bool, cache: f32, has_audio: bool) {
+    let mut guard = MODEL.lock().unwrap();
+    {
+        let m = &mut *guard;
+        m.elapsed_secs = elapsed_secs;
+        if duration_secs > 0 {
+            m.duration_secs = duration_secs;
+        }
+        m.playing = playing;
+        if has_audio {
+            m.loading = false;
+        }
+        // progress is derived in publish() from elapsed/duration; cache is
+        // stored raw for the seekbar's buffer overlay.
+        m.cache = cache;
+    }
+    let m = guard.clone();
+    drop(guard);
+    publish_with_cache(&m);
+}
+
+/// Same as `publish` but honors the poll-fed cache value instead of
+/// mirroring progress.
+fn publish_with_cache(m: &NowPlayingModel) {
+    let m = m.clone();
+    crate::ui(move |mut b| {
+        let progress = if m.duration_secs > 0 {
+            (m.elapsed_secs as f32 / m.duration_secs as f32).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        b.as_mut().set_np_has_track(m.has_track);
+        b.as_mut().set_np_title(QString::from(m.title.as_str()));
+        b.as_mut().set_np_artist(QString::from(m.artist.as_str()));
+        b.as_mut()
+            .set_np_artwork_path(QString::from(m.artwork_path.as_str()));
+        b.as_mut().set_np_elapsed_secs(m.elapsed_secs);
+        b.as_mut().set_np_duration_secs(m.duration_secs);
+        b.as_mut().set_np_progress(progress);
+        b.as_mut().set_np_cache_progress(m.cache);
+        b.as_mut().set_np_playing(m.playing);
+        b.as_mut().set_np_loading(m.loading);
+        b.as_mut().set_np_volume(m.volume);
+        b.as_mut().set_np_muted(m.muted);
+        b.as_mut().set_np_shuffle(m.shuffle);
+        b.as_mut().set_np_repeat_mode(m.repeat_mode);
+        b.as_mut()
+            .set_np_quality_tier(QString::from(m.quality_tier.as_str()));
+        b.as_mut()
+            .set_np_quality_label(QString::from(m.quality_label.as_str()));
+    });
 }
