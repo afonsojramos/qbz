@@ -1241,6 +1241,7 @@ export component LocalLibraryView inherits Rectangle {
                                 actions: [
                                     { id: "select-all", label: @tr("Select all"), icon: @image-url("../assets/icons/square-check-big.svg"), danger: false, needs-selection: false },
                                     { id: "queue", label: @tr("Add to queue"), icon: @image-url("../assets/icons/list-end.svg"), danger: false, needs-selection: true },
+                                    { id: "play-later", label: @tr("Play later"), icon: @image-url("../assets/icons/list-plus.svg"), danger: false, needs-selection: true },
                                     { id: "play-next", label: @tr("Play next"), icon: @image-url("../assets/icons/list-start.svg"), danger: false, needs-selection: true },
                                     { id: "add-to-playlist", label: @tr("Add to playlist"), icon: @image-url("../assets/icons/list-music.svg"), danger: false, needs-selection: true },
                                     { id: "add-to-mixtape", label: @tr("Add to Mixtape/Collection"), icon: @image-url("../assets/icons/cassette-tape.svg"), danger: false, needs-selection: true },
@@ -1407,6 +1408,7 @@ export component LocalLibraryView inherits Rectangle {
                             actions: [
                                 { id: "select-all", label: @tr("Select all"), icon: @image-url("../assets/icons/square-check-big.svg"), danger: false, needs-selection: false },
                                 { id: "queue", label: @tr("Add to queue"), icon: @image-url("../assets/icons/list-end.svg"), danger: false, needs-selection: true },
+                                { id: "play-later", label: @tr("Play later"), icon: @image-url("../assets/icons/list-plus.svg"), danger: false, needs-selection: true },
                                 { id: "play-next", label: @tr("Play next"), icon: @image-url("../assets/icons/list-start.svg"), danger: false, needs-selection: true },
                                 { id: "remove-favorites", label: @tr("Remove from favorites"), icon: @image-url("../assets/icons/heart-crack.svg"), danger: true, needs-selection: true },
                                 { id: "add-to-playlist", label: @tr("Add to playlist"), icon: @image-url("../assets/icons/list-music.svg"), danger: false, needs-selection: true },
@@ -1806,6 +1808,14 @@ export component LocalLibraryView inherits Rectangle {
                                             icon: @image-url("../assets/icons/list-start.svg");
                                             tooltip: @tr("Play next");
                                             clicked => { LocalLibraryActions.folders-bulk-action("play-next"); }
+                                        }
+                                    }
+                                    VerticalLayout {
+                                        alignment: center;
+                                        RailBulkBtn {
+                                            icon: @image-url("../assets/icons/list-plus.svg");
+                                            tooltip: @tr("Play later");
+                                            clicked => { LocalLibraryActions.folders-bulk-action("play-later"); }
                                         }
                                     }
                                     VerticalLayout {

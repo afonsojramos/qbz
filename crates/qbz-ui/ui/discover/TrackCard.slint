@@ -79,7 +79,7 @@ export component TrackCard inherits Rectangle {
     animate opacity { duration: 250ms; }
     callback clicked(string);
     // kind ("track"), track id, action ("play" | "queue" | "play-next" |
-    // "favorite" | "open").
+    // "play-later" | "favorite" | "open").
     callback media-action(string, string, string);
 
     in property <length> card-height: 246px;
@@ -202,8 +202,8 @@ export component TrackCard inherits Rectangle {
                 x: 26px;
                 y: 56px;
                 width: 196px;
-                // Play / Play-next / Queue / Go-to-artist / Go-to-album / favorite.
-                height: 6 * 33px + 10px;
+                // Play / Play-next / Play-later / Queue / Go-to-artist / Go-to-album / favorite.
+                height: 7 * 33px + 10px;
                 ContextMenu {
                     ContextMenuItem {
                         icon: @image-url("../assets/icons/play.svg");
@@ -217,6 +217,13 @@ export component TrackCard inherits Rectangle {
                         label: @tr("Play next");
                         clicked => {
                             root.media-action("track", root.track.id, "play-next");
+                        }
+                    }
+                    ContextMenuItem {
+                        icon: @image-url("../assets/icons/list-plus.svg");
+                        label: @tr("Play later");
+                        clicked => {
+                            root.media-action("track", root.track.id, "play-later");
                         }
                     }
                     ContextMenuItem {

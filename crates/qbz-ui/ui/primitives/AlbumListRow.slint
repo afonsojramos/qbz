@@ -150,7 +150,7 @@ export component AlbumListRow inherits Rectangle {
 
     callback clicked(string);
     // kind ("album" | "artist"), id, action ("play" | "queue" |
-    // "play-next" | "favorite" | "open").
+    // "play-next" | "play-later" | "favorite" | "open").
     callback media-action(string, string, string);
 
     // Hover spans the row body + the art / artist / overflow affordances so
@@ -382,8 +382,8 @@ export component AlbumListRow inherits Rectangle {
                     x: -170px;
                     y: 34px;
                     width: 196px;
-                    // 6 items max (Open/Play/Play-next/Queue/favorite + block).
-                    height: 6 * 33px + 10px;
+                    // 7 items max (Open/Play/Play-next/Play-later/Queue/favorite + block).
+                    height: 7 * 33px + 10px;
                     ContextMenu {
                         ContextMenuItem {
                             icon: @image-url("../assets/icons/library-big.svg");
@@ -404,6 +404,13 @@ export component AlbumListRow inherits Rectangle {
                             label: @tr("Play next");
                             clicked => {
                                 root.media-action("album", root.album.id, "play-next");
+                            }
+                        }
+                        ContextMenuItem {
+                            icon: @image-url("../assets/icons/list-plus.svg");
+                            label: @tr("Play later");
+                            clicked => {
+                                root.media-action("album", root.album.id, "play-later");
                             }
                         }
                         ContextMenuItem {

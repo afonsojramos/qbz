@@ -382,8 +382,8 @@ export component AlbumCard inherits Rectangle {
                 x: more-btn.absolute-position.x + more-btn.width / 2 - artwork-box.absolute-position.x;
                 y: more-btn.absolute-position.y + more-btn.height / 2 - artwork-box.absolute-position.y;
                 width: 196px;
-                // 6 items max (Open/Play/Play-next/Queue + favorite + block).
-                height: 6 * 33px + 10px;
+                // 7 items max (Open/Play/Play-next/Play-later/Queue + favorite + block).
+                height: 7 * 33px + 10px;
                 ContextMenu {
                     ContextMenuItem {
                         icon: @image-url("../assets/icons/library-big.svg");
@@ -404,6 +404,13 @@ export component AlbumCard inherits Rectangle {
                         label: @tr("Play next");
                         clicked => {
                             root.media-action("album", root.album.id, "play-next");
+                        }
+                    }
+                    ContextMenuItem {
+                        icon: @image-url("../assets/icons/list-plus.svg");
+                        label: @tr("Play later");
+                        clicked => {
+                            root.media-action("album", root.album.id, "play-later");
                         }
                     }
                     ContextMenuItem {

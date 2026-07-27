@@ -1467,9 +1467,9 @@ export component FavoritesView inherits Rectangle {
                                     x: row-rect.menu-x;
                                     y: row-rect.menu-y;
                                     width: 196px;
-                                    height: (item.kind == "track" ? 6
-                                        : item.kind == "album" ? 6
-                                        : item.kind == "playlist" ? 4
+                                    height: (item.kind == "track" ? 7
+                                        : item.kind == "album" ? 7
+                                        : item.kind == "playlist" ? 5
                                         : 1) * 33px + 10px;
                                     ContextMenu {
                                         if item.kind == "track" || item.kind == "album" || item.kind == "playlist": ContextMenuItem {
@@ -1488,6 +1488,15 @@ export component FavoritesView inherits Rectangle {
                                                 if (item.kind == "track") { FavoritesActions.track-action(item.id, "play-next"); }
                                                 else if (item.kind == "album") { FavoritesActions.album-action(item.id, "play-next"); }
                                                 else { FavoritesActions.playlist-action(item.id, "play-next"); }
+                                            }
+                                        }
+                                        if item.kind == "track" || item.kind == "album" || item.kind == "playlist": ContextMenuItem {
+                                            icon: @image-url("../assets/icons/list-plus.svg");
+                                            label: @tr("Play later");
+                                            clicked => {
+                                                if (item.kind == "track") { FavoritesActions.track-action(item.id, "play-later"); }
+                                                else if (item.kind == "album") { FavoritesActions.album-action(item.id, "play-later"); }
+                                                else { FavoritesActions.playlist-action(item.id, "play-later"); }
                                             }
                                         }
                                         if item.kind == "track" || item.kind == "album" || item.kind == "playlist": ContextMenuItem {
@@ -1563,6 +1572,7 @@ export component FavoritesView inherits Rectangle {
                     actions: [
                         { id: "select-all", label: @tr("Select all"), icon: @image-url("../assets/icons/square-check-big.svg"), danger: false, needs-selection: false },
                         { id: "play-next", label: @tr("Play next"), icon: @image-url("../assets/icons/list-start.svg"), danger: false, needs-selection: true },
+                        { id: "play-later", label: @tr("Play later"), icon: @image-url("../assets/icons/list-plus.svg"), danger: false, needs-selection: true },
                         { id: "queue", label: @tr("Add to queue"), icon: @image-url("../assets/icons/list-end.svg"), danger: false, needs-selection: true },
                         { id: "add-to-playlist", label: @tr("Add to playlist"), icon: @image-url("../assets/icons/list-music.svg"), danger: false, needs-selection: true },
                         { id: "add-to-mixtape", label: @tr("Add to Mixtape/Collection"), icon: @image-url("../assets/icons/cassette-tape.svg"), danger: false, needs-selection: true },
@@ -1727,6 +1737,7 @@ export component FavoritesView inherits Rectangle {
                                 actions: [
                                     { id: "select-all", label: @tr("Select all"), icon: @image-url("../assets/icons/square-check-big.svg"), danger: false, needs-selection: false },
                                     { id: "play-next", label: @tr("Play next"), icon: @image-url("../assets/icons/list-start.svg"), danger: false, needs-selection: true },
+                                    { id: "play-later", label: @tr("Play later"), icon: @image-url("../assets/icons/list-plus.svg"), danger: false, needs-selection: true },
                                     { id: "queue", label: @tr("Add to queue"), icon: @image-url("../assets/icons/list-end.svg"), danger: false, needs-selection: true },
                                     { id: "remove-selected", label: @tr("Remove from Library"), icon: @image-url("../assets/icons/heart-crack.svg"), danger: true, needs-selection: true },
                                     { id: "clear", label: @tr("Clear"), icon: @image-url("../assets/icons/x.svg"), danger: false, needs-selection: true },

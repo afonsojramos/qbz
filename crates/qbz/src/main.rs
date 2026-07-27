@@ -6430,9 +6430,10 @@ fn wire_myqbz_detail(
 
     // --- Bulk action bar (select-mode, spec 12 §13.1) ------------------
     // The full §13.1 group set:
-    //  - "add-to-queue" / "play-next": resolve the selected items via the shared
-    //    enqueue resolver + append / insert-next (no replace, no queue-source
-    //    stamp — mirrors the per-row contract).
+    //  - "add-to-queue" / "play-next" / "play-later": resolve the selected
+    //    items via the shared enqueue resolver + append / insert-next /
+    //    manual-block-tail (no replace, no queue-source stamp — mirrors the
+    //    per-row contract).
     //  - "add-to-playlist": resolve the selected items to their Qobuz track ids
     //    and open the existing playlist picker (Qobuz mode) with them.
     //  - "add-to-mixtape": open the global AddToMixtapeModal with the payloads.
@@ -6458,6 +6459,19 @@ fn wire_myqbz_detail(
                         handle.clone(),
                         selected,
                         id.as_str() == "play-next",
+                    );
+                }
+                "play-later" => {
+                    // #442 — same resolve, manual-block-tail placement.
+                    let selected = myqbz_detail::selected_full_items(&w);
+                    if selected.is_empty() {
+                        return;
+                    }
+                    myqbz_play::bulk_enqueue_later(
+                        runtime.clone(),
+                        weak.clone(),
+                        handle.clone(),
+                        selected,
                     );
                 }
                 "add-to-playlist" => {
@@ -6703,7 +6717,7 @@ fn wire_myqbz_detail(
         });
     }
 
-    // --- Per-row context menu (play / play-next / add-to-queue) ---------
+    // --- Per-row context menu (play / play-next / play-later / add-to-queue) ---
     {
         let runtime = app_runtime.clone();
         let weak = window.as_weak();
@@ -11915,6 +11929,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     handle.clone(),
                     id,
                 ),
+                // #442 "Play later" — the album lands at the END of the
+                // manual block (natural order, no reverse).
+                ("album", "play-later") => playback::enqueue_album_later(
+                    runtime.clone(),
+                    weak.clone(),
+                    handle.clone(),
+                    id,
+                ),
                 ("album", "shuffle") => playback::play_album_shuffled(
                     runtime.clone(),
                     weak.clone(),
@@ -13068,6 +13090,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         playback::enqueue_tracks(runtime.clone(), handle.clone(), tracks, true);
                     }
                 }
+                ("label", "play-later") => {
+                    if let Some(w) = weak.upgrade() {
+                        let tracks = label::selected_play_tracks(&w);
+                        playback::enqueue_tracks_later(runtime.clone(), handle.clone(), tracks);
+                    }
+                }
                 // Popular Tracks section menu + header overflow: ALL of the
                 // label's popular tracks play-next / add-to-queue (the cached
                 // list — same source as "play-top").
@@ -13085,6 +13113,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         crate::toast::error_weak(&weak, "No popular tracks for this label");
                     } else {
                         playback::enqueue_tracks(runtime.clone(), handle.clone(), tracks, false);
+                    }
+                }
+                ("label", "top-play-later") => {
+                    // #442 — all of the label's popular tracks at the END of
+                    // the manual block (same cached source as "top-queue").
+                    let tracks = label::top_tracks_for_play();
+                    if tracks.is_empty() {
+                        crate::toast::error_weak(&weak, "No popular tracks for this label");
+                    } else {
+                        playback::enqueue_tracks_later(runtime.clone(), handle.clone(), tracks);
                     }
                 }
                 // Header shuffle: all popular tracks, xorshift-shuffled.
@@ -13408,6 +13446,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         playback::enqueue_tracks(runtime.clone(), handle.clone(), tracks, true);
                     }
                 }
+                ("mix", "play-later") => {
+                    if let Some(w) = weak.upgrade() {
+                        let tracks = mix::selected_play_tracks(&w);
+                        playback::enqueue_tracks_later(runtime.clone(), handle.clone(), tracks);
+                    }
+                }
                 ("mix", "add-to-playlist") => {
                     if let Some(w) = weak.upgrade() {
                         let ids = mix::selected_ids(&w);
@@ -13552,6 +13596,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         true,
                     )
                 }
+                ("playlist", "play-later") => {
+                    // #442 — END of the manual block; local playlists ride
+                    // their own resolver (source-aware rows + offline-only
+                    // stamp), Qobuz playlists the sidecar-merging fetch.
+                    if local_playlist::is_local_id(&id) {
+                        local_playlist::enqueue_later_by_id(
+                            runtime.clone(),
+                            weak.clone(),
+                            handle.clone(),
+                            id,
+                        );
+                        return;
+                    }
+                    playback::enqueue_playlist_later(
+                        runtime.clone(),
+                        weak.clone(),
+                        handle.clone(),
+                        id,
+                    )
+                }
                 ("playlist", "upload-to-qobuz") => {
                     // D8: convert a non-offline-only LOCAL playlist into a
                     // real Qobuz playlist (explicit user action, confirmed
@@ -13678,6 +13742,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             handle.clone(),
                             tracks,
                             next,
+                        );
+                    }
+                }
+                ("playlist", "play-later-selected") => {
+                    // #442 bulk Play later — same source-aware resolution as
+                    // the play-next/queue pair above, manual-block tail.
+                    if let Some(w) = weak.upgrade() {
+                        let tracks = playlist::selected_queue_tracks(&w);
+                        if tracks.is_empty() {
+                            toast::error(&w, "Nothing playable in the selection");
+                            return;
+                        }
+                        playlist::clear_selection(&w);
+                        playback::enqueue_queue_tracks_later(
+                            runtime.clone(),
+                            weak.clone(),
+                            handle.clone(),
+                            tracks,
                         );
                     }
                 }
@@ -14715,6 +14797,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             );
                         }
                     }
+                    "play-later" => {
+                        let tracks = album::selected_play_tracks(&w);
+                        if !tracks.is_empty() {
+                            playback::enqueue_tracks_later(
+                                runtime.clone(),
+                                handle.clone(),
+                                tracks,
+                            );
+                        }
+                    }
                     "make-offline" => {
                         let tracks = album::selected_play_tracks(&w);
                         if !tracks.is_empty() {
@@ -14836,6 +14928,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             handle.clone(),
                             tracks,
                             true,
+                        );
+                    }
+                    "play-later" => {
+                        playback::enqueue_tracks_later(
+                            runtime.clone(),
+                            handle.clone(),
+                            tracks,
                         );
                     }
                     other => {
@@ -15096,6 +15195,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         artist_id,
                         artist::selected_ids(&w),
                         true,
+                    ),
+                    "play-later" => playback::enqueue_artist_top_later(
+                        runtime.clone(),
+                        weak.clone(),
+                        handle.clone(),
+                        artist_id,
+                        artist::selected_ids(&w),
                     ),
                     "queue" => playback::enqueue_artist_top_selected(
                         runtime.clone(),
@@ -18516,6 +18622,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             action.as_str() == "play-next",
                         );
                     }
+                    "play-later" => {
+                        playback::enqueue_local_tracks_later(
+                            runtime.clone(),
+                            handle.clone(),
+                            vec![row.clone()],
+                        );
+                    }
                     "add-to-playlist" => {
                         playlist_picker::open_multi(&w, &[local_picker_ref(row)], true);
                         let runtime = runtime.clone();
@@ -18663,6 +18776,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         handle.clone(),
                         tracks,
                         true,
+                    ),
+                    "play-later" => playback::enqueue_local_tracks_later(
+                        runtime.clone(),
+                        handle.clone(),
+                        tracks,
                     ),
                     other => {
                         log::warn!("[qbz-slint] local disc-action: unknown action {other}");
@@ -18857,6 +18975,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         playback::enqueue_local_tracks(runtime, handle2, rows, play_next);
                     });
                 }
+                "play-later" => {
+                    // #442 — same source-aware resolve, manual-block tail.
+                    let runtime = runtime.clone();
+                    let handle2 = handle.clone();
+                    let album_id = id.to_string();
+                    handle.spawn(async move {
+                        let rows = tokio::task::spawn_blocking(move || {
+                            local_library::fetch_album_tracks_blocking(&album_id)
+                        })
+                        .await
+                        .unwrap_or_default();
+                        playback::enqueue_local_tracks_later(runtime, handle2, rows);
+                    });
+                }
                 _ => {
                     log::debug!("[qbz-slint] unhandled local album action: {id} {action}");
                 }
@@ -18954,6 +19086,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         handle2,
                                         vec![row],
                                         play_next,
+                                    );
+                                }
+                            });
+                        }
+                    }
+                    "play-later" => {
+                        // #442 — same resolution as play-next above (cache
+                        // first, DB fallback), manual-block tail.
+                        if let Some(row) = local_library::local_track_by_id(id.as_str()) {
+                            playback::enqueue_local_tracks_later(
+                                runtime.clone(),
+                                handle.clone(),
+                                vec![row],
+                            );
+                        } else if let Ok(rid) = id.parse::<i64>() {
+                            let runtime = runtime.clone();
+                            let handle2 = handle.clone();
+                            handle.spawn(async move {
+                                let row = tokio::task::spawn_blocking(move || {
+                                    crate::library_db::with_db(|db| db.get_track(rid))
+                                        .flatten()
+                                })
+                                .await
+                                .ok()
+                                .flatten();
+                                if let Some(row) = row {
+                                    playback::enqueue_local_tracks_later(
+                                        runtime,
+                                        handle2,
+                                        vec![row],
                                     );
                                 }
                             });
@@ -19155,6 +19317,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         playback::enqueue_local_tracks(runtime.clone(), handle.clone(), rows, true);
                         local_library::clear_tracks_selection(&w);
                     }
+                    "play-later" => {
+                        let rows = local_library::selected_local_tracks(&w);
+                        playback::enqueue_local_tracks_later(runtime.clone(), handle.clone(), rows);
+                        local_library::clear_tracks_selection(&w);
+                    }
                     "remove-favorites" => {
                         // Bulk local un-favorite: ONE model pass (the first
                         // cut looped the whole model per selected row and
@@ -19290,6 +19457,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         });
                         local_library::clear_albums_selection(&w);
                     }
+                    "play-later" => {
+                        // #442 — same album->tracks resolution, manual-block tail.
+                        let keys = local_library::selected_album_ids(&w);
+                        let runtime = runtime.clone();
+                        let handle2 = handle.clone();
+                        handle.spawn(async move {
+                            let rows = tokio::task::spawn_blocking(move || {
+                                local_library::selected_albums_tracks_blocking(&keys)
+                            })
+                            .await
+                            .unwrap_or_default();
+                            playback::enqueue_local_tracks_later(runtime, handle2, rows);
+                        });
+                        local_library::clear_albums_selection(&w);
+                    }
                     "add-to-playlist" => {
                         let keys = local_library::selected_album_ids(&w);
                         if !keys.is_empty() {
@@ -19413,6 +19595,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "play-next" => {
                         let rows = local_library::tree_selected_snapshot();
                         playback::enqueue_local_tracks(runtime.clone(), handle.clone(), rows, true);
+                        local_library::tree_clear_selection(&w);
+                    }
+                    "play-later" => {
+                        let rows = local_library::tree_selected_snapshot();
+                        playback::enqueue_local_tracks_later(runtime.clone(), handle.clone(), rows);
                         local_library::tree_clear_selection(&w);
                     }
                     "add-to-playlist" => {
@@ -22207,8 +22394,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                     act => {
-                        // play / play-next / queue: fetch the playlist's tracks,
-                        // then play or enqueue.
+                        // play / play-next / play-later / queue: fetch the
+                        // playlist's tracks, then play or enqueue.
                         let Ok(pid) = id.parse::<u64>() else {
                             return;
                         };
@@ -22230,6 +22417,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             match act.as_str() {
                                 "play-next" => {
                                     playback::enqueue_tracks(runtime, handle2, tracks, true)
+                                }
+                                "play-later" => {
+                                    playback::enqueue_tracks_later(runtime, handle2, tracks)
                                 }
                                 "queue" => {
                                     playback::enqueue_tracks(runtime, handle2, tracks, false)
@@ -22449,8 +22639,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
     }
     {
-        // Albums LIST-mode bulk bar: select-all / play-next / queue /
-        // remove-selected (bulk un-favorite) / clear.
+        // Albums LIST-mode bulk bar: select-all / play-next / play-later /
+        // queue / remove-selected (bulk un-favorite) / clear.
         let runtime = app_runtime.clone();
         let weak = window.as_weak();
         let handle = tokio_rt.handle().clone();
@@ -22482,6 +22672,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         ids.reverse();
                         for id in ids {
                             playback::enqueue_album_next(
+                                runtime.clone(),
+                                weak.clone(),
+                                handle.clone(),
+                                id,
+                            );
+                        }
+                    }
+                    "play-later" => {
+                        // #442 — each album APPENDS to the manual block, so
+                        // NATURAL order (no reverse, unlike play-next).
+                        for id in favorites::selected_album_ids(&w) {
+                            playback::enqueue_album_later(
                                 runtime.clone(),
                                 weak.clone(),
                                 handle.clone(),
@@ -22771,6 +22973,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "play-next" => {
                         let tracks = favorites::selected_tracks(&w);
                         playback::enqueue_tracks(runtime.clone(), handle.clone(), tracks, true);
+                    }
+                    "play-later" => {
+                        let tracks = favorites::selected_tracks(&w);
+                        playback::enqueue_tracks_later(runtime.clone(), handle.clone(), tracks);
                     }
                     "make-offline" => {
                         let tracks = favorites::selected_tracks(&w);

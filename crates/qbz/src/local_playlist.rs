@@ -20,7 +20,9 @@ use slint::{ComponentHandle, Model};
 
 use crate::adapter::SlintAdapter;
 use crate::artwork::{self, ArtworkJob, ArtworkTarget, ImageCache};
-use crate::playback::{after_track_change, refresh_sidebar};
+use crate::playback::{
+    after_track_change, batch_all_qconnect_castable, refresh_sidebar, sync_qconnect_after_add,
+};
 use crate::{AppWindow, ContentView, NavState, PlaylistState, TrackItem};
 
 type Runtime = Arc<AppRuntime<SlintAdapter>>;
@@ -1645,6 +1647,56 @@ pub fn enqueue_by_id(
                 qbz_i18n::t("Added to queue")
             },
         );
+    });
+}
+
+/// Play-later variant of `enqueue_by_id` (#442): the playlist's rows land at
+/// the END of the manual block in NATURAL order (each `add_track_later`
+/// appends — no reverse). Rides the playback.rs QConnect pattern (batch
+/// routing to the peer's manual-block tail + post-add sync; local/plex rows
+/// are refused by the router's all-or-nothing admission, exactly like the
+/// other source-typed batch paths). The OFFLINE-ONLY stamp rule is unchanged
+/// (D8: nothing from it ever reaches the cloud push).
+pub fn enqueue_later_by_id(
+    runtime: Runtime,
+    weak: slint::Weak<AppWindow>,
+    handle: tokio::runtime::Handle,
+    playlist_id: String,
+) {
+    handle.spawn(async move {
+        let Some(data) = load(&runtime, &playlist_id).await else {
+            crate::toast::error_weak(&weak, qbz_i18n::t("Couldn't load this playlist"));
+            return;
+        };
+        let tracks: Vec<QueueTrack> = data
+            .rows
+            .iter()
+            .filter_map(|r| row_queue_track(&r.item))
+            .collect();
+        if tracks.is_empty() {
+            crate::toast::error_weak(&weak, qbz_i18n::t("Nothing playable in this playlist right now"));
+            return;
+        }
+        // QConnect CONTROLLER mode: route the whole playlist to the peer's
+        // manual-block tail; false when no peer is active, so the local loop
+        // below runs unchanged.
+        if let Some(svc) = crate::qconnect_service::service() {
+            let routed: Vec<(u64, Option<String>)> =
+                tracks.iter().map(|qt| (qt.id, qt.source.clone())).collect();
+            if svc.play_later_batch_on_peer_if_active(&routed).await {
+                return;
+            }
+        }
+        let added_castable = batch_all_qconnect_castable(&tracks);
+        for track in tracks {
+            runtime.core().add_track_later(track).await;
+        }
+        sync_qconnect_after_add(added_castable).await;
+        if data.offline_only {
+            runtime.core().set_queue_offline_only(true);
+        }
+        refresh_sidebar(false);
+        crate::toast::success_weak(&weak, qbz_i18n::t("Added to play later"));
     });
 }
 

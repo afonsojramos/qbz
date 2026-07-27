@@ -13,7 +13,7 @@ import { DiscContextMenu } from "DiscContextMenu.slint";
 
 export component DiscHeaderMenu inherits Rectangle {
     in property <int> disc;
-    // (disc, action) — action: "play" | "shuffle" | "queue" | "play-next".
+    // (disc, action) — action: "play" | "shuffle" | "queue" | "play-later" | "play-next".
     callback disc-action(int, string);
 
     width: 32px;

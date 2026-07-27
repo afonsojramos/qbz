@@ -49,7 +49,7 @@ component OverlayButton inherits Rectangle {
 export component PlaylistCard inherits Rectangle {
     in property <SearchPlaylistItem> playlist;
     // kind ("playlist"), playlist id, action ("play" | "play-next" |
-    // "queue" | "favorite" | "open").
+    // "play-later" | "queue" | "favorite" | "open").
     callback media-action(string, string, string);
     // When true, a click on the card BODY opens the playlist ("open")
     // instead of playing it — the Favorites grid wants body=open, the play
@@ -188,8 +188,8 @@ export component PlaylistCard inherits Rectangle {
             // + 33px/row) so the panel never clips or over-reserves.
             playlist-menu := PopupWindow {
                 property <int> item-count: root.playlist.is-owned
-                    ? 4
-                    : (root.playlist.is-copied ? 4 : 5);
+                    ? 5
+                    : (root.playlist.is-copied ? 5 : 6);
                 x: 26px;
                 y: 56px;
                 width: 196px;
@@ -207,6 +207,13 @@ export component PlaylistCard inherits Rectangle {
                         label: @tr("Play next");
                         clicked => {
                             root.media-action("playlist", root.playlist.id, "play-next");
+                        }
+                    }
+                    ContextMenuItem {
+                        icon: @image-url("../assets/icons/list-plus.svg");
+                        label: @tr("Play later");
+                        clicked => {
+                            root.media-action("playlist", root.playlist.id, "play-later");
                         }
                     }
                     ContextMenuItem {

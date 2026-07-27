@@ -6,6 +6,7 @@
 //
 // Item -> media-action("album", <album-id>, <action>) mapping:
 //   Play next               -> "play-next"
+//   Play later              -> "play-later"
 //   Add to queue            -> "queue"
 //   --
 //   Add to playlist         -> "add-to-playlist"
@@ -39,11 +40,11 @@ export component AlbumContextMenu inherits PopupWindow {
     callback media-action(string, string, string);
 
     width: 224px;
-    // 9 rows x 33px + 4 separators x 1px + ContextMenu's 5/5 padding. The
+    // 10 rows x 33px + 4 separators x 1px + ContextMenu's 5/5 padding. The
     // offline row swaps label/action on `fully-cached` (count constant); the
     // block row swaps label/action on `is-blocked` (count constant); the pin
     // row swaps label/action on `is-pinned` (count constant).
-    height: 9 * 33px + 4 * 1px + 10px;
+    height: 10 * 33px + 4 * 1px + 10px;
     // Default close-policy is close-on-click, which races the row's TouchArea:
     // the popup can dismiss on the press before the item's `clicked` fires, so
     // some rows (e.g. Share Qobuz link) needed a second open+click to register.
@@ -57,6 +58,16 @@ export component AlbumContextMenu inherits PopupWindow {
             label: @tr("Play next");
             clicked => {
                 root.media-action("album", root.album-id, "play-next");
+                root.close();
+            }
+        }
+        // #442 "Play later" — the END of the manual block (after every
+        // play-next / play-later already queued, before the source resumes).
+        ContextMenuItem {
+            icon: @image-url("../assets/icons/list-plus.svg");
+            label: @tr("Play later");
+            clicked => {
+                root.media-action("album", root.album-id, "play-later");
                 root.close();
             }
         }
