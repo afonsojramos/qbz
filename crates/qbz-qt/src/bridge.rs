@@ -93,6 +93,16 @@ pub mod qbz_bridge {
         // POC: empty until phase 4 (QML shows the empty states).
         #[qproperty(QList_QVariant, queue_model)]
 
+        // --- Discover > Home ---------------------------------------------
+        #[qproperty(bool, home_loading)]
+        #[qproperty(QString, home_error)]
+        // POC-NOTE: the brief's QVariantList-of-QVariantMap shape is not
+        // expressible in cxx-qt-lib 0.7.3 (no QVariantValue impls for
+        // QMap/QList — a QVariant can't hold a nested map/list), so the
+        // sections travel as ONE JSON document; QML JSON.parse()s it into
+        // the exact same {id, title, kind, items:[{...}]} object graph.
+        #[qproperty(QString, home_sections_json)]
+
         type QbzBridge = super::QbzBridgeRust;
 
         /// Called once from Main.qml's Component.onCompleted: registers the
@@ -163,6 +173,11 @@ pub mod qbz_bridge {
         fn toggle_shuffle(self: Pin<&mut QbzBridge>);
         #[qinvokable]
         fn cycle_repeat(self: Pin<&mut QbzBridge>);
+
+        /// Home view retry button / manual refresh: refetch the discover
+        /// index + rails and republish `homeSectionsJson`.
+        #[qinvokable]
+        fn reload_home(self: Pin<&mut QbzBridge>);
     }
 
     impl cxx_qt::Threading for QbzBridge {}
@@ -214,6 +229,9 @@ pub struct QbzBridgeRust {
     np_quality_tier: QString,
     np_quality_label: QString,
     queue_model: QListQVariant,
+    home_loading: bool,
+    home_error: QString,
+    home_sections_json: QString,
 }
 
 impl Default for QbzBridgeRust {
@@ -255,6 +273,9 @@ impl Default for QbzBridgeRust {
             np_repeat_mode: 0,
             np_quality_label: QString::default(),
             queue_model: QListQVariant::default(),
+            home_loading: false,
+            home_error: QString::default(),
+            home_sections_json: QString::from("[]"),
         }
     }
 }
@@ -348,5 +369,9 @@ impl qbz_bridge::QbzBridge {
 
     pub fn cycle_repeat(self: Pin<&mut Self>) {
         crate::now_playing::cycle_repeat();
+    }
+
+    pub fn reload_home(self: Pin<&mut Self>) {
+        crate::reload_home();
     }
 }

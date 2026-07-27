@@ -7,7 +7,9 @@
 //! async work; results hop back to Qt through the bridge's `CxxQtThread`.
 
 mod auth_qt;
+mod artwork_qt;
 mod bridge;
+mod home_qt;
 mod nav_qt;
 mod now_playing;
 mod offline_fwd;
@@ -42,6 +44,10 @@ static QT_THREAD: OnceLock<CxxQtThread<QbzBridge>> = OnceLock::new();
 /// In-flight browser-OAuth task, so `cancelLogin()` can `abort()` it
 /// (mirrors `login_task` in crates/qbz/src/main.rs).
 static LOGIN_TASK: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
+
+/// Whether the Home view has been loaded this session (the auto-load fires
+/// once per shell entry; `reloadHome()` bypasses the flag).
+static HOME_LOADED: Mutex<bool> = Mutex::new(false);
 
 pub(crate) fn register_qt_thread(thread: CxxQtThread<QbzBridge>) {
     if QT_THREAD.set(thread).is_err() {
@@ -108,6 +114,10 @@ fn enter_shell(session: auth_qt::SessionInfo) {
     // history and push the current now-playing model onto the bar.
     nav_qt::record("home");
     now_playing::publish_current();
+    // Phase 3: fetch Discover > Home (online sessions only — the offline
+    // engine gates Qobuz calls anyway, and the view shows the offline
+    // placeholder instead).
+    load_home_once();
     ui(move |mut b| {
                 b.as_mut().set_session_user_name(QString::from(session.display_name.as_str()));
         b.as_mut().set_session_subscription(QString::from(session.subscription.as_str()));
@@ -203,14 +213,90 @@ pub(crate) fn do_logout() {
         if let Err(e) = auth_qt::logout(&runtime).await {
             log::error!("[qbz-qt] logout failed: {e}");
         }
+        // A later login must re-fetch Home (new user, fresh rails).
+        *HOME_LOADED.lock().unwrap() = false;
         ui(|mut b| {
-                        b.as_mut().set_session_user_name(QString::from(""));
+            b.as_mut().set_session_user_name(QString::from(""));
             b.as_mut().set_session_subscription(QString::from(""));
             b.as_mut().set_login_error(QString::from(""));
             b.as_mut().set_restore_error(QString::from(""));
             b.as_mut().set_login_phase(0);
+            b.as_mut().set_home_sections_json(QString::from("[]"));
+            b.as_mut().set_home_error(QString::from(""));
+            b.as_mut().set_home_loading(false);
             b.as_mut().set_screen(QString::from("login"));
         });
+    });
+}
+
+// ============================ Discover > Home ==============================
+
+/// Fire the Home auto-load once per shell entry. Gated on the offline
+/// engine: offline sessions show the OfflinePlaceholder instead of
+/// fetching (the Qobuz gate would refuse the calls anyway).
+fn load_home_once() {
+    if *HOME_LOADED.lock().unwrap() {
+        return;
+    }
+    if offline_fwd::engine().status().is_offline() {
+        log::info!("[qbz-qt] home load skipped (offline session)");
+        return;
+    }
+    *HOME_LOADED.lock().unwrap() = true;
+    reload_home();
+}
+
+/// `reloadHome()` invokable / auto-load worker: fetch + publish + artwork.
+pub(crate) fn reload_home() {
+    if offline_fwd::engine().status().is_offline() {
+        return;
+    }
+    ui(|mut b| {
+        b.as_mut().set_home_loading(true);
+        b.as_mut().set_home_error(QString::from(""));
+    });
+    let runtime = app();
+    spawn(async move {
+        match home_qt::load_home(&runtime).await {
+            Ok(mut sections) => {
+                // Artwork: disk hits attach synchronously; misses download
+                // in the background and trigger ONE republish (POC-NOTE in
+                // artwork_qt.rs — per-row model updates are the follow-up).
+                let missing = artwork_qt::attach_cached(&mut sections);
+                let count: usize = sections.iter().map(|s| s.items.len()).sum();
+                publish_home_sections(&sections);
+                log::info!(
+                    "[qbz-qt] home published: {} sections, {} cards, {} artwork misses",
+                    sections.len(),
+                    count,
+                    missing.len(),
+                );
+                if !missing.is_empty() {
+                    spawn(async move {
+                        artwork_qt::download_missing(missing).await;
+                        let mut sections = sections;
+                        let _ = artwork_qt::attach_cached(&mut sections);
+                        publish_home_sections(&sections);
+                        log::info!("[qbz-qt] home republished after artwork downloads");
+                    });
+                }
+                ui(|mut b| b.as_mut().set_home_loading(false));
+            }
+            Err(e) => {
+                log::warn!("[qbz-qt] home load failed: {e}");
+                ui(move |mut b| {
+                    b.as_mut().set_home_error(QString::from(e.as_str()));
+                    b.as_mut().set_home_loading(false);
+                });
+            }
+        }
+    });
+}
+
+fn publish_home_sections(sections: &[home_qt::HomeSection]) {
+    let json = serde_json::to_string(sections).unwrap_or_else(|_| "[]".to_string());
+    ui(move |mut b| {
+        b.as_mut().set_home_sections_json(QString::from(json.as_str()));
     });
 }
 

@@ -17,6 +17,9 @@ cxx-qt-lib = { version = "0.7", features = ["qt_full"] }
 tokio = { workspace = true }
 log = { workspace = true }
 rand = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+reqwest = { workspace = true }
 urlencoding = "2"
 open = "5"
 dirs = "5"
@@ -25,6 +28,8 @@ qbz-core = { path = "../qbz-core" }
 qbz-app = { path = "../qbz-app" }
 qbz-qobuz = { path = "../qbz-qobuz" }
 qbz-models = { path = "../qbz-models" }
+qbz-cache = { path = "../qbz-cache" }
+qbz-text-utils = { path = "../qbz-text-utils" }
 qbz-credentials = { path = "../qbz-credentials" }
 qbz-i18n = { path = "../qbz-i18n" }
 qbz-log = { path = "../qbz-log" }

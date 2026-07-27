@@ -17,7 +17,8 @@ Image {
     id: root
     // Icon file name, e.g. "compass" (".svg" appended).
     property string name: ""
-    // One of: "primary" | "secondary" | "muted" | "accent" | "warning".
+    // One of: "primary" | "secondary" | "muted" | "accent" | "warning" |
+    // "black" (for glyphs on white discs).
     property string tintName: "secondary"
 
     source: "assets/icons/" + tintName + "/" + name + ".svg"

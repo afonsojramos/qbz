@@ -17,7 +17,10 @@ fn collect_qrc_files(dir: &Path, out: &mut Vec<String>) {
 }
 
 fn main() {
-    let mut qrc_files: Vec<String> = vec!["qml/assets/qbz-logo.png".to_string()];
+    let mut qrc_files: Vec<String> = vec![
+        "qml/assets/qbz-logo.png".to_string(),
+        "qml/assets/hi-res.svg".to_string(),
+    ];
     collect_qrc_files(Path::new("qml/assets/icons"), &mut qrc_files);
     collect_qrc_files(Path::new("qml/assets/fonts"), &mut qrc_files);
     // Non-QML resources land at qrc:/qt/qml/com/blitzfc/qbz/<path> — QML
