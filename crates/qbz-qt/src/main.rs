@@ -8,6 +8,8 @@
 
 mod auth_qt;
 mod bridge;
+mod nav_qt;
+mod now_playing;
 mod offline_fwd;
 
 use std::pin::Pin;
@@ -102,6 +104,10 @@ pub(crate) fn on_boot() {
 /// Post-login UI state: session header, refresh has-previous-session,
 /// clear login errors/phase, switch to the shell.
 fn enter_shell(session: auth_qt::SessionInfo) {
+    // Phase 2: the shell mounts on the (only) "home" view; seed the nav
+    // history and push the current now-playing model onto the bar.
+    nav_qt::record("home");
+    now_playing::publish_current();
     ui(move |mut b| {
                 b.as_mut().set_session_user_name(QString::from(session.display_name.as_str()));
         b.as_mut().set_session_subscription(QString::from(session.subscription.as_str()));
@@ -170,13 +176,15 @@ pub(crate) fn start_offline() {
                     format!("Offline (user {user_id})")
                 };
                 ui(move |mut b| {
-                                        b.as_mut().set_session_user_name(QString::from(name.as_str()));
+                    b.as_mut().set_session_user_name(QString::from(name.as_str()));
                     b.as_mut().set_session_subscription(QString::from(""));
                     b.as_mut().set_login_error(QString::from(""));
                     b.as_mut().set_restore_error(QString::from(""));
                     b.as_mut().set_login_phase(0);
                     b.as_mut().set_screen(QString::from("shell"));
                 });
+                nav_qt::record("home");
+                now_playing::publish_current();
             }
             Err(e) => {
                 log::error!("[qbz-qt] failed to enter offline mode: {e}");

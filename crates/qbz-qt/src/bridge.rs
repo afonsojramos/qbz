@@ -1,22 +1,28 @@
 //! The single Qt-side bridge object for the POC.
 //!
 //! One `QbzBridge` QObject is registered as a QML SINGLETON (`QbzBridge.*`
-//! in QML). All session/login/offline state the QML needs lives in its
-//! properties; user actions come in as invokables. Invokable bodies NEVER
-//! block the Qt thread — they enqueue work onto the process-global tokio
-//! runtime (see `main.rs`) and the async results hop back here through
-//! `CxxQtThread::queue` (the cxx-qt analogue of Slint's
+//! in QML). All session/login/offline/shell state the QML needs lives in
+//! its properties; user actions come in as invokables. Invokable bodies
+//! NEVER block the Qt thread — they enqueue work onto the process-global
+//! tokio runtime (see `main.rs`) and the async results hop back here
+//! through `CxxQtThread::queue` (the cxx-qt analogue of Slint's
 //! `upgrade_in_event_loop`).
 //!
-//! `#[auto_cxx_name]` on the extern blocks keeps Rust names snake_case while
-//! QML/C++ see camelCase (`login_phase` -> `loginPhase`), matching the
-//! property names of the Slint `LoginState`/`OfflineState` globals.
+//! `#[auto_cxx_name]` on the extern blocks keeps Rust names snake_case
+//! while QML/C++ see camelCase (`login_phase` -> `loginPhase`), matching
+//! the property names of the Slint `LoginState`/`OfflineState` globals.
 
 #[cxx_qt::bridge]
 pub mod qbz_bridge {
     extern "C++" {
         include!("cxx-qt-lib/qstring.h");
         type QString = cxx_qt_lib::QString;
+
+        include!("cxx-qt-lib/qvariant.h");
+        type QVariant = cxx_qt_lib::QVariant;
+
+        include!("cxx-qt-lib/qlist.h");
+        type QList_QVariant = cxx_qt_lib::QList<cxx_qt_lib::QVariant>;
     }
 
     #[auto_cxx_name]
@@ -48,6 +54,45 @@ pub mod qbz_bridge {
         // Shell session header:
         #[qproperty(QString, session_user_name)]
         #[qproperty(QString, session_subscription)]
+
+        // --- Shell chrome (Slint ShellState) ----------------------------
+        // Three-state sidebar: 0 = open (240px), 1 = mini (64px), 2 = closed.
+        #[qproperty(i32, sidebar_state)]
+        #[qproperty(bool, queue_open)]
+        // Content view id — only "home" exists (phase 3 adds the rest).
+        #[qproperty(QString, current_view)]
+        // Nav history (src/nav_qt.rs):
+        #[qproperty(bool, can_back)]
+        #[qproperty(bool, can_forward)]
+
+        // --- Now playing (Slint NowPlayingState; np_ prefix) ------------
+        // POC: fed by a static NowPlayingModel (src/now_playing.rs) with
+        // empty-state defaults; phase 4 swaps the data source for the real
+        // player poll.
+        #[qproperty(bool, np_has_track)]
+        #[qproperty(QString, np_title)]
+        #[qproperty(QString, np_artist)]
+        #[qproperty(QString, np_artwork_path)]
+        #[qproperty(i32, np_elapsed_secs)]
+        #[qproperty(i32, np_duration_secs)]
+        #[qproperty(f32, np_progress)]
+        #[qproperty(f32, np_cache_progress)]
+        #[qproperty(bool, np_playing)]
+        #[qproperty(bool, np_loading)]
+        #[qproperty(f32, np_volume)]
+        #[qproperty(bool, np_muted)]
+        #[qproperty(bool, np_shuffle)]
+        // 0 off / 1 all / 2 one.
+        #[qproperty(i32, np_repeat_mode)]
+        // "hires" | "mp3" | "lossless" | "cd" (AudioStamp tier mapping).
+        #[qproperty(QString, np_quality_tier)]
+        // e.g. "24-bit / 96 kHz" (AudioStamp detail line).
+        #[qproperty(QString, np_quality_label)]
+
+        // --- Queue panel -------------------------------------------------
+        // POC: empty until phase 4 (QML shows the empty states).
+        #[qproperty(QList_QVariant, queue_model)]
+
         type QbzBridge = super::QbzBridgeRust;
 
         /// Called once from Main.qml's Component.onCompleted: registers the
@@ -68,7 +113,7 @@ pub mod qbz_bridge {
         #[qinvokable]
         fn start_offline(self: Pin<&mut QbzBridge>);
 
-        /// Recovery banner "Sign in again": same browser flow.
+        /// Recovery badge "Sign in": same browser flow.
         #[qinvokable]
         fn recovery_login(self: Pin<&mut QbzBridge>);
 
@@ -85,6 +130,39 @@ pub mod qbz_bridge {
         /// the Slint `@tr()` calls use.
         #[qinvokable]
         fn tr(self: &QbzBridge, msgid: QString) -> QString;
+
+        // --- Shell chrome -------------------------------------------------
+        /// Header panel-left button: cycle the sidebar open -> mini ->
+        /// closed -> open (Slint `ShellState.cycle-sidebar()`).
+        #[qinvokable]
+        fn cycle_sidebar(self: Pin<&mut QbzBridge>);
+        /// NPB queue button / queue panel close.
+        #[qinvokable]
+        fn toggle_queue(self: Pin<&mut QbzBridge>);
+        /// Header history buttons.
+        #[qinvokable]
+        fn navigate_back(self: Pin<&mut QbzBridge>);
+        #[qinvokable]
+        fn navigate_forward(self: Pin<&mut QbzBridge>);
+
+        // --- Transport (phase 4 wires the player; POC log-and-noop, except
+        // the pure-UI toggles which mutate the NowPlayingModel) -----------
+        #[qinvokable]
+        fn toggle_play(self: Pin<&mut QbzBridge>);
+        #[qinvokable]
+        fn next(self: Pin<&mut QbzBridge>);
+        #[qinvokable]
+        fn previous(self: Pin<&mut QbzBridge>);
+        #[qinvokable]
+        fn seek(self: Pin<&mut QbzBridge>, frac: f32);
+        #[qinvokable]
+        fn set_volume(self: Pin<&mut QbzBridge>, volume: f32);
+        #[qinvokable]
+        fn toggle_mute(self: Pin<&mut QbzBridge>);
+        #[qinvokable]
+        fn toggle_shuffle(self: Pin<&mut QbzBridge>);
+        #[qinvokable]
+        fn cycle_repeat(self: Pin<&mut QbzBridge>);
     }
 
     impl cxx_qt::Threading for QbzBridge {}
@@ -93,12 +171,13 @@ pub mod qbz_bridge {
 use core::pin::Pin;
 
 use cxx_qt::Threading as _;
-use cxx_qt_lib::QString;
+use cxx_qt_lib::{QList, QString, QVariant};
+
+type QListQVariant = QList<QVariant>;
 
 /// Rust side of the bridge. All fields are driven exclusively through the
 /// generated `set_*` methods on the Qt thread; the struct itself is plain
 /// storage (as required by cxx-qt's Default-constructed qobjects).
-#[derive(Default)]
 pub struct QbzBridgeRust {
     screen: QString,
     login_phase: i32,
@@ -113,6 +192,71 @@ pub struct QbzBridgeRust {
     offline_session: bool,
     session_user_name: QString,
     session_subscription: QString,
+    sidebar_state: i32,
+    queue_open: bool,
+    current_view: QString,
+    can_back: bool,
+    can_forward: bool,
+    np_has_track: bool,
+    np_title: QString,
+    np_artist: QString,
+    np_artwork_path: QString,
+    np_elapsed_secs: i32,
+    np_duration_secs: i32,
+    np_progress: f32,
+    np_cache_progress: f32,
+    np_playing: bool,
+    np_loading: bool,
+    np_volume: f32,
+    np_muted: bool,
+    np_shuffle: bool,
+    np_repeat_mode: i32,
+    np_quality_tier: QString,
+    np_quality_label: QString,
+    queue_model: QListQVariant,
+}
+
+impl Default for QbzBridgeRust {
+    fn default() -> Self {
+        Self {
+            screen: QString::from("splash"),
+            current_view: QString::from("home"),
+            // A derive would zero these — the model's sane defaults instead.
+            np_volume: 1.0,
+            np_quality_tier: QString::from("cd"),
+            login_phase: 0,
+            login_error: QString::default(),
+            restore_error: QString::default(),
+            offline: false,
+            offline_mode: 0,
+            connectivity: 0,
+            captive_portal: false,
+            has_previous_session: false,
+            show_recovery_banner: false,
+            offline_session: false,
+            session_user_name: QString::default(),
+            session_subscription: QString::default(),
+            sidebar_state: 0,
+            queue_open: false,
+            can_back: false,
+            can_forward: false,
+            np_has_track: false,
+            np_title: QString::default(),
+            np_artist: QString::default(),
+            np_artwork_path: QString::default(),
+            np_elapsed_secs: 0,
+            np_duration_secs: 0,
+            np_progress: 0.0,
+            np_cache_progress: 0.0,
+            np_playing: false,
+            np_loading: false,
+            np_muted: false,
+            np_shuffle: false,
+            np_repeat_mode: 0,
+            np_quality_label: QString::default(),
+            queue_model: QListQVariant::default(),
+        }
+    }
 }
 
 impl qbz_bridge::QbzBridge {
@@ -154,5 +298,55 @@ impl qbz_bridge::QbzBridge {
 
     pub fn tr(&self, msgid: QString) -> QString {
         QString::from(&qbz_i18n::t(&msgid.to_string()))
+    }
+
+    pub fn cycle_sidebar(mut self: Pin<&mut Self>) {
+        let next = (self.sidebar_state() + 1) % 3;
+        self.as_mut().set_sidebar_state(next);
+    }
+
+    pub fn toggle_queue(mut self: Pin<&mut Self>) {
+        let next = !self.queue_open();
+        self.as_mut().set_queue_open(next);
+    }
+
+    pub fn navigate_back(self: Pin<&mut Self>) {
+        crate::nav_qt::back();
+    }
+
+    pub fn navigate_forward(self: Pin<&mut Self>) {
+        crate::nav_qt::forward();
+    }
+
+    pub fn toggle_play(self: Pin<&mut Self>) {
+        crate::now_playing::toggle_play();
+    }
+
+    pub fn next(self: Pin<&mut Self>) {
+        crate::now_playing::next();
+    }
+
+    pub fn previous(self: Pin<&mut Self>) {
+        crate::now_playing::previous();
+    }
+
+    pub fn seek(self: Pin<&mut Self>, frac: f32) {
+        crate::now_playing::seek(frac);
+    }
+
+    pub fn set_volume(self: Pin<&mut Self>, volume: f32) {
+        crate::now_playing::set_volume(volume);
+    }
+
+    pub fn toggle_mute(self: Pin<&mut Self>) {
+        crate::now_playing::toggle_mute();
+    }
+
+    pub fn toggle_shuffle(self: Pin<&mut Self>) {
+        crate::now_playing::toggle_shuffle();
+    }
+
+    pub fn cycle_repeat(self: Pin<&mut Self>) {
+        crate::now_playing::cycle_repeat();
     }
 }
