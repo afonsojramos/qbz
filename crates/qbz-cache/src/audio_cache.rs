@@ -251,6 +251,19 @@ impl AudioCache {
         }
     }
 
+    /// Drop every L1 in-memory entry WITHOUT touching the L2 disk cache or
+    /// the fetching/failed bookkeeping. The memory-pressure watchdog's
+    /// relief valve: RAM is the scarce resource under pressure, the disk
+    /// files cost nothing to keep and save a re-download on recovery.
+    pub fn evict_all_memory(&self) {
+        let mut state = self.state.lock().unwrap();
+        let dropped = state.tracks.len();
+        state.tracks.clear();
+        state.access_order.clear();
+        state.current_size = 0;
+        log::info!("L1 memory cache evicted ({dropped} tracks dropped, L2 disk cache kept)");
+    }
+
     /// Get cache statistics
     pub fn stats(&self) -> CacheStats {
         let state = self.state.lock().unwrap();

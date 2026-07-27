@@ -8366,6 +8366,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // file, all redacted at the write choke point. Feeds the in-app log viewer and
     // the diagnostics bundle. Honours RUST_LOG (default "info").
     qbz_log::install("info");
+
+    // Host memory profile (issue #660): one-shot Normal/LowMemory detection,
+    // pushed into the player as the initial-buffer cap, the L1 cache budget
+    // and the low-memory class gate. Must run BEFORE the AppRuntime (and with
+    // it the Player + its L1 cache) is created, and after the logger so the
+    // profile's own info line lands in the log.
+    {
+        let profile = qbz_core::system_capabilities::memory_profile();
+        qbz_player::player::apply_memory_tuning(
+            profile.class == qbz_core::system_capabilities::MemoryClass::LowMemory,
+            profile.audio_cache_l1_max_bytes,
+            profile.max_initial_buffer_bytes,
+        );
+    }
     #[cfg(target_os = "linux")]
     if gamescope {
         log::info!(
@@ -8917,6 +8931,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let app_runtime = Arc::new(AppRuntime::with_visualizer(SlintAdapter::new(window.as_weak())));
+
+    // Memory-pressure watchdog (issue #660): 15 s loop that evicts the L1
+    // audio cache and halts prefetch under critical pressure. Runs for the
+    // app lifetime; no ordered shutdown needed (process exit reaps it).
+    qbz_app::memory_watchdog::spawn(app_runtime.core().player());
 
     // ImmersiveView audio visualizers: spawn the frontend-agnostic FFT producer
     // against the runtime's tap and start the 30fps drain into VisualizerState.

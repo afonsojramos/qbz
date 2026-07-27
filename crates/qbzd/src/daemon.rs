@@ -42,6 +42,20 @@ pub struct BootedRuntime {
 pub async fn run(roots: ProfileRoots, cfg: QbzdConfig, warns: Vec<String>) -> Result<i32, String> {
     // 1. argv parse happened in main(). 2. logging:
     qbz_log::install(&cfg.log.level);
+    // 2b. Host memory profile (issue #660: qbzd OOM-killed on a 1 GB Pi 3B):
+    //     one-shot Normal/LowMemory detection, pushed into the player as the
+    //     initial-buffer cap, the L1 cache budget and the low-memory class
+    //     gate. Must run BEFORE boot() builds the AppRuntime (and with it the
+    //     Player + its L1 cache); after the logger so the profile's own info
+    //     line lands in the log.
+    {
+        let profile = qbz_core::system_capabilities::memory_profile();
+        qbz_player::player::apply_memory_tuning(
+            profile.class == qbz_core::system_capabilities::MemoryClass::LowMemory,
+            profile.audio_cache_l1_max_bytes,
+            profile.max_initial_buffer_bytes,
+        );
+    }
     // 3. config: surface unknown-key warnings (they never abort — D14).
     for w in &warns {
         log::warn!("[config] unknown key: {w}");
@@ -75,6 +89,12 @@ pub async fn run(roots: ProfileRoots, cfg: QbzdConfig, warns: Vec<String>) -> Re
 
     // 6.-9. compose stores + runtime + restore credentials + restore session.
     let mut booted = boot(&roots, &cfg, warns.len()).await?;
+
+    // 9b. Memory-pressure watchdog (issue #660): 15 s loop that evicts the
+    //     L1 audio cache and halts prefetch under critical pressure. Holds an
+    //     Arc<Player> (not Arc<AppRuntime>), so it sits outside the #521/§8.2
+    //     ordering — aborted alongside the scrobbler for a clean shutdown.
+    let memwatch = qbz_app::memory_watchdog::spawn(booted.runtime.core().player());
 
     // 10. playback driver (T4). Spawn the 450 ms headless orchestrator on the
     //     booted runtime + shared state. It runs safely regardless of auth: with
@@ -211,6 +231,11 @@ pub async fn run(roots: ProfileRoots, cfg: QbzdConfig, warns: Vec<String>) -> Re
     // Stop the scrobble-on-play subscriber (holds no Arc<AppRuntime>; order-free).
     scrobbler.abort();
     let _ = scrobbler.await;
+    // Stop the memory-pressure watchdog and JOIN it: it holds an Arc<Player>
+    // clone, which must drop before `drop(booted)` can release the audio
+    // device — the same ordering constraint as the driver (§8.2).
+    memwatch.abort();
+    let _ = memwatch.await;
     // Tear down MPRIS: abort its updater and drop the D-Bus handle. Its inbound
     // callback held only a Weak<AppRuntime>, so this is order-free too.
     if let Some(mpris) = mpris {
