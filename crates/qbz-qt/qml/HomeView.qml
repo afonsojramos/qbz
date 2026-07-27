@@ -97,261 +97,6 @@ Rectangle {
         }
     }
 
-    // Album card (AlbumCard.slint): 200x246 — 200px art (radius 8) + 6px +
-    // 40px title/artist row with the icon-only quality badge.
-    component AlbumCard: Rectangle {
-        property var card: ({})
-        width: 200
-        height: 246
-        color: "transparent"
-
-        readonly property bool overlayOn: artArea.containsMouse
-
-        Column {
-            spacing: 0
-            // --- Artwork + hover overlay --------------------------------
-            Rectangle {
-                width: 200
-                height: 200
-                radius: theme.radiusSm
-                color: theme.surfaceElevated
-                clip: true
-
-                Image {
-                    anchors.fill: parent
-                    source: card.artPath
-                    fillMode: Image.PreserveAspectCrop
-                    asynchronous: true
-                }
-                // Hover scrim.
-                Rectangle {
-                    anchors.fill: parent
-                    color: "#000000"
-                    opacity: overlayOn ? 0.6 : 0.0
-                    Behavior on opacity { NumberAnimation { duration: 150 } }
-                }
-                // Hover meta — genre + year, top-left.
-                Column {
-                    x: 12
-                    y: 12
-                    spacing: 2
-                    opacity: overlayOn ? 1.0 : 0.0
-                    Behavior on opacity { NumberAnimation { duration: 150 } }
-                    Text {
-                        visible: card.genre !== ""
-                        text: card.genre
-                        height: 20
-                        color: "#ebffffff"
-                        font.pixelSize: 13
-                        font.weight: theme.weightBold
-                        verticalAlignment: Text.AlignVCenter
-                    }
-                    Text {
-                        visible: card.year !== ""
-                        text: card.year
-                        height: 17
-                        color: "#ccffffff"
-                        font.pixelSize: 12
-                        verticalAlignment: Text.AlignVCenter
-                    }
-                }
-                // Card-open + hover detector (declared before the action
-                // buttons so those win the pointer).
-                MouseArea {
-                    id: artArea
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    // Phase 4: a card click plays the album (the album page
-                    // itself is out of scope — POC-NOTE).
-                    onClicked: QbzBridge.playAlbum(card.id)
-                }
-                // Hover action buttons — favorite / play / more (INERT;
-                // POC-NOTE: playback + favorites land in later phases).
-                Row {
-                    x: 0
-                    y: 120
-                    width: 200
-                    height: 44
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    spacing: 12
-                    opacity: overlayOn ? 1.0 : 0.0
-                    Behavior on opacity { NumberAnimation { duration: 150 } }
-
-                    Item { width: (parent.width - 44 - 2 * 36 - 2 * 12) / 2; height: 1 }
-                    Rectangle {
-                        width: 36
-                        height: 36
-                        radius: 18
-                        anchors.verticalCenter: parent.verticalCenter
-                        color: favArea.containsMouse ? "#3dffffff" : "#24ffffff"
-                        border.width: 1.5
-                        border.color: "#ccffffff"
-                        QbzIcon {
-                            name: "heart"
-                            width: 16
-                            height: 16
-                            anchors.centerIn: parent
-                            tintName: "primary"
-                        }
-                        MouseArea { id: favArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor }
-                    }
-                    Rectangle {
-                        width: 44
-                        height: 44
-                        radius: 22
-                        color: playOvArea.containsMouse ? "#d6ffffff" : "#ffffff"
-                        // Black glyph on the white disc (Slint tints #000)
-                        // — the "black" baked variant.
-                        QbzIcon {
-                            name: "play-fill"
-                            width: 18
-                            height: 18
-                            anchors.centerIn: parent
-                            tintName: "black"
-                        }
-                        MouseArea {
-                            id: playOvArea
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: QbzBridge.playAlbum(card.id)
-                        }
-                    }
-                    Rectangle {
-                        width: 36
-                        height: 36
-                        radius: 18
-                        anchors.verticalCenter: parent.verticalCenter
-                        color: moreArea.containsMouse ? "#3dffffff" : "#24ffffff"
-                        border.width: 1.5
-                        border.color: "#ccffffff"
-                        QbzIcon {
-                            name: "ellipsis"
-                            width: 16
-                            height: 16
-                            anchors.centerIn: parent
-                            tintName: "primary"
-                        }
-                        MouseArea { id: moreArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor }
-                    }
-                    Item { width: (parent.width - 44 - 2 * 36 - 2 * 12) / 2; height: 1 }
-                }
-                // Award ribbon — content-width, capped at the card width.
-                Rectangle {
-                    visible: card.ribbon !== ""
-                    x: 0
-                    y: parent.height - height - 8
-                    height: 20
-                    width: Math.min(ribbonRow.width, 200)
-                    color: card.ribbonKind === "press" ? "#d49511" : "#e0000000"
-                    topRightRadius: 3
-                    bottomRightRadius: 3
-                    clip: true
-                    Rectangle {
-                        width: card.ribbonKind === "press" ? 0 : 3
-                        height: parent.height
-                        color: card.ribbonKind === "qobuzissime" ? "#8b5cf6" : "#eab308"
-                    }
-                    Row {
-                        id: ribbonRow
-                        height: parent.height
-                        leftPadding: 10
-                        rightPadding: 10
-                        width: ribbonText.implicitWidth + 20
-                        Text {
-                            id: ribbonText
-                            height: parent.height
-                            text: card.ribbon
-                            color: card.ribbonKind === "press" ? "#1f1407" : "#ffffff"
-                            font.pixelSize: 9
-                            font.weight: theme.weightSemibold
-                            verticalAlignment: Text.AlignVCenter
-                            elide: Text.ElideRight
-                        }
-                    }
-                }
-            }
-            Item { width: 1; height: 6 }
-            // --- Title / artist + quality badge --------------------------
-            Row {
-                width: 200
-                height: 40
-                spacing: theme.spacingSm
-                Column {
-                    width: parent.width - (qualityBadge.visible ? qualityBadge.width + theme.spacingSm : 0)
-                    anchors.verticalCenter: parent.verticalCenter
-                    spacing: 2
-                    Text {
-                        width: parent.width
-                        height: 20
-                        text: card.title
-                        color: titleArea.containsMouse ? theme.accent : theme.textPrimary
-                        font.pixelSize: theme.fontBody - 2
-                        font.weight: theme.weightMedium
-                        verticalAlignment: Text.AlignVCenter
-                        elide: Text.ElideRight
-                        MouseArea {
-                            id: titleArea
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                        }
-                    }
-                    Text {
-                        width: parent.width
-                        height: 18
-                        text: card.artist
-                        color: card.artistId !== "" && artistArea.containsMouse
-                            ? theme.textPrimary : theme.textMuted
-                        font.pixelSize: theme.fontLink - 1
-                        verticalAlignment: Text.AlignVCenter
-                        elide: Text.ElideRight
-                        MouseArea {
-                            id: artistArea
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: card.artistId !== "" ? Qt.PointingHandCursor : Qt.ArrowCursor
-                        }
-                    }
-                }
-                // Icon-only quality badge (QualityBadge.slint).
-                Item {
-                    id: qualityBadge
-                    visible: card.qualityTier !== ""
-                    width: card.qualityTier === "hires" ? 42 : 30
-                    height: 30
-                    anchors.verticalCenter: parent.verticalCenter
-                    Image {
-                        visible: card.qualityTier === "hires"
-                        source: "assets/hi-res.svg"
-                        width: 42
-                        height: 28
-                        anchors.centerIn: parent
-                        sourceSize: Qt.size(84, 56)
-                        fillMode: Image.PreserveAspectFit
-                    }
-                    Rectangle {
-                        visible: card.qualityTier === "cd"
-                        width: 30
-                        height: 30
-                        radius: 3
-                        color: theme.surfaceElevated
-                        border.width: 1
-                        border.color: theme.borderSubtle
-                        QbzIcon {
-                            name: "cd"
-                            width: 16
-                            height: 16
-                            anchors.centerIn: parent
-                            tintName: "muted"
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     // Horizontal album rail (Carousel.slint): header + clipped ListView,
     // page chevrons (per-page step like the Slint paging).
     component AlbumRail: Column {
@@ -381,7 +126,22 @@ Rectangle {
                 clip: true
                 boundsBehavior: Flickable.StopAtBounds
                 model: sectionData.items
-                delegate: AlbumCard { card: modelData }
+                delegate: AlbumCard {
+                    albumId: modelData.id
+                    title: modelData.title
+                    artist: modelData.artist
+                    artistId: modelData.artistId
+                    genre: modelData.genre
+                    year: modelData.year
+                    qualityTier: modelData.qualityTier
+                    ribbon: modelData.ribbon
+                    ribbonKind: modelData.ribbonKind
+                    artSource: modelData.artPath
+                    isPinned: modelData.isPinned
+                    // POC-NOTE: Home hearts are not seeded from fav_cache
+                    // (store not open in the POC); toggles still hit the API.
+                    isFavorite: false
+                }
             }
             // Cider-style edge fades (Carousel.slint): content dissolves
             // into the page background at the scrolled edges.

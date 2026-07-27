@@ -53,6 +53,8 @@ pub struct HomeCard {
     pub ribbon: String,
     #[serde(rename = "ribbonKind")]
     pub ribbon_kind: String,
+    #[serde(rename = "isPinned", default)]
+    pub is_pinned: bool,
     /// Slim rows ("Popular albums"): the 1-based rank ("" = none).
     pub rank: String,
     /// Playlist rows: the UPPERCASE first-tag category subtag.
@@ -274,7 +276,9 @@ pub(crate) fn map_album(album: DiscoverAlbum) -> HomeCard {
         .or(album.image.thumbnail)
         .or(album.image.small)
         .unwrap_or_default();
+    let is_pinned = crate::sidebar_qt::is_pinned("album", &album.id);
     HomeCard {
+        is_pinned,
         id: album.id,
         title: album.title,
         artist,

@@ -19,7 +19,10 @@ ApplicationWindow {
     minimumHeight: 600
     visible: true
     title: "QBZ"
-    color: "#0f0f0f"
+    // Custom chrome (phase 7): frameless + translucent so the window draws
+    // its own rounded corners, 1:1 with the Slint custom-chrome look.
+    flags: Qt.Window | Qt.FramelessWindowHint
+    color: "transparent"
 
     FontLoader { id: interRegular; source: "assets/fonts/Inter_18pt-Regular.ttf" }
     FontLoader { id: interMedium; source: "assets/fonts/Inter_18pt-Medium.ttf" }
@@ -36,6 +39,62 @@ ApplicationWindow {
         source: QbzBridge.screen === "login"
                 ? "LoginScreen.qml"
                 : (QbzBridge.screen === "shell" ? "AppShell.qml" : "")
+        // Hand the host window down for drag/maximize/resize (custom chrome).
+        onLoaded: if (screenLoader.item) screenLoader.item.hostWindow = window
+    }
+
+    // Rounded-window hairline frame (app.slint's no-frame 1px edge) —
+    // paints at the very rim, over everything, clipped by the corners.
+    Rectangle {
+        anchors.fill: parent
+        color: "transparent"
+        radius: 12
+        border.width: 1
+        border.color: "#14ffffff"
+        visible: window.visibility !== Window.Maximized && window.visibility !== Window.FullScreen
+    }
+
+    // Edge/corner resize grips (custom chrome — the compositor draws no
+    // border). 6px, invisible.
+    MouseArea {
+        anchors.left: parent.left; anchors.top: parent.top; anchors.bottom: parent.bottom; width: 6
+        cursorShape: Qt.SizeHorCursor
+        onPressed: window.startSystemResize(Qt.LeftEdge)
+    }
+    MouseArea {
+        anchors.right: parent.right; anchors.top: parent.top; anchors.bottom: parent.bottom; width: 6
+        cursorShape: Qt.SizeHorCursor
+        onPressed: window.startSystemResize(Qt.RightEdge)
+    }
+    MouseArea {
+        anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top; height: 6
+        cursorShape: Qt.SizeVerCursor
+        onPressed: window.startSystemResize(Qt.TopEdge)
+    }
+    MouseArea {
+        anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom; height: 6
+        cursorShape: Qt.SizeVerCursor
+        onPressed: window.startSystemResize(Qt.BottomEdge)
+    }
+    MouseArea {
+        anchors.left: parent.left; anchors.top: parent.top; width: 12; height: 12
+        cursorShape: Qt.SizeFDiagCursor
+        onPressed: window.startSystemResize(Qt.TopEdge | Qt.LeftEdge)
+    }
+    MouseArea {
+        anchors.right: parent.right; anchors.top: parent.top; width: 12; height: 12
+        cursorShape: Qt.SizeBDiagCursor
+        onPressed: window.startSystemResize(Qt.TopEdge | Qt.RightEdge)
+    }
+    MouseArea {
+        anchors.left: parent.left; anchors.bottom: parent.bottom; width: 12; height: 12
+        cursorShape: Qt.SizeBDiagCursor
+        onPressed: window.startSystemResize(Qt.BottomEdge | Qt.LeftEdge)
+    }
+    MouseArea {
+        anchors.right: parent.right; anchors.bottom: parent.bottom; width: 12; height: 12
+        cursorShape: Qt.SizeFDiagCursor
+        onPressed: window.startSystemResize(Qt.BottomEdge | Qt.RightEdge)
     }
 
     // Splash (SplashScreen.slint): the same 720px dark card as the login
@@ -43,6 +102,7 @@ ApplicationWindow {
     Rectangle {
         anchors.fill: parent
         color: "#0f0f0f"
+        radius: 12
         visible: QbzBridge.screen === "splash"
 
         Rectangle {

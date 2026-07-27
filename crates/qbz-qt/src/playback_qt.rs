@@ -40,11 +40,10 @@ static PREMUTE_VOLUME: AtomicU64 = AtomicU64::new(0);
 
 /// Fetch the album, build the queue (playback.rs `make_queue_track` port),
 /// set it starting at track 1, and play through the core's resolved path.
-pub async fn play_album(
+async fn fetch_album_queue(
     runtime: &Arc<AppRuntime<LoggingAdapter>>,
     album_id: &str,
-) -> Result<(), String> {
-    log::info!("[qbz-qt] play_album: resolving {album_id}");
+) -> Result<Vec<QueueTrack>, String> {
     let album = runtime
         .core()
         .get_album(album_id)
@@ -101,7 +100,38 @@ pub async fn play_album(
             context_id: Some(album.id.clone()),
         })
         .collect();
+    Ok(tracks)
+}
 
+/// "Play next" / "Add to queue" for an album (AlbumCard ⋯ menu): resolve
+/// the album's tracks and insert them after the current track (mode
+/// "next") or append them (mode "later").
+pub async fn enqueue_album(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    album_id: &str,
+    mode: &str,
+) -> Result<(), String> {
+    let tracks = fetch_album_queue(runtime, album_id).await?;
+    log::info!("[qbz-qt] enqueue_album {album_id} ({mode}): {} tracks", tracks.len());
+    if mode == "next" {
+        // add_track_next inserts directly after the current track — feed
+        // in reverse so the album's first track lands first.
+        for track in tracks.into_iter().rev() {
+            runtime.core().add_track_next(track).await;
+        }
+    } else {
+        runtime.core().add_tracks(tracks).await;
+    }
+    publish_queue(runtime).await;
+    Ok(())
+}
+
+pub async fn play_album(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    album_id: &str,
+) -> Result<(), String> {
+    log::info!("[qbz-qt] play_album: resolving {album_id}");
+    let tracks = fetch_album_queue(runtime, album_id).await?;
     let first_id = tracks[0].id;
     let count = tracks.len();
     runtime.core().set_queue(tracks, Some(0)).await;

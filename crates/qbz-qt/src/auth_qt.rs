@@ -150,6 +150,8 @@ where
         crate::offline_fwd::init_for_user(&dir);
         // Phase 5: local-favorites store (Library show-local + hearts).
         crate::library_qt::init_local_favorites(&dir);
+        // Phase 7: pinned-items store (AlbumCard pin badges).
+        crate::sidebar_qt::init_pinned(&dir);
     }
     crate::offline_fwd::subscription_mark_valid();
     crate::offline_fwd::engine().set_offline_session(false);
@@ -304,6 +306,8 @@ where
         crate::offline_fwd::init_for_user(&dir);
         // Phase 5: local-favorites store (Library show-local + hearts).
         crate::library_qt::init_local_favorites(&dir);
+        // Phase 7: pinned-items store (AlbumCard pin badges).
+        crate::sidebar_qt::init_pinned(&dir);
     }
     crate::offline_fwd::engine().set_offline_session(true);
     Ok(user_id)

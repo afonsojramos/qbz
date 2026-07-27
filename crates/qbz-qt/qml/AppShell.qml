@@ -17,9 +17,14 @@ import com.blitzfc.qbz
 
 Rectangle {
     id: root
-    // The window chrome is surface-card (header / sidebar / queue column /
-    // NPB all paint it too); the content panel contrasts in surface-main.
-    color: theme.surfaceCard
+    // TRANSPARENT — the chrome (header / sidebar / queue column / NPB)
+    // paints every pixel between the header's rounded top corners and the
+    // NPB's rounded bottom corners, so the window's rounded corners show
+    // through (frameless translucent window).
+    color: "transparent"
+
+    // The host ApplicationWindow (custom chrome: drag / maximize / resize).
+    property var hostWindow: null
 
     QbzTheme { id: theme }
 
@@ -29,6 +34,10 @@ Rectangle {
         anchors.right: parent.right
         anchors.top: parent.top
         height: theme.headerHeight
+        hostWindow: root.hostWindow
+        // Rounded top window corners (custom chrome); the bottom corners
+        // are covered by the same-color surfaces below.
+        radius: 12
     }
 
     NowPlayingBarSmall {
@@ -37,6 +46,9 @@ Rectangle {
         anchors.right: parent.right
         anchors.bottom: parent.bottom
         height: theme.npbSmallHeight
+        // Rounded bottom window corners (custom chrome); the top corners
+        // are covered by the same-color surfaces above.
+        radius: 12
     }
 
     Sidebar {

@@ -17,6 +17,10 @@ import com.blitzfc.qbz
 Rectangle {
     id: root
     color: theme.surfaceMain
+    // Rounded window corners (custom chrome).
+    radius: 12
+    // Set by the Loader (custom chrome drag/maximize); unused here.
+    property var hostWindow: null
 
     // Slint: in-out property tos-accepted: true.
     property bool tosAccepted: true

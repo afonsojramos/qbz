@@ -113,6 +113,13 @@ pub mod qbz_bridge {
         // {tracks, albums, artists, playlists, labels, all} — tab badges.
         #[qproperty(QString, library_counts_json)]
 
+        // --- Sidebar playlist tree ---------------------------------------
+        // One JSON document: the flattened entries (folders + playlists,
+        // expand/sort/search applied Rust-side — sidebar_qt.rs).
+        #[qproperty(QString, sidebar_json)]
+        #[qproperty(QString, sidebar_sort_by)]
+        #[qproperty(bool, sidebar_sort_asc)]
+
         type QbzBridge = super::QbzBridgeRust;
 
         /// Called once from Main.qml's Component.onCompleted: registers the
@@ -228,6 +235,36 @@ pub mod qbz_bridge {
         /// Emitted after a heart toggle (optimistic flip + rollback).
         #[qsignal]
         fn library_favorite_changed(self: Pin<&mut QbzBridge>, key: QString, value: bool);
+
+        /// AlbumCard ⋯ menu: Play next ("next") / Add to queue ("later").
+        #[qinvokable]
+        fn enqueue_album(self: Pin<&mut QbzBridge>, album_id: QString, mode: QString);
+
+        /// AlbumCard pin badge: toggle pin (album/artist/playlist).
+        #[qinvokable]
+        fn toggle_pin(self: Pin<&mut QbzBridge>, kind: QString, id: QString, title: QString, subtitle: QString, artwork_url: QString);
+        /// Emitted after a pin toggle (`{kind}:{id}` key like artKey).
+        #[qsignal]
+        fn pin_changed(self: Pin<&mut QbzBridge>, key: QString, value: bool);
+
+        /// Sidebar tree: rebuild + republish after load / sort / search /
+        /// folder toggle.
+        #[qinvokable]
+        fn reload_sidebar(self: Pin<&mut QbzBridge>);
+        #[qinvokable]
+        fn sidebar_set_sort(self: Pin<&mut QbzBridge>, option: QString);
+        #[qinvokable]
+        fn sidebar_search(self: Pin<&mut QbzBridge>, query: QString);
+        #[qinvokable]
+        fn sidebar_toggle_folder(self: Pin<&mut QbzBridge>, id: QString);
+        /// Sidebar "+" — create an empty playlist (single core call), then
+        /// reload the tree.
+        #[qinvokable]
+        fn create_playlist(self: Pin<&mut QbzBridge>);
+        /// Sidebar cover dispatch: JSON array of cover URLS (the tree's
+        /// collage is url-keyed, unlike the feed's artKey).
+        #[qinvokable]
+        fn sidebar_artwork_window(self: Pin<&mut QbzBridge>, urls_json: QString);
     }
 
     impl cxx_qt::Threading for QbzBridge {}
@@ -286,6 +323,9 @@ pub struct QbzBridgeRust {
     library_error: QString,
     library_json: QString,
     library_counts_json: QString,
+    sidebar_json: QString,
+    sidebar_sort_by: QString,
+    sidebar_sort_asc: bool,
 }
 
 impl Default for QbzBridgeRust {
@@ -334,6 +374,9 @@ impl Default for QbzBridgeRust {
             library_error: QString::default(),
             library_json: QString::from("[]"),
             library_counts_json: QString::from("{}"),
+            sidebar_json: QString::from("[]"),
+            sidebar_sort_by: QString::from("name"),
+            sidebar_sort_asc: true,
         }
     }
 }
@@ -457,5 +500,43 @@ impl qbz_bridge::QbzBridge {
 
     pub fn library_toggle_favorite(self: Pin<&mut Self>, kind: QString, id: QString) {
         crate::library_toggle_favorite(kind.to_string(), id.to_string());
+    }
+
+    pub fn enqueue_album(self: Pin<&mut Self>, album_id: QString, mode: QString) {
+        crate::enqueue_album(album_id.to_string(), mode.to_string());
+    }
+
+    pub fn toggle_pin(self: Pin<&mut Self>, kind: QString, id: QString, title: QString, subtitle: QString, artwork_url: QString) {
+        crate::toggle_pin(
+            kind.to_string(),
+            id.to_string(),
+            title.to_string(),
+            subtitle.to_string(),
+            artwork_url.to_string(),
+        );
+    }
+
+    pub fn reload_sidebar(self: Pin<&mut Self>) {
+        crate::reload_sidebar();
+    }
+
+    pub fn sidebar_set_sort(self: Pin<&mut Self>, option: QString) {
+        crate::sidebar_set_sort(&option.to_string());
+    }
+
+    pub fn sidebar_search(self: Pin<&mut Self>, query: QString) {
+        crate::sidebar_set_search(&query.to_string());
+    }
+
+    pub fn sidebar_toggle_folder(self: Pin<&mut Self>, id: QString) {
+        crate::sidebar_toggle_folder(&id.to_string());
+    }
+
+    pub fn create_playlist(self: Pin<&mut Self>) {
+        crate::create_playlist();
+    }
+
+    pub fn sidebar_artwork_window(self: Pin<&mut Self>, urls_json: QString) {
+        crate::sidebar_artwork_window(urls_json.to_string());
     }
 }

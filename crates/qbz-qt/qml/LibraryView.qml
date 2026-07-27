@@ -169,6 +169,13 @@ Rectangle {
             }
             root.feedChanged()
         }
+        function onPinChanged(key, value) {
+            var f = root.feed
+            for (var i = 0; i < f.length; i++) {
+                if (f[i].artKey === key) { f[i].isPinned = value; break }
+            }
+            root.feedChanged()
+        }
     }
 
     // Debounced window reporting (180ms, library_all.rs throttle).

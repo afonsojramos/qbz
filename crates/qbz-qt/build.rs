@@ -40,6 +40,7 @@ fn main() {
                 "qml/Main.qml",
                 "qml/LoginScreen.qml",
                 "qml/AppShell.qml",
+                "qml/AlbumCard.qml",
                 "qml/Sidebar.qml",
                 "qml/HeaderBar.qml",
                 "qml/NowPlayingBarSmall.qml",

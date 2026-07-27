@@ -77,6 +77,8 @@ pub struct FeedItem {
     pub playlist_owned: bool,
     #[serde(rename = "playlistFollowing")]
     pub playlist_following: bool,
+    #[serde(rename = "isPinned", default)]
+    pub is_pinned: bool,
     /// Recency proxy in [0,1]; 0 = most-recently added (per source).
     pub added_rank: f32,
 }
@@ -283,7 +285,9 @@ fn map_album(album: Album) -> FeedItem {
             .and_then(|c| c.first().map(|a| a.name.clone()))
             .unwrap_or_default()
     };
+    let is_pinned = crate::sidebar_qt::is_pinned("album", &album.id);
     FeedItem {
+        is_pinned,
         kind: "album".into(),
         group: "favorites".into(),
         source: "qobuz".into(),

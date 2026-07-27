@@ -16,6 +16,7 @@ mod nav_qt;
 mod now_playing;
 mod offline_fwd;
 mod playback_qt;
+mod sidebar_qt;
 
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -123,6 +124,8 @@ fn enter_shell(session: auth_qt::SessionInfo) {
     load_home_once();
     // Phase 4: the 1 Hz playback state pump (idempotent).
     playback_qt::start_poll_loop(app());
+    // Phase 7: the sidebar playlist tree.
+    load_sidebar_once();
 
     ui(move |mut b| {
                 b.as_mut().set_session_user_name(QString::from(session.display_name.as_str()));
@@ -235,6 +238,7 @@ pub(crate) fn do_logout() {
             b.as_mut().set_library_counts_json(QString::from("{}"));
             b.as_mut().set_library_error(QString::from(""));
             b.as_mut().set_library_loading(false);
+            b.as_mut().set_sidebar_json(QString::from("[]"));
             b.as_mut().set_screen(QString::from("login"));
         });
     });
@@ -258,6 +262,129 @@ fn load_home_once() {
 }
 
 // ============================ Playback (phase 4) ===========================
+
+// ============================ Sidebar + pins (phase 7) =====================
+
+/// Load + publish the sidebar tree (session entry; idempotent per session).
+fn load_sidebar_once() {
+    static LOADED: Mutex<bool> = Mutex::new(false);
+    if *LOADED.lock().unwrap() {
+        return;
+    }
+    if offline_fwd::engine().status().is_offline() {
+        log::info!("[qbz-qt] sidebar load skipped (offline session)");
+        return;
+    }
+    *LOADED.lock().unwrap() = true;
+    reload_sidebar();
+}
+
+/// Fetch playlists + folders and publish the flattened entries.
+pub(crate) fn reload_sidebar() {
+    if offline_fwd::engine().status().is_offline() {
+        return;
+    }
+    let runtime = app();
+    spawn(async move {
+        sidebar_qt::load(&runtime).await;
+        publish_sidebar();
+    });
+}
+
+fn publish_sidebar() {
+    let entries = sidebar_qt::rebuild();
+    let json = serde_json::to_string(&entries).unwrap_or_else(|_| "[]".into());
+    log::debug!("[qbz-qt] sidebar published: {} entries ({} bytes)", entries.len(), json.len());
+    let (sort_by, sort_asc) = sidebar_qt::sort_state();
+    ui(move |mut b| {
+        b.as_mut().set_sidebar_json(QString::from(json.as_str()));
+        b.as_mut().set_sidebar_sort_by(QString::from(sort_by.as_str()));
+        b.as_mut().set_sidebar_sort_asc(sort_asc);
+    });
+}
+
+pub(crate) fn sidebar_set_sort(option: &str) {
+    sidebar_qt::set_sort(option);
+    publish_sidebar();
+}
+
+pub(crate) fn sidebar_set_search(query: &str) {
+    sidebar_qt::set_search(query);
+    publish_sidebar();
+}
+
+pub(crate) fn sidebar_toggle_folder(id: &str) {
+    sidebar_qt::toggle_folder(id);
+    publish_sidebar();
+}
+
+/// Sidebar cover dispatch: plain url list (the tree's collage is
+/// url-keyed). Disk hits emit immediately; misses download then emit.
+pub(crate) fn sidebar_artwork_window(urls_json: String) {
+    let urls: Vec<String> = serde_json::from_str(&urls_json).unwrap_or_default();
+    let mut missing: Vec<String> = Vec::new();
+    for url in urls {
+        let path = artwork_qt::cached_path(&url);
+        if path.is_empty() {
+            missing.push(url);
+        } else {
+            emit_library_artwork(url, path);
+        }
+    }
+    if missing.is_empty() {
+        return;
+    }
+    spawn(async move {
+        let urls = missing;
+        artwork_qt::download_missing(urls.clone()).await;
+        for url in urls {
+            let path = artwork_qt::cached_path(&url);
+            if !path.is_empty() {
+                emit_library_artwork(url, path);
+            }
+        }
+    });
+}
+
+/// Sidebar "+" — create an empty playlist with the default name, then
+/// reload the tree (the Slint flow opens a naming modal — POC-NOTE).
+pub(crate) fn create_playlist() {
+    let runtime = app();
+    spawn(async move {
+        match runtime
+            .core()
+            .create_playlist(&qbz_i18n::t("New Playlist"), None, false)
+            .await
+        {
+            Ok(p) => {
+                log::info!("[qbz-qt] playlist created: {} ({})", p.name, p.id);
+                sidebar_qt::load(&runtime).await;
+                publish_sidebar();
+            }
+            Err(e) => log::error!("[qbz-qt] create playlist failed: {e}"),
+        }
+    });
+}
+
+/// AlbumCard ⋯ menu: Play next / Add to queue.
+pub(crate) fn enqueue_album(album_id: String, mode: String) {
+    let runtime = app();
+    spawn(async move {
+        if let Err(e) = playback_qt::enqueue_album(&runtime, &album_id, &mode).await {
+            log::error!("[qbz-qt] enqueue_album failed: {e}");
+        }
+    });
+}
+
+/// AlbumCard pin badge: toggle + signal the result.
+pub(crate) fn toggle_pin(kind: String, id: String, title: String, subtitle: String, artwork_url: String) {
+    if let Some(value) = sidebar_qt::toggle_pin(&kind, &id, &title, &subtitle, &artwork_url) {
+        let key = format!("{kind}:{id}");
+        ui(move |mut b| {
+            b.as_mut().pin_changed(QString::from(key.as_str()), value);
+        });
+    }
+}
 
 /// Track-row click (Library tracks): one-track queue through the core.
 pub(crate) fn play_track(track_id: u64) {

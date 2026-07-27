@@ -21,7 +21,32 @@ Rectangle {
     id: root
     color: theme.surfaceCard
 
+    // The host ApplicationWindow (custom chrome); null in previews.
+    property var hostWindow: null
+
     QbzTheme { id: theme }
+
+    // Custom-chrome drag surface (declared FIRST so every interactive
+    // element above wins hit-testing): press-and-move starts the system
+    // move; double-click toggles maximize. The system grab starts only
+    // after a real movement so plain clicks/double-clicks still work.
+    MouseArea {
+        anchors.fill: parent
+        property bool dragStarted: false
+        onPressed: dragStarted = false
+        onPositionChanged: {
+            if (pressed && !dragStarted && root.hostWindow) {
+                dragStarted = true
+                root.hostWindow.startSystemMove()
+            }
+        }
+        onDoubleClicked: {
+            if (root.hostWindow) {
+                root.hostWindow.visibility = root.hostWindow.visibility === Window.Maximized
+                    ? Window.Windowed : Window.Maximized
+            }
+        }
+    }
 
     // Slint OfflineState.badge-state: 0 hidden / 1 hard offline / 2 manual /
     // 3 logged out (wins over the others).
@@ -195,7 +220,8 @@ Rectangle {
     // --- Right controls: status badge + app menu --------------------------
     Row {
         id: rightControls
-        x: root.width - width - theme.spacingMd + 2
+        // Shifts left of the drawn window controls (3x34 + 2x2 = 106px).
+        x: root.width - width - theme.spacingMd + 2 - 110
         y: (root.height - height) / 2
         height: 36
         spacing: 4
@@ -332,6 +358,80 @@ Rectangle {
             name: "menu"
             anchors.verticalCenter: parent.verticalCenter
             onClicked: appMenu.open()
+        }
+    }
+
+    // --- Drawn window controls (WindowControls.slint, right placement:
+    // minimize · maximize · close; close gets the danger-red hover) ------
+    Row {
+        x: root.width - width - 8
+        y: (root.height - height) / 2
+        height: 26
+        spacing: 2
+        Rectangle {
+            width: 34
+            height: 26
+            radius: theme.radiusSm
+            color: wcMinArea.containsMouse ? theme.surfaceHover : "transparent"
+            QbzIcon {
+                name: "minus"
+                width: 14
+                height: 14
+                anchors.centerIn: parent
+                tintName: "secondary"
+            }
+            MouseArea {
+                id: wcMinArea
+                anchors.fill: parent
+                hoverEnabled: true
+                onClicked: if (root.hostWindow) root.hostWindow.showMinimized()
+            }
+        }
+        Rectangle {
+            width: 34
+            height: 26
+            radius: theme.radiusSm
+            color: wcMaxArea.containsMouse ? theme.surfaceHover : "transparent"
+            QbzIcon {
+                name: root.hostWindow && root.hostWindow.visibility === Window.Maximized
+                    ? "minimize-2" : "maximize-2"
+                width: 14
+                height: 14
+                anchors.centerIn: parent
+                tintName: "secondary"
+            }
+            MouseArea {
+                id: wcMaxArea
+                anchors.fill: parent
+                hoverEnabled: true
+                onClicked: {
+                    if (root.hostWindow) {
+                        root.hostWindow.visibility = root.hostWindow.visibility === Window.Maximized
+                            ? Window.Windowed : Window.Maximized
+                    }
+                }
+            }
+        }
+        Rectangle {
+            width: 34
+            height: 26
+            radius: theme.radiusSm
+            color: wcCloseArea.containsMouse ? "#e81123" : "transparent"
+            QbzIcon {
+                name: "x"
+                width: 14
+                height: 14
+                anchors.centerIn: parent
+                tintName: wcCloseArea.containsMouse ? "primary" : "secondary"
+            }
+            MouseArea {
+                id: wcCloseArea
+                anchors.fill: parent
+                hoverEnabled: true
+                // POC-NOTE: the Slint app hides-to-tray on close; the POC
+                // has no tray — close quits.
+                onClicked: Qt.quit()
+            }
         }
     }
 
