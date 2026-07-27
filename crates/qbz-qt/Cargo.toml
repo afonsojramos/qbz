@@ -29,6 +29,8 @@ qbz-app = { path = "../qbz-app" }
 qbz-qobuz = { path = "../qbz-qobuz" }
 qbz-models = { path = "../qbz-models" }
 qbz-cache = { path = "../qbz-cache" }
+qbz-offline-cache = { path = "../qbz-offline-cache" }
+qbz-library = { path = "../qbz-library" }
 qbz-text-utils = { path = "../qbz-text-utils" }
 qbz-credentials = { path = "../qbz-credentials" }
 qbz-i18n = { path = "../qbz-i18n" }

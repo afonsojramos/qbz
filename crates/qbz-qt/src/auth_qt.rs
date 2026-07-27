@@ -148,6 +148,8 @@ where
     // recovery: a successful login ends any unauthenticated offline session.
     if let Some(dir) = crate::offline_fwd::user_data_dir(user_id) {
         crate::offline_fwd::init_for_user(&dir);
+        // Phase 5: local-favorites store (Library show-local + hearts).
+        crate::library_qt::init_local_favorites(&dir);
     }
     crate::offline_fwd::subscription_mark_valid();
     crate::offline_fwd::engine().set_offline_session(false);
@@ -300,6 +302,8 @@ where
     // unauthenticated offline session.
     if let Some(dir) = crate::offline_fwd::user_data_dir(user_id) {
         crate::offline_fwd::init_for_user(&dir);
+        // Phase 5: local-favorites store (Library show-local + hearts).
+        crate::library_qt::init_local_favorites(&dir);
     }
     crate::offline_fwd::engine().set_offline_session(true);
     Ok(user_id)

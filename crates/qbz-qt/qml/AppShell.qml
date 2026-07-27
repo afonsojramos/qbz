@@ -70,7 +70,8 @@ Rectangle {
 
         Loader {
             anchors.fill: parent
-            source: QbzBridge.currentView === "home" ? "HomeView.qml" : ""
+            source: QbzBridge.currentView === "home" ? "HomeView.qml"
+                : QbzBridge.currentView === "library" ? "LibraryView.qml" : ""
         }
     }
 }

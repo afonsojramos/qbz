@@ -411,6 +411,26 @@ pub(crate) fn format_rate(rate: f64) -> String {
     }
 }
 
+/// Tier from a bare bit depth (album_map.rs `tier`): >16 is Hi-Res, a
+/// known depth <= 16 is CD, unknown hides the badge.
+pub(crate) fn quality_tier_from_depth(bit_depth: Option<u32>) -> &'static str {
+    match bit_depth {
+        Some(b) if b > 16 => "hires",
+        Some(_) => "cd",
+        None => "",
+    }
+}
+
+/// Bare exact-quality detail from parts, Hz- or kHz-tolerant (quality.rs
+/// `detail`): "24-bit / 96 kHz".
+pub(crate) fn quality_detail_from_parts(bit_depth: Option<u32>, sample_rate: Option<f64>) -> String {
+    let hi_res = matches!(bit_depth, Some(depth) if depth >= 24);
+    let depth = bit_depth.unwrap_or(if hi_res { 24 } else { 16 });
+    let rate = sample_rate.unwrap_or(if hi_res { 96.0 } else { 44.1 });
+    let rate = if rate >= 1000.0 { rate / 1000.0 } else { rate };
+    format!("{depth}-bit / {} kHz", format_rate(rate))
+}
+
 // ---------------------------------------------------------------------------
 // Personalized rails — ported from foryou.rs (live-session only; the reco /
 // blacklist stores are skipped, see module docs).

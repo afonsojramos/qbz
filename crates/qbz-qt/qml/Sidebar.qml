@@ -115,15 +115,20 @@ Rectangle {
                 name: "compass"
                 label: QbzBridge.tr("Discover")
                 visible: !QbzBridge.offline
-                onClicked: root.activeNav = "discover"
+                onClicked: {
+                    root.activeNav = "discover"
+                    QbzBridge.navigateTo("home")
+                }
             }
             NavRow {
                 navId: "library"
                 name: "music-library-2"
                 label: QbzBridge.tr("Library")
                 visible: !QbzBridge.offline
-                // Inert — the view lands in phase 3.
-                onClicked: root.activeNav = "library"
+                onClicked: {
+                    root.activeNav = "library"
+                    QbzBridge.navigateTo("library")
+                }
             }
             NavRow {
                 navId: "local"

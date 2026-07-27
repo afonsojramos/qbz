@@ -103,6 +103,16 @@ pub mod qbz_bridge {
         // the exact same {id, title, kind, items:[{...}]} object graph.
         #[qproperty(QString, home_sections_json)]
 
+        // --- Library view --------------------------------------------------
+        #[qproperty(bool, library_loading)]
+        #[qproperty(QString, library_error)]
+        // One JSON document: the FULL merged feed (tabs/search/sort/source
+        // filters derive QML-side from the parsed array — see library_qt.rs
+        // for the rationale + the measured parse cost).
+        #[qproperty(QString, library_json)]
+        // {tracks, albums, artists, playlists, labels, all} — tab badges.
+        #[qproperty(QString, library_counts_json)]
+
         type QbzBridge = super::QbzBridgeRust;
 
         /// Called once from Main.qml's Component.onCompleted: registers the
@@ -183,6 +193,41 @@ pub mod qbz_bridge {
         /// and play through the core's resolved path.
         #[qinvokable]
         fn play_album(self: Pin<&mut QbzBridge>, album_id: QString);
+
+        /// Sidebar navigation: record a content view ("home" | "library")
+        /// and lazy-load its data on first visit.
+        #[qinvokable]
+        fn navigate_to(self: Pin<&mut QbzBridge>, view: QString);
+
+        /// Track-row click (Library): play the track as a 1-element queue.
+        #[qinvokable]
+        fn play_track(self: Pin<&mut QbzBridge>, track_id: QString);
+
+        /// Library retry button / manual refresh.
+        #[qinvokable]
+        fn reload_library(self: Pin<&mut QbzBridge>);
+
+        /// Windowed artwork: the grid/list reports the mounted window as a
+        /// JSON array of artKeys (tab views filter the feed, so raw indices
+        /// don't map); Rust dispatches covers for those keys (id-keyed via
+        /// `libraryArtworkReady`).
+        #[qinvokable]
+        fn library_artwork_window(self: Pin<&mut QbzBridge>, keys_json: QString);
+
+        /// Card heart: toggle favorite (Qobuz API or the local store,
+        /// routed by id shape); the result arrives via
+        /// `libraryFavoriteChanged`.
+        #[qinvokable]
+        fn library_toggle_favorite(self: Pin<&mut QbzBridge>, kind: QString, id: QString);
+
+        /// Emitted when a dispatched cover lands on disk (id-keyed —
+        /// `{kind}:{id}`); QML updates its artwork map.
+        #[qsignal]
+        fn library_artwork_ready(self: Pin<&mut QbzBridge>, key: QString, path: QString);
+
+        /// Emitted after a heart toggle (optimistic flip + rollback).
+        #[qsignal]
+        fn library_favorite_changed(self: Pin<&mut QbzBridge>, key: QString, value: bool);
     }
 
     impl cxx_qt::Threading for QbzBridge {}
@@ -237,6 +282,10 @@ pub struct QbzBridgeRust {
     home_loading: bool,
     home_error: QString,
     home_sections_json: QString,
+    library_loading: bool,
+    library_error: QString,
+    library_json: QString,
+    library_counts_json: QString,
 }
 
 impl Default for QbzBridgeRust {
@@ -281,6 +330,10 @@ impl Default for QbzBridgeRust {
             home_loading: false,
             home_error: QString::default(),
             home_sections_json: QString::from("[]"),
+            library_loading: false,
+            library_error: QString::default(),
+            library_json: QString::from("[]"),
+            library_counts_json: QString::from("{}"),
         }
     }
 }
@@ -382,5 +435,27 @@ impl qbz_bridge::QbzBridge {
 
     pub fn play_album(self: Pin<&mut Self>, album_id: QString) {
         crate::play_album(album_id.to_string());
+    }
+
+    pub fn navigate_to(self: Pin<&mut Self>, view: QString) {
+        crate::navigate_to(&view.to_string());
+    }
+
+    pub fn play_track(self: Pin<&mut Self>, track_id: QString) {
+        if let Ok(id) = track_id.to_string().parse::<u64>() {
+            crate::play_track(id);
+        }
+    }
+
+    pub fn reload_library(self: Pin<&mut Self>) {
+        crate::reload_library();
+    }
+
+    pub fn library_artwork_window(self: Pin<&mut Self>, keys_json: QString) {
+        crate::library_artwork_window(keys_json.to_string());
+    }
+
+    pub fn library_toggle_favorite(self: Pin<&mut Self>, kind: QString, id: QString) {
+        crate::library_toggle_favorite(kind.to_string(), id.to_string());
     }
 }

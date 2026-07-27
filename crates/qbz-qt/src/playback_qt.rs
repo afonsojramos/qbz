@@ -117,6 +117,69 @@ pub async fn play_album(
     Ok(())
 }
 
+/// Play a single track as a one-element queue (Library track rows). The
+/// queue meta is rebuilt from the Library feed row; the audio resolves by
+/// id through the same `play_track_resolved` path.
+pub async fn play_single_track(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    track_id: u64,
+) -> Result<(), String> {
+    let id = track_id.to_string();
+    let item = crate::library_qt::with_library(|d| {
+        d.feed
+            .iter()
+            .find(|i| i.kind == "track" && i.id == id)
+            .cloned()
+    })
+    .flatten()
+    .ok_or_else(|| format!("track {track_id} not in the library feed"))?;
+    let duration_secs = {
+        let mut parts = item.duration.split(':');
+        parts.next().and_then(|m| m.parse::<u64>().ok()).unwrap_or(0) * 60
+            + parts.next().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0)
+    };
+    let qt = QueueTrack {
+        id: track_id,
+        title: item.title.clone(),
+        version: None,
+        artist: item.artist.clone(),
+        album: item.album.clone(),
+        album_version: None,
+        duration_secs,
+        artwork_url: if item.image_url.is_empty() {
+            None
+        } else {
+            Some(item.image_url.clone())
+        },
+        hires: item.quality_tier == "hires",
+        bit_depth: None,
+        sample_rate: None,
+        is_local: false,
+        album_id: if item.album_id.is_empty() {
+            None
+        } else {
+            Some(item.album_id.clone())
+        },
+        artist_id: item.artist_id.parse::<u64>().ok(),
+        streamable: true,
+        source: Some("qobuz".to_string()),
+        parental_warning: item.explicit,
+        source_item_id_hint: None,
+        context_kind: None,
+        context_id: None,
+    };
+    runtime.core().set_queue(vec![qt], Some(0)).await;
+    publish_queue(runtime).await;
+    log::info!("[qbz-qt] play_single_track: playing {track_id}");
+    runtime
+        .core()
+        .play_track_resolved(track_id, POC_QUALITY, None, None, 0)
+        .await
+        .map_err(|e| format!("play_track {track_id} failed: {e}"))?;
+    refresh_now_playing(runtime).await;
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Transport
 // ---------------------------------------------------------------------------

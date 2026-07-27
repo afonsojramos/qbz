@@ -10,6 +10,8 @@ mod auth_qt;
 mod artwork_qt;
 mod bridge;
 mod home_qt;
+mod library_db_qt;
+mod library_qt;
 mod nav_qt;
 mod now_playing;
 mod offline_fwd;
@@ -121,6 +123,7 @@ fn enter_shell(session: auth_qt::SessionInfo) {
     load_home_once();
     // Phase 4: the 1 Hz playback state pump (idempotent).
     playback_qt::start_poll_loop(app());
+
     ui(move |mut b| {
                 b.as_mut().set_session_user_name(QString::from(session.display_name.as_str()));
         b.as_mut().set_session_subscription(QString::from(session.subscription.as_str()));
@@ -216,8 +219,9 @@ pub(crate) fn do_logout() {
         if let Err(e) = auth_qt::logout(&runtime).await {
             log::error!("[qbz-qt] logout failed: {e}");
         }
-        // A later login must re-fetch Home (new user, fresh rails).
+        // A later login must re-fetch Home + Library (new user, fresh data).
         *HOME_LOADED.lock().unwrap() = false;
+        *LIBRARY_LOADED.lock().unwrap() = false;
         ui(|mut b| {
             b.as_mut().set_session_user_name(QString::from(""));
             b.as_mut().set_session_subscription(QString::from(""));
@@ -227,6 +231,10 @@ pub(crate) fn do_logout() {
             b.as_mut().set_home_sections_json(QString::from("[]"));
             b.as_mut().set_home_error(QString::from(""));
             b.as_mut().set_home_loading(false);
+            b.as_mut().set_library_json(QString::from("[]"));
+            b.as_mut().set_library_counts_json(QString::from("{}"));
+            b.as_mut().set_library_error(QString::from(""));
+            b.as_mut().set_library_loading(false);
             b.as_mut().set_screen(QString::from("login"));
         });
     });
@@ -250,6 +258,16 @@ fn load_home_once() {
 }
 
 // ============================ Playback (phase 4) ===========================
+
+/// Track-row click (Library tracks): one-track queue through the core.
+pub(crate) fn play_track(track_id: u64) {
+    let runtime = app();
+    spawn(async move {
+        if let Err(e) = playback_qt::play_single_track(&runtime, track_id).await {
+            log::error!("[qbz-qt] play_track failed: {e}");
+        }
+    });
+}
 
 /// Album-card click on Home: resolve + enqueue + play through the core.
 pub(crate) fn play_album(album_id: String) {
@@ -301,6 +319,161 @@ pub(crate) fn transport_toggle_shuffle() {
 pub(crate) fn transport_cycle_repeat() {
     let runtime = app();
     spawn(async move { playback_qt::cycle_repeat(&runtime).await });
+}
+
+// ============================ Library (phase 5) ===========================
+
+/// Whether the Library view has been loaded this session.
+static LIBRARY_LOADED: Mutex<bool> = Mutex::new(false);
+
+/// Sidebar navigation: record the view and lazy-load its data.
+pub(crate) fn navigate_to(view: &str) {
+    nav_qt::record(view);
+    if view == "library" {
+        load_library_once();
+    }
+}
+
+fn load_library_once() {
+    if *LIBRARY_LOADED.lock().unwrap() {
+        return;
+    }
+    if offline_fwd::engine().status().is_offline() {
+        log::info!("[qbz-qt] library load skipped (offline session)");
+        return;
+    }
+    *LIBRARY_LOADED.lock().unwrap() = true;
+    reload_library();
+}
+
+/// Fetch + publish the whole library (feed + counts). Perf-instrumented
+/// (phase-5 deliverable): wall timings land in the log.
+pub(crate) fn reload_library() {
+    if offline_fwd::engine().status().is_offline() {
+        return;
+    }
+    log_rss("library load start");
+    ui(|mut b| {
+        b.as_mut().set_library_loading(true);
+        b.as_mut().set_library_error(QString::from(""));
+    });
+    let runtime = app();
+    spawn(async move {
+        let t = std::time::Instant::now();
+        match library_qt::load_library(&runtime).await {
+            Ok(total) => {
+                let t_ser = std::time::Instant::now();
+                let (feed_json, counts_json) = library_qt::with_library(|d| {
+                    (
+                        serde_json::to_string(&d.feed).unwrap_or_else(|_| "[]".into()),
+                        serde_json::to_string(&d.counts).unwrap_or_else(|_| "{}".into()),
+                    )
+                })
+                .unwrap_or_else(|| ("[]".into(), "{}".into()));
+                log::info!(
+                    "[qbz-qt][perf] library serialize: {:?} ({} bytes)",
+                    t_ser.elapsed(),
+                    feed_json.len(),
+                );
+                log::info!(
+                    "[qbz-qt][perf] library load total: {:?} ({total} items)",
+                    t.elapsed(),
+                );
+                ui(move |mut b| {
+                    b.as_mut().set_library_json(QString::from(feed_json.as_str()));
+                    b.as_mut()
+                        .set_library_counts_json(QString::from(counts_json.as_str()));
+                    b.as_mut().set_library_loading(false);
+                });
+                log_rss("library published");
+            }
+            Err(e) => {
+                log::warn!("[qbz-qt] library load failed: {e}");
+                ui(move |mut b| {
+                    b.as_mut().set_library_error(QString::from(e.as_str()));
+                    b.as_mut().set_library_loading(false);
+                });
+            }
+        }
+    });
+}
+
+/// VmRSS (KiB) from /proc/self/status — phase-5 RSS-delta measurement.
+fn log_rss(mark: &str) {
+    if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
+        if let Some(line) = status.lines().find(|l| l.starts_with("VmRSS:")) {
+            log::info!("[qbz-qt][perf] RSS @ {mark}: {line}");
+        }
+    }
+}
+
+/// Windowed artwork dispatch for the Library feed: the view reports the
+/// mounted window as artKeys; download the missing ones, emitting
+/// `libraryArtworkReady` per store (id-keyed — the wrong-cover race fix
+/// from the Slint round). Disk hits emit immediately.
+pub(crate) fn library_artwork_window(keys_json: String) {
+    let keys: Vec<String> = serde_json::from_str(&keys_json).unwrap_or_default();
+    log::debug!("[qbz-qt] library_artwork_window: {} keys", keys.len());
+    if keys.is_empty() {
+        return;
+    }
+    let Some(pairs) = library_qt::with_library(|d| {
+        keys.iter()
+            .filter_map(|k| {
+                d.feed
+                    .iter()
+                    .find(|i| &i.art_key == k)
+                    .map(|i| (i.art_key.clone(), i.image_url.clone()))
+            })
+            .filter(|(_, u)| !u.is_empty())
+            .collect::<Vec<_>>()
+    }) else {
+        return;
+    };
+    let mut missing: Vec<(String, String)> = Vec::new();
+    for (key, url) in pairs {
+        let path = artwork_qt::cached_path(&url);
+        if path.is_empty() {
+            missing.push((key, url));
+        } else {
+            emit_library_artwork(key, path);
+        }
+    }
+    if missing.is_empty() {
+        return;
+    }
+    spawn(async move {
+        let urls: Vec<String> = missing.iter().map(|(_, u)| u.clone()).collect();
+        artwork_qt::download_missing(urls).await;
+        for (key, url) in missing {
+            let path = artwork_qt::cached_path(&url);
+            if !path.is_empty() {
+                emit_library_artwork(key, path);
+            }
+        }
+    });
+}
+
+fn emit_library_artwork(key: String, path: String) {
+    ui(move |mut b| {
+        b.as_mut()
+            .library_artwork_ready(QString::from(key.as_str()), QString::from(path.as_str()));
+    });
+}
+
+/// Card heart: toggle + signal the result (or the unchanged state on
+/// failure, so the UI rolls back).
+pub(crate) fn library_toggle_favorite(kind: String, id: String) {
+    let key = library_qt::feed_key(&kind, &id);
+    let runtime = app();
+    spawn(async move {
+        if let Some(value) = library_qt::toggle_favorite(&runtime, &kind, &id).await {
+            ui(move |mut b| {
+                b.as_mut()
+                    .library_favorite_changed(QString::from(key.as_str()), value);
+            });
+        }
+    });
 }
 
 /// `reloadHome()` invokable / auto-load worker: fetch + publish + artwork.
