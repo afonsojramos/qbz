@@ -949,10 +949,10 @@ Rectangle {
             height: parent.height - 57
             clip: true
 
-            // Loading.
-            BusyIndicator {
+            // Loading (LoadingSpinner.slint: accent arc, 1s spin).
+            QbzSpinner {
                 anchors.centerIn: parent
-                running: QbzBridge.libraryLoading
+                size: 36
                 visible: QbzBridge.libraryLoading
             }
 
@@ -1048,6 +1048,24 @@ Rectangle {
                     width: list.width
                     item: modelData
                 }
+            }
+
+            // Thin auto-hiding scrollbars (ListScrollbar replica).
+            QbzScrollBar {
+                anchors.right: parent.right
+                anchors.rightMargin: 4
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                target: grid
+                visible: grid.visible && grid.contentHeight > grid.height
+            }
+            QbzScrollBar {
+                anchors.right: parent.right
+                anchors.rightMargin: 4
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                target: list
+                visible: list.visible && list.contentHeight > list.height
             }
         }
     }

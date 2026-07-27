@@ -92,15 +92,16 @@ Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                     radius: 4
                     color: root.tosAccepted ? theme.accent : "transparent"
-                    border.color: root.tosAccepted ? theme.accent : theme.textMuted
-                    border.width: 1
+                    border.color: theme.textMuted
+                    border.width: root.tosAccepted ? 0 : 1.5
 
-                    Text {
+                    QbzIcon {
                         anchors.centerIn: parent
                         visible: root.tosAccepted
-                        text: "✓"
-                        color: theme.textPrimary
-                        font.pixelSize: 13
+                        name: "check"
+                        width: 12
+                        height: 12
+                        tintName: "primary"
                     }
                     MouseArea {
                         anchors.fill: parent
@@ -135,18 +136,19 @@ Rectangle {
             Rectangle {
                 id: signInButton
                 width: parent.width
-                height: 44
+                height: 48
                 radius: theme.radiusSm
                 property bool canSignIn: root.tosAccepted && QbzBridge.loginPhase === 0
-                color: canSignIn ? (signInArea.containsMouse ? "#5a95f5" : theme.accent)
-                                 : theme.surfaceElevated
+                opacity: canSignIn ? 1.0 : 0.5
+                color: signInArea.containsMouse && canSignIn ? theme.accentHover : theme.accent
+                Behavior on color { ColorAnimation { duration: 150 } }
 
                 Text {
                     anchors.centerIn: parent
                     text: QbzBridge.tr("Sign in with your browser")
-                    color: signInButton.canSignIn ? theme.textPrimary : theme.textMuted
-                    font.pixelSize: theme.fontBody
-                    font.weight: theme.weightMedium
+                    color: theme.accentText
+                    font.pixelSize: theme.fontButton
+                    font.weight: theme.weightSemibold
                 }
                 MouseArea {
                     id: signInArea
@@ -185,13 +187,26 @@ Rectangle {
                     wrapMode: Text.WordWrap
                 }
                 Item { width: 1; height: 4 }
-                Text {
+                Item {
                     anchors.horizontalCenter: parent.horizontalCenter
-                    text: QbzBridge.tr("Cancel")
-                    color: theme.accent
-                    font.pixelSize: theme.fontBody
+                    width: cancelText.implicitWidth
+                    height: cancelText.implicitHeight + 3
+                    Text {
+                        id: cancelText
+                        text: QbzBridge.tr("Cancel")
+                        color: cancelArea.containsMouse ? theme.accent : theme.textMuted
+                        font.pixelSize: theme.fontLink
+                    }
+                    Rectangle {
+                        y: cancelText.implicitHeight + 1
+                        width: cancelText.implicitWidth
+                        height: 1
+                        color: cancelArea.containsMouse ? theme.accent : theme.textMuted
+                    }
                     MouseArea {
+                        id: cancelArea
                         anchors.fill: parent
+                        hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
                         onClicked: QbzBridge.cancelLogin()
                     }
@@ -335,13 +350,26 @@ Rectangle {
             // Always visible (#553): without a previous session this
             // opens the GUEST profile (user 0) — Local Library only,
             // adopted by the account on the first real login.
-            Text {
+            Item {
                 anchors.horizontalCenter: parent.horizontalCenter
-                text: QbzBridge.tr("Start offline (no access to Qobuz™ services)")
-                color: theme.accent
-                font.pixelSize: theme.fontBody
+                width: offlineText.implicitWidth
+                height: offlineText.implicitHeight + 3
+                Text {
+                    id: offlineText
+                    text: QbzBridge.tr("Start offline (no access to Qobuz™ services)")
+                    color: offlineArea.containsMouse ? theme.accent : theme.textMuted
+                    font.pixelSize: theme.fontLink
+                }
+                Rectangle {
+                    y: offlineText.implicitHeight + 1
+                    width: offlineText.implicitWidth
+                    height: 1
+                    color: offlineArea.containsMouse ? theme.accent : theme.textMuted
+                }
                 MouseArea {
+                    id: offlineArea
                     anchors.fill: parent
+                    hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
                     onClicked: QbzBridge.startOffline()
                 }

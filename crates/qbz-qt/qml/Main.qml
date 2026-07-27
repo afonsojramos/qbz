@@ -38,25 +38,56 @@ ApplicationWindow {
                 : (QbzBridge.screen === "shell" ? "AppShell.qml" : "")
     }
 
-    // Splash: shown until the silent session restore resolves.
+    // Splash (SplashScreen.slint): the same 720px dark card as the login
+    // screen while the silent session restore resolves.
     Rectangle {
         anchors.fill: parent
         color: "#0f0f0f"
         visible: QbzBridge.screen === "splash"
 
-        Column {
+        Rectangle {
             anchors.centerIn: parent
-            spacing: 16
-            Image {
-                anchors.horizontalCenter: parent.horizontalCenter
-                source: "assets/qbz-logo.png"
-                width: 120
-                height: 120
-                fillMode: Image.PreserveAspectFit
-            }
-            BusyIndicator {
-                anchors.horizontalCenter: parent.horizontalCenter
-                running: true
+            width: 720
+            height: splashColumn.height + 104
+            radius: 16
+            color: "#1a1a1a"
+
+            Column {
+                id: splashColumn
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.margins: 52
+                spacing: 0
+                Image {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    source: "assets/qbz-logo.png"
+                    width: 140
+                    height: 140
+                    fillMode: Image.PreserveAspectFit
+                }
+                Item { width: 1; height: 8 }
+                Text {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: "QBZ"
+                    color: "#ffffff"
+                    font.pixelSize: 29
+                    font.weight: Font.DemiBold
+                    font.letterSpacing: 8
+                }
+                Item { width: 1; height: 2 }
+                Text {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: "QOBUZ™ PLAYER"
+                    color: "#888888"
+                    font.pixelSize: 15
+                    font.letterSpacing: 4
+                }
+                Item { width: 1; height: 32 }
+                QbzSpinner {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    size: 32
+                }
             }
         }
     }

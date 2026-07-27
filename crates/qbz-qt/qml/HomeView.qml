@@ -370,16 +370,47 @@ Rectangle {
             onPageLeft: rail.contentX = Math.min(0, rail.contentX - step)
             onPageRight: rail.contentX = Math.min(maxScroll, rail.contentX + step)
         }
-        ListView {
-            id: rail
+        Item {
             width: parent.width
             height: 246
-            orientation: ListView.Horizontal
-            spacing: 32
-            clip: true
-            boundsBehavior: Flickable.StopAtBounds
-            model: sectionData.items
-            delegate: AlbumCard { card: modelData }
+            ListView {
+                id: rail
+                anchors.fill: parent
+                orientation: ListView.Horizontal
+                spacing: 32
+                clip: true
+                boundsBehavior: Flickable.StopAtBounds
+                model: sectionData.items
+                delegate: AlbumCard { card: modelData }
+            }
+            // Cider-style edge fades (Carousel.slint): content dissolves
+            // into the page background at the scrolled edges.
+            Rectangle {
+                anchors.left: parent.left
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                width: 56
+                opacity: rail.contentX > 1 ? 1.0 : 0.0
+                Behavior on opacity { NumberAnimation { duration: 150 } }
+                gradient: Gradient {
+                    orientation: Gradient.Horizontal
+                    GradientStop { position: 0.0; color: theme.surfaceMain }
+                    GradientStop { position: 1.0; color: "transparent" }
+                }
+            }
+            Rectangle {
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                width: 56
+                opacity: rail.contentX < maxScroll - 1 ? 1.0 : 0.0
+                Behavior on opacity { NumberAnimation { duration: 150 } }
+                gradient: Gradient {
+                    orientation: Gradient.Horizontal
+                    GradientStop { position: 0.0; color: "transparent" }
+                    GradientStop { position: 1.0; color: theme.surfaceMain }
+                }
+            }
         }
     }
 
@@ -688,7 +719,9 @@ Rectangle {
             height: 56
 
             Row {
-                x: 32
+                // Slint left-controls: x 32 + NavButtons (now a 0px
+                // placeholder) + 16px spacing -> the pill starts at 48.
+                x: 48
                 y: 25 - height / 2
                 height: tabPill.height
                 spacing: 16
@@ -805,10 +838,13 @@ Rectangle {
         }
 
         // --- Scrollable sections -----------------------------------------
+        Item {
+            width: parent.width
+            height: parent.height - 57
         Flickable {
             id: homeFlick
             width: parent.width
-            height: parent.height - 57
+            height: parent.height
             clip: true
             contentWidth: width
             contentHeight: homeContent.implicitHeight
@@ -987,6 +1023,15 @@ Rectangle {
                     }
                 }
             }
+        }
+        // Thin auto-hiding scrollbar in the right gutter (ListScrollbar).
+        QbzScrollBar {
+            anchors.right: parent.right
+            anchors.rightMargin: 4
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            target: homeFlick
+        }
         }
     }
 }

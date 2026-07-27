@@ -48,6 +48,8 @@ fn main() {
                 "qml/LibraryView.qml",
                 "qml/QbzTheme.qml",
                 "qml/QbzIcon.qml",
+                "qml/QbzScrollBar.qml",
+                "qml/QbzSpinner.qml",
             ],
             qrc_files: &qrc_refs,
             ..Default::default()

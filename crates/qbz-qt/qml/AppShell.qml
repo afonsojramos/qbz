@@ -1,14 +1,25 @@
 // App shell — the QML port of crates/qbz-ui/ui/shell/AppShell.slint's
-// chrome: HeaderBar (top, 42px) / { Sidebar | content | queue column } /
-// NowPlayingBarSmall (bottom). The recovery affordance and logout live in
-// the header (offline badge flyout + app menu), like the Slint shell.
+// chrome: HeaderBar (top, 42px) / { Sidebar | content frame | queue
+// column } / NowPlayingBarSmall (bottom).
+//
+// The window chrome is surface-card throughout; the content area is a
+// ROUNDED surface-main panel inset 8px left/right/bottom (0 top — it
+// butts the header), the "Slack-style bezel on all four corners" of
+// AppShell.slint:358-390. The recovery affordance and logout live in the
+// header (offline badge flyout + app menu), like the Slint shell.
+//
+// POC-NOTE: the artwork-derived ambient background (AppearanceState
+// "Ambient"/"Blurred art" modes) is not implemented — the Slint default
+// is Off, which is what this static dark treatment matches.
 
 import QtQuick
 import com.blitzfc.qbz
 
 Rectangle {
     id: root
-    color: theme.surfaceMain
+    // The window chrome is surface-card (header / sidebar / queue column /
+    // NPB all paint it too); the content panel contrasts in surface-main.
+    color: theme.surfaceCard
 
     QbzTheme { id: theme }
 
@@ -58,14 +69,20 @@ Rectangle {
         }
     }
 
-    // Content frame — the view area between sidebar and queue column.
+    // Content frame — the rounded, inset surface-main panel (Radius.md,
+    // 8px gaps left/right/bottom, flush to the header).
     Rectangle {
         id: contentFrame
         anchors.left: sidebar.right
         anchors.right: queueColumn.left
         anchors.top: header.bottom
         anchors.bottom: npb.top
+        anchors.leftMargin: 8
+        anchors.rightMargin: 8
+        anchors.bottomMargin: 8
+        radius: theme.radiusMd
         color: theme.surfaceMain
+        border.width: 0
         clip: true
 
         Loader {

@@ -108,14 +108,14 @@ Rectangle {
                 id: seekTrack
                 width: parent.width
                 height: 3
-                radius: 1.5
+                radius: 2
                 color: theme.surfaceElevated
 
                 // Buffered / cache line.
                 Rectangle {
                     width: parent.width * Math.min(Math.max(QbzBridge.npCacheProgress, 0), 1)
                     height: parent.height
-                    radius: 1.5
+                    radius: 2
                     color: theme.textMuted
                     opacity: 0.35
                 }
@@ -123,7 +123,7 @@ Rectangle {
                 Rectangle {
                     width: parent.width * Math.min(Math.max(QbzBridge.npProgress, 0), 1)
                     height: parent.height
-                    radius: 1.5
+                    radius: 2
                     color: theme.accent
                 }
                 // Hover thumb.
@@ -421,20 +421,20 @@ Rectangle {
                         Rectangle {
                             id: volTrack
                             width: parent.width
-                            height: 3
-                            radius: 1.5
+                            height: 4
+                            radius: 2
                             anchors.verticalCenter: parent.verticalCenter
                             color: theme.surfaceElevated
                             Rectangle {
                                 width: parent.width * QbzBridge.npVolume
                                 height: parent.height
-                                radius: 1.5
+                                radius: 2
                                 color: theme.accent
                             }
                             Rectangle {
-                                width: 12
-                                height: 12
-                                radius: 6
+                                width: 16
+                                height: 16
+                                radius: 8
                                 color: theme.textPrimary
                                 x: parent.width * QbzBridge.npVolume - width / 2
                                 anchors.verticalCenter: parent.verticalCenter
