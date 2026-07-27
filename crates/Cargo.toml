@@ -39,7 +39,13 @@ members = [
     "qbz-external-reco",
     "qbz-log",
     "qbzd",
+    "qbz-qt",
 ]
+
+# Qt-frontend POC worktree: plain `cargo build`/`cargo check` in this workspace
+# produces ONLY the Qt binary (plus its Slint-free dependency closure). The
+# Slint crates remain members but are never built by default here.
+default-members = ["qbz-qt"]
 
 [workspace.package]
 version = "2.0.2"
