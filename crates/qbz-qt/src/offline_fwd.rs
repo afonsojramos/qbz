@@ -1,0 +1,201 @@
+//! Qt-side glue for the shared offline-MODE engine — the cxx-qt port of
+//! `crates/qbz/src/offline_mode.rs` MINUS the Slint parts.
+//!
+//! Offline MODE = the app operating without Qobuz — NOT the offline CACHE
+//! (downloads). The engine, connectivity actor and persisted settings are
+//! frontend-agnostic (`qbz_app::offline_mode`, ADR-006); this module owns
+//! only the process globals, the per-user binding, and the status -> QML
+//! forwarder (`engine().subscribe()` watch -> `CxxQtThread::queue`).
+//!
+//! POC-NOTE (skipped vs the Slint glue): `check_now` / `seed_settings` /
+//! `request_recheck` (Settings > Offline UI — no settings views in the
+//! POC), `offline_playback_allowed` (no playback yet), and the
+//! subscription purge consumer (`spawn_subscription_purge_check` — needs
+//! the offline cache, which this phase does not bring up; TODO when the
+//! offline cache is wired).
+
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use qbz_app::offline_mode::{
+    Connectivity, ConnectivityActor, OfflineMode, OfflineModeEngine, OfflineStatus,
+};
+use qbz_app::settings::subscription::SubscriptionStateStore;
+use qbz_app::user_data::UserDataPaths;
+
+/// Process-global engine. Exists from first use; per-user state binds via
+/// [`init_for_user`], connectivity via [`start`].
+static ENGINE: LazyLock<Arc<OfflineModeEngine>> =
+    LazyLock::new(|| Arc::new(OfflineModeEngine::new()));
+
+/// The connectivity actor, spawned once per process by [`start`].
+static CONNECTIVITY: OnceLock<ConnectivityActor> = OnceLock::new();
+
+/// Per-user subscription state (D4). `None` until a session (online or
+/// offline) is activated; consumers fail open in that window.
+static SUBSCRIPTION: Mutex<Option<SubscriptionStateStore>> = Mutex::new(None);
+
+pub fn engine() -> Arc<OfflineModeEngine> {
+    Arc::clone(&ENGINE)
+}
+
+/// Spawn the connectivity actor and attach it to the engine. Called once
+/// during boot (from a tokio context — the spawns need the runtime); the
+/// monitoring runs for the whole app lifetime, login screen included (the
+/// restore flow and the D2 recovery banner read it).
+pub fn start() {
+    if CONNECTIVITY.get().is_some() {
+        return;
+    }
+    let actor = ConnectivityActor::spawn();
+    engine().attach_connectivity(&actor);
+    if CONNECTIVITY.set(actor).is_err() {
+        log::warn!("[qbz-qt] offline mode: connectivity actor already started");
+    } else {
+        log::info!("[qbz-qt] offline mode: connectivity monitoring started");
+    }
+}
+
+/// Mirror every engine status change into the bridge properties (the login
+/// affordances + the D2 recovery banner read them). Also seeds
+/// `hasPreviousSession` once; `enter_shell` refreshes it after a successful
+/// login. Spawned once from the boot sequence.
+pub fn start_ui_forwarder() {
+    let has_previous = UserDataPaths::load_last_user_id().is_some();
+    crate::ui(move |mut b| b.as_mut().set_has_previous_session(has_previous));
+
+    crate::spawn(async move {
+        let mut rx = engine().subscribe();
+        loop {
+            let status = *rx.borrow_and_update();
+            crate::ui(move |b| apply_status(b, status));
+            if rx.changed().await.is_err() {
+                break;
+            }
+        }
+    });
+}
+
+/// Push one engine status snapshot into the bridge (queued on the Qt
+/// thread via [`crate::ui`]).
+fn apply_status(mut b: core::pin::Pin<&mut crate::bridge::qbz_bridge::QbzBridge>, status: OfflineStatus) {
+        b.as_mut().set_offline(status.is_offline());
+    b.as_mut().set_offline_mode(match status.mode {
+        OfflineMode::Online => 0,
+        OfflineMode::RealOffline => 1,
+        OfflineMode::InducedOffline => 2,
+    });
+    b.as_mut().set_connectivity(match status.connectivity {
+        Connectivity::Unknown => 0,
+        Connectivity::Up => 1,
+        Connectivity::Down => 2,
+    });
+    b.as_mut().set_captive_portal(status.captive_portal);
+    b.as_mut().set_show_recovery_banner(status.show_recovery_banner());
+    // The header badge's "Logged out" state needs the raw session flag —
+    // show_recovery_banner() is false while connectivity is down.
+    b.as_mut().set_offline_session(status.offline_session);
+}
+
+/// `<data_dir>/qbz/users/<user_id>/` — the per-user directory both the
+/// engine store and the subscription store live in. Matches the Tauri and
+/// Slint per-user path.
+pub fn user_data_dir(user_id: u64) -> Option<PathBuf> {
+    Some(
+        dirs::data_dir()?
+            .join("qbz")
+            .join("users")
+            .join(user_id.to_string()),
+    )
+}
+
+/// Bind the engine + subscription store to the active user's data dir.
+/// Called on every session activation (login, restore, offline entry).
+/// Best-effort: failures are logged, never block entry.
+///
+/// POC-NOTE: the Slint version also spawns the subscription purge check
+/// here — omitted (needs the offline cache; see module docs).
+pub fn init_for_user(base_dir: &Path) {
+    if let Err(e) = engine().init_for_user(base_dir) {
+        log::error!("[qbz-qt] offline mode engine init failed: {e}");
+    }
+    match SubscriptionStateStore::new_at(base_dir) {
+        Ok(store) => {
+            if let Ok(mut guard) = SUBSCRIPTION.lock() {
+                *guard = Some(store);
+            }
+        }
+        // Fail-open: no store means no recorded invalidity, playback allowed.
+        Err(e) => log::error!("[qbz-qt] subscription state store open failed: {e}"),
+    }
+}
+
+/// Drop the per-user state on logout. The engine also ends the
+/// session-scoped offline state (offline_session + cached induced flag) and
+/// reopens the Qobuz gate when connectivity allows — a logged-out user must
+/// always be able to sign back in.
+pub fn teardown() {
+    engine().teardown();
+    if let Ok(mut guard) = SUBSCRIPTION.lock() {
+        *guard = None;
+    }
+}
+
+fn now_unix_secs() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
+}
+
+/// D4 producer: a successful login verdict. Clears any running grace clock.
+pub fn subscription_mark_valid() {
+    let now = now_unix_secs();
+    match SUBSCRIPTION.lock() {
+        Ok(guard) => match guard.as_ref() {
+            Some(store) => {
+                if let Err(e) = store.mark_valid(now) {
+                    log::error!("[qbz-qt] subscription mark_valid failed: {e}");
+                }
+            }
+            None => log::warn!("[qbz-qt] subscription mark_valid: no store open"),
+        },
+        Err(e) => log::error!("[qbz-qt] subscription store lock poisoned: {e}"),
+    }
+}
+
+/// D4 producer: an EXPLICIT ineligible-account login verdict
+/// (`ApiError::IneligibleUser`). Generic 401/network errors must never
+/// reach this — the grace clock only starts on a real verdict.
+///
+/// An ineligible verdict can arrive before any session activation, so when
+/// no store is open this falls back to transiently opening the LAST user's
+/// store.
+pub fn subscription_mark_invalid() {
+    let now = now_unix_secs();
+    if let Ok(guard) = SUBSCRIPTION.lock() {
+        if let Some(store) = guard.as_ref() {
+            if let Err(e) = store.mark_invalid(now) {
+                log::error!("[qbz-qt] subscription mark_invalid failed: {e}");
+            }
+            return;
+        }
+    }
+    let Some(user_id) = UserDataPaths::load_last_user_id() else {
+        log::warn!("[qbz-qt] subscription mark_invalid: no previous user, skipping");
+        return;
+    };
+    let Some(dir) = user_data_dir(user_id) else {
+        log::warn!("[qbz-qt] subscription mark_invalid: data dir unavailable");
+        return;
+    };
+    match SubscriptionStateStore::new_at(&dir) {
+        Ok(store) => {
+            if let Err(e) = store.mark_invalid(now) {
+                log::error!("[qbz-qt] subscription mark_invalid failed: {e}");
+            }
+        }
+        Err(e) => log::error!("[qbz-qt] subscription state store open failed: {e}"),
+    }
+}

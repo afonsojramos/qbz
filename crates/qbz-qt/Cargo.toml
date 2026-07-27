@@ -14,5 +14,20 @@ cxx = "1"
 cxx-qt = "0.7"
 cxx-qt-lib = { version = "0.7", features = ["qt_full"] }
 
+tokio = { workspace = true }
+log = { workspace = true }
+rand = { workspace = true }
+urlencoding = "2"
+open = "5"
+dirs = "5"
+
+qbz-core = { path = "../qbz-core" }
+qbz-app = { path = "../qbz-app" }
+qbz-qobuz = { path = "../qbz-qobuz" }
+qbz-models = { path = "../qbz-models" }
+qbz-credentials = { path = "../qbz-credentials" }
+qbz-i18n = { path = "../qbz-i18n" }
+qbz-log = { path = "../qbz-log" }
+
 [build-dependencies]
 cxx-qt-build = "0.7"
