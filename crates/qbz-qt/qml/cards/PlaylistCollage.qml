@@ -135,7 +135,10 @@ Item {
         id: canvas
         anchors.fill: parent
         renderTarget: Canvas.Image
-        renderStrategy: Canvas.Cooperative
+        // See RoundedImage.qml: GUI-thread raster. This canvas repaints from
+        // libraryArtworkReady and from four async image probes, on a card the
+        // feed recycles.
+        renderStrategy: Canvas.Immediate
 
         // Dimension probes: Canvas cannot query a loaded image's intrinsic
         // size and the crop fit needs it (RoundedImage's pattern, one per

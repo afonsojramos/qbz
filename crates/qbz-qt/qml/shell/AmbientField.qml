@@ -45,7 +45,10 @@ Canvas {
         : true
 
     renderTarget: Canvas.Image
-    renderStrategy: Canvas.Cooperative
+    // See RoundedImage.qml. This one repaints 30x/s for the whole window
+    // lifetime, so it is the canvas most likely to be mid-raster when another
+    // is torn down on the same render thread.
+    renderStrategy: Canvas.Immediate
 
     // The shader clock (t = time * 0.75). Accumulated at ~30fps.
     property real t: Math.random() * 40.0

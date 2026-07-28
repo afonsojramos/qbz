@@ -25,7 +25,13 @@ Canvas {
     property string fit: "crop"
 
     renderTarget: Canvas.Image
-    renderStrategy: Canvas.Cooperative
+    // GUI-thread raster. Cooperative/Threaded rasterize on the SCENE GRAPH
+    // RENDER THREAD, and this item is created and destroyed by list recycling
+    // while async artwork callbacks schedule repaints — the render thread can
+    // be mid-draw on a pixmap whose Canvas is already gone. Immediate keeps
+    // paint and destruction on one thread. renderTarget: Image already meant
+    // CPU raster, so this costs no visual change.
+    renderStrategy: Canvas.Immediate
 
     // Dimension probe: Canvas can't query the loaded image's intrinsic
     // size, and PreserveAspectCrop needs it. A hidden Image doubles as
