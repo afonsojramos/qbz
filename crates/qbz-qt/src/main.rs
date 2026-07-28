@@ -367,6 +367,7 @@ pub(crate) fn open_album(album_id: String) {
         return;
     }
     nav_qt::record("album");
+    *LAST_DETAIL.lock().unwrap() = ("album".to_string(), album_id.clone());
     let runtime = app();
     let param = album_id.clone();
     ui(move |mut b| {
@@ -395,6 +396,7 @@ pub(crate) fn open_artist(artist_id: String) {
         return;
     }
     nav_qt::record("artist");
+    *LAST_DETAIL.lock().unwrap() = ("artist".to_string(), artist_id.clone());
     let runtime = app();
     let param = artist_id.clone();
     ui(move |mut b| {
@@ -898,12 +900,77 @@ static LIBRARY_LOADED: Mutex<bool> = Mutex::new(false);
 /// Sidebar navigation: record the view and lazy-load its data.
 pub(crate) fn navigate_to(view: &str) {
     nav_qt::record(view);
+    LAST_DETAIL.lock().unwrap().0.clear();
     if view == "library" {
         load_library_once();
     }
     if view == "settings" {
         publish_settings();
     }
+}
+
+// ============================ i18n (phase 20) ==============================
+
+/// The active detail view ("album"/"artist" + id) — re-published on a live
+/// language switch so its Rust-built section headers re-translate.
+static LAST_DETAIL: Mutex<(String, String)> = Mutex::new((String::new(), String::new()));
+
+/// Settings > Appearance > Language: the pref is already persisted by the
+/// settings arm; this applies it LIVE — "auto" resolves POSIX env — then:
+///  1. bumps trRev, so EVERY `QbzBridge.tr(msgid, QbzBridge.trRev)` binding
+///     re-evaluates through the new catalog (the Slint reseed equivalent);
+///  2. re-publishes the Rust-built translated documents (home section
+///     titles, library feed labels, settings option labels, the active
+///     album/artist detail headers — tf() plurals included).
+pub(crate) fn apply_language(code: String) {
+    let resolved = if code == "auto" {
+        qbz_i18n::resolve_auto().to_string()
+    } else {
+        code.clone()
+    };
+    qbz_i18n::set_language(&resolved);
+    log::info!("[qbz-qt] language -> {code} (resolved: {resolved})");
+    ui(move |mut b| {
+        let next = b.as_ref().tr_rev() + 1;
+        b.as_mut().set_tr_rev(next);
+    });
+    reload_home();
+    reload_library();
+    publish_settings();
+    let (view, id) = LAST_DETAIL.lock().unwrap().clone();
+    if !id.is_empty() {
+        match view.as_str() {
+            "album" => republish_album(id),
+            "artist" => republish_artist(id),
+            _ => {}
+        }
+    }
+}
+
+/// Re-fetch + publish the album/artist detail doc WITHOUT touching nav
+/// (the open_* entry points record a nav entry).
+fn republish_album(album_id: String) {
+    if offline_fwd::engine().status().is_offline() {
+        return;
+    }
+    let runtime = app();
+    spawn(async move {
+        if let Ok(json) = album_qt::load_album_view(&runtime, &album_id).await {
+            ui(move |mut b| b.as_mut().set_album_json(QString::from(json.as_str())));
+        }
+    });
+}
+
+fn republish_artist(artist_id: String) {
+    if offline_fwd::engine().status().is_offline() {
+        return;
+    }
+    let runtime = app();
+    spawn(async move {
+        if let Ok(json) = artist_qt::load_artist_view(&runtime, &artist_id).await {
+            ui(move |mut b| b.as_mut().set_artist_json(QString::from(json.as_str())));
+        }
+    });
 }
 
 // ============================ Search (phase 15) ===========================
@@ -1249,7 +1316,14 @@ fn publish_home_sections(sections: &home_qt::DiscoverSections) {
 
 fn main() {
     qbz_log::install("info");
-    qbz_i18n::set_language(qbz_i18n::resolve_auto());
+    // i18n (phase 20): honor the persisted ui_prefs language; "auto"/missing
+    // resolves POSIX env (qbz_i18n::resolve_auto).
+    let boot_lang = settings_qt::pref_str("language", "auto");
+    qbz_i18n::set_language(if boot_lang == "auto" {
+        qbz_i18n::resolve_auto()
+    } else {
+        boot_lang.as_str()
+    });
     // rustls process-level CryptoProvider (aws-lc-rs) — required before any
     // reqwest call, same as the Slint and daemon binaries.
     qbz_app::ensure_crypto_provider();

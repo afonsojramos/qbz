@@ -215,7 +215,7 @@ Rectangle {
             Text {
                 width: 200
                 height: 18
-                text: QbzBridge.tr("Track") + " • " + (card.artist || "")
+                text: QbzBridge.tr("Track", QbzBridge.trRev) + " • " + (card.artist || "")
                 color: theme.textMuted
                 font.pixelSize: theme.fontLink - 1
                 verticalAlignment: Text.AlignVCenter
@@ -434,12 +434,12 @@ Rectangle {
             menuWidth: 196
             Repeater {
                 model: [
-                    { "label": QbzBridge.tr("Play"), "icon": "play-fill", "action": "play" },
-                    { "label": QbzBridge.tr("Play next"), "icon": "list-start", "action": "next" },
-                    { "label": QbzBridge.tr("Play later"), "icon": "list-plus", "action": "later" },
-                    { "label": QbzBridge.tr("Add to queue"), "icon": "list-end", "action": "queue" },
-                    { "label": item.artistId !== "" ? QbzBridge.tr("Go to artist") : "", "icon": "user", "action": "go-artist" },
-                    { "label": item.albumId !== "" ? QbzBridge.tr("Go to album") : "", "icon": "disc", "action": "go-album" },
+                    { "label": QbzBridge.tr("Play", QbzBridge.trRev), "icon": "play-fill", "action": "play" },
+                    { "label": QbzBridge.tr("Play next", QbzBridge.trRev), "icon": "list-start", "action": "next" },
+                    { "label": QbzBridge.tr("Play later", QbzBridge.trRev), "icon": "list-plus", "action": "later" },
+                    { "label": QbzBridge.tr("Add to queue", QbzBridge.trRev), "icon": "list-end", "action": "queue" },
+                    { "label": item.artistId !== "" ? QbzBridge.tr("Go to artist", QbzBridge.trRev) : "", "icon": "user", "action": "go-artist" },
+                    { "label": item.albumId !== "" ? QbzBridge.tr("Go to album", QbzBridge.trRev) : "", "icon": "disc", "action": "go-album" },
                 ]
                 delegate: Rectangle {
                     required property var modelData
@@ -509,7 +509,7 @@ Rectangle {
             Text {
                 id: moreText
                 anchors.centerIn: parent
-                text: QbzBridge.tr("View all")
+                text: QbzBridge.tr("View all", QbzBridge.trRev)
                 color: theme.accent
                 font.pixelSize: 14
                 font.weight: theme.weightMedium
@@ -543,7 +543,7 @@ Rectangle {
             Text {
                 id: lmText
                 anchors.centerIn: parent
-                text: QbzBridge.tr("Load more") + " (" + loaded + " / " + total + ")"
+                text: QbzBridge.tr("Load more", QbzBridge.trRev) + " (" + loaded + " / " + total + ")"
                 color: theme.textSecondary
                 font.pixelSize: 13
             }
@@ -613,7 +613,7 @@ Rectangle {
             Text {
                 x: 32
                 anchors.verticalCenter: parent.verticalCenter
-                text: QbzBridge.tr("Search")
+                text: QbzBridge.tr("Search", QbzBridge.trRev)
                 color: theme.textPrimary
                 font.pixelSize: theme.fontSection
                 font.weight: theme.weightBold
@@ -624,11 +624,11 @@ Rectangle {
                 anchors.rightMargin: 32
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: 16
-                FilterRadio { label: QbzBridge.tr("Main Artist"); selected: root.filterIndex === 1; onPicked: QbzBridge.searchFilterChanged(1) }
-                FilterRadio { label: QbzBridge.tr("Performer"); selected: root.filterIndex === 2; onPicked: QbzBridge.searchFilterChanged(2) }
-                FilterRadio { label: QbzBridge.tr("Composer"); selected: root.filterIndex === 3; onPicked: QbzBridge.searchFilterChanged(3) }
-                FilterRadio { label: QbzBridge.tr("Label"); selected: root.filterIndex === 4; onPicked: QbzBridge.searchFilterChanged(4) }
-                FilterRadio { label: QbzBridge.tr("Release Name"); selected: root.filterIndex === 5; onPicked: QbzBridge.searchFilterChanged(5) }
+                FilterRadio { label: QbzBridge.tr("Main Artist", QbzBridge.trRev); selected: root.filterIndex === 1; onPicked: QbzBridge.searchFilterChanged(1) }
+                FilterRadio { label: QbzBridge.tr("Performer", QbzBridge.trRev); selected: root.filterIndex === 2; onPicked: QbzBridge.searchFilterChanged(2) }
+                FilterRadio { label: QbzBridge.tr("Composer", QbzBridge.trRev); selected: root.filterIndex === 3; onPicked: QbzBridge.searchFilterChanged(3) }
+                FilterRadio { label: QbzBridge.tr("Label", QbzBridge.trRev); selected: root.filterIndex === 4; onPicked: QbzBridge.searchFilterChanged(4) }
+                FilterRadio { label: QbzBridge.tr("Release Name", QbzBridge.trRev); selected: root.filterIndex === 5; onPicked: QbzBridge.searchFilterChanged(5) }
                 Rectangle {
                     visible: root.filterIndex !== 0
                     width: 24
@@ -660,11 +660,11 @@ Rectangle {
                 spacing: 22
                 Repeater {
                     model: [
-                        { "t": 0, "label": QbzBridge.tr("All") },
-                        { "t": 1, "label": QbzBridge.tr("Albums") },
-                        { "t": 2, "label": QbzBridge.tr("Tracks") },
-                        { "t": 3, "label": QbzBridge.tr("Artists") },
-                        { "t": 4, "label": QbzBridge.tr("Playlists") },
+                        { "t": 0, "label": QbzBridge.tr("All", QbzBridge.trRev) },
+                        { "t": 1, "label": QbzBridge.tr("Albums", QbzBridge.trRev) },
+                        { "t": 2, "label": QbzBridge.tr("Tracks", QbzBridge.trRev) },
+                        { "t": 3, "label": QbzBridge.tr("Artists", QbzBridge.trRev) },
+                        { "t": 4, "label": QbzBridge.tr("Playlists", QbzBridge.trRev) },
                     ]
                     delegate: Column {
                         required property var modelData
@@ -730,7 +730,7 @@ Rectangle {
                                 spacing: 8
                                 QbzIcon { name: "award"; width: 18; height: 18; tintName: "warning" }
                                 Text {
-                                    text: QbzBridge.tr("Most popular")
+                                    text: QbzBridge.tr("Most popular", QbzBridge.trRev)
                                     color: theme.textPrimary
                                     font.pixelSize: theme.fontSection
                                     font.weight: theme.weightSemibold
@@ -772,7 +772,7 @@ Rectangle {
                             width: parent.width - 224
                             spacing: 12
                             SectionHeader {
-                                title: QbzBridge.tr("Artists")
+                                title: QbzBridge.tr("Artists", QbzBridge.trRev)
                                 showMore: true
                                 onMoreClicked: QbzBridge.searchTabChanged(3)
                             }
@@ -794,7 +794,7 @@ Rectangle {
                         width: parent.width
                         spacing: 12
                         SectionHeader {
-                            title: QbzBridge.tr("Artists")
+                            title: QbzBridge.tr("Artists", QbzBridge.trRev)
                             showMore: true
                             onMoreClicked: QbzBridge.searchTabChanged(3)
                         }
@@ -816,7 +816,7 @@ Rectangle {
                         width: parent.width
                         spacing: 12
                         SectionHeader {
-                            title: QbzBridge.tr("Albums")
+                            title: QbzBridge.tr("Albums", QbzBridge.trRev)
                             showMore: true
                             onMoreClicked: QbzBridge.searchTabChanged(1)
                         }
@@ -878,7 +878,7 @@ Rectangle {
                         width: parent.width
                         spacing: 4
                         SectionHeader {
-                            title: QbzBridge.tr("Tracks")
+                            title: QbzBridge.tr("Tracks", QbzBridge.trRev)
                             showMore: root.tab === 0 && (root.doc.tracksTotal || 0) > root.previewCap
                             onMoreClicked: QbzBridge.searchTabChanged(2)
                         }
@@ -918,7 +918,7 @@ Rectangle {
                         width: parent.width
                         spacing: 12
                         SectionHeader {
-                            title: QbzBridge.tr("Playlists")
+                            title: QbzBridge.tr("Playlists", QbzBridge.trRev)
                             showMore: true
                             onMoreClicked: QbzBridge.searchTabChanged(4)
                         }
@@ -961,7 +961,7 @@ Rectangle {
                         spacing: 18
                         QbzSpinner { size: 36; anchors.horizontalCenter: parent.horizontalCenter }
                         Text {
-                            text: QbzBridge.tr("Searching…")
+                            text: QbzBridge.tr("Searching…", QbzBridge.trRev)
                             color: theme.textMuted
                             font.pixelSize: 13
                         }
@@ -971,7 +971,7 @@ Rectangle {
                     visible: !root.loading && !root.hasResults
                     x: 32
                     y: 8
-                    text: QbzBridge.tr("No results.")
+                    text: QbzBridge.tr("No results.", QbzBridge.trRev)
                     color: theme.textMuted
                     font.pixelSize: 14
                 }

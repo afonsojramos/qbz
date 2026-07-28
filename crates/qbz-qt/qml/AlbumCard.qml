@@ -236,12 +236,12 @@ Rectangle {
                 menuWidth: 196
                     Repeater {
                         model: [
-                            { "label": QbzBridge.tr("Open album"), "icon": "library-big", "action": "open" },
-                            { "label": QbzBridge.tr("Play"), "icon": "play-fill", "action": "play" },
-                            { "label": QbzBridge.tr("Play next"), "icon": "list-plus", "action": "next" },
-                            { "label": QbzBridge.tr("Add to queue"), "icon": "list-end", "action": "queue" },
-                            { "label": root.isFavorite ? QbzBridge.tr("Remove from Library") : QbzBridge.tr("Add to Library"), "icon": root.isFavorite ? "heart-filled" : "heart", "action": "favorite" },
-                            { "label": QbzBridge.tr("Block this album"), "icon": "blind-eye", "action": "block" },
+                            { "label": QbzBridge.tr("Open album", QbzBridge.trRev), "icon": "library-big", "action": "open" },
+                            { "label": QbzBridge.tr("Play", QbzBridge.trRev), "icon": "play-fill", "action": "play" },
+                            { "label": QbzBridge.tr("Play next", QbzBridge.trRev), "icon": "list-plus", "action": "next" },
+                            { "label": QbzBridge.tr("Add to queue", QbzBridge.trRev), "icon": "list-end", "action": "queue" },
+                            { "label": root.isFavorite ? QbzBridge.tr("Remove from Library", QbzBridge.trRev) : QbzBridge.tr("Add to Library", QbzBridge.trRev), "icon": root.isFavorite ? "heart-filled" : "heart", "action": "favorite" },
+                            { "label": QbzBridge.tr("Block this album", QbzBridge.trRev), "icon": "blind-eye", "action": "block" },
                         ]
                         delegate: Rectangle {
                             required property var modelData

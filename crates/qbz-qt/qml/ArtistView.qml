@@ -53,13 +53,13 @@ Rectangle {
     // JUMP TO tabs from the present sections (ArtistState.jump-tabs).
     readonly property var jumpTabs: {
         var tabs = []
-        if ((artist.bio || "") !== "") tabs.push({ "id": "about", "label": QbzBridge.tr("About") })
-        if (topTracks.length > 0) tabs.push({ "id": "popular-tracks", "label": QbzBridge.tr("Popular Tracks") })
+        if ((artist.bio || "") !== "") tabs.push({ "id": "about", "label": QbzBridge.tr("About", QbzBridge.trRev) })
+        if (topTracks.length > 0) tabs.push({ "id": "popular-tracks", "label": QbzBridge.tr("Popular Tracks", QbzBridge.trRev) })
         for (var i = 0; i < releaseSections.length; i++) {
             if (releaseSections[i].releaseType !== "other")
                 tabs.push({ "id": releaseSections[i].releaseType, "label": releaseSections[i].title })
         }
-        if (appearsOn.length > 0) tabs.push({ "id": "appears-on", "label": QbzBridge.tr("Appears On") })
+        if (appearsOn.length > 0) tabs.push({ "id": "appears-on", "label": QbzBridge.tr("Appears On", QbzBridge.trRev) })
         return tabs
     }
 
@@ -429,7 +429,7 @@ Rectangle {
                 id: seeAll
                 anchors.verticalCenter: parent.verticalCenter
                 height: 28
-                text: QbzBridge.tr("See discography")
+                text: QbzBridge.tr("See discography", QbzBridge.trRev)
                 color: seeAllArea.containsMouse ? theme.textPrimary : theme.textSecondary
                 font.pixelSize: 13
                 verticalAlignment: Text.AlignVCenter
@@ -456,7 +456,7 @@ Rectangle {
                     spacing: 6
                     Text {
                         anchors.verticalCenter: parent.verticalCenter
-                        text: QbzBridge.tr("Newest")
+                        text: QbzBridge.tr("Newest", QbzBridge.trRev)
                         color: theme.textSecondary
                         font.pixelSize: 12
                     }
@@ -505,7 +505,7 @@ Rectangle {
                 Text {
                     id: loadMoreText
                     anchors.centerIn: parent
-                    text: QbzBridge.tr("Load more")
+                    text: QbzBridge.tr("Load more", QbzBridge.trRev)
                     color: loadMoreArea.containsMouse ? theme.textPrimary : theme.textSecondary
                     font.pixelSize: 13
                 }
@@ -590,7 +590,7 @@ Rectangle {
                     Item { visible: artist.bioTruncated === true; width: 1; height: 4 }
                     Text {
                         visible: artist.bioTruncated === true
-                        text: QbzBridge.tr("Read more")
+                        text: QbzBridge.tr("Read more", QbzBridge.trRev)
                         color: readMoreArea.containsMouse ? theme.accentHover : theme.accent
                         font.pixelSize: theme.fontLegal
                         MouseArea {
@@ -654,8 +654,8 @@ Rectangle {
                                 spacing: 4
                                 Repeater {
                                     model: [
-                                        { "id": "catalog", "label": QbzBridge.tr("From catalog"), "count": 0 },
-                                        { "id": "library", "label": QbzBridge.tr("In library"), "count": artist.libraryCount || 0 },
+                                        { "id": "catalog", "label": QbzBridge.tr("From catalog", QbzBridge.trRev), "count": 0 },
+                                        { "id": "library", "label": QbzBridge.tr("In library", QbzBridge.trRev), "count": artist.libraryCount || 0 },
                                     ]
                                     delegate: Rectangle {
                                         required property var modelData
@@ -762,7 +762,7 @@ Rectangle {
                     QbzSpinner { size: 36; anchors.horizontalCenter: parent.horizontalCenter }
                     Text {
                         anchors.horizontalCenter: parent.horizontalCenter
-                        text: QbzBridge.tr("Loading artist…")
+                        text: QbzBridge.tr("Loading artist…", QbzBridge.trRev)
                         color: theme.textMuted
                         font.pixelSize: 13
                     }
@@ -785,7 +785,7 @@ Rectangle {
                     Text {
                         width: parent.width - 44 - 32 - 32 - 3 * 12
                         anchors.verticalCenter: parent.verticalCenter
-                        text: QbzBridge.tr("Popular Tracks")
+                        text: QbzBridge.tr("Popular Tracks", QbzBridge.trRev)
                         color: theme.textPrimary
                         font.pixelSize: theme.fontHeading
                         font.weight: theme.weightSemibold
@@ -837,7 +837,7 @@ Rectangle {
                     color: "transparent"
                     Text {
                         anchors.centerIn: parent
-                        text: root.topTracksExpanded ? QbzBridge.tr("View less") : QbzBridge.tr("Load more")
+                        text: root.topTracksExpanded ? QbzBridge.tr("View less", QbzBridge.trRev) : QbzBridge.tr("Load more", QbzBridge.trRev)
                         color: loadMoreTopArea.containsMouse ? theme.textPrimary : theme.textSecondary
                         font.pixelSize: 13
                         MouseArea {
@@ -858,7 +858,7 @@ Rectangle {
                     spacing: 12
                     Item { width: 1; height: 32 }
                     Text {
-                        text: QbzBridge.tr("Latest release")
+                        text: QbzBridge.tr("Latest release", QbzBridge.trRev)
                         color: theme.textPrimary
                         font.pixelSize: theme.fontHeading
                         font.weight: theme.weightSemibold
@@ -897,7 +897,7 @@ Rectangle {
                     spacing: 0
                     Item { width: 1; height: 32 }
                     Text {
-                        text: QbzBridge.tr("Appears On")
+                        text: QbzBridge.tr("Appears On", QbzBridge.trRev)
                         color: theme.textPrimary
                         font.pixelSize: theme.fontHeading
                         font.weight: theme.weightSemibold
@@ -921,7 +921,7 @@ Rectangle {
                         color: "transparent"
                         Text {
                             anchors.centerIn: parent
-                            text: root.appearsOnExpanded ? QbzBridge.tr("View less") : QbzBridge.tr("Load more")
+                            text: root.appearsOnExpanded ? QbzBridge.tr("View less", QbzBridge.trRev) : QbzBridge.tr("Load more", QbzBridge.trRev)
                             color: loadMoreAppArea.containsMouse ? theme.textPrimary : theme.textSecondary
                             font.pixelSize: 13
                             MouseArea {
@@ -942,7 +942,7 @@ Rectangle {
                     spacing: 12
                     Item { width: 1; height: 32 }
                     Text {
-                        text: QbzBridge.tr("Playlists")
+                        text: QbzBridge.tr("Playlists", QbzBridge.trRev)
                         color: theme.textPrimary
                         font.pixelSize: theme.fontHeading
                         font.weight: theme.weightSemibold
@@ -1022,7 +1022,7 @@ Rectangle {
                             Text {
                                 id: otherToggle
                                 anchors.verticalCenter: parent.verticalCenter
-                                text: root.otherExpanded ? QbzBridge.tr("Hide") : QbzBridge.tr("Show")
+                                text: root.otherExpanded ? QbzBridge.tr("Hide", QbzBridge.trRev) : QbzBridge.tr("Show", QbzBridge.trRev)
                                 color: otherToggleArea.containsMouse ? theme.textPrimary : theme.textSecondary
                                 font.pixelSize: 13
                                 MouseArea {
@@ -1080,7 +1080,7 @@ Rectangle {
 
                 Text {
                     visible: libTracks.length > 0
-                    text: QbzBridge.tr("Tracks")
+                    text: QbzBridge.tr("Tracks", QbzBridge.trRev)
                     color: theme.textPrimary
                     font.pixelSize: theme.fontHeading
                     font.weight: theme.weightSemibold
@@ -1104,7 +1104,7 @@ Rectangle {
                 Item { visible: libraryTab.libAlbums.length > 0; width: 1; height: 24 }
                 Text {
                     visible: libraryTab.libAlbums.length > 0
-                    text: QbzBridge.tr("Albums")
+                    text: QbzBridge.tr("Albums", QbzBridge.trRev)
                     color: theme.textPrimary
                     font.pixelSize: theme.fontHeading
                     font.weight: theme.weightSemibold
@@ -1175,8 +1175,8 @@ Rectangle {
                     spacing: 14
                     Repeater {
                         model: [
-                            { "id": "network", "label": QbzBridge.tr("Network") },
-                            { "id": "magazine", "label": QbzBridge.tr("Magazine") },
+                            { "id": "network", "label": QbzBridge.tr("Network", QbzBridge.trRev) },
+                            { "id": "magazine", "label": QbzBridge.tr("Magazine", QbzBridge.trRev) },
                         ]
                         delegate: Column {
                             required property var modelData
@@ -1255,7 +1255,7 @@ Rectangle {
                         bottomPadding: 6
                         spacing: 4
                         Text {
-                            text: QbzBridge.tr("LABELS")
+                            text: QbzBridge.tr("LABELS", QbzBridge.trRev)
                             color: theme.textMuted
                             font.pixelSize: 11
                             font.weight: theme.weightSemibold
@@ -1263,7 +1263,7 @@ Rectangle {
                         }
                         Text {
                             visible: labels.length === 0
-                            text: QbzBridge.tr("No label info")
+                            text: QbzBridge.tr("No label info", QbzBridge.trRev)
                             color: theme.textMuted
                             font.pixelSize: 12
                         }
@@ -1286,7 +1286,7 @@ Rectangle {
                         bottomPadding: 6
                         spacing: 4
                         Text {
-                            text: QbzBridge.tr("SIMILAR ARTISTS")
+                            text: QbzBridge.tr("SIMILAR ARTISTS", QbzBridge.trRev)
                             color: theme.textMuted
                             font.pixelSize: 11
                             font.weight: theme.weightSemibold
@@ -1294,7 +1294,7 @@ Rectangle {
                         }
                         Text {
                             visible: similarArtists.length === 0 && QbzBridge.artistLoading
-                            text: QbzBridge.tr("Loading…")
+                            text: QbzBridge.tr("Loading…", QbzBridge.trRev)
                             color: theme.textMuted
                             font.pixelSize: 12
                         }
@@ -1334,7 +1334,7 @@ Rectangle {
         id: radioPopup
         menuWidth: 180
             Repeater {
-                model: [QbzBridge.tr("QBZ Radio"), QbzBridge.tr("Qobuz Radio")]
+                model: [QbzBridge.tr("QBZ Radio", QbzBridge.trRev), QbzBridge.tr("Qobuz Radio", QbzBridge.trRev)]
                 delegate: Rectangle {
                     required property string modelData
                     width: parent ? parent.width : 0
@@ -1371,10 +1371,10 @@ Rectangle {
         menuWidth: 224
             Repeater {
                 model: [
-                    { "label": QbzBridge.tr("Create Artist Collection"), "icon": "library-big", "action": "stub" },
-                    { "label": QbzBridge.tr("Artist Scene"), "icon": "map-pin", "action": "stub" },
-                    { "label": QbzBridge.tr("Share"), "icon": "link", "action": "stub" },
-                    { "label": artist.isPinned ? QbzBridge.tr("Unpin") : QbzBridge.tr("Pin"), "icon": artist.isPinned ? "pin-filled" : "pin", "action": "pin" },
+                    { "label": QbzBridge.tr("Create Artist Collection", QbzBridge.trRev), "icon": "library-big", "action": "stub" },
+                    { "label": QbzBridge.tr("Artist Scene", QbzBridge.trRev), "icon": "map-pin", "action": "stub" },
+                    { "label": QbzBridge.tr("Share", QbzBridge.trRev), "icon": "link", "action": "stub" },
+                    { "label": artist.isPinned ? QbzBridge.tr("Unpin", QbzBridge.trRev) : QbzBridge.tr("Pin", QbzBridge.trRev), "icon": artist.isPinned ? "pin-filled" : "pin", "action": "pin" },
                 ]
                 delegate: Rectangle {
                     required property var modelData
@@ -1425,7 +1425,7 @@ Rectangle {
                     QbzIcon { name: "blind-eye"; width: 15; height: 15; anchors.verticalCenter: parent.verticalCenter; tintName: "secondary" }
                     Text {
                         height: parent.height
-                        text: QbzBridge.tr("Blacklist artist")
+                        text: QbzBridge.tr("Blacklist artist", QbzBridge.trRev)
                         color: theme.textSecondary
                         font.pixelSize: 13
                         verticalAlignment: Text.AlignVCenter
@@ -1447,10 +1447,10 @@ Rectangle {
         menuWidth: 224
             Repeater {
                 model: [
-                    { "label": QbzBridge.tr("Play all next"), "icon": "list-start", "action": "next-all" },
-                    { "label": QbzBridge.tr("Add all to queue"), "icon": "list-end", "action": "queue-all" },
-                    { "label": QbzBridge.tr("Shuffle all"), "icon": "shuffle", "action": "shuffle-all" },
-                    { "label": QbzBridge.tr("Add all to playlist"), "icon": "list-music", "action": "playlist-all" },
+                    { "label": QbzBridge.tr("Play all next", QbzBridge.trRev), "icon": "list-start", "action": "next-all" },
+                    { "label": QbzBridge.tr("Add all to queue", QbzBridge.trRev), "icon": "list-end", "action": "queue-all" },
+                    { "label": QbzBridge.tr("Shuffle all", QbzBridge.trRev), "icon": "shuffle", "action": "shuffle-all" },
+                    { "label": QbzBridge.tr("Add all to playlist", QbzBridge.trRev), "icon": "list-music", "action": "playlist-all" },
                 ]
                 delegate: Rectangle {
                     required property var modelData

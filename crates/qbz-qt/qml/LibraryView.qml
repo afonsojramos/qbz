@@ -475,14 +475,14 @@ Rectangle {
     // Track context-menu model (TrackCard.slint track-menu) + dispatch.
     function trackMenuModel(item) {
         var m = [
-            { "label": QbzBridge.tr("Play"), "icon": "play-fill", "action": "play" },
-            { "label": QbzBridge.tr("Play next"), "icon": "list-start", "action": "next" },
-            { "label": QbzBridge.tr("Play later"), "icon": "list-plus", "action": "later" },
-            { "label": QbzBridge.tr("Add to queue"), "icon": "list-end", "action": "queue" },
+            { "label": QbzBridge.tr("Play", QbzBridge.trRev), "icon": "play-fill", "action": "play" },
+            { "label": QbzBridge.tr("Play next", QbzBridge.trRev), "icon": "list-start", "action": "next" },
+            { "label": QbzBridge.tr("Play later", QbzBridge.trRev), "icon": "list-plus", "action": "later" },
+            { "label": QbzBridge.tr("Add to queue", QbzBridge.trRev), "icon": "list-end", "action": "queue" },
         ]
-        if (item.artistId !== "") m.push({ "label": QbzBridge.tr("Go to artist"), "icon": "user", "action": "go-artist" })
-        if (item.albumId !== "") m.push({ "label": QbzBridge.tr("Go to album"), "icon": "disc", "action": "go-album" })
-        m.push({ "label": item.isFavorite ? QbzBridge.tr("Remove from Library") : QbzBridge.tr("Add to Library"),
+        if (item.artistId !== "") m.push({ "label": QbzBridge.tr("Go to artist", QbzBridge.trRev), "icon": "user", "action": "go-artist" })
+        if (item.albumId !== "") m.push({ "label": QbzBridge.tr("Go to album", QbzBridge.trRev), "icon": "disc", "action": "go-album" })
+        m.push({ "label": item.isFavorite ? QbzBridge.tr("Remove from Library", QbzBridge.trRev) : QbzBridge.tr("Add to Library", QbzBridge.trRev),
                  "icon": item.isFavorite ? "heart-filled" : "heart", "action": "favorite" })
         return m
     }
@@ -623,7 +623,7 @@ Rectangle {
                     Text {
                         width: parent.width
                         height: 18
-                        text: QbzBridge.tr("Track") + " • " + item.artist
+                        text: QbzBridge.tr("Track", QbzBridge.trRev) + " • " + item.artist
                         color: item.artistId !== "" && tcArtistArea.containsMouse
                             ? theme.textPrimary : theme.textMuted
                         font.pixelSize: theme.fontLink - 1
@@ -737,9 +737,9 @@ Rectangle {
                         id: agMenu
                         menuWidth: 196
                         entries: [
-                            { "label": QbzBridge.tr("Open artist"), "icon": "user", "action": "open" },
-                            { "label": QbzBridge.tr("Play"), "icon": "play-fill", "action": "play" },
-                            { "label": QbzBridge.tr("Not interested"), "icon": "thumbs-down", "action": "not-interested" },
+                            { "label": QbzBridge.tr("Open artist", QbzBridge.trRev), "icon": "user", "action": "open" },
+                            { "label": QbzBridge.tr("Play", QbzBridge.trRev), "icon": "play-fill", "action": "play" },
+                            { "label": QbzBridge.tr("Not interested", QbzBridge.trRev), "icon": "thumbs-down", "action": "not-interested" },
                         ]
                         onPicked: function (a) {
                             if (a === "open") QbzBridge.openArtist(item.id)
@@ -858,13 +858,13 @@ Rectangle {
                     // the playlist track-list builder (out of scope) — inert,
                     // POC-NOTE; favorite stays wired for owned playlists.
                     entries: [
-                        { "label": QbzBridge.tr("Play"), "icon": "play-fill", "action": "play" },
-                        { "label": QbzBridge.tr("Play next"), "icon": "list-start", "action": "play-next" },
-                        { "label": QbzBridge.tr("Play later"), "icon": "list-plus", "action": "play-later" },
-                        { "label": QbzBridge.tr("Add to queue"), "icon": "list-end", "action": "queue" },
+                        { "label": QbzBridge.tr("Play", QbzBridge.trRev), "icon": "play-fill", "action": "play" },
+                        { "label": QbzBridge.tr("Play next", QbzBridge.trRev), "icon": "list-start", "action": "play-next" },
+                        { "label": QbzBridge.tr("Play later", QbzBridge.trRev), "icon": "list-plus", "action": "play-later" },
+                        { "label": QbzBridge.tr("Add to queue", QbzBridge.trRev), "icon": "list-end", "action": "queue" },
                         { "label": item.playlistOwned
-                            ? (item.isFavorite ? QbzBridge.tr("Remove from Library") : QbzBridge.tr("Add to Library"))
-                            : (item.playlistFollowing ? QbzBridge.tr("Unfollow on Qobuz") : QbzBridge.tr("Follow on Qobuz")),
+                            ? (item.isFavorite ? QbzBridge.tr("Remove from Library", QbzBridge.trRev) : QbzBridge.tr("Add to Library", QbzBridge.trRev))
+                            : (item.playlistFollowing ? QbzBridge.tr("Unfollow on Qobuz", QbzBridge.trRev) : QbzBridge.tr("Follow on Qobuz", QbzBridge.trRev)),
                           "icon": item.playlistOwned ? (item.isFavorite ? "heart-filled" : "heart")
                               : (item.playlistFollowing ? "check" : "user-plus"),
                           "action": "favorite" },
@@ -1133,11 +1133,11 @@ Rectangle {
                         tintName: "muted"
                     }
                     Text {
-                        text: item.kind === "track" ? QbzBridge.tr("Track")
-                            : item.kind === "album" ? QbzBridge.tr("Album")
-                            : item.kind === "artist" ? QbzBridge.tr("Artist")
-                            : item.kind === "playlist" ? QbzBridge.tr("Playlist")
-                            : QbzBridge.tr("Label")
+                        text: item.kind === "track" ? QbzBridge.tr("Track", QbzBridge.trRev)
+                            : item.kind === "album" ? QbzBridge.tr("Album", QbzBridge.trRev)
+                            : item.kind === "artist" ? QbzBridge.tr("Artist", QbzBridge.trRev)
+                            : item.kind === "playlist" ? QbzBridge.tr("Playlist", QbzBridge.trRev)
+                            : QbzBridge.tr("Label", QbzBridge.trRev)
                         color: theme.textMuted
                         font.pixelSize: 10
                         font.weight: theme.weightSemibold
@@ -1204,17 +1204,17 @@ Rectangle {
             menuWidth: 196
             entries: item.kind === "track" ? root.trackMenuModel(item)
                 : item.kind === "album" ? [
-                    { "label": QbzBridge.tr("Open album"), "icon": "library-big", "action": "open" },
-                    { "label": QbzBridge.tr("Play"), "icon": "play-fill", "action": "play" },
-                    { "label": item.isFavorite ? QbzBridge.tr("Remove from Library") : QbzBridge.tr("Add to Library"),
+                    { "label": QbzBridge.tr("Open album", QbzBridge.trRev), "icon": "library-big", "action": "open" },
+                    { "label": QbzBridge.tr("Play", QbzBridge.trRev), "icon": "play-fill", "action": "play" },
+                    { "label": item.isFavorite ? QbzBridge.tr("Remove from Library", QbzBridge.trRev) : QbzBridge.tr("Add to Library", QbzBridge.trRev),
                       "icon": item.isFavorite ? "heart-filled" : "heart", "action": "favorite" },
                 ]
                 : item.kind === "artist" ? [
-                    { "label": QbzBridge.tr("Go to artist"), "icon": "user", "action": "go-artist" },
+                    { "label": QbzBridge.tr("Go to artist", QbzBridge.trRev), "icon": "user", "action": "go-artist" },
                 ]
                 : [
-                    { "label": QbzBridge.tr("Open"), "icon": "list-music", "action": "open" },
-                    { "label": item.isFavorite ? QbzBridge.tr("Remove from Library") : QbzBridge.tr("Add to Library"),
+                    { "label": QbzBridge.tr("Open", QbzBridge.trRev), "icon": "list-music", "action": "open" },
+                    { "label": item.isFavorite ? QbzBridge.tr("Remove from Library", QbzBridge.trRev) : QbzBridge.tr("Add to Library", QbzBridge.trRev),
                       "icon": item.isFavorite ? "heart-filled" : "heart", "action": "favorite" },
                 ]
             onPicked: function (a) {
@@ -1415,7 +1415,7 @@ Rectangle {
         Item { width: 1; height: 18 }
         Text {
             anchors.horizontalCenter: parent.horizontalCenter
-            text: QbzBridge.tr("You're offline")
+            text: QbzBridge.tr("You're offline", QbzBridge.trRev)
             color: theme.textPrimary
             font.pixelSize: theme.fontHeading
             font.weight: theme.weightSemibold
@@ -1424,8 +1424,8 @@ Rectangle {
         Text {
             width: 420
             text: QbzBridge.offlineMode === 2
-                ? QbzBridge.tr("Offline mode is enabled. Disable it in Settings to use Qobuz.")
-                : QbzBridge.tr("No internet connection. Your local library and downloads keep working.")
+                ? QbzBridge.tr("Offline mode is enabled. Disable it in Settings to use Qobuz.", QbzBridge.trRev)
+                : QbzBridge.tr("No internet connection. Your local library and downloads keep working.", QbzBridge.trRev)
             color: theme.textSecondary
             font.pixelSize: theme.fontBody
             horizontalAlignment: Text.AlignHCenter
@@ -1455,12 +1455,12 @@ Rectangle {
                     id: tabRow
                     padding: 3
                     spacing: 4
-                    SegTab { label: QbzBridge.tr("All"); count: counts.all || 0; active: root.activeTab === "all"; onClicked: root.activeTab = "all" }
-                    SegTab { label: QbzBridge.tr("Tracks"); count: counts.tracks || 0; active: root.activeTab === "tracks"; onClicked: root.activeTab = "tracks" }
-                    SegTab { label: QbzBridge.tr("Albums"); count: counts.albums || 0; active: root.activeTab === "albums"; onClicked: root.activeTab = "albums" }
-                    SegTab { label: QbzBridge.tr("Artists"); count: counts.artists || 0; active: root.activeTab === "artists"; onClicked: root.activeTab = "artists" }
-                    SegTab { label: QbzBridge.tr("Playlists"); count: counts.playlists || 0; active: root.activeTab === "playlists"; onClicked: root.activeTab = "playlists" }
-                    SegTab { label: QbzBridge.tr("Labels"); count: counts.labels || 0; active: root.activeTab === "labels"; onClicked: root.activeTab = "labels" }
+                    SegTab { label: QbzBridge.tr("All", QbzBridge.trRev); count: counts.all || 0; active: root.activeTab === "all"; onClicked: root.activeTab = "all" }
+                    SegTab { label: QbzBridge.tr("Tracks", QbzBridge.trRev); count: counts.tracks || 0; active: root.activeTab === "tracks"; onClicked: root.activeTab = "tracks" }
+                    SegTab { label: QbzBridge.tr("Albums", QbzBridge.trRev); count: counts.albums || 0; active: root.activeTab === "albums"; onClicked: root.activeTab = "albums" }
+                    SegTab { label: QbzBridge.tr("Artists", QbzBridge.trRev); count: counts.artists || 0; active: root.activeTab === "artists"; onClicked: root.activeTab = "artists" }
+                    SegTab { label: QbzBridge.tr("Playlists", QbzBridge.trRev); count: counts.playlists || 0; active: root.activeTab === "playlists"; onClicked: root.activeTab = "playlists" }
+                    SegTab { label: QbzBridge.tr("Labels", QbzBridge.trRev); count: counts.labels || 0; active: root.activeTab === "labels"; onClicked: root.activeTab = "labels" }
                 }
             }
 
@@ -1477,7 +1477,7 @@ Rectangle {
                     spacing: 8
                     height: parent.height
                     SearchBox {
-                        placeholder: QbzBridge.tr("Search your library")
+                        placeholder: QbzBridge.tr("Search your library", QbzBridge.trRev)
                         onSearchEdited: {
                             root.search = text
                             allSearchDebounce.restart()
@@ -1515,10 +1515,10 @@ Rectangle {
                             spacing: 6
                             Text {
                                 anchors.verticalCenter: parent.verticalCenter
-                                text: QbzBridge.tr("Sort") + ": " + (
-                                    root.sortBy === "title" ? QbzBridge.tr("Title")
-                                    : root.sortBy === "artist" ? QbzBridge.tr("Artist")
-                                    : QbzBridge.tr("Date added"))
+                                text: QbzBridge.tr("Sort", QbzBridge.trRev) + ": " + (
+                                    root.sortBy === "title" ? QbzBridge.tr("Title", QbzBridge.trRev)
+                                    : root.sortBy === "artist" ? QbzBridge.tr("Artist", QbzBridge.trRev)
+                                    : QbzBridge.tr("Date added", QbzBridge.trRev))
                                 color: theme.textSecondary
                                 font.pixelSize: 12
                             }
@@ -1553,9 +1553,9 @@ Rectangle {
                             contentItem: Column {
                                 Repeater {
                                     model: [
-                                        { "field": "date", "label": QbzBridge.tr("Date added") },
-                                        { "field": "title", "label": QbzBridge.tr("Title") },
-                                        { "field": "artist", "label": QbzBridge.tr("Artist") },
+                                        { "field": "date", "label": QbzBridge.tr("Date added", QbzBridge.trRev) },
+                                        { "field": "title", "label": QbzBridge.tr("Title", QbzBridge.trRev) },
+                                        { "field": "artist", "label": QbzBridge.tr("Artist", QbzBridge.trRev) },
                                     ]
                                     delegate: Rectangle {
                                         required property var modelData
@@ -1613,7 +1613,7 @@ Rectangle {
                 // ===== Other-tab toolbars =====
                 SearchBox {
                     visible: root.activeTab !== "all"
-                    placeholder: QbzBridge.tr("Search")
+                    placeholder: QbzBridge.tr("Search", QbzBridge.trRev)
                     onSearchEdited: root.tabSearch = text
                 }
                 // Albums sort popup (real, JS-side).
@@ -1631,7 +1631,7 @@ Rectangle {
                         spacing: 6
                         Text {
                             anchors.verticalCenter: parent.verticalCenter
-                            text: QbzBridge.tr("Sort") + ": " + root.albumsSort
+                            text: QbzBridge.tr("Sort", QbzBridge.trRev) + ": " + root.albumsSort
                             color: theme.textSecondary
                             font.pixelSize: 12
                         }
@@ -1700,8 +1700,8 @@ Rectangle {
                         spacing: 4
                         Repeater {
                             model: [
-                                { "id": "favorites", "label": QbzBridge.tr("Library") },
-                                { "id": "following", "label": QbzBridge.tr("Following") },
+                                { "id": "favorites", "label": QbzBridge.tr("Library", QbzBridge.trRev) },
+                                { "id": "following", "label": QbzBridge.tr("Following", QbzBridge.trRev) },
                             ]
                             delegate: Rectangle {
                                 required property var modelData
@@ -1754,7 +1754,7 @@ Rectangle {
                 anchors.centerIn: parent
                 spacing: 10
                 Text {
-                    text: QbzBridge.tr("Couldn't load your Library.")
+                    text: QbzBridge.tr("Couldn't load your Library.", QbzBridge.trRev)
                     color: theme.textPrimary
                     font.pixelSize: theme.fontBody
                     font.weight: theme.weightSemibold
@@ -1775,7 +1775,7 @@ Rectangle {
                     Text {
                         id: retryText
                         anchors.centerIn: parent
-                        text: QbzBridge.tr("Retry")
+                        text: QbzBridge.tr("Retry", QbzBridge.trRev)
                         color: theme.textPrimary
                         font.pixelSize: theme.fontLegal
                     }

@@ -143,7 +143,7 @@ Rectangle {
             NavRow {
                 navId: "discover"
                 name: "compass"
-                label: QbzBridge.tr("Discover")
+                label: QbzBridge.tr("Discover", QbzBridge.trRev)
                 visible: !QbzBridge.offline
                 onClicked: {
                     root.activeNav = "discover"
@@ -153,7 +153,7 @@ Rectangle {
             NavRow {
                 navId: "library"
                 name: "music-library-2"
-                label: QbzBridge.tr("Library")
+                label: QbzBridge.tr("Library", QbzBridge.trRev)
                 visible: !QbzBridge.offline
                 onClicked: {
                     root.activeNav = "library"
@@ -163,14 +163,14 @@ Rectangle {
             NavRow {
                 navId: "local"
                 name: "hard-drive"
-                label: QbzBridge.tr("Local Library")
+                label: QbzBridge.tr("Local Library", QbzBridge.trRev)
                 onClicked: root.activeNav = "local"
             }
             NavRow {
                 navId: "myqbz"
                 name: "qbz-symbolic"
                 // Slint: MyQbzBrandingState.label, default "My QBZ".
-                label: QbzBridge.tr("My QBZ")
+                label: QbzBridge.tr("My QBZ", QbzBridge.trRev)
                 onClicked: root.activeNav = "myqbz"
             }
         }
@@ -193,7 +193,7 @@ Rectangle {
                 visible: !root.searchOpen
                 width: parent.width - 4 * 26
                 height: parent.height
-                text: QbzBridge.tr("PLAYLISTS")
+                text: QbzBridge.tr("PLAYLISTS", QbzBridge.trRev)
                 color: theme.textMuted
                 font.pixelSize: 10
                 font.letterSpacing: 1
@@ -220,7 +220,7 @@ Rectangle {
                     Text {
                         visible: searchEdit.text === ""
                         anchors.fill: parent
-                        text: QbzBridge.tr("Search playlists")
+                        text: QbzBridge.tr("Search playlists", QbzBridge.trRev)
                         color: theme.textMuted
                         font.pixelSize: 12
                         verticalAlignment: Text.AlignVCenter
@@ -324,7 +324,7 @@ Rectangle {
                             spacing: 6
                             QbzIcon { name: "arrow-up-down"; width: 13; height: 13; tintName: "muted" }
                             Text {
-                                text: QbzBridge.tr("Sort by")
+                                text: QbzBridge.tr("Sort by", QbzBridge.trRev)
                                 color: theme.textMuted
                                 font.pixelSize: 11
                                 verticalAlignment: Text.AlignVCenter
@@ -332,11 +332,11 @@ Rectangle {
                         }
                         Repeater {
                             model: [
-                                { "opt": "name", "label": QbzBridge.tr("Name (A-Z)") },
-                                { "opt": "recent", "label": QbzBridge.tr("Recent") },
-                                { "opt": "tracks", "label": QbzBridge.tr("# of tracks") },
-                                { "opt": "playcount", "label": QbzBridge.tr("Play Count") },
-                                { "opt": "custom", "label": QbzBridge.tr("Custom") },
+                                { "opt": "name", "label": QbzBridge.tr("Name (A-Z)", QbzBridge.trRev) },
+                                { "opt": "recent", "label": QbzBridge.tr("Recent", QbzBridge.trRev) },
+                                { "opt": "tracks", "label": QbzBridge.tr("# of tracks", QbzBridge.trRev) },
+                                { "opt": "playcount", "label": QbzBridge.tr("Play Count", QbzBridge.trRev) },
+                                { "opt": "custom", "label": QbzBridge.tr("Custom", QbzBridge.trRev) },
                             ]
                             delegate: Rectangle {
                                 required property var modelData
@@ -385,9 +385,9 @@ Rectangle {
                         // of scope).
                         Repeater {
                             model: [
-                                { "icon": "folder-plus", "label": QbzBridge.tr("New folder") },
-                                { "icon": "library-big", "label": QbzBridge.tr("Manage playlists") },
-                                { "icon": "import", "label": QbzBridge.tr("Import") },
+                                { "icon": "folder-plus", "label": QbzBridge.tr("New folder", QbzBridge.trRev) },
+                                { "icon": "library-big", "label": QbzBridge.tr("Manage playlists", QbzBridge.trRev) },
+                                { "icon": "import", "label": QbzBridge.tr("Import", QbzBridge.trRev) },
                             ]
                             delegate: Rectangle {
                                 required property var modelData
@@ -618,7 +618,7 @@ Rectangle {
                     Text {
                         visible: !root.mini && root.entries.length === 0 && !QbzBridge.offline
                         width: plColumn.width
-                        text: QbzBridge.tr("No playlists yet.")
+                        text: QbzBridge.tr("No playlists yet.", QbzBridge.trRev)
                         color: theme.textMuted
                         font.pixelSize: 12
                         wrapMode: Text.WordWrap

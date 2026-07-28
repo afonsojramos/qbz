@@ -242,7 +242,7 @@ Rectangle {
                 spacing: 4
                 Text {
                     width: parent.width
-                    text: QbzBridge.npHasTrack ? QbzBridge.npTitle : QbzBridge.tr("Nothing playing")
+                    text: QbzBridge.npHasTrack ? QbzBridge.npTitle : QbzBridge.tr("Nothing playing", QbzBridge.trRev)
                     color: theme.textPrimary
                     font.pixelSize: theme.fontBody
                     font.weight: theme.weightMedium

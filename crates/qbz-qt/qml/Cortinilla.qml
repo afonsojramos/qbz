@@ -201,7 +201,7 @@ Item {
                         Text {
                             x: 14
                             anchors.verticalCenter: parent.verticalCenter
-                            text: QbzBridge.tr("No results for") + " “" + (root.doc.query || "") + "”"
+                            text: QbzBridge.tr("No results for", QbzBridge.trRev) + " “" + (root.doc.query || "") + "”"
                             color: theme.textMuted
                             font.pixelSize: 12
                         }
@@ -217,7 +217,7 @@ Item {
                         Text {
                             x: 10
                             height: 22
-                            text: QbzBridge.tr("Top result")
+                            text: QbzBridge.tr("Top result", QbzBridge.trRev)
                             color: theme.textMuted
                             font.pixelSize: 11
                             font.weight: theme.weightSemibold
@@ -253,7 +253,7 @@ Item {
                                     anchors.right: parent.right
                                     anchors.rightMargin: 10
                                     anchors.verticalCenter: parent.verticalCenter
-                                    text: QbzBridge.tr("View more")
+                                    text: QbzBridge.tr("View more", QbzBridge.trRev)
                                     color: vmArea.containsMouse ? theme.textPrimary : theme.accent
                                     font.pixelSize: 11
                                     font.weight: theme.weightMedium

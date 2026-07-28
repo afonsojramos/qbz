@@ -148,6 +148,11 @@ pub mod qbz_bridge {
         #[qproperty(QString, theme_list_json)]
         // Dropdown filter: 0 All / 1 Dark / 2 Light (ui_prefs theme_filter).
         #[qproperty(i32, theme_filter)]
+        // --- i18n (phase 20) ----------------------------------------------
+        // Translation revision: bumped on every live language switch. Every
+        // QML `QbzBridge.tr(msgid, QbzBridge.trRev)` binding depends on it,
+        // so all ~380 call sites re-evaluate through the new catalog.
+        #[qproperty(i32, tr_rev)]
 
         // --- Lyrics panel (phase 9) ----------------------------------------
         #[qproperty(bool, lyrics_open)]
@@ -262,9 +267,11 @@ pub mod qbz_bridge {
 
         /// i18n lookup against the shared gettext catalog (qbz-i18n), so the
         /// QML texts reuse the EXISTING .po translations via the same msgids
-        /// the Slint `@tr()` calls use.
+        /// the Slint `@tr()` calls use. `rev` is the trRev binding
+        /// dependency (phase 20) — unused in Rust, it only forces QML
+        /// re-evaluation when the language changes live.
         #[qinvokable]
-        fn tr(self: &QbzBridge, msgid: QString) -> QString;
+        fn tr(self: &QbzBridge, msgid: QString, rev: i32) -> QString;
 
         // --- Shell chrome -------------------------------------------------
         /// Header panel-left button: cycle the sidebar open -> mini ->
@@ -663,6 +670,7 @@ pub struct QbzBridgeRust {
     theme_slug: QString,
     theme_list_json: QString,
     theme_filter: i32,
+    tr_rev: i32,
     queue_json: QString,
     lyrics_open: bool,
     lyrics_json: QString,
@@ -759,6 +767,7 @@ impl Default for QbzBridgeRust {
             theme_slug: QString::from(crate::theme_qt::current_slug().as_str()),
             theme_list_json: QString::from(crate::theme_qt::theme_list_json().as_str()),
             theme_filter: crate::theme_qt::theme_filter(),
+            tr_rev: 0,
             queue_json: QString::from("{}"),
             lyrics_open: false,
             lyrics_json: QString::from("{}"),
@@ -829,7 +838,8 @@ impl qbz_bridge::QbzBridge {
         crate::do_logout();
     }
 
-    pub fn tr(&self, msgid: QString) -> QString {
+    pub fn tr(&self, msgid: QString, rev: i32) -> QString {
+        let _ = rev; // binding dependency only (see the bridge declaration)
         QString::from(&qbz_i18n::t(&msgid.to_string()))
     }
 

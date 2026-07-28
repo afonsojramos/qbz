@@ -176,7 +176,7 @@ Rectangle {
                         Text {
                             visible: searchInput.text === ""
                             anchors.fill: parent
-                            text: QbzBridge.tr("Search…")
+                            text: QbzBridge.tr("Search…", QbzBridge.trRev)
                             color: theme.textMuted
                             font.pixelSize: theme.fontBody
                             verticalAlignment: Text.AlignVCenter

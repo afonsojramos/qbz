@@ -67,7 +67,7 @@ Rectangle {
             Item { width: 1; height: theme.spacingSm }
             Text {
                 anchors.horizontalCenter: parent.horizontalCenter
-                text: QbzBridge.tr("QBZ")
+                text: QbzBridge.tr("QBZ", QbzBridge.trRev)
                 color: theme.textPrimary
                 font.pixelSize: theme.fontWordmark
                 font.weight: theme.weightSemibold
@@ -76,7 +76,7 @@ Rectangle {
             Item { width: 1; height: 2 }
             Text {
                 anchors.horizontalCenter: parent.horizontalCenter
-                text: QbzBridge.tr("QOBUZ™ PLAYER")
+                text: QbzBridge.tr("QOBUZ™ PLAYER", QbzBridge.trRev)
                 color: theme.textMuted
                 font.pixelSize: theme.fontSubtitle
                 font.letterSpacing: 4
@@ -115,14 +115,14 @@ Rectangle {
                 }
                 Text {
                     anchors.verticalCenter: parent.verticalCenter
-                    text: QbzBridge.tr("I have read the")
+                    text: QbzBridge.tr("I have read the", QbzBridge.trRev)
                     color: theme.textSecondary
                     font.pixelSize: theme.fontBody
                 }
                 Text {
                     id: tosLink
                     anchors.verticalCenter: parent.verticalCenter
-                    text: QbzBridge.tr("Qobuz™ Terms of Service")
+                    text: QbzBridge.tr("Qobuz™ Terms of Service", QbzBridge.trRev)
                     color: theme.accent
                     font.pixelSize: theme.fontBody
                     MouseArea {
@@ -149,7 +149,7 @@ Rectangle {
 
                 Text {
                     anchors.centerIn: parent
-                    text: QbzBridge.tr("Sign in with your browser")
+                    text: QbzBridge.tr("Sign in with your browser", QbzBridge.trRev)
                     color: theme.accentText
                     font.pixelSize: theme.fontButton
                     font.weight: theme.weightSemibold
@@ -176,7 +176,7 @@ Rectangle {
                 spacing: 4
                 Text {
                     width: parent.width
-                    text: QbzBridge.tr("Continue in your web browser — QBZ is waiting for you to finish signing in.")
+                    text: QbzBridge.tr("Continue in your web browser — QBZ is waiting for you to finish signing in.", QbzBridge.trRev)
                     color: theme.textSecondary
                     font.pixelSize: theme.fontBody
                     horizontalAlignment: Text.AlignHCenter
@@ -184,7 +184,7 @@ Rectangle {
                 }
                 Text {
                     width: parent.width
-                    text: QbzBridge.tr("The browser may open in the background without taking focus — check your other windows.")
+                    text: QbzBridge.tr("The browser may open in the background without taking focus — check your other windows.", QbzBridge.trRev)
                     color: theme.textMuted
                     font.pixelSize: theme.fontLegal
                     horizontalAlignment: Text.AlignHCenter
@@ -197,7 +197,7 @@ Rectangle {
                     height: cancelText.implicitHeight + 3
                     Text {
                         id: cancelText
-                        text: QbzBridge.tr("Cancel")
+                        text: QbzBridge.tr("Cancel", QbzBridge.trRev)
                         color: cancelArea.containsMouse ? theme.accent : theme.textMuted
                         font.pixelSize: theme.fontLink
                     }
@@ -219,7 +219,7 @@ Rectangle {
             Text {
                 visible: QbzBridge.loginPhase === 2
                 width: parent.width
-                text: QbzBridge.tr("Signing you in…")
+                text: QbzBridge.tr("Signing you in…", QbzBridge.trRev)
                 color: theme.textSecondary
                 font.pixelSize: theme.fontBody
                 horizontalAlignment: Text.AlignHCenter
@@ -242,7 +242,7 @@ Rectangle {
                     spacing: 4
                     Text {
                         width: parent.width
-                        text: QbzBridge.tr("Sign-in failed")
+                        text: QbzBridge.tr("Sign-in failed", QbzBridge.trRev)
                         color: theme.textPrimary
                         font.pixelSize: theme.fontBody
                         font.weight: theme.weightMedium
@@ -283,7 +283,7 @@ Rectangle {
                         spacing: 4
                         Text {
                             width: parent.width
-                            text: QbzBridge.tr("No internet connection — you can start in offline mode with your local library and downloads")
+                            text: QbzBridge.tr("No internet connection — you can start in offline mode with your local library and downloads", QbzBridge.trRev)
                             color: theme.textSecondary
                             font.pixelSize: theme.fontBody
                             horizontalAlignment: Text.AlignHCenter
@@ -292,7 +292,7 @@ Rectangle {
                         Text {
                             visible: QbzBridge.captivePortal
                             width: parent.width
-                            text: QbzBridge.tr("A network sign-in page may be blocking the connection")
+                            text: QbzBridge.tr("A network sign-in page may be blocking the connection", QbzBridge.trRev)
                             color: theme.textMuted
                             font.pixelSize: theme.fontLegal
                             horizontalAlignment: Text.AlignHCenter
@@ -332,7 +332,7 @@ Rectangle {
                         spacing: 4
                         Text {
                             width: parent.width
-                            text: QbzBridge.tr("Could not restore your session")
+                            text: QbzBridge.tr("Could not restore your session", QbzBridge.trRev)
                             color: theme.textPrimary
                             font.pixelSize: theme.fontBody
                             font.weight: theme.weightMedium
@@ -360,7 +360,7 @@ Rectangle {
                 height: offlineText.implicitHeight + 3
                 Text {
                     id: offlineText
-                    text: QbzBridge.tr("Start offline (no access to Qobuz™ services)")
+                    text: QbzBridge.tr("Start offline (no access to Qobuz™ services)", QbzBridge.trRev)
                     color: offlineArea.containsMouse ? theme.accent : theme.textMuted
                     font.pixelSize: theme.fontLink
                 }
@@ -384,13 +384,13 @@ Rectangle {
             // --- Legal disclaimer ------------------------------------
             Text {
                 width: parent.width
-                text: QbzBridge.tr("QBZ requires an active Qobuz™ subscription. Your credentials are sent directly to Qobuz™.")
+                text: QbzBridge.tr("QBZ requires an active Qobuz™ subscription. Your credentials are sent directly to Qobuz™.", QbzBridge.trRev)
                     + "\n"
-                    + QbzBridge.tr("QBZ can be used as an offline player without a Qobuz™ account (no access to the Qobuz™ library).")
+                    + QbzBridge.tr("QBZ can be used as an offline player without a Qobuz™ account (no access to the Qobuz™ library).", QbzBridge.trRev)
                     + "\n"
-                    + QbzBridge.tr("This application uses the Qobuz API but is not certified by Qobuz.")
+                    + QbzBridge.tr("This application uses the Qobuz API but is not certified by Qobuz.", QbzBridge.trRev)
                     + " "
-                    + QbzBridge.tr("Qobuz™ is a trademark of Qobuz. QBZ is an open-source application licensed under the MIT License and is not affiliated with, endorsed by, or certified by Qobuz.")
+                    + QbzBridge.tr("Qobuz™ is a trademark of Qobuz. QBZ is an open-source application licensed under the MIT License and is not affiliated with, endorsed by, or certified by Qobuz.", QbzBridge.trRev)
                 color: theme.textMuted
                 font.pixelSize: theme.fontLegal
                 horizontalAlignment: Text.AlignHCenter

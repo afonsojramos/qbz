@@ -67,13 +67,13 @@ Rectangle {
     }
 
     function sortLabel() {
-        return sortField === "title" ? QbzBridge.tr("Title")
-            : sortField === "artist" ? QbzBridge.tr("Artist")
-            : sortField === "album" ? QbzBridge.tr("Album")
-            : sortField === "duration" ? QbzBridge.tr("Duration")
-            : sortField === "added" ? QbzBridge.tr("Date added")
-            : sortField === "custom" ? QbzBridge.tr("Custom")
-            : QbzBridge.tr("Default")
+        return sortField === "title" ? QbzBridge.tr("Title", QbzBridge.trRev)
+            : sortField === "artist" ? QbzBridge.tr("Artist", QbzBridge.trRev)
+            : sortField === "album" ? QbzBridge.tr("Album", QbzBridge.trRev)
+            : sortField === "duration" ? QbzBridge.tr("Duration", QbzBridge.trRev)
+            : sortField === "added" ? QbzBridge.tr("Date added", QbzBridge.trRev)
+            : sortField === "custom" ? QbzBridge.tr("Custom", QbzBridge.trRev)
+            : QbzBridge.tr("Default", QbzBridge.trRev)
     }
 
     // --- Reorder state (the view-level half of the shared drag) ----------
@@ -396,15 +396,15 @@ Rectangle {
             menuWidth: 220
             Repeater {
                 model: [
-                    { "label": QbzBridge.tr("Play"), "icon": "play-fill", "action": "play" },
-                    { "label": QbzBridge.tr("Play next"), "icon": "list-start", "action": "next" },
-                    { "label": QbzBridge.tr("Play later"), "icon": "list-plus", "action": "later" },
-                    { "label": QbzBridge.tr("Add to queue"), "icon": "list-end", "action": "queue" },
-                    { "label": QbzBridge.tr("Go to artist"), "icon": "user", "action": "go-artist", "show": modelData.artistId !== "" },
-                    { "label": QbzBridge.tr("Go to album"), "icon": "disc", "action": "go-album", "show": modelData.albumId !== "" },
-                    { "label": modelData.isFavorite ? QbzBridge.tr("Remove from Library") : QbzBridge.tr("Add to Library"),
+                    { "label": QbzBridge.tr("Play", QbzBridge.trRev), "icon": "play-fill", "action": "play" },
+                    { "label": QbzBridge.tr("Play next", QbzBridge.trRev), "icon": "list-start", "action": "next" },
+                    { "label": QbzBridge.tr("Play later", QbzBridge.trRev), "icon": "list-plus", "action": "later" },
+                    { "label": QbzBridge.tr("Add to queue", QbzBridge.trRev), "icon": "list-end", "action": "queue" },
+                    { "label": QbzBridge.tr("Go to artist", QbzBridge.trRev), "icon": "user", "action": "go-artist", "show": modelData.artistId !== "" },
+                    { "label": QbzBridge.tr("Go to album", QbzBridge.trRev), "icon": "disc", "action": "go-album", "show": modelData.albumId !== "" },
+                    { "label": modelData.isFavorite ? QbzBridge.tr("Remove from Library", QbzBridge.trRev) : QbzBridge.tr("Add to Library", QbzBridge.trRev),
                       "icon": modelData.isFavorite ? "heart-filled" : "heart", "action": "favorite" },
-                    { "label": QbzBridge.tr("Remove from playlist"), "icon": "trash-2", "action": "remove", "show": root.isOwner },
+                    { "label": QbzBridge.tr("Remove from playlist", QbzBridge.trRev), "icon": "trash-2", "action": "remove", "show": root.isOwner },
                 ]
                 delegate: Rectangle {
                     required property var modelData
@@ -498,7 +498,7 @@ Rectangle {
                 width: parent.width - 150 - 24
                 spacing: 0
                 Text {
-                    text: QbzBridge.tr("Playlist").toUpperCase()
+                    text: QbzBridge.tr("Playlist", QbzBridge.trRev).toUpperCase()
                     color: theme.textMuted
                     font.pixelSize: 11
                     font.weight: theme.weightSemibold
@@ -525,7 +525,7 @@ Rectangle {
                 Text {
                     visible: (doc.description || "") !== (doc.descriptionShort || "")
                     height: 18
-                    text: QbzBridge.tr("Read more")
+                    text: QbzBridge.tr("Read more", QbzBridge.trRev)
                     color: rmArea.containsMouse ? theme.accentHover : theme.accent
                     font.pixelSize: theme.fontLegal
                     verticalAlignment: Text.AlignVCenter
@@ -539,7 +539,7 @@ Rectangle {
                 }
                 Item { width: 1; height: 8 }
                 Text {
-                    text: (doc.owner || "") + "  •  " + (doc.trackCount || 0) + " " + QbzBridge.tr("tracks")
+                    text: (doc.owner || "") + "  •  " + (doc.trackCount || 0) + " " + QbzBridge.tr("tracks", QbzBridge.trRev)
                         + "  •  " + (doc.totalDuration || "")
                     color: theme.textSecondary
                     font.pixelSize: theme.fontLegal
@@ -622,7 +622,7 @@ Rectangle {
                                 Text {
                                     visible: parent.text === ""
                                     anchors.fill: parent
-                                    text: QbzBridge.tr("Search tracks")
+                                    text: QbzBridge.tr("Search tracks", QbzBridge.trRev)
                                     color: theme.textMuted
                                     font.pixelSize: 13
                                     verticalAlignment: Text.AlignVCenter
@@ -647,7 +647,7 @@ Rectangle {
                             Text {
                                 width: parent.width - 13 - 5
                                 anchors.verticalCenter: parent.verticalCenter
-                                text: QbzBridge.tr("Sort") + ": " + root.sortLabel()
+                                text: QbzBridge.tr("Sort", QbzBridge.trRev) + ": " + root.sortLabel()
                                 color: theme.textSecondary
                                 font.pixelSize: theme.fontLegal
                                 elide: Text.ElideRight
@@ -666,13 +666,13 @@ Rectangle {
                             menuWidth: 172
                             Repeater {
                                 model: [
-                                    { "field": "default", "label": QbzBridge.tr("Default") },
-                                    { "field": "title", "label": QbzBridge.tr("Title") },
-                                    { "field": "artist", "label": QbzBridge.tr("Artist") },
-                                    { "field": "album", "label": QbzBridge.tr("Album") },
-                                    { "field": "duration", "label": QbzBridge.tr("Duration") },
-                                    { "field": "added", "label": QbzBridge.tr("Date added") },
-                                    { "field": "custom", "label": QbzBridge.tr("Custom"), "ownerOnly": true },
+                                    { "field": "default", "label": QbzBridge.tr("Default", QbzBridge.trRev) },
+                                    { "field": "title", "label": QbzBridge.tr("Title", QbzBridge.trRev) },
+                                    { "field": "artist", "label": QbzBridge.tr("Artist", QbzBridge.trRev) },
+                                    { "field": "album", "label": QbzBridge.tr("Album", QbzBridge.trRev) },
+                                    { "field": "duration", "label": QbzBridge.tr("Duration", QbzBridge.trRev) },
+                                    { "field": "added", "label": QbzBridge.tr("Date added", QbzBridge.trRev) },
+                                    { "field": "custom", "label": QbzBridge.tr("Custom", QbzBridge.trRev), "ownerOnly": true },
                                 ]
                                 delegate: Rectangle {
                                     required property var modelData
@@ -731,7 +731,7 @@ Rectangle {
         }
         Text {
             visible: !root.loading && root.allTracks.length === 0
-            text: QbzBridge.tr("This playlist is empty.")
+            text: QbzBridge.tr("This playlist is empty.", QbzBridge.trRev)
             color: theme.textMuted
             font.pixelSize: theme.fontBody
         }
@@ -744,10 +744,10 @@ Rectangle {
             spacing: 14
             Text { text: "#"; width: 32; color: theme.textMuted; font.pixelSize: theme.fontLegal; horizontalAlignment: Text.AlignHCenter }
             Rectangle { width: 36; height: 1; color: "transparent" }
-            Text { text: QbzBridge.tr("Title"); width: parent.width - 32 - 36 - 220 - 70 - 92 - 28 - 28 - 32 - 8 * 14; color: theme.textMuted; font.pixelSize: theme.fontLegal }
-            Text { text: QbzBridge.tr("Album"); width: 220; color: theme.textMuted; font.pixelSize: theme.fontLegal }
-            Text { text: QbzBridge.tr("Duration"); width: 70; color: theme.textMuted; font.pixelSize: theme.fontLegal; horizontalAlignment: Text.AlignHCenter }
-            Text { text: QbzBridge.tr("Quality"); width: 92; color: theme.textMuted; font.pixelSize: theme.fontLegal; horizontalAlignment: Text.AlignHCenter }
+            Text { text: QbzBridge.tr("Title", QbzBridge.trRev); width: parent.width - 32 - 36 - 220 - 70 - 92 - 28 - 28 - 32 - 8 * 14; color: theme.textMuted; font.pixelSize: theme.fontLegal }
+            Text { text: QbzBridge.tr("Album", QbzBridge.trRev); width: 220; color: theme.textMuted; font.pixelSize: theme.fontLegal }
+            Text { text: QbzBridge.tr("Duration", QbzBridge.trRev); width: 70; color: theme.textMuted; font.pixelSize: theme.fontLegal; horizontalAlignment: Text.AlignHCenter }
+            Text { text: QbzBridge.tr("Quality", QbzBridge.trRev); width: 92; color: theme.textMuted; font.pixelSize: theme.fontLegal; horizontalAlignment: Text.AlignHCenter }
             Rectangle { width: 28; height: 1; color: "transparent" }
             Rectangle { width: 28; height: 1; color: "transparent" }
             Rectangle { width: 32; height: 1; color: "transparent" }
@@ -815,7 +815,7 @@ Rectangle {
         contentItem: Column {
             spacing: 14
             Text {
-                text: QbzBridge.tr("Edit playlist")
+                text: QbzBridge.tr("Edit playlist", QbzBridge.trRev)
                 color: theme.textPrimary
                 font.pixelSize: theme.fontHeading
                 font.weight: theme.weightSemibold
@@ -852,7 +852,7 @@ Rectangle {
                     Text {
                         id: delText
                         anchors.centerIn: parent
-                        text: QbzBridge.tr("Delete")
+                        text: QbzBridge.tr("Delete", QbzBridge.trRev)
                         color: "#ef4444"
                         font.pixelSize: 13
                         font.weight: theme.weightMedium
@@ -876,7 +876,7 @@ Rectangle {
                     Text {
                         id: saveText
                         anchors.centerIn: parent
-                        text: QbzBridge.tr("Save")
+                        text: QbzBridge.tr("Save", QbzBridge.trRev)
                         color: "#ffffff"
                         font.pixelSize: 13
                         font.weight: theme.weightMedium

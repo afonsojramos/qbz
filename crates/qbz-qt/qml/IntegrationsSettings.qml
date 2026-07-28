@@ -25,10 +25,10 @@ Column {
     spacing: 4
 
     // ======================= RECOMMENDATIONS =============================
-    GroupHeader { text: QbzBridge.tr("RECOMMENDATIONS") }
+    GroupHeader { text: QbzBridge.tr("RECOMMENDATIONS", QbzBridge.trRev) }
     SettingRow {
-        label: QbzBridge.tr("Show Recommendations in Discover")
-        description: QbzBridge.tr("A personalized Discover tab built from your listening. For the best results connect Last.fm and ListenBrainz below — MusicBrainz is used automatically to match releases.")
+        label: QbzBridge.tr("Show Recommendations in Discover", QbzBridge.trRev)
+        description: QbzBridge.tr("A personalized Discover tab built from your listening. For the best results connect Last.fm and ListenBrainz below — MusicBrainz is used automatically to match releases.", QbzBridge.trRev)
         QbzToggle {
             checked: root.doc.showRecommendations === true
             onToggled: function (v) { QbzBridge.settingsBool("show-recommendations", v) }
@@ -40,10 +40,10 @@ Column {
     SettingsSpacer { }
 
     // =========================== METADATA ================================
-    GroupHeader { text: QbzBridge.tr("METADATA") }
+    GroupHeader { text: QbzBridge.tr("METADATA", QbzBridge.trRev) }
     SettingRow {
-        label: QbzBridge.tr("MusicBrainz")
-        description: QbzBridge.tr("Enable artist relationships and enhanced metadata from MusicBrainz. No telemetry — it only matches releases to enrich artist pages and playlist song suggestions. Turn off to disable those sections.")
+        label: QbzBridge.tr("MusicBrainz", QbzBridge.trRev)
+        description: QbzBridge.tr("Enable artist relationships and enhanced metadata from MusicBrainz. No telemetry — it only matches releases to enrich artist pages and playlist song suggestions. Turn off to disable those sections.", QbzBridge.trRev)
         QbzToggle {
             checked: root.doc.musicbrainzEnabled === true
             onToggled: function (v) { QbzBridge.settingsBool("musicbrainz", v) }
@@ -68,7 +68,7 @@ Column {
             spacing: 3
             Text {
                 width: parent.width
-                text: QbzBridge.tr("SCROBBLERS")
+                text: QbzBridge.tr("SCROBBLERS", QbzBridge.trRev)
                 color: theme.textMuted
                 font.pixelSize: 11
                 font.letterSpacing: 1.5
@@ -77,7 +77,7 @@ Column {
             }
             Text {
                 width: parent.width
-                text: QbzBridge.tr("Send your plays to Last.fm and ListenBrainz. Works for Qobuz, local, and Plex tracks.")
+                text: QbzBridge.tr("Send your plays to Last.fm and ListenBrainz. Works for Qobuz, local, and Plex tracks.", QbzBridge.trRev)
                 color: theme.textMuted
                 font.pixelSize: 12
                 wrapMode: Text.WordWrap
@@ -124,12 +124,12 @@ Column {
         spacing: 4
 
         // ------------------------- LAST.FM ------------------------------
-        GroupHeader { text: QbzBridge.tr("LAST.FM") }
+        GroupHeader { text: QbzBridge.tr("LAST.FM", QbzBridge.trRev) }
         SettingRow {
-            label: QbzBridge.tr("Scrobble to Last.fm")
+            label: QbzBridge.tr("Scrobble to Last.fm", QbzBridge.trRev)
             description: root.doc.lastfmAuthed === true
-                ? QbzBridge.tr("Signed in as {}.").replace("{}", root.doc.lastfmUsername || "")
-                : QbzBridge.tr("Connect your Last.fm account to enable scrobbling.")
+                ? QbzBridge.tr("Signed in as {}.", QbzBridge.trRev).replace("{}", root.doc.lastfmUsername || "")
+                : QbzBridge.tr("Connect your Last.fm account to enable scrobbling.", QbzBridge.trRev)
             QbzToggle {
                 checked: root.doc.lastfmEnabled === true
                 onToggled: function (v) { QbzBridge.settingsBool("lastfm-enable", v) }
@@ -137,34 +137,34 @@ Column {
         }
         SettingRow {
             visible: root.doc.lastfmAuthed !== true
-            label: QbzBridge.tr("Connect")
-            description: QbzBridge.tr("Authorize QBZ in your browser, then click Finish.")
+            label: QbzBridge.tr("Connect", QbzBridge.trRev)
+            description: QbzBridge.tr("Authorize QBZ in your browser, then click Finish.", QbzBridge.trRev)
             Row {
                 spacing: 8
                 SettingsButton {
-                    text: root.doc.lastfmBusy === true ? QbzBridge.tr("Working...") : QbzBridge.tr("Connect Last.fm")
+                    text: root.doc.lastfmBusy === true ? QbzBridge.tr("Working...", QbzBridge.trRev) : QbzBridge.tr("Connect Last.fm", QbzBridge.trRev)
                     enabled: root.doc.lastfmBusy !== true
                     onClicked: QbzBridge.integrationsAction("lastfm-connect")
                 }
                 SettingsButton {
                     visible: (root.doc.lastfmAuthUrl || "") !== ""
-                    text: QbzBridge.tr("Open authorize page")
+                    text: QbzBridge.tr("Open authorize page", QbzBridge.trRev)
                     onClicked: QbzBridge.integrationsAction("lastfm-open-auth-url")
                 }
                 SettingsButton {
                     visible: (root.doc.lastfmAuthUrl || "") !== ""
-                    text: QbzBridge.tr("Finish")
+                    text: QbzBridge.tr("Finish", QbzBridge.trRev)
                     onClicked: QbzBridge.integrationsAction("lastfm-finish")
                 }
             }
         }
         SettingRow {
             visible: root.doc.lastfmAuthed === true
-            label: QbzBridge.tr("Disconnect Last.fm")
-            description: QbzBridge.tr("Sign out of Last.fm.")
+            label: QbzBridge.tr("Disconnect Last.fm", QbzBridge.trRev)
+            description: QbzBridge.tr("Sign out of Last.fm.", QbzBridge.trRev)
             SettingsButton {
                 danger: true
-                text: QbzBridge.tr("Disconnect")
+                text: QbzBridge.tr("Disconnect", QbzBridge.trRev)
                 onClicked: QbzBridge.integrationsAction("lastfm-disconnect")
             }
         }
@@ -172,12 +172,12 @@ Column {
         SettingsSpacer { }
 
         // ----------------------- LISTENBRAINZ ----------------------------
-        GroupHeader { text: QbzBridge.tr("LISTENBRAINZ") }
+        GroupHeader { text: QbzBridge.tr("LISTENBRAINZ", QbzBridge.trRev) }
         SettingRow {
-            label: QbzBridge.tr("Scrobble to ListenBrainz")
+            label: QbzBridge.tr("Scrobble to ListenBrainz", QbzBridge.trRev)
             description: root.doc.listenbrainzAuthed === true
-                ? QbzBridge.tr("Signed in as {}.").replace("{}", root.doc.listenbrainzUsername || "")
-                : QbzBridge.tr("Paste your ListenBrainz user token to enable scrobbling.")
+                ? QbzBridge.tr("Signed in as {}.", QbzBridge.trRev).replace("{}", root.doc.listenbrainzUsername || "")
+                : QbzBridge.tr("Paste your ListenBrainz user token to enable scrobbling.", QbzBridge.trRev)
             QbzToggle {
                 checked: root.doc.listenbrainzEnabled === true
                 onToggled: function (v) { QbzBridge.settingsBool("listenbrainz-enable", v) }
@@ -185,21 +185,21 @@ Column {
         }
         SettingRow {
             visible: root.doc.listenbrainzAuthed !== true
-            label: QbzBridge.tr("User token")
-            description: QbzBridge.tr("From listenbrainz.org/settings.")
+            label: QbzBridge.tr("User token", QbzBridge.trRev)
+            description: QbzBridge.tr("From listenbrainz.org/settings.", QbzBridge.trRev)
             QbzLineEdit {
                 isPassword: true
-                placeholder: QbzBridge.tr("ListenBrainz token")
+                placeholder: QbzBridge.tr("ListenBrainz token", QbzBridge.trRev)
                 onCommitted: function (v) { QbzBridge.settingsString("listenbrainz-token", v) }
             }
         }
         SettingRow {
             visible: root.doc.listenbrainzAuthed === true
-            label: QbzBridge.tr("Disconnect ListenBrainz")
-            description: QbzBridge.tr("Sign out of ListenBrainz.")
+            label: QbzBridge.tr("Disconnect ListenBrainz", QbzBridge.trRev)
+            description: QbzBridge.tr("Sign out of ListenBrainz.", QbzBridge.trRev)
             SettingsButton {
                 danger: true
-                text: QbzBridge.tr("Disconnect")
+                text: QbzBridge.tr("Disconnect", QbzBridge.trRev)
                 onClicked: QbzBridge.integrationsAction("listenbrainz-disconnect")
             }
         }
@@ -222,17 +222,17 @@ Column {
     SettingsSpacer { }
 
     // =========================== DISCORD =================================
-    GroupHeader { text: QbzBridge.tr("DISCORD") }
+    GroupHeader { text: QbzBridge.tr("DISCORD", QbzBridge.trRev) }
     SettingRow {
-        label: QbzBridge.tr("Discord Rich Presence")
-        description: QbzBridge.tr("Show what you're listening to as your Discord status. Opt-in — Discord must be running.")
+        label: QbzBridge.tr("Discord Rich Presence", QbzBridge.trRev)
+        description: QbzBridge.tr("Show what you're listening to as your Discord status. Opt-in — Discord must be running.", QbzBridge.trRev)
         QbzToggle {
             checked: root.doc.discordEnabled === true
             onToggled: function (v) { QbzBridge.settingsBool("discord-rpc", v) }
         }
     }
     SettingRow {
-        label: QbzBridge.tr("Flatpak socket access")
-        description: QbzBridge.tr("Flatpak install and the presence isn't showing? Grant access to Discord's IPC socket, then restart QBZ:\nflatpak override --user --filesystem=xdg-run/discord-ipc-0 com.blitzfc.qbz")
+        label: QbzBridge.tr("Flatpak socket access", QbzBridge.trRev)
+        description: QbzBridge.tr("Flatpak install and the presence isn't showing? Grant access to Discord's IPC socket, then restart QBZ:\nflatpak override --user --filesystem=xdg-run/discord-ipc-0 com.blitzfc.qbz", QbzBridge.trRev)
     }
 }

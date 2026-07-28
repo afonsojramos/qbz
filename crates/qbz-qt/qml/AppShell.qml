@@ -312,7 +312,7 @@ Rectangle {
             spacing: 2
             Text {
                 text: QbzBridge.dragCount > 1
-                    ? QbzBridge.dragCount + " " + QbzBridge.tr("tracks")
+                    ? QbzBridge.dragCount + " " + QbzBridge.tr("tracks", QbzBridge.trRev)
                     : QbzBridge.dragTitle
                 color: "#ffffff"
                 font.pixelSize: 12

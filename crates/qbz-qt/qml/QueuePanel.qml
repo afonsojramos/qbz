@@ -233,9 +233,9 @@ Rectangle {
                     menuWidth: 196
                         Repeater {
                             model: [
-                                { "label": QbzBridge.tr("Remove from queue"), "icon": "trash-2", "action": "remove" },
-                                { "label": QbzBridge.tr("Remove all after"), "icon": "list-x", "action": "remove-after" },
-                                { "label": row.isFavorite ? QbzBridge.tr("Remove from Library") : QbzBridge.tr("Add to Library"), "icon": row.isFavorite ? "heart-filled" : "heart", "action": "favorite" },
+                                { "label": QbzBridge.tr("Remove from queue", QbzBridge.trRev), "icon": "trash-2", "action": "remove" },
+                                { "label": QbzBridge.tr("Remove all after", QbzBridge.trRev), "icon": "list-x", "action": "remove-after" },
+                                { "label": row.isFavorite ? QbzBridge.tr("Remove from Library", QbzBridge.trRev) : QbzBridge.tr("Add to Library", QbzBridge.trRev), "icon": row.isFavorite ? "heart-filled" : "heart", "action": "favorite" },
                             ]
                             delegate: Rectangle {
                                 required property var modelData
@@ -311,7 +311,7 @@ Rectangle {
                 spacing: 14
 
                 QueueTab {
-                    text: QbzBridge.tr("Queue")
+                    text: QbzBridge.tr("Queue", QbzBridge.trRev)
                     active: root.tab === 0
                     onClicked: root.tab = 0
                 }
@@ -323,7 +323,7 @@ Rectangle {
                     verticalAlignment: Text.AlignVCenter
                 }
                 QueueTab {
-                    text: QbzBridge.tr("History")
+                    text: QbzBridge.tr("History", QbzBridge.trRev)
                     active: root.tab === 1
                     onClicked: root.tab = 1
                 }
@@ -385,7 +385,7 @@ Rectangle {
                         width: parent.width - 20
                         spacing: 10
                         Text {
-                            text: QbzBridge.tr("NOW PLAYING")
+                            text: QbzBridge.tr("NOW PLAYING", QbzBridge.trRev)
                             color: theme.textMuted
                             font.pixelSize: 11
                             font.weight: theme.weightSemibold
@@ -473,7 +473,7 @@ Rectangle {
                         width: parent.width - 20
                         spacing: 8
                         Text {
-                            text: QbzBridge.tr("UP NEXT")
+                            text: QbzBridge.tr("UP NEXT", QbzBridge.trRev)
                             color: theme.textMuted
                             font.pixelSize: 11
                             font.weight: theme.weightSemibold
@@ -502,7 +502,7 @@ Rectangle {
                                     Text {
                                         anchors.verticalCenter: parent.verticalCenter
                                         text: modelData.section === "next-in-queue"
-                                            ? QbzBridge.tr("Next in queue") : QbzBridge.tr("Next up")
+                                            ? QbzBridge.tr("Next in queue", QbzBridge.trRev) : QbzBridge.tr("Next up", QbzBridge.trRev)
                                         color: theme.textMuted
                                         font.pixelSize: 11
                                         font.weight: theme.weightSemibold
@@ -550,7 +550,7 @@ Rectangle {
                                 }
                                 Text {
                                     anchors.verticalCenter: parent.verticalCenter
-                                    text: QbzBridge.tr("Page {} of {}").replace("{}", (doc.page || 0) + 1).replace("{}", doc.pageCount || 1)
+                                    text: QbzBridge.tr("Page {} of {}", QbzBridge.trRev).replace("{}", (doc.page || 0) + 1).replace("{}", doc.pageCount || 1)
                                     color: theme.textMuted
                                     font.pixelSize: 12
                                 }
@@ -573,7 +573,7 @@ Rectangle {
                         spacing: 6
                         Text {
                             width: parent.width
-                            text: QbzBridge.tr("Your queue is empty")
+                            text: QbzBridge.tr("Your queue is empty", QbzBridge.trRev)
                             color: theme.textSecondary
                             font.pixelSize: theme.fontBody
                             font.weight: theme.weightMedium
@@ -581,7 +581,7 @@ Rectangle {
                         }
                         Text {
                             width: parent.width
-                            text: QbzBridge.tr("Play an album or track to get started")
+                            text: QbzBridge.tr("Play an album or track to get started", QbzBridge.trRev)
                             color: theme.textMuted
                             font.pixelSize: 12
                             horizontalAlignment: Text.AlignHCenter
@@ -607,7 +607,7 @@ Rectangle {
                     spacing: 8
 
                     Text {
-                        text: QbzBridge.tr("RECENTLY PLAYED")
+                        text: QbzBridge.tr("RECENTLY PLAYED", QbzBridge.trRev)
                         color: theme.textMuted
                         font.pixelSize: 11
                         font.weight: theme.weightSemibold
@@ -627,7 +627,7 @@ Rectangle {
                         visible: root.historyRows.length === 0
                         width: parent.width
                         topPadding: 48 - 10
-                        text: QbzBridge.tr("Nothing played yet")
+                        text: QbzBridge.tr("Nothing played yet", QbzBridge.trRev)
                         color: theme.textMuted
                         font.pixelSize: theme.fontBody
                         horizontalAlignment: Text.AlignHCenter
@@ -650,8 +650,8 @@ Rectangle {
                 rightPadding: theme.spacingMd
                 topPadding: 8
                 text: (doc.upcomingTotal === 1
-                        ? QbzBridge.tr("Showing {} of {} track.")
-                        : QbzBridge.tr("Showing {} of {} tracks."))
+                        ? QbzBridge.tr("Showing {} of {} track.", QbzBridge.trRev)
+                        : QbzBridge.tr("Showing {} of {} tracks.", QbzBridge.trRev))
                       .replace("{}", doc.pageEnd || 0).replace("{}", doc.upcomingTotal || 0)
                 color: theme.textMuted
                 font.pixelSize: 11
@@ -706,7 +706,7 @@ Rectangle {
                             Text {
                                 visible: parent.text === ""
                                 anchors.fill: parent
-                                text: QbzBridge.tr("Search queue")
+                                text: QbzBridge.tr("Search queue", QbzBridge.trRev)
                                 color: theme.textMuted
                                 font.pixelSize: 12
                                 verticalAlignment: Text.AlignVCenter

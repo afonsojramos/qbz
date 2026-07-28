@@ -306,10 +306,10 @@ Rectangle {
                     menuWidth: 196
                         Repeater {
                             model: [
-                                { "label": QbzBridge.tr("Play"), "icon": "play-fill", "action": "play" },
-                                { "label": QbzBridge.tr("Play next"), "icon": "list-plus", "action": "next" },
-                                { "label": QbzBridge.tr("Add to queue"), "icon": "list-end", "action": "queue" },
-                                { "label": row.isFavorite ? QbzBridge.tr("Remove from Library") : QbzBridge.tr("Add to Library"), "icon": row.isFavorite ? "heart-filled" : "heart", "action": "favorite" },
+                                { "label": QbzBridge.tr("Play", QbzBridge.trRev), "icon": "play-fill", "action": "play" },
+                                { "label": QbzBridge.tr("Play next", QbzBridge.trRev), "icon": "list-plus", "action": "next" },
+                                { "label": QbzBridge.tr("Add to queue", QbzBridge.trRev), "icon": "list-end", "action": "queue" },
+                                { "label": row.isFavorite ? QbzBridge.tr("Remove from Library", QbzBridge.trRev) : QbzBridge.tr("Add to Library", QbzBridge.trRev), "icon": row.isFavorite ? "heart-filled" : "heart", "action": "favorite" },
                             ]
                             delegate: Rectangle {
                                 required property var modelData
@@ -594,7 +594,7 @@ Rectangle {
                     Item { visible: (header.description || "") !== (header.descriptionShort || ""); width: 1; height: 4 }
                     Text {
                         visible: (header.description || "") !== (header.descriptionShort || "")
-                        text: QbzBridge.tr("Read more")
+                        text: QbzBridge.tr("Read more", QbzBridge.trRev)
                         color: readMoreArea.containsMouse ? theme.accentHover : theme.accent
                         font.pixelSize: theme.fontLegal
                         MouseArea {
@@ -605,7 +605,7 @@ Rectangle {
                             onClicked: {
                                 var shell = root.parent
                                 while (shell && shell.openTextModal === undefined) shell = shell.parent
-                                if (shell) shell.openTextModal(QbzBridge.tr("About this album"), header.description || "")
+                                if (shell) shell.openTextModal(QbzBridge.tr("About this album", QbzBridge.trRev), header.description || "")
                             }
                         }
                     }
@@ -689,7 +689,7 @@ Rectangle {
                             QbzSpinner { size: 36; anchors.horizontalCenter: parent.horizontalCenter }
                             Text {
                                 anchors.horizontalCenter: parent.horizontalCenter
-                                text: QbzBridge.tr("Loading album…")
+                                text: QbzBridge.tr("Loading album…", QbzBridge.trRev)
                                 color: theme.textMuted
                                 font.pixelSize: 13
                             }
@@ -755,7 +755,7 @@ Rectangle {
                                     Text {
                                         visible: parent.text === ""
                                         anchors.fill: parent
-                                        text: QbzBridge.tr("Search tracks...")
+                                        text: QbzBridge.tr("Search tracks...", QbzBridge.trRev)
                                         color: theme.textMuted
                                         font.pixelSize: 13
                                         verticalAlignment: Text.AlignVCenter
@@ -797,9 +797,9 @@ Rectangle {
                         rightPadding: 12
                         spacing: 16
                         Text { text: "#"; width: 32; color: theme.textMuted; font.pixelSize: 13; font.letterSpacing: 0.5; anchors.verticalCenter: parent.verticalCenter }
-                        Text { text: QbzBridge.tr("Title"); width: parent.width - 32 - 80 - 80 - 28 - 28 - 32 - 5 * 16 - 24; color: theme.textMuted; font.pixelSize: 13; font.letterSpacing: 0.5; anchors.verticalCenter: parent.verticalCenter; elide: Text.ElideRight }
-                        Text { text: QbzBridge.tr("Duration"); width: 80; color: theme.textMuted; font.pixelSize: 13; font.letterSpacing: 0.5; horizontalAlignment: Text.AlignHCenter; anchors.verticalCenter: parent.verticalCenter }
-                        Text { text: QbzBridge.tr("Quality"); width: 80; color: theme.textMuted; font.pixelSize: 13; font.letterSpacing: 0.5; horizontalAlignment: Text.AlignHCenter; anchors.verticalCenter: parent.verticalCenter }
+                        Text { text: QbzBridge.tr("Title", QbzBridge.trRev); width: parent.width - 32 - 80 - 80 - 28 - 28 - 32 - 5 * 16 - 24; color: theme.textMuted; font.pixelSize: 13; font.letterSpacing: 0.5; anchors.verticalCenter: parent.verticalCenter; elide: Text.ElideRight }
+                        Text { text: QbzBridge.tr("Duration", QbzBridge.trRev); width: 80; color: theme.textMuted; font.pixelSize: 13; font.letterSpacing: 0.5; horizontalAlignment: Text.AlignHCenter; anchors.verticalCenter: parent.verticalCenter }
+                        Text { text: QbzBridge.tr("Quality", QbzBridge.trRev); width: 80; color: theme.textMuted; font.pixelSize: 13; font.letterSpacing: 0.5; horizontalAlignment: Text.AlignHCenter; anchors.verticalCenter: parent.verticalCenter }
                         Item { width: 28; height: 1; QbzIcon { name: "heart"; width: 14; height: 14; anchors.centerIn: parent; tintName: "muted" } }
                         Item { width: 28; height: 1; QbzIcon { name: "cloud-download"; width: 14; height: 14; anchors.centerIn: parent; tintName: "muted" } }
                         Item { width: 32; height: 1 }
@@ -823,7 +823,7 @@ Rectangle {
                                     anchors.left: parent.left
                                     anchors.leftMargin: 12
                                     anchors.verticalCenter: parent.verticalCenter
-                                    text: QbzBridge.tr("Disc") + " " + hdr.disc
+                                    text: QbzBridge.tr("Disc", QbzBridge.trRev) + " " + hdr.disc
                                     color: theme.textMuted
                                     font.pixelSize: 13
                                     font.weight: theme.weightSemibold
@@ -889,7 +889,7 @@ Rectangle {
                         visible: (header.label || "") !== ""
                         width: parent.width
                         spacing: 8
-                        SidebarHeading { text: QbzBridge.tr("LABEL") }
+                        SidebarHeading { text: QbzBridge.tr("LABEL", QbzBridge.trRev) }
                         SidebarCard {
                             name: header.label || ""
                             iconName: "disc"
@@ -902,7 +902,7 @@ Rectangle {
                         visible: awards.length > 0
                         width: parent.width
                         spacing: 8
-                        SidebarHeading { text: QbzBridge.tr("AWARDS") }
+                        SidebarHeading { text: QbzBridge.tr("AWARDS", QbzBridge.trRev) }
                         Repeater {
                             model: awards
                             delegate: SidebarCard {
@@ -922,14 +922,14 @@ Rectangle {
             Item { visible: (album.moreFromArtist || []).length > 0; width: 1; height: 40 }
             SectionRail {
                 visible: (album.moreFromArtist || []).length > 0
-                title: QbzBridge.tr("From the same artist")
+                title: QbzBridge.tr("From the same artist", QbzBridge.trRev)
                 items: album.moreFromArtist || []
                 coverMap: root.coverMap
             }
             Item { visible: (album.suggestions || []).length > 0; width: 1; height: 40 }
             SectionRail {
                 visible: (album.suggestions || []).length > 0
-                title: QbzBridge.tr("Listening suggestions")
+                title: QbzBridge.tr("Listening suggestions", QbzBridge.trRev)
                 items: album.suggestions || []
                 coverMap: root.coverMap
             }
@@ -951,11 +951,11 @@ Rectangle {
         menuWidth: 196
             Repeater {
                 model: [
-                    { "label": QbzBridge.tr("Play"), "icon": "play-fill", "action": "play" },
-                    { "label": QbzBridge.tr("Play next"), "icon": "list-plus", "action": "next" },
-                    { "label": QbzBridge.tr("Add to queue"), "icon": "list-end", "action": "queue" },
-                    { "label": header.isFavorite ? QbzBridge.tr("Remove from Library") : QbzBridge.tr("Add to Library"), "icon": header.isFavorite ? "heart-filled" : "heart", "action": "favorite" },
-                    { "label": header.isPinned ? QbzBridge.tr("Unpin") : QbzBridge.tr("Pin"), "icon": header.isPinned ? "pin-filled" : "pin", "action": "pin" },
+                    { "label": QbzBridge.tr("Play", QbzBridge.trRev), "icon": "play-fill", "action": "play" },
+                    { "label": QbzBridge.tr("Play next", QbzBridge.trRev), "icon": "list-plus", "action": "next" },
+                    { "label": QbzBridge.tr("Add to queue", QbzBridge.trRev), "icon": "list-end", "action": "queue" },
+                    { "label": header.isFavorite ? QbzBridge.tr("Remove from Library", QbzBridge.trRev) : QbzBridge.tr("Add to Library", QbzBridge.trRev), "icon": header.isFavorite ? "heart-filled" : "heart", "action": "favorite" },
+                    { "label": header.isPinned ? QbzBridge.tr("Unpin", QbzBridge.trRev) : QbzBridge.tr("Pin", QbzBridge.trRev), "icon": header.isPinned ? "pin-filled" : "pin", "action": "pin" },
                 ]
                 delegate: Rectangle {
                     required property var modelData

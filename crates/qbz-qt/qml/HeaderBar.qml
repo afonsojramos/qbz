@@ -294,7 +294,7 @@ Rectangle {
             visible: searchInput.text === "" && !searchInput.activeFocus
             anchors.fill: parent
             anchors.leftMargin: 30
-            text: QbzBridge.tr("Search")
+            text: QbzBridge.tr("Search", QbzBridge.trRev)
             color: theme.textMuted
             font.pixelSize: 13
             verticalAlignment: Text.AlignVCenter
@@ -308,7 +308,7 @@ Rectangle {
             anchors.right: parent.right
             anchors.rightMargin: 10
             height: parent.height
-            text: "⏎ " + QbzBridge.tr("Enter")
+            text: "⏎ " + QbzBridge.tr("Enter", QbzBridge.trRev)
             color: theme.textMuted
             font.pixelSize: 12
             verticalAlignment: Text.AlignVCenter
@@ -376,9 +376,9 @@ Rectangle {
                 }
                 Text {
                     height: parent.height
-                    text: root.badgeState === 3 ? QbzBridge.tr("Logged out")
-                        : root.badgeState === 2 ? QbzBridge.tr("Offline (manual)")
-                        : QbzBridge.tr("Offline (hard)")
+                    text: root.badgeState === 3 ? QbzBridge.tr("Logged out", QbzBridge.trRev)
+                        : root.badgeState === 2 ? QbzBridge.tr("Offline (manual)", QbzBridge.trRev)
+                        : QbzBridge.tr("Offline (hard)", QbzBridge.trRev)
                     color: theme.textSecondary
                     font.pixelSize: 11
                     verticalAlignment: Text.AlignVCenter
@@ -422,13 +422,13 @@ Rectangle {
                             width: parent.width - 23
                             text: root.badgeState === 3
                                 ? (QbzBridge.connectivity === 2
-                                    ? QbzBridge.tr("You're signed out. Sign-in needs a connection.")
+                                    ? QbzBridge.tr("You're signed out. Sign-in needs a connection.", QbzBridge.trRev)
                                     : QbzBridge.connectivity === 1
-                                        ? QbzBridge.tr("Connection available — sign back in to Qobuz.")
-                                        : QbzBridge.tr("You're signed out — sign back in to Qobuz."))
+                                        ? QbzBridge.tr("Connection available — sign back in to Qobuz.", QbzBridge.trRev)
+                                        : QbzBridge.tr("You're signed out — sign back in to Qobuz.", QbzBridge.trRev))
                                 : root.badgeState === 2
-                                    ? QbzBridge.tr("Offline mode is enabled. Disable it in Settings to use Qobuz.")
-                                    : QbzBridge.tr("No internet connection — your local library and downloads keep working.")
+                                    ? QbzBridge.tr("Offline mode is enabled. Disable it in Settings to use Qobuz.", QbzBridge.trRev)
+                                    : QbzBridge.tr("No internet connection — your local library and downloads keep working.", QbzBridge.trRev)
                             color: theme.textPrimary
                             font.pixelSize: 12
                             wrapMode: Text.WordWrap
@@ -452,7 +452,7 @@ Rectangle {
                             Text {
                                 id: signInText
                                 anchors.centerIn: parent
-                                text: QbzBridge.tr("Sign in")
+                                text: QbzBridge.tr("Sign in", QbzBridge.trRev)
                                 color: theme.textSecondary
                                 font.pixelSize: 13
                             }
@@ -591,14 +591,14 @@ Rectangle {
                 spacing: 2
                 Text {
                     text: QbzBridge.sessionUserName === ""
-                        ? QbzBridge.tr("Guest") : QbzBridge.sessionUserName
+                        ? QbzBridge.tr("Guest", QbzBridge.trRev) : QbzBridge.sessionUserName
                     color: theme.textPrimary
                     font.pixelSize: theme.fontBody
                     font.weight: theme.weightSemibold
                 }
                 Text {
                     text: QbzBridge.sessionSubscription === ""
-                        ? QbzBridge.tr("Not signed in") : QbzBridge.sessionSubscription
+                        ? QbzBridge.tr("Not signed in", QbzBridge.trRev) : QbzBridge.sessionSubscription
                     color: theme.textMuted
                     font.pixelSize: 12
                 }
@@ -661,13 +661,13 @@ Rectangle {
 
             AppMenuItem {
                 name: "search"
-                label: QbzBridge.tr("Intelligent search")
+                label: QbzBridge.tr("Intelligent search", QbzBridge.trRev)
                 checkedItem: QbzBridge.intelligentSearch
                 onClicked: QbzBridge.toggleIntelligentSearch()
             }
             AppMenuItem {
                 name: "layout-grid"
-                label: QbzBridge.tr("Ambient background")
+                label: QbzBridge.tr("Ambient background", QbzBridge.trRev)
                 checkedItem: QbzBridge.ambientMode > 0
                 onClicked: {
                     QbzBridge.toggleAmbientBackground()
@@ -676,7 +676,7 @@ Rectangle {
             }
             AppMenuItem {
                 name: "layout-grid"
-                label: QbzBridge.tr("Use system title bar")
+                label: QbzBridge.tr("Use system title bar", QbzBridge.trRev)
                 checkedItem: QbzBridge.systemTitleBarPref
                 onClicked: {
                     QbzBridge.toggleSystemTitleBar()
@@ -687,13 +687,13 @@ Rectangle {
             Text {
                 width: parent.width
                 leftPadding: 37
-                text: QbzBridge.tr("Takes effect after restarting QBZ.")
+                text: QbzBridge.tr("Takes effect after restarting QBZ.", QbzBridge.trRev)
                 color: theme.textMuted
                 font.pixelSize: 11
             }
             AppMenuItem {
                 name: "settings-2"
-                label: QbzBridge.tr("Settings")
+                label: QbzBridge.tr("Settings", QbzBridge.trRev)
                 onClicked: {
                     appMenu.close()
                     QbzBridge.navigateTo("settings")
@@ -701,7 +701,7 @@ Rectangle {
             }
             AppMenuItem {
                 name: "log-out"
-                label: QbzBridge.tr("Log Out")
+                label: QbzBridge.tr("Log Out", QbzBridge.trRev)
                 onClicked: {
                     appMenu.close()
                     QbzBridge.logout()
@@ -709,7 +709,7 @@ Rectangle {
             }
             AppMenuItem {
                 name: "x"
-                label: QbzBridge.tr("Close")
+                label: QbzBridge.tr("Close", QbzBridge.trRev)
                 // POC-NOTE: the Slint app hides to tray / follows the
                 // platform close behavior; the POC just quits.
                 onClicked: Qt.quit()

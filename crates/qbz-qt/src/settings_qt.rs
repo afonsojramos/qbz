@@ -1340,9 +1340,8 @@ pub async fn settings_select(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &st
                 return;
             };
             save_pref("language", serde_json::json!(lang));
-            // POC-NOTE: live language switching is phase 20; the pref
-            // persists here and applies on the next launch.
-            log::info!("[qbz-qt] language -> {lang} (applies on next launch; live switch is phase 20)");
+            // Live switch (phase 20): trRev bump + doc republish.
+            crate::apply_language(lang.to_string());
         }
         "ui-scale" => {
             let Some(scale) = UI_SCALE_VALUES.get(index) else {

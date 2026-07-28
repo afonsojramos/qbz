@@ -71,7 +71,7 @@ Rectangle {
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: 2
                 Text {
-                    text: QbzBridge.tr("LYRICS")
+                    text: QbzBridge.tr("LYRICS", QbzBridge.trRev)
                     color: theme.textMuted
                     font.pixelSize: 11
                     font.weight: theme.weightSemibold
@@ -155,7 +155,7 @@ Rectangle {
                 QbzSpinner { size: 24; anchors.horizontalCenter: parent.horizontalCenter }
                 Text {
                     anchors.horizontalCenter: parent.horizontalCenter
-                    text: QbzBridge.tr("Fetching lyrics...")
+                    text: QbzBridge.tr("Fetching lyrics...", QbzBridge.trRev)
                     color: theme.textMuted
                     font.pixelSize: theme.fontLegal
                 }
@@ -169,7 +169,7 @@ Rectangle {
                 spacing: 12
                 Text {
                     width: parent.width
-                    text: QbzBridge.tr("No lyrics available")
+                    text: QbzBridge.tr("No lyrics available", QbzBridge.trRev)
                     color: theme.textMuted
                     font.pixelSize: theme.fontLegal
                     horizontalAlignment: Text.AlignHCenter
@@ -180,7 +180,7 @@ Rectangle {
                     spacing: 2
                     Text {
                         width: parent.width
-                        text: QbzBridge.tr("Missing lyrics? You can contribute them to LRCLIB:")
+                        text: QbzBridge.tr("Missing lyrics? You can contribute them to LRCLIB:", QbzBridge.trRev)
                         color: theme.textMuted
                         font.pixelSize: 10
                         horizontalAlignment: Text.AlignHCenter
@@ -207,7 +207,7 @@ Rectangle {
                 visible: doc.status === 5
                 anchors.centerIn: parent
                 width: parent.width - 32
-                text: QbzBridge.tr("Lyrics unavailable offline")
+                text: QbzBridge.tr("Lyrics unavailable offline", QbzBridge.trRev)
                 color: theme.textMuted
                 font.pixelSize: theme.fontLegal
                 horizontalAlignment: Text.AlignHCenter
@@ -296,7 +296,7 @@ Rectangle {
             bottomPadding: 5
             spacing: 3
             Text {
-                text: QbzBridge.tr("Lyrics source") + ":"
+                text: QbzBridge.tr("Lyrics source", QbzBridge.trRev) + ":"
                 color: theme.textMuted
                 font.pixelSize: 9
                 anchors.verticalCenter: parent.verticalCenter

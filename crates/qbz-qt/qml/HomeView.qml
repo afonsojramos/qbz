@@ -88,7 +88,7 @@ Rectangle {
         Text {
             id: linkText
             anchors.centerIn: parent
-            text: QbzBridge.tr("View all →")
+            text: QbzBridge.tr("View all →", QbzBridge.trRev)
             color: vaArea.containsMouse ? theme.textPrimary : theme.textSecondary
             font.pixelSize: 14
             font.weight: theme.weightMedium
@@ -670,22 +670,22 @@ Rectangle {
             spacing: 32
             MixTile {
                 badge: "qobuz"; mixName: "DailyQ"
-                desc: QbzBridge.tr("Elevate your day with a customized selection of music.")
+                desc: QbzBridge.tr("Elevate your day with a customized selection of music.", QbzBridge.trRev)
                 c0: "#1e3a8a"; c1: "#6366f1"; c2: "#c084fc"
             }
             MixTile {
                 badge: "qobuz"; mixName: "WeeklyQ"
-                desc: QbzBridge.tr("Take a weekly journey with a fresh mix every Friday.")
+                desc: QbzBridge.tr("Take a weekly journey with a fresh mix every Friday.", QbzBridge.trRev)
                 c0: "#065f46"; c1: "#10b981"; c2: "#fbbf24"
             }
             MixTile {
                 badge: "qbz"; mixName: "FavQ"
-                desc: QbzBridge.tr("A fresh shuffle from your personal library.")
+                desc: QbzBridge.tr("A fresh shuffle from your personal library.", QbzBridge.trRev)
                 c0: "#7f1d1d"; c1: "#ef4444"; c2: "#fb923c"
             }
             MixTile {
                 badge: "qbz"; mixName: "TopQ"
-                desc: QbzBridge.tr("Discover new music from your most-played playlists.")
+                desc: QbzBridge.tr("Discover new music from your most-played playlists.", QbzBridge.trRev)
                 c0: "#1f2937"; c1: "#4b5563"; c2: "#fbbf24"
             }
         }
@@ -851,7 +851,7 @@ Rectangle {
         Item { width: 1; height: 18 }
         Text {
             anchors.horizontalCenter: parent.horizontalCenter
-            text: QbzBridge.tr("You're offline")
+            text: QbzBridge.tr("You're offline", QbzBridge.trRev)
             color: theme.textPrimary
             font.pixelSize: theme.fontHeading
             font.weight: theme.weightSemibold
@@ -860,8 +860,8 @@ Rectangle {
         Text {
             width: 420
             text: QbzBridge.offlineMode === 2
-                ? QbzBridge.tr("Offline mode is enabled. Disable it in Settings to use Qobuz.")
-                : QbzBridge.tr("No internet connection. Your local library and downloads keep working.")
+                ? QbzBridge.tr("Offline mode is enabled. Disable it in Settings to use Qobuz.", QbzBridge.trRev)
+                : QbzBridge.tr("No internet connection. Your local library and downloads keep working.", QbzBridge.trRev)
             color: theme.textSecondary
             font.pixelSize: theme.fontBody
             horizontalAlignment: Text.AlignHCenter
@@ -902,10 +902,10 @@ Rectangle {
                         spacing: 4
                         Repeater {
                             model: [
-                                { "id": "home", "label": QbzBridge.tr("Home") },
-                                { "id": "editorPicks", "label": QbzBridge.tr("Editor's Picks") },
-                                { "id": "forYou", "label": QbzBridge.tr("For You") },
-                                { "id": "recommendations", "label": QbzBridge.tr("Recommendations") },
+                                { "id": "home", "label": QbzBridge.tr("Home", QbzBridge.trRev) },
+                                { "id": "editorPicks", "label": QbzBridge.tr("Editor's Picks", QbzBridge.trRev) },
+                                { "id": "forYou", "label": QbzBridge.tr("For You", QbzBridge.trRev) },
+                                { "id": "recommendations", "label": QbzBridge.tr("Recommendations", QbzBridge.trRev) },
                             ]
                             delegate: Rectangle {
                                 required property var modelData
@@ -966,7 +966,7 @@ Rectangle {
                             tintName: "secondary"
                         }
                         Text {
-                            text: QbzBridge.tr("Filter by genre")
+                            text: QbzBridge.tr("Filter by genre", QbzBridge.trRev)
                             color: theme.textSecondary
                             font.pixelSize: 13
                             anchors.verticalCenter: parent.verticalCenter
@@ -1076,7 +1076,7 @@ Rectangle {
                                 Text {
                                     id: retryText
                                     anchors.centerIn: parent
-                                    text: QbzBridge.tr("Retry")
+                                    text: QbzBridge.tr("Retry", QbzBridge.trRev)
                                     color: theme.textPrimary
                                     font.pixelSize: theme.fontLegal
                                 }
@@ -1122,7 +1122,7 @@ Rectangle {
                     width: parent.width - 64
                     spacing: 10
                     Text {
-                        text: QbzBridge.tr("Recommendations")
+                        text: QbzBridge.tr("Recommendations", QbzBridge.trRev)
                         color: theme.textPrimary
                         font.pixelSize: theme.fontSection
                         font.weight: theme.weightSemibold

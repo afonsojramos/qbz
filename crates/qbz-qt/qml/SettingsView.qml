@@ -64,7 +64,7 @@ Item {
                 x: 32
                 // padding-top 11 + 12px gap below the (0px) NavButtons row.
                 y: 23
-                text: QbzBridge.tr("Settings")
+                text: QbzBridge.tr("Settings", QbzBridge.trRev)
                 color: theme.textPrimary
                 font.pixelSize: theme.fontTitle
                 font.weight: theme.weightBold
@@ -131,49 +131,49 @@ Item {
 
                     SubNavItem {
                         name: "volume-2"
-                        label: QbzBridge.tr("Audio")
+                        label: QbzBridge.tr("Audio", QbzBridge.trRev)
                         active: root.section === 0
                         onClicked: root.section = 0
                     }
                     SubNavItem {
                         name: "play-fill"
-                        label: QbzBridge.tr("Playback")
+                        label: QbzBridge.tr("Playback", QbzBridge.trRev)
                         active: root.section === 1
                         onClicked: root.section = 1
                     }
                     SubNavItem {
                         name: "layers"
-                        label: QbzBridge.tr("Appearance")
+                        label: QbzBridge.tr("Appearance", QbzBridge.trRev)
                         active: root.section === 2
                         onClicked: root.section = 2
                     }
                     SubNavItem {
                         name: "cloud-download"
-                        label: QbzBridge.tr("Offline")
+                        label: QbzBridge.tr("Offline", QbzBridge.trRev)
                         active: root.section === 3
                         onClicked: root.section = 3
                     }
                     SubNavItem {
                         name: "hard-drive"
-                        label: QbzBridge.tr("Local Library")
+                        label: QbzBridge.tr("Local Library", QbzBridge.trRev)
                         active: root.section === 4
                         onClicked: root.section = 4
                     }
                     SubNavItem {
                         name: "blind-eye"
-                        label: QbzBridge.tr("Blacklist")
+                        label: QbzBridge.tr("Blacklist", QbzBridge.trRev)
                         active: root.section === 5
                         onClicked: root.section = 5
                     }
                     SubNavItem {
                         name: "refresh-cw"
-                        label: QbzBridge.tr("Integrations")
+                        label: QbzBridge.tr("Integrations", QbzBridge.trRev)
                         active: root.section === 6
                         onClicked: root.section = 6
                     }
                     SubNavItem {
                         name: "bug"
-                        label: QbzBridge.tr("Developer")
+                        label: QbzBridge.tr("Developer", QbzBridge.trRev)
                         active: root.section === 7
                         onClicked: root.section = 7
                     }
@@ -186,7 +186,7 @@ Item {
                     Item { width: 1; height: parent.height - 8 * 42 - 38 - 4 }
                     SubNavItem {
                         name: "cloud-upload"
-                        label: QbzBridge.tr("Share logs")
+                        label: QbzBridge.tr("Share logs", QbzBridge.trRev)
                         active: false
                         // POC-NOTE: LogViewerState (copy + upload viewer) is
                         // not ported — the row is inert.
@@ -222,10 +222,10 @@ Item {
                             width: parent.width
                             spacing: 4
 
-                            GroupHeader { text: QbzBridge.tr("STREAMING") }
+                            GroupHeader { text: QbzBridge.tr("STREAMING", QbzBridge.trRev) }
                             SettingRow {
-                                label: QbzBridge.tr("Streaming quality")
-                                description: QbzBridge.tr("The quality tier QBZ requests for playback.")
+                                label: QbzBridge.tr("Streaming quality", QbzBridge.trRev)
+                                description: QbzBridge.tr("The quality tier QBZ requests for playback.", QbzBridge.trRev)
                                 QbzSelect {
                                     menuWidth: 200
                                     options: root.doc.streamingQualities || []
@@ -234,8 +234,8 @@ Item {
                                 }
                             }
                             SettingRow {
-                                label: QbzBridge.tr("Limit quality to device")
-                                description: QbzBridge.tr("Cap the requested streaming quality at your output device's limit. Applies to local playback only, never to casting.")
+                                label: QbzBridge.tr("Limit quality to device", QbzBridge.trRev)
+                                description: QbzBridge.tr("Cap the requested streaming quality at your output device's limit. Applies to local playback only, never to casting.", QbzBridge.trRev)
                                 QbzToggle {
                                     checked: root.doc.limitQualityToDevice === true
                                     onToggled: function (v) { QbzBridge.settingsBool("limit-quality-to-device", v) }
@@ -250,10 +250,10 @@ Item {
                             SettingsDivider { }
                             SettingsSpacer { }
 
-                            GroupHeader { text: QbzBridge.tr("OUTPUT") }
+                            GroupHeader { text: QbzBridge.tr("OUTPUT", QbzBridge.trRev) }
                             SettingRow {
-                                label: QbzBridge.tr("Audio backend")
-                                description: QbzBridge.tr("The audio stack QBZ routes playback through.")
+                                label: QbzBridge.tr("Audio backend", QbzBridge.trRev)
+                                description: QbzBridge.tr("The audio stack QBZ routes playback through.", QbzBridge.trRev)
                                 QbzSelect {
                                     menuWidth: 220
                                     options: root.doc.backends || []
@@ -265,8 +265,8 @@ Item {
                             // WarningBanner is skipped (backendIsJack is
                             // published for a future port).
                             SettingRow {
-                                label: QbzBridge.tr("Output device")
-                                description: QbzBridge.tr("The DAC or sound device that receives audio.")
+                                label: QbzBridge.tr("Output device", QbzBridge.trRev)
+                                description: QbzBridge.tr("The DAC or sound device that receives audio.", QbzBridge.trRev)
                                 Row {
                                     spacing: 8
                                     // Refresh / release: frees a device QBZ
@@ -306,8 +306,8 @@ Item {
                             SettingRow {
                                 visible: root.doc.backendIsAlsa === true
                                 height: visible ? (description === "" ? 52 : 64) : 0
-                                label: QbzBridge.tr("ALSA plugin")
-                                description: QbzBridge.tr("How ALSA opens the device — hw is bit-perfect, plughw converts.")
+                                label: QbzBridge.tr("ALSA plugin", QbzBridge.trRev)
+                                description: QbzBridge.tr("How ALSA opens the device — hw is bit-perfect, plughw converts.", QbzBridge.trRev)
                                 QbzSelect {
                                     menuWidth: 220
                                     options: root.doc.alsaPlugins || []
@@ -318,8 +318,8 @@ Item {
                             SettingRow {
                                 visible: root.doc.backendIsAlsa === true && root.doc.alsaPluginIsHw === true
                                 height: visible ? (description === "" ? 52 : 64) : 0
-                                label: QbzBridge.tr("Hardware volume control")
-                                description: QbzBridge.tr("Use the ALSA mixer for volume instead of software gain.")
+                                label: QbzBridge.tr("Hardware volume control", QbzBridge.trRev)
+                                description: QbzBridge.tr("Use the ALSA mixer for volume instead of software gain.", QbzBridge.trRev)
                                 QbzToggle {
                                     checked: root.doc.alsaHardwareVolume === true
                                     onToggled: function (v) { QbzBridge.settingsBool("alsa-hardware-volume", v) }
@@ -328,8 +328,8 @@ Item {
                             SettingRow {
                                 visible: root.doc.backendIsAlsa === true
                                 height: visible ? (description === "" ? 52 : 64) : 0
-                                label: QbzBridge.tr("DSD playback")
-                                description: QbzBridge.tr("How DSD tracks reach the DAC. WARNING: choose DoP or Native only if your DAC supports it — on any other DAC they play as loud noise. Volume is fixed and seeking is disabled in DoP/Native mode. Native additionally needs kernel support for the DAC.")
+                                label: QbzBridge.tr("DSD playback", QbzBridge.trRev)
+                                description: QbzBridge.tr("How DSD tracks reach the DAC. WARNING: choose DoP or Native only if your DAC supports it — on any other DAC they play as loud noise. Volume is fixed and seeking is disabled in DoP/Native mode. Native additionally needs kernel support for the DAC.", QbzBridge.trRev)
                                 QbzSelect {
                                     menuWidth: 280
                                     options: root.doc.dsdModes || []
@@ -342,10 +342,10 @@ Item {
                             SettingsDivider { }
                             SettingsSpacer { }
 
-                            GroupHeader { text: QbzBridge.tr("BIT-PERFECT") }
+                            GroupHeader { text: QbzBridge.tr("BIT-PERFECT", QbzBridge.trRev) }
                             SettingRow {
-                                label: QbzBridge.tr("Exclusive mode")
-                                description: QbzBridge.tr("Lock the device so no other app can resample it.")
+                                label: QbzBridge.tr("Exclusive mode", QbzBridge.trRev)
+                                description: QbzBridge.tr("Lock the device so no other app can resample it.", QbzBridge.trRev)
                                 rowEnabled: root.doc.backendIsAlsa === true
                                 QbzToggle {
                                     checked: root.doc.exclusiveMode === true
@@ -354,16 +354,16 @@ Item {
                                 }
                             }
                             SettingRow {
-                                label: QbzBridge.tr("Reserve DAC while running")
-                                description: QbzBridge.tr("Hold the device reserved so other apps can't grab it.")
+                                label: QbzBridge.tr("Reserve DAC while running", QbzBridge.trRev)
+                                description: QbzBridge.tr("Hold the device reserved so other apps can't grab it.", QbzBridge.trRev)
                                 QbzToggle {
                                     checked: root.doc.reserveDac === true
                                     onToggled: function (v) { QbzBridge.settingsBool("reserve-dac", v) }
                                 }
                             }
                             SettingRow {
-                                label: QbzBridge.tr("DAC passthrough")
-                                description: QbzBridge.tr("Send the bitstream untouched to the DAC.")
+                                label: QbzBridge.tr("DAC passthrough", QbzBridge.trRev)
+                                description: QbzBridge.tr("Send the bitstream untouched to the DAC.", QbzBridge.trRev)
                                 rowEnabled: root.doc.backendIsPipewire === true
                                 QbzToggle {
                                     checked: root.doc.dacPassthrough === true
@@ -374,16 +374,16 @@ Item {
                             SettingRow {
                                 visible: root.doc.dacPassthrough === true && root.doc.backendIsPipewire === true
                                 height: visible ? (description === "" ? 52 : 64) : 0
-                                label: QbzBridge.tr("Force bit-perfect")
-                                description: QbzBridge.tr("Pin the PipeWire quantum and rate for the active track.")
+                                label: QbzBridge.tr("Force bit-perfect", QbzBridge.trRev)
+                                description: QbzBridge.tr("Pin the PipeWire quantum and rate for the active track.", QbzBridge.trRev)
                                 QbzToggle {
                                     checked: root.doc.pwForceBitperfect === true
                                     onToggled: function (v) { QbzBridge.settingsBool("pw-force-bitperfect", v) }
                                 }
                             }
                             SettingRow {
-                                label: QbzBridge.tr("Allow quality fallback")
-                                description: QbzBridge.tr("Drop to a lower tier when the requested one is unavailable.")
+                                label: QbzBridge.tr("Allow quality fallback", QbzBridge.trRev)
+                                description: QbzBridge.tr("Drop to a lower tier when the requested one is unavailable.", QbzBridge.trRev)
                                 QbzToggle {
                                     checked: root.doc.allowQualityFallback === true
                                     onToggled: function (v) { QbzBridge.settingsBool("allow-quality-fallback", v) }
@@ -397,10 +397,10 @@ Item {
                             SettingsDivider { }
                             SettingsSpacer { }
 
-                            GroupHeader { text: QbzBridge.tr("STARTUP") }
+                            GroupHeader { text: QbzBridge.tr("STARTUP", QbzBridge.trRev) }
                             SettingRow {
-                                label: QbzBridge.tr("Sync audio settings on startup")
-                                description: QbzBridge.tr("Reload saved audio settings into the player when QBZ launches.")
+                                label: QbzBridge.tr("Sync audio settings on startup", QbzBridge.trRev)
+                                description: QbzBridge.tr("Reload saved audio settings into the player when QBZ launches.", QbzBridge.trRev)
                                 QbzToggle {
                                     checked: root.doc.syncAudioOnStartup === true
                                     onToggled: function (v) { QbzBridge.settingsBool("sync-audio-on-startup", v) }
@@ -409,8 +409,8 @@ Item {
                             SettingRow {
                                 visible: root.doc.backendIsPipewire === true
                                 height: visible ? (description === "" ? 52 : 64) : 0
-                                label: QbzBridge.tr("Lock output device")
-                                description: QbzBridge.tr("Keep external routing intact — skip switching the default sink.")
+                                label: QbzBridge.tr("Lock output device", QbzBridge.trRev)
+                                description: QbzBridge.tr("Keep external routing intact — skip switching the default sink.", QbzBridge.trRev)
                                 rowEnabled: root.doc.dacPassthrough !== true
                                 QbzToggle {
                                     checked: root.doc.skipSinkSwitch === true
@@ -432,7 +432,7 @@ Item {
                                 Text {
                                     id: resetLabel
                                     anchors.centerIn: parent
-                                    text: QbzBridge.tr("Reset to defaults")
+                                    text: QbzBridge.tr("Reset to defaults", QbzBridge.trRev)
                                     color: theme.textSecondary
                                     font.pixelSize: theme.fontBody
                                     font.weight: theme.weightMedium
@@ -453,26 +453,26 @@ Item {
                             width: parent.width
                             spacing: 4
 
-                            GroupHeader { text: QbzBridge.tr("PLAYBACK") }
+                            GroupHeader { text: QbzBridge.tr("PLAYBACK", QbzBridge.trRev) }
                             SettingRow {
-                                label: QbzBridge.tr("Continue playback after track ends")
-                                description: QbzBridge.tr("Keep playing the rest of the album or playlist instead of stopping.")
+                                label: QbzBridge.tr("Continue playback after track ends", QbzBridge.trRev)
+                                description: QbzBridge.tr("Keep playing the rest of the album or playlist instead of stopping.", QbzBridge.trRev)
                                 QbzToggle {
                                     checked: root.doc.continuePlayback === true
                                     onToggled: function (v) { QbzBridge.settingsBool("continue-playback", v) }
                                 }
                             }
                             SettingRow {
-                                label: QbzBridge.tr("Show track playing context")
-                                description: QbzBridge.tr("Display the context-stack icon in the player.")
+                                label: QbzBridge.tr("Show track playing context", QbzBridge.trRev)
+                                description: QbzBridge.tr("Display the context-stack icon in the player.", QbzBridge.trRev)
                                 QbzToggle {
                                     checked: root.doc.showContextIcon === true
                                     onToggled: function (v) { QbzBridge.settingsBool("show-context-icon", v) }
                                 }
                             }
                             SettingRow {
-                                label: QbzBridge.tr("Gapless playback")
-                                description: QbzBridge.tr("Play consecutive same-format tracks without a gap.")
+                                label: QbzBridge.tr("Gapless playback", QbzBridge.trRev)
+                                description: QbzBridge.tr("Play consecutive same-format tracks without a gap.", QbzBridge.trRev)
                                 rowEnabled: root.doc.streamingOnly !== true
                                 QbzToggle {
                                     checked: root.doc.gapless === true
@@ -485,18 +485,18 @@ Item {
                             SettingsDivider { }
                             SettingsSpacer { }
 
-                            GroupHeader { text: QbzBridge.tr("SESSION") }
+                            GroupHeader { text: QbzBridge.tr("SESSION", QbzBridge.trRev) }
                             SettingRow {
-                                label: QbzBridge.tr("Restore session on startup")
-                                description: QbzBridge.tr("Restore the queue and current track on the next launch.")
+                                label: QbzBridge.tr("Restore session on startup", QbzBridge.trRev)
+                                description: QbzBridge.tr("Restore the queue and current track on the next launch.", QbzBridge.trRev)
                                 QbzToggle {
                                     checked: root.doc.persistSession === true
                                     onToggled: function (v) { QbzBridge.settingsBool("persist-session", v) }
                                 }
                             }
                             SettingRow {
-                                label: QbzBridge.tr("Resume playback position")
-                                description: QbzBridge.tr("Also seek back to where the saved track left off.")
+                                label: QbzBridge.tr("Resume playback position", QbzBridge.trRev)
+                                description: QbzBridge.tr("Also seek back to where the saved track left off.", QbzBridge.trRev)
                                 rowEnabled: root.doc.persistSession === true
                                 QbzToggle {
                                     checked: root.doc.resumePosition === true
@@ -505,8 +505,8 @@ Item {
                                 }
                             }
                             SettingRow {
-                                label: QbzBridge.tr("Auto-connect Qobuz Connect on startup")
-                                description: QbzBridge.tr("Choose whether Qobuz Connect activates automatically when QBZ launches.")
+                                label: QbzBridge.tr("Auto-connect Qobuz Connect on startup", QbzBridge.trRev)
+                                description: QbzBridge.tr("Choose whether Qobuz Connect activates automatically when QBZ launches.", QbzBridge.trRev)
                                 QbzSelect {
                                     menuWidth: 240
                                     options: root.doc.qconnectStartupModes || []
@@ -515,8 +515,8 @@ Item {
                                 }
                             }
                             SettingRow {
-                                label: QbzBridge.tr("Qobuz Connect device name")
-                                description: QbzBridge.tr("The name other Qobuz Connect apps see for this device. Applies on the next connection.")
+                                label: QbzBridge.tr("Qobuz Connect device name", QbzBridge.trRev)
+                                description: QbzBridge.tr("The name other Qobuz Connect apps see for this device. Applies on the next connection.", QbzBridge.trRev)
                                 QbzLineEdit {
                                     text: root.doc.qconnectDeviceName || ""
                                     placeholder: root.doc.qconnectDeviceNameDefault || ""
@@ -528,10 +528,10 @@ Item {
                             SettingsDivider { }
                             SettingsSpacer { }
 
-                            GroupHeader { text: QbzBridge.tr("STREAMING") }
+                            GroupHeader { text: QbzBridge.tr("STREAMING", QbzBridge.trRev) }
                             SettingRow {
-                                label: QbzBridge.tr("Stream uncached tracks")
-                                description: QbzBridge.tr("Start uncached tracks via streaming instead of waiting for the full download.")
+                                label: QbzBridge.tr("Stream uncached tracks", QbzBridge.trRev)
+                                description: QbzBridge.tr("Start uncached tracks via streaming instead of waiting for the full download.", QbzBridge.trRev)
                                 QbzToggle {
                                     checked: root.doc.streamUncached === true
                                     onToggled: function (v) { QbzBridge.settingsBool("stream-uncached", v) }
@@ -540,8 +540,8 @@ Item {
                             SettingRow {
                                 visible: root.doc.streamUncached === true
                                 height: visible ? (description === "" ? 52 : 64) : 0
-                                label: QbzBridge.tr("Initial buffer size")
-                                description: QbzBridge.tr("Seconds of audio buffered before streaming playback starts.")
+                                label: QbzBridge.tr("Initial buffer size", QbzBridge.trRev)
+                                description: QbzBridge.tr("Seconds of audio buffered before streaming playback starts.", QbzBridge.trRev)
                                 Row {
                                     spacing: 12
                                     Item { width: 1; height: 1 }
@@ -554,7 +554,7 @@ Item {
                                     }
                                     Text {
                                         anchors.verticalCenter: parent.verticalCenter
-                                        text: (root.doc.bufferSeconds || 1) + QbzBridge.tr("s")
+                                        text: (root.doc.bufferSeconds || 1) + QbzBridge.tr("s", QbzBridge.trRev)
                                         color: theme.textSecondary
                                         font.pixelSize: theme.fontBody
                                         font.weight: theme.weightMedium
@@ -562,16 +562,16 @@ Item {
                                 }
                             }
                             SettingRow {
-                                label: QbzBridge.tr("Streaming only")
-                                description: QbzBridge.tr("Skip writing tracks to the local cache while streaming.")
+                                label: QbzBridge.tr("Streaming only", QbzBridge.trRev)
+                                description: QbzBridge.tr("Skip writing tracks to the local cache while streaming.", QbzBridge.trRev)
                                 QbzToggle {
                                     checked: root.doc.streamingOnly === true
                                     onToggled: function (v) { QbzBridge.settingsBool("streaming-only", v) }
                                 }
                             }
                             SettingRow {
-                                label: QbzBridge.tr("When quality retries fail")
-                                description: QbzBridge.tr("What to do when every quality tier for a track is unavailable.")
+                                label: QbzBridge.tr("When quality retries fail", QbzBridge.trRev)
+                                description: QbzBridge.tr("What to do when every quality tier for a track is unavailable.", QbzBridge.trRev)
                                 QbzSelect {
                                     menuWidth: 240
                                     options: root.doc.retryBehaviors || []
@@ -606,14 +606,14 @@ Item {
                             width: parent.width
                             spacing: 4
                             GroupHeader {
-                                text: root.section === 3 ? QbzBridge.tr("OFFLINE")
-                                    : root.section === 4 ? QbzBridge.tr("LOCAL LIBRARY")
-                                    : root.section === 5 ? QbzBridge.tr("BLACKLIST")
-                                    : QbzBridge.tr("DEVELOPER")
+                                text: root.section === 3 ? QbzBridge.tr("OFFLINE", QbzBridge.trRev)
+                                    : root.section === 4 ? QbzBridge.tr("LOCAL LIBRARY", QbzBridge.trRev)
+                                    : root.section === 5 ? QbzBridge.tr("BLACKLIST", QbzBridge.trRev)
+                                    : QbzBridge.tr("DEVELOPER", QbzBridge.trRev)
                             }
                             Text {
                                 width: parent.width
-                                text: QbzBridge.tr("This section is not ported to the Qt frontend yet.")
+                                text: QbzBridge.tr("This section is not ported to the Qt frontend yet.", QbzBridge.trRev)
                                 color: theme.textMuted
                                 font.pixelSize: 12
                                 wrapMode: Text.WordWrap

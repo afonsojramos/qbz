@@ -67,9 +67,9 @@ Column {
     readonly property bool tbLocked: doc.hideTitleBar === true || doc.useSystemTitleBar === true
 
     // ============================ THEME ==================================
-    GroupHeader { text: QbzBridge.tr("THEME") }
+    GroupHeader { text: QbzBridge.tr("THEME", QbzBridge.trRev) }
     SettingRow {
-        label: QbzBridge.tr("Theme")
+        label: QbzBridge.tr("Theme", QbzBridge.trRev)
         Row {
             spacing: 8
             // Filter cycle (All -> Dark -> Light): sun-moon / moon / sun.
@@ -109,15 +109,15 @@ Column {
         }
     }
     SettingRow {
-        label: QbzBridge.tr("Album header gradient")
-        description: QbzBridge.tr("Use artwork-derived blur as a backdrop in album and artist detail views.")
+        label: QbzBridge.tr("Album header gradient", QbzBridge.trRev)
+        description: QbzBridge.tr("Use artwork-derived blur as a backdrop in album and artist detail views.", QbzBridge.trRev)
         QbzToggle {
             checked: root.doc.albumHeaderGradient === true
             onToggled: function (v) { QbzBridge.settingsBool("album-header-gradient", v) }
         }
     }
     SettingRow {
-        label: QbzBridge.tr("Dynamic background")
+        label: QbzBridge.tr("Dynamic background", QbzBridge.trRev)
         QbzSelect {
             menuWidth: 200
             options: root.doc.appBackgroundModes || []
@@ -126,7 +126,7 @@ Column {
         }
     }
     SettingRow {
-        label: QbzBridge.tr("Intelligent Search")
+        label: QbzBridge.tr("Intelligent Search", QbzBridge.trRev)
         QbzToggle {
             checked: root.doc.intelligentSearch === true
             onToggled: function (v) { QbzBridge.settingsBool("intelligent-search", v) }
@@ -135,28 +135,28 @@ Column {
     // Auto-theme rows (theme slug "auto" only).
     SettingRow {
         visible: QbzBridge.themeSlug === "auto"
-        label: QbzBridge.tr("Source")
+        label: QbzBridge.tr("Source", QbzBridge.trRev)
         QbzSelect {
             menuWidth: 200
-            options: [QbzBridge.tr("System Colors"), QbzBridge.tr("Wallpaper Sync"), QbzBridge.tr("Custom Image")]
+            options: [QbzBridge.tr("System Colors", QbzBridge.trRev), QbzBridge.tr("Wallpaper Sync", QbzBridge.trRev), QbzBridge.tr("Custom Image", QbzBridge.trRev)]
             currentIndex: root.doc.autoThemeSourceIndex || 0
             onSelected: function (i) { QbzBridge.settingsSelect("auto-theme-source", i) }
         }
     }
     SettingRow {
         visible: QbzBridge.themeSlug === "auto"
-        label: QbzBridge.tr("Regenerate")
-        description: QbzBridge.tr("Rebuild the palette from the source (System colors in the POC).")
+        label: QbzBridge.tr("Regenerate", QbzBridge.trRev)
+        description: QbzBridge.tr("Rebuild the palette from the source (System colors in the POC).", QbzBridge.trRev)
         SettingsButton {
-            text: QbzBridge.tr("Regenerate")
+            text: QbzBridge.tr("Regenerate", QbzBridge.trRev)
             onClicked: QbzBridge.themeSet(QbzBridge.themeSlug)
         }
     }
     // Custom-theme rows (theme slug "custom" only) — no token editor.
     SettingRow {
         visible: QbzBridge.themeSlug === "custom"
-        label: QbzBridge.tr("Custom theme")
-        description: QbzBridge.tr("Applied read-only from custom_theme.json — the token editor is not ported to the Qt frontend (POC).")
+        label: QbzBridge.tr("Custom theme", QbzBridge.trRev)
+        description: QbzBridge.tr("Applied read-only from custom_theme.json — the token editor is not ported to the Qt frontend (POC).", QbzBridge.trRev)
     }
 
     SettingsSpacer { }
@@ -164,9 +164,9 @@ Column {
     SettingsSpacer { }
 
     // ===================== TYPOGRAPHY & LANGUAGE =========================
-    GroupHeader { text: QbzBridge.tr("TYPOGRAPHY & LANGUAGE") }
+    GroupHeader { text: QbzBridge.tr("TYPOGRAPHY & LANGUAGE", QbzBridge.trRev) }
     SettingRow {
-        label: QbzBridge.tr("Language")
+        label: QbzBridge.tr("Language", QbzBridge.trRev)
         QbzSelect {
             menuWidth: 200
             options: root.doc.languages || []
@@ -175,8 +175,8 @@ Column {
         }
     }
     SettingRow {
-        label: QbzBridge.tr("Interface size")
-        description: QbzBridge.tr("Restart to apply.")
+        label: QbzBridge.tr("Interface size", QbzBridge.trRev)
+        description: QbzBridge.tr("Restart to apply.", QbzBridge.trRev)
         QbzSelect {
             menuWidth: 200
             options: root.doc.uiScales || []
@@ -185,7 +185,7 @@ Column {
         }
     }
     SettingRow {
-        label: QbzBridge.tr("Immersive search")
+        label: QbzBridge.tr("Immersive search", QbzBridge.trRev)
         QbzSelect {
             menuWidth: 220
             options: root.doc.immersiveSearchActions || []
@@ -194,7 +194,7 @@ Column {
         }
     }
     SettingRow {
-        label: QbzBridge.tr("Immersive default view")
+        label: QbzBridge.tr("Immersive default view", QbzBridge.trRev)
         QbzSelect {
             menuWidth: 220
             options: root.doc.immersiveDefaultViews || []
@@ -208,9 +208,9 @@ Column {
     SettingsSpacer { }
 
     // ======================= LIBRARY & VISUALS ===========================
-    GroupHeader { text: QbzBridge.tr("LIBRARY & VISUALS") }
+    GroupHeader { text: QbzBridge.tr("LIBRARY & VISUALS", QbzBridge.trRev) }
     SettingRow {
-        label: QbzBridge.tr("Show navigation in sidebar")
+        label: QbzBridge.tr("Show navigation in sidebar", QbzBridge.trRev)
         QbzToggle {
             checked: root.doc.navInSidebar === true
             onToggled: function (v) { QbzBridge.settingsBool("nav-in-sidebar", v) }
@@ -219,14 +219,14 @@ Column {
     SettingRow {
         // ADR-010: only mounted when navigation is NOT in the sidebar.
         visible: root.doc.navInSidebar !== true
-        label: QbzBridge.tr("Compact header navigation")
+        label: QbzBridge.tr("Compact header navigation", QbzBridge.trRev)
         QbzToggle {
             checked: root.doc.navHeaderCompact === true
             onToggled: function (v) { QbzBridge.settingsBool("nav-header-compact", v) }
         }
     }
     SettingRow {
-        label: QbzBridge.tr("My QBZ")
+        label: QbzBridge.tr("My QBZ", QbzBridge.trRev)
         Row {
             spacing: 8
             RoundedImage {
@@ -238,7 +238,7 @@ Column {
             QbzLineEdit {
                 width: 150
                 text: root.doc.myQbzLabel || ""
-                placeholder: QbzBridge.tr("My QBZ")
+                placeholder: QbzBridge.tr("My QBZ", QbzBridge.trRev)
                 onCommitted: function (v) { QbzBridge.settingsString("myqbz-label", v) }
             }
             SettingsButton {
@@ -248,28 +248,28 @@ Column {
         }
     }
     SettingRow {
-        label: QbzBridge.tr("Show playlist cover collages in sidebar")
+        label: QbzBridge.tr("Show playlist cover collages in sidebar", QbzBridge.trRev)
         QbzToggle {
             checked: root.doc.sidebarPlaylistCollage === true
             onToggled: function (v) { QbzBridge.settingsBool("sidebar-playlist-collage", v) }
         }
     }
     SettingRow {
-        label: QbzBridge.tr("Show album artwork in Local Library track list")
+        label: QbzBridge.tr("Show album artwork in Local Library track list", QbzBridge.trRev)
         QbzToggle {
             checked: root.doc.localLibraryTrackArtwork === true
             onToggled: function (v) { QbzBridge.settingsBool("local-library-track-artwork", v) }
         }
     }
     SettingRow {
-        label: QbzBridge.tr("Play indicator animation")
+        label: QbzBridge.tr("Play indicator animation", QbzBridge.trRev)
         QbzToggle {
             checked: root.doc.playIndicatorAnimation === true
             onToggled: function (v) { QbzBridge.settingsBool("play-indicator-animation", v) }
         }
     }
     SettingRow {
-        label: QbzBridge.tr("Invert swipe navigation direction")
+        label: QbzBridge.tr("Invert swipe navigation direction", QbzBridge.trRev)
         QbzToggle {
             checked: root.doc.invertSwipeNavigation === true
             onToggled: function (v) { QbzBridge.settingsBool("invert-swipe-navigation", v) }
@@ -281,16 +281,16 @@ Column {
     SettingsSpacer { }
 
     // ========================= NOTIFICATIONS =============================
-    GroupHeader { text: QbzBridge.tr("NOTIFICATIONS") }
+    GroupHeader { text: QbzBridge.tr("NOTIFICATIONS", QbzBridge.trRev) }
     SettingRow {
-        label: QbzBridge.tr("In-app toasts notifications")
+        label: QbzBridge.tr("In-app toasts notifications", QbzBridge.trRev)
         QbzToggle {
             checked: root.doc.inAppToasts === true
             onToggled: function (v) { QbzBridge.settingsBool("in-app-toasts", v) }
         }
     }
     SettingRow {
-        label: QbzBridge.tr("System Notifications")
+        label: QbzBridge.tr("System Notifications", QbzBridge.trRev)
         QbzToggle {
             checked: root.doc.systemNotifications === true
             onToggled: function (v) { QbzBridge.settingsBool("system-notifications", v) }
@@ -302,9 +302,9 @@ Column {
     SettingsSpacer { }
 
     // ========================= WINDOW TITLE ==============================
-    GroupHeader { text: QbzBridge.tr("WINDOW TITLE") }
+    GroupHeader { text: QbzBridge.tr("WINDOW TITLE", QbzBridge.trRev) }
     SettingRow {
-        label: QbzBridge.tr("Show track in window title")
+        label: QbzBridge.tr("Show track in window title", QbzBridge.trRev)
         QbzToggle {
             checked: root.doc.windowTitleShow === true
             onToggled: function (v) { QbzBridge.settingsBool("window-title-show", v) }
@@ -316,17 +316,17 @@ Column {
     SettingsSpacer { }
 
     // ========================== TITLE BAR ================================
-    GroupHeader { text: QbzBridge.tr("TITLE BAR") }
+    GroupHeader { text: QbzBridge.tr("TITLE BAR", QbzBridge.trRev) }
     SettingRow {
-        label: QbzBridge.tr("Use system title bar")
-        description: QbzBridge.tr("Restart to apply.")
+        label: QbzBridge.tr("Use system title bar", QbzBridge.trRev)
+        description: QbzBridge.tr("Restart to apply.", QbzBridge.trRev)
         QbzToggle {
             checked: root.doc.useSystemTitleBar === true
             onToggled: function (v) { QbzBridge.settingsBool("use-system-title-bar", v) }
         }
     }
     SettingRow {
-        label: QbzBridge.tr("Hide title bar")
+        label: QbzBridge.tr("Hide title bar", QbzBridge.trRev)
         rowEnabled: root.doc.useSystemTitleBar !== true
         QbzToggle {
             enabled: root.doc.useSystemTitleBar !== true
@@ -340,9 +340,9 @@ Column {
     SettingsSpacer { }
 
     // ======================= WINDOW CONTROLS =============================
-    GroupHeader { text: QbzBridge.tr("WINDOW CONTROLS") }
+    GroupHeader { text: QbzBridge.tr("WINDOW CONTROLS", QbzBridge.trRev) }
     SettingRow {
-        label: QbzBridge.tr("Window controls position")
+        label: QbzBridge.tr("Window controls position", QbzBridge.trRev)
         rowEnabled: !root.tbLocked
         QbzSelect {
             enabled: !root.tbLocked
@@ -353,7 +353,7 @@ Column {
         }
     }
     SettingRow {
-        label: QbzBridge.tr("Show window controls")
+        label: QbzBridge.tr("Show window controls", QbzBridge.trRev)
         rowEnabled: !root.tbLocked
         QbzToggle {
             enabled: !root.tbLocked
@@ -367,16 +367,16 @@ Column {
     SettingsSpacer { }
 
     // ========================= PLAYER VIEWS ==============================
-    GroupHeader { text: QbzBridge.tr("PLAYER VIEWS") }
+    GroupHeader { text: QbzBridge.tr("PLAYER VIEWS", QbzBridge.trRev) }
     SettingRow {
-        label: QbzBridge.tr("Show volume +/- buttons")
+        label: QbzBridge.tr("Show volume +/- buttons", QbzBridge.trRev)
         QbzToggle {
             checked: root.doc.showVolumeSteppers === true
             onToggled: function (v) { QbzBridge.settingsBool("show-volume-steppers", v) }
         }
     }
     SettingRow {
-        label: QbzBridge.tr("Mini player default view")
+        label: QbzBridge.tr("Mini player default view", QbzBridge.trRev)
         QbzSelect {
             menuWidth: 220
             options: root.doc.miniDefaultViews || []
@@ -385,7 +385,7 @@ Column {
         }
     }
     SettingRow {
-        label: QbzBridge.tr("Startup page")
+        label: QbzBridge.tr("Startup page", QbzBridge.trRev)
         QbzSelect {
             menuWidth: 220
             options: root.doc.startupPages || []
@@ -394,14 +394,14 @@ Column {
         }
     }
     SettingRow {
-        label: QbzBridge.tr("Show Purchases")
+        label: QbzBridge.tr("Show Purchases", QbzBridge.trRev)
         QbzToggle {
             checked: root.doc.showPurchases === true
             onToggled: function (v) { QbzBridge.settingsBool("show-purchases", v) }
         }
     }
     SettingRow {
-        label: QbzBridge.tr("Purchases in title bar")
+        label: QbzBridge.tr("Purchases in title bar", QbzBridge.trRev)
         rowEnabled: !root.tbLocked
         QbzToggle {
             enabled: !root.tbLocked
@@ -415,16 +415,16 @@ Column {
     SettingsSpacer { }
 
     // ========================== SYSTEM TRAY ==============================
-    GroupHeader { text: QbzBridge.tr("SYSTEM TRAY") }
+    GroupHeader { text: QbzBridge.tr("SYSTEM TRAY", QbzBridge.trRev) }
     SettingRow {
-        label: QbzBridge.tr("Enable tray icon")
+        label: QbzBridge.tr("Enable tray icon", QbzBridge.trRev)
         QbzToggle {
             checked: root.doc.trayEnable === true
             onToggled: function (v) { QbzBridge.settingsBool("tray-enable", v) }
         }
     }
     SettingRow {
-        label: QbzBridge.tr("Close to tray")
+        label: QbzBridge.tr("Close to tray", QbzBridge.trRev)
         rowEnabled: root.doc.trayEnable === true
         QbzToggle {
             enabled: root.doc.trayEnable === true
@@ -433,7 +433,7 @@ Column {
         }
     }
     SettingRow {
-        label: QbzBridge.tr("Tray icon variant")
+        label: QbzBridge.tr("Tray icon variant", QbzBridge.trRev)
         QbzSelect {
             menuWidth: 200
             options: root.doc.trayIconThemes || []
@@ -447,10 +447,10 @@ Column {
     SettingsSpacer { }
 
     // =========================== RENDERER ================================
-    GroupHeader { text: QbzBridge.tr("RENDERER") }
+    GroupHeader { text: QbzBridge.tr("RENDERER", QbzBridge.trRev) }
     SettingRow {
-        label: QbzBridge.tr("Rendering backend")
-        description: QbzBridge.tr("Restart to apply.")
+        label: QbzBridge.tr("Rendering backend", QbzBridge.trRev)
+        description: QbzBridge.tr("Restart to apply.", QbzBridge.trRev)
         QbzSelect {
             menuWidth: 220
             options: root.doc.renderers || []
@@ -459,8 +459,8 @@ Column {
         }
     }
     SettingRow {
-        label: QbzBridge.tr("Preferred GPU")
-        description: QbzBridge.tr("Restart to apply.")
+        label: QbzBridge.tr("Preferred GPU", QbzBridge.trRev)
+        description: QbzBridge.tr("Restart to apply.", QbzBridge.trRev)
         QbzSelect {
             menuWidth: 260
             options: root.doc.gpuPowers || []

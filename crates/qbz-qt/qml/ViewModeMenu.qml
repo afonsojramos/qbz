@@ -14,10 +14,10 @@ QbzContextMenu {
 
     Repeater {
         model: [
-            { "label": QbzBridge.tr("New"), "icon": "panel-left", "mode": 0 },
-            { "label": QbzBridge.tr("Classic"), "icon": "panel-right-close", "mode": 1 },
-            { "label": QbzBridge.tr("Small"), "icon": "rows-3", "mode": 2 },
-            { "label": QbzBridge.tr("Large"), "icon": "layout-grid", "mode": 3 },
+            { "label": QbzBridge.tr("New", QbzBridge.trRev), "icon": "panel-left", "mode": 0 },
+            { "label": QbzBridge.tr("Classic", QbzBridge.trRev), "icon": "panel-right-close", "mode": 1 },
+            { "label": QbzBridge.tr("Small", QbzBridge.trRev), "icon": "rows-3", "mode": 2 },
+            { "label": QbzBridge.tr("Large", QbzBridge.trRev), "icon": "layout-grid", "mode": 3 },
         ]
         delegate: Rectangle {
             required property var modelData
@@ -82,9 +82,9 @@ QbzContextMenu {
     }
     Repeater {
         model: [
-            { "label": QbzBridge.tr("Miniplayer"), "icon": "picture-in-picture-2" },
-            { "label": QbzBridge.tr("Immersive"), "icon": "maximize-2" },
-            { "label": QbzBridge.tr("Kiosk mode"), "icon": "hard-drive" },
+            { "label": QbzBridge.tr("Miniplayer", QbzBridge.trRev), "icon": "picture-in-picture-2" },
+            { "label": QbzBridge.tr("Immersive", QbzBridge.trRev), "icon": "maximize-2" },
+            { "label": QbzBridge.tr("Kiosk mode", QbzBridge.trRev), "icon": "hard-drive" },
         ]
         delegate: Rectangle {
             required property var modelData
