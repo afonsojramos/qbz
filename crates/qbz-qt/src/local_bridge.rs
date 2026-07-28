@@ -494,7 +494,12 @@ impl qbz_local::QbzLocal {
 
     pub fn open_album(self: Pin<&mut Self>, id: QString) {
         let id = id.to_string();
-        ui(|mut b| b.as_mut().set_local_album_loading(true));
+        ui(|mut b| {
+            // Clear the previous local album with the loading flag — the same
+            // stale-render the catalog album view had.
+            b.as_mut().set_local_album_json(QString::from(""));
+            b.as_mut().set_local_album_loading(true);
+        });
         crate::spawn(async move {
             let detail = tokio::task::spawn_blocking(move || lib::load_album_detail_blocking(&id))
                 .await

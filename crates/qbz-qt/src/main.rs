@@ -425,7 +425,13 @@ pub(crate) fn open_album(album_id: String) {
     nav_qt::record("album");
     *LAST_DETAIL.lock().unwrap() = ("album".to_string(), album_id.clone());
     let runtime = app();
-    album_bridge::ui(move |mut b| b.as_mut().set_album_loading(true));
+    album_bridge::ui(move |mut b| {
+        // Clear the PREVIOUS album in the same hop that raises the loading
+        // flag: without it the view renders the last album until the fetch
+        // lands, so opening B after A showed A.
+        b.as_mut().set_album_json(QString::from("{}"));
+        b.as_mut().set_album_loading(true);
+    });
     spawn(async move {
         match album_qt::load_album_view(&runtime, &album_id).await {
             Ok(json) => {
@@ -450,7 +456,11 @@ pub(crate) fn open_artist(artist_id: String) {
     nav_qt::record("artist");
     *LAST_DETAIL.lock().unwrap() = ("artist".to_string(), artist_id.clone());
     let runtime = app();
-    artist_bridge::ui(move |mut b| b.as_mut().set_artist_loading(true));
+    artist_bridge::ui(move |mut b| {
+        // Same as open_album: stale artist until the fetch lands otherwise.
+        b.as_mut().set_artist_json(QString::from("{}"));
+        b.as_mut().set_artist_loading(true);
+    });
     spawn(async move {
         match artist_qt::load_artist_view(&runtime, &artist_id).await {
             Ok(json) => artist_bridge::ui(move |mut b| {
@@ -689,6 +699,9 @@ pub(crate) fn open_playlist(playlist_id: String) {
         return;
     };
     nav_qt::record("playlist");
+    // Clear the previous playlist before the fetch — same stale-render as the
+    // album and artist views had.
+    ui(|mut b| b.as_mut().set_playlist_json(QString::from("{}")));
     let runtime = app();
     spawn(async move {
         if let Err(e) = playlist_qt::load(&runtime, pid).await {
