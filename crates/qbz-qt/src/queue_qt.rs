@@ -206,7 +206,7 @@ pub async fn publish(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
         },
     };
     let json = serde_json::to_string(&doc).unwrap_or_else(|_| "{}".into());
-    crate::ui(move |mut b| {
+    crate::queue_bridge::ui(move |mut b| {
         b.as_mut().set_queue_json(QString::from(json.as_str()));
     });
 }

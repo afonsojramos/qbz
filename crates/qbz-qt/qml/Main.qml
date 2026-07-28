@@ -10,6 +10,7 @@
 import QtQuick
 import QtQuick.Controls
 import com.blitzfc.qbz
+import "theme"
 
 ApplicationWindow {
     id: window
@@ -28,7 +29,7 @@ ApplicationWindow {
     // with square corners and a square 1px hairline frame. The system
     // titlebar is the `use_system_title_bar` pref (ui_prefs.json; applied
     // at startup, restart semantics like Slint).
-    flags: QbzBridge.systemTitleBar ? Qt.Window : (Qt.Window | Qt.FramelessWindowHint)
+    flags: QbzShell.systemTitleBar ? Qt.Window : (Qt.Window | Qt.FramelessWindowHint)
     color: "#1a1a1a"
 
     FontLoader { id: interRegular; source: "assets/fonts/Inter_18pt-Regular.ttf" }
@@ -37,7 +38,16 @@ ApplicationWindow {
     FontLoader { id: interBold; source: "assets/fonts/Inter_18pt-Bold.ttf" }
     font.family: interRegular.status === FontLoader.Ready ? interRegular.name : "Sans Serif"
 
-    Component.onCompleted: QbzBridge.boot()
+    // Phase 23: every domain singleton boots (registers its Qt-thread
+    // hop; QbzSession.boot additionally fires the app boot sequence).
+    Component.onCompleted: {
+        QbzSession.boot()
+        QbzShell.boot()
+        QbzPlayer.boot()
+        QbzQueue.boot()
+        QbzHome.boot()
+        QbzBridge.boot()
+    }
 
 
 
@@ -48,10 +58,10 @@ ApplicationWindow {
     Loader {
         id: screenLoader
         anchors.fill: parent
-        active: QbzBridge.screen !== "splash"
-        source: QbzBridge.screen === "login"
+        active: QbzSession.screen !== "splash"
+        source: QbzSession.screen === "login"
                 ? "LoginScreen.qml"
-                : (QbzBridge.screen === "shell" ? "AppShell.qml" : "")
+                : (QbzSession.screen === "shell" ? "shell/AppShell.qml" : "")
         // Hand the host window down for drag/maximize/resize (custom chrome).
         onLoaded: if (screenLoader.item) screenLoader.item.hostWindow = window
     }
@@ -63,7 +73,7 @@ ApplicationWindow {
         color: "transparent"
         border.width: 1
         border.color: "#14ffffff"
-        visible: !QbzBridge.systemTitleBar
+        visible: !QbzShell.systemTitleBar
             && window.visibility !== Window.Maximized && window.visibility !== Window.FullScreen
     }
 
@@ -72,49 +82,49 @@ ApplicationWindow {
     MouseArea {
         anchors.left: parent.left; anchors.top: parent.top; anchors.bottom: parent.bottom; width: 6
         cursorShape: Qt.SizeHorCursor
-        enabled: !QbzBridge.systemTitleBar
+        enabled: !QbzShell.systemTitleBar
         onPressed: window.startSystemResize(Qt.LeftEdge)
     }
     MouseArea {
         anchors.right: parent.right; anchors.top: parent.top; anchors.bottom: parent.bottom; width: 6
         cursorShape: Qt.SizeHorCursor
-        enabled: !QbzBridge.systemTitleBar
+        enabled: !QbzShell.systemTitleBar
         onPressed: window.startSystemResize(Qt.RightEdge)
     }
     MouseArea {
         anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top; height: 6
         cursorShape: Qt.SizeVerCursor
-        enabled: !QbzBridge.systemTitleBar
+        enabled: !QbzShell.systemTitleBar
         onPressed: window.startSystemResize(Qt.TopEdge)
     }
     MouseArea {
         anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom; height: 6
         cursorShape: Qt.SizeVerCursor
-        enabled: !QbzBridge.systemTitleBar
+        enabled: !QbzShell.systemTitleBar
         onPressed: window.startSystemResize(Qt.BottomEdge)
     }
     MouseArea {
         anchors.left: parent.left; anchors.top: parent.top; width: 12; height: 12
         cursorShape: Qt.SizeFDiagCursor
-        enabled: !QbzBridge.systemTitleBar
+        enabled: !QbzShell.systemTitleBar
         onPressed: window.startSystemResize(Qt.TopEdge | Qt.LeftEdge)
     }
     MouseArea {
         anchors.right: parent.right; anchors.top: parent.top; width: 12; height: 12
         cursorShape: Qt.SizeBDiagCursor
-        enabled: !QbzBridge.systemTitleBar
+        enabled: !QbzShell.systemTitleBar
         onPressed: window.startSystemResize(Qt.TopEdge | Qt.RightEdge)
     }
     MouseArea {
         anchors.left: parent.left; anchors.bottom: parent.bottom; width: 12; height: 12
         cursorShape: Qt.SizeBDiagCursor
-        enabled: !QbzBridge.systemTitleBar
+        enabled: !QbzShell.systemTitleBar
         onPressed: window.startSystemResize(Qt.BottomEdge | Qt.LeftEdge)
     }
     MouseArea {
         anchors.right: parent.right; anchors.bottom: parent.bottom; width: 12; height: 12
         cursorShape: Qt.SizeFDiagCursor
-        enabled: !QbzBridge.systemTitleBar
+        enabled: !QbzShell.systemTitleBar
         onPressed: window.startSystemResize(Qt.BottomEdge | Qt.RightEdge)
     }
 
@@ -123,7 +133,7 @@ ApplicationWindow {
     Rectangle {
         anchors.fill: parent
         color: "#0f0f0f"
-        visible: QbzBridge.screen === "splash"
+        visible: QbzSession.screen === "splash"
 
         Rectangle {
             anchors.centerIn: parent

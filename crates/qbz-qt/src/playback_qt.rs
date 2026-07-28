@@ -590,7 +590,7 @@ pub(crate) async fn refresh_now_playing(runtime: &Arc<AppRuntime<LoggingAdapter>
     let state = runtime.core().get_queue_state().await;
     let Some(track) = state.current_track else {
         crate::now_playing::clear_track();
-        crate::ui(move |mut b| {
+        crate::player_bridge::ui(move |mut b| {
             b.as_mut().set_np_track_id(QString::from(""));
         });
         crate::lyrics_qt::publish_idle();
@@ -601,7 +601,7 @@ pub(crate) async fn refresh_now_playing(runtime: &Arc<AppRuntime<LoggingAdapter>
         None => track.title.clone(),
     };
     let track_id_str = track.id.to_string();
-    crate::ui(move |mut b| {
+    crate::player_bridge::ui(move |mut b| {
         b.as_mut().set_np_track_id(QString::from(track_id_str.as_str()));
     });
     log::info!(

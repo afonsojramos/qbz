@@ -63,13 +63,13 @@ pub fn start() {
 /// login. Spawned once from the boot sequence.
 pub fn start_ui_forwarder() {
     let has_previous = UserDataPaths::load_last_user_id().is_some();
-    crate::ui(move |mut b| b.as_mut().set_has_previous_session(has_previous));
+    crate::session_bridge::ui(move |mut b| b.as_mut().set_has_previous_session(has_previous));
 
     crate::spawn(async move {
         let mut rx = engine().subscribe();
         loop {
             let status = *rx.borrow_and_update();
-            crate::ui(move |b| apply_status(b, status));
+            crate::session_bridge::ui(move |b| apply_status(b, status));
             if rx.changed().await.is_err() {
                 break;
             }
@@ -79,7 +79,10 @@ pub fn start_ui_forwarder() {
 
 /// Push one engine status snapshot into the bridge (queued on the Qt
 /// thread via [`crate::ui`]).
-fn apply_status(mut b: core::pin::Pin<&mut crate::bridge::qbz_bridge::QbzBridge>, status: OfflineStatus) {
+fn apply_status(
+    mut b: core::pin::Pin<&mut crate::session_bridge::qbz_session::QbzSession>,
+    status: OfflineStatus,
+) {
         b.as_mut().set_offline(status.is_offline());
     b.as_mut().set_offline_mode(match status.mode {
         OfflineMode::Online => 0,

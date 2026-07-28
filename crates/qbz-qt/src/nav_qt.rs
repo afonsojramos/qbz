@@ -72,7 +72,7 @@ fn snapshot(h: &NavHistory) -> (bool, bool, String) {
 }
 
 fn publish(can_back: bool, can_forward: bool, current: String) {
-    crate::ui(move |mut b| {
+    crate::shell_bridge::ui(move |mut b| {
         b.as_mut().set_can_back(can_back);
         b.as_mut().set_can_forward(can_forward);
         b.as_mut().set_current_view(QString::from(current.as_str()));

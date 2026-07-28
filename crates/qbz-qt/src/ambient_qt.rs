@@ -272,7 +272,7 @@ pub fn update_for_artwork(artwork_url: &str) {
         .flatten();
         if let Some((primary, secondary, accent)) = triad {
             log::info!("[qbz-qt] ambient palette: {primary} / {secondary} / {accent}");
-            crate::ui(move |mut b| {
+            crate::shell_bridge::ui(move |mut b| {
                 b.as_mut().set_ambient_primary(QString::from(primary.as_str()));
                 b.as_mut()
                     .set_ambient_secondary(QString::from(secondary.as_str()));

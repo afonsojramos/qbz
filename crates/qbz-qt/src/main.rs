@@ -7,6 +7,24 @@
 //! async work; results hop back to Qt through the bridge's `CxxQtThread`.
 
 mod auth_qt;
+// Per-domain QML bridge singletons (phase 23 — the QbzBridge God-object
+// split). THE PATTERN (phase-1, replicated per domain file):
+//   1. one #[cxx_qt::bridge] mod per file (crate root — cxx-qt-build
+//      accepts rust_files from ONE directory only, QTBUG-93443) with a
+//      single #[qml_element] #[qml_singleton] QObject + its *Rust storage;
+//   2. `static QT_THREAD: OnceLock<CxxQtThread<QbzDomain>>` per file;
+//   3. the singleton's `boot()` invokable registers `self.qt_thread()` —
+//      Main.qml boots EVERY singleton (they instantiate lazily); only
+//      QbzSession.boot also fires crate::on_boot();
+//   4. `pub(crate) fn ui(f)` queues a property mutation onto that
+//      object's Qt event loop (no-op pre-registration).
+// All singletons live in the SAME QML module (com.blitzfc.qbz); the
+// invokables stay one-line forwards into the domain controllers below.
+mod session_bridge;
+mod shell_bridge;
+mod player_bridge;
+mod queue_bridge;
+mod home_bridge;
 mod artwork_qt;
 mod bridge;
 mod home_qt;
@@ -112,8 +130,8 @@ pub(crate) fn on_boot() {
         }
         match auth_qt::restore_saved_session(&runtime).await {
             Ok(Some(session)) => enter_shell(session),
-            Ok(None) => ui(|mut b| b.as_mut().set_screen(QString::from("login"))),
-            Err(e) => ui(move |mut b| {
+            Ok(None) => session_bridge::ui(|mut b| b.as_mut().set_screen(QString::from("login"))),
+            Err(e) => session_bridge::ui(move |mut b| {
                                 b.as_mut().set_restore_error(QString::from(e.as_str()));
                 b.as_mut().set_screen(QString::from("login"));
             }),
@@ -139,7 +157,7 @@ fn enter_shell(session: auth_qt::SessionInfo) {
     // Phase 10: seed the playback request tier from the persisted
     // streaming-quality pref (Settings > Audio writes it live after this).
     playback_qt::set_streaming_quality(&settings_qt::streaming_quality());
-    ui(move |mut b| {
+    session_bridge::ui(move |mut b| {
                 b.as_mut().set_session_user_name(QString::from(session.display_name.as_str()));
         b.as_mut().set_session_subscription(QString::from(session.subscription.as_str()));
         b.as_mut().set_has_previous_session(true);
@@ -160,7 +178,7 @@ pub(crate) fn start_login() {
             return;
         }
     }
-    ui(|mut b| {
+    session_bridge::ui(|mut b| {
                 b.as_mut().set_login_error(QString::from(""));
         b.as_mut().set_login_phase(1);
     });
@@ -172,13 +190,13 @@ pub(crate) fn start_login() {
                 auth_qt::LoginPhase::WaitingForBrowser => 1,
                 auth_qt::LoginPhase::Authenticating => 2,
             };
-            ui(move |mut b| b.as_mut().set_login_phase(value));
+            session_bridge::ui(move |mut b| b.as_mut().set_login_phase(value));
         })
         .await;
         LOGIN_TASK.lock().unwrap().take();
         match result {
             Ok(session) => enter_shell(session),
-            Err(e) => ui(move |mut b| {
+            Err(e) => session_bridge::ui(move |mut b| {
                                 b.as_mut().set_login_phase(0);
                 b.as_mut().set_login_error(QString::from(e.as_str()));
             }),
@@ -192,7 +210,7 @@ pub(crate) fn cancel_login() {
     if let Some(task) = LOGIN_TASK.lock().unwrap().take() {
         task.abort();
     }
-    ui(|mut b| b.as_mut().set_login_phase(0));
+    session_bridge::ui(|mut b| b.as_mut().set_login_phase(0));
 }
 
 /// "Start offline": unauthenticated offline session -> shell placeholder.
@@ -206,7 +224,7 @@ pub(crate) fn start_offline() {
                 } else {
                     format!("Offline (user {user_id})")
                 };
-                ui(move |mut b| {
+                session_bridge::ui(move |mut b| {
                     b.as_mut().set_session_user_name(QString::from(name.as_str()));
                     b.as_mut().set_session_subscription(QString::from(""));
                     b.as_mut().set_login_error(QString::from(""));
@@ -219,7 +237,7 @@ pub(crate) fn start_offline() {
             }
             Err(e) => {
                 log::error!("[qbz-qt] failed to enter offline mode: {e}");
-                ui(move |mut b| {
+                session_bridge::ui(move |mut b| {
                     b.as_mut().set_login_error(QString::from(e.as_str()));
                 });
             }
@@ -237,21 +255,27 @@ pub(crate) fn do_logout() {
         // A later login must re-fetch Home + Library (new user, fresh data).
         *HOME_LOADED.lock().unwrap() = false;
         *LIBRARY_LOADED.lock().unwrap() = false;
-        ui(|mut b| {
+        session_bridge::ui(|mut b| {
             b.as_mut().set_session_user_name(QString::from(""));
             b.as_mut().set_session_subscription(QString::from(""));
             b.as_mut().set_login_error(QString::from(""));
             b.as_mut().set_restore_error(QString::from(""));
             b.as_mut().set_login_phase(0);
+            b.as_mut().set_screen(QString::from("login"));
+        });
+        home_bridge::ui(|mut b| {
             b.as_mut().set_home_sections_json(QString::from("[]"));
             b.as_mut().set_home_error(QString::from(""));
             b.as_mut().set_home_loading(false);
+        });
+        ui(|mut b| {
             b.as_mut().set_library_json(QString::from("[]"));
             b.as_mut().set_library_counts_json(QString::from("{}"));
             b.as_mut().set_library_error(QString::from(""));
             b.as_mut().set_library_loading(false);
+        });
+        shell_bridge::ui(|mut b| {
             b.as_mut().set_sidebar_json(QString::from("[]"));
-            b.as_mut().set_screen(QString::from("login"));
         });
     });
 }
@@ -308,7 +332,7 @@ fn publish_sidebar() {
     let json = serde_json::to_string(&entries).unwrap_or_else(|_| "[]".into());
     log::debug!("[qbz-qt] sidebar published: {} entries ({} bytes)", entries.len(), json.len());
     let (sort_by, sort_asc) = sidebar_qt::sort_state();
-    ui(move |mut b| {
+    shell_bridge::ui(move |mut b| {
         b.as_mut().set_sidebar_json(QString::from(json.as_str()));
         b.as_mut().set_sidebar_sort_by(QString::from(sort_by.as_str()));
         b.as_mut().set_sidebar_sort_asc(sort_asc);
@@ -494,7 +518,7 @@ static LYRICS_OPEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBoo
 
 pub(crate) fn toggle_lyrics() {
     let open = !LYRICS_OPEN.swap(!LYRICS_OPEN.load(std::sync::atomic::Ordering::SeqCst), std::sync::atomic::Ordering::SeqCst);
-    ui(move |mut b| {
+    shell_bridge::ui(move |mut b| {
         b.as_mut().set_lyrics_open(open);
     });
     if open {
@@ -734,7 +758,7 @@ pub(crate) fn drag_start(track_id: String, title: String, subtitle: String, x: f
     let id = track_id.parse::<u64>().unwrap_or(0);
     *DRAGGED.lock().unwrap() = if id > 0 { vec![id] } else { Vec::new() };
     log::info!("[qbz-qt][drag] start {track_id} ({title})");
-    ui(move |mut b| {
+    shell_bridge::ui(move |mut b| {
         b.as_mut().set_drag_count(if id > 0 { 1 } else { 0 });
         b.as_mut().set_drag_title(QString::from(title.as_str()));
         b.as_mut().set_drag_subtitle(QString::from(subtitle.as_str()));
@@ -746,7 +770,7 @@ pub(crate) fn drag_start(track_id: String, title: String, subtitle: String, x: f
 }
 
 pub(crate) fn drag_move(x: f32, y: f32) {
-    ui(move |mut b| {
+    shell_bridge::ui(move |mut b| {
         b.as_mut().set_drag_x(x);
         b.as_mut().set_drag_y(y);
     });
@@ -754,7 +778,7 @@ pub(crate) fn drag_move(x: f32, y: f32) {
 
 pub(crate) fn drag_set_over(playlist_id: String) {
     *DRAG_OVER.lock().unwrap() = playlist_id.clone();
-    ui(move |mut b| {
+    shell_bridge::ui(move |mut b| {
         b.as_mut()
             .set_drag_over_playlist_id(QString::from(playlist_id.as_str()));
     });
@@ -762,7 +786,7 @@ pub(crate) fn drag_set_over(playlist_id: String) {
 
 pub(crate) fn drag_end() {
     let pid = std::mem::take(&mut *DRAG_OVER.lock().unwrap());
-    ui(|mut b| {
+    shell_bridge::ui(|mut b| {
         b.as_mut().set_drag_active(false);
         b.as_mut().set_drag_over_playlist_id(QString::default());
     });
@@ -810,7 +834,7 @@ pub(crate) fn playlist_set_follow_by_id(playlist_id: u64, follow: bool) {
 pub(crate) fn npb_set_mode(mode: i32) {
     let mode = settings_qt::set_npb_mode(mode);
     log::info!("[qbz-qt] npb_mode -> {mode}");
-    ui(move |mut b| {
+    shell_bridge::ui(move |mut b| {
         if mode == 3 {
             b.as_mut().set_sidebar_state(0);
         }
@@ -930,7 +954,7 @@ pub(crate) fn apply_language(code: String) {
     };
     qbz_i18n::set_language(&resolved);
     log::info!("[qbz-qt] language -> {code} (resolved: {resolved})");
-    ui(move |mut b| {
+    session_bridge::ui(move |mut b| {
         let next = b.as_ref().tr_rev() + 1;
         b.as_mut().set_tr_rev(next);
     });
@@ -1072,7 +1096,7 @@ pub(crate) fn theme_set(slug: String) {
 pub(crate) fn theme_set_filter(index: i32) {
     let index = index.clamp(0, 2);
     theme_qt::set_theme_filter(index);
-    ui(move |mut b| b.as_mut().set_theme_filter(index));
+    shell_bridge::ui(move |mut b| b.as_mut().set_theme_filter(index));
 }
 
 /// Integrations panel non-toggle actions (Last.fm connect flow, LB/LFM
@@ -1089,7 +1113,7 @@ pub(crate) fn integrations_action(action: String) {
 pub(crate) fn toggle_system_title_bar() {
     let next = settings_qt::toggle_system_title_bar();
     log::info!("[qbz-qt] use_system_title_bar -> {next} (applies on next launch)");
-    ui(move |mut b| b.as_mut().set_system_title_bar_pref(next));
+    shell_bridge::ui(move |mut b| b.as_mut().set_system_title_bar_pref(next));
 }
 
 /// App-menu ambient toggle: persist the flipped pref and apply LIVE (the
@@ -1097,7 +1121,7 @@ pub(crate) fn toggle_system_title_bar() {
 pub(crate) fn toggle_ambient_background() {
     let mode = settings_qt::toggle_ambient_background();
     log::info!("[qbz-qt] app_background -> {}", if mode == 1 { "ambient" } else { "off" });
-    ui(move |mut b| b.as_mut().set_ambient_mode(mode));
+    shell_bridge::ui(move |mut b| b.as_mut().set_ambient_mode(mode));
 }
 
 fn load_library_once() {
@@ -1247,7 +1271,7 @@ pub(crate) fn reload_home() {
     if offline_fwd::engine().status().is_offline() {
         return;
     }
-    ui(|mut b| {
+    home_bridge::ui(|mut b| {
         b.as_mut().set_home_loading(true);
         b.as_mut().set_home_error(QString::from(""));
     });
@@ -1287,11 +1311,11 @@ pub(crate) fn reload_home() {
                     });
                 }
 
-                ui(|mut b| b.as_mut().set_home_loading(false));
+                home_bridge::ui(|mut b| b.as_mut().set_home_loading(false));
             }
             Err(e) => {
                 log::warn!("[qbz-qt] home load failed: {e}");
-                ui(move |mut b| {
+                home_bridge::ui(move |mut b| {
                     b.as_mut().set_home_error(QString::from(e.as_str()));
                     b.as_mut().set_home_loading(false);
                 });
@@ -1304,7 +1328,7 @@ fn publish_home_sections(sections: &home_qt::DiscoverSections) {
     let home_json = serde_json::to_string(&sections.home).unwrap_or_else(|_| "[]".to_string());
     let editor_json = serde_json::to_string(&sections.editor).unwrap_or_else(|_| "[]".to_string());
     let for_you_json = serde_json::to_string(&sections.for_you).unwrap_or_else(|_| "[]".to_string());
-    ui(move |mut b| {
+    home_bridge::ui(move |mut b| {
         b.as_mut().set_home_sections_json(QString::from(home_json.as_str()));
         b.as_mut()
             .set_editor_sections_json(QString::from(editor_json.as_str()));

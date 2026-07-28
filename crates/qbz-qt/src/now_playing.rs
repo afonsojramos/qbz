@@ -92,7 +92,7 @@ fn mutate(f: impl FnOnce(&mut NowPlayingModel)) {
 /// Push the full model onto the bridge (Qt thread hop).
 fn publish(m: &NowPlayingModel) {
     let m = m.clone();
-    crate::ui(move |mut b| {
+    crate::player_bridge::ui(move |mut b| {
         let progress = if m.duration_secs > 0 {
             (m.elapsed_secs as f32 / m.duration_secs as f32).clamp(0.0, 1.0)
         } else {
@@ -253,7 +253,7 @@ pub fn set_position(elapsed_secs: i32, duration_secs: i32, playing: bool, cache:
 /// mirroring progress.
 fn publish_with_cache(m: &NowPlayingModel) {
     let m = m.clone();
-    crate::ui(move |mut b| {
+    crate::player_bridge::ui(move |mut b| {
         let progress = if m.duration_secs > 0 {
             (m.elapsed_secs as f32 / m.duration_secs as f32).clamp(0.0, 1.0)
         } else {

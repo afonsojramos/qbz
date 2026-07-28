@@ -6,13 +6,14 @@
 // captive-portal line), session-restore error box, "Start offline" link,
 // legal disclaimer.
 //
-// All user-visible strings go through QbzBridge.tr() with the EXACT msgids
+// All user-visible strings go through QbzSession.tr() with the EXACT msgids
 // of the Slint @tr() calls so the existing .po translations apply.
 // State comes from the QbzBridge singleton (Slint's LoginState +
 // OfflineState globals); actions call the bridge invokables.
 
 import QtQuick
 import com.blitzfc.qbz
+import "theme"
 
 Rectangle {
     id: root
@@ -67,7 +68,7 @@ Rectangle {
             Item { width: 1; height: theme.spacingSm }
             Text {
                 anchors.horizontalCenter: parent.horizontalCenter
-                text: QbzBridge.tr("QBZ", QbzBridge.trRev)
+                text: QbzSession.tr("QBZ", QbzSession.trRev)
                 color: theme.textPrimary
                 font.pixelSize: theme.fontWordmark
                 font.weight: theme.weightSemibold
@@ -76,7 +77,7 @@ Rectangle {
             Item { width: 1; height: 2 }
             Text {
                 anchors.horizontalCenter: parent.horizontalCenter
-                text: QbzBridge.tr("QOBUZ™ PLAYER", QbzBridge.trRev)
+                text: QbzSession.tr("QOBUZ™ PLAYER", QbzSession.trRev)
                 color: theme.textMuted
                 font.pixelSize: theme.fontSubtitle
                 font.letterSpacing: 4
@@ -115,20 +116,20 @@ Rectangle {
                 }
                 Text {
                     anchors.verticalCenter: parent.verticalCenter
-                    text: QbzBridge.tr("I have read the", QbzBridge.trRev)
+                    text: QbzSession.tr("I have read the", QbzSession.trRev)
                     color: theme.textSecondary
                     font.pixelSize: theme.fontBody
                 }
                 Text {
                     id: tosLink
                     anchors.verticalCenter: parent.verticalCenter
-                    text: QbzBridge.tr("Qobuz™ Terms of Service", QbzBridge.trRev)
+                    text: QbzSession.tr("Qobuz™ Terms of Service", QbzSession.trRev)
                     color: theme.accent
                     font.pixelSize: theme.fontBody
                     MouseArea {
                         anchors.fill: parent
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: QbzBridge.openTos()
+                        onClicked: QbzSession.openTos()
                     }
                 }
             }
@@ -142,14 +143,14 @@ Rectangle {
                 width: parent.width
                 height: 48
                 radius: theme.radiusSm
-                property bool canSignIn: root.tosAccepted && QbzBridge.loginPhase === 0
+                property bool canSignIn: root.tosAccepted && QbzSession.loginPhase === 0
                 opacity: canSignIn ? 1.0 : 0.5
                 color: signInArea.containsMouse && canSignIn ? theme.accentHover : theme.accent
                 Behavior on color { ColorAnimation { duration: 150 } }
 
                 Text {
                     anchors.centerIn: parent
-                    text: QbzBridge.tr("Sign in with your browser", QbzBridge.trRev)
+                    text: QbzSession.tr("Sign in with your browser", QbzSession.trRev)
                     color: theme.accentText
                     font.pixelSize: theme.fontButton
                     font.weight: theme.weightSemibold
@@ -160,7 +161,7 @@ Rectangle {
                     enabled: signInButton.canSignIn
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: QbzBridge.signInViaBrowser()
+                    onClicked: QbzSession.signInViaBrowser()
                 }
             }
 
@@ -171,12 +172,12 @@ Rectangle {
             // focus, and the code exchange takes a few seconds — the
             // screen must narrate instead of sitting inert.
             Column {
-                visible: QbzBridge.loginPhase === 1
+                visible: QbzSession.loginPhase === 1
                 width: parent.width
                 spacing: 4
                 Text {
                     width: parent.width
-                    text: QbzBridge.tr("Continue in your web browser — QBZ is waiting for you to finish signing in.", QbzBridge.trRev)
+                    text: QbzSession.tr("Continue in your web browser — QBZ is waiting for you to finish signing in.", QbzSession.trRev)
                     color: theme.textSecondary
                     font.pixelSize: theme.fontBody
                     horizontalAlignment: Text.AlignHCenter
@@ -184,7 +185,7 @@ Rectangle {
                 }
                 Text {
                     width: parent.width
-                    text: QbzBridge.tr("The browser may open in the background without taking focus — check your other windows.", QbzBridge.trRev)
+                    text: QbzSession.tr("The browser may open in the background without taking focus — check your other windows.", QbzSession.trRev)
                     color: theme.textMuted
                     font.pixelSize: theme.fontLegal
                     horizontalAlignment: Text.AlignHCenter
@@ -197,7 +198,7 @@ Rectangle {
                     height: cancelText.implicitHeight + 3
                     Text {
                         id: cancelText
-                        text: QbzBridge.tr("Cancel", QbzBridge.trRev)
+                        text: QbzSession.tr("Cancel", QbzSession.trRev)
                         color: cancelArea.containsMouse ? theme.accent : theme.textMuted
                         font.pixelSize: theme.fontLink
                     }
@@ -212,21 +213,21 @@ Rectangle {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: QbzBridge.cancelLogin()
+                        onClicked: QbzSession.cancelLogin()
                     }
                 }
             }
             Text {
-                visible: QbzBridge.loginPhase === 2
+                visible: QbzSession.loginPhase === 2
                 width: parent.width
-                text: QbzBridge.tr("Signing you in…", QbzBridge.trRev)
+                text: QbzSession.tr("Signing you in…", QbzSession.trRev)
                 color: theme.textSecondary
                 font.pixelSize: theme.fontBody
                 horizontalAlignment: Text.AlignHCenter
             }
             // Sign-in failure box (phase 0 only).
             Rectangle {
-                visible: QbzBridge.loginPhase === 0 && QbzBridge.loginError !== ""
+                visible: QbzSession.loginPhase === 0 && QbzSession.loginError !== ""
                 width: parent.width
                 height: signInErrorColumn.implicitHeight + 24
                 color: theme.surfaceElevated
@@ -242,7 +243,7 @@ Rectangle {
                     spacing: 4
                     Text {
                         width: parent.width
-                        text: QbzBridge.tr("Sign-in failed", QbzBridge.trRev)
+                        text: QbzSession.tr("Sign-in failed", QbzSession.trRev)
                         color: theme.textPrimary
                         font.pixelSize: theme.fontBody
                         font.weight: theme.weightMedium
@@ -250,7 +251,7 @@ Rectangle {
                     }
                     Text {
                         width: parent.width
-                        text: QbzBridge.loginError
+                        text: QbzSession.loginError
                         color: theme.textMuted
                         font.pixelSize: theme.fontLegal
                         horizontalAlignment: Text.AlignHCenter
@@ -264,7 +265,7 @@ Rectangle {
             // No connectivity: point the user at the Start-offline link
             // right below. Gated on has-previous-session too.
             Column {
-                visible: QbzBridge.hasPreviousSession && QbzBridge.connectivity === 2
+                visible: QbzSession.hasPreviousSession && QbzSession.connectivity === 2
                 width: parent.width
                 spacing: 2
                 Rectangle {
@@ -283,16 +284,16 @@ Rectangle {
                         spacing: 4
                         Text {
                             width: parent.width
-                            text: QbzBridge.tr("No internet connection — you can start in offline mode with your local library and downloads", QbzBridge.trRev)
+                            text: QbzSession.tr("No internet connection — you can start in offline mode with your local library and downloads", QbzSession.trRev)
                             color: theme.textSecondary
                             font.pixelSize: theme.fontBody
                             horizontalAlignment: Text.AlignHCenter
                             wrapMode: Text.WordWrap
                         }
                         Text {
-                            visible: QbzBridge.captivePortal
+                            visible: QbzSession.captivePortal
                             width: parent.width
-                            text: QbzBridge.tr("A network sign-in page may be blocking the connection", QbzBridge.trRev)
+                            text: QbzSession.tr("A network sign-in page may be blocking the connection", QbzSession.trRev)
                             color: theme.textMuted
                             font.pixelSize: theme.fontLegal
                             horizontalAlignment: Text.AlignHCenter
@@ -313,7 +314,7 @@ Rectangle {
             // for a non-connectivity reason). Hidden while the
             // connectivity box shows — never two boxes at once.
             Column {
-                visible: QbzBridge.restoreError !== "" && QbzBridge.connectivity !== 2
+                visible: QbzSession.restoreError !== "" && QbzSession.connectivity !== 2
                 width: parent.width
                 spacing: 0
                 Rectangle {
@@ -332,7 +333,7 @@ Rectangle {
                         spacing: 4
                         Text {
                             width: parent.width
-                            text: QbzBridge.tr("Could not restore your session", QbzBridge.trRev)
+                            text: QbzSession.tr("Could not restore your session", QbzSession.trRev)
                             color: theme.textPrimary
                             font.pixelSize: theme.fontBody
                             font.weight: theme.weightMedium
@@ -340,7 +341,7 @@ Rectangle {
                         }
                         Text {
                             width: parent.width
-                            text: QbzBridge.restoreError
+                            text: QbzSession.restoreError
                             color: theme.textMuted
                             font.pixelSize: theme.fontLegal
                             horizontalAlignment: Text.AlignHCenter
@@ -360,7 +361,7 @@ Rectangle {
                 height: offlineText.implicitHeight + 3
                 Text {
                     id: offlineText
-                    text: QbzBridge.tr("Start offline (no access to Qobuz™ services)", QbzBridge.trRev)
+                    text: QbzSession.tr("Start offline (no access to Qobuz™ services)", QbzSession.trRev)
                     color: offlineArea.containsMouse ? theme.accent : theme.textMuted
                     font.pixelSize: theme.fontLink
                 }
@@ -375,7 +376,7 @@ Rectangle {
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: QbzBridge.startOffline()
+                    onClicked: QbzSession.startOffline()
                 }
             }
 
@@ -384,13 +385,13 @@ Rectangle {
             // --- Legal disclaimer ------------------------------------
             Text {
                 width: parent.width
-                text: QbzBridge.tr("QBZ requires an active Qobuz™ subscription. Your credentials are sent directly to Qobuz™.", QbzBridge.trRev)
+                text: QbzSession.tr("QBZ requires an active Qobuz™ subscription. Your credentials are sent directly to Qobuz™.", QbzSession.trRev)
                     + "\n"
-                    + QbzBridge.tr("QBZ can be used as an offline player without a Qobuz™ account (no access to the Qobuz™ library).", QbzBridge.trRev)
+                    + QbzSession.tr("QBZ can be used as an offline player without a Qobuz™ account (no access to the Qobuz™ library).", QbzSession.trRev)
                     + "\n"
-                    + QbzBridge.tr("This application uses the Qobuz API but is not certified by Qobuz.", QbzBridge.trRev)
+                    + QbzSession.tr("This application uses the Qobuz API but is not certified by Qobuz.", QbzSession.trRev)
                     + " "
-                    + QbzBridge.tr("Qobuz™ is a trademark of Qobuz. QBZ is an open-source application licensed under the MIT License and is not affiliated with, endorsed by, or certified by Qobuz.", QbzBridge.trRev)
+                    + QbzSession.tr("Qobuz™ is a trademark of Qobuz. QBZ is an open-source application licensed under the MIT License and is not affiliated with, endorsed by, or certified by Qobuz.", QbzSession.trRev)
                 color: theme.textMuted
                 font.pixelSize: theme.fontLegal
                 horizontalAlignment: Text.AlignHCenter

@@ -91,7 +91,7 @@ async fn service(runtime: &Arc<AppRuntime<LoggingAdapter>>) -> Option<Arc<Lyrics
 
 fn publish(doc: LyricsDoc) {
     let json = serde_json::to_string(&doc).unwrap_or_else(|_| "{}".into());
-    crate::ui(move |mut b| {
+    crate::shell_bridge::ui(move |mut b| {
         b.as_mut().set_lyrics_json(QString::from(json.as_str()));
     });
 }

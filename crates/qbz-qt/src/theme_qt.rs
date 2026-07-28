@@ -270,7 +270,7 @@ pub fn theme_json() -> String {
 pub fn publish_theme() {
     let json = theme_json();
     let slug = current_slug();
-    crate::ui(move |mut b| {
+    crate::shell_bridge::ui(move |mut b| {
         b.as_mut().set_theme_json(QString::from(json.as_str()));
         b.as_mut().set_theme_slug(QString::from(slug.as_str()));
     });

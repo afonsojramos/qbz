@@ -1141,7 +1141,7 @@ pub async fn settings_bool(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &str,
             // Restart semantics (1:1 Slint): the APPLIED mode is untouched;
             // only the menu/row state flips live.
             log::info!("[qbz-qt] use_system_title_bar -> {value} (applies on next launch)");
-            crate::ui(move |mut b| b.as_mut().set_system_title_bar_pref(value));
+            crate::shell_bridge::ui(move |mut b| b.as_mut().set_system_title_bar_pref(value));
             Ok(Apply::None)
         }
         "hide-title-bar" => {
@@ -1323,7 +1323,7 @@ pub async fn settings_select(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &st
             save_pref("app_background", serde_json::json!(mode));
             // Live (pure QML layering; blurred renders AS ambient in the POC).
             let ambient = if *mode == "off" { 0 } else { 1 };
-            crate::ui(move |mut b| b.as_mut().set_ambient_mode(ambient));
+            crate::shell_bridge::ui(move |mut b| b.as_mut().set_ambient_mode(ambient));
         }
         "language" => {
             let Some(lang) = LANGUAGE_VALUES.get(index) else {
