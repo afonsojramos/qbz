@@ -43,10 +43,46 @@ pub mod qbz_player {
         #[qproperty(bool, np_shuffle)]
         // 0 off / 1 all / 2 one.
         #[qproperty(i32, np_repeat_mode)]
-        // "hires" | "mp3" | "lossless" | "cd" (AudioStamp tier mapping).
+        // --- Quality stamp (Slint NowPlayingState quality-* block) -------
+        // CATALOG max of the track: "hires" | "mp3" | "lossless" | "cd" | "".
         #[qproperty(QString, np_quality_tier)]
-        // e.g. "24-bit / 96 kHz" (AudioStamp detail line).
+        // Exact detail line of the catalog max, e.g. "24-bit / 96 kHz".
+        #[qproperty(QString, np_quality_detail)]
+        // Legacy alias of np_quality_detail (the pre-contract Qt name) —
+        // published from the same value so existing QML keeps working.
         #[qproperty(QString, np_quality_label)]
+        // DELIVERED-vs-catalog state (#590/#638). While `downgraded` is on,
+        // the stamp's main line reports the delivered tier/detail and the
+        // catalog max moves to the tooltip's "Source" line.
+        #[qproperty(bool, np_quality_downgraded)]
+        // Delivered detail line while downgraded ("16-bit / 44.1 kHz",
+        // "DSD64"); empty when the engine has not reported params yet.
+        #[qproperty(QString, np_quality_true_detail)]
+        // Delivered tier while downgraded ("hires"|"cd"|"mp3"), else "".
+        #[qproperty(QString, np_quality_effective_tier)]
+        // WHY the stream is below the catalog max (qbz_models::QualityLimit):
+        // 0 none · 1 streaming-quality setting · 2 local output device cap ·
+        // 3 cast renderer cap · 4 Qobuz offered nothing higher.
+        #[qproperty(i32, np_quality_limit_cause)]
+
+        // --- Output LEDs (settings.rs `output_labels`) -------------------
+        // PIPEWIRE|ALSA|JACK|PULS|SYST|AUTO — *_active lights the LED.
+        #[qproperty(QString, np_output_backend_label)]
+        #[qproperty(bool, np_output_backend_active)]
+        // DACPASS|BITPERF|EXCL|DIRECT|LOCKED|ROUTED|SHARED|DEFAULT.
+        #[qproperty(QString, np_output_mode_label)]
+        #[qproperty(bool, np_output_mode_active)]
+
+        // --- Cast / remote (Qobuz Connect + Chromecast/DLNA) -------------
+        // A peer Qobuz Connect renderer owns playback (transport is remote).
+        #[qproperty(bool, np_is_remote)]
+        // Name of the active renderer / cast target; empty when local.
+        #[qproperty(QString, np_cast_target)]
+        // A Chromecast/DLNA session is connected — while casting the two
+        // output LEDs fuse into a single cast chip.
+        #[qproperty(bool, np_cast_active)]
+        // "cast" | "dlna".
+        #[qproperty(QString, np_cast_protocol)]
         // Now-playing track id (playing-row indicator in track lists).
         #[qproperty(QString, np_track_id)]
         #[qproperty(QString, np_album)]
@@ -150,7 +186,20 @@ pub struct QbzPlayerRust {
     np_shuffle: bool,
     np_repeat_mode: i32,
     np_quality_tier: QString,
+    np_quality_detail: QString,
     np_quality_label: QString,
+    np_quality_downgraded: bool,
+    np_quality_true_detail: QString,
+    np_quality_effective_tier: QString,
+    np_quality_limit_cause: i32,
+    np_output_backend_label: QString,
+    np_output_backend_active: bool,
+    np_output_mode_label: QString,
+    np_output_mode_active: bool,
+    np_is_remote: bool,
+    np_cast_target: QString,
+    np_cast_active: bool,
+    np_cast_protocol: QString,
     np_track_id: QString,
     np_album: QString,
     np_album_id: QString,
@@ -177,7 +226,22 @@ impl Default for QbzPlayerRust {
             np_muted: false,
             np_shuffle: false,
             np_repeat_mode: 0,
+            np_quality_detail: QString::default(),
             np_quality_label: QString::default(),
+            np_quality_downgraded: false,
+            np_quality_true_detail: QString::default(),
+            np_quality_effective_tier: QString::default(),
+            np_quality_limit_cause: 0,
+            // The Slint NowPlayingState defaults (state.slint) — an unlit
+            // "SYST / DEFAULT" pair until the first settings snapshot.
+            np_output_backend_label: QString::from("SYST"),
+            np_output_backend_active: false,
+            np_output_mode_label: QString::from("DEFAULT"),
+            np_output_mode_active: false,
+            np_is_remote: false,
+            np_cast_target: QString::default(),
+            np_cast_active: false,
+            np_cast_protocol: QString::default(),
             np_track_id: QString::default(),
             np_album: QString::default(),
             np_album_id: QString::default(),

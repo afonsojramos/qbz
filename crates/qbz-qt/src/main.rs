@@ -36,6 +36,8 @@ mod library_qt;
 mod local_library_qt;
 mod nav_qt;
 mod now_playing;
+mod output_labels;
+mod quality_state;
 mod offline_fwd;
 mod album_qt;
 mod ambient_qt;

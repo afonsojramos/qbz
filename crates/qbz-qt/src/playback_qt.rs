@@ -638,6 +638,11 @@ pub(crate) async fn refresh_now_playing(runtime: &Arc<AppRuntime<LoggingAdapter>
             RepeatMode::One => 2,
         },
     });
+    // Catalog max + whether the streaming-quality pref governs this request:
+    // the downgrade arrow compares DELIVERED against this (quality_state.rs).
+    // Local and Plex sources are not governed — nothing downgrades them.
+    let governed = !track.is_local;
+    crate::now_playing::set_catalog_quality(track.bit_depth, track.sample_rate, governed);
     // Artwork through the same cache pipeline as Home (attach + background
     // download + republish — single url here).
     crate::artwork_qt::attach_now_playing(&track.artwork_url.clone().unwrap_or_default());
@@ -737,6 +742,13 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                 is_playing,
                 cache,
                 track_id != 0,
+            );
+
+            // DELIVERED stream params -> the downgrade arrow + tooltip cause.
+            // Deduped inside, so a steady stream costs no Qt-thread hop.
+            crate::now_playing::set_effective_stream(
+                event.sample_rate.unwrap_or(0),
+                event.bit_depth.unwrap_or(0),
             );
 
             // --- End-of-track edge (playback.rs condition, verbatim) ------

@@ -828,6 +828,12 @@ pub async fn publish_snapshot() {
     let prefs = with_playback(|s| s.get_preferences()).unwrap_or_default();
     let streaming_key = streaming_quality();
 
+    // The now-playing stamp's two output LEDs are a pure function of the
+    // audio settings (settings.rs `output_labels`, mirrored onto
+    // NowPlayingState by `apply_snapshot`). Every settings change already
+    // funnels through here, so they refresh with the settings and never poll.
+    crate::output_labels::publish(&audio_settings);
+
     let doc = tokio::task::spawn_blocking(move || {
         let backend_types = BackendManager::available_backends();
         let current_backend = audio_settings.backend_type.unwrap_or_default();
@@ -1186,6 +1192,9 @@ pub async fn settings_bool(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &str,
         }
         "local-library-track-artwork" => {
             save_pref("local_library_track_artwork", serde_json::json!(value));
+            // Republish so the local lists repaint live; the bridge property is
+            // read at boot otherwise and the toggle would need a restart.
+            crate::local_album_actions::publish_track_artwork();
             Ok(Apply::None)
         }
         "play-indicator-animation" => {
