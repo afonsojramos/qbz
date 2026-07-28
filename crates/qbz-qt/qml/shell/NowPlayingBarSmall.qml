@@ -17,7 +17,8 @@
 // next · repeat · "+"), and the right cluster keeps PlayerBarSmall's mount
 // order (Connect · Cast · Settings · ViewMode · Lyrics · Volume · Queue).
 // The "+" opens the same "Add to…" flyout as the full bar; the quality stamp
-// is the shared QualityBadge in "compact" mode, not hand-drawn text.
+// is AudioStamp.qml — the inline 2-row stamp (quality line over the backend /
+// mode LEDs) that PlayerBarSmall.slint mounts, shared with the Large bar.
 //
 // Connect / Cast / Settings / ViewMode are still inert visual replicas where
 // no Qt invokable exists (TODO comments at the call sites); Volume, Queue,
@@ -59,20 +60,6 @@ Rectangle {
         } catch (e) {
             return false
         }
-    }
-
-    // np_quality_label is "24-bit / 96 kHz" (playback_qt::quality_badge);
-    // QualityBadge wants the raw numbers.
-    readonly property int npBitDepth: {
-        var l = QbzPlayer.npQualityLabel
-        var i = l.indexOf("-bit")
-        return i > 0 ? parseInt(l.substring(0, i)) : 0
-    }
-    readonly property real npSampleRate: {
-        var l = QbzPlayer.npQualityLabel
-        var i = l.indexOf("/")
-        var j = l.indexOf("kHz")
-        return (i >= 0 && j > i) ? parseFloat(l.substring(i + 1, j)) : 0
     }
 
     function fmt(secs) {
@@ -368,18 +355,17 @@ Rectangle {
                     height: parent.height
                     spacing: 1
 
-                    // AudioStamp — the shared QualityBadge in its narrow-bar
-                    // "compact" mode (icon + "24/96"), same component the full
-                    // bar uses. POC-NOTE: row 2 (backend/mode LEDs) is not
-                    // rendered here — the Small stamp has no room for it.
-                    QualityBadge {
-                        visible: QbzPlayer.npHasTrack && QbzPlayer.npQualityLabel !== ""
+                    // AudioStamp — the inline 2-row stamp (quality line over
+                    // the backend/mode LEDs), FIRST in the right set.
+                    // PlayerBarSmall.slint clamps it at 150px, widening to
+                    // 280px when a QConnect renderer name is shown (it grows
+                    // leftward into the empty space before the centre
+                    // transport; the right zone's clip is the real guard).
+                    AudioStamp {
+                        visible: QbzPlayer.npHasTrack
                         anchors.verticalCenter: parent.verticalCenter
-                        mode: "compact"
-                        tierOverride: QbzPlayer.npQualityTier === "hires" ? "hires"
-                            : (QbzPlayer.npQualityLabel !== "" ? "cd" : "")
-                        bitDepth: root.npBitDepth
-                        samplingRate: root.npSampleRate
+                        maxWidth: (QbzPlayer.npIsRemote && QbzPlayer.npCastTarget !== "")
+                            ? 280 : 150
                     }
 
                     // Separator: AudioStamp | icon cluster (10px toward the

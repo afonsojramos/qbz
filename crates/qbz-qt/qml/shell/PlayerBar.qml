@@ -17,7 +17,15 @@
 //   Classic (1): LEFT transport · CENTER glass SongCard (<=560px) · RIGHT cluster
 //   Large (3):   LEFT SongCard WITHOUT the cover (it lives in the sidebar
 //                dock, shifted right to clear it) · CENTER transport ·
-//                RIGHT small AudioStamp + cluster.
+//                RIGHT inline AudioStamp + cluster.
+//
+// QUALITY STACK (which bar mounts which component — SongCard.slint /
+// PlayerBar.slint / PlayerBarSmall.slint):
+//   New (0), Classic (1) -> shell/SongCardStamp.qml, mounted INSIDE the song
+//                           card: QualityBadgeFull (icon + stacked
+//                           tier/detail) over the dot LEDs.
+//   Large (3), Small (2) -> shell/AudioStamp.qml, the inline 2-row stamp.
+// They are DIFFERENT components in Slint and they stay different here.
 //
 // BUTTON SET (phase 24 — 1:1 with the Tauri NowPlayingBar.svelte, via the
 // Slint TransportControls/PlayerBar that descend from it):
@@ -70,8 +78,10 @@ Rectangle {
             return ({})
         }
     }
-    readonly property bool backendPipewire: settingsDoc.backendIsPipewire === true
-    readonly property bool dacPassthrough: settingsDoc.dacPassthrough === true
+    // (The old backendPipewire / dacPassthrough LED sources are gone: the
+    // stamp's LEDs now read np_output_backend_* / np_output_mode_* off
+    // QbzPlayer, which is where Slint reads them too — the settings document
+    // never knew whether the backend was actually ENGAGED.)
     // AppearanceState.show-volume-steppers (PlayerBar.slint gates the −/+
     // pair on it; Tauri always showed them).
     readonly property bool showVolumeSteppers: settingsDoc.showVolumeSteppers === true
@@ -104,21 +114,6 @@ Rectangle {
         QbzBridge.settingsBool("normalization", normLocal)
     }
 
-    // np_quality_label is "24-bit / 96 kHz" (playback_qt::quality_badge);
-    // QualityBadge wants the raw numbers, so split the published string
-    // instead of duplicating the tier logic.
-    readonly property int npBitDepth: {
-        var l = QbzPlayer.npQualityLabel
-        var i = l.indexOf("-bit")
-        return i > 0 ? parseInt(l.substring(0, i)) : 0
-    }
-    readonly property real npSampleRate: {
-        var l = QbzPlayer.npQualityLabel
-        var i = l.indexOf("/")
-        var j = l.indexOf("kHz")
-        return (i >= 0 && j > i) ? parseFloat(l.substring(i + 1, j)) : 0
-    }
-
     function fmt(secs) {
         var m = Math.floor(secs / 60)
         var s = Math.floor(secs % 60)
@@ -126,66 +121,6 @@ Rectangle {
     }
 
     // --- Shared bits -------------------------------------------------------
-
-    // Square compact icon button (BarControls.IconButton).
-
-
-    // Dot LED (circle-dot on / circle off) + constant-colour label — the
-    // New-mode output indicators (SongCard dot-leds).
-    component DotLed: Row {
-        property string label: ""
-        property bool on: false
-        spacing: 4
-        height: 12
-        Rectangle {
-            width: 8
-            height: 8
-            radius: 4
-            anchors.verticalCenter: parent.verticalCenter
-            color: parent.on ? theme.accent : "transparent"
-            border.width: 1
-            border.color: parent.on ? theme.accent : theme.textMuted
-        }
-        Text {
-            text: parent.label
-            color: theme.textMuted
-            font.pixelSize: 9
-            font.weight: theme.weightSemibold
-            font.letterSpacing: 0.5
-            verticalAlignment: Text.AlignVCenter
-        }
-    }
-
-    // The audio stamp (quality badge + dot LEDs) — New mode keeps the full
-    // stamp inside the SongCard; Large mounts a compact one on the right
-    // column's left wall.
-    component AudioStamp: Row {
-        property bool showLeds: true
-        spacing: 8
-        height: 30
-        layoutDirection: Qt.RightToLeft
-
-        // The badge itself is the Tauri QualityBadge in its narrow-bar
-        // "compact" mode (icon + "24/96"), NOT a hand-drawn glyph+label pair.
-        QualityBadge {
-            visible: QbzPlayer.npQualityLabel !== ""
-            mode: "compact"
-            // The stamp shows the cd glyph for ANY non-hires tier with a
-            // label (not just "cd") — map that exactly.
-            tierOverride: QbzPlayer.npQualityTier === "hires" ? "hires"
-                : (QbzPlayer.npQualityLabel !== "" ? "cd" : "")
-            bitDepth: root.npBitDepth
-            samplingRate: root.npSampleRate
-            anchors.verticalCenter: parent.verticalCenter
-        }
-        Column {
-            visible: showLeds
-            anchors.verticalCenter: parent.verticalCenter
-            spacing: 1
-            DotLed { label: "PIPEWIRE"; on: root.backendPipewire }
-            DotLed { label: "DACPASS"; on: root.dacPassthrough }
-        }
-    }
 
     // SongCard (SongCard.slint): cover + title + context meta + the in-card
     // audio stamp. `glass` renders the Classic contained card.
@@ -201,8 +136,12 @@ Rectangle {
 
         Row {
             anchors.left: parent.left
-            anchors.right: stamp.left
-            anchors.rightMargin: 4
+            // SongCard.slint's inner-row width formula: the card minus the
+            // stamp + a 4px gap ONLY when the stamp is rendered (Large hides
+            // it — the AudioStamp moves to the right column — so the text
+            // column must reclaim those 132px).
+            anchors.right: stamp.visible ? stamp.left : parent.right
+            anchors.rightMargin: stamp.visible ? 4 : 0
             height: parent.height
             spacing: 0
 
@@ -283,7 +222,7 @@ Rectangle {
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: if (QbzPlayer.npAlbumId !== "") QbzBridge.openAlbum(QbzPlayer.npAlbumId)
+                            onClicked: if (QbzPlayer.npAlbumId !== "") QbzAlbum.openAlbum(QbzPlayer.npAlbumId)
                         }
                     }
                     Text {
@@ -297,7 +236,7 @@ Rectangle {
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: QbzPlayer.npArtistId !== "" ? Qt.PointingHandCursor : Qt.ArrowCursor
-                            onClicked: if (QbzPlayer.npArtistId !== "") QbzBridge.openArtist(QbzPlayer.npArtistId)
+                            onClicked: if (QbzPlayer.npArtistId !== "") QbzArtist.openArtist(QbzPlayer.npArtistId)
                         }
                     }
                     Rectangle {
@@ -318,16 +257,19 @@ Rectangle {
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: QbzPlayer.npAlbumId !== "" ? Qt.PointingHandCursor : Qt.ArrowCursor
-                            onClicked: if (QbzPlayer.npAlbumId !== "") QbzBridge.openAlbum(QbzPlayer.npAlbumId)
+                            onClicked: if (QbzPlayer.npAlbumId !== "") QbzAlbum.openAlbum(QbzPlayer.npAlbumId)
                         }
                     }
                 }
             }
         }
-        AudioStamp {
+        SongCardStamp {
             id: stamp
             visible: showBadges && QbzPlayer.npHasTrack
             anchors.right: parent.right
+            // Classic (glass) insets the stamp by pad + stamp-right-margin
+            // (2px each) so it clears the visible card border.
+            anchors.rightMargin: glass ? 4 : 0
             anchors.verticalCenter: parent.verticalCenter
         }
     }
@@ -602,12 +544,13 @@ Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                     spacing: 1
 
-                    // Large: the SMALL AudioStamp just LEFT of the icon
-                    // cluster at a fixed 12px gap (the badges move out of the
-                    // song card in Large).
+                    // Large: the inline 2-row AudioStamp just LEFT of the icon
+                    // cluster at a fixed 12px gap (the badges move OUT of the
+                    // song card in Large). PlayerBar.slint mounts it with
+                    // max-width: 140px.
                     AudioStamp {
                         visible: root.largeActive && QbzPlayer.npHasTrack
-                        showLeds: false
+                        maxWidth: 140
                         anchors.verticalCenter: parent.verticalCenter
                     }
                     Item { visible: root.largeActive; width: 12; height: 1 }
