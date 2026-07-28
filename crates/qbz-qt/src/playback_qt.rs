@@ -638,6 +638,14 @@ pub(crate) async fn refresh_now_playing(runtime: &Arc<AppRuntime<LoggingAdapter>
             RepeatMode::One => 2,
         },
     });
+    // The two output LEDs (+ the volume-lock flag) are decided HERE, not when
+    // the Settings page republishes: a stream is about to open and the
+    // backend/mode it will use is whatever the audio settings say right now.
+    // Publishing on the track edge is what makes the stamp live from the first
+    // note instead of updating only when the user changes page. Cheap: one WAL
+    // read + one Qt hop per track — no poll, and NOT publish_snapshot (that
+    // rebuilds the entire Settings document).
+    crate::output_labels::publish_current();
     // Catalog max + whether the streaming-quality pref governs this request:
     // the downgrade arrow compares DELIVERED against this (quality_state.rs).
     // Local and Plex sources are not governed — nothing downgrades them.

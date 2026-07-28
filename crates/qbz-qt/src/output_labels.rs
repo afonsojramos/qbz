@@ -6,10 +6,20 @@
 //! lights the LED. This module only READS AudioSettings — the audio path
 //! (qbz-audio / qbz-player) is never touched from here.
 //!
-//! Published onto `QbzPlayer` (`np_output_*`) from `settings_qt::
-//! publish_snapshot`, i.e. on every settings change and at boot. Same shape
-//! as the Slint, where `apply_snapshot` mirrors the four values onto
-//! `NowPlayingState` alongside `SettingsState`. No polling.
+//! Published onto `QbzPlayer` (`np_output_*`) from THREE edges, never a poll:
+//!   1. `settings_qt::publish_snapshot` — every settings change (and the
+//!      Settings document's own republish).
+//!   2. the TRACK edge (`playback_qt::refresh_now_playing`) — the moment a
+//!      new stream is about to open, which is when the backend + mode are
+//!      actually decided. Without this the LEDs only refreshed when the
+//!      settings document republished, i.e. when the user changed page.
+//!   3. the STREAM edge (`now_playing::set_effective_stream`, deduped inside
+//!      on the delivered params) — the first tick after the engine reports
+//!      real stream params, so the labels are correct even if the settings
+//!      were touched between track start and stream open.
+//!
+//! Same shape as the Slint, where `apply_snapshot` mirrors the four values
+//! onto `NowPlayingState` alongside `SettingsState`.
 
 use cxx_qt_lib::QString;
 use qbz_audio::backend::{AlsaPlugin, AudioBackendType};
@@ -88,17 +98,50 @@ pub fn output_labels(audio: &AudioSettings) -> OutputLabels {
     }
 }
 
-/// Derive + push the four LED values onto the player bridge (Qt-thread hop).
-/// Called from `settings_qt::publish_snapshot`, so the labels follow an audio
-/// settings change with no poll of their own.
+/// Whether the app's SOFTWARE volume control is inert on the current output
+/// route — i.e. moving the slider changes nothing in the signal path.
+///
+/// This is not a guess: `PlaybackEngine::set_volume`
+/// (`qbz-player/src/player/playback_engine.rs`) is a documented NO-OP on the
+/// `AlsaDirect` arm unless `alsa_hardware_volume` is on, in which case it
+/// drives the DAC's own mixer instead (still bit-perfect, so the slider stays
+/// live). The ALSA backend builds an `AlsaDirectStream` for BOTH the `hw`
+/// (bit-perfect direct) and the `plughw` fallback plugin; only `Pcm` opts out
+/// of the direct engine entirely and lands on CPAL/rodio, where software
+/// volume works. Hence: ALSA backend, plugin != Pcm, hardware volume off.
+///
+/// READ-ONLY derivation from the persisted `AudioSettings` — no audio
+/// behaviour is changed anywhere by this, the UI just stops lying about it.
+pub fn volume_locked(audio: &AudioSettings) -> bool {
+    matches!(audio.backend_type, Some(AudioBackendType::Alsa))
+        && !matches!(audio.alsa_plugin, Some(AlsaPlugin::Pcm))
+        && !audio.alsa_hardware_volume
+}
+
+/// Derive + push the four LED values (and the volume-lock flag) onto the
+/// player bridge (Qt-thread hop). Called from `settings_qt::publish_snapshot`
+/// AND from the track/stream edges, so the labels follow the settings without
+/// a poll of their own.
 pub fn publish(audio: &AudioSettings) {
     let l = output_labels(audio);
+    let locked = volume_locked(audio);
     crate::player_bridge::ui(move |mut b| {
         b.as_mut().set_np_output_backend_label(QString::from(l.backend));
         b.as_mut().set_np_output_mode_label(QString::from(l.mode));
         b.as_mut().set_np_output_backend_active(l.backend_active);
         b.as_mut().set_np_output_mode_active(l.mode_active);
+        b.as_mut().set_np_volume_locked(locked);
     });
+}
+
+/// Re-derive from the LIVE audio settings and publish. This is the TRACK /
+/// STREAM edge entry point: the settings store is the source of truth for
+/// which backend + mode the engine is about to use, so reading it at the
+/// moment a stream opens costs one cheap WAL read and no settings-document
+/// rebuild (`publish_snapshot` is the expensive one — device enumeration,
+/// integrations, the whole Settings JSON; it must NOT be called from here).
+pub fn publish_current() {
+    publish(&crate::settings_qt::audio_settings());
 }
 
 #[cfg(test)]
@@ -160,6 +203,35 @@ mod tests {
         s.reserve_dac_while_running = true;
         assert_eq!(output_labels(&s).mode, "LOCKED");
         assert!(output_labels(&s).mode_active);
+    }
+
+    #[test]
+    fn volume_is_locked_only_on_the_alsa_direct_engine_without_hw_mixer() {
+        // Non-ALSA backends keep software volume.
+        for b in [
+            None,
+            Some(AudioBackendType::PipeWire),
+            Some(AudioBackendType::Pulse),
+            Some(AudioBackendType::Jack),
+            Some(AudioBackendType::SystemDefault),
+        ] {
+            assert!(!volume_locked(&settings(b)), "{b:?} must keep the slider");
+        }
+        let mut s = settings(Some(AudioBackendType::Alsa));
+        // hw = the bit-perfect direct path: engine set_volume is a no-op.
+        s.alsa_plugin = Some(AlsaPlugin::Hw);
+        s.alsa_hardware_volume = false;
+        assert!(volume_locked(&s));
+        // ...unless the DAC's own mixer is driven instead.
+        s.alsa_hardware_volume = true;
+        assert!(!volume_locked(&s));
+        // plughw still runs the AlsaDirect engine -> still inert.
+        s.alsa_hardware_volume = false;
+        s.alsa_plugin = Some(AlsaPlugin::PlugHw);
+        assert!(volume_locked(&s));
+        // Pcm opts out of the direct engine (CPAL/rodio) -> software volume.
+        s.alsa_plugin = Some(AlsaPlugin::Pcm);
+        assert!(!volume_locked(&s));
     }
 
     #[test]

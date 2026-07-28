@@ -72,6 +72,13 @@ pub mod qbz_player {
         // DACPASS|BITPERF|EXCL|DIRECT|LOCKED|ROUTED|SHARED|DEFAULT.
         #[qproperty(QString, np_output_mode_label)]
         #[qproperty(bool, np_output_mode_active)]
+        // The app's software volume is INERT on this route — the ALSA Direct
+        // engine's `set_volume` is a no-op unless the DAC's own mixer is
+        // driven (`alsa_hardware_volume`). Derived read-only in
+        // `output_labels::volume_locked`; the bars render the volume slider
+        // disabled with a tooltip instead of pretending it works. No audio
+        // behaviour hangs off this flag — it is a UI mirror only.
+        #[qproperty(bool, np_volume_locked)]
 
         // --- Cast / remote (Qobuz Connect + Chromecast/DLNA) -------------
         // A peer Qobuz Connect renderer owns playback (transport is remote).
@@ -196,6 +203,7 @@ pub struct QbzPlayerRust {
     np_output_backend_active: bool,
     np_output_mode_label: QString,
     np_output_mode_active: bool,
+    np_volume_locked: bool,
     np_is_remote: bool,
     np_cast_target: QString,
     np_cast_active: bool,
@@ -238,6 +246,9 @@ impl Default for QbzPlayerRust {
             np_output_backend_active: false,
             np_output_mode_label: QString::from("DEFAULT"),
             np_output_mode_active: false,
+            // Optimistic default: the slider stays live until the first
+            // settings read proves the route is an inert ALSA-direct one.
+            np_volume_locked: false,
             np_is_remote: false,
             np_cast_target: QString::default(),
             np_cast_active: false,

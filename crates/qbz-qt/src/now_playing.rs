@@ -9,8 +9,12 @@
 //!
 //! The arithmetic behind the downgrade block lives in `quality_state.rs`
 //! (pure, unit-tested); the two output LEDs are derived from AudioSettings in
-//! `output_labels.rs` and published from `settings_qt::publish_snapshot`, not
-//! from here — they follow the SETTINGS, not the track.
+//! `output_labels.rs`. They follow the SETTINGS, not the track — but they are
+//! DECIDED when a stream opens, so besides `settings_qt::publish_snapshot`
+//! they are re-derived on shell entry (`publish_current`), on the track edge
+//! (`playback_qt::refresh_now_playing`) and on the stream edge
+//! (`set_effective_stream`, only when the delivered params actually move).
+//! Without those edges the stamp only refreshed when the user changed page.
 //!
 //! POC-NOTE: playback transport is wired (playback_qt poll pump). Cast /
 //! Qobuz Connect are NOT in the POC build (no qbz-cast / qconnect deps), so
@@ -149,6 +153,10 @@ fn publish(m: &NowPlayingModel) {
 pub fn publish_current() {
     let (_, snapshot) = with_model(|_| ());
     publish(&snapshot);
+    // Seed the two output LEDs + the volume-lock flag at shell entry too, so
+    // the stamp is correct before the first track ever plays (the bridge
+    // defaults are the unlit SYST/DEFAULT pair).
+    crate::output_labels::publish_current();
 }
 
 // --- Pure-UI toggles (mutate + republish) --------------------------------
@@ -262,6 +270,12 @@ pub fn set_effective_stream(eff_rate_hz: u32, eff_bits: u32) {
     });
     if changed {
         publish(&snapshot);
+        // STREAM edge: the engine has just reported real params, i.e. the
+        // output stream is open and the backend/mode are now facts. Re-derive
+        // the two LEDs so they are right even if the audio settings moved
+        // between the track edge and the stream actually opening. Gated by
+        // `changed`, so a steady stream costs nothing — this is not a poll.
+        crate::output_labels::publish_current();
     }
 }
 

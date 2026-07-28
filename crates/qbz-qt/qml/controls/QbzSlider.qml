@@ -17,6 +17,9 @@ Item {
 
     width: 200
     height: 22
+    // Disabled = inert (the bit-perfect ALSA direct path locks volume).
+    // `enabled` already disarms the MouseArea; this is the matching dim.
+    opacity: enabled ? 1.0 : 0.3
 
     readonly property int thumbSize: 16
     readonly property real travel: width - thumbSize

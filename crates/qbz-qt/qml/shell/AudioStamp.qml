@@ -156,6 +156,14 @@ Item {
                 hoverEnabled: true
             }
 
+            // The bubble is 1:1 with the global shell/TooltipOverlay.slint the
+            // Slint stamp feeds: 11px/medium TEXT-PRIMARY (not secondary) on
+            // surface-elevated, radius 4 (not radiusSm=8), NO border, 5px/9px
+            // padding (not 6px), default line height (Slint sets none), and a
+            // downward caret. Centred on the control (TooltipOverlay clamps to
+            // the window and keeps the caret on the anchor); the BUBBLE bottom
+            // sits 9px above the anchor top (TooltipOverlay.slint:26) with the
+            // caret poking 5px below it, hence y = -height - 4.
             ToolTip {
                 id: qualityTip
                 visible: qualityHover.containsMouse && root.qualityTooltip !== ""
@@ -163,24 +171,41 @@ Item {
                 delay: 0
                 timeout: -1
                 padding: 0
-                x: qualityRow.width - width
-                y: -height - 6
+                x: Math.round((qualityRow.width - width) / 2)
+                y: -height - 4
                 contentItem: Text {
                     text: qualityTip.text
-                    color: theme.textSecondary
+                    color: theme.textPrimary
                     font.pixelSize: 11
                     font.weight: theme.weightMedium
-                    lineHeight: 1.25
                     leftPadding: 9
                     rightPadding: 9
-                    topPadding: 6
-                    bottomPadding: 6
+                    topPadding: 5
+                    // 5px bubble padding + the 5px caret zone below it.
+                    bottomPadding: 10
                 }
-                background: Rectangle {
-                    color: theme.surfaceElevated
-                    radius: theme.radiusSm
-                    border.width: 1
-                    border.color: theme.borderSubtle
+                background: Item {
+                    Rectangle {
+                        anchors.fill: parent
+                        anchors.bottomMargin: 5
+                        color: theme.surfaceElevated
+                        radius: 4
+                    }
+                    // Caret (TooltipOverlay.slint:56 draws a 10x6 Path). A
+                    // 7.07px square rotated 45 deg is a 10px-wide diamond;
+                    // centred on the bubble's bottom edge its lower half IS
+                    // the caret. QtQuick.Shapes is not imported anywhere in
+                    // this port, and shader effects are dead on the software
+                    // path, so a rotated Rectangle is the way to draw it.
+                    Rectangle {
+                        width: 7.07
+                        height: 7.07
+                        rotation: 45
+                        antialiasing: true
+                        color: theme.surfaceElevated
+                        x: Math.round((parent.width - width) / 2)
+                        y: parent.height - 5 - height / 2
+                    }
                 }
             }
         }

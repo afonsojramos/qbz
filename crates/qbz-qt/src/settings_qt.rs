@@ -63,6 +63,17 @@ fn with_audio<T>(f: impl FnOnce(&AudioSettingsStore) -> Result<T, String>) -> Re
     f(store)
 }
 
+/// The live persisted audio settings, READ-ONLY (the audio path is
+/// PROTECTED — nothing here writes or reinitialises a device).
+///
+/// Exposed so the now-playing stamp can re-derive its two output LEDs on the
+/// TRACK / STREAM edge (`output_labels::publish_current`) without dragging in
+/// `publish_snapshot`, which rebuilds the whole Settings document (device
+/// enumeration + integrations) and is far too heavy for a track change.
+pub fn audio_settings() -> qbz_audio::settings::AudioSettings {
+    with_audio(|s| s.get_settings()).unwrap_or_default()
+}
+
 fn with_playback<T>(
     f: impl FnOnce(&PlaybackPreferencesStore) -> Result<T, String>,
 ) -> Result<T, String> {
@@ -824,7 +835,7 @@ fn backend_label(t: AudioBackendType) -> String {
 
 /// Build + publish the full snapshot (settings.rs `build_snapshot`).
 pub async fn publish_snapshot() {
-    let audio_settings = with_audio(|s| s.get_settings()).unwrap_or_default();
+    let audio_settings = audio_settings();
     let prefs = with_playback(|s| s.get_preferences()).unwrap_or_default();
     let streaming_key = streaming_quality();
 

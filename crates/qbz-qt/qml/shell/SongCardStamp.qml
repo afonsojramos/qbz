@@ -55,15 +55,56 @@ Column {
         return qualityCauseLine === "" ? t : t + "\n" + qualityCauseLine
     }
 
+    // The tooltip bubble of shell/TooltipOverlay.slint, 1:1: surface-elevated,
+    // radius 4, NO border (the port's earlier bubble had a 1px border-subtle
+    // and radiusSm = 8), plus the downward caret. The bubble's bottom edge
+    // sits 9px above the anchor and the 5px caret pokes below it, so every
+    // ToolTip using this background is positioned at y = -height - 4 with a
+    // bottomPadding of 10 (5px bubble padding + the 5px caret zone).
+    //
+    // Slint also drop-shadows the bubble (blur 10, #00000099); that needs a
+    // shader layer effect, which renders nothing on the software path, so it
+    // is deliberately dropped.
+    component TipBubble: Item {
+        Rectangle {
+            anchors.fill: parent
+            anchors.bottomMargin: 5
+            color: theme.surfaceElevated
+            radius: 4
+        }
+        // A 7.07px square rotated 45 deg is a 10px-wide diamond; centred on
+        // the bubble's bottom edge, its lower half is the 10x5 caret
+        // (TooltipOverlay.slint:56 draws a 10x6 Path). QtQuick.Shapes is not
+        // imported anywhere in this port.
+        Rectangle {
+            width: 7.07
+            height: 7.07
+            rotation: 45
+            antialiasing: true
+            color: theme.surfaceElevated
+            x: Math.round((parent.width - width) / 2)
+            y: parent.height - 5 - height / 2
+        }
+    }
+
     // Dot LED (circle-dot on / circle off) + constant-colour label —
-    // SongCard.slint's DotLed. 9px mark, 4px gap, 8px/600 label at
+    // SongCard.slint's DotLed (line 57): 9px mark, 4px gap, 8px/600 label at
     // letter-spacing 0.3 that NEVER changes colour (it stays text-muted; only
     // the dot signals state).
     //
     // The mark is DRAWN, not an SVG: the port has no circle / circle-dot
     // assets, and the software path cannot recolour at render time, so every
-    // LED colour would need its own baked variant. A 1px ring plus a 4px
-    // centre dot is the same figure.
+    // LED colour would need its own baked variant.
+    //
+    // The figure is measured off the two lucide SVGs Slint tints, scaled to
+    // the 9px box the .slint asks for (scale = 9/24 = 0.375):
+    //   circle.svg      <circle r="10" stroke-width="2">  -> painted band
+    //                   r 9..11 => outer diameter 22 * 0.375 = 8.25px,
+    //                   stroke   2 * 0.375 = 0.75px
+    //   circle-dot.svg  adds <circle r="2.5" fill>        -> centre dot
+    //                   diameter 5 * 0.375 = 1.875px
+    // The previous 9px/1px ring with a 4px dot read as a solid bullseye next
+    // to Slint's thin ring + pinpoint — that was the visible mismatch.
     component DotLed: Item {
         id: led
         property string label: ""
@@ -78,21 +119,30 @@ Column {
         Row {
             id: ledRow
             spacing: 4
-            Rectangle {
+            // The 9px icon BOX (what QbzIcon occupies in the .slint) — the
+            // 4px gap must measure from it, not from the smaller ring.
+            Item {
                 width: 9
                 height: 9
-                radius: 4.5
                 anchors.verticalCenter: parent.verticalCenter
-                color: "transparent"
-                border.width: 1
-                border.color: led.on ? led.onColor : theme.textMuted
                 Rectangle {
-                    visible: led.on
-                    width: 4
-                    height: 4
-                    radius: 2
+                    width: 8.25
+                    height: 8.25
+                    radius: width / 2
                     anchors.centerIn: parent
-                    color: led.onColor
+                    antialiasing: true
+                    color: "transparent"
+                    border.width: 0.75
+                    border.color: led.on ? led.onColor : theme.textMuted
+                    Rectangle {
+                        visible: led.on
+                        width: 1.875
+                        height: 1.875
+                        radius: width / 2
+                        anchors.centerIn: parent
+                        antialiasing: true
+                        color: led.onColor
+                    }
                 }
             }
             Text {
@@ -110,6 +160,8 @@ Column {
             anchors.fill: parent
             hoverEnabled: true
         }
+        // Bubble geometry: see Tip below — same numbers, read off
+        // shell/TooltipOverlay.slint.
         ToolTip {
             id: ledTip
             visible: ledHover.containsMouse && led.tooltip !== ""
@@ -118,23 +170,18 @@ Column {
             timeout: -1
             padding: 0
             x: Math.round((led.width - width) / 2)
-            y: -height - 6
+            y: -height - 4
             contentItem: Text {
                 text: ledTip.text
-                color: theme.textSecondary
+                color: theme.textPrimary
                 font.pixelSize: 11
                 font.weight: theme.weightMedium
                 leftPadding: 9
                 rightPadding: 9
                 topPadding: 5
-                bottomPadding: 5
+                bottomPadding: 10
             }
-            background: Rectangle {
-                color: theme.surfaceElevated
-                radius: theme.radiusSm
-                border.width: 1
-                border.color: theme.borderSubtle
-            }
+            background: TipBubble {}
         }
     }
 
@@ -186,24 +233,18 @@ Column {
             timeout: -1
             padding: 0
             x: Math.round((root.width - width) / 2)
-            y: -height - 6
+            y: -height - 4
             contentItem: Text {
                 text: stampTip.text
-                color: theme.textSecondary
+                color: theme.textPrimary
                 font.pixelSize: 11
                 font.weight: theme.weightMedium
-                lineHeight: 1.25
                 leftPadding: 9
                 rightPadding: 9
-                topPadding: 6
-                bottomPadding: 6
+                topPadding: 5
+                bottomPadding: 10
             }
-            background: Rectangle {
-                color: theme.surfaceElevated
-                radius: theme.radiusSm
-                border.width: 1
-                border.color: theme.borderSubtle
-            }
+            background: TipBubble {}
         }
     }
 
