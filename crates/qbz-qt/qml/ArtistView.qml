@@ -21,6 +21,10 @@ import com.blitzfc.qbz
 Rectangle {
     id: root
     color: theme.surfaceMain
+    // Round to the AppShell content-frame bezel (Radius.md): QML clips
+    // are rectangular, so the frame's own rounding never reaches the
+    // view — the view's own fill must round instead.
+    radius: 12
 
     QbzTheme { id: theme }
 
@@ -118,7 +122,7 @@ Rectangle {
     component CircleBtn: Rectangle {
         property string name: ""
         property bool active: false
-        signal clicked()
+        signal clicked(var mouse)
         width: 32
         height: 32
         radius: 16
@@ -137,7 +141,7 @@ Rectangle {
             anchors.fill: parent
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
-            onClicked: parent.clicked()
+            onClicked: function (mouse) { parent.clicked(mouse) }
         }
     }
 
@@ -197,14 +201,14 @@ Rectangle {
                     height: showAlbum ? 16 : 14
                     tintName: "muted"
                 }
-                Image {
+                RoundedImage {
                     anchors.fill: parent
                     source: root.coverMap[row.artUrl] || ""
-                    fillMode: Image.PreserveAspectCrop
-                    asynchronous: true
+                    radius: theme.radiusSm
                 }
                 Rectangle {
                     anchors.fill: parent
+                    radius: theme.radiusSm
                     color: "#000000"
                     opacity: trArea.containsMouse || isActive ? 0.6 : 0.0
                     Behavior on opacity { NumberAnimation { duration: 150 } }
@@ -549,11 +553,10 @@ Rectangle {
                     radius: 100
                     color: theme.surfaceElevated
                     clip: true
-                    Image {
+                    RoundedImage {
                         anchors.fill: parent
                         source: root.coverMap[artist.artUrl] || ""
-                        fillMode: Image.PreserveAspectCrop
-                        asynchronous: true
+                        radius: 100
                     }
                 }
 
@@ -611,9 +614,10 @@ Rectangle {
                             }
                         }
                         CircleBtn {
+                            id: radioBtn
                             name: "radio"
                             anchors.verticalCenter: parent.verticalCenter
-                            onClicked: radioPopup.open()
+                            onClicked: radioPopup.openBelowRight(radioBtn)
                         }
                         CircleBtn {
                             name: "element-connect"
@@ -622,9 +626,10 @@ Rectangle {
                             onClicked: root.networkOpen = !root.networkOpen
                         }
                         CircleBtn {
+                            id: overflowBtn
                             name: "ellipsis"
                             anchors.verticalCenter: parent.verticalCenter
-                            onClicked: overflowMenu.open()
+                            onClicked: function (mouse) { overflowMenu.openAtCursor(overflowBtn, mouse.x, mouse.y) }
                         }
                         Item { width: parent.width - 4 * 32 - 4 * 12 - segTabs.width; height: 1 }
                         // From catalog / In library (webplayer parity).
@@ -799,9 +804,10 @@ Rectangle {
                         // POC-NOTE: multi-select out of scope.
                     }
                     CircleBtn {
+                        id: topMenuBtn
                         name: "ellipsis"
                         anchors.verticalCenter: parent.verticalCenter
-                        onClicked: topMenu.open()
+                        onClicked: function (mouse) { topMenu.openAtCursor(topMenuBtn, mouse.x, mouse.y) }
                     }
                 }
                 Item { visible: topTracks.length > 0; width: 1; height: 10 }
@@ -954,11 +960,10 @@ Rectangle {
                                     radius: theme.radiusSm
                                     color: theme.surfaceElevated
                                     clip: true
-                                    Image {
+                                    RoundedImage {
                                         anchors.fill: parent
                                         source: root.coverMap[modelData.artUrl] || ""
-                                        fillMode: Image.PreserveAspectCrop
-                                        asynchronous: true
+                                        radius: theme.radiusSm
                                     }
                                     MouseArea {
                                         anchors.fill: parent
@@ -1318,20 +1323,9 @@ Rectangle {
     }
 
     // --- Radio dropdown (INERT items — POC-NOTE: radio engines) ----------
-    Popup {
+    QbzContextMenu {
         id: radioPopup
-        x: 260
-        y: 300
-        width: 180
-        padding: 5
-        closePolicy: Popup.CloseOnPressOutside
-        background: Rectangle {
-            color: theme.surfaceMain
-            radius: theme.radiusSm
-            border.width: 1
-            border.color: theme.borderMuted
-        }
-        contentItem: Column {
+        menuWidth: 180
             Repeater {
                 model: [QbzBridge.tr("QBZ Radio"), QbzBridge.tr("Qobuz Radio")]
                 delegate: Rectangle {
@@ -1363,23 +1357,11 @@ Rectangle {
                 }
             }
         }
-    }
 
     // --- ⋯ overflow menu ---------------------------------------------------
-    Popup {
+    QbzContextMenu {
         id: overflowMenu
-        x: 260
-        y: 300
-        width: 224
-        padding: 5
-        closePolicy: Popup.CloseOnPressOutside
-        background: Rectangle {
-            color: theme.surfaceMain
-            radius: theme.radiusSm
-            border.width: 1
-            border.color: theme.borderMuted
-        }
-        contentItem: Column {
+        menuWidth: 224
             Repeater {
                 model: [
                     { "label": QbzBridge.tr("Create Artist Collection"), "icon": "library-big", "action": "stub" },
@@ -1451,23 +1433,11 @@ Rectangle {
                 }
             }
         }
-    }
 
     // --- Popular Tracks ⋯ menu ---------------------------------------------
-    Popup {
+    QbzContextMenu {
         id: topMenu
-        x: 260
-        y: 340
-        width: 224
-        padding: 5
-        closePolicy: Popup.CloseOnPressOutside
-        background: Rectangle {
-            color: theme.surfaceMain
-            radius: theme.radiusSm
-            border.width: 1
-            border.color: theme.borderMuted
-        }
-        contentItem: Column {
+        menuWidth: 224
             Repeater {
                 model: [
                     { "label": QbzBridge.tr("Play all next"), "icon": "list-start", "action": "next-all" },
@@ -1513,7 +1483,6 @@ Rectangle {
                 }
             }
         }
-    }
 
     // --- Full-bio modal ----------------------------------------------------
     Rectangle {

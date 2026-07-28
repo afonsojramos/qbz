@@ -26,6 +26,10 @@ import com.blitzfc.qbz
 Rectangle {
     id: root
     color: theme.surfaceMain
+    // Round to the AppShell content-frame bezel (Radius.md): QML clips
+    // are rectangular, so the frame's own rounding never reaches the
+    // view — the view's own fill must round instead.
+    radius: 12
 
     QbzTheme { id: theme }
 
@@ -406,23 +410,16 @@ Rectangle {
                 color: theme.surfaceElevated
                 clip: true
 
-                Image {
+                RoundedImage {
                     anchors.fill: parent
                     source: root.artMap[item.artKey] || ""
-                    fillMode: Image.PreserveAspectCrop
-                    asynchronous: true
-                }
-                // Artist cards are circular in Slint (ArtistGridCard).
-                Rectangle {
-                    visible: item.kind === "artist"
-                    anchors.fill: parent
-                    radius: 100
-                    color: "transparent"
-                    border.width: 0
+                    // Artist cards are circular in Slint (ArtistGridCard).
+                    radius: item.kind === "artist" ? 100 : theme.radiusSm
                 }
                 // Hover scrim + play overlay (albums + tracks).
                 Rectangle {
                     anchors.fill: parent
+                    radius: item.kind === "artist" ? 100 : theme.radiusSm
                     color: "#000000"
                     opacity: overlayOn && (item.kind === "album" || item.kind === "track") ? 0.5 : 0.0
                     Behavior on opacity { NumberAnimation { duration: 150 } }
@@ -550,11 +547,10 @@ Rectangle {
                 anchors.verticalCenter: parent.verticalCenter
                 color: theme.surfaceElevated
                 clip: true
-                Image {
+                RoundedImage {
                     anchors.fill: parent
                     source: root.artMap[item.artKey] || ""
-                    fillMode: Image.PreserveAspectCrop
-                    asynchronous: true
+                    radius: 4
                 }
             }
             Column {

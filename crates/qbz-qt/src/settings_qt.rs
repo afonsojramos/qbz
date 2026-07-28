@@ -115,6 +115,47 @@ fn save_streaming_quality(key: &str) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// ui_prefs.json (window chrome, phase 12) — the Slint `use_system_title_bar`
+// pref (crates/qbz/src/ui_prefs.rs): SAME shared file, additive key patch so
+// every other Slint key survives. Default TRUE on Linux (the Slint default
+// is `!macos` — Linux keeps the system decorations). Applied at startup
+// only: decorations negotiate at surface creation on Wayland, so a toggle
+// takes effect on the next launch (restart semantics, 1:1 Slint).
+// ---------------------------------------------------------------------------
+
+pub fn use_system_title_bar() -> bool {
+    let Some(path) = prefs_path() else {
+        return true;
+    };
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|v| v.get("use_system_title_bar").and_then(|q| q.as_bool()))
+        .unwrap_or(true)
+}
+
+/// Flip + persist the pref; returns the new value (for the menu state).
+pub fn toggle_system_title_bar() -> bool {
+    let next = !use_system_title_bar();
+    if let Some(path) = prefs_path() {
+        let mut value: serde_json::Value = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
+        if let Some(obj) = value.as_object_mut() {
+            obj.insert(
+                "use_system_title_bar".to_string(),
+                serde_json::Value::Bool(next),
+            );
+            if let Ok(text) = serde_json::to_string_pretty(&value) {
+                let _ = std::fs::write(&path, text);
+            }
+        }
+    }
+    next
+}
+
 pub const STREAMING_QUALITY_KEYS: &[&str] = &["mp3", "cd", "hires", "hires_plus"];
 pub const STREAMING_QUALITY_LABELS: &[&str] = &["MP3", "CD Quality", "Hi-Res", "Hi-Res+"];
 

@@ -187,11 +187,10 @@ Rectangle {
                             color: theme.surfaceElevated
                             clip: true
 
-                            Image {
-                                visible: QbzBridge.npHasTrack && QbzBridge.npArtworkPath !== ""
+                            RoundedImage {
                                 anchors.fill: parent
                                 source: QbzBridge.npArtworkPath
-                                fillMode: Image.PreserveAspectCrop
+                                radius: 6
                             }
                             // Idle (no track): a STATIC album glyph
                             // placeholder (50% of the art size, muted).

@@ -17,11 +17,10 @@ import com.blitzfc.qbz
 
 Rectangle {
     id: root
-    // TRANSPARENT — the chrome (header / sidebar / queue column / NPB)
-    // paints every pixel between the header's rounded top corners and the
-    // NPB's rounded bottom corners, so the window's rounded corners show
-    // through (frameless translucent window).
-    color: "transparent"
+    // OPAQUE surface-card chrome (phase 12: the translucent-window read
+    // was wrong — the Slint main window is opaque with square corners;
+    // the compositor owns any rounding).
+    color: theme.surfaceCard
 
     // The host ApplicationWindow (custom chrome: drag / maximize / resize).
     property var hostWindow: null
@@ -35,9 +34,8 @@ Rectangle {
         anchors.top: parent.top
         height: theme.headerHeight
         hostWindow: root.hostWindow
-        // Rounded top window corners (custom chrome); the bottom corners
-        // are covered by the same-color surfaces below.
-        radius: 12
+        // Square corners (phase 12: the window is opaque; any rounding is
+        // the compositor's business).
     }
 
     NowPlayingBarSmall {
@@ -46,9 +44,7 @@ Rectangle {
         anchors.right: parent.right
         anchors.bottom: parent.bottom
         height: theme.npbSmallHeight
-        // Rounded bottom window corners (custom chrome); the top corners
-        // are covered by the same-color surfaces above.
-        radius: 12
+        // Square corners (see the header note above).
     }
 
     Sidebar {

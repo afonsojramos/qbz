@@ -19,6 +19,10 @@ import com.blitzfc.qbz
 Rectangle {
     id: root
     color: theme.surfaceMain
+    // Round to the AppShell content-frame bezel (Radius.md): QML clips
+    // are rectangular, so the frame's own rounding never reaches the
+    // view — the view's own fill must round instead.
+    radius: 12
 
     QbzTheme { id: theme }
 
@@ -71,7 +75,7 @@ Rectangle {
     onHeaderChanged: dispatchCovers()
     function dispatchCovers() {
         var urls = []
-        if (header.artUrl) urls.push(header.artUrl)
+        if (header && header.artUrl) urls.push(header.artUrl)
         var more = album.moreFromArtist || []
         for (var i = 0; i < more.length; i++) if (more[i].artUrl) urls.push(more[i].artUrl)
         var sug = album.suggestions || []
@@ -84,7 +88,7 @@ Rectangle {
     component CircleBtn: Rectangle {
         property string name: ""
         property bool active: false
-        signal clicked()
+        signal clicked(var mouse)
         width: 32
         height: 32
         radius: 16
@@ -103,7 +107,7 @@ Rectangle {
             anchors.fill: parent
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
-            onClicked: parent.clicked()
+            onClicked: function (mouse) { parent.clicked(mouse) }
         }
     }
 
@@ -292,22 +296,11 @@ Rectangle {
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: rowMenu.open()
+                    onClicked: function (mouse) { rowMenu.openAtCursor(moreArea, mouse.x, mouse.y) }
                 }
-                Popup {
+                QbzContextMenu {
                     id: rowMenu
-                    x: 32 - 196
-                    y: 38
-                    width: 196
-                    padding: 5
-                    closePolicy: Popup.CloseOnPressOutside
-                    background: Rectangle {
-                        color: theme.surfaceMain
-                        radius: theme.radiusSm
-                        border.width: 1
-                        border.color: theme.borderMuted
-                    }
-                    contentItem: Column {
+                    menuWidth: 196
                         Repeater {
                             model: [
                                 { "label": QbzBridge.tr("Play"), "icon": "play-fill", "action": "play" },
@@ -356,7 +349,6 @@ Rectangle {
                             }
                         }
                     }
-                }
             }
         }
 
@@ -430,6 +422,7 @@ Rectangle {
 
     // ============================ the page ================================
     Flickable {
+        id: pageFlick
         anchors.fill: parent
         clip: true
         contentWidth: width
@@ -459,11 +452,10 @@ Rectangle {
                     radius: 12
                     color: theme.surfaceElevated
                     clip: true
-                    Image {
+                    RoundedImage {
                         anchors.fill: parent
                         source: root.coverMap[header.artUrl] || ""
-                        fillMode: Image.PreserveAspectCrop
-                        asynchronous: true
+                        radius: 12
                     }
                 }
 
@@ -631,9 +623,10 @@ Rectangle {
                         CircleBtn { name: "cassette-tape"; anchors.verticalCenter: parent.verticalCenter }
                         CircleBtn { name: "info"; anchors.verticalCenter: parent.verticalCenter }
                         CircleBtn {
+                            id: albumMenuBtn
                             name: "ellipsis"
                             anchors.verticalCenter: parent.verticalCenter
-                            onClicked: albumMenu.open()
+                            onClicked: function (mouse) { albumMenu.openAtCursor(albumMenuBtn, mouse.x, mouse.y) }
                         }
                     }
                 }
@@ -917,7 +910,7 @@ Rectangle {
         anchors.rightMargin: 4
         anchors.top: parent.top
         anchors.bottom: parent.bottom
-        target: page.parent
+        target: pageFlick
     }
 
     // --- Full-description modal ------------------------------------------
@@ -993,20 +986,9 @@ Rectangle {
     }
 
     // Album ⋯ menu (AlbumContextMenu subset — card menu + pin).
-    Popup {
+    QbzContextMenu {
         id: albumMenu
-        x: 260
-        y: 260
-        width: 196
-        padding: 5
-        closePolicy: Popup.CloseOnPressOutside
-        background: Rectangle {
-            color: theme.surfaceMain
-            radius: theme.radiusSm
-            border.width: 1
-            border.color: theme.borderMuted
-        }
-        contentItem: Column {
+        menuWidth: 196
             Repeater {
                 model: [
                     { "label": QbzBridge.tr("Play"), "icon": "play-fill", "action": "play" },
@@ -1059,5 +1041,4 @@ Rectangle {
                 }
             }
         }
-    }
 }

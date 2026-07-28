@@ -32,6 +32,9 @@ Rectangle {
     // after a real movement so plain clicks/double-clicks still work.
     MouseArea {
         anchors.fill: parent
+        // Inert under the system titlebar (the native chrome owns
+        // drag/double-click) — phase 12 titlebar toggle.
+        enabled: !QbzBridge.systemTitleBar
         property bool dragStarted: false
         onPressed: dragStarted = false
         onPositionChanged: {
@@ -221,7 +224,7 @@ Rectangle {
     Row {
         id: rightControls
         // Shifts left of the drawn window controls (3x34 + 2x2 = 106px).
-        x: root.width - width - theme.spacingMd + 2 - 110
+        x: root.width - width - theme.spacingMd + 2 - (QbzBridge.systemTitleBar ? 0 : 110)
         y: (root.height - height) / 2
         height: 36
         spacing: 4
@@ -364,6 +367,7 @@ Rectangle {
     // --- Drawn window controls (WindowControls.slint, right placement:
     // minimize · maximize · close; close gets the danger-red hover) ------
     Row {
+        visible: !QbzBridge.systemTitleBar
         x: root.width - width - 8
         y: (root.height - height) / 2
         height: 26
@@ -487,6 +491,7 @@ Rectangle {
             component AppMenuItem: Rectangle {
                 property string name: ""
                 property string label: ""
+                property bool checkedItem: false
                 signal clicked()
 
                 width: parent ? parent.width : 0
@@ -505,11 +510,25 @@ Rectangle {
                         tintName: "secondary"
                     }
                     Text {
+                        id: miLabel
                         height: parent.height
                         text: parent.parent.label
                         color: theme.textSecondary
                         font.pixelSize: 13
                         verticalAlignment: Text.AlignVCenter
+                    }
+                    Item {
+                        visible: parent.parent.checkedItem
+                        width: visible ? parent.width - 15 - miLabel.implicitWidth - 14 - 2 * parent.spacing : 0
+                        height: 1
+                    }
+                    QbzIcon {
+                        visible: parent.parent.checkedItem
+                        name: "check"
+                        width: 14
+                        height: 14
+                        anchors.verticalCenter: parent.verticalCenter
+                        tintName: "accent"
                     }
                 }
                 MouseArea {
@@ -521,6 +540,23 @@ Rectangle {
                 }
             }
 
+            AppMenuItem {
+                name: "layout-grid"
+                label: QbzBridge.tr("Use system title bar")
+                checkedItem: QbzBridge.systemTitleBarPref
+                onClicked: {
+                    QbzBridge.toggleSystemTitleBar()
+                    // Keep the menu open so the check state reads; the
+                    // applied mode changes on the next launch (1:1 Slint).
+                }
+            }
+            Text {
+                width: parent.width
+                leftPadding: 37
+                text: QbzBridge.tr("Takes effect after restarting QBZ.")
+                color: theme.textMuted
+                font.pixelSize: 11
+            }
             AppMenuItem {
                 name: "settings-2"
                 label: QbzBridge.tr("Settings")

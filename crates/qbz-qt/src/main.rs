@@ -725,6 +725,16 @@ pub(crate) fn refresh_devices() {
     spawn(async move { settings_qt::refresh_devices(&runtime).await });
 }
 
+/// App-menu chrome toggle: persist the flipped pref and update the menu
+/// state. The APPLIED mode (`systemTitleBar`) is deliberately untouched —
+/// it changes on the next launch (the window flags are read once at
+/// startup, 1:1 the Slint restart semantics).
+pub(crate) fn toggle_system_title_bar() {
+    let next = settings_qt::toggle_system_title_bar();
+    log::info!("[qbz-qt] use_system_title_bar -> {next} (applies on next launch)");
+    ui(move |mut b| b.as_mut().set_system_title_bar_pref(next));
+}
+
 fn load_library_once() {
     if *LIBRARY_LOADED.lock().unwrap() {
         return;

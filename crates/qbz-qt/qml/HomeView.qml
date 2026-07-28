@@ -26,6 +26,10 @@ import com.blitzfc.qbz
 Rectangle {
     id: root
     color: theme.surfaceMain
+    // Round to the AppShell content-frame bezel (Radius.md): QML clips
+    // are rectangular, so the frame's own rounding never reaches the
+    // view — the view's own fill must round instead.
+    radius: 12
 
     QbzTheme { id: theme }
 
@@ -235,11 +239,10 @@ Rectangle {
                 anchors.verticalCenter: parent.verticalCenter
                 color: theme.surfaceElevated
                 clip: true
-                Image {
+                RoundedImage {
                     anchors.fill: parent
                     source: card.artPath
-                    fillMode: Image.PreserveAspectCrop
-                    asynchronous: true
+                    radius: 4
                 }
             }
             Column {
@@ -348,11 +351,10 @@ Rectangle {
                     anchors.centerIn: parent
                     color: theme.surfaceMain
                     clip: true
-                    Image {
+                    RoundedImage {
                         anchors.fill: parent
                         source: card.artPath || ""
-                        fillMode: Image.PreserveAspectCrop
-                        asynchronous: true
+                        radius: 95
                     }
                     MouseArea {
                         anchors.fill: parent
@@ -396,11 +398,10 @@ Rectangle {
                 radius: theme.radiusSm
                 color: theme.surfaceElevated
                 clip: true
-                Image {
+                RoundedImage {
                     anchors.fill: parent
                     source: card.artPath || ""
-                    fillMode: Image.PreserveAspectCrop
-                    asynchronous: true
+                    radius: theme.radiusSm
                 }
                 MouseArea {
                     anchors.fill: parent
@@ -505,11 +506,10 @@ Rectangle {
                 radius: theme.radiusSm
                 color: theme.surfaceElevated
                 clip: true
-                Image {
+                RoundedImage {
                     anchors.fill: parent
                     source: card.artPath
-                    fillMode: Image.PreserveAspectCrop
-                    asynchronous: true
+                    radius: theme.radiusSm
                 }
                 MouseArea {
                     anchors.fill: parent
@@ -559,11 +559,10 @@ Rectangle {
                 anchors.horizontalCenter: parent.horizontalCenter
                 color: theme.surfaceElevated
                 clip: true
-                Image {
+                RoundedImage {
                     anchors.fill: parent
                     source: card.artPath
-                    fillMode: Image.PreserveAspectCrop
-                    asynchronous: true
+                    radius: 60
                 }
                 MouseArea {
                     anchors.fill: parent

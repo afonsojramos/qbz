@@ -19,10 +19,17 @@ ApplicationWindow {
     minimumHeight: 600
     visible: true
     title: "QBZ"
-    // Custom chrome (phase 7): frameless + translucent so the window draws
-    // its own rounded corners, 1:1 with the Slint custom-chrome look.
-    flags: Qt.Window | Qt.FramelessWindowHint
-    color: "transparent"
+    // Custom chrome (phase 7/12): frameless but OPAQUE — the phase-7
+    // translucent window was a misread: the Slint MAIN window keeps an
+    // OPAQUE swapchain (only the miniplayer blends; crates/qbz/src/main.rs
+    // set_surface_prefers_transparent + the Cargo.toml patch comment), and
+    // the rounded corners in the Slint screenshots come from the
+    // COMPOSITOR, not the app — app.slint's root is opaque surface-main
+    // with square corners and a square 1px hairline frame. The system
+    // titlebar is the `use_system_title_bar` pref (ui_prefs.json; applied
+    // at startup, restart semantics like Slint).
+    flags: QbzBridge.systemTitleBar ? Qt.Window : (Qt.Window | Qt.FramelessWindowHint)
+    color: "#1a1a1a"
 
     FontLoader { id: interRegular; source: "assets/fonts/Inter_18pt-Regular.ttf" }
     FontLoader { id: interMedium; source: "assets/fonts/Inter_18pt-Medium.ttf" }
@@ -31,6 +38,7 @@ ApplicationWindow {
     font.family: interRegular.status === FontLoader.Ready ? interRegular.name : "Sans Serif"
 
     Component.onCompleted: QbzBridge.boot()
+
 
     Loader {
         id: screenLoader
@@ -43,15 +51,15 @@ ApplicationWindow {
         onLoaded: if (screenLoader.item) screenLoader.item.hostWindow = window
     }
 
-    // Rounded-window hairline frame (app.slint's no-frame 1px edge) —
-    // paints at the very rim, over everything, clipped by the corners.
+    // Frameless hairline (app.slint's no-frame 1px edge) — paints at the
+    // very rim, over everything. SQUARE (the app draws no corner rounding).
     Rectangle {
         anchors.fill: parent
         color: "transparent"
-        radius: 12
         border.width: 1
         border.color: "#14ffffff"
-        visible: window.visibility !== Window.Maximized && window.visibility !== Window.FullScreen
+        visible: !QbzBridge.systemTitleBar
+            && window.visibility !== Window.Maximized && window.visibility !== Window.FullScreen
     }
 
     // Edge/corner resize grips (custom chrome — the compositor draws no
@@ -59,41 +67,49 @@ ApplicationWindow {
     MouseArea {
         anchors.left: parent.left; anchors.top: parent.top; anchors.bottom: parent.bottom; width: 6
         cursorShape: Qt.SizeHorCursor
+        enabled: !QbzBridge.systemTitleBar
         onPressed: window.startSystemResize(Qt.LeftEdge)
     }
     MouseArea {
         anchors.right: parent.right; anchors.top: parent.top; anchors.bottom: parent.bottom; width: 6
         cursorShape: Qt.SizeHorCursor
+        enabled: !QbzBridge.systemTitleBar
         onPressed: window.startSystemResize(Qt.RightEdge)
     }
     MouseArea {
         anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top; height: 6
         cursorShape: Qt.SizeVerCursor
+        enabled: !QbzBridge.systemTitleBar
         onPressed: window.startSystemResize(Qt.TopEdge)
     }
     MouseArea {
         anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom; height: 6
         cursorShape: Qt.SizeVerCursor
+        enabled: !QbzBridge.systemTitleBar
         onPressed: window.startSystemResize(Qt.BottomEdge)
     }
     MouseArea {
         anchors.left: parent.left; anchors.top: parent.top; width: 12; height: 12
         cursorShape: Qt.SizeFDiagCursor
+        enabled: !QbzBridge.systemTitleBar
         onPressed: window.startSystemResize(Qt.TopEdge | Qt.LeftEdge)
     }
     MouseArea {
         anchors.right: parent.right; anchors.top: parent.top; width: 12; height: 12
         cursorShape: Qt.SizeBDiagCursor
+        enabled: !QbzBridge.systemTitleBar
         onPressed: window.startSystemResize(Qt.TopEdge | Qt.RightEdge)
     }
     MouseArea {
         anchors.left: parent.left; anchors.bottom: parent.bottom; width: 12; height: 12
         cursorShape: Qt.SizeBDiagCursor
+        enabled: !QbzBridge.systemTitleBar
         onPressed: window.startSystemResize(Qt.BottomEdge | Qt.LeftEdge)
     }
     MouseArea {
         anchors.right: parent.right; anchors.bottom: parent.bottom; width: 12; height: 12
         cursorShape: Qt.SizeFDiagCursor
+        enabled: !QbzBridge.systemTitleBar
         onPressed: window.startSystemResize(Qt.BottomEdge | Qt.RightEdge)
     }
 
@@ -102,7 +118,6 @@ ApplicationWindow {
     Rectangle {
         anchors.fill: parent
         color: "#0f0f0f"
-        radius: 12
         visible: QbzBridge.screen === "splash"
 
         Rectangle {

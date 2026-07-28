@@ -17,8 +17,8 @@ import com.blitzfc.qbz
 Rectangle {
     id: root
     color: theme.surfaceMain
-    // Rounded window corners (custom chrome).
-    radius: 12
+    // Square window corners (phase 12: opaque window; the compositor owns
+    // any rounding).
     // Set by the Loader (custom chrome drag/maximize); unused here.
     property var hostWindow: null
 

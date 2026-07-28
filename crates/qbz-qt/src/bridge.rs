@@ -146,6 +146,15 @@ pub mod qbz_bridge {
         // row states, select option lists, output-device groups).
         #[qproperty(QString, settings_json)]
 
+        // --- Window chrome (phase 12) --------------------------------------
+        // The APPLIED titlebar mode (the ui_prefs `use_system_title_bar`
+        // value read at startup — drives the window flags; never mutated at
+        // runtime, matching the Slint restart semantics).
+        #[qproperty(bool, system_title_bar)]
+        // The PERSISTED pref as it stands NOW (the app-menu check state;
+        // flips live when the user toggles, applies on the next launch).
+        #[qproperty(bool, system_title_bar_pref)]
+
         type QbzBridge = super::QbzBridgeRust;
 
         /// Called once from Main.qml's Component.onCompleted: registers the
@@ -370,6 +379,12 @@ pub mod qbz_bridge {
         /// Output-device refresh button: release a held device, re-enumerate.
         #[qinvokable]
         fn refresh_devices(self: Pin<&mut QbzBridge>);
+
+        /// App-menu chrome toggle: flip the persisted `use_system_title_bar`
+        /// pref (applies on the next launch — the window flags are fixed at
+        /// creation, 1:1 Slint). Updates `systemTitleBarPref` only.
+        #[qinvokable]
+        fn toggle_system_title_bar(self: Pin<&mut QbzBridge>);
     }
 
     impl cxx_qt::Threading for QbzBridge {}
@@ -441,6 +456,8 @@ pub struct QbzBridgeRust {
     lyrics_open: bool,
     lyrics_json: QString,
     settings_json: QString,
+    system_title_bar: bool,
+    system_title_bar_pref: bool,
 }
 
 impl Default for QbzBridgeRust {
@@ -502,6 +519,8 @@ impl Default for QbzBridgeRust {
             lyrics_open: false,
             lyrics_json: QString::from("{}"),
             settings_json: QString::from("{}"),
+            system_title_bar: crate::settings_qt::use_system_title_bar(),
+            system_title_bar_pref: crate::settings_qt::use_system_title_bar(),
         }
     }
 }
@@ -769,5 +788,9 @@ impl qbz_bridge::QbzBridge {
 
     pub fn refresh_devices(self: Pin<&mut Self>) {
         crate::refresh_devices();
+    }
+
+    pub fn toggle_system_title_bar(self: Pin<&mut Self>) {
+        crate::toggle_system_title_bar();
     }
 }

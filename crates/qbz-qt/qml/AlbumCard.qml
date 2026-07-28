@@ -65,16 +65,16 @@ Rectangle {
             color: theme.surfaceElevated
             clip: true
 
-            Image {
+            RoundedImage {
                 anchors.fill: parent
                 source: root.artSource
-                fillMode: Image.PreserveAspectCrop
-                asynchronous: true
+                radius: theme.radiusSm
             }
 
             // Hover scrim.
             Rectangle {
                 anchors.fill: parent
+                radius: theme.radiusSm
                 color: "#000000"
                 opacity: root.overlayOn ? 0.6 : 0.0
                 Behavior on opacity { NumberAnimation { duration: 150 } }
@@ -223,7 +223,7 @@ Rectangle {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: albumMenu.open()
+                        onClicked: function (mouse) { albumMenu.openAtCursor(moreArea, mouse.x, mouse.y) }
                     }
                 }
                 Item { width: (200 - 44 - 2 * 36 - 2 * 12) / 2; height: 1 }
@@ -231,20 +231,9 @@ Rectangle {
 
             // Context menu (AlbumCard.slint's album-menu): 196px, items
             // 33px, icon 15 + label 13.
-            Popup {
+            QbzContextMenu {
                 id: albumMenu
-                x: 150
-                y: 140
-                width: 196
-                padding: 5
-                closePolicy: Popup.CloseOnPressOutside
-                background: Rectangle {
-                    color: theme.surfaceMain
-                    radius: theme.radiusSm
-                    border.width: 1
-                    border.color: theme.borderMuted
-                }
-                contentItem: Column {
+                menuWidth: 196
                     Repeater {
                         model: [
                             { "label": QbzBridge.tr("Open album"), "icon": "library-big", "action": "open" },
@@ -301,7 +290,6 @@ Rectangle {
                         }
                     }
                 }
-            }
 
             // Award ribbon — content-width, capped at the card width.
             Rectangle {

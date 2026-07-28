@@ -153,11 +153,10 @@ Rectangle {
                 anchors.verticalCenter: parent.verticalCenter
                 color: theme.surfaceElevated
                 clip: true
-                Image {
+                RoundedImage {
                     anchors.fill: parent
                     source: root.coverMap[row.artUrl] || ""
-                    fillMode: Image.PreserveAspectCrop
-                    asynchronous: true
+                    radius: 4
                 }
             }
 
@@ -227,22 +226,11 @@ Rectangle {
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: rowMenu.open()
+                    onClicked: function (mouse) { rowMenu.openAtCursor(menuArea, mouse.x, mouse.y) }
                 }
-                Popup {
+                QbzContextMenu {
                     id: rowMenu
-                    x: width - 196
-                    y: 44
-                    width: 196
-                    padding: 5
-                    closePolicy: Popup.CloseOnPressOutside
-                    background: Rectangle {
-                        color: theme.surfaceMain
-                        radius: theme.radiusSm
-                        border.width: 1
-                        border.color: theme.borderMuted
-                    }
-                    contentItem: Column {
+                    menuWidth: 196
                         Repeater {
                             model: [
                                 { "label": QbzBridge.tr("Remove from queue"), "icon": "trash-2", "action": "remove" },
@@ -289,7 +277,6 @@ Rectangle {
                             }
                         }
                     }
-                }
             }
         }
 
@@ -423,11 +410,10 @@ Rectangle {
                                     anchors.verticalCenter: parent.verticalCenter
                                     color: theme.surfaceCard
                                     clip: true
-                                    Image {
+                                    RoundedImage {
                                         anchors.fill: parent
                                         source: root.currentRow ? (root.coverMap[root.currentRow.artUrl] || "") : ""
-                                        fillMode: Image.PreserveAspectCrop
-                                        asynchronous: true
+                                        radius: 4
                                     }
                                 }
                                 Column {
