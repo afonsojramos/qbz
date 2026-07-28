@@ -21,6 +21,7 @@
 
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Window
 import com.blitzfc.qbz
 import "../cards"
 import "../controls"
@@ -57,6 +58,30 @@ Rectangle {
 
     // Decoded-cover map {artKey: file://path}, fed by the signal.
     property var artMap: ({})
+
+    // --- skeleton pulse ---------------------------------------------------
+    // ONE 900ms Timer drives EVERY placeholder in this view (the loading
+    // grid/list AND the per-item cover tiles). GATING RULE: freeze on NOT
+    // VISIBLE — the view hidden, or the window minimized/hidden. NEVER on
+    // lost focus (a tiling desktop keeps windows visible and unfocused).
+    property bool skelPhase: false
+    // Covers requested for the current window that have not arrived yet, and
+    // the window's first index (the per-item placeholders count their cap
+    // from it, so the cap follows the viewport instead of the model).
+    property int artPending: 0
+    property int artWindowFirst: 0
+    readonly property bool windowShowing: root.Window.window
+        ? (root.Window.window.visibility !== Window.Minimized
+           && root.Window.window.visibility !== Window.Hidden)
+        : true
+    Timer {
+        interval: 900
+        repeat: true
+        // Ticks only while something can actually be shimmering.
+        running: root.visible && root.windowShowing
+            && (QbzLibrary.libraryLoading || root.artPending > 0)
+        onTriggered: root.skelPhase = !root.skelPhase
+    }
 
     // All-tab derive state (LibraryAllState semantics).
     property string search: ""
@@ -152,11 +177,18 @@ Rectangle {
         var keepLo = Math.max(0, first - span)
         var keepHi = Math.min(visibleArray.length - 1, last + span)
         for (var i = keepLo; i <= keepHi; i++) keep[visibleArray[i].artKey] = true
+        var m = artMap
+        var pending = 0
         for (i = first; i <= last; i++) {
             var k = visibleArray[i].artKey
-            if (visibleArray[i].imageUrl !== "") keys.push(k)
+            if (visibleArray[i].imageUrl !== "") {
+                keys.push(k)
+                if (!m[k]) pending++
+            }
         }
-        var m = artMap
+        // Drives the skeleton Timer + the per-item cap (see the pulse block).
+        artWindowFirst = first
+        artPending = pending
         var changed = false
         for (var key in m) {
             if (!keep[key]) { delete m[key]; changed = true }
@@ -169,6 +201,9 @@ Rectangle {
         target: QbzLibrary
         function onLibraryArtworkReady(key, path) {
             var m = root.artMap
+            // One fewer shimmering tile — when the count hits 0 the pulse
+            // Timer stops on its own.
+            if (!m[key] && root.artPending > 0) root.artPending--
             m[key] = path
             // Rebind requires a NEW object reference (same-ref assignment
             // is not a change in QML).
@@ -322,6 +357,8 @@ Rectangle {
     // --- All-feed LIST row (FavoritesView inline row, homologated) --------
     component FeedListRow: Rectangle {
         property var item: ({})
+        // Viewport-relative position, for the skeleton's animated cap.
+        property int rowIndex: 0
         height: 44
         radius: 6
         color: rowArea.containsMouse ? theme.surfaceHover : "transparent"
@@ -374,6 +411,20 @@ Rectangle {
                         && (root.artMap[item.artKey] || "") === ""
                     urls: item.covers || []
                     radius: 6
+                }
+                // Per-row cover placeholder — same progressive rule as the
+                // grid: it clears when THIS row's cover lands. Skipped for
+                // the collage arm (a playlist mosaic is real content) and
+                // for artists/labels (round designed placeholders).
+                QbzSkeleton {
+                    variant: "art"
+                    anchors.fill: parent
+                    blockRadius: 6
+                    visible: (item.kind === "track" || item.kind === "album")
+                        && item.imageUrl !== ""
+                        && (root.artMap[item.artKey] || "") === ""
+                    phase: root.skelPhase
+                    cellIndex: rowIndex
                 }
                 Rectangle {
                     visible: item.kind === "track" || item.kind === "album" || item.kind === "playlist"
@@ -867,11 +918,68 @@ Rectangle {
             height: parent.height - 57
             clip: true
 
-            // Loading (LoadingSpinner.slint: accent arc, 1s spin).
-            QbzSpinner {
-                anchors.centerIn: parent
-                size: 36
-                visible: QbzLibrary.libraryLoading
+            // Loading skeleton — a deliberate ADDITION: the Slint mounts a
+            // bare centred 36px LoadingSpinner here (FavoritesView.slint:
+            // 956/1012), which says "busy" but not "this is the shape of
+            // what is coming". The placeholders take the exact footprint of
+            // the cells that will replace them (200x246 grid cells / 44-50px
+            // rows), so the first paint reads as the page filling in.
+            //
+            // COST: the layer only exists while `libraryLoading` — the
+            // Repeater models collapse to 0 otherwise, so nothing is mounted
+            // and nothing animates once the feed lands. The mounted count is
+            // capped to the viewport (never the model), and QbzSkeleton caps
+            // ANIMATED instances at 48; the pulse itself is one shared bool.
+            Item {
+                id: skelLayer
+                anchors.fill: parent
+                anchors.leftMargin: 32
+                anchors.rightMargin: 32
+                anchors.topMargin: 16
+                visible: QbzLibrary.libraryLoading && QbzLibrary.libraryError === ""
+                // Which shape the tab is about to render.
+                readonly property bool listShape:
+                    (root.activeTab === "all" && root.viewMode === "list")
+                    || root.activeTab === "tracks"
+                readonly property int cols: Math.max(1, Math.floor(width / 220))
+                readonly property int rows: Math.max(1, Math.ceil(height / 266))
+                readonly property int rowHeight: root.activeTab === "tracks" ? 50 : 44
+
+                Grid {
+                    columns: skelLayer.cols
+                    columnSpacing: 20
+                    rowSpacing: 20
+                    Repeater {
+                        model: (skelLayer.visible && !skelLayer.listShape)
+                            ? Math.min(48, skelLayer.cols * skelLayer.rows) : 0
+                        delegate: QbzSkeleton {
+                            required property int index
+                            variant: "card"
+                            // The real cell exactly: GridView cellWidth 220 /
+                            // cellHeight 266 = 200x246 + the 20px gaps.
+                            width: 200
+                            height: 246
+                            phase: root.skelPhase
+                            cellIndex: index
+                        }
+                    }
+                }
+                Column {
+                    width: parent.width
+                    spacing: 6
+                    Repeater {
+                        model: (skelLayer.visible && skelLayer.listShape)
+                            ? Math.min(48, Math.ceil(skelLayer.height / (skelLayer.rowHeight + 6))) : 0
+                        delegate: QbzSkeleton {
+                            required property int index
+                            variant: "row"
+                            width: skelLayer.width
+                            height: skelLayer.rowHeight
+                            phase: root.skelPhase
+                            cellIndex: index
+                        }
+                    }
+                }
             }
 
             // Error + retry.
@@ -939,6 +1047,7 @@ Rectangle {
 
                 delegate: Item {
                     required property var modelData
+                    required property int index
                     width: 200
                     height: 246
 
@@ -997,6 +1106,29 @@ Rectangle {
                             : modelData.kind === "playlist" ? playlistCardComp
                             : labelCardComp
                     }
+                    // THE fix for "many grey squares that fill in unevenly":
+                    // each pending cover shimmers on its own and stops the
+                    // moment ITS file:// path lands in artMap, so the grid
+                    // resolves progressively instead of looking like a wall
+                    // of dead tiles. Artists and labels are excluded — their
+                    // cards already draw a designed round gradient+glyph
+                    // portrait placeholder (ArtistGridCard/LabelCard).
+                    // A bare Rectangle: it does not take pointer events, so
+                    // the card's hover/click areas keep working underneath.
+                    QbzSkeleton {
+                        variant: "art"
+                        width: 200
+                        height: 200
+                        visible: (modelData.kind === "album"
+                                  || modelData.kind === "track"
+                                  || modelData.kind === "playlist")
+                            && modelData.imageUrl !== ""
+                            && (root.artMap[modelData.artKey] || "") === ""
+                        phase: root.skelPhase
+                        // Viewport-relative so the 48-instance cap follows
+                        // the window, not the (possibly 10k-item) model.
+                        cellIndex: Math.max(0, index - root.artWindowFirst)
+                    }
                 }
             }
 
@@ -1034,7 +1166,10 @@ Rectangle {
                     }
                     Component {
                         id: feedRowComp
-                        FeedListRow { item: modelData }
+                        FeedListRow {
+                            item: modelData
+                            rowIndex: Math.max(0, index - root.artWindowFirst)
+                        }
                     }
                     sourceComponent: root.activeTab === "tracks" ? trackRowComp : feedRowComp
                 }

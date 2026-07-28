@@ -24,6 +24,7 @@
 
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Window
 import com.blitzfc.qbz
 import "../cards"
 import "../controls"
@@ -49,6 +50,41 @@ Rectangle {
     readonly property var editorSections: JSON.parse(QbzHome.editorSectionsJson)
     readonly property var forYouSections: JSON.parse(QbzHome.forYouSectionsJson)
     property string activeTab: "home"
+
+    // --- skeleton pulse ---------------------------------------------------
+    // ONE 900ms Timer drives EVERY placeholder in this view (QbzSkeleton's
+    // preferred drive mode). GATING RULE: freeze on NOT VISIBLE — the view
+    // hidden, or the window minimized/hidden. NEVER on lost focus (a tiling
+    // desktop keeps windows visible and unfocused).
+    property bool skelPhase: false
+    readonly property bool windowShowing: root.Window.window
+        ? (root.Window.window.visibility !== Window.Minimized
+           && root.Window.window.visibility !== Window.Hidden)
+        : true
+    // Runs only while something can actually be shimmering: the first fetch
+    // (section skeletons) or a card still waiting for its cover.
+    readonly property bool skelNeeded: QbzHome.homeLoading || root.artPending
+    // Cheap "some card in the mounted rails has artUrl but no artPath yet"
+    // probe — recomputed only when a sections document is republished.
+    readonly property bool artPending: root.anyArtPending(
+        root.activeTab === "editorPicks" ? root.editorSections
+        : root.activeTab === "forYou" ? root.forYouSections : root.sections)
+    function anyArtPending(model) {
+        for (var s = 0; s < model.length; s++) {
+            var items = model[s].items || []
+            for (var i = 0; i < items.length; i++) {
+                if ((items[i].artUrl || "") !== "" && (items[i].artPath || "") === "")
+                    return true
+            }
+        }
+        return false
+    }
+    Timer {
+        interval: 900
+        repeat: true
+        running: root.visible && root.windowShowing && root.skelNeeded
+        onTriggered: root.skelPhase = !root.skelPhase
+    }
 
     // ============================ shared components =======================
 
@@ -83,21 +119,42 @@ Rectangle {
                 clip: true
                 boundsBehavior: Flickable.StopAtBounds
                 model: sectionData.items
-                delegate: AlbumCard {
-                    albumId: modelData.id
-                    title: modelData.title
-                    artist: modelData.artist
-                    artistId: modelData.artistId
-                    genre: modelData.genre
-                    year: modelData.year
-                    qualityTier: modelData.qualityTier
-                    ribbon: modelData.ribbon
-                    ribbonKind: modelData.ribbonKind
-                    artSource: modelData.artPath
-                    isPinned: modelData.isPinned
-                    // POC-NOTE: Home hearts are not seeded from fav_cache
-                    // (store not open in the POC); toggles still hit the API.
-                    isFavorite: false
+                delegate: Item {
+                    required property var modelData
+                    required property int index
+                    width: 200
+                    height: 246
+
+                    AlbumCard {
+                        albumId: modelData.id
+                        title: modelData.title
+                        artist: modelData.artist
+                        artistId: modelData.artistId
+                        genre: modelData.genre
+                        year: modelData.year
+                        qualityTier: modelData.qualityTier
+                        ribbon: modelData.ribbon
+                        ribbonKind: modelData.ribbonKind
+                        artSource: modelData.artPath
+                        isPinned: modelData.isPinned
+                        // POC-NOTE: Home hearts are not seeded from fav_cache
+                        // (store not open in the POC); toggles still hit the API.
+                        isFavorite: false
+                    }
+                    // Per-item artwork placeholder: the grey tile shimmers
+                    // until THIS card's cover lands, then disappears on its
+                    // own — the rail fills in progressively instead of all
+                    // at once. A bare Rectangle, so it does not eat the
+                    // card's hover/click areas underneath.
+                    QbzSkeleton {
+                        variant: "art"
+                        width: 200
+                        height: 200
+                        visible: (modelData.artUrl || "") !== ""
+                            && (modelData.artPath || "") === ""
+                        phase: root.skelPhase
+                        cellIndex: index
+                    }
                 }
             }
             // Cider-style edge fades (Carousel.slint): content dissolves
@@ -215,6 +272,7 @@ Rectangle {
                 model: sectionData.items
                 delegate: Item {
                     required property var modelData
+                    required property int index
                     width: 200
                     height: 246
 
@@ -251,6 +309,20 @@ Rectangle {
                         anchors.fill: parent
                         sourceComponent: modelData.itemKind === "artist" ? pArtist
                             : modelData.itemKind === "playlist" ? pPlaylist : pAlbum
+                    }
+                    // Square-art slots only — a pinned ARTIST keeps the
+                    // designed round gradient+glyph placeholder ArtistCard
+                    // already draws (Slint's ArtistGridCard), which reads as
+                    // a portrait, not as a missing tile.
+                    QbzSkeleton {
+                        variant: "art"
+                        width: 200
+                        height: 200
+                        visible: modelData.itemKind !== "artist"
+                            && (modelData.artUrl || "") !== ""
+                            && (modelData.artPath || "") === ""
+                        phase: root.skelPhase
+                        cellIndex: index
                     }
                 }
             }
@@ -458,31 +530,38 @@ Rectangle {
         }
     }
 
-    component Shimmer: Rectangle {
-        property bool phase: false
-        color: theme.surfaceElevated
-        radius: theme.radiusSm
-        opacity: phase ? 0.85 : 0.4
-        Behavior on opacity { NumberAnimation { duration: 900; easing.type: Easing.InOutQuad } }
-    }
+    // HomeSkeleton.slint's SkeletonRow, 1:1 on the shared QbzSkeleton
+    // control: a 180x22 title bar over five 200px card placeholders,
+    // spacing 32/12/8. `phase` comes from the ONE Timer on the view root.
     component SkeletonRow: Column {
         id: skelRow
         property bool phase: false
         width: parent ? parent.width : 0
         spacing: 12
-        Shimmer { phase: skelRow.phase; width: 180; height: 22 }
+        QbzSkeleton { variant: "block"; width: 180; height: 22; phase: skelRow.phase }
         Row {
             spacing: 32
             Repeater {
                 model: 5
-                delegate: Column {
-                    spacing: 8
-                    Shimmer { phase: skelRow.phase; width: 200; height: 200 }
-                    Shimmer { phase: skelRow.phase; width: 140; height: 14 }
-                    Shimmer { phase: skelRow.phase; width: 90; height: 12 }
+                delegate: QbzSkeleton {
+                    required property int index
+                    variant: "card"
+                    width: 200
+                    phase: skelRow.phase
+                    cellIndex: index
                 }
             }
         }
+    }
+    // Two SkeletonRows = the whole HomeSkeleton component. Mounted by each
+    // Discover tab while its sections document is still empty.
+    component TabSkeleton: Column {
+        id: tabSkel
+        property bool phase: false
+        width: parent ? parent.width : 0
+        spacing: 40
+        SkeletonRow { phase: tabSkel.phase }
+        SkeletonRow { phase: tabSkel.phase }
     }
 
     // ============================ offline gate ============================
@@ -620,20 +699,12 @@ Rectangle {
                     width: parent.width - 64
                     spacing: 40
 
-                    // Loading skeleton (HomeSkeleton: two shimmer rows).
-                    Column {
+                    // Loading skeleton (HomeSkeleton: two shimmer rows). The
+                    // pulse comes from the view-root Timer, which is itself
+                    // gated on visibility + window state.
+                    TabSkeleton {
                         visible: QbzHome.homeLoading && root.sections.length === 0
-                        width: parent.width
-                        spacing: 40
-                        property bool phase: false
-                        Timer {
-                            interval: 900
-                            running: parent.visible
-                            repeat: true
-                            onTriggered: parent.phase = !parent.phase
-                        }
-                        SkeletonRow { phase: parent.phase }
-                        SkeletonRow { phase: parent.phase }
+                        phase: root.skelPhase
                     }
 
                     // Error state with retry (the Slint Home has no error
@@ -689,6 +760,10 @@ Rectangle {
                     visible: root.activeTab === "editorPicks"
                     width: parent.width - 64
                     spacing: 40
+                    TabSkeleton {
+                        visible: QbzHome.homeLoading && root.editorSections.length === 0
+                        phase: root.skelPhase
+                    }
                     SectionRails { sectionsModel: root.editorSections }
                 }
 
@@ -697,6 +772,10 @@ Rectangle {
                     visible: root.activeTab === "forYou"
                     width: parent.width - 64
                     spacing: 40
+                    TabSkeleton {
+                        visible: QbzHome.homeLoading && root.forYouSections.length === 0
+                        phase: root.skelPhase
+                    }
                     SectionRails { sectionsModel: root.forYouSections }
                 }
 
