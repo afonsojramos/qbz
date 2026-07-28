@@ -35,7 +35,7 @@ Rectangle {
 
     QbzTheme { id: theme }
 
-    readonly property var artist: JSON.parse(QbzBridge.artistJson)
+    readonly property var artist: JSON.parse(QbzArtist.artistJson)
     readonly property var topTracks: artist.topTracks || []
     readonly property var appearsOn: artist.appearsOn || []
     readonly property var releaseSections: artist.releaseSections || []
@@ -67,7 +67,7 @@ Rectangle {
     }
 
     // Two blocks, not one: artwork is QbzLibrary's signal and the releases
-    // pager is still QbzBridge's. Retargeting a mixed block wholesale would
+    // pager is QbzArtist's. Retargeting a mixed block wholesale would
     // silently orphan the other half — QML resolves handlers lazily, so the
     // discography would just stop loading with nothing in the log.
     Connections {
@@ -80,7 +80,7 @@ Rectangle {
     }
 
     Connections {
-        target: QbzBridge
+        target: QbzArtist
         function onReleaseSectionReady(releaseType, cardsJson, hasMore) {
             var cards = JSON.parse(cardsJson)
             var sections = root.releaseSections
@@ -273,7 +273,7 @@ Rectangle {
                     enabled: row.albumId !== ""
                     hoverEnabled: true
                     cursorShape: row.albumId !== "" ? Qt.PointingHandCursor : Qt.ArrowCursor
-                    onClicked: QbzBridge.openAlbum(row.albumId)
+                    onClicked: QbzAlbum.openAlbum(row.albumId)
                 }
             }
             Text {
@@ -501,7 +501,7 @@ Rectangle {
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: QbzBridge.loadReleaseSection(artist.id, section.releaseType, section.cards.length)
+                    onClicked: QbzArtist.loadReleaseSection(artist.id, section.releaseType, section.cards.length)
                 }
             }
             Item { width: (parent.width - loadMoreBtn.width) / 2; height: 1 }
@@ -740,7 +740,7 @@ Rectangle {
 
             // --- Loading -------------------------------------------------
             Item {
-                visible: QbzBridge.artistLoading && topTracks.length === 0
+                visible: QbzArtist.artistLoading && topTracks.length === 0
                 width: parent.width - 64
                 height: 280
                 Column {
@@ -759,7 +759,7 @@ Rectangle {
             // ================= Catalog tab ================================
             Column {
                 id: sectionAnchors
-                visible: root.artistTab === "catalog" && !QbzBridge.artistLoading
+                visible: root.artistTab === "catalog" && !QbzArtist.artistLoading
                 width: parent.width - 64
                 spacing: 0
 
@@ -1050,7 +1050,7 @@ Rectangle {
             // ================= In library tab =============================
             Column {
                 id: libraryTab
-                visible: root.artistTab === "library" && !QbzBridge.artistLoading
+                visible: root.artistTab === "library" && !QbzArtist.artistLoading
                 width: parent.width - 64
                 spacing: 0
                 readonly property var libItems: {
@@ -1265,7 +1265,7 @@ Rectangle {
                     }
                     // SIMILAR ARTISTS.
                     Column {
-                        visible: similarArtists.length > 0 || QbzBridge.artistLoading
+                        visible: similarArtists.length > 0 || QbzArtist.artistLoading
                         width: parent.width
                         leftPadding: 14
                         rightPadding: 14
@@ -1280,7 +1280,7 @@ Rectangle {
                             font.letterSpacing: 0.5
                         }
                         Text {
-                            visible: similarArtists.length === 0 && QbzBridge.artistLoading
+                            visible: similarArtists.length === 0 && QbzArtist.artistLoading
                             text: QbzSession.tr("Loading…", QbzSession.trRev)
                             color: theme.textMuted
                             font.pixelSize: 12
@@ -1290,7 +1290,7 @@ Rectangle {
                             delegate: SidebarLink {
                                 label: modelData.name
                                 iconName: "user"
-                                onClicked: QbzBridge.openArtist(modelData.id)
+                                onClicked: QbzArtist.openArtist(modelData.id)
                             }
                         }
                     }

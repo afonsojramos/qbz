@@ -75,6 +75,6 @@ Rectangle {
         hoverEnabled: true
         cursorShape: Qt.PointingHandCursor
         // Phase 8: slim rows are albums — click opens the album view.
-        onClicked: QbzBridge.openAlbum(card.id)
+        onClicked: QbzAlbum.openAlbum(card.id)
     }
 }

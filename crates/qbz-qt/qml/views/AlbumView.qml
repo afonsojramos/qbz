@@ -34,7 +34,7 @@ Rectangle {
     QbzTheme { id: theme }
 
     // The view's album + url-keyed cover map (artwork pipeline).
-    readonly property var album: JSON.parse(QbzBridge.albumJson)
+    readonly property var album: JSON.parse(QbzAlbum.albumJson)
     readonly property var header: album.header || ({})
     readonly property var tracks: album.tracks || []
     readonly property var awards: album.awards || []
@@ -234,7 +234,7 @@ Rectangle {
                                         enabled: modelData[1] !== ""
                                         hoverEnabled: true
                                         cursorShape: modelData[1] !== "" ? Qt.PointingHandCursor : Qt.ArrowCursor
-                                        onClicked: QbzBridge.openArtist(modelData[1])
+                                        onClicked: QbzArtist.openArtist(modelData[1])
                                     }
                                 }
                                 Text {
@@ -384,7 +384,7 @@ Rectangle {
 
                     // Loading.
                     Item {
-                        visible: QbzBridge.albumLoading && tracks.length === 0
+                        visible: QbzAlbum.albumLoading && tracks.length === 0
                         width: parent.width
                         height: 280
                         Column {
@@ -402,7 +402,7 @@ Rectangle {
 
                     // Toolbar — quality badge + track search (+ inert select).
                     Row {
-                        visible: !QbzBridge.albumLoading
+                        visible: !QbzAlbum.albumLoading
                         width: parent.width
                         height: 52
                         spacing: 16
@@ -494,7 +494,7 @@ Rectangle {
 
                     // Column header.
                     Row {
-                        visible: !QbzBridge.albumLoading
+                        visible: !QbzAlbum.albumLoading
                         width: parent.width
                         height: 40
                         leftPadding: 12
@@ -567,7 +567,7 @@ Rectangle {
                                         enabled: modelData.workComposerId !== ""
                                         hoverEnabled: true
                                         cursorShape: modelData.workComposerId !== "" ? Qt.PointingHandCursor : Qt.ArrowCursor
-                                        onClicked: QbzBridge.openArtist(modelData.workComposerId)
+                                        onClicked: QbzArtist.openArtist(modelData.workComposerId)
                                     }
                                 }
                                 Text {

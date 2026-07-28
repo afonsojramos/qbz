@@ -53,6 +53,8 @@ ApplicationWindow {
         QbzViz.boot()
         QbzLocal.boot()
         QbzLibrary.boot()
+        QbzAlbum.boot()
+        QbzArtist.boot()
         QbzBridge.boot()
     }
 

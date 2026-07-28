@@ -28,6 +28,8 @@ mod home_bridge;
 mod viz_bridge;
 mod local_bridge;
 mod library_bridge;
+mod album_bridge;
+mod artist_bridge;
 mod artwork_qt;
 mod bridge;
 mod home_qt;
@@ -410,22 +412,18 @@ pub(crate) fn open_album(album_id: String) {
     nav_qt::record("album");
     *LAST_DETAIL.lock().unwrap() = ("album".to_string(), album_id.clone());
     let runtime = app();
-    let param = album_id.clone();
-    ui(move |mut b| {
-        b.as_mut().set_album_loading(true);
-        b.as_mut().set_view_param_id(QString::from(param.as_str()));
-    });
+    album_bridge::ui(move |mut b| b.as_mut().set_album_loading(true));
     spawn(async move {
         match album_qt::load_album_view(&runtime, &album_id).await {
             Ok(json) => {
-                                ui(move |mut b| {
+                                album_bridge::ui(move |mut b| {
                     b.as_mut().set_album_json(QString::from(json.as_str()));
                     b.as_mut().set_album_loading(false);
                 })
             },
             Err(e) => {
                 log::warn!("[qbz-qt] album view load failed: {e}");
-                ui(move |mut b| b.as_mut().set_album_loading(false));
+                album_bridge::ui(move |mut b| b.as_mut().set_album_loading(false));
             }
         }
     });
@@ -439,20 +437,16 @@ pub(crate) fn open_artist(artist_id: String) {
     nav_qt::record("artist");
     *LAST_DETAIL.lock().unwrap() = ("artist".to_string(), artist_id.clone());
     let runtime = app();
-    let param = artist_id.clone();
-    ui(move |mut b| {
-        b.as_mut().set_artist_loading(true);
-        b.as_mut().set_view_param_id(QString::from(param.as_str()));
-    });
+    artist_bridge::ui(move |mut b| b.as_mut().set_artist_loading(true));
     spawn(async move {
         match artist_qt::load_artist_view(&runtime, &artist_id).await {
-            Ok(json) => ui(move |mut b| {
+            Ok(json) => artist_bridge::ui(move |mut b| {
                 b.as_mut().set_artist_json(QString::from(json.as_str()));
                 b.as_mut().set_artist_loading(false);
             }),
             Err(e) => {
                 log::warn!("[qbz-qt] artist view load failed: {e}");
-                ui(move |mut b| b.as_mut().set_artist_loading(false));
+                artist_bridge::ui(move |mut b| b.as_mut().set_artist_loading(false));
             }
         }
     });
@@ -467,7 +461,7 @@ pub(crate) fn load_release_section(artist_id: String, release_type: String, offs
         {
             Ok((cards, has_more)) => {
                 let json = serde_json::to_string(&cards).unwrap_or_else(|_| "[]".into());
-                ui(move |mut b| {
+                artist_bridge::ui(move |mut b| {
                     b.as_mut().release_section_ready(
                         QString::from(release_type.as_str()),
                         QString::from(json.as_str()),
@@ -682,8 +676,6 @@ pub(crate) fn open_playlist(playlist_id: String) {
         return;
     };
     nav_qt::record("playlist");
-    let param = playlist_id.clone();
-    ui(move |mut b| b.as_mut().set_view_param_id(QString::from(param.as_str())));
     let runtime = app();
     spawn(async move {
         if let Err(e) = playlist_qt::load(&runtime, pid).await {
@@ -1023,7 +1015,7 @@ fn republish_album(album_id: String) {
     let runtime = app();
     spawn(async move {
         if let Ok(json) = album_qt::load_album_view(&runtime, &album_id).await {
-            ui(move |mut b| b.as_mut().set_album_json(QString::from(json.as_str())));
+            album_bridge::ui(move |mut b| b.as_mut().set_album_json(QString::from(json.as_str())));
         }
     });
 }
@@ -1035,7 +1027,7 @@ fn republish_artist(artist_id: String) {
     let runtime = app();
     spawn(async move {
         if let Ok(json) = artist_qt::load_artist_view(&runtime, &artist_id).await {
-            ui(move |mut b| b.as_mut().set_artist_json(QString::from(json.as_str())));
+            artist_bridge::ui(move |mut b| b.as_mut().set_artist_json(QString::from(json.as_str())));
         }
     });
 }

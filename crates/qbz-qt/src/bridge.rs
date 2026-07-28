@@ -24,13 +24,11 @@ pub mod qbz_bridge {
         #[qobject]
         #[qml_element]
         #[qml_singleton]
-        // --- Album / Artist detail views (phase 8) -------------------------
-        #[qproperty(bool, album_loading)]
-        #[qproperty(QString, album_json)]
-        #[qproperty(bool, artist_loading)]
-        #[qproperty(QString, artist_json)]
-        // The id backing the current "album"/"artist" view ("" = none).
-        #[qproperty(QString, view_param_id)]
+        // --- Album / Artist detail views: MOVED (phase 23) ----------------
+        // album_* -> QbzAlbum (album_bridge.rs), artist_* + the releases
+        // "Load more" signal -> QbzArtist (artist_bridge.rs). `view_param_id`
+        // was deleted, not moved: write-only, zero readers — the rationale
+        // lives in artist_bridge.rs's header.
 
         // --- Settings (phase 10) -----------------------------------------
         // One JSON document (settings_qt.rs SettingsDoc: audio + playback
@@ -64,19 +62,6 @@ pub mod qbz_bridge {
         /// when the last domain moves out.
         #[qinvokable]
         fn boot(self: Pin<&mut QbzBridge>);
-
-        /// Open the album detail view (pushes "album" on the nav stack).
-        #[qinvokable]
-        fn open_album(self: Pin<&mut QbzBridge>, album_id: QString);
-        /// Open the artist detail view (pushes "artist" on the nav stack).
-        #[qinvokable]
-        fn open_artist(self: Pin<&mut QbzBridge>, artist_id: QString);
-        /// ArtistView per-section "Load more" — the next releases page.
-        #[qinvokable]
-        fn load_release_section(self: Pin<&mut QbzBridge>, artist_id: QString, release_type: QString, offset: i32);
-        /// Emitted with the next page of a releases bucket.
-        #[qsignal]
-        fn release_section_ready(self: Pin<&mut QbzBridge>, release_type: QString, cards_json: QString, has_more: bool);
 
         // --- Settings (phase 10) ------------------------------------------
         /// Toggle rows (settings_qt.rs key dispatch; persists + applies +
@@ -194,11 +179,6 @@ use cxx_qt_lib::QString;
 /// generated `set_*` methods on the Qt thread; the struct itself is plain
 /// storage (as required by cxx-qt's Default-constructed qobjects).
 pub struct QbzBridgeRust {
-    album_loading: bool,
-    album_json: QString,
-    artist_loading: bool,
-    artist_json: QString,
-    view_param_id: QString,
     settings_json: QString,
     cortinilla_open: bool,
     cortinilla_loading: bool,
@@ -213,11 +193,6 @@ pub struct QbzBridgeRust {
 impl Default for QbzBridgeRust {
     fn default() -> Self {
         Self {
-            album_loading: false,
-            album_json: QString::from("{}"),
-            artist_loading: false,
-            artist_json: QString::from("{}"),
-            view_param_id: QString::default(),
             settings_json: QString::from("{}"),
             cortinilla_open: false,
             cortinilla_loading: false,
@@ -234,18 +209,6 @@ impl Default for QbzBridgeRust {
 impl qbz_bridge::QbzBridge {
     pub fn boot(self: Pin<&mut Self>) {
         crate::register_qt_thread(self.qt_thread());
-    }
-
-    pub fn open_album(self: Pin<&mut Self>, album_id: QString) {
-        crate::open_album(album_id.to_string());
-    }
-
-    pub fn open_artist(self: Pin<&mut Self>, artist_id: QString) {
-        crate::open_artist(artist_id.to_string());
-    }
-
-    pub fn load_release_section(self: Pin<&mut Self>, artist_id: QString, release_type: QString, offset: i32) {
-        crate::load_release_section(artist_id.to_string(), release_type.to_string(), offset);
     }
 
     pub fn integrations_action(self: Pin<&mut Self>, action: QString) {

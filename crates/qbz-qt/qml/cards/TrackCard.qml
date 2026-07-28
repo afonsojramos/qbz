@@ -162,7 +162,7 @@ Rectangle {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: root.item.artistId ? Qt.PointingHandCursor : Qt.ArrowCursor
-                        onClicked: if (root.item.artistId) QbzBridge.openArtist(root.item.artistId)
+                        onClicked: if (root.item.artistId) QbzArtist.openArtist(root.item.artistId)
                     }
                 }
             }
@@ -189,8 +189,8 @@ Rectangle {
         else if (a === "next") QbzPlayer.enqueueTrack(root.item.id, "next")
         else if (a === "later") QbzPlayer.enqueueTrack(root.item.id, "later")
         else if (a === "queue") QbzPlayer.enqueueTrack(root.item.id, "queue")
-        else if (a === "go-artist") QbzBridge.openArtist(root.item.artistId)
-        else if (a === "go-album") QbzBridge.openAlbum(root.item.albumId)
+        else if (a === "go-artist") QbzArtist.openArtist(root.item.artistId)
+        else if (a === "go-album") QbzAlbum.openAlbum(root.item.albumId)
         else if (a === "favorite") {
             root.item.isFavorite = !root.item.isFavorite
             QbzLibrary.libraryToggleFavorite("track", root.item.id)

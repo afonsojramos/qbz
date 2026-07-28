@@ -41,7 +41,7 @@ Rectangle {
     // --- Local Library mode (additive; default = the Qobuz behaviour) ----
     // The Local Library mounts THIS card, but its `albumId` is a group key
     // (folder or metadata identity), not a Qobuz catalog id — routing it
-    // through QbzBridge.openAlbum / QbzPlayer.playAlbum would fire a
+    // through QbzAlbum.openAlbum / QbzPlayer.playAlbum would fire a
     // catalog fetch for a folder path. In localMode every action is emitted
     // to the host instead, and the catalog-only affordances (heart, pin,
     // "Block this album") are hidden. Nothing else about the card changes,
@@ -131,7 +131,7 @@ Rectangle {
                 // Phase 8: the card opens the album view (the overlay play
                 // button carries the play affordance).
                 onClicked: root.localMode ? root.openRequested()
-                                          : QbzBridge.openAlbum(root.albumId)
+                                          : QbzAlbum.openAlbum(root.albumId)
             }
 
             // Pin badge — top-right. Hover-revealed like the overlay
@@ -267,7 +267,7 @@ Rectangle {
                                         else if (a === "queue") root.enqueueRequested("later")
                                         return
                                     }
-                                    if (a === "open") QbzBridge.openAlbum(root.albumId)
+                                    if (a === "open") QbzAlbum.openAlbum(root.albumId)
                                     else if (a === "play") QbzPlayer.playAlbum(root.albumId)
                                     else if (a === "next") QbzPlayer.enqueueAlbum(root.albumId, "next")
                                     else if (a === "queue") QbzPlayer.enqueueAlbum(root.albumId, "later")
@@ -362,7 +362,7 @@ Rectangle {
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
                         onClicked: root.localMode ? root.openRequested()
-                                                  : QbzBridge.openAlbum(root.albumId)
+                                                  : QbzAlbum.openAlbum(root.albumId)
                     }
                 }
                 Text {
@@ -379,7 +379,7 @@ Rectangle {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: root.artistId !== "" ? Qt.PointingHandCursor : Qt.ArrowCursor
-                        onClicked: if (root.artistId !== "") QbzBridge.openArtist(root.artistId)
+                        onClicked: if (root.artistId !== "") QbzArtist.openArtist(root.artistId)
                     }
                 }
             }

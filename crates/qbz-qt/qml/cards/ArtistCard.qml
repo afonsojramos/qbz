@@ -102,7 +102,7 @@ Rectangle {
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: QbzBridge.openArtist(root.item.id)
+                    onClicked: QbzArtist.openArtist(root.item.id)
                 }
                 // Hover overlay — follow? / play / more (y=113).
                 CardOverlayRow {
@@ -148,7 +148,7 @@ Rectangle {
                         return m
                     }
                     onPicked: function (a) {
-                        if (a === "open") QbzBridge.openArtist(root.item.id)
+                        if (a === "open") QbzArtist.openArtist(root.item.id)
                         else if (a === "play") QbzPlayer.playArtistCard(root.item.id)
                         // "follow": no artist-follow API (POC-NOTE — inert).
                         // "not-interested": the reco dismissal store is not
@@ -210,7 +210,7 @@ Rectangle {
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: QbzBridge.openArtist(root.item.id)
+                    onClicked: QbzArtist.openArtist(root.item.id)
                 }
             }
             Text {

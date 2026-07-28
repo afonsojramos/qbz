@@ -311,8 +311,8 @@ Rectangle {
         else if (a === "next") QbzPlayer.enqueueTrack(item.id, "next")
         else if (a === "later") QbzPlayer.enqueueTrack(item.id, "later")
         else if (a === "queue") QbzPlayer.enqueueTrack(item.id, "queue")
-        else if (a === "go-artist") QbzBridge.openArtist(item.artistId)
-        else if (a === "go-album") QbzBridge.openAlbum(item.albumId)
+        else if (a === "go-artist") QbzArtist.openArtist(item.artistId)
+        else if (a === "go-album") QbzAlbum.openAlbum(item.albumId)
         else if (a === "favorite") {
             item.isFavorite = !item.isFavorite
             QbzLibrary.libraryToggleFavorite("track", item.id)
@@ -335,8 +335,8 @@ Rectangle {
             cursorShape: Qt.PointingHandCursor
             onClicked: {
                 if (item.kind === "track") QbzPlayer.playTrack(item.id)
-                else if (item.kind === "album") QbzBridge.openAlbum(item.id)
-                else if (item.kind === "artist") QbzBridge.openArtist(item.id)
+                else if (item.kind === "album") QbzAlbum.openAlbum(item.id)
+                else if (item.kind === "artist") QbzArtist.openArtist(item.id)
                 // playlist/label pages: out of scope (POC-NOTE).
             }
         }
@@ -418,8 +418,8 @@ Rectangle {
                         cursorShape: Qt.PointingHandCursor
                         onClicked: {
                             if (item.kind === "track") QbzPlayer.playTrack(item.id)
-                            else if (item.kind === "album") QbzBridge.openAlbum(item.id)
-                            else if (item.kind === "artist") QbzBridge.openArtist(item.id)
+                            else if (item.kind === "album") QbzAlbum.openAlbum(item.id)
+                            else if (item.kind === "artist") QbzArtist.openArtist(item.id)
                         }
                     }
                 }
@@ -439,7 +439,7 @@ Rectangle {
                         hoverEnabled: true
                         cursorShape: (item.artistId !== "" && (item.kind === "track" || item.kind === "album"))
                             ? Qt.PointingHandCursor : Qt.ArrowCursor
-                        onClicked: if (item.artistId !== "") QbzBridge.openArtist(item.artistId)
+                        onClicked: if (item.artistId !== "") QbzArtist.openArtist(item.artistId)
                     }
                 }
             }
@@ -549,12 +549,12 @@ Rectangle {
             onPicked: function (a) {
                 if (item.kind === "track") { root.trackAction(item, a); return }
                 if (a === "open") {
-                    if (item.kind === "album") QbzBridge.openAlbum(item.id)
+                    if (item.kind === "album") QbzAlbum.openAlbum(item.id)
                     // playlist/label pages: out of scope (POC-NOTE).
                 } else if (a === "play") {
                     if (item.kind === "album") QbzPlayer.playAlbum(item.id)
                 } else if (a === "go-artist") {
-                    QbzBridge.openArtist(item.id)
+                    QbzArtist.openArtist(item.id)
                 } else if (a === "favorite") {
                     item.isFavorite = !item.isFavorite
                     QbzLibrary.libraryToggleFavorite(item.kind, item.id)
