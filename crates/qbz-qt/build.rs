@@ -51,6 +51,7 @@ fn main() {
                 "qml/LyricsPanel.qml",
                 "qml/HomeView.qml",
                 "qml/LibraryView.qml",
+                "qml/SettingsView.qml",
                 "qml/QbzTheme.qml",
                 "qml/QbzIcon.qml",
                 "qml/QbzScrollBar.qml",

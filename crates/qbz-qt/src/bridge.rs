@@ -141,6 +141,11 @@ pub mod qbz_bridge {
         #[qproperty(QString, sidebar_sort_by)]
         #[qproperty(bool, sidebar_sort_asc)]
 
+        // --- Settings (phase 10) -----------------------------------------
+        // One JSON document (settings_qt.rs SettingsDoc: audio + playback
+        // row states, select option lists, output-device groups).
+        #[qproperty(QString, settings_json)]
+
         type QbzBridge = super::QbzBridgeRust;
 
         /// Called once from Main.qml's Component.onCompleted: registers the
@@ -344,6 +349,27 @@ pub mod qbz_bridge {
         /// Emitted with the next page of a releases bucket.
         #[qsignal]
         fn release_section_ready(self: Pin<&mut QbzBridge>, release_type: QString, cards_json: QString, has_more: bool);
+
+        // --- Settings (phase 10) ------------------------------------------
+        /// Toggle rows (settings_qt.rs key dispatch; persists + applies +
+        /// republishes `settingsJson`).
+        #[qinvokable]
+        fn settings_bool(self: Pin<&mut QbzBridge>, key: QString, value: bool);
+        /// Select rows: the picked OPTION INDEX within the row's list.
+        #[qinvokable]
+        fn settings_select(self: Pin<&mut QbzBridge>, key: QString, index: i32);
+        /// Slider rows (initial buffer size).
+        #[qinvokable]
+        fn settings_slider(self: Pin<&mut QbzBridge>, key: QString, value: i32);
+        /// Free-text rows (Qobuz Connect device name).
+        #[qinvokable]
+        fn settings_string(self: Pin<&mut QbzBridge>, key: QString, value: QString);
+        /// "Reset to defaults" (audio + playback stores, quality pref).
+        #[qinvokable]
+        fn settings_reset(self: Pin<&mut QbzBridge>);
+        /// Output-device refresh button: release a held device, re-enumerate.
+        #[qinvokable]
+        fn refresh_devices(self: Pin<&mut QbzBridge>);
     }
 
     impl cxx_qt::Threading for QbzBridge {}
@@ -414,6 +440,7 @@ pub struct QbzBridgeRust {
     queue_json: QString,
     lyrics_open: bool,
     lyrics_json: QString,
+    settings_json: QString,
 }
 
 impl Default for QbzBridgeRust {
@@ -474,6 +501,7 @@ impl Default for QbzBridgeRust {
             queue_json: QString::from("{}"),
             lyrics_open: false,
             lyrics_json: QString::from("{}"),
+            settings_json: QString::from("{}"),
         }
     }
 }
@@ -717,5 +745,29 @@ impl qbz_bridge::QbzBridge {
 
     pub fn load_release_section(self: Pin<&mut Self>, artist_id: QString, release_type: QString, offset: i32) {
         crate::load_release_section(artist_id.to_string(), release_type.to_string(), offset);
+    }
+
+    pub fn settings_bool(self: Pin<&mut Self>, key: QString, value: bool) {
+        crate::settings_bool(key.to_string(), value);
+    }
+
+    pub fn settings_select(self: Pin<&mut Self>, key: QString, index: i32) {
+        crate::settings_select(key.to_string(), index);
+    }
+
+    pub fn settings_slider(self: Pin<&mut Self>, key: QString, value: i32) {
+        crate::settings_slider(key.to_string(), value);
+    }
+
+    pub fn settings_string(self: Pin<&mut Self>, key: QString, value: QString) {
+        crate::settings_string(key.to_string(), value.to_string());
+    }
+
+    pub fn settings_reset(self: Pin<&mut Self>) {
+        crate::settings_reset();
+    }
+
+    pub fn refresh_devices(self: Pin<&mut Self>) {
+        crate::refresh_devices();
     }
 }

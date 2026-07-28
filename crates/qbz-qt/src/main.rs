@@ -20,6 +20,7 @@ mod artist_qt;
 mod lyrics_qt;
 mod playback_qt;
 mod queue_qt;
+mod settings_qt;
 mod sidebar_qt;
 
 use std::pin::Pin;
@@ -130,6 +131,9 @@ fn enter_shell(session: auth_qt::SessionInfo) {
     playback_qt::start_poll_loop(app());
     // Phase 7: the sidebar playlist tree.
     load_sidebar_once();
+    // Phase 10: seed the playback request tier from the persisted
+    // streaming-quality pref (Settings > Audio writes it live after this).
+    playback_qt::set_streaming_quality(&settings_qt::streaming_quality());
     ui(move |mut b| {
                 b.as_mut().set_session_user_name(QString::from(session.display_name.as_str()));
         b.as_mut().set_session_subscription(QString::from(session.subscription.as_str()));
@@ -676,6 +680,49 @@ pub(crate) fn navigate_to(view: &str) {
     if view == "library" {
         load_library_once();
     }
+    if view == "settings" {
+        publish_settings();
+    }
+}
+
+// ============================ Settings (phase 10) =========================
+
+/// Publish the settings snapshot (settings_qt.rs SettingsDoc) onto
+/// `settingsJson`. Called on settings-view open and after every mutation
+/// (the handlers republish themselves).
+pub(crate) fn publish_settings() {
+    spawn(async { settings_qt::publish_snapshot().await });
+}
+
+pub(crate) fn settings_bool(key: String, value: bool) {
+    let runtime = app();
+    spawn(async move { settings_qt::settings_bool(&runtime, &key, value).await });
+}
+
+pub(crate) fn settings_select(key: String, index: i32) {
+    let runtime = app();
+    spawn(async move {
+        settings_qt::settings_select(&runtime, &key, index.max(0) as usize).await
+    });
+}
+
+pub(crate) fn settings_slider(key: String, value: i32) {
+    let runtime = app();
+    spawn(async move { settings_qt::settings_slider(&runtime, &key, value).await });
+}
+
+pub(crate) fn settings_string(key: String, value: String) {
+    spawn(async move { settings_qt::settings_string(&key, value).await });
+}
+
+pub(crate) fn settings_reset() {
+    let runtime = app();
+    spawn(async move { settings_qt::settings_reset(&runtime).await });
+}
+
+pub(crate) fn refresh_devices() {
+    let runtime = app();
+    spawn(async move { settings_qt::refresh_devices(&runtime).await });
 }
 
 fn load_library_once() {

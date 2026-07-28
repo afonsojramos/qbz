@@ -26,6 +26,7 @@ dirs = "5"
 
 qbz-core = { path = "../qbz-core" }
 qbz-app = { path = "../qbz-app" }
+qbz-audio = { path = "../qbz-audio" }
 qbz-qobuz = { path = "../qbz-qobuz" }
 qbz-models = { path = "../qbz-models" }
 qbz-cache = { path = "../qbz-cache" }
@@ -36,6 +37,8 @@ qbz-text-utils = { path = "../qbz-text-utils" }
 qbz-credentials = { path = "../qbz-credentials" }
 qbz-i18n = { path = "../qbz-i18n" }
 qbz-log = { path = "../qbz-log" }
+
+rusqlite = { version = "0.31", features = ["bundled"] }
 
 [build-dependencies]
 cxx-qt-build = "0.7"

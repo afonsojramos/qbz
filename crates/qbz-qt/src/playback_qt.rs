@@ -6,9 +6,9 @@
 //! end-of-track advance).
 //!
 //! POC-NOTEs (deliberate cuts vs playback.rs, named for the effort report):
-//! - Streaming quality: the ui_prefs DEFAULT ("hires_plus" ->
-//!   `Quality::UltraHiRes`). The ui_prefs store and the #638 device-cap
-//!   clamp live in the Slint glue; there is no prefs UI in the POC.
+//! - Streaming quality: seeded from ui_prefs ("streaming_quality") and
+//!   live-updated by Settings > Audio (settings_qt). The #638 device-cap
+//!   clamp lives in the Slint glue and is NOT ported.
 //! - Blacklist filtering of album tracks: skipped (store not open).
 //! - Offline-cache tier (offline bytes), gapless prefetch (`play_next`),
 //!   prefetch warming, stop-after, infinite refill, session persist,
@@ -19,16 +19,36 @@
 //!   the core queue's next directly; a failed play logs and stops.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use qbz_app::shell::AppRuntime;
 use qbz_core::LoggingAdapter;
 use cxx_qt_lib::QString;
 use qbz_models::{Quality, QueueTrack, RepeatMode};
 
-/// The request tier for every play: the ui_prefs default ("hires_plus").
-/// See module docs (no prefs UI in the POC).
-const POC_QUALITY: Quality = Quality::UltraHiRes;
+/// The request tier for every play. Persisted in ui_prefs.json ("streaming_quality")
+/// and applied here from Settings > Audio (settings_qt). Default "hires_plus".
+static POC_QUALITY: RwLock<Quality> = RwLock::new(Quality::UltraHiRes);
+
+/// Map a ui_prefs quality key to the request tier (settings.rs STREAMING_QUALITIES).
+fn quality_for_key(key: &str) -> Quality {
+    match key {
+        "mp3" => Quality::Mp3,
+        "cd" => Quality::Lossless,
+        "hires" => Quality::HiRes,
+        _ => Quality::UltraHiRes,
+    }
+}
+
+/// Settings > Audio > Streaming quality writes through here (also used at
+/// startup to seed from the persisted prefs).
+pub fn set_streaming_quality(key: &str) {
+    *POC_QUALITY.write().unwrap() = quality_for_key(key);
+}
+
+fn current_quality() -> Quality {
+    *POC_QUALITY.read().unwrap()
+}
 
 // Mute bookkeeping (mirrors playback.rs MUTED / PREMUTE_VOLUME: there is no
 // dedicated mute API on the core — mute is volume 0 with a stash).
@@ -152,7 +172,7 @@ pub async fn play_album_from(
     log::info!("[qbz-qt] play_album: queue set ({count} tracks), playing track {first_id}");
     runtime
         .core()
-        .play_track_resolved(first_id, POC_QUALITY, None, None, 0)
+        .play_track_resolved(first_id, current_quality(), None, None, 0)
         .await
         .map_err(|e| format!("play_track {first_id} failed: {e}"))?;
     log::info!("[qbz-qt] play_album: play_track_resolved started for {first_id}");
@@ -174,7 +194,7 @@ pub async fn play_album_from_track(
     publish_queue(runtime).await;
     runtime
         .core()
-        .play_track_resolved(first_id, POC_QUALITY, None, None, 0)
+        .play_track_resolved(first_id, current_quality(), None, None, 0)
         .await
         .map_err(|e| format!("play_track {first_id} failed: {e}"))?;
     refresh_now_playing(runtime).await;
@@ -202,7 +222,7 @@ pub async fn play_track_list(
     publish_queue(runtime).await;
     runtime
         .core()
-        .play_track_resolved(first_id, POC_QUALITY, None, None, 0)
+        .play_track_resolved(first_id, current_quality(), None, None, 0)
         .await
         .map_err(|e| format!("play_track {first_id} failed: {e}"))?;
     refresh_now_playing(runtime).await;
@@ -310,7 +330,7 @@ pub async fn play_single_track(
     log::info!("[qbz-qt] play_single_track: playing {track_id}");
     runtime
         .core()
-        .play_track_resolved(track_id, POC_QUALITY, None, None, 0)
+        .play_track_resolved(track_id, current_quality(), None, None, 0)
         .await
         .map_err(|e| format!("play_track {track_id} failed: {e}"))?;
     refresh_now_playing(runtime).await;
@@ -352,7 +372,7 @@ pub(crate) async fn play_queue_track_public(runtime: &Arc<AppRuntime<LoggingAdap
 async fn play_queue_track(runtime: &Arc<AppRuntime<LoggingAdapter>>, track_id: u64) {
     if let Err(e) = runtime
         .core()
-        .play_track_resolved(track_id, POC_QUALITY, None, None, 0)
+        .play_track_resolved(track_id, current_quality(), None, None, 0)
         .await
     {
         log::error!("[qbz-qt] playback: play_track {track_id} failed: {e}");

@@ -435,10 +435,10 @@ Rectangle {
         }
     }
 
-    // --- App menu (stub: user block + Log Out + Close) --------------------
-    // POC-NOTE: the Slint menu also carries Settings / Open Music Link /
-    // Keyboard Shortcuts / Documentation / Report an Issue / What's New /
-    // About QBZ — omitted here (no views/dialogs to open yet).
+    // --- App menu (user block + Settings + Log Out + Close) ---------------
+    // POC-NOTE: the Slint menu also carries Open Music Link / Keyboard
+    // Shortcuts / Documentation / Report an Issue / What's New / About QBZ
+    // — omitted here (no views/dialogs to open yet).
     Popup {
         id: appMenu
         x: root.width - 234 - theme.spacingMd
@@ -521,6 +521,14 @@ Rectangle {
                 }
             }
 
+            AppMenuItem {
+                name: "settings-2"
+                label: QbzBridge.tr("Settings")
+                onClicked: {
+                    appMenu.close()
+                    QbzBridge.navigateTo("settings")
+                }
+            }
             AppMenuItem {
                 name: "log-out"
                 label: QbzBridge.tr("Log Out")

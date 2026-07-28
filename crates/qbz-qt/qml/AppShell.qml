@@ -125,7 +125,8 @@ Rectangle {
             source: QbzBridge.currentView === "home" ? "HomeView.qml"
                 : QbzBridge.currentView === "library" ? "LibraryView.qml"
                 : QbzBridge.currentView === "album" ? "AlbumView.qml"
-                : QbzBridge.currentView === "artist" ? "ArtistView.qml" : ""
+                : QbzBridge.currentView === "artist" ? "ArtistView.qml"
+                : QbzBridge.currentView === "settings" ? "SettingsView.qml" : ""
         }
     }
 }
