@@ -328,16 +328,6 @@ pub fn save_pref(key: &str, value: serde_json::Value) {
     }
 }
 
-/// The Appearance > app_background index: 0 off / 1 ambient / 2 blurred
-/// (the POC renders blurred AS ambient — ambient_qt.rs POC-NOTE).
-pub fn app_background_index() -> i32 {
-    match pref_str("app_background", "off").as_str() {
-        "ambient" => 1,
-        "blurred" => 2,
-        _ => 0,
-    }
-}
-
 // Tray store (qbz_app::settings::tray — per-user tray_settings.db, the SAME
 // file the Slint tray_settings.rs glue writes).
 static TRAY: OnceLock<qbz_app::settings::tray::TraySettingsState> = OnceLock::new();
