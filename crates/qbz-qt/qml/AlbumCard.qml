@@ -118,9 +118,11 @@ Rectangle {
                 onClicked: QbzBridge.openAlbum(root.albumId)
             }
 
-            // Pin badge — top-right. Filled accent pin always visible when
-            // pinned; outline pin hover-revealed otherwise. Always-mounted
-            // (opacity) so its hover joins overlayOn.
+            // Pin badge — top-right. Hover-revealed like the overlay
+            // buttons (AlbumCard.slint: opacity follows overlay-on even
+            // when pinned — the pinned state reads in the icon swap only:
+            // filled accent pin vs outline). Always-mounted (opacity) so
+            // its hover joins overlayOn.
             Rectangle {
                 x: parent.width - width - 8
                 y: 8
@@ -128,7 +130,7 @@ Rectangle {
                 height: 26
                 radius: 13
                 color: pinArea.containsMouse ? "#cc000000" : "#99000000"
-                opacity: root.overlayOn ? 1.0 : (root.isPinned ? 1.0 : 0.0)
+                opacity: root.overlayOn ? 1.0 : 0.0
                 Behavior on opacity { NumberAnimation { duration: 150 } }
                 QbzIcon {
                     name: root.isPinned ? "pin-filled" : "pin"

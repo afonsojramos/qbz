@@ -15,10 +15,11 @@
 //!   view renders the Slint empty-data placeholders instead.
 //! - Reco-scored taste ordering of favorite albums (reco store skipped):
 //!   favorites render in plain favorite order.
-//! - Pinned / Most Played Albums / Qobuz Mixes rows: stores/static tiles
-//!   out of scope.
-//! - Discover prefs (per-tab section visibility/reorder): OUT OF SCOPE —
-//!   a fixed superset order renders (see `SECTION_ORDER`).
+//! - Most Played Albums / Qobuz Mixes rows: stores/static tiles out of
+//!   scope (prefs entries for them are skipped).
+//! - The "View all" full-list pages: the rails show the link when the
+//!   section carries an endpoint (1:1 header) but the click is INERT — the
+//!   DiscoverBrowse page is out of scope.
 //! - Editor's Picks / For You / Recommendations tabs: placeholder pages
 //!   (the editor section set is not built).
 
@@ -57,6 +58,10 @@ pub struct HomeCard {
     pub is_pinned: bool,
     /// Slim rows ("Popular albums"): the 1-based rank ("" = none).
     pub rank: String,
+    /// Pinned rail only: the card's own kind ("album" | "artist" |
+    /// "playlist") — the mixed PinnedCarousel slot dispatch.
+    #[serde(rename = "itemKind", default)]
+    pub item_kind: String,
     /// Playlist rows: the UPPERCASE first-tag category subtag.
     pub category: String,
     #[serde(rename = "artUrl")]
@@ -70,10 +75,15 @@ pub struct HomeCard {
 pub struct HomeSection {
     pub id: String,
     pub title: String,
-    /// "album" | "slim" | "playlist" | "artists" | "recentPlaceholder".
+    /// "album" | "slim" | "playlist" | "artists" | "pinned" |
+    /// "recentPlaceholder".
     pub kind: String,
     /// Placeholder hint for recentPlaceholder sections.
     pub hint: String,
+    /// Discover endpoint path for the "View all" header link ("" = no
+    /// full-list page — home.rs SectionData.endpoint).
+    #[serde(default)]
+    pub endpoint: String,
     pub items: Vec<HomeCard>,
 }
 
@@ -83,6 +93,7 @@ fn push_albums(
     out: &mut Vec<HomeSection>,
     id: &str,
     title: String,
+    endpoint: &str,
     container: Option<DiscoverContainer<DiscoverAlbum>>,
 ) {
     let Some(container) = container else {
@@ -96,6 +107,7 @@ fn push_albums(
         title,
         kind: "album".to_string(),
         hint: String::new(),
+        endpoint: endpoint.to_string(),
         items: container.data.items.into_iter().map(map_album).collect(),
     });
 }
@@ -111,8 +123,34 @@ fn build_sections(
 ) -> Vec<HomeSection> {
     let mut out: Vec<HomeSection> = Vec::new();
 
-    push_albums(&mut out, "newReleases", qbz_i18n::t("New Releases"), containers.new_releases);
-    push_albums(&mut out, "pressAwards", qbz_i18n::t("Press Accolades"), containers.press_awards);
+    push_albums(&mut out, "newReleases", qbz_i18n::t("New Releases"), "/discover/newReleases", containers.new_releases);
+    push_albums(&mut out, "pressAwards", qbz_i18n::t("Press Accolades"), "/discover/pressAward", containers.press_awards);
+
+    // Pinned rail (phase 11) — the user's pinned albums/artists/playlists
+    // from the shared per-user store (PinnedCarousel.slint: mixed 200x246
+    // slots, most-recent first). Self-hides while empty.
+    let pinned: Vec<HomeCard> = crate::sidebar_qt::list_pinned()
+        .into_iter()
+        .map(|p| HomeCard {
+            id: p.id,
+            title: p.title,
+            artist: p.subtitle,
+            art_url: p.artwork_url,
+            item_kind: p.kind,
+            is_pinned: true,
+            ..Default::default()
+        })
+        .collect();
+    if !pinned.is_empty() {
+        out.push(HomeSection {
+            id: "pinned".to_string(),
+            title: qbz_i18n::t("Pinned"),
+            kind: "pinned".to_string(),
+            hint: String::new(),
+            endpoint: String::new(),
+            items: pinned,
+        });
+    }
 
     // Qobuz Playlists row (single-cover cards, first-tag category subtag).
     let playlists: Vec<HomeCard> = containers
@@ -129,6 +167,9 @@ fn build_sections(
             title: qbz_i18n::t("Qobuz Playlists"),
             kind: "playlist".to_string(),
             hint: String::new(),
+            // The Slint playlist "View all" opens the local browse page (an
+            // action, not a discover endpoint) — no header link here.
+            endpoint: String::new(),
             items: playlists,
         });
     }
@@ -140,6 +181,7 @@ fn build_sections(
         title: qbz_i18n::t("Recently Played Albums"),
         kind: "recentPlaceholder".to_string(),
         hint: qbz_i18n::t("Albums you play will appear here."),
+        endpoint: String::new(),
         items: Vec::new(),
     });
     out.push(HomeSection {
@@ -147,6 +189,7 @@ fn build_sections(
         title: qbz_i18n::t("Recently Played Tracks"),
         kind: "recentPlaceholder".to_string(),
         hint: qbz_i18n::t("Tracks you play will appear here."),
+        endpoint: String::new(),
         items: Vec::new(),
     });
 
@@ -154,6 +197,7 @@ fn build_sections(
         &mut out,
         "idealDiscography",
         qbz_i18n::t("Ideal Discography"),
+        "/discover/idealDiscography",
         containers.ideal_discography,
     );
 
@@ -174,6 +218,7 @@ fn build_sections(
             title: qbz_i18n::t("Popular albums"),
             kind: "slim".to_string(),
             hint: String::new(),
+            endpoint: "/discover/mostStreamed".to_string(),
             items: popular,
         });
     }
@@ -182,9 +227,10 @@ fn build_sections(
         &mut out,
         "editorPicks",
         qbz_i18n::t("Albums of the Week"),
+        "/discover/albumOfTheWeek",
         containers.album_of_the_week,
     );
-    push_albums(&mut out, "qobuzissimes", qbz_i18n::t("Qobuzissimes"), containers.qobuzissims);
+    push_albums(&mut out, "qobuzissimes", qbz_i18n::t("Qobuzissimes"), "/discover/qobuzissims", containers.qobuzissims);
 
     // Personalized rails (self-hide while empty, 1:1 Slint).
     if !favorite_albums.is_empty() {
@@ -193,6 +239,7 @@ fn build_sections(
             title: qbz_i18n::t("Library Albums"),
             kind: "album".to_string(),
             hint: String::new(),
+            endpoint: String::new(),
             items: favorite_albums,
         });
     }
@@ -202,6 +249,7 @@ fn build_sections(
             title: qbz_i18n::t("Release Watch"),
             kind: "album".to_string(),
             hint: String::new(),
+            endpoint: String::new(),
             items: release_watch,
         });
     }
@@ -211,11 +259,40 @@ fn build_sections(
             title: qbz_i18n::t("Your Top Artists"),
             kind: "artists".to_string(),
             hint: String::new(),
+            endpoint: String::new(),
             items: top_artists,
         });
     }
 
-    out
+    // Phase 11: order + gate by the persisted Discover prefs — the Slint
+    // renders per `DiscoverState.home-sections`, which the prefs drive
+    // (discover_prefs.rs). A section whose prefs entry is DISABLED does not
+    // render at all; ids the POC does not implement (qobuzMixes,
+    // mostPlayedAlbums, ...) are skipped.
+    let prefs = crate::sidebar_qt::user_dir()
+        .and_then(|dir| {
+            qbz_app::settings::discover_prefs::DiscoverPrefsStore::new_at(&dir).ok()
+        })
+        .map(|store| store.load())
+        .unwrap_or_else(qbz_app::settings::discover_prefs::default_prefs);
+    let home_prefs = prefs.tab(qbz_app::settings::discover_prefs::DiscoveryTab::Home);
+    let mut gated: Vec<HomeSection> = Vec::with_capacity(out.len());
+    for pref in home_prefs {
+        if !pref.enabled {
+            continue;
+        }
+        if let Some(pos) = out.iter().position(|s| s.id == pref.id.as_str()) {
+            gated.push(out.remove(pos));
+        }
+    }
+    // Defensive: built sections with NO prefs entry at all keep their
+    // relative order at the end (every built id has one today). Sections
+    // that HAVE an entry but are disabled stay hidden (1:1 Slint).
+    let known: std::collections::HashSet<&str> =
+        home_prefs.iter().map(|p| p.id.as_str()).collect();
+    out.retain(|s| !known.contains(s.id.as_str()));
+    gated.append(&mut out);
+    gated
 }
 
 /// Fetch the discover index (UNFILTERED — genre filter out of scope) and

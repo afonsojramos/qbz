@@ -281,7 +281,8 @@ fn enumerate_devices(backend: AudioBackendType) -> (Vec<DeviceOption>, Vec<Strin
 
     if backend == AudioBackendType::Alsa {
         // Stable sort by section; the section header lands on each section's
-        // first row (settings.rs `group_alsa_devices`).
+        // first row (settings.rs `group_alsa_devices`). rows[i] aligns with
+        // ids[i] (both lead with the synthetic "System default"/"" entry).
         let section_labels = [
             qbz_i18n::t("Defaults"),
             qbz_i18n::t("Bit-perfect (Hardware / Digital)"),
@@ -290,17 +291,9 @@ fn enumerate_devices(backend: AudioBackendType) -> (Vec<DeviceOption>, Vec<Strin
         ];
         let mut indexed: Vec<(usize, DeviceOption, String)> = rows
             .into_iter()
-            .zip(ids.iter().skip(1).map(|id| {
-                // ids[i] aligns with rows[i-1] after the synthetic lead;
-                // rebuilt below — simpler to recompute section per row id.
-                id.clone()
-            }))
-            .map(|(row, _)| row)
+            .zip(ids.iter().cloned())
             .enumerate()
-            .map(|(i, row)| {
-                let id = if i == 0 { String::new() } else { ids[i].clone() };
-                (alsa_section(&id, i == 0, &row.label), row, id)
-            })
+            .map(|(i, (row, id))| (alsa_section(&id, i == 0, &row.label), row, id))
             .collect();
         indexed.sort_by_key(|(section, _, _)| *section);
         // Rebuild ids in the SAME order (they're the index map).

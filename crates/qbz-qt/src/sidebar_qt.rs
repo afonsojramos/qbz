@@ -30,10 +30,14 @@ use serde::Serialize;
 // ---------------------------------------------------------------------------
 
 static PINNED: OnceLock<Mutex<PinnedItemsService>> = OnceLock::new();
+/// The per-user base dir the pinned store was bound to (also where the
+/// discover-prefs DB lives) — stashed so Home can read section prefs.
+static USER_DIR: OnceLock<std::path::PathBuf> = OnceLock::new();
 
 /// Bind `<dir>/pinned_items.db` on every session activation (mirrors
 /// `pinned::init_for_user`; fail-open).
 pub fn init_pinned(base_dir: &Path) {
+    let _ = USER_DIR.set(base_dir.to_path_buf());
     let path = base_dir.join(DB_FILE_NAME);
     match PinnedItemsService::new(&path) {
         Ok(service) => {
@@ -49,6 +53,20 @@ pub fn is_pinned(kind: &str, id: &str) -> bool {
         .get()
         .map(|s| s.lock().unwrap().is_pinned(kind, id))
         .unwrap_or(false)
+}
+
+/// All pinned items, most-recent first (PinnedItemsService::list) — feeds
+/// the Home "Pinned" rail.
+pub fn list_pinned() -> Vec<PinnedItem> {
+    PINNED
+        .get()
+        .and_then(|s| s.lock().unwrap().list().ok())
+        .unwrap_or_default()
+}
+
+/// The per-user base dir (None before any session activation).
+pub fn user_dir() -> Option<std::path::PathBuf> {
+    USER_DIR.get().cloned()
 }
 
 /// Toggle the pin state of an album/artist/playlist. Returns the new

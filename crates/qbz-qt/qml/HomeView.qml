@@ -5,7 +5,8 @@
 // Data: QbzBridge.homeSectionsJson (one JSON document — see bridge.rs),
 // published by src/home_qt.rs; artwork file:// paths resolve through the
 // qbz-cache image cache. Section kinds: "album" | "playlist" | "slim" |
-// "artists" | "recentPlaceholder".
+// "artists" | "pinned" | "recentPlaceholder". Rail ORDER + VISIBILITY
+// follow the persisted Discover prefs (phase 11, discover_prefs.db).
 //
 // POC-NOTEs:
 // - The genre filter + section-configurator gear are INERT visual stubs
@@ -62,11 +63,37 @@ Rectangle {
         }
     }
 
-    // Section header: title + page chevrons (Carousel header metrics).
+    // "View all →" header link (Carousel.slint ViewAllLink) — shown when
+    // the section carries a discover endpoint. POC-NOTE: the click is
+    // INERT (the DiscoverBrowse full-list page is out of scope).
+    component ViewAllLink: Rectangle {
+        width: linkText.implicitWidth + 16
+        height: 26
+        radius: 4
+        color: vaArea.containsMouse ? theme.surfaceHover : "transparent"
+        Text {
+            id: linkText
+            anchors.centerIn: parent
+            text: QbzBridge.tr("View all →")
+            color: vaArea.containsMouse ? theme.textPrimary : theme.textSecondary
+            font.pixelSize: 14
+            font.weight: theme.weightMedium
+        }
+        MouseArea {
+            id: vaArea
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+        }
+    }
+
+    // Section header: title + [View all] + page chevrons (Carousel header
+    // metrics — the link sits LEFT of the chevrons, Tauri parity).
     component RailHeader: Item {
         property string title: ""
         property bool leftEnabled: false
         property bool rightEnabled: false
+        property bool showViewAll: false
         signal pageLeft()
         signal pageRight()
 
@@ -84,6 +111,10 @@ Rectangle {
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
             spacing: 4
+            ViewAllLink {
+                visible: parent.parent.showViewAll
+                anchors.verticalCenter: parent.verticalCenter
+            }
             NavBtn {
                 name: "chevron-left"
                 btnEnabled: parent.parent.leftEnabled
@@ -112,6 +143,7 @@ Rectangle {
             title: sectionData.title
             leftEnabled: rail.contentX > 1
             rightEnabled: rail.contentX < maxScroll - 1
+            showViewAll: (sectionData.endpoint || "") !== ""
             onPageLeft: rail.contentX = Math.min(0, rail.contentX - step)
             onPageRight: rail.contentX = Math.min(maxScroll, rail.contentX + step)
         }
@@ -256,6 +288,7 @@ Rectangle {
             title: sectionData.title
             leftEnabled: grid.contentX > 1
             rightEnabled: grid.contentX < maxScroll - 1
+            showViewAll: (sectionData.endpoint || "") !== ""
             onPageLeft: grid.contentX = Math.max(0, grid.contentX - grid.width)
             onPageRight: grid.contentX = Math.min(maxScroll, grid.contentX + grid.width)
         }
@@ -283,6 +316,173 @@ Rectangle {
                         x: pageIdx * grid.width + (slot % 4) * (grid.cellWidth + 8)
                         y: Math.floor(slot / 4) * (60 + 8)
                         card: modelData
+                    }
+                }
+            }
+        }
+    }
+
+    // Pinned rail (PinnedCarousel.slint) — one 200x246 slot per item, the
+    // card picked by the item's own kind: albums reuse AlbumCard, artists
+    // render the ArtistGridCard circle, playlists the PlaylistCard square.
+    // Fed from the shared per-user pinned_items.db (home_qt "pinned"
+    // section; most-recent first).
+    component PinnedArtistCard: Item {
+        property var card: ({})
+        width: 200
+        height: 246
+
+        Column {
+            spacing: 0
+            // Art zone: 200x200 rounded-square surface (AlbumCard parity)
+            // framing a 190px round portrait (ArtistGridCard).
+            Rectangle {
+                width: 200
+                height: 200
+                radius: theme.radiusSm
+                color: theme.surfaceElevated
+                Rectangle {
+                    width: 190
+                    height: 190
+                    radius: 95
+                    anchors.centerIn: parent
+                    color: theme.surfaceMain
+                    clip: true
+                    Image {
+                        anchors.fill: parent
+                        source: card.artPath || ""
+                        fillMode: Image.PreserveAspectCrop
+                        asynchronous: true
+                    }
+                    MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: QbzBridge.openArtist(card.id)
+                    }
+                }
+            }
+            Item { width: 1; height: 6 }
+            Text {
+                width: 200
+                text: card.title
+                color: paNameArea.containsMouse ? theme.accent : theme.textPrimary
+                font.pixelSize: theme.fontBody - 2
+                font.weight: theme.weightMedium
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.WordWrap
+                maximumLineCount: 2
+                elide: Text.ElideRight
+                MouseArea {
+                    id: paNameArea
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: QbzBridge.openArtist(card.id)
+                }
+            }
+        }
+    }
+
+    component PinnedPlaylistCard: Item {
+        property var card: ({})
+        width: 200
+        height: 246
+
+        Column {
+            spacing: 0
+            Rectangle {
+                width: 200
+                height: 200
+                radius: theme.radiusSm
+                color: theme.surfaceElevated
+                clip: true
+                Image {
+                    anchors.fill: parent
+                    source: card.artPath || ""
+                    fillMode: Image.PreserveAspectCrop
+                    asynchronous: true
+                }
+                MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    // POC-NOTE: playlist page out of scope — inert.
+                }
+            }
+            Item { width: 1; height: 6 }
+            Text {
+                width: 200
+                text: card.title
+                color: theme.textPrimary
+                font.pixelSize: theme.fontBody - 2
+                font.weight: theme.weightSemibold
+                elide: Text.ElideRight
+            }
+            Text {
+                width: 200
+                visible: card.artist !== ""
+                text: card.artist
+                color: theme.textMuted
+                font.pixelSize: 12
+                elide: Text.ElideRight
+            }
+        }
+    }
+
+    component PinnedRail: Column {
+        property var sectionData: ({})
+        width: parent ? parent.width : 0
+        spacing: 12
+
+        readonly property real maxScroll: Math.max(0, rail.contentWidth - rail.width)
+        readonly property int perPage: Math.max(1, Math.floor((rail.width + 32) / 232))
+        readonly property int step: perPage * 232
+
+        RailHeader {
+            title: sectionData.title
+            leftEnabled: rail.contentX > 1
+            rightEnabled: rail.contentX < maxScroll - 1
+            onPageLeft: rail.contentX = Math.max(0, rail.contentX - step)
+            onPageRight: rail.contentX = Math.min(maxScroll, rail.contentX + step)
+        }
+        Item {
+            width: parent.width
+            height: 246
+            ListView {
+                id: rail
+                anchors.fill: parent
+                orientation: ListView.Horizontal
+                spacing: 32
+                clip: true
+                boundsBehavior: Flickable.StopAtBounds
+                model: sectionData.items
+                delegate: Item {
+                    required property var modelData
+                    width: 200
+                    height: 246
+
+                    Component {
+                        id: pAlbum
+                        AlbumCard {
+                            albumId: modelData.id
+                            title: modelData.title
+                            artist: modelData.artist
+                            artSource: modelData.artPath || ""
+                            isPinned: true
+                            isFavorite: false
+                        }
+                    }
+                    Component {
+                        id: pArtist
+                        PinnedArtistCard { card: modelData }
+                    }
+                    Component {
+                        id: pPlaylist
+                        PinnedPlaylistCard { card: modelData }
+                    }
+                    Loader {
+                        anchors.fill: parent
+                        sourceComponent: modelData.itemKind === "artist" ? pArtist
+                            : modelData.itemKind === "playlist" ? pPlaylist : pAlbum
                     }
                 }
             }
@@ -692,8 +892,14 @@ Rectangle {
                                 : modelData.kind === "playlist" ? playlistRailComp
                                 : modelData.kind === "slim" ? slimGridComp
                                 : modelData.kind === "artists" ? artistRailComp
+                                : modelData.kind === "pinned" ? pinnedRailComp
                                 : recentComp
                             property var sectionData: modelData
+
+                            Component {
+                                id: pinnedRailComp
+                                PinnedRail { sectionData: parent.sectionData }
+                            }
 
                             Component {
                                 id: albumRailComp

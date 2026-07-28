@@ -240,10 +240,15 @@ where
             let subscription = session.subscription_label.clone();
             core.set_session(session).await.map_err(|e| e.to_string())?;
             runtime.activate(user_id).await?;
-            // POC-NOTE: per-user store fan-out skipped here (see module
-            // docs) — only the offline-mode binding + D4 verdict stay.
+            // Per-user stores the shell depends on (pinned items for the
+            // Home rail + pin badges, local favorites for hearts) — the
+            // same binding the fresh-login path does (auth_qt login).
+            // POC-NOTE: the rest of the Slint per-user store fan-out stays
+            // skipped (see module docs).
             if let Some(dir) = crate::offline_fwd::user_data_dir(user_id) {
                 crate::offline_fwd::init_for_user(&dir);
+                crate::library_qt::init_local_favorites(&dir);
+                crate::sidebar_qt::init_pinned(&dir);
             }
             crate::offline_fwd::subscription_mark_valid();
             crate::offline_fwd::engine().set_offline_session(false);
