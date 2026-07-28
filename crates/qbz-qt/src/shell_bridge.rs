@@ -144,6 +144,10 @@ pub mod qbz_shell {
         /// and lazy-load its data on first visit.
         #[qinvokable]
         fn navigate_to(self: Pin<&mut QbzShell>, view: QString);
+        /// Open a url in the system browser (the Slint
+        /// AlbumActions.open-external-link). Spawns xdg-open detached.
+        #[qinvokable]
+        fn open_external_url(self: Pin<&mut QbzShell>, url: QString);
 
         /// Now-Playing-view flyout: switch the bar mode (0 New / 1 Classic /
         /// 2 Small / 3 Large) — persists ui_prefs.npb_mode; Large forces the
@@ -440,4 +444,11 @@ impl qbz_shell::QbzShell {
     pub fn drag_end(self: Pin<&mut Self>) {
         crate::drag_end();
     }
+    pub fn open_external_url(self: Pin<&mut Self>, url: QString) {
+        let url = url.to_string();
+        if let Err(e) = open::that(&url) {
+            log::warn!("[qbz-qt] failed to open '{url}': {e}");
+        }
+    }
+
 }

@@ -7,7 +7,9 @@
 // replica — the cortinilla/live-search is out of scope; POC-NOTE).
 // Right: the tri-state offline status badge with its flyout (recovery
 // "Sign in" wired to QbzSession.recoveryLogin) and the app menu (user block
-// + Log Out + Close; the other Slint menu items are POC-NOTE stubs).
+// + Documentation + Log Out + Close. Still missing vs Slint, each needing a
+// surface the port does not have yet: Open Music Link, Keyboard Shortcuts,
+// Report an Issue, What's New, About QBZ.
 //
 // POC-NOTE: the custom window-chrome parts (drag surface, drawn
 // min/max/close WindowControls) are skipped — the POC keeps NATIVE window
@@ -603,44 +605,24 @@ Rectangle {
                 }
             }
 
-            AppMenuItem {
-                name: "search"
-                label: QbzSession.tr("Intelligent search", QbzSession.trRev)
-                checkedItem: QbzBridge.intelligentSearch
-                onClicked: QbzBridge.toggleIntelligentSearch()
-            }
-            AppMenuItem {
-                name: "layout-grid"
-                label: QbzSession.tr("Ambient background", QbzSession.trRev)
-                checkedItem: QbzShell.ambientMode > 0
-                onClicked: {
-                    QbzShell.toggleAmbientBackground()
-                    // Applies LIVE (pure QML layering); the check flips now.
-                }
-            }
-            AppMenuItem {
-                name: "layout-grid"
-                label: QbzSession.tr("Use system title bar", QbzSession.trRev)
-                checkedItem: QbzShell.systemTitleBarPref
-                onClicked: {
-                    QbzShell.toggleSystemTitleBar()
-                    // Keep the menu open so the check state reads; the
-                    // applied mode changes on the next launch (1:1 Slint).
-                }
-            }
-            Text {
-                width: parent.width
-                leftPadding: 37
-                text: QbzSession.tr("Takes effect after restarting QBZ.", QbzSession.trRev)
-                color: theme.textMuted
-                font.pixelSize: 11
-            }
+            // The app menu carries ACTIONS. Intelligent search, Ambient
+            // background and Use system title bar were settings living here by
+            // accident; all three already have their real rows in
+            // Settings > Appearance, which is where Slint keeps them.
             AppMenuItem {
                 name: "settings-2"
                 label: QbzSession.tr("Settings", QbzSession.trRev)
                 onClicked: {
                     appMenu.close()
                     QbzShell.navigateTo("settings")
+                }
+            }
+            AppMenuItem {
+                name: "book-open"
+                label: QbzSession.tr("Documentation", QbzSession.trRev)
+                onClicked: {
+                    appMenu.close()
+                    QbzShell.openExternalUrl("https://github.com/vicrodh/qbz/wiki")
                 }
             }
             AppMenuItem {

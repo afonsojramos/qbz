@@ -27,6 +27,14 @@ fn main() {
     // files in qml/ reference them relatively (e.g.
     // "assets/icons/primary/plus.svg").
     let qrc_refs: Vec<&str> = qrc_files.iter().map(String::as_str).collect();
+    // Cargo's default is to rerun build.rs only when a source file changes, so
+    // dropping a new icon into qml/assets/ produced a binary whose qrc did not
+    // contain it — the file was on disk and the app logged "Cannot open".
+    // Watch the whole tree instead.
+    println!("cargo:rerun-if-changed=qml");
+    for f in &qrc_files {
+        println!("cargo:rerun-if-changed={f}");
+    }
 
     CxxQtBuilder::new()
         // Qt modules the bridge links against (Qt6 CMake in /usr/lib64/cmake).
