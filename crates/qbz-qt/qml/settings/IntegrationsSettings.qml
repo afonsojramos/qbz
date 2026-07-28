@@ -51,8 +51,6 @@ Column {
     }
 
     SettingsSpacer { }
-    SettingsDivider { }
-    SettingsSpacer { }
 
     // =========================== METADATA ================================
     GroupHeader { text: QbzSession.tr("METADATA", QbzSession.trRev) }
@@ -65,8 +63,6 @@ Column {
         }
     }
 
-    SettingsSpacer { }
-    SettingsDivider { }
     SettingsSpacer { }
 
     // ========================== SCROBBLERS ===============================
@@ -254,8 +250,6 @@ Column {
         }
     }
 
-    SettingsSpacer { }
-    SettingsDivider { }
     SettingsSpacer { }
 
     // =========================== DISCORD =================================

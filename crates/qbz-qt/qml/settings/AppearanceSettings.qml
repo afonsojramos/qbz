@@ -1,27 +1,24 @@
-// Settings > Appearance (phase 19) — the QML port of
-// crates/qbz-ui/ui/settings/AppearanceSettings.slint. Row order, group
-// headers and gating mirror the Slint 1:1; every control rides the single
-// settingsJson document (root.doc) and the settingsBool/Select/String
-// invokables — never local truth.
+// Settings > Appearance — the QML port of crates/qbz-ui/ui/settings/
+// AppearanceSettings.slint. Group order, row order, labels, descriptions and
+// gating are 1:1 with the Slint; every control rides the settingsJson
+// document (root.doc) and the settingsBool/Select/String invokables — never
+// local truth.
 //
 // The THEME row is live: QbzShell.themeSlug / themeListJson / themeFilter
 // (theme_qt.rs) and themeSet() repaints the whole app through QbzTheme.qml
 // (the Slint theme::push_colors equivalent).
 //
-// POC-NOTEs (deliberate cuts):
-// - "Auto (dynamic)" rows: the Source dropdown persists, Regenerate
-//   re-resolves via AutoSource::System; the "Select Image..." flow
-//   (file dialog + AutoSource::Image) is not ported.
-// - "Custom" rows: the Slint token editor is not ported (owner: read-only
-//   apply of custom_theme.json) — an info row stands in.
-// - The "system" registry theme maps to the Dark palette (Slint reads the
-//   OS palette).
-// - Language persists but applies on next launch (live switch = phase 20).
-// - UI scale / renderer / preferred GPU persist with restart semantics;
-//   the Slint restart toasts are logs here.
-// - Preferred GPU: no adapter enumeration — Auto + the persisted adapter.
-// - The commented-out Slint blocks (immersive background/panels, title
-//   template) stay out, 1:1 the owner's cut.
+// Not shipped (no backend seam in this port):
+// - The "Auto (dynamic)" custom-image picker ("Select Image..." + the
+//   "Detected: <desktop>" line): there is no file-chooser seam here, so the
+//   button would do nothing. The Source dropdown still persists all three
+//   values (the shared ui_prefs key the Slint reads).
+// - The Custom-theme editor (seed-from-current, the dark-polarity toggle and
+//   the base-token swatch grid): the port applies custom_theme.json read-only
+//   and has no ColorPicker primitive.
+// - "Hide Dock icon when closed to menu bar" (macOS-only in the Slint too).
+// - The commented-out Slint blocks (immersive background / panels / FPS,
+//   window-title template) stay out, 1:1 the owner's cut.
 
 import QtQuick
 import com.blitzfc.qbz
@@ -74,32 +71,15 @@ Column {
         label: QbzSession.tr("Theme", QbzSession.trRev)
         Row {
             spacing: 8
-            // Filter cycle (All -> Dark -> Light): sun-moon / moon / sun.
-            Rectangle {
-                width: 34
-                height: 34
-                radius: theme.radiusSm
-                border.width: 1
-                border.color: theme.borderSubtle
-                color: fArea.containsMouse ? theme.surfaceHover : theme.surfaceElevated
-                QbzIcon {
-                    anchors.centerIn: parent
-                    name: QbzShell.themeFilter === 1 ? "moon"
-                        : QbzShell.themeFilter === 2 ? "sun" : "sun-moon"
-                    width: 16
-                    height: 16
-                    tintName: "secondary"
-                }
-                MouseArea {
-                    id: fArea
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: QbzShell.themeSetFilter((QbzShell.themeFilter + 1) % 3)
-                }
+            // Theme list filter cycle (All / Dark / Light).
+            SettingsButton {
+                iconName: QbzShell.themeFilter === 1 ? "moon"
+                    : QbzShell.themeFilter === 2 ? "sun" : "sun-moon"
+                onClicked: QbzShell.themeSetFilter((QbzShell.themeFilter + 1) % 3)
             }
             QbzSelect {
                 menuWidth: 220
+                // 36 registered themes — a name filter (Slint parity).
                 searchable: true
                 options: root.filteredLabels
                 currentIndex: root.currentThemeIndex
@@ -120,6 +100,7 @@ Column {
     }
     SettingRow {
         label: QbzSession.tr("Dynamic background", QbzSession.trRev)
+        description: QbzSession.tr("Animated album-art background behind the whole app. High resource use — GPU accelerated.", QbzSession.trRev)
         QbzSelect {
             menuWidth: 200
             options: root.doc.appBackgroundModes || []
@@ -129,18 +110,20 @@ Column {
     }
     SettingRow {
         label: QbzSession.tr("Intelligent Search", QbzSession.trRev)
+        description: QbzSession.tr("Smart search cache, ranking, and the search preview dropdown. On by default.", QbzSession.trRev)
         QbzToggle {
             checked: root.doc.intelligentSearch === true
             onToggled: function (v) { QbzBridge.settingsBool("intelligent-search", v) }
         }
     }
-    // Auto-theme rows (theme slug "auto" only).
+    // Auto-theme rows (the "auto" theme only).
     SettingRow {
         visible: QbzShell.themeSlug === "auto"
         label: QbzSession.tr("Source", QbzSession.trRev)
+        description: QbzSession.tr("Generate a color theme from your system wallpaper or a custom image", QbzSession.trRev)
         QbzSelect {
             menuWidth: 200
-            options: [QbzSession.tr("System Colors", QbzSession.trRev), QbzSession.tr("Wallpaper Sync", QbzSession.trRev), QbzSession.tr("Custom Image", QbzSession.trRev)]
+            options: root.doc.autoThemeSources || []
             currentIndex: root.doc.autoThemeSourceIndex || 0
             onSelected: function (i) { QbzBridge.settingsSelect("auto-theme-source", i) }
         }
@@ -148,17 +131,10 @@ Column {
     SettingRow {
         visible: QbzShell.themeSlug === "auto"
         label: QbzSession.tr("Regenerate", QbzSession.trRev)
-        description: QbzSession.tr("Rebuild the palette from the source (System colors in the POC).", QbzSession.trRev)
         SettingsButton {
             text: QbzSession.tr("Regenerate", QbzSession.trRev)
             onClicked: QbzShell.themeSet(QbzShell.themeSlug)
         }
-    }
-    // Custom-theme rows (theme slug "custom" only) — no token editor.
-    SettingRow {
-        visible: QbzShell.themeSlug === "custom"
-        label: QbzSession.tr("Custom theme", QbzSession.trRev)
-        description: QbzSession.tr("Applied read-only from custom_theme.json — the token editor is not ported to the Qt frontend (POC).", QbzSession.trRev)
     }
 
     SettingsSpacer { }
@@ -178,7 +154,7 @@ Column {
     }
     SettingRow {
         label: QbzSession.tr("Interface size", QbzSession.trRev)
-        description: QbzSession.tr("Restart to apply.", QbzSession.trRev)
+        description: QbzSession.tr("Scales the whole interface, like browser zoom. Small fits more content on screen, Large and Extra large improve readability (requires restart)", QbzSession.trRev)
         QbzSelect {
             menuWidth: 200
             options: root.doc.uiScales || []
@@ -188,8 +164,9 @@ Column {
     }
     SettingRow {
         label: QbzSession.tr("Immersive search", QbzSession.trRev)
+        description: QbzSession.tr("What selecting a result in the Immersive search does. Disabled turns the in-immersive search off.", QbzSession.trRev)
         QbzSelect {
-            menuWidth: 220
+            menuWidth: 200
             options: root.doc.immersiveSearchActions || []
             currentIndex: root.doc.immersiveSearchActionIndex || 0
             onSelected: function (i) { QbzBridge.settingsSelect("immersive-search-action", i) }
@@ -197,8 +174,9 @@ Column {
     }
     SettingRow {
         label: QbzSession.tr("Immersive default view", QbzSession.trRev)
+        description: QbzSession.tr("Which immersive view opens by default. 'Remember last' restores your last view.", QbzSession.trRev)
         QbzSelect {
-            menuWidth: 220
+            menuWidth: 200
             options: root.doc.immersiveDefaultViews || []
             currentIndex: root.doc.immersiveDefaultViewIndex || 0
             onSelected: function (i) { QbzBridge.settingsSelect("immersive-default-view", i) }
@@ -213,6 +191,7 @@ Column {
     GroupHeader { text: QbzSession.tr("LIBRARY & VISUALS", QbzSession.trRev) }
     SettingRow {
         label: QbzSession.tr("Show navigation in sidebar", QbzSession.trRev)
+        description: QbzSession.tr("Move the Discover, Library, Local Library and My QBZ sections out of the header and into the sidebar.", QbzSession.trRev)
         QbzToggle {
             checked: root.doc.navInSidebar === true
             onToggled: function (v) { QbzBridge.settingsBool("nav-in-sidebar", v) }
@@ -222,6 +201,7 @@ Column {
         // ADR-010: only mounted when navigation is NOT in the sidebar.
         visible: root.doc.navInSidebar !== true
         label: QbzSession.tr("Compact header navigation", QbzSession.trRev)
+        description: QbzSession.tr("Use the icon-only section navigation in the header even while the sidebar is open.", QbzSession.trRev)
         QbzToggle {
             checked: root.doc.navHeaderCompact === true
             onToggled: function (v) { QbzBridge.settingsBool("nav-header-compact", v) }
@@ -229,21 +209,26 @@ Column {
     }
     SettingRow {
         label: QbzSession.tr("My QBZ", QbzSession.trRev)
+        description: QbzSession.tr("Rename the My QBZ hub. Leave the name blank (or hit reset) to restore the default.", QbzSession.trRev)
         Row {
             spacing: 8
+            // Fixed icon preview (RENAME ONLY — no custom icon, owner DQ3).
             RoundedImage {
                 width: 34
                 height: 34
+                anchors.verticalCenter: parent.verticalCenter
                 source: "../assets/qbz-logo.png"
                 radius: theme.radiusSm
             }
             QbzLineEdit {
                 width: 150
+                anchors.verticalCenter: parent.verticalCenter
                 text: root.doc.myQbzLabel || ""
                 placeholder: QbzSession.tr("My QBZ", QbzSession.trRev)
                 onCommitted: function (v) { QbzBridge.settingsString("myqbz-label", v) }
             }
             SettingsButton {
+                anchors.verticalCenter: parent.verticalCenter
                 iconName: "rotate-ccw"
                 onClicked: QbzBridge.settingsString("myqbz-label", "")
             }
@@ -251,6 +236,7 @@ Column {
     }
     SettingRow {
         label: QbzSession.tr("Show playlist cover collages in sidebar", QbzSession.trRev)
+        description: QbzSession.tr("Render a 2×2 thumbnail of track covers next to each playlist. Disable on low-end machines to skip the extra images.", QbzSession.trRev)
         QbzToggle {
             checked: root.doc.sidebarPlaylistCollage === true
             onToggled: function (v) { QbzBridge.settingsBool("sidebar-playlist-collage", v) }
@@ -258,6 +244,7 @@ Column {
     }
     SettingRow {
         label: QbzSession.tr("Show album artwork in Local Library track list", QbzSession.trRev)
+        description: QbzSession.tr("Display the album cover thumbnail next to each track in the Tracks and Folders views. Off by default — large libraries pay a per-row image-decode cost.", QbzSession.trRev)
         QbzToggle {
             checked: root.doc.localLibraryTrackArtwork === true
             onToggled: function (v) { QbzBridge.settingsBool("local-library-track-artwork", v) }
@@ -265,6 +252,7 @@ Column {
     }
     SettingRow {
         label: QbzSession.tr("Play indicator animation", QbzSession.trRev)
+        description: QbzSession.tr("Animate the now-playing row with equalizer bars. Off (default) shows a static pause icon with an accent edge mark — lighter on CPU.", QbzSession.trRev)
         QbzToggle {
             checked: root.doc.playIndicatorAnimation === true
             onToggled: function (v) { QbzBridge.settingsBool("play-indicator-animation", v) }
@@ -272,6 +260,7 @@ Column {
     }
     SettingRow {
         label: QbzSession.tr("Invert swipe navigation direction", QbzSession.trRev)
+        description: QbzSession.tr("Swap the two-finger touchpad swipe: left goes back, right goes forward.", QbzSession.trRev)
         QbzToggle {
             checked: root.doc.invertSwipeNavigation === true
             onToggled: function (v) { QbzBridge.settingsBool("invert-swipe-navigation", v) }
@@ -321,7 +310,7 @@ Column {
     GroupHeader { text: QbzSession.tr("TITLE BAR", QbzSession.trRev) }
     SettingRow {
         label: QbzSession.tr("Use system title bar", QbzSession.trRev)
-        description: QbzSession.tr("Restart to apply.", QbzSession.trRev)
+        description: QbzSession.tr("Keep your system's native window decorations. Turn off to use the QBZ header as the title bar, with its own window controls and drag support. Takes effect after restarting QBZ.", QbzSession.trRev)
         QbzToggle {
             checked: root.doc.useSystemTitleBar === true
             onToggled: function (v) { QbzBridge.settingsBool("use-system-title-bar", v) }
@@ -329,6 +318,7 @@ Column {
     }
     SettingRow {
         label: QbzSession.tr("Hide title bar", QbzSession.trRev)
+        description: QbzSession.tr("Frameless window without window controls or header drag (for tiling window manager users)", QbzSession.trRev)
         rowEnabled: root.doc.useSystemTitleBar !== true
         QbzToggle {
             enabled: root.doc.useSystemTitleBar !== true
@@ -345,6 +335,7 @@ Column {
     GroupHeader { text: QbzSession.tr("WINDOW CONTROLS", QbzSession.trRev) }
     SettingRow {
         label: QbzSession.tr("Window controls position", QbzSession.trRev)
+        description: QbzSession.tr("Place the window control buttons on the left or right side of the title bar", QbzSession.trRev)
         rowEnabled: !root.tbLocked
         QbzSelect {
             enabled: !root.tbLocked
@@ -356,6 +347,7 @@ Column {
     }
     SettingRow {
         label: QbzSession.tr("Show window controls", QbzSession.trRev)
+        description: QbzSession.tr("Show minimize, maximize, and close buttons in the title bar. Disable if your window manager handles these.", QbzSession.trRev)
         rowEnabled: !root.tbLocked
         QbzToggle {
             enabled: !root.tbLocked
@@ -372,6 +364,7 @@ Column {
     GroupHeader { text: QbzSession.tr("PLAYER VIEWS", QbzSession.trRev) }
     SettingRow {
         label: QbzSession.tr("Show volume +/- buttons", QbzSession.trRev)
+        description: QbzSession.tr("Add discrete plus and minus buttons next to the volume slider in the player bar.", QbzSession.trRev)
         QbzToggle {
             checked: root.doc.showVolumeSteppers === true
             onToggled: function (v) { QbzBridge.settingsBool("show-volume-steppers", v) }
@@ -380,7 +373,7 @@ Column {
     SettingRow {
         label: QbzSession.tr("Mini player default view", QbzSession.trRev)
         QbzSelect {
-            menuWidth: 220
+            menuWidth: 200
             options: root.doc.miniDefaultViews || []
             currentIndex: root.doc.miniDefaultViewIndex || 0
             onSelected: function (i) { QbzBridge.settingsSelect("mini-default-view", i) }
@@ -388,8 +381,9 @@ Column {
     }
     SettingRow {
         label: QbzSession.tr("Startup page", QbzSession.trRev)
+        description: QbzSession.tr("Choose which page to show when the app starts", QbzSession.trRev)
         QbzSelect {
-            menuWidth: 220
+            menuWidth: 200
             options: root.doc.startupPages || []
             currentIndex: root.doc.startupPageIndex || 0
             onSelected: function (i) { QbzBridge.settingsSelect("startup-page", i) }
@@ -397,6 +391,7 @@ Column {
     }
     SettingRow {
         label: QbzSession.tr("Show Purchases", QbzSession.trRev)
+        description: QbzSession.tr("Show the Purchases section in the sidebar for browsing and downloading your purchased music", QbzSession.trRev)
         QbzToggle {
             checked: root.doc.showPurchases === true
             onToggled: function (v) { QbzBridge.settingsBool("show-purchases", v) }
@@ -404,6 +399,7 @@ Column {
     }
     SettingRow {
         label: QbzSession.tr("Purchases in title bar", QbzSession.trRev)
+        description: QbzSession.tr("Place the Purchases entry in the custom title bar instead of the sidebar", QbzSession.trRev)
         rowEnabled: !root.tbLocked
         QbzToggle {
             enabled: !root.tbLocked
@@ -420,6 +416,7 @@ Column {
     GroupHeader { text: QbzSession.tr("SYSTEM TRAY", QbzSession.trRev) }
     SettingRow {
         label: QbzSession.tr("Enable tray icon", QbzSession.trRev)
+        description: QbzSession.tr("Show icon in system tray (requires restart)", QbzSession.trRev)
         QbzToggle {
             checked: root.doc.trayEnable === true
             onToggled: function (v) { QbzBridge.settingsBool("tray-enable", v) }
@@ -427,6 +424,7 @@ Column {
     }
     SettingRow {
         label: QbzSession.tr("Close to tray", QbzSession.trRev)
+        description: QbzSession.tr("Keep playing in the tray instead of quitting when you close the window", QbzSession.trRev)
         rowEnabled: root.doc.trayEnable === true
         QbzToggle {
             enabled: root.doc.trayEnable === true
@@ -436,8 +434,9 @@ Column {
     }
     SettingRow {
         label: QbzSession.tr("Tray icon variant", QbzSession.trRev)
+        description: QbzSession.tr("Pick a mono glyph to match your panel (Plasma, GNOME's permanently dark top bar) or the full colour vinyl logo", QbzSession.trRev)
         QbzSelect {
-            menuWidth: 200
+            menuWidth: 160
             options: root.doc.trayIconThemes || []
             currentIndex: root.doc.trayIconThemeIndex || 0
             onSelected: function (i) { QbzBridge.settingsSelect("tray-icon-theme", i) }
@@ -452,9 +451,9 @@ Column {
     GroupHeader { text: QbzSession.tr("RENDERER", QbzSession.trRev) }
     SettingRow {
         label: QbzSession.tr("Rendering backend", QbzSession.trRev)
-        description: QbzSession.tr("Restart to apply.", QbzSession.trRev)
+        description: QbzSession.tr("Auto picks the best renderer for your graphics hardware. Only change this if the app feels slow or renders incorrectly (requires restart)", QbzSession.trRev)
         QbzSelect {
-            menuWidth: 220
+            menuWidth: 200
             options: root.doc.renderers || []
             currentIndex: root.doc.rendererIndex || 0
             onSelected: function (i) { QbzBridge.settingsSelect("renderer", i) }
@@ -462,7 +461,7 @@ Column {
     }
     SettingRow {
         label: QbzSession.tr("Preferred GPU", QbzSession.trRev)
-        description: QbzSession.tr("Restart to apply.", QbzSession.trRev)
+        description: QbzSession.tr("Which GPU renders the app. On a hybrid laptop, picking the discrete GPU moves the dynamic-background load off the integrated one (cooler, but more power). Auto is recommended (requires restart)", QbzSession.trRev)
         QbzSelect {
             menuWidth: 260
             options: root.doc.gpuPowers || []
@@ -470,4 +469,6 @@ Column {
             onSelected: function (i) { QbzBridge.settingsSelect("gpu-power", i) }
         }
     }
+
+    Item { width: 1; height: 40 }
 }

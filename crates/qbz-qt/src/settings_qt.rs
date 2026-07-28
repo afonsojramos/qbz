@@ -21,6 +21,7 @@
 //!   they take effect on the next connection, like upstream.
 
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use cxx_qt_lib::QString;
 use qbz_app::settings::playback::{
@@ -31,6 +32,13 @@ use qbz_audio::backend::{AlsaPlugin, AudioBackendType, BackendManager};
 use qbz_audio::settings::{AudioSettingsState, AudioSettingsStore};
 use qbz_core::LoggingAdapter;
 use serde::Serialize;
+
+// Per-section controllers. Declared HERE (not in main.rs) so the settings
+// controller can be split by concern without touching the app root: a
+// `mod x;` in `settings_qt.rs` resolves to `src/settings_qt/x.rs`.
+pub mod devtools;
+pub mod library;
+pub mod offline;
 
 // ---------------------------------------------------------------------------
 // Stores (shared files with the Slint app)
@@ -502,6 +510,8 @@ const RENDERER_LABELS: &[&str] =
 const RENDERER_VALUES: &[&str] = &["auto", "wgpu", "gl", "software"];
 const TRAY_ICON_LABELS: &[&str] = &["Auto", "Mono light", "Mono dark", "Color"];
 const TRAY_ICON_VALUES: &[&str] = &["auto", "mono-light", "mono-dark", "color"];
+const AUTO_THEME_SOURCE_LABELS: &[&str] = &["System Colors", "Wallpaper Sync", "Custom Image"];
+const AUTO_THEME_SOURCE_VALUES: &[&str] = &["system", "wallpaper", "image"];
 
 fn index_of(values: &[&str], key: &str, default: usize) -> i32 {
     values.iter().position(|v| *v == key).unwrap_or(default) as i32
@@ -614,6 +624,8 @@ pub struct SettingsDoc {
     pub app_background_modes: Vec<String>,
     #[serde(rename = "appBackgroundIndex")]
     pub app_background_index: i32,
+    #[serde(rename = "autoThemeSources")]
+    pub auto_theme_sources: Vec<String>,
     #[serde(rename = "autoThemeSourceIndex")]
     pub auto_theme_source_index: i32,
     #[serde(rename = "intelligentSearch")]
@@ -726,10 +738,50 @@ pub struct SettingsDoc {
     pub integrations_status_kind: i32,
     #[serde(rename = "discordEnabled")]
     pub discord_enabled: bool,
+    // --- Per-section sub-documents (settings_qt/*.rs) ---------------------
+    /// Settings > Local Library (folders, scan, maintenance, Plex fields).
+    pub library: library::Snapshot,
+    /// Settings > Offline (offline MODE + the lyrics cache row).
+    pub offline: offline::Snapshot,
+    /// Settings > Developer + Blacklist counters + the sandbox gate.
+    pub dev: devtools::Snapshot,
 }
 
 /// Index -> value maps the select handlers resolve against.
 static MAPS: Mutex<(Vec<AudioBackendType>, Vec<String>)> = Mutex::new((Vec::new(), Vec::new()));
+
+/// Last device enumeration (backend, rows, id map, taken at).
+///
+/// Every settings change rebuilds the whole document, and a library scan
+/// re-publishes it on a 2 s ticker — enumerating the backend's devices that
+/// often is wasted work (a PipeWire enumeration opens a connection). The
+/// short TTL keeps hot-plug latency at a few seconds, and the refresh button
+/// (which exists precisely for "my DAC is not listed") drops the entry.
+static DEVICE_CACHE: Mutex<Option<(AudioBackendType, Vec<DeviceOption>, Vec<String>, Instant)>> =
+    Mutex::new(None);
+
+const DEVICE_CACHE_TTL: Duration = Duration::from_secs(4);
+
+fn cached_devices(backend: AudioBackendType) -> (Vec<DeviceOption>, Vec<String>) {
+    if let Ok(guard) = DEVICE_CACHE.lock() {
+        if let Some((cached_backend, rows, ids, at)) = guard.as_ref() {
+            if *cached_backend == backend && at.elapsed() < DEVICE_CACHE_TTL {
+                return (rows.clone(), ids.clone());
+            }
+        }
+    }
+    let fresh = enumerate_devices(backend);
+    if let Ok(mut guard) = DEVICE_CACHE.lock() {
+        *guard = Some((backend, fresh.0.clone(), fresh.1.clone(), Instant::now()));
+    }
+    fresh
+}
+
+fn invalidate_device_cache() {
+    if let Ok(mut guard) = DEVICE_CACHE.lock() {
+        *guard = None;
+    }
+}
 
 /// settings.rs `alsa_section` — Tauri dropdown sectioning for ALSA rows.
 fn alsa_section(id: &str, is_default: bool, label: &str) -> usize {
@@ -857,7 +909,7 @@ pub async fn publish_snapshot() {
             .copied()
             .unwrap_or_default();
 
-        let (devices, ids) = enumerate_devices(active_backend);
+        let (devices, ids) = cached_devices(active_backend);
         let device_index = match &audio_settings.output_device {
             None => 0,
             Some(id) => ids.iter().position(|d| d == id).unwrap_or(0),
@@ -953,8 +1005,12 @@ pub async fn publish_snapshot() {
                 .iter()
                 .position(|v| *v == pref_str("app_background", "off"))
                 .unwrap_or(0) as i32,
+            auto_theme_sources: AUTO_THEME_SOURCE_LABELS
+                .iter()
+                .map(|l| qbz_i18n::t(l))
+                .collect(),
             auto_theme_source_index: index_of(
-                &["system", "wallpaper", "image"],
+                AUTO_THEME_SOURCE_VALUES,
                 &pref_str("auto_theme_source", "system"),
                 0,
             ),
@@ -1049,6 +1105,9 @@ pub async fn publish_snapshot() {
             integrations_status_text: integ_ui.status_text.clone(),
             integrations_status_kind: integ_ui.status_kind,
             discord_enabled: crate::integrations_qt::discord_enabled(),
+            library: library::snapshot(),
+            offline: offline::snapshot(),
+            dev: devtools::snapshot(),
         }
     })
     .await
@@ -1293,6 +1352,19 @@ pub async fn settings_bool(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &str,
         "discord-rpc" => {
             crate::integrations_qt::set_discord_enabled(value).map(|_| Apply::None)
         }
+        // --- Offline -------------------------------------------------------
+        // Induced offline. The engine takes the #279 stream-first snapshot,
+        // so the audio settings can change under us -> Reload the player.
+        "offline-mode-enabled" => offline::set_mode_enabled(value).map(|_| Apply::Reload),
+        // --- Local Library > Plex -----------------------------------------
+        "plex-metadata-write" => {
+            library::set_metadata_write(value);
+            Ok(Apply::None)
+        }
+        "plex-collapse" => {
+            save_pref("plex_ui_collapsed", serde_json::json!(value));
+            Ok(Apply::None)
+        }
         other => {
             log::warn!("[qbz-qt] unknown settings bool key: {other}");
             return;
@@ -1508,19 +1580,55 @@ pub async fn settings_slider(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &st
     publish_snapshot().await;
 }
 
+/// String-payload handler. Also the ACTION channel for the sections whose
+/// affordances are buttons rather than settings (Local Library folders and
+/// scans, the caches, the developer tools): the payload is the action's
+/// argument ("" when it takes none).
 pub async fn settings_string(key: &str, value: String) {
-    if key == "qconnect-device-name" {
-        let trimmed = value.trim().to_string();
-        let stored = (!trimmed.is_empty()).then_some(trimmed.as_str());
-        qconnect_persist_device_name(stored);
-    }
-    if key == "myqbz-label" {
-        save_myqbz_label(&value);
-    }
-    if key == "listenbrainz-token" {
-        // Validates + persists + republishes itself (async flow).
-        crate::integrations_qt::listenbrainz_set_token(&value).await;
-        return;
+    match key {
+        "qconnect-device-name" => {
+            let trimmed = value.trim().to_string();
+            let stored = (!trimmed.is_empty()).then_some(trimmed.as_str());
+            qconnect_persist_device_name(stored);
+        }
+        "myqbz-label" => save_myqbz_label(&value),
+        "listenbrainz-token" => {
+            // Validates + persists + republishes itself (async flow).
+            crate::integrations_qt::listenbrainz_set_token(&value).await;
+            return;
+        }
+        // --- Local Library -------------------------------------------------
+        "library-add-folder" => library::add_folder(value).await,
+        "library-remove-folders" => {
+            let ids: Vec<i64> = serde_json::from_str(&value).unwrap_or_default();
+            library::remove_folders(ids).await;
+        }
+        "library-folder-enabled" => {
+            if let Ok(id) = value.trim().parse::<i64>() {
+                library::toggle_folder_enabled(id).await;
+            }
+        }
+        // "" = every enabled folder; "<id>" = that folder only.
+        "library-scan" => library::scan(value.trim().parse::<i64>().ok()),
+        "library-scan-stop" => library::stop_scan(),
+        // Panel mount / manual refresh: fall through to the publish below.
+        "refresh" => {}
+        "library-cleanup-missing" => {
+            // Publishes its own progress + result.
+            library::cleanup_missing().await;
+            return;
+        }
+        "library-clear" => {
+            library::clear_library().await;
+            return;
+        }
+        "plex-clear-cache" => library::plex_clear_cache().await,
+        // --- Offline --------------------------------------------------------
+        "lyrics-cache-clear" => offline::clear_lyrics_cache().await,
+        // --- Developer ------------------------------------------------------
+        "open-log-file" => devtools::open_log_file(),
+        "export-settings" => devtools::export_settings().await,
+        other => log::warn!("[qbz-qt] unknown settings string key: {other}"),
     }
     publish_snapshot().await;
 }
@@ -1543,11 +1651,13 @@ pub async fn settings_reset(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
 /// The refresh/release button next to the output device (settings.rs:
 /// frees a held ALSA-exclusive device and re-enumerates).
 pub async fn refresh_devices(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
-    // Release whatever the player holds, then rebuild the snapshot.
+    // Release whatever the player holds, then re-enumerate from scratch (the
+    // whole point of the button is a device that was not in the last list).
     let player = runtime.core().player();
     if let Err(e) = player.release_device() {
         log::warn!("[qbz-qt] release device failed: {e}");
     }
+    invalidate_device_cache();
     publish_snapshot().await;
 }
 
