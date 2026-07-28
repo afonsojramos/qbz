@@ -72,13 +72,10 @@ Rectangle {
                 onClicked: QbzBridge.openPlaylist(root.item.id)
             }
             // Hover overlay — fav / play / more (y=120, h=44, centered).
-            Row {
+            CardOverlayRow {
                 y: 120
-                width: 200
-                height: 44
-                opacity: root.overlayOn ? 1.0 : 0.0
-                Behavior on opacity { NumberAnimation { duration: 150 } }
-                Item { width: (200 - 44 - 2 * 36 - 2 * 12) / 2; height: 1 }
+                width: parent.width
+                shown: root.overlayOn
                 CardOverlayButton {
                     id: plFav
                     name: root.item.playlistOwned ? "heart"
@@ -108,7 +105,6 @@ Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                     onClicked: function (mouse) { plMenu.openAtCursor(plMore, mouse.x, mouse.y) }
                 }
-                Item { width: (200 - 44 - 2 * 36 - 2 * 12) / 2; height: 1 }
             }
             // Pin badge — top-right (opacity follows overlay-on).
             Rectangle {

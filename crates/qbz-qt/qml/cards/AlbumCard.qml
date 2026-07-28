@@ -152,16 +152,11 @@ Rectangle {
 
             // Hover action buttons — favorite / play / more (y=120, h=44,
             // centered, spacing 12).
-            Row {
+            CardOverlayRow {
                 y: 120
                 width: parent.width
-                height: 44
-                anchors.horizontalCenter: parent.horizontalCenter
-                spacing: 12
-                opacity: root.overlayOn ? 1.0 : 0.0
-                Behavior on opacity { NumberAnimation { duration: 150 } }
+                shown: root.overlayOn
 
-                Item { width: (200 - 44 - 2 * 36 - 2 * 12) / 2; height: 1 }
                 Rectangle {
                     width: 36
                     height: 36
@@ -228,7 +223,6 @@ Rectangle {
                         onClicked: function (mouse) { albumMenu.openAtCursor(moreArea, mouse.x, mouse.y) }
                     }
                 }
-                Item { width: (200 - 44 - 2 * 36 - 2 * 12) / 2; height: 1 }
             }
 
             // Context menu (AlbumCard.slint's album-menu): 196px, items

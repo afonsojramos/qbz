@@ -105,16 +105,10 @@ Rectangle {
                     onClicked: QbzBridge.openArtist(root.item.id)
                 }
                 // Hover overlay — follow? / play / more (y=113).
-                Row {
+                CardOverlayRow {
                     y: 113
-                    width: 190
-                    height: 44
-                    opacity: root.overlayOn ? 1.0 : 0.0
-                    Behavior on opacity { NumberAnimation { duration: 150 } }
-                    Item {
-                        width: (190 - 44 - (root.showFollow ? 2 : 1) * 36 - (root.showFollow ? 2 : 1) * 12) / 2
-                        height: 1
-                    }
+                    width: parent.width
+                    shown: root.overlayOn
                     CardOverlayButton {
                         id: agFollow
                         visible: root.showFollow
@@ -136,10 +130,6 @@ Rectangle {
                         name: "ellipsis"
                         anchors.verticalCenter: parent.verticalCenter
                         onClicked: function (mouse) { agMenu.openAtCursor(agMore, mouse.x, mouse.y) }
-                    }
-                    Item {
-                        width: (190 - 44 - (root.showFollow ? 2 : 1) * 36 - (root.showFollow ? 2 : 1) * 12) / 2
-                        height: 1
                     }
                 }
                 CardMenu {

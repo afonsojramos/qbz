@@ -69,13 +69,10 @@ Rectangle {
             }
             // Hover overlay — favorite / play / more (y=120, h=44,
             // centered, spacing 12).
-            Row {
+            CardOverlayRow {
                 y: 120
-                width: 200
-                height: 44
-                opacity: root.overlayOn ? 1.0 : 0.0
-                Behavior on opacity { NumberAnimation { duration: 150 } }
-                Item { width: (200 - 44 - 2 * 36 - 2 * 12) / 2; height: 1 }
+                width: parent.width
+                shown: root.overlayOn
                 CardOverlayButton {
                     id: favBtn
                     name: root.item.isFavorite ? "heart-filled" : "heart"
@@ -99,7 +96,6 @@ Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                     onClicked: function (mouse) { trackMenu.openAtCursor(moreBtn, mouse.x, mouse.y) }
                 }
-                Item { width: (200 - 44 - 2 * 36 - 2 * 12) / 2; height: 1 }
             }
             // Source badge (All feed, show-local): bottom-right.
             Rectangle {

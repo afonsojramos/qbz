@@ -47,6 +47,7 @@ fn main() {
                 "qml/cards/TrackCard.qml",
                 "qml/controls/CardMenu.qml",
                 "qml/controls/CardOverlayButton.qml",
+                "qml/controls/CardOverlayRow.qml",
                 "qml/controls/GroupHeader.qml",
                 "qml/controls/QbzCircleAction.qml",
                 "qml/controls/QbzContextMenu.qml",
