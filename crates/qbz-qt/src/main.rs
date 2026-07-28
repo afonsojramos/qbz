@@ -20,6 +20,7 @@ mod ambient_qt;
 mod artist_qt;
 mod lyrics_qt;
 mod playback_qt;
+mod playlist_qt;
 mod queue_qt;
 mod search_qt;
 mod settings_qt;
@@ -448,6 +449,11 @@ pub(crate) fn create_playlist() {
                 log::info!("[qbz-qt] playlist created: {} ({})", p.name, p.id);
                 sidebar_qt::load(&runtime).await;
                 publish_sidebar();
+                // Open the new playlist (the Slint lands on it after the
+                // naming modal); the user-playlists endpoint lags the
+                // write, so the tree may not show it yet — the detail view
+                // fetches by id and is correct regardless.
+                open_playlist(p.id.to_string());
             }
             Err(e) => log::error!("[qbz-qt] create playlist failed: {e}"),
         }
@@ -617,6 +623,182 @@ pub(crate) fn play_track(track_id: u64) {
             log::error!("[qbz-qt] play_track failed: {e}");
         }
     });
+}
+
+// ============================ Playlist view + DnD (phase 17) ==============
+
+/// Open the playlist detail view (sidebar row / playlist card click).
+pub(crate) fn open_playlist(playlist_id: String) {
+    if offline_fwd::engine().status().is_offline() {
+        return;
+    }
+    let Some(pid) = playlist_id.parse::<u64>().ok() else {
+        log::warn!("[qbz-qt] open_playlist: invalid id {playlist_id}");
+        return;
+    };
+    nav_qt::record("playlist");
+    let param = playlist_id.clone();
+    ui(move |mut b| b.as_mut().set_view_param_id(QString::from(param.as_str())));
+    let runtime = app();
+    spawn(async move {
+        if let Err(e) = playlist_qt::load(&runtime, pid).await {
+            log::warn!("[qbz-qt] playlist load failed: {e}");
+        }
+    });
+}
+
+pub(crate) fn playlist_play_all() {
+    let runtime = app();
+    spawn(async move {
+        if let Err(e) = playlist_qt::play_all(&runtime).await {
+            log::error!("[qbz-qt] playlist play-all failed: {e}");
+        }
+    });
+}
+
+pub(crate) fn playlist_shuffle() {
+    let runtime = app();
+    spawn(async move {
+        if let Err(e) = playlist_qt::play_shuffled(&runtime).await {
+            log::error!("[qbz-qt] playlist shuffle failed: {e}");
+        }
+    });
+}
+
+pub(crate) fn playlist_toggle_follow() {
+    let runtime = app();
+    spawn(async move { playlist_qt::toggle_follow(&runtime).await });
+}
+
+pub(crate) fn playlist_copy() {
+    let runtime = app();
+    spawn(async move { playlist_qt::copy_playlist(&runtime).await });
+}
+
+pub(crate) fn playlist_rename(name: String) {
+    let runtime = app();
+    spawn(async move {
+        if let Err(e) = playlist_qt::rename(&runtime, &name).await {
+            log::error!("[qbz-qt] playlist rename failed: {e}");
+        }
+    });
+}
+
+pub(crate) fn playlist_delete() {
+    let runtime = app();
+    spawn(async move {
+        if let Err(e) = playlist_qt::delete_playlist(&runtime).await {
+            log::error!("[qbz-qt] playlist delete failed: {e}");
+        }
+    });
+}
+
+pub(crate) fn playlist_play_track(track_id: String) {
+    let runtime = app();
+    spawn(async move {
+        if let Err(e) = playlist_qt::play_track(&runtime, &track_id).await {
+            log::error!("[qbz-qt] playlist row play failed: {e}");
+        }
+    });
+}
+
+pub(crate) fn playlist_enqueue_track(track_id: String, mode: String) {
+    let runtime = app();
+    spawn(async move {
+        if let Err(e) = playlist_qt::enqueue_track(&runtime, &track_id, &mode).await {
+            log::error!("[qbz-qt] playlist row enqueue ({mode}) failed: {e}");
+        }
+    });
+}
+
+pub(crate) fn playlist_remove_track(playlist_track_id: u64) {
+    let runtime = app();
+    spawn(async move { playlist_qt::remove_track(&runtime, playlist_track_id).await });
+}
+
+// --- Drag & drop (DragState + DragActions, state.slint parity) -----------
+//
+// The dragged payload: Qobuz catalog ids only for the POC (the Slint's
+// DragTrack enum also carries local-library rows and Plex keys into
+// sidecar writes — out of scope, see module POC-NOTEs).
+static DRAGGED: Mutex<Vec<u64>> = Mutex::new(Vec::new());
+/// The claimed drop target (sidebar playlist id) — mirrored Rust-side so
+/// drag_end never reads the bridge off-thread.
+static DRAG_OVER: Mutex<String> = Mutex::new(String::new());
+
+pub(crate) fn drag_start(track_id: String, title: String, subtitle: String, x: f32, y: f32) {
+    let id = track_id.parse::<u64>().unwrap_or(0);
+    *DRAGGED.lock().unwrap() = if id > 0 { vec![id] } else { Vec::new() };
+    log::info!("[qbz-qt][drag] start {track_id} ({title})");
+    ui(move |mut b| {
+        b.as_mut().set_drag_count(if id > 0 { 1 } else { 0 });
+        b.as_mut().set_drag_title(QString::from(title.as_str()));
+        b.as_mut().set_drag_subtitle(QString::from(subtitle.as_str()));
+        b.as_mut().set_drag_x(x);
+        b.as_mut().set_drag_y(y);
+        b.as_mut().set_drag_over_playlist_id(QString::default());
+        b.as_mut().set_drag_active(true);
+    });
+}
+
+pub(crate) fn drag_move(x: f32, y: f32) {
+    ui(move |mut b| {
+        b.as_mut().set_drag_x(x);
+        b.as_mut().set_drag_y(y);
+    });
+}
+
+pub(crate) fn drag_set_over(playlist_id: String) {
+    *DRAG_OVER.lock().unwrap() = playlist_id.clone();
+    ui(move |mut b| {
+        b.as_mut()
+            .set_drag_over_playlist_id(QString::from(playlist_id.as_str()));
+    });
+}
+
+pub(crate) fn drag_end() {
+    let pid = std::mem::take(&mut *DRAG_OVER.lock().unwrap());
+    ui(|mut b| {
+        b.as_mut().set_drag_active(false);
+        b.as_mut().set_drag_over_playlist_id(QString::default());
+    });
+    let tracks = std::mem::take(&mut *DRAGGED.lock().unwrap());
+    if tracks.is_empty() {
+        return;
+    }
+    let Ok(pid) = pid.parse::<u64>() else {
+        // Not a Qobuz playlist target (a local-library playlist row or
+        // nothing) — the sidecar path is out of scope (POC-NOTE).
+        return;
+    };
+    let runtime = app();
+    spawn(async move { playlist_qt::add_tracks(&runtime, pid, &tracks).await });
+}
+
+/// Card overlay Play for a playlist (fetch + play from the top).
+pub(crate) fn play_playlist_by_id(playlist_id: u64) {
+    let runtime = app();
+    spawn(async move {
+        if let Err(e) = playlist_qt::play_playlist_by_id(&runtime, playlist_id).await {
+            log::error!("[qbz-qt] play playlist {playlist_id} failed: {e}");
+        }
+    });
+}
+
+/// Card menu queueing for a playlist.
+pub(crate) fn enqueue_playlist_by_id(playlist_id: u64, mode: String) {
+    let runtime = app();
+    spawn(async move {
+        if let Err(e) = playlist_qt::enqueue_playlist_by_id(&runtime, playlist_id, &mode).await {
+            log::error!("[qbz-qt] enqueue playlist {playlist_id} ({mode}) failed: {e}");
+        }
+    });
+}
+
+/// Card overlay follow/unfollow for a playlist.
+pub(crate) fn playlist_set_follow_by_id(playlist_id: u64, follow: bool) {
+    let runtime = app();
+    spawn(async move { playlist_qt::set_follow_by_id(&runtime, playlist_id, follow).await });
 }
 
 /// Artist-card overlay play (ArtistGridCard): Popular tracks with the

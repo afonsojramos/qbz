@@ -355,11 +355,36 @@ Rectangle {
             }
         }
 
+        // Shared drag (the row BODY is the source — TrackRow.slint):
+        // press-drag >6px starts it; a normal click/double-click still
+        // plays. The ghost + sidebar drops live in main.rs drag_*.
+        property bool dragging: false
+        property point downPos: Qt.point(0, 0)
         MouseArea {
             id: trArea
             anchors.fill: parent
             hoverEnabled: true
             propagateComposedEvents: true
+            onPressed: function (mouse) { parent.downPos = Qt.point(mouse.x, mouse.y) }
+            onPositionChanged: function (mouse) {
+                if (!pressed) return
+                const g = mapToItem(null, mouse.x, mouse.y)
+                if (!parent.dragging
+                    && (Math.abs(mouse.x - parent.downPos.x) > 6
+                        || Math.abs(mouse.y - parent.downPos.y) > 6)) {
+                    parent.dragging = true
+                    QbzBridge.dragStart(row.id, row.title,
+                        row.artist + " · " + row.album, g.x, g.y)
+                }
+                if (parent.dragging) QbzBridge.dragMove(g.x, g.y)
+            }
+            onReleased: function (mouse) {
+                if (parent.dragging) {
+                    QbzBridge.dragEnd()
+                    parent.dragging = false
+                    mouse.accepted = true
+                }
+            }
             onDoubleClicked: QbzBridge.playAlbumFrom(header.id, row.id)
             onClicked: mouse.accepted = false
         }

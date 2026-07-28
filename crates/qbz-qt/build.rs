@@ -54,6 +54,7 @@ fn main() {
                 "qml/SettingsView.qml",
                 "qml/SearchView.qml",
                 "qml/Cortinilla.qml",
+                "qml/PlaylistView.qml",
                 "qml/QbzTheme.qml",
                 "qml/QbzIcon.qml",
                 "qml/QbzScrollBar.qml",

@@ -254,7 +254,7 @@ Rectangle {
                 MouseArea {
                     anchors.fill: parent
                     cursorShape: Qt.PointingHandCursor
-                    // Playlist view: out of scope (POC-NOTE — inert).
+                    onClicked: QbzBridge.openPlaylist(card.id)
                 }
             }
             Item { width: 1; height: 6 }
@@ -290,12 +290,34 @@ Rectangle {
         radius: 6
         color: strArea.containsMouse ? theme.surfaceHover : "transparent"
 
+        property bool dragging: false
+        property point downPos: Qt.point(0, 0)
         MouseArea {
             id: strArea
             anchors.fill: parent
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
-            onClicked: QbzBridge.playTrack(item.id)
+            onPressed: function (mouse) { parent.downPos = Qt.point(mouse.x, mouse.y) }
+            onPositionChanged: function (mouse) {
+                if (!pressed) return
+                const g = mapToItem(null, mouse.x, mouse.y)
+                if (!parent.dragging
+                    && (Math.abs(mouse.x - parent.downPos.x) > 6
+                        || Math.abs(mouse.y - parent.downPos.y) > 6)) {
+                    parent.dragging = true
+                    QbzBridge.dragStart(item.id, item.title,
+                        item.artist + " · " + item.album, g.x, g.y)
+                }
+                if (parent.dragging) QbzBridge.dragMove(g.x, g.y)
+            }
+            onReleased: function (mouse) {
+                if (parent.dragging) {
+                    QbzBridge.dragEnd()
+                    parent.dragging = false
+                } else {
+                    QbzBridge.playTrack(item.id)
+                }
+            }
         }
         Row {
             anchors.fill: parent

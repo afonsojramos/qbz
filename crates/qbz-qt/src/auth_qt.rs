@@ -154,6 +154,8 @@ where
         crate::sidebar_qt::init_pinned(&dir);
         // Phase 15: intelligent-search service (cortinilla cache+ranking).
         crate::search_qt::init(&dir, crate::search_qt::intelligent_search_pref());
+        // Phase 17: playlist is_owner math.
+        crate::playlist_qt::set_user_id(user_id);
     }
     crate::offline_fwd::subscription_mark_valid();
     crate::offline_fwd::engine().set_offline_session(false);
@@ -253,6 +255,8 @@ where
                 crate::sidebar_qt::init_pinned(&dir);
         // Phase 15: intelligent-search service (cortinilla cache+ranking).
         crate::search_qt::init(&dir, crate::search_qt::intelligent_search_pref());
+        // Phase 17: playlist is_owner math.
+        crate::playlist_qt::set_user_id(user_id);
             }
             crate::offline_fwd::subscription_mark_valid();
             crate::offline_fwd::engine().set_offline_session(false);
@@ -319,6 +323,8 @@ where
         crate::sidebar_qt::init_pinned(&dir);
         // Phase 15: intelligent-search service (cortinilla cache+ranking).
         crate::search_qt::init(&dir, crate::search_qt::intelligent_search_pref());
+        // Phase 17: playlist is_owner math.
+        crate::playlist_qt::set_user_id(user_id);
     }
     crate::offline_fwd::engine().set_offline_session(true);
     Ok(user_id)

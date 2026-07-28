@@ -146,7 +146,8 @@ Rectangle {
                 : QbzBridge.currentView === "album" ? "AlbumView.qml"
                 : QbzBridge.currentView === "artist" ? "ArtistView.qml"
                 : QbzBridge.currentView === "settings" ? "SettingsView.qml"
-                : QbzBridge.currentView === "search" ? "SearchView.qml" : ""
+                : QbzBridge.currentView === "search" ? "SearchView.qml"
+                : QbzBridge.currentView === "playlist" ? "PlaylistView.qml" : ""
         }
     }
 
@@ -238,6 +239,41 @@ Rectangle {
                         wrapMode: Text.WordWrap
                     }
                 }
+            }
+        }
+    }
+
+    // --- Drag ghost (DragGhost.slint, phase 17) -----------------------------
+    // The dark pill that follows the cursor while tracks are dragged onto
+    // the sidebar: "N tracks" for a group, or title + "artist · album" for
+    // one. Visual only (never blocks the pointer).
+    Rectangle {
+        visible: QbzBridge.dragActive
+        x: QbzBridge.dragX + 10
+        y: QbzBridge.dragY + 14
+        width: ghostCol.width + 28
+        height: ghostCol.height + 16
+        radius: 8
+        color: "#e01e1e28"
+        border.width: 1
+        border.color: "#1fffffff"
+        Column {
+            id: ghostCol
+            anchors.centerIn: parent
+            spacing: 2
+            Text {
+                text: QbzBridge.dragCount > 1
+                    ? QbzBridge.dragCount + " " + QbzBridge.tr("tracks")
+                    : QbzBridge.dragTitle
+                color: "#ffffff"
+                font.pixelSize: 12
+                font.weight: theme.weightMedium
+            }
+            Text {
+                visible: QbzBridge.dragCount === 1 && QbzBridge.dragSubtitle !== ""
+                text: QbzBridge.dragSubtitle
+                color: "#8cffffff"
+                font.pixelSize: 10
             }
         }
     }

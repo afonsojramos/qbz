@@ -46,7 +46,7 @@ pub fn set_streaming_quality(key: &str) {
     *POC_QUALITY.write().unwrap() = quality_for_key(key);
 }
 
-fn current_quality() -> Quality {
+pub(crate) fn current_quality() -> Quality {
     *POC_QUALITY.read().unwrap()
 }
 
@@ -586,7 +586,7 @@ pub async fn cycle_repeat(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
 
 /// Push the queue's current-track meta into the NowPlayingModel (title /
 /// artist / quality / artwork via the phase-3 pipeline).
-pub async fn refresh_now_playing(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
+pub(crate) async fn refresh_now_playing(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
     let state = runtime.core().get_queue_state().await;
     let Some(track) = state.current_track else {
         crate::now_playing::clear_track();

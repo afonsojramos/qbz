@@ -467,11 +467,38 @@ Rectangle {
                             required property var modelData
                             property bool isFolder: modelData.kind === "folder"
                             property bool isActive: !isFolder && modelData.id === root.activePlaylistId
+                            // Track-drag drop target (Sidebar.slint SidebarRow):
+                            // the row self-detects the drop from the shared
+                            // window-coord pointer and claims/releases it.
+                            property bool dropHot: false
+                            function recomputeDrop() {
+                                if (isFolder || !QbzBridge.dragActive) {
+                                    if (dropHot) { QbzBridge.dragSetOver(""); dropHot = false }
+                                    return
+                                }
+                                const tl = mapToItem(null, 0, 0)
+                                const hot = QbzBridge.dragX >= tl.x && QbzBridge.dragX <= tl.x + width
+                                    && QbzBridge.dragY >= tl.y && QbzBridge.dragY <= tl.y + height
+                                if (hot && !dropHot) QbzBridge.dragSetOver(modelData.id)
+                                else if (!hot && dropHot) QbzBridge.dragSetOver("")
+                                dropHot = hot
+                            }
+                            Connections {
+                                target: QbzBridge
+                                function onDragXChanged() { recomputeDrop() }
+                                function onDragYChanged() { recomputeDrop() }
+                                function onDragActiveChanged() { recomputeDrop() }
+                            }
                             width: plColumn.width
                             height: root.mini && modelData.indent ? 0 : 32
                             visible: !(root.mini && modelData.indent)
                             radius: 6
-                            color: (rowArea.containsMouse || isActive) ? theme.surfaceHover : "transparent"
+                            // success-bg + success-border while hot (Theme
+                            // success family, #3fae6a at 10% / 30%).
+                            color: dropHot ? "#3fae6a1a"
+                                : ((rowArea.containsMouse || isActive) ? theme.surfaceHover : "transparent")
+                            border.width: dropHot ? 1 : 0
+                            border.color: "#3fae6a4d"
 
                             Row {
                                 anchors.fill: parent
@@ -579,9 +606,8 @@ Rectangle {
                                     if (isFolder) {
                                         QbzBridge.sidebarToggleFolder(modelData.id)
                                     } else {
-                                        // POC-NOTE: no playlist view yet —
-                                        // the click only marks the row active.
                                         root.activePlaylistId = modelData.id
+                                        QbzBridge.openPlaylist(modelData.id)
                                     }
                                 }
                             }

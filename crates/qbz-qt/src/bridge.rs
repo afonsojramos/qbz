@@ -189,6 +189,23 @@ pub mod qbz_bridge {
         // app-menu check; live-flippable, no restart).
         #[qproperty(bool, intelligent_search)]
 
+        // --- Playlist view (phase 17) --------------------------------------
+        // ONE JSON document (playlist_qt.rs PlaylistDoc: header + track
+        // rows + ownership/follow/pin/sort/search state).
+        #[qproperty(QString, playlist_json)]
+
+        // --- Drag & drop (phase 17) ----------------------------------------
+        // The shared drag state (DragState in state.slint): the ghost reads
+        // count/title/subtitle + the window-coord pointer; sidebar playlist
+        // rows self-detect the drop via dragX/dragY + over-playlist-id.
+        #[qproperty(bool, drag_active)]
+        #[qproperty(i32, drag_count)]
+        #[qproperty(QString, drag_title)]
+        #[qproperty(QString, drag_subtitle)]
+        #[qproperty(f32, drag_x)]
+        #[qproperty(f32, drag_y)]
+        #[qproperty(QString, drag_over_playlist_id)]
+
         type QbzBridge = super::QbzBridgeRust;
 
         /// Called once from Main.qml's Component.onCompleted: registers the
@@ -469,6 +486,63 @@ pub mod qbz_bridge {
         /// App-menu intelligent-search toggle (the 2.0.0 opt-out module).
         #[qinvokable]
         fn toggle_intelligent_search(self: Pin<&mut QbzBridge>);
+
+        // --- Playlist view (phase 17) --------------------------------------
+        /// Sidebar playlist row / playlist card click: open the detail view.
+        #[qinvokable]
+        fn open_playlist(self: Pin<&mut QbzBridge>, playlist_id: QString);
+        #[qinvokable]
+        fn playlist_play_all(self: Pin<&mut QbzBridge>);
+        #[qinvokable]
+        fn playlist_shuffle(self: Pin<&mut QbzBridge>);
+        #[qinvokable]
+        fn playlist_toggle_favorite(self: Pin<&mut QbzBridge>);
+        #[qinvokable]
+        fn playlist_toggle_follow(self: Pin<&mut QbzBridge>);
+        #[qinvokable]
+        fn playlist_toggle_pin(self: Pin<&mut QbzBridge>);
+        /// "Copy to your library" (foreign playlists).
+        #[qinvokable]
+        fn playlist_copy(self: Pin<&mut QbzBridge>);
+        #[qinvokable]
+        fn playlist_rename(self: Pin<&mut QbzBridge>, name: QString);
+        #[qinvokable]
+        fn playlist_delete(self: Pin<&mut QbzBridge>);
+        #[qinvokable]
+        fn playlist_set_sort(self: Pin<&mut QbzBridge>, field: QString);
+        #[qinvokable]
+        fn playlist_set_search(self: Pin<&mut QbzBridge>, query: QString);
+        /// Row play / row ⋯ queueing / owner Remove-from-playlist / drag
+        /// reorder.
+        #[qinvokable]
+        fn playlist_play_track(self: Pin<&mut QbzBridge>, track_id: QString);
+        #[qinvokable]
+        fn playlist_enqueue_track(self: Pin<&mut QbzBridge>, track_id: QString, mode: QString);
+        #[qinvokable]
+        fn playlist_remove_track(self: Pin<&mut QbzBridge>, playlist_track_id: f64);
+        #[qinvokable]
+        fn playlist_reorder(self: Pin<&mut QbzBridge>, from: i32, slot: i32);
+
+        // --- Drag & drop (phase 17) ----------------------------------------
+        /// Track-row press-drag start (row id, ghost texts, window coords).
+        #[qinvokable]
+        fn drag_start(self: Pin<&mut QbzBridge>, track_id: QString, title: QString, subtitle: QString, x: f32, y: f32);
+        #[qinvokable]
+        fn drag_move(self: Pin<&mut QbzBridge>, x: f32, y: f32);
+        /// A sidebar playlist row claims / releases the drop target.
+        #[qinvokable]
+        fn drag_set_over(self: Pin<&mut QbzBridge>, playlist_id: QString);
+        /// Release: add the dragged track(s) to the over-playlist target.
+        #[qinvokable]
+        fn drag_end(self: Pin<&mut QbzBridge>);
+
+        /// Card-level playlist actions (LibPlaylistCard overlay + menu).
+        #[qinvokable]
+        fn play_playlist_by_id(self: Pin<&mut QbzBridge>, playlist_id: QString);
+        #[qinvokable]
+        fn enqueue_playlist_by_id(self: Pin<&mut QbzBridge>, playlist_id: QString, mode: QString);
+        #[qinvokable]
+        fn playlist_set_follow_by_id(self: Pin<&mut QbzBridge>, playlist_id: QString, follow: bool);
     }
 
     impl cxx_qt::Threading for QbzBridge {}
@@ -558,6 +632,14 @@ pub struct QbzBridgeRust {
     cortinilla_scroll_y: f32,
     search_json: QString,
     intelligent_search: bool,
+    playlist_json: QString,
+    drag_active: bool,
+    drag_count: i32,
+    drag_title: QString,
+    drag_subtitle: QString,
+    drag_x: f32,
+    drag_y: f32,
+    drag_over_playlist_id: QString,
 }
 
 impl Default for QbzBridgeRust {
@@ -638,6 +720,14 @@ impl Default for QbzBridgeRust {
             cortinilla_scroll_y: 0.0,
             search_json: QString::from("{}"),
             intelligent_search: crate::search_qt::intelligent_search_pref(),
+            playlist_json: QString::from("{}"),
+            drag_active: false,
+            drag_count: 0,
+            drag_title: QString::default(),
+            drag_subtitle: QString::default(),
+            drag_x: 0.0,
+            drag_y: 0.0,
+            drag_over_playlist_id: QString::default(),
         }
     }
 }
@@ -967,5 +1057,99 @@ impl qbz_bridge::QbzBridge {
 
     pub fn toggle_intelligent_search(self: Pin<&mut Self>) {
         crate::toggle_intelligent_search();
+    }
+
+    pub fn open_playlist(self: Pin<&mut Self>, playlist_id: QString) {
+        crate::open_playlist(playlist_id.to_string());
+    }
+
+    pub fn playlist_play_all(self: Pin<&mut Self>) {
+        crate::playlist_play_all();
+    }
+
+    pub fn playlist_shuffle(self: Pin<&mut Self>) {
+        crate::playlist_shuffle();
+    }
+
+    pub fn playlist_toggle_favorite(self: Pin<&mut Self>) {
+        crate::playlist_qt::toggle_favorite();
+    }
+
+    pub fn playlist_toggle_follow(self: Pin<&mut Self>) {
+        crate::playlist_toggle_follow();
+    }
+
+    pub fn playlist_toggle_pin(self: Pin<&mut Self>) {
+        crate::playlist_qt::toggle_pin();
+    }
+
+    pub fn playlist_copy(self: Pin<&mut Self>) {
+        crate::playlist_copy();
+    }
+
+    pub fn playlist_rename(self: Pin<&mut Self>, name: QString) {
+        crate::playlist_rename(name.to_string());
+    }
+
+    pub fn playlist_delete(self: Pin<&mut Self>) {
+        crate::playlist_delete();
+    }
+
+    pub fn playlist_set_sort(self: Pin<&mut Self>, field: QString) {
+        crate::playlist_qt::set_sort(&field.to_string());
+    }
+
+    pub fn playlist_set_search(self: Pin<&mut Self>, query: QString) {
+        crate::playlist_qt::set_search(&query.to_string());
+    }
+
+    pub fn playlist_play_track(self: Pin<&mut Self>, track_id: QString) {
+        crate::playlist_play_track(track_id.to_string());
+    }
+
+    pub fn playlist_enqueue_track(self: Pin<&mut Self>, track_id: QString, mode: QString) {
+        crate::playlist_enqueue_track(track_id.to_string(), mode.to_string());
+    }
+
+    pub fn playlist_remove_track(self: Pin<&mut Self>, playlist_track_id: f64) {
+        crate::playlist_remove_track(playlist_track_id as u64);
+    }
+
+    pub fn playlist_reorder(self: Pin<&mut Self>, from: i32, slot: i32) {
+        crate::playlist_qt::reorder_track(from.max(0) as usize, slot.max(0) as usize);
+    }
+
+    pub fn drag_start(self: Pin<&mut Self>, track_id: QString, title: QString, subtitle: QString, x: f32, y: f32) {
+        crate::drag_start(track_id.to_string(), title.to_string(), subtitle.to_string(), x, y);
+    }
+
+    pub fn drag_move(self: Pin<&mut Self>, x: f32, y: f32) {
+        crate::drag_move(x, y);
+    }
+
+    pub fn drag_set_over(self: Pin<&mut Self>, playlist_id: QString) {
+        crate::drag_set_over(playlist_id.to_string());
+    }
+
+    pub fn drag_end(self: Pin<&mut Self>) {
+        crate::drag_end();
+    }
+
+    pub fn play_playlist_by_id(self: Pin<&mut Self>, playlist_id: QString) {
+        if let Ok(pid) = playlist_id.to_string().parse::<u64>() {
+            crate::play_playlist_by_id(pid);
+        }
+    }
+
+    pub fn enqueue_playlist_by_id(self: Pin<&mut Self>, playlist_id: QString, mode: QString) {
+        if let Ok(pid) = playlist_id.to_string().parse::<u64>() {
+            crate::enqueue_playlist_by_id(pid, mode.to_string());
+        }
+    }
+
+    pub fn playlist_set_follow_by_id(self: Pin<&mut Self>, playlist_id: QString, follow: bool) {
+        if let Ok(pid) = playlist_id.to_string().parse::<u64>() {
+            crate::playlist_set_follow_by_id(pid, follow);
+        }
     }
 }

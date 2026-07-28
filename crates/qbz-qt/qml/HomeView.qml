@@ -416,7 +416,7 @@ Rectangle {
                 MouseArea {
                     anchors.fill: parent
                     cursorShape: Qt.PointingHandCursor
-                    // POC-NOTE: playlist page out of scope — inert.
+                    onClicked: QbzBridge.openPlaylist(card.id)
                 }
             }
             Item { width: 1; height: 6 }
@@ -524,7 +524,7 @@ Rectangle {
                 MouseArea {
                     anchors.fill: parent
                     cursorShape: Qt.PointingHandCursor
-                    // POC-NOTE: playlist page out of scope — inert.
+                    onClicked: QbzBridge.openPlaylist(card.id)
                 }
             }
             Item { width: 1; height: 8 }
