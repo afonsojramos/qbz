@@ -35,7 +35,7 @@ fn main() {
         .qt_module("QuickControls2")
         .qml_module(QmlModule {
             uri: "com.blitzfc.qbz",
-            rust_files: &["src/bridge.rs", "src/session_bridge.rs", "src/shell_bridge.rs", "src/player_bridge.rs", "src/queue_bridge.rs", "src/home_bridge.rs", "src/viz_bridge.rs"],
+            rust_files: &["src/bridge.rs", "src/session_bridge.rs", "src/shell_bridge.rs", "src/player_bridge.rs", "src/queue_bridge.rs", "src/home_bridge.rs", "src/viz_bridge.rs", "src/local_bridge.rs"],
             qml_files: &[
                 "qml/LoginScreen.qml",
                 "qml/Main.qml",
@@ -93,6 +93,7 @@ fn main() {
                 "qml/views/ArtistView.qml",
                 "qml/views/HomeView.qml",
                 "qml/views/LibraryView.qml",
+                "qml/views/LocalLibraryView.qml",
                 "qml/views/PlaylistView.qml",
                 "qml/views/SearchView.qml",
                 "qml/views/SectionRail.qml",

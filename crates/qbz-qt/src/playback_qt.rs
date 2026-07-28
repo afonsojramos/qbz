@@ -513,6 +513,14 @@ pub(crate) async fn play_queue_track_public(runtime: &Arc<AppRuntime<LoggingAdap
 }
 
 async fn play_queue_track(runtime: &Arc<AppRuntime<LoggingAdapter>>, track_id: u64) {
+    // Source-aware audible step: a LOCAL file plays from disk through the
+    // player's play_data seam. The Qobuz tier-walk below needs a client and
+    // would fail with "No Qobuz client available" on every local advance.
+    if crate::local_library_qt::play_current_if_local(runtime, track_id).await {
+        refresh_now_playing(runtime).await;
+        publish_queue(runtime).await;
+        return;
+    }
     if let Err(e) = runtime
         .core()
         .play_track_resolved(track_id, current_quality(), None, None, 0)

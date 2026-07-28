@@ -180,7 +180,10 @@ Rectangle {
                 navId: "local"
                 name: "hard-drive"
                 label: QbzSession.tr("Local Library", QbzSession.trRev)
-                onClicked: root.activeNav = "local"
+                onClicked: {
+                    root.activeNav = "local"
+                    QbzShell.navigateTo("local")
+                }
             }
             NavRow {
                 navId: "myqbz"

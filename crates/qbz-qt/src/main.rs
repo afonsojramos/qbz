@@ -26,11 +26,13 @@ mod player_bridge;
 mod queue_bridge;
 mod home_bridge;
 mod viz_bridge;
+mod local_bridge;
 mod artwork_qt;
 mod bridge;
 mod home_qt;
 mod library_db_qt;
 mod library_qt;
+mod local_library_qt;
 mod nav_qt;
 mod now_playing;
 mod offline_fwd;
@@ -261,6 +263,9 @@ pub(crate) fn do_logout() {
         // Integrations: drop the Discord presence so a signed-out session
         // stops advertising what was playing (the Slint discord_rpc::clear).
         integrations_qt::discord_clear();
+        // The local-library documents are per-user; a later login must not
+        // inherit the previous user's cached tree.
+        local_library_qt::reset();
         // A later login must re-fetch Home + Library (new user, fresh data).
         *HOME_LOADED.lock().unwrap() = false;
         *LIBRARY_LOADED.lock().unwrap() = false;

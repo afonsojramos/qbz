@@ -51,6 +51,7 @@ ApplicationWindow {
         QbzQueue.boot()
         QbzHome.boot()
         QbzViz.boot()
+        QbzLocal.boot()
         QbzBridge.boot()
     }
 

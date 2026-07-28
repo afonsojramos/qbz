@@ -52,6 +52,12 @@ Rectangle {
     property bool menuShowGoTo: true
     property bool menuShowFavorite: true
     property bool menuShowRemove: false
+    // Drag source arm (additive; default = the existing behaviour). The
+    // Local Library rows set this false: their `item.id` is a local DB row
+    // id, and the sidebar drop handler forwards whatever it receives to
+    // `playlist add-tracks` as a QOBUZ catalog id — a local row dropped on a
+    // playlist would silently add an unrelated catalog track.
+    property bool draggable: true
 
     signal playRequested()
     signal enqueueRequested(string mode)
@@ -341,7 +347,7 @@ Rectangle {
         cursorShape: root.clickPlays ? Qt.PointingHandCursor : Qt.ArrowCursor
         onPressed: function (mouse) { root.downPos = Qt.point(mouse.x, mouse.y) }
         onPositionChanged: function (mouse) {
-            if (!pressed) return
+            if (!pressed || !root.draggable) return
             const g = mapToItem(null, mouse.x, mouse.y)
             if (!root.dragging
                 && (Math.abs(mouse.x - root.downPos.x) > 6
