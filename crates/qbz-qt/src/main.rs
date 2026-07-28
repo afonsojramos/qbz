@@ -21,6 +21,7 @@ mod artist_qt;
 mod lyrics_qt;
 mod playback_qt;
 mod queue_qt;
+mod search_qt;
 mod settings_qt;
 mod sidebar_qt;
 
@@ -695,6 +696,54 @@ pub(crate) fn navigate_to(view: &str) {
     if view == "settings" {
         publish_settings();
     }
+}
+
+// ============================ Search (phase 15) ===========================
+
+pub(crate) fn search_live(query: String) {
+    if offline_fwd::engine().status().is_offline() {
+        // Qobuz-only surface (the local cortinilla sections are not
+        // ported — search_qt.rs POC-NOTE): nothing to show offline.
+        return;
+    }
+    let runtime = app();
+    spawn(async move { search_qt::live(&runtime, &query).await });
+}
+
+pub(crate) fn search_submit(query: String) {
+    if offline_fwd::engine().status().is_offline() {
+        return;
+    }
+    let runtime = app();
+    spawn(async move { search_qt::submit(&runtime, &query, None).await });
+}
+
+pub(crate) fn cortinilla_view_more(kind: String) {
+    let runtime = app();
+    spawn(async move { search_qt::view_more(&runtime, &kind).await });
+}
+
+pub(crate) fn cortinilla_search_all() {
+    let runtime = app();
+    spawn(async move { search_qt::search_all_action(&runtime).await });
+}
+
+pub(crate) fn search_load_more(tab: i32) {
+    let runtime = app();
+    spawn(async move { search_qt::load_more(&runtime, tab).await });
+}
+
+pub(crate) fn search_filter_changed(index: i32) {
+    let runtime = app();
+    spawn(async move { search_qt::filter_changed(&runtime, index).await });
+}
+
+/// App-menu intelligent-search toggle: persist the pref + flip the live
+/// kill switch + update the menu state. Live, no restart.
+pub(crate) fn toggle_intelligent_search() {
+    let next = search_qt::toggle_intelligent_search();
+    log::info!("[qbz-qt] intelligent_search -> {next}");
+    ui(move |mut b| b.as_mut().set_intelligent_search(next));
 }
 
 // ============================ Settings (phase 10) =========================

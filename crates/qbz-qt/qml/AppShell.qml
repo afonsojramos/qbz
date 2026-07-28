@@ -145,7 +145,15 @@ Rectangle {
                 : QbzBridge.currentView === "library" ? "LibraryView.qml"
                 : QbzBridge.currentView === "album" ? "AlbumView.qml"
                 : QbzBridge.currentView === "artist" ? "ArtistView.qml"
-                : QbzBridge.currentView === "settings" ? "SettingsView.qml" : ""
+                : QbzBridge.currentView === "settings" ? "SettingsView.qml"
+                : QbzBridge.currentView === "search" ? "SearchView.qml" : ""
         }
+    }
+
+    // Search cortinilla (phase 15): the live-search dropdown overlay, LAST
+    // child so it renders above every surface (Cortinilla.slint's mount).
+    Cortinilla {
+        anchors.fill: parent
+        headerBar: header
     }
 }

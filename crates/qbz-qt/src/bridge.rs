@@ -174,6 +174,21 @@ pub mod qbz_bridge {
         #[qproperty(f32, ambient_surface_alpha)]
         #[qproperty(f32, ambient_bar_alpha)]
 
+        // --- Search (phase 15) ---------------------------------------------
+        // Cortinilla (live dropdown): open/loading flags, ONE JSON payload
+        // (search_qt.rs CortinillaData: query/top/sections with controller
+        // flat indices), keyboard selection + its content-space scroll y.
+        #[qproperty(bool, cortinilla_open)]
+        #[qproperty(bool, cortinilla_loading)]
+        #[qproperty(QString, cortinilla_json)]
+        #[qproperty(i32, selected_index)]
+        #[qproperty(f32, cortinilla_scroll_y)]
+        // Results page: ONE JSON document (search_qt.rs SearchPageDoc).
+        #[qproperty(QString, search_json)]
+        // The intelligent-search kill switch (ui_prefs pref state — the
+        // app-menu check; live-flippable, no restart).
+        #[qproperty(bool, intelligent_search)]
+
         type QbzBridge = super::QbzBridgeRust;
 
         /// Called once from Main.qml's Component.onCompleted: registers the
@@ -414,6 +429,42 @@ pub mod qbz_bridge {
         /// unlike the titlebar).
         #[qinvokable]
         fn toggle_ambient_background(self: Pin<&mut QbzBridge>);
+
+        // --- Search (phase 15) ---------------------------------------------
+        /// Header field keystrokes (QML-debounced 220ms, >= 2 chars): drive
+        /// the cortinilla live query.
+        #[qinvokable]
+        fn search_live(self: Pin<&mut QbzBridge>, query: QString);
+        /// Enter with the cortinilla closed: full results page (All tab).
+        #[qinvokable]
+        fn search_submit(self: Pin<&mut QbzBridge>, query: QString);
+        /// Cortinilla: Esc / click-outside / idle-close / page change.
+        #[qinvokable]
+        fn cortinilla_dismiss(self: Pin<&mut QbzBridge>);
+        /// Arrow keys: delta -1 (up) / +1 (down) through the flat list.
+        #[qinvokable]
+        fn cortinilla_move_selection(self: Pin<&mut QbzBridge>, delta: i32);
+        /// Row click or Enter on the keyboard-selected row.
+        #[qinvokable]
+        fn cortinilla_row_clicked(self: Pin<&mut QbzBridge>, index: i32);
+        /// Section "View more" (kind: album | track | artist | playlist).
+        #[qinvokable]
+        fn cortinilla_view_more(self: Pin<&mut QbzBridge>, kind: QString);
+        /// The Enter affordance with no keyboard selection: Search > All.
+        #[qinvokable]
+        fn cortinilla_search_all(self: Pin<&mut QbzBridge>);
+        /// Results page: the five-tab strip.
+        #[qinvokable]
+        fn search_tab_changed(self: Pin<&mut QbzBridge>, tab: i32);
+        /// Per-type tab "Load more".
+        #[qinvokable]
+        fn search_load_more(self: Pin<&mut QbzBridge>, tab: i32);
+        /// searchType filter radios (0 = none, 1..5 = the chips).
+        #[qinvokable]
+        fn search_filter_changed(self: Pin<&mut QbzBridge>, index: i32);
+        /// App-menu intelligent-search toggle (the 2.0.0 opt-out module).
+        #[qinvokable]
+        fn toggle_intelligent_search(self: Pin<&mut QbzBridge>);
     }
 
     impl cxx_qt::Threading for QbzBridge {}
@@ -496,6 +547,13 @@ pub struct QbzBridgeRust {
     ambient_dim: f32,
     ambient_surface_alpha: f32,
     ambient_bar_alpha: f32,
+    cortinilla_open: bool,
+    cortinilla_loading: bool,
+    cortinilla_json: QString,
+    selected_index: i32,
+    cortinilla_scroll_y: f32,
+    search_json: QString,
+    intelligent_search: bool,
 }
 
 impl Default for QbzBridgeRust {
@@ -569,6 +627,13 @@ impl Default for QbzBridgeRust {
             ambient_dim: crate::settings_qt::ambient_dim(),
             ambient_surface_alpha: crate::settings_qt::ambient_surface_alpha(),
             ambient_bar_alpha: crate::settings_qt::ambient_bar_alpha(),
+            cortinilla_open: false,
+            cortinilla_loading: false,
+            cortinilla_json: QString::from("{}"),
+            selected_index: -1,
+            cortinilla_scroll_y: 0.0,
+            search_json: QString::from("{}"),
+            intelligent_search: crate::search_qt::intelligent_search_pref(),
         }
     }
 }
@@ -850,5 +915,49 @@ impl qbz_bridge::QbzBridge {
 
     pub fn toggle_ambient_background(self: Pin<&mut Self>) {
         crate::toggle_ambient_background();
+    }
+
+    pub fn search_live(self: Pin<&mut Self>, query: QString) {
+        crate::search_live(query.to_string());
+    }
+
+    pub fn search_submit(self: Pin<&mut Self>, query: QString) {
+        crate::search_submit(query.to_string());
+    }
+
+    pub fn cortinilla_dismiss(self: Pin<&mut Self>) {
+        crate::search_qt::dismiss();
+    }
+
+    pub fn cortinilla_move_selection(self: Pin<&mut Self>, delta: i32) {
+        crate::search_qt::move_selection(delta);
+    }
+
+    pub fn cortinilla_row_clicked(self: Pin<&mut Self>, index: i32) {
+        crate::search_qt::row_clicked(index);
+    }
+
+    pub fn cortinilla_view_more(self: Pin<&mut Self>, kind: QString) {
+        crate::cortinilla_view_more(kind.to_string());
+    }
+
+    pub fn cortinilla_search_all(self: Pin<&mut Self>) {
+        crate::cortinilla_search_all();
+    }
+
+    pub fn search_tab_changed(self: Pin<&mut Self>, tab: i32) {
+        crate::search_qt::tab_changed(tab);
+    }
+
+    pub fn search_load_more(self: Pin<&mut Self>, tab: i32) {
+        crate::search_load_more(tab);
+    }
+
+    pub fn search_filter_changed(self: Pin<&mut Self>, index: i32) {
+        crate::search_filter_changed(index);
+    }
+
+    pub fn toggle_intelligent_search(self: Pin<&mut Self>) {
+        crate::toggle_intelligent_search();
     }
 }

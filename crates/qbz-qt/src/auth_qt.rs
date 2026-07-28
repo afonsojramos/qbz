@@ -152,6 +152,8 @@ where
         crate::library_qt::init_local_favorites(&dir);
         // Phase 7: pinned-items store (AlbumCard pin badges).
         crate::sidebar_qt::init_pinned(&dir);
+        // Phase 15: intelligent-search service (cortinilla cache+ranking).
+        crate::search_qt::init(&dir, crate::search_qt::intelligent_search_pref());
     }
     crate::offline_fwd::subscription_mark_valid();
     crate::offline_fwd::engine().set_offline_session(false);
@@ -249,6 +251,8 @@ where
                 crate::offline_fwd::init_for_user(&dir);
                 crate::library_qt::init_local_favorites(&dir);
                 crate::sidebar_qt::init_pinned(&dir);
+        // Phase 15: intelligent-search service (cortinilla cache+ranking).
+        crate::search_qt::init(&dir, crate::search_qt::intelligent_search_pref());
             }
             crate::offline_fwd::subscription_mark_valid();
             crate::offline_fwd::engine().set_offline_session(false);
@@ -313,6 +317,8 @@ where
         crate::library_qt::init_local_favorites(&dir);
         // Phase 7: pinned-items store (AlbumCard pin badges).
         crate::sidebar_qt::init_pinned(&dir);
+        // Phase 15: intelligent-search service (cortinilla cache+ranking).
+        crate::search_qt::init(&dir, crate::search_qt::intelligent_search_pref());
     }
     crate::offline_fwd::engine().set_offline_session(true);
     Ok(user_id)

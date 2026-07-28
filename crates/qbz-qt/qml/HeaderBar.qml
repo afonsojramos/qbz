@@ -193,17 +193,24 @@ Rectangle {
         }
     }
 
-    // --- Search (absolutely centered; VISUAL replica only) ---------------
-    // POC-NOTE: the field is inert — the live-search cortinilla is out of
-    // scope; metrics/colors/placeholder match the Slint field.
+    // --- Search (absolutely centered; LIVE — phase 15) ---------------------
+    // The Slint HeaderBar search-scope: typing drives the cortinilla (220ms
+    // debounce, >= 2 chars), arrows move the keyboard selection, Enter runs
+    // the row / full search, Esc dismisses. The × clears + closes.
+    function clearSearch() {
+        searchInput.text = ""
+        QbzBridge.cortinillaDismiss()
+    }
+
     Rectangle {
+        id: searchBox
         x: (root.width - width) / 2
         y: (root.height - height) / 2
         width: root.width < 960 ? 179 : 256
         height: 32
         radius: 6
         border.width: 1
-        border.color: theme.borderSubtle
+        border.color: searchInput.activeFocus ? theme.accent : theme.borderSubtle
         color: theme.surfaceElevated
 
         QbzIcon {
@@ -214,13 +221,121 @@ Rectangle {
             anchors.verticalCenter: parent.verticalCenter
             tintName: "muted"
         }
+        TextInput {
+            id: searchInput
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.leftMargin: 30
+            anchors.rightMargin: 8
+            height: parent.height
+            color: theme.textPrimary
+            font.pixelSize: 13
+            verticalAlignment: Text.AlignVCenter
+            horizontalAlignment: text === "" && !activeFocus ? Text.AlignHCenter : Text.AlignLeft
+            clip: true
+            onTextEdited: {
+                if (text.trim().length < 2) {
+                    liveDebounce.stop()
+                    QbzBridge.cortinillaDismiss()
+                } else {
+                    liveDebounce.restart()
+                }
+            }
+
+            // 220ms live debounce (CORTINILLA_DEBOUNCE — one load per pause,
+            // not one per keystroke).
+            Timer {
+                id: liveDebounce
+                interval: 220
+                repeat: false
+                onTriggered: QbzBridge.searchLive(searchInput.text)
+            }
+
+            // The Enter rule (HeaderBar.slint on-enter): cortinilla open +
+            // a keyboard selection -> activate the row; open + none -> full
+            // search; closed -> plain submit (also Search > All).
+            Keys.onPressed: function (event) {
+                if (event.key === Qt.Key_Down) {
+                    if (QbzBridge.cortinillaOpen) {
+                        QbzBridge.cortinillaMoveSelection(1)
+                        event.accepted = true
+                    }
+                } else if (event.key === Qt.Key_Up) {
+                    if (QbzBridge.cortinillaOpen) {
+                        QbzBridge.cortinillaMoveSelection(-1)
+                        event.accepted = true
+                    }
+                } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                    if (QbzBridge.cortinillaOpen) {
+                        if (QbzBridge.selectedIndex >= 0) {
+                            root.clearSearch()
+                            QbzBridge.cortinillaRowClicked(QbzBridge.selectedIndex)
+                        } else {
+                            root.clearSearch()
+                            QbzBridge.cortinillaSearchAll()
+                        }
+                    } else {
+                        // Capture BEFORE clearing (clearSearch wipes the input).
+                        var q = searchInput.text
+                        root.clearSearch()
+                        QbzBridge.searchSubmit(q)
+                    }
+                    event.accepted = true
+                } else if (event.key === Qt.Key_Escape) {
+                    if (QbzBridge.cortinillaOpen) {
+                        QbzBridge.cortinillaDismiss()
+                        event.accepted = true
+                    }
+                }
+            }
+        }
+        // Placeholder (centered when empty + unfocused, left once typing).
         Text {
+            visible: searchInput.text === "" && !searchInput.activeFocus
             anchors.fill: parent
+            anchors.leftMargin: 30
             text: QbzBridge.tr("Search")
             color: theme.textMuted
             font.pixelSize: 13
             verticalAlignment: Text.AlignVCenter
             horizontalAlignment: Text.AlignHCenter
+        }
+        // Right-edge affordances: the Enter hint while the cortinilla is
+        // open (Slint: it lives in the box, opposite the magnifier), else
+        // the × clear.
+        Text {
+            visible: QbzBridge.cortinillaOpen
+            anchors.right: parent.right
+            anchors.rightMargin: 10
+            height: parent.height
+            text: "⏎ " + QbzBridge.tr("Enter")
+            color: theme.textMuted
+            font.pixelSize: 12
+            verticalAlignment: Text.AlignVCenter
+        }
+        Rectangle {
+            visible: !QbzBridge.cortinillaOpen && searchInput.text !== ""
+            anchors.right: parent.right
+            anchors.rightMargin: 5
+            width: 22
+            height: 22
+            anchors.verticalCenter: parent.verticalCenter
+            radius: 11
+            color: clearArea.containsMouse ? theme.surfaceHover : "transparent"
+            QbzIcon {
+                name: "x"
+                width: 12
+                height: 12
+                anchors.centerIn: parent
+                tintName: clearArea.containsMouse ? "primary" : "muted"
+            }
+            MouseArea {
+                id: clearArea
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.clearSearch()
+            }
         }
     }
 
@@ -544,6 +659,12 @@ Rectangle {
                 }
             }
 
+            AppMenuItem {
+                name: "search"
+                label: QbzBridge.tr("Intelligent search")
+                checkedItem: QbzBridge.intelligentSearch
+                onClicked: QbzBridge.toggleIntelligentSearch()
+            }
             AppMenuItem {
                 name: "layout-grid"
                 label: QbzBridge.tr("Ambient background")
