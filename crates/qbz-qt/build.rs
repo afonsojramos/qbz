@@ -17,12 +17,12 @@ fn collect_qrc_files(dir: &Path, out: &mut Vec<String>) {
 }
 
 fn main() {
-    let mut qrc_files: Vec<String> = vec![
-        "qml/assets/qbz-logo.png".to_string(),
-        "qml/assets/hi-res.svg".to_string(),
-    ];
-    collect_qrc_files(Path::new("qml/assets/icons"), &mut qrc_files);
-    collect_qrc_files(Path::new("qml/assets/fonts"), &mut qrc_files);
+    // The WHOLE asset tree, recursively. This used to name the root-level
+    // files by hand with only icons/ and fonts/ collected, so dropping a new
+    // asset next to hi-res.svg compiled fine and then failed at runtime with
+    // "QQuickImage: Cannot open" — invisible to cargo check and to the tests.
+    let mut qrc_files: Vec<String> = Vec::new();
+    collect_qrc_files(Path::new("qml/assets"), &mut qrc_files);
     // Non-QML resources land at qrc:/qt/qml/com/blitzfc/qbz/<path> — QML
     // files in qml/ reference them relatively (e.g.
     // "assets/icons/primary/plus.svg").
@@ -60,6 +60,7 @@ fn main() {
                 "qml/controls/QbzSlider.qml",
                 "qml/controls/QbzTabBar.qml",
                 "qml/controls/QbzToggle.qml",
+                "qml/controls/QualityBadge.qml",
                 "qml/controls/QualityMini.qml",
                 "qml/controls/SettingRow.qml",
                 "qml/controls/SettingsButton.qml",

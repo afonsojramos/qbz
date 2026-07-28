@@ -87,6 +87,17 @@ QtObject {
     readonly property color cardShadow: _c("cardShadow")
     // 24 alpha tiers ([4..95]%, white-based dark / black-based light).
     readonly property var alphaTiers: _doc.alpha === undefined ? [] : _doc.alpha
+    // The ramp's percents (theme_qt.rs ALPHA_PCTS) — the index table for
+    // alphaTier(), so a caller asks for the percentage the design specifies
+    // ("--alpha-6") instead of a magic array index.
+    readonly property var alphaPcts: [4, 5, 6, 8, 10, 12, 15, 18, 20, 25, 30, 35,
+        40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95]
+    /// One alpha tier by percentage. Theme-correct in both polarities (the
+    /// ramp is white-based on dark themes, black-based on light).
+    function alphaTier(pct) {
+        var i = alphaPcts.indexOf(pct)
+        return (i >= 0 && i < alphaTiers.length) ? alphaTiers[i] : "transparent"
+    }
     // Ambient-background layering (phase 14; theme-derived since phase 19):
     // chrome surface-card @50%, frosted content panel surface-main @22%,
     // thin bars surface-main @30%, hairline = alpha tier 10%. The live

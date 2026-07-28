@@ -36,6 +36,10 @@ ApplicationWindow {
     FontLoader { id: interMedium; source: "assets/fonts/Inter_18pt-Medium.ttf" }
     FontLoader { id: interSemiBold; source: "assets/fonts/Inter_18pt-SemiBold.ttf" }
     FontLoader { id: interBold; source: "assets/fonts/Inter_18pt-Bold.ttf" }
+    // The quality badge's face in the Tauri build — loading it here registers
+    // the family app-wide, so QualityBadge can name it without carrying its
+    // own loader into every row it renders in.
+    FontLoader { id: lineSeed; source: "assets/fonts/LINESeedJP-Regular.ttf" }
     font.family: interRegular.status === FontLoader.Ready ? interRegular.name : "Sans Serif"
 
     // Phase 23: every domain singleton boots (registers its Qt-thread
