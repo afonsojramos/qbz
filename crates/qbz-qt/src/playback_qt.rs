@@ -274,13 +274,9 @@ pub async fn play_album_shuffled(
     play_album(runtime, album_id).await
 }
 
-/// Play a single track as a one-element queue (Library track rows). The
-/// queue meta is rebuilt from the Library feed row; the audio resolves by
-/// id through the same `play_track_resolved` path.
-pub async fn play_single_track(
-    runtime: &Arc<AppRuntime<LoggingAdapter>>,
-    track_id: u64,
-) -> Result<(), String> {
+/// Build the queue meta for a Library-feed track (shared by
+/// play_single_track / enqueue_single_track).
+fn feed_queue_track(track_id: u64) -> Result<QueueTrack, String> {
     let id = track_id.to_string();
     let item = crate::library_qt::with_library(|d| {
         d.feed
@@ -295,7 +291,7 @@ pub async fn play_single_track(
         parts.next().and_then(|m| m.parse::<u64>().ok()).unwrap_or(0) * 60
             + parts.next().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0)
     };
-    let qt = QueueTrack {
+    Ok(QueueTrack {
         id: track_id,
         title: item.title.clone(),
         version: None,
@@ -324,7 +320,17 @@ pub async fn play_single_track(
         source_item_id_hint: None,
         context_kind: None,
         context_id: None,
-    };
+    })
+}
+
+/// Play a single track as a one-element queue (Library track rows). The
+/// queue meta is rebuilt from the Library feed row; the audio resolves by
+/// id through the same `play_track_resolved` path.
+pub async fn play_single_track(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    track_id: u64,
+) -> Result<(), String> {
+    let qt = feed_queue_track(track_id)?;
     runtime.core().set_queue(vec![qt], Some(0)).await;
     publish_queue(runtime).await;
     log::info!("[qbz-qt] play_single_track: playing {track_id}");
@@ -334,6 +340,24 @@ pub async fn play_single_track(
         .await
         .map_err(|e| format!("play_track {track_id} failed: {e}"))?;
     refresh_now_playing(runtime).await;
+    Ok(())
+}
+
+/// One Library-feed track into the EXISTING queue (the TrackCard / list-row
+/// context menus): "next" -> add_track_next, "later" -> add_track_later
+/// (#442 block tail), "queue" -> add_track (append).
+pub async fn enqueue_single_track(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    track_id: u64,
+    mode: &str,
+) -> Result<(), String> {
+    let qt = feed_queue_track(track_id)?;
+    match mode {
+        "next" => runtime.core().add_track_next(qt).await,
+        "later" => runtime.core().add_track_later(qt).await,
+        _ => runtime.core().add_track(qt).await,
+    }
+    publish_queue(runtime).await;
     Ok(())
 }
 

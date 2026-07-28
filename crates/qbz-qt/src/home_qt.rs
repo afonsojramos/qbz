@@ -15,13 +15,21 @@
 //!   view renders the Slint empty-data placeholders instead.
 //! - Reco-scored taste ordering of favorite albums (reco store skipped):
 //!   favorites render in plain favorite order.
-//! - Most Played Albums / Qobuz Mixes rows: stores/static tiles out of
-//!   scope (prefs entries for them are skipped).
+//! - Most Played Albums / Radio / similar-albums / rediscover / essentials /
+//!   to-follow / spotlight rows (For You): reco-engine and local-history
+//!   rails out of scope (their pref entries are skipped). Qobuz Mixes
+//!   renders as the four static navigation tiles (the mix DETAIL views are
+//!   out of scope — tiles inert).
+//! - Recommendations tab: the external reco engine (crates/qbz/src/
+//!   external_reco.rs — seeded similar albums, weeklies builders, dismissal
+//!   stores) is not ported; the tab renders a placeholder while the
+//!   `showRecommendations` pref gates its visibility (1:1 Slint).
 //! - The "View all" full-list pages: the rails show the link when the
 //!   section carries an endpoint (1:1 header) but the click is INERT — the
 //!   DiscoverBrowse page is out of scope.
-//! - Editor's Picks / For You / Recommendations tabs: placeholder pages
-//!   (the editor section set is not built).
+//! - Editor's Picks / For You: RENDERING parity (same rails as the Slint
+//!   descriptor arms, prefs-driven order); the progressive per-branch lazy
+//!   load is simplified to the single discover-index fetch.
 
 use std::sync::Arc;
 
@@ -112,10 +120,21 @@ fn push_albums(
     });
 }
 
-/// The fixed render order (prefs out of scope — see module docs). Mirrors
-/// the default-enabled Home order for the shared sections, then the
-/// optional rails whose data is fetched anyway.
-fn build_sections(
+/// The three Discover tab section sets (phase 13) — Home / Editor's Picks /
+/// For You, each ordered + gated by its OWN prefs list (the Slint
+/// `DiscoverState.home-sections` / `editor-sections` / `foryou-sections`
+/// descriptors, all driven by discover_prefs.db).
+pub struct DiscoverSections {
+    pub home: Vec<HomeSection>,
+    pub editor: Vec<HomeSection>,
+    pub for_you: Vec<HomeSection>,
+}
+
+/// All sections any Discover tab can render, in construction order (the
+/// per-tab assembly clones from here). Ids are the DiscoverySectionId keys;
+/// "mostStreamed#album" is the EDITOR-tab variant (album carousel — the
+/// Home tab renders the same data as the "Popular albums" slim grid).
+fn build_candidates(
     containers: qbz_models::DiscoverContainers,
     favorite_albums: Vec<HomeCard>,
     release_watch: Vec<HomeCard>,
@@ -126,9 +145,8 @@ fn build_sections(
     push_albums(&mut out, "newReleases", qbz_i18n::t("New Releases"), "/discover/newReleases", containers.new_releases);
     push_albums(&mut out, "pressAwards", qbz_i18n::t("Press Accolades"), "/discover/pressAward", containers.press_awards);
 
-    // Pinned rail (phase 11) — the user's pinned albums/artists/playlists
-    // from the shared per-user store (PinnedCarousel.slint: mixed 200x246
-    // slots, most-recent first). Self-hides while empty.
+    // Pinned rail (phase 11) — the user's mixed pinned albums/artists/
+    // playlists from the shared per-user store. Self-hides while empty.
     let pinned: Vec<HomeCard> = crate::sidebar_qt::list_pinned()
         .into_iter()
         .map(|p| HomeCard {
@@ -151,6 +169,17 @@ fn build_sections(
             items: pinned,
         });
     }
+
+    // Qobuz Mixes (For You) — four STATIC navigation tiles (QobuzMixesRow:
+    // no per-tile data, always rendered when the pref is on).
+    out.push(HomeSection {
+        id: "qobuzMixes".to_string(),
+        title: qbz_i18n::t("Qobuz Mixes"),
+        kind: "mixes".to_string(),
+        hint: String::new(),
+        endpoint: String::new(),
+        items: Vec::new(),
+    });
 
     // Qobuz Playlists row (single-cover cards, first-tag category subtag).
     let playlists: Vec<HomeCard> = containers
@@ -175,7 +204,8 @@ fn build_sections(
     }
 
     // Recently-played rails are OUT OF SCOPE (local store) — the Slint
-    // empty-data placeholders render instead (always present on Home).
+    // empty-data placeholders render instead (Home only; the For You arms
+    // self-hide on empty data, so the forYou assembly drops these).
     out.push(HomeSection {
         id: "recentlyPlayedAlbums".to_string(),
         title: qbz_i18n::t("Recently Played Albums"),
@@ -201,14 +231,17 @@ fn build_sections(
         containers.ideal_discography,
     );
 
-    // Most Streamed on Home renders as the "Popular albums" slim grid,
-    // capped at 24 (two carousel pages of 12), 1-based ranked.
-    let popular: Vec<HomeCard> = containers
+    // Most Streamed: Home renders the "Popular albums" slim grid (capped
+    // 24, 1-based ranked); the Editor's Picks tab renders the SAME data as
+    // a plain album carousel (HomeView.slint's generic carousel arm).
+    let streamed: Vec<qbz_models::DiscoverAlbum> = containers
         .most_streamed
         .map(|container| container.data.items)
-        .unwrap_or_default()
-        .into_iter()
+        .unwrap_or_default();
+    let popular: Vec<HomeCard> = streamed
+        .iter()
         .take(24)
+        .cloned()
         .enumerate()
         .map(|(index, album)| map_slim(index, album))
         .collect();
@@ -220,6 +253,17 @@ fn build_sections(
             hint: String::new(),
             endpoint: "/discover/mostStreamed".to_string(),
             items: popular,
+        });
+    }
+    let streamed_albums: Vec<HomeCard> = streamed.iter().map(|a| map_album(a.clone())).collect();
+    if !streamed_albums.is_empty() {
+        out.push(HomeSection {
+            id: "mostStreamed#album".to_string(),
+            title: qbz_i18n::t("Most Streamed"),
+            kind: "album".to_string(),
+            hint: String::new(),
+            endpoint: "/discover/mostStreamed".to_string(),
+            items: streamed_albums,
         });
     }
 
@@ -264,44 +308,70 @@ fn build_sections(
         });
     }
 
-    // Phase 11: order + gate by the persisted Discover prefs — the Slint
-    // renders per `DiscoverState.home-sections`, which the prefs drive
-    // (discover_prefs.rs). A section whose prefs entry is DISABLED does not
-    // render at all; ids the POC does not implement (qobuzMixes,
-    // mostPlayedAlbums, ...) are skipped.
-    let prefs = crate::sidebar_qt::user_dir()
+    out
+}
+
+/// Assemble one tab's render list from the candidates: the tab's ENABLED
+/// pref ids in pref order (a disabled entry hides the section; a pref id
+/// the POC does not implement is skipped). `most_streamed_variant` picks
+/// the slim (Home) or album (Editor's Picks) candidate for the
+/// "mostStreamed" pref id. When `include_tail` (Home only), candidates
+/// with NO prefs entry at all append at the end (phase-11 behavior);
+/// tab-specific "#" variants never leak through the tail.
+fn order_by_prefs(
+    candidates: &[HomeSection],
+    prefs: &qbz_app::settings::discover_prefs::DiscoverPrefs,
+    tab: qbz_app::settings::discover_prefs::DiscoveryTab,
+    most_streamed_variant: &str,
+    include_tail: bool,
+) -> Vec<HomeSection> {
+    let tab_prefs = prefs.tab(tab);
+    let mut gated: Vec<HomeSection> = Vec::new();
+    for pref in tab_prefs {
+        if !pref.enabled {
+            continue;
+        }
+        let key = if pref.id.as_str() == "mostStreamed" {
+            most_streamed_variant
+        } else {
+            pref.id.as_str()
+        };
+        if let Some(section) = candidates.iter().find(|s| s.id == key) {
+            gated.push(section.clone());
+        }
+    }
+    if include_tail {
+        let known: std::collections::HashSet<&str> =
+            tab_prefs.iter().map(|p| p.id.as_str()).collect();
+        for s in candidates {
+            if !s.id.contains('#') && !known.contains(s.id.as_str()) && !gated.iter().any(|g| g.id == s.id) {
+                gated.push(s.clone());
+            }
+        }
+    }
+    gated
+}
+
+/// The fixed render order (prefs out of scope — see module docs). Mirrors
+/// the default-enabled Home order for the shared sections, then the
+/// optional rails whose data is fetched anyway.
+fn load_prefs() -> qbz_app::settings::discover_prefs::DiscoverPrefs {
+    crate::sidebar_qt::user_dir()
         .and_then(|dir| {
             qbz_app::settings::discover_prefs::DiscoverPrefsStore::new_at(&dir).ok()
         })
         .map(|store| store.load())
-        .unwrap_or_else(qbz_app::settings::discover_prefs::default_prefs);
-    let home_prefs = prefs.tab(qbz_app::settings::discover_prefs::DiscoveryTab::Home);
-    let mut gated: Vec<HomeSection> = Vec::with_capacity(out.len());
-    for pref in home_prefs {
-        if !pref.enabled {
-            continue;
-        }
-        if let Some(pos) = out.iter().position(|s| s.id == pref.id.as_str()) {
-            gated.push(out.remove(pos));
-        }
-    }
-    // Defensive: built sections with NO prefs entry at all keep their
-    // relative order at the end (every built id has one today). Sections
-    // that HAVE an entry but are disabled stay hidden (1:1 Slint).
-    let known: std::collections::HashSet<&str> =
-        home_prefs.iter().map(|p| p.id.as_str()).collect();
-    out.retain(|s| !known.contains(s.id.as_str()));
-    gated.append(&mut out);
-    gated
+        .unwrap_or_else(qbz_app::settings::discover_prefs::default_prefs)
 }
 
 /// Fetch the discover index (UNFILTERED — genre filter out of scope) and
 /// the personalized rails concurrently (mirrors home.rs's `join!`), then
 /// map everything into plain rows.
-pub async fn load_home<A>(runtime: &Arc<AppRuntime<A>>) -> Result<Vec<HomeSection>, String>
+pub async fn load_home<A>(runtime: &Arc<AppRuntime<A>>) -> Result<DiscoverSections, String>
 where
     A: FrontendAdapter + Send + Sync + 'static,
 {
+    use qbz_app::settings::discover_prefs::DiscoveryTab;
     let (response, favorite_albums, release_watch, top_artists) = tokio::join!(
         runtime.core().get_discover_index(None),
         favorite_album_cards(runtime),
@@ -315,12 +385,26 @@ where
         release_watch.len(),
         top_artists.len(),
     );
-    Ok(build_sections(
+    let candidates = build_candidates(
         response.containers,
         favorite_albums,
         release_watch,
         top_artists,
-    ))
+    );
+    let prefs = load_prefs();
+    let home = order_by_prefs(&candidates, &prefs, DiscoveryTab::Home, "mostStreamed", true);
+    let editor = order_by_prefs(&candidates, &prefs, DiscoveryTab::EditorPicks, "mostStreamed#album", false);
+    // For You: the local-history arms (recentPlaceholder) self-hide on
+    // empty data in Slint — drop them here (local store out of scope).
+    let for_you: Vec<HomeSection> = order_by_prefs(&candidates, &prefs, DiscoveryTab::ForYou, "mostStreamed", false)
+        .into_iter()
+        .filter(|s| s.kind != "recentPlaceholder")
+        .collect();
+    Ok(DiscoverSections {
+        home,
+        editor,
+        for_you,
+    })
 }
 
 // ---------------------------------------------------------------------------

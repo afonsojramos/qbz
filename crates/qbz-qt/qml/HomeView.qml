@@ -11,8 +11,11 @@
 // POC-NOTEs:
 // - The genre filter + section-configurator gear are INERT visual stubs
 //  (out of scope).
-// - Editor's Picks / For You / Recommendations tabs render a placeholder
-//  page with the exact header copy; only "home" is real.
+// - Editor's Picks / For You mount the same rails, ordered by each tab's
+//  discover prefs (phase 13); Recommendations renders a placeholder — the
+//  external reco engine (external_reco.rs) is not ported. The tab bar is
+//  always fully visible (the Slint showRecommendations gate is not wired;
+//  the pref is ON for this user anyway).
 // - Card clicks / hover actions (play / favorite / more / pin) and
 //  "View all" / context menus are inert — album/artist pages, playback
 //  and per-user stores are later phases.
@@ -33,8 +36,11 @@ Rectangle {
 
     QbzTheme { id: theme }
 
-    // Reparsed whenever Rust republishes the JSON document.
+    // Reparsed whenever Rust republishes the JSON documents (one per
+    // Discover tab — phase 13).
     readonly property var sections: JSON.parse(QbzBridge.homeSectionsJson)
+    readonly property var editorSections: JSON.parse(QbzBridge.editorSectionsJson)
+    readonly property var forYouSections: JSON.parse(QbzBridge.forYouSectionsJson)
     property string activeTab: "home"
 
     // ============================ shared components =======================
@@ -583,6 +589,201 @@ Rectangle {
         }
     }
 
+    // Qobuz Mixes rail (QobuzMixesRow.slint) — four static 220px
+    // navigation tiles (gradient art + badge + name, description below).
+    // POC-NOTE: the mix DETAIL views are out of scope — tiles are inert.
+    // (Slint's 135° linear gradients are approximated with corner
+    // RadialGradients — QML has no angled linear gradient.)
+    component MixTile: Column {
+        property string badge: ""
+        property string mixName: ""
+        property string desc: ""
+        property color c0: "#000000"
+        property color c1: "#000000"
+        property color c2: "#000000"
+        spacing: 8
+        width: 220
+
+        Rectangle {
+            width: 220
+            height: 220
+            radius: 8
+            gradient: Gradient {
+                GradientStop { position: 0.0; color: c0 }
+                GradientStop { position: 0.5; color: c1 }
+                GradientStop { position: 1.0; color: c2 }
+            }
+            // Fake the 135° sweep with a corner-centered radial overlay.
+            Rectangle {
+                anchors.fill: parent
+                radius: 8
+                gradient: Gradient {
+                    GradientStop { position: 0.0; color: "#00000000" }
+                    GradientStop { position: 1.0; color: "#33000000" }
+                }
+            }
+            Text {
+                x: 12
+                y: 12
+                text: badge
+                color: "#ccffffff"
+                font.pixelSize: 10
+                font.weight: theme.weightSemibold
+                font.letterSpacing: 1
+            }
+            Text {
+                anchors.centerIn: parent
+                text: mixName
+                color: "#ffffff"
+                font.pixelSize: 22
+                font.weight: theme.weightBold
+            }
+            MouseArea {
+                anchors.fill: parent
+                cursorShape: Qt.PointingHandCursor
+                // Inert (mix detail views out of scope).
+            }
+        }
+        Text {
+            width: 220
+            text: desc
+            color: theme.textMuted
+            font.pixelSize: 12
+            wrapMode: Text.WordWrap
+        }
+    }
+    component MixesRail: Column {
+        property var sectionData: ({})
+        width: parent ? parent.width : 0
+        spacing: 12
+        Text {
+            text: sectionData.title
+            color: theme.textPrimary
+            font.pixelSize: theme.fontSection
+            font.weight: theme.weightSemibold
+        }
+        Row {
+            spacing: 32
+            MixTile {
+                badge: "qobuz"; mixName: "DailyQ"
+                desc: QbzBridge.tr("Elevate your day with a customized selection of music.")
+                c0: "#1e3a8a"; c1: "#6366f1"; c2: "#c084fc"
+            }
+            MixTile {
+                badge: "qobuz"; mixName: "WeeklyQ"
+                desc: QbzBridge.tr("Take a weekly journey with a fresh mix every Friday.")
+                c0: "#065f46"; c1: "#10b981"; c2: "#fbbf24"
+            }
+            MixTile {
+                badge: "qbz"; mixName: "FavQ"
+                desc: QbzBridge.tr("A fresh shuffle from your personal library.")
+                c0: "#7f1d1d"; c1: "#ef4444"; c2: "#fb923c"
+            }
+            MixTile {
+                badge: "qbz"; mixName: "TopQ"
+                desc: QbzBridge.tr("Discover new music from your most-played playlists.")
+                c0: "#1f2937"; c1: "#4b5563"; c2: "#fbbf24"
+            }
+        }
+    }
+
+    // The section-rails renderer (one per Discover tab — the tab bodies
+    // differ only in WHICH sections doc they mount).
+    component SectionRails: Column {
+        property var sectionsModel: []
+        width: parent ? parent.width : 0
+        spacing: 40
+
+        Repeater {
+            model: sectionsModel
+            delegate: Loader {
+                required property var modelData
+                width: parent ? parent.width : 0
+                sourceComponent: modelData.kind === "album" ? albumRailComp
+                    : modelData.kind === "playlist" ? playlistRailComp
+                    : modelData.kind === "slim" ? slimGridComp
+                    : modelData.kind === "artists" ? artistRailComp
+                    : modelData.kind === "pinned" ? pinnedRailComp
+                    : modelData.kind === "mixes" ? mixesRailComp
+                    : recentComp
+                property var sectionData: modelData
+
+                Component {
+                    id: pinnedRailComp
+                    PinnedRail { sectionData: parent.sectionData }
+                }
+                Component {
+                    id: albumRailComp
+                    AlbumRail { sectionData: parent.sectionData }
+                }
+                Component {
+                    id: playlistRailComp
+                    Column {
+                        property var sectionData: parent.sectionData
+                        width: parent ? parent.width : 0
+                        spacing: 12
+                        Text {
+                            text: sectionData.title
+                            color: theme.textPrimary
+                            font.pixelSize: theme.fontSection
+                            font.weight: theme.weightSemibold
+                        }
+                        ListView {
+                            width: parent.width
+                            height: 246
+                            orientation: ListView.Horizontal
+                            spacing: 32
+                            clip: true
+                            boundsBehavior: Flickable.StopAtBounds
+                            model: sectionData.items
+                            delegate: PlaylistCard { card: modelData }
+                        }
+                    }
+                }
+                Component {
+                    id: slimGridComp
+                    SlimGrid { sectionData: parent.sectionData }
+                }
+                Component {
+                    id: artistRailComp
+                    Column {
+                        property var sectionData: parent.sectionData
+                        width: parent ? parent.width : 0
+                        spacing: 12
+                        Text {
+                            text: sectionData.title
+                            color: theme.textPrimary
+                            font.pixelSize: theme.fontSection
+                            font.weight: theme.weightSemibold
+                        }
+                        ListView {
+                            width: parent.width
+                            height: 220
+                            orientation: ListView.Horizontal
+                            spacing: 32
+                            clip: true
+                            boundsBehavior: Flickable.StopAtBounds
+                            model: sectionData.items
+                            delegate: ArtistCard { card: modelData }
+                        }
+                    }
+                }
+                Component {
+                    id: mixesRailComp
+                    MixesRail { sectionData: parent.sectionData }
+                }
+                Component {
+                    id: recentComp
+                    RecentPlaceholder {
+                        property var sectionData: parent.sectionData
+                        title: sectionData.title
+                        hint: sectionData.hint
+                    }
+                }
+            }
+        }
+    }
+
     // Recently-played placeholder (HomeView.slint RecentPlaceholder).
     component RecentPlaceholder: Column {
         property string title: ""
@@ -723,7 +924,12 @@ Rectangle {
                                     anchors.fill: parent
                                     hoverEnabled: true
                                     cursorShape: Qt.PointingHandCursor
-                                    onClicked: root.activeTab = modelData.id
+                                    // Data is per-tab JSON (no refetch on
+                                    // switch); scroll resets to top.
+                                    onClicked: {
+                                        root.activeTab = modelData.id
+                                        homeFlick.contentY = 0
+                                    }
                                 }
                             }
                         }
@@ -882,107 +1088,43 @@ Rectangle {
                     }
 
                     // Section rails.
-                    Repeater {
-                        model: root.sections
-                        delegate: Loader {
-                            required property var modelData
-                            width: homeTab.width
-                            sourceComponent: modelData.kind === "album" ? albumRailComp
-                                : modelData.kind === "playlist" ? playlistRailComp
-                                : modelData.kind === "slim" ? slimGridComp
-                                : modelData.kind === "artists" ? artistRailComp
-                                : modelData.kind === "pinned" ? pinnedRailComp
-                                : recentComp
-                            property var sectionData: modelData
-
-                            Component {
-                                id: pinnedRailComp
-                                PinnedRail { sectionData: parent.sectionData }
-                            }
-
-                            Component {
-                                id: albumRailComp
-                                AlbumRail { sectionData: parent.sectionData }
-                            }
-                            Component {
-                                id: playlistRailComp
-                                Column {
-                                    property var sectionData: parent.sectionData
-                                    width: parent ? parent.width : 0
-                                    spacing: 12
-                                    Text {
-                                        text: sectionData.title
-                                        color: theme.textPrimary
-                                        font.pixelSize: theme.fontSection
-                                        font.weight: theme.weightSemibold
-                                    }
-                                    ListView {
-                                        width: parent.width
-                                        height: 246
-                                        orientation: ListView.Horizontal
-                                        spacing: 32
-                                        clip: true
-                                        boundsBehavior: Flickable.StopAtBounds
-                                        model: sectionData.items
-                                        delegate: PlaylistCard { card: modelData }
-                                    }
-                                }
-                            }
-                            Component {
-                                id: slimGridComp
-                                SlimGrid { sectionData: parent.sectionData }
-                            }
-                            Component {
-                                id: artistRailComp
-                                Column {
-                                    property var sectionData: parent.sectionData
-                                    width: parent ? parent.width : 0
-                                    spacing: 12
-                                    Text {
-                                        text: sectionData.title
-                                        color: theme.textPrimary
-                                        font.pixelSize: theme.fontSection
-                                        font.weight: theme.weightSemibold
-                                    }
-                                    ListView {
-                                        width: parent.width
-                                        height: 220
-                                        orientation: ListView.Horizontal
-                                        spacing: 32
-                                        clip: true
-                                        boundsBehavior: Flickable.StopAtBounds
-                                        model: sectionData.items
-                                        delegate: ArtistCard { card: modelData }
-                                    }
-                                }
-                            }
-                            Component {
-                                id: recentComp
-                                RecentPlaceholder {
-                                    property var sectionData: parent.sectionData
-                                    title: sectionData.title
-                                    hint: sectionData.hint
-                                }
-                            }
-                        }
-                    }
+                    SectionRails { sectionsModel: root.sections }
                 }
 
-                // ===== Placeholder tabs (POC-NOTE) ========================
+                // ===== Editor's Picks (phase 13) ========================
                 Column {
-                    visible: root.activeTab !== "home"
+                    visible: root.activeTab === "editorPicks"
+                    width: parent.width - 64
+                    spacing: 40
+                    SectionRails { sectionsModel: root.editorSections }
+                }
+
+                // ===== For You (phase 13) =================================
+                Column {
+                    visible: root.activeTab === "forYou"
+                    width: parent.width - 64
+                    spacing: 40
+                    SectionRails { sectionsModel: root.forYouSections }
+                }
+
+                // ===== Recommendations (POC-NOTE placeholder) =============
+                // The tab follows the Slint gating (showRecommendations pref
+                // — ON for this user, so the tab shows); the CONTENT is the
+                // external reco engine (crates/qbz/src/external_reco.rs —
+                // seeded similar albums, weeklies builders, dismissal
+                // stores), which is not ported to the POC.
+                Column {
+                    visible: root.activeTab === "recommendations"
                     width: parent.width - 64
                     spacing: 10
                     Text {
-                        text: root.activeTab === "editorPicks" ? QbzBridge.tr("Editor's Picks")
-                            : root.activeTab === "forYou" ? QbzBridge.tr("For You")
-                            : QbzBridge.tr("Recommendations")
+                        text: QbzBridge.tr("Recommendations")
                         color: theme.textPrimary
                         font.pixelSize: theme.fontSection
                         font.weight: theme.weightSemibold
                     }
                     Text {
-                        text: "QBZ Qt POC — this Discover tab lands in a later phase"
+                        text: "QBZ Qt POC — the external recommendations engine is not ported (external_reco.rs)"
                         color: theme.textMuted
                         font.pixelSize: 13
                     }

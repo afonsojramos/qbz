@@ -20,6 +20,9 @@ Canvas {
     id: root
     property string source: ""
     property real radius: 8
+    // "crop" (PreserveAspectCrop — album art) | "contain"
+    // (PreserveAspectFit — label logos, never cropped, LabelCard.slint).
+    property string fit: "crop"
 
     renderTarget: Canvas.Image
     renderStrategy: Canvas.Cooperative
@@ -64,10 +67,11 @@ Canvas {
             ctx.clip()
         }
         if (probe.status === Image.Ready && probe.sourceSize.width > 0 && isImageLoaded(source)) {
-            // PreserveAspectCrop: uniform scale covering the rect, centered.
+            // "crop" = uniform scale covering the rect; "contain" = fitting
+            // inside it. Both centered.
             var iw = probe.sourceSize.width
             var ih = probe.sourceSize.height
-            var scale = Math.max(w / iw, h / ih)
+            var scale = fit === "contain" ? Math.min(w / iw, h / ih) : Math.max(w / iw, h / ih)
             var dw = iw * scale
             var dh = ih * scale
             ctx.drawImage(source, (w - dw) / 2, (h - dh) / 2, dw, dh)

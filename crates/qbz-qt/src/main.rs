@@ -617,6 +617,17 @@ pub(crate) fn play_track(track_id: u64) {
     });
 }
 
+/// Library track menu: Play next / Play later / Add to queue (single feed
+/// track into the existing queue).
+pub(crate) fn enqueue_track(track_id: u64, mode: String) {
+    let runtime = app();
+    spawn(async move {
+        if let Err(e) = playback_qt::enqueue_single_track(&runtime, track_id, &mode).await {
+            log::error!("[qbz-qt] enqueue_track {track_id} ({mode}) failed: {e}");
+        }
+    });
+}
+
 /// Album-card click on Home: resolve + enqueue + play through the core.
 pub(crate) fn play_album(album_id: String) {
     let runtime = app();
@@ -893,13 +904,20 @@ pub(crate) fn reload_home() {
                 // Artwork: disk hits attach synchronously; misses download
                 // in the background and trigger ONE republish (POC-NOTE in
                 // artwork_qt.rs — per-row model updates are the follow-up).
-                let missing = artwork_qt::attach_cached(&mut sections);
-                let count: usize = sections.iter().map(|s| s.items.len()).sum();
+                let mut missing = artwork_qt::attach_cached(&mut sections.home);
+                missing.extend(artwork_qt::attach_cached(&mut sections.editor));
+                missing.extend(artwork_qt::attach_cached(&mut sections.for_you));
+                missing.dedup();
+                let count: usize = sections.home.iter().map(|s| s.items.len()).sum::<usize>()
+                    + sections.editor.iter().map(|s| s.items.len()).sum::<usize>()
+                    + sections.for_you.iter().map(|s| s.items.len()).sum::<usize>();
 
                 publish_home_sections(&sections);
                 log::info!(
-                    "[qbz-qt] home published: {} sections, {} cards, {} artwork misses",
-                    sections.len(),
+                    "[qbz-qt] home published: {}+{}+{} sections, {} cards, {} artwork misses",
+                    sections.home.len(),
+                    sections.editor.len(),
+                    sections.for_you.len(),
                     count,
                     missing.len(),
                 );
@@ -907,7 +925,9 @@ pub(crate) fn reload_home() {
                     spawn(async move {
                         artwork_qt::download_missing(missing).await;
                         let mut sections = sections;
-                        let _ = artwork_qt::attach_cached(&mut sections);
+                        let _ = artwork_qt::attach_cached(&mut sections.home);
+                        let _ = artwork_qt::attach_cached(&mut sections.editor);
+                        let _ = artwork_qt::attach_cached(&mut sections.for_you);
                         publish_home_sections(&sections);
                         log::info!("[qbz-qt] home republished after artwork downloads");
                     });
@@ -926,10 +946,16 @@ pub(crate) fn reload_home() {
     });
 }
 
-fn publish_home_sections(sections: &[home_qt::HomeSection]) {
-    let json = serde_json::to_string(sections).unwrap_or_else(|_| "[]".to_string());
+fn publish_home_sections(sections: &home_qt::DiscoverSections) {
+    let home_json = serde_json::to_string(&sections.home).unwrap_or_else(|_| "[]".to_string());
+    let editor_json = serde_json::to_string(&sections.editor).unwrap_or_else(|_| "[]".to_string());
+    let for_you_json = serde_json::to_string(&sections.for_you).unwrap_or_else(|_| "[]".to_string());
     ui(move |mut b| {
-        b.as_mut().set_home_sections_json(QString::from(json.as_str()));
+        b.as_mut().set_home_sections_json(QString::from(home_json.as_str()));
+        b.as_mut()
+            .set_editor_sections_json(QString::from(editor_json.as_str()));
+        b.as_mut()
+            .set_for_you_sections_json(QString::from(for_you_json.as_str()));
     });
 }
 

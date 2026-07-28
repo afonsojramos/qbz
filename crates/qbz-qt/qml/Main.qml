@@ -40,6 +40,7 @@ ApplicationWindow {
     Component.onCompleted: QbzBridge.boot()
 
 
+
     Loader {
         id: screenLoader
         anchors.fill: parent

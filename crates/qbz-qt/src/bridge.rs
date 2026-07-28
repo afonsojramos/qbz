@@ -102,6 +102,10 @@ pub mod qbz_bridge {
         // sections travel as ONE JSON document; QML JSON.parse()s it into
         // the exact same {id, title, kind, items:[{...}]} object graph.
         #[qproperty(QString, home_sections_json)]
+        // Editor's Picks / For You tab section lists (phase 13; same
+        // HomeSection shape, ordered by each tab's discover prefs).
+        #[qproperty(QString, editor_sections_json)]
+        #[qproperty(QString, for_you_sections_json)]
 
         // --- Library view --------------------------------------------------
         #[qproperty(bool, library_loading)]
@@ -289,6 +293,10 @@ pub mod qbz_bridge {
         /// Track-row click (Library): play the track as a 1-element queue.
         #[qinvokable]
         fn play_track(self: Pin<&mut QbzBridge>, track_id: QString);
+        /// Library track context menus: Play next ("next") / Play later
+        /// ("later") / Add to queue ("queue") on a single feed track.
+        #[qinvokable]
+        fn enqueue_track(self: Pin<&mut QbzBridge>, track_id: QString, mode: QString);
 
         /// Library retry button / manual refresh.
         #[qinvokable]
@@ -439,6 +447,8 @@ pub struct QbzBridgeRust {
     home_loading: bool,
     home_error: QString,
     home_sections_json: QString,
+    editor_sections_json: QString,
+    for_you_sections_json: QString,
     library_loading: bool,
     library_error: QString,
     library_json: QString,
@@ -502,6 +512,8 @@ impl Default for QbzBridgeRust {
             home_loading: false,
             home_error: QString::default(),
             home_sections_json: QString::from("[]"),
+            editor_sections_json: QString::from("[]"),
+            for_you_sections_json: QString::from("[]"),
             library_loading: false,
             library_error: QString::default(),
             library_json: QString::from("[]"),
@@ -701,6 +713,12 @@ impl qbz_bridge::QbzBridge {
     pub fn play_track(self: Pin<&mut Self>, track_id: QString) {
         if let Ok(id) = track_id.to_string().parse::<u64>() {
             crate::play_track(id);
+        }
+    }
+
+    pub fn enqueue_track(self: Pin<&mut Self>, track_id: QString, mode: QString) {
+        if let Ok(id) = track_id.to_string().parse::<u64>() {
+            crate::enqueue_track(id, mode.to_string());
         }
     }
 
