@@ -38,6 +38,19 @@ Rectangle {
     // Source badge (Library show-local): "local" | "plex" | "" (hidden).
     property string source: ""
 
+    // --- Local Library mode (additive; default = the Qobuz behaviour) ----
+    // The Local Library mounts THIS card, but its `albumId` is a group key
+    // (folder or metadata identity), not a Qobuz catalog id — routing it
+    // through QbzBridge.openAlbum / QbzPlayer.playAlbum would fire a
+    // catalog fetch for a folder path. In localMode every action is emitted
+    // to the host instead, and the catalog-only affordances (heart, pin,
+    // "Block this album") are hidden. Nothing else about the card changes,
+    // so the two surfaces stay pixel-identical.
+    property bool localMode: false
+    signal openRequested()
+    signal playRequested()
+    signal enqueueRequested(string mode)
+
     QbzTheme { id: theme }
 
     width: 200
@@ -45,7 +58,7 @@ Rectangle {
     color: "transparent"
 
     readonly property bool overlayOn: artArea.containsMouse || pinArea.containsMouse
-        || favArea.containsMouse || playArea.containsMouse || moreArea.containsMouse
+        || favBtn.hovered || playBtn.hovered || moreBtn.hovered
 
     function toggleFavorite() {
         root.isFavorite = !root.isFavorite
@@ -117,7 +130,8 @@ Rectangle {
                 cursorShape: Qt.PointingHandCursor
                 // Phase 8: the card opens the album view (the overlay play
                 // button carries the play affordance).
-                onClicked: QbzBridge.openAlbum(root.albumId)
+                onClicked: root.localMode ? root.openRequested()
+                                          : QbzBridge.openAlbum(root.albumId)
             }
 
             // Pin badge — top-right. Hover-revealed like the overlay
@@ -126,6 +140,7 @@ Rectangle {
             // filled accent pin vs outline). Always-mounted (opacity) so
             // its hover joins overlayOn.
             Rectangle {
+                visible: !root.localMode
                 x: parent.width - width - 8
                 y: 8
                 width: 26
@@ -157,70 +172,34 @@ Rectangle {
                 width: parent.width
                 shown: root.overlayOn
 
-                Rectangle {
-                    width: 36
-                    height: 36
-                    radius: 18
+                CardOverlayButton {
+                    id: favBtn
+                    visible: !root.localMode
+                    name: root.isFavorite ? "heart-filled" : "heart"
+                    active: root.isFavorite
                     anchors.verticalCenter: parent.verticalCenter
-                    color: favArea.containsMouse ? "#3dffffff" : "#24ffffff"
-                    border.width: 1.5
-                    border.color: "#ccffffff"
-                    QbzIcon {
-                        name: root.isFavorite ? "heart-filled" : "heart"
-                        width: 16
-                        height: 16
-                        anchors.centerIn: parent
-                        tintName: root.isFavorite ? "favorite" : "primary"
-                    }
-                    MouseArea {
-                        id: favArea
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: root.toggleFavorite()
-                    }
+                    onClicked: root.toggleFavorite()
                 }
-                Rectangle {
-                    width: 44
-                    height: 44
-                    radius: 22
-                    color: playArea.containsMouse ? "#d6ffffff" : "#ffffff"
-                    QbzIcon {
-                        name: "play-fill"
-                        width: 18
-                        height: 18
-                        anchors.centerIn: parent
-                        tintName: "black"
-                    }
-                    MouseArea {
-                        id: playArea
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: QbzPlayer.playAlbum(root.albumId)
-                    }
-                }
-                Rectangle {
-                    width: 36
-                    height: 36
-                    radius: 18
+                CardOverlayButton {
+                    id: playBtn
+                    name: "play-fill"
+                    primary: true
                     anchors.verticalCenter: parent.verticalCenter
-                    color: moreArea.containsMouse ? "#3dffffff" : "#24ffffff"
-                    border.width: 1.5
-                    border.color: "#ccffffff"
-                    QbzIcon {
-                        name: "ellipsis"
-                        width: 16
-                        height: 16
-                        anchors.centerIn: parent
-                        tintName: "primary"
-                    }
-                    MouseArea {
-                        id: moreArea
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: function (mouse) { albumMenu.openAtCursor(moreArea, mouse.x, mouse.y) }
+                    onClicked: root.localMode ? root.playRequested()
+                                              : QbzPlayer.playAlbum(root.albumId)
+                }
+                CardOverlayButton {
+                    id: moreBtn
+                    name: "ellipsis"
+                    anchors.verticalCenter: parent.verticalCenter
+                    // CardOverlayButton.clicked() carries no mouse payload,
+                    // so fall back to the disc's centre — the menu still
+                    // opens under the ⋯ (worst case 18px off the pointer).
+                    // Stays correct if the signal ever forwards the event.
+                    onClicked: function (mouse) {
+                        albumMenu.openAtCursor(moreBtn,
+                            mouse ? mouse.x : moreBtn.width / 2,
+                            mouse ? mouse.y : moreBtn.height / 2)
                     }
                 }
             }
@@ -231,14 +210,21 @@ Rectangle {
                 id: albumMenu
                 menuWidth: 196
                     Repeater {
-                        model: [
-                            { "label": QbzSession.tr("Open album", QbzSession.trRev), "icon": "library-big", "action": "open" },
-                            { "label": QbzSession.tr("Play", QbzSession.trRev), "icon": "play-fill", "action": "play" },
-                            { "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-plus", "action": "next" },
-                            { "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "action": "queue" },
-                            { "label": root.isFavorite ? QbzSession.tr("Remove from Library", QbzSession.trRev) : QbzSession.tr("Add to Library", QbzSession.trRev), "icon": root.isFavorite ? "heart-filled" : "heart", "action": "favorite" },
-                            { "label": QbzSession.tr("Block this album", QbzSession.trRev), "icon": "blind-eye", "action": "block" },
-                        ]
+                        // localMode drops the two catalog-only rows (heart +
+                        // blacklist); the four playback rows are identical.
+                        model: {
+                            var m = [
+                                { "label": QbzSession.tr("Open album", QbzSession.trRev), "icon": "library-big", "action": "open" },
+                                { "label": QbzSession.tr("Play", QbzSession.trRev), "icon": "play-fill", "action": "play" },
+                                { "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-plus", "action": "next" },
+                                { "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "action": "queue" },
+                            ]
+                            if (!root.localMode) {
+                                m.push({ "label": root.isFavorite ? QbzSession.tr("Remove from Library", QbzSession.trRev) : QbzSession.tr("Add to Library", QbzSession.trRev), "icon": root.isFavorite ? "heart-filled" : "heart", "action": "favorite" })
+                                m.push({ "label": QbzSession.tr("Block this album", QbzSession.trRev), "icon": "blind-eye", "action": "block" })
+                            }
+                            return m
+                        }
                         delegate: Rectangle {
                             required property var modelData
                             width: parent ? parent.width : 0
@@ -274,6 +260,13 @@ Rectangle {
                                 onClicked: {
                                     albumMenu.close()
                                     var a = modelData.action
+                                    if (root.localMode) {
+                                        if (a === "open") root.openRequested()
+                                        else if (a === "play") root.playRequested()
+                                        else if (a === "next") root.enqueueRequested("next")
+                                        else if (a === "queue") root.enqueueRequested("later")
+                                        return
+                                    }
                                     if (a === "open") QbzBridge.openAlbum(root.albumId)
                                     else if (a === "play") QbzPlayer.playAlbum(root.albumId)
                                     else if (a === "next") QbzPlayer.enqueueAlbum(root.albumId, "next")
@@ -325,6 +318,7 @@ Rectangle {
             // Source badge (Library show-local): bottom-right of the art.
             Rectangle {
                 visible: root.source === "local" || root.source === "plex"
+                    || root.source === "offline"
                 x: parent.width - width - 6
                 y: parent.height - height - 6
                 width: 24
@@ -332,7 +326,9 @@ Rectangle {
                 radius: 4
                 color: "#b3000000"
                 QbzIcon {
-                    name: "hard-drive"
+                    // The Local Library's third source: a Qobuz offline copy
+                    // (LocalLibraryView.slint's `show-source-badge` triple).
+                    name: root.source === "offline" ? "cloud-download" : "hard-drive"
                     width: 14
                     height: 14
                     anchors.centerIn: parent
@@ -365,7 +361,8 @@ Rectangle {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: QbzBridge.openAlbum(root.albumId)
+                        onClicked: root.localMode ? root.openRequested()
+                                                  : QbzBridge.openAlbum(root.albumId)
                     }
                 }
                 Text {

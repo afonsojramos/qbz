@@ -12,7 +12,11 @@ Rectangle {
     property string name: ""
     property bool primary: false
     property bool active: false
-    signal clicked()
+    // Forwards the MouseArea event. Three cards write
+    // `onClicked: function (mouse) { menu.openAtCursor(btn, mouse.x, mouse.y) }`
+    // against this signal; while it took no argument, `mouse` was undefined and
+    // those context menus threw a TypeError instead of opening.
+    signal clicked(var mouse)
 
     width: primary ? 44 : 36
     height: primary ? 44 : 36
@@ -34,6 +38,6 @@ Rectangle {
         anchors.fill: parent
         hoverEnabled: true
         cursorShape: Qt.PointingHandCursor
-        onClicked: parent.clicked()
+        onClicked: function (m) { parent.clicked(m) }
     }
 }
