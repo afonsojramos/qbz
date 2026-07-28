@@ -4,12 +4,13 @@
 //! suggestions" via get_album_suggest). Publishes ONE JSON document.
 //!
 //! POC-NOTEs:
-//! - Booklet download/rasterize, external links (Last.fm/Discogs/MB),
-//!   multi-select + bulk bar, DiscHeaderMenu, album-info modal, custom
-//!   covers: out of scope (inert stubs where visible).
+//! - Booklet download/rasterize, multi-select + bulk bar, DiscHeaderMenu,
+//!   album-info modal, custom covers: out of scope (inert stubs where visible).
 //! - Blacklist filtering on carousels: skipped (store not open).
-//! - The album-header-gradient atmosphere and Last.fm suggestions row:
-//!   not wired (appearance pref + Last.fm subsystem).
+//! - The album-header-gradient atmosphere: not wired (appearance pref).
+//! - The Last.fm "similar albums" second suggestions row needs the
+//!   `qbz-external-reco` engine, which is not a dependency of this crate —
+//!   see the GLUE note in the handoff report. NOT faked here.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -104,6 +105,18 @@ pub struct AlbumHeader {
     pub is_favorite: bool,
     #[serde(rename = "isPinned")]
     pub is_pinned: bool,
+    /// EXTERNAL LINKS sidebar block — deep links into the three music
+    /// databases, built from artist + title. These are plain URLs handed to
+    /// the system browser on click: nothing is fetched, no account is needed
+    /// and no integration has to be connected for them to work.
+    #[serde(rename = "showExternalLinks")]
+    pub show_external_links: bool,
+    #[serde(rename = "lastfmUrl")]
+    pub lastfm_url: String,
+    #[serde(rename = "discogsUrl")]
+    pub discogs_url: String,
+    #[serde(rename = "musicbrainzUrl")]
+    pub musicbrainz_url: String,
 }
 
 #[derive(Default, Serialize)]
@@ -127,6 +140,38 @@ fn format_duration(secs: u32) -> String {
     } else {
         format!("{minutes}m")
     }
+}
+
+/// Last.fm path segment: percent-encode, then render spaces as `+` (Last.fm's
+/// `/music/{artist}/{album}` paths use `+` for spaces). `urlencoding::encode`
+/// emits `%20` for spaces, so swap them — the remaining percent-escapes
+/// (e.g. `/`, `?`) stay path-safe. (album.rs `lastfm_segment`.)
+fn lastfm_segment(text: &str) -> String {
+    urlencoding::encode(text).replace("%20", "+")
+}
+
+/// The three external-database deep links for an album (album.rs
+/// `apply_album`'s external-links block). Returns `None` when either the
+/// artist or the title is missing — the sidebar block is then absent.
+fn external_links(artist: &str, title: &str) -> Option<(String, String, String)> {
+    if artist.is_empty() || title.is_empty() {
+        return None;
+    }
+    let lastfm = format!(
+        "https://www.last.fm/music/{}/{}",
+        lastfm_segment(artist),
+        lastfm_segment(title),
+    );
+    // `{artist}+{album}` query (spaces as `+`, each part percent-encoded).
+    let query = format!(
+        "{}+{}",
+        urlencoding::encode(artist),
+        urlencoding::encode(title)
+    );
+    let discogs = format!("https://www.discogs.com/search/?q={query}&type=release");
+    let musicbrainz =
+        format!("https://musicbrainz.org/search?query={query}&type=release&method=indexed");
+    Some((lastfm, discogs, musicbrainz))
 }
 
 /// Word-boundary truncation (album.rs `truncate_words`).
@@ -322,7 +367,15 @@ pub async fn load_album(runtime: &Arc<AppRuntime<LoggingAdapter>>, album_id: &st
         .map(|container| container.items.iter().map(map_track).collect())
         .unwrap_or_default();
 
+    // External links are built from the SAME artist/title the header shows.
+    let links = external_links(&artist, &title);
+    let (lastfm_url, discogs_url, musicbrainz_url) = links.clone().unwrap_or_default();
+
     let header = AlbumHeader {
+        show_external_links: links.is_some(),
+        lastfm_url,
+        discogs_url,
+        musicbrainz_url,
         is_favorite: crate::library_qt::with_library(|d| {
             d.feed
                 .iter()

@@ -2,22 +2,46 @@
 //! (`load_artist`/`map_artist`, `load_release_page`, the release-section
 //! bucketing in the official order). Publishes ONE JSON document.
 //!
+//! The page publishes PROGRESSIVELY: `load_artist_view` returns the Qobuz
+//! document immediately (main.rs sets it on the bridge), then a background
+//! task re-publishes the SAME document enriched with the Magazine stories and
+//! the MusicBrainz network-sidebar sections as each one resolves. The stashed
+//! copy is generation-guarded so a late reply for a previous artist is
+//! dropped instead of overwriting the current page.
+//!
+//! MusicBrainz is OPT-IN-RESPECTING: `network.mbAvailable` is seeded from
+//! `core.musicbrainz_is_enabled()` BEFORE anything is fetched — when the user
+//! has MB off, no resolve/metadata/relationship/discovery request is made at
+//! all and the Origin / Relationships / You-may-also-like sections are simply
+//! absent from the sidebar (never an error, never an empty frame).
+//!
 //! POC-NOTEs:
-//! - MusicBrainz sidebar sections (Origin / Relationships / Discovery),
-//!   the Magazine/Stories tab, blacklist banner/filter, "In library"
-//!   PLAYLISTS sub-lists, jump-tab scroll-tracking: out of scope (the
-//!   Network sidebar carries LABELS + SIMILAR ARTISTS, both wired).
+//! - Blacklist banner/filter, "In library" PLAYLISTS sub-lists, jump-tab
+//!   scroll-tracking: out of scope.
 //! - `is_following` seeds from the phase-5 library feed (the Slint app
 //!   resolves it from the favorites cache — same truth, different path).
+//! - Discovery runs with EMPTY `dismissed_per_tag` / `known_artists`
+//!   callbacks: the Slint app feeds those from `discovery_dismiss` +
+//!   `play_history` + `reco`, none of which this POC brings up. That is the
+//!   same default a first-run Slint profile lands on (no exclusion applied),
+//!   not a fabricated one.
+//! - MB Origin location is rendered as plain text: the clickable form opens
+//!   ArtistsByLocationView, which this POC has no port of, so the affordance
+//!   is left out rather than dead.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use cxx_qt_lib::QString;
 use qbz_app::shell::AppRuntime;
 use qbz_core::LoggingAdapter;
-use qbz_models::{PageArtistRelease, PageArtistResponse, PageArtistTrack, QueueTrack};
+use qbz_models::{
+    ArtistStoryItem, PageArtistRelease, PageArtistResponse, PageArtistTrack, QueueTrack,
+};
 use serde::Serialize;
+use serde_json::json;
 
 use crate::album_qt::{truncate_words, AlbumCardData, TrackRow};
 use crate::home_qt;
@@ -71,6 +95,85 @@ pub struct ArtistPlaylist {
     pub art_url: String,
 }
 
+/// Magazine story teaser (Qobuz editorial — `/artist/getStory`). Not an
+/// integration: it is the same Qobuz session the rest of the page uses.
+#[derive(Clone, Default, Serialize)]
+pub struct StoryRow {
+    pub title: String,
+    pub author: String,
+    pub excerpt: String,
+    pub url: String,
+    #[serde(rename = "artUrl")]
+    pub art_url: String,
+}
+
+/// MusicBrainz Origin block (artist.rs `MbOrigin`). `hasData` is the gate the
+/// sidebar uses so an MB-matched artist with no life-span/location renders
+/// nothing at all instead of an empty heading.
+#[derive(Clone, Default, Serialize)]
+pub struct MbOriginJson {
+    #[serde(rename = "isPerson")]
+    pub is_person: bool,
+    #[serde(rename = "beginDate")]
+    pub begin_date: String,
+    #[serde(rename = "endDate")]
+    pub end_date: String,
+    #[serde(rename = "locationDisplay")]
+    pub location_display: String,
+    #[serde(rename = "hasData")]
+    pub has_data: bool,
+}
+
+/// One Members / Member-Of / Collaborators row (artist.rs `MbRelationshipRow`).
+#[derive(Clone, Default, Serialize)]
+pub struct MbRelationshipJson {
+    pub mbid: String,
+    pub name: String,
+    pub role: String,
+    pub tooltip: String,
+}
+
+#[derive(Clone, Default, Serialize)]
+pub struct MbRelationshipsJson {
+    pub members: Vec<MbRelationshipJson>,
+    pub groups: Vec<MbRelationshipJson>,
+    pub collaborators: Vec<MbRelationshipJson>,
+    #[serde(rename = "hasData")]
+    pub has_data: bool,
+}
+
+/// One "You may also like" candidate. `qobuzId` is "" when the MB candidate
+/// never validated against Qobuz — those rows are informational only.
+#[derive(Clone, Default, Serialize)]
+pub struct MbDiscoveryJson {
+    pub mbid: String,
+    pub name: String,
+    #[serde(rename = "qobuzId")]
+    pub qobuz_id: String,
+}
+
+/// Everything the Network sidebar renders beyond LABELS / SIMILAR ARTISTS
+/// (which ride the Qobuz artist page). Mirrors Slint's `NetworkSidebarState`.
+#[derive(Clone, Default, Serialize)]
+pub struct ArtistNetwork {
+    /// MusicBrainz is enabled AND this artist resolved to an MBID. False =
+    /// every MB-driven section is ABSENT (opt-in rule: no error, no frame).
+    #[serde(rename = "mbAvailable")]
+    pub mb_available: bool,
+    pub mbid: String,
+    #[serde(rename = "originLoading")]
+    pub origin_loading: bool,
+    pub origin: MbOriginJson,
+    #[serde(rename = "relationshipsLoading")]
+    pub relationships_loading: bool,
+    pub relationships: MbRelationshipsJson,
+    #[serde(rename = "discoveryLoading")]
+    pub discovery_loading: bool,
+    #[serde(rename = "discoveryTag")]
+    pub discovery_tag: String,
+    pub discovery: Vec<MbDiscoveryJson>,
+}
+
 #[derive(Default, Serialize)]
 pub struct ArtistViewData {
     pub id: String,
@@ -80,6 +183,9 @@ pub struct ArtistViewData {
     pub bio_short: String,
     #[serde(rename = "bioTruncated")]
     pub bio_truncated: bool,
+    /// Biography attribution ("TiVo" etc); "" when Qobuz sends none.
+    #[serde(rename = "bioSource")]
+    pub bio_source: String,
     #[serde(rename = "artUrl")]
     pub artwork_url: String,
     #[serde(rename = "isFollowing")]
@@ -100,6 +206,12 @@ pub struct ArtistViewData {
     #[serde(rename = "similarArtists")]
     pub similar_artists: Vec<ArtistSimilar>,
     pub playlists: Vec<ArtistPlaylist>,
+    /// Magazine tab. Empty + `storiesLoading` false = "No stories".
+    pub stories: Vec<StoryRow>,
+    #[serde(rename = "storiesLoading")]
+    pub stories_loading: bool,
+    /// MusicBrainz-driven Network sidebar sections (filled progressively).
+    pub network: ArtistNetwork,
 }
 
 fn mmss(secs: u32) -> String {
@@ -213,11 +325,26 @@ pub async fn load_artist(
 
 fn map_artist(page: PageArtistResponse) -> ArtistViewData {
     let name = page.name.display;
-    let bio = page
-        .biography
-        .and_then(|b| b.content)
-        .map(|c| qbz_text_utils::strip_html::strip_html(&c))
-        .unwrap_or_default();
+    // Biography: content (HTML-stripped) + the attribution name. Qobuz sends
+    // `biography.source` as a raw JSON value (sometimes a string, sometimes an
+    // object) — only the string form carries an attribution.
+    let (bio, bio_source) = match page.biography {
+        Some(biography) => {
+            let content = biography
+                .content
+                .map(|c| qbz_text_utils::strip_html::strip_html(&c))
+                .unwrap_or_default();
+            let source = biography
+                .source
+                .and_then(|v| {
+                    v.as_str()
+                        .map(qbz_text_utils::strip_html::decode_html_entities)
+                })
+                .unwrap_or_default();
+            (content, source)
+        }
+        None => (String::new(), String::new()),
+    };
     let bio_short = truncate_words(&bio, 360);
     let bio_truncated = bio_short != bio;
     let artwork_url = page
@@ -391,6 +518,7 @@ fn map_artist(page: PageArtistResponse) -> ArtistViewData {
         bio,
         bio_short,
         bio_truncated,
+        bio_source,
         artwork_url,
         is_following,
         is_pinned: crate::sidebar_qt::is_pinned("artist", &page.id.to_string()),
@@ -402,6 +530,10 @@ fn map_artist(page: PageArtistResponse) -> ArtistViewData {
         labels,
         similar_artists,
         playlists,
+        // Filled by the background enrichment pass (see load_artist_view).
+        stories: Vec::new(),
+        stories_loading: false,
+        network: ArtistNetwork::default(),
     }
 }
 
@@ -479,19 +611,88 @@ pub async fn load_release_page(
         .await
         .map_err(|e| e.to_string())?;
     let has_more = resp.has_more;
-    let cards = resp.items.iter().map(map_release).collect();
+    let cards: Vec<AlbumCardData> = resp.items.iter().map(map_release).collect();
+    // Fold the page into the stashed document too. The view appends it to its
+    // own parsed copy when the signal lands, but an enrichment pass that
+    // republishes the document afterwards would otherwise reset the section
+    // back to page 1. Ids are deduped on both sides.
+    merge_release_page(artist_id, release_type, &cards, has_more);
     Ok((cards, has_more))
 }
 
-/// Fetch + publish (perf-marked like phase 5).
+/// Append `cards` to `release_type`'s bucket inside the stashed document
+/// (no republish — the caller's `releaseSectionReady` signal already paints
+/// them; this only keeps a LATER republish from losing them). Ignored when
+/// the stashed document is for a different artist (the user navigated away
+/// while the page was in flight).
+fn merge_release_page(
+    artist_id: &str,
+    release_type: &str,
+    cards: &[AlbumCardData],
+    has_more: bool,
+) {
+    let Ok(mut guard) = ARTIST_DOC.lock() else {
+        return;
+    };
+    let Some((_, doc)) = guard.as_mut() else {
+        return;
+    };
+    if doc.get("id").and_then(|v| v.as_str()) != Some(artist_id) {
+        return;
+    }
+    let Some(sections) = doc
+        .get_mut("releaseSections")
+        .and_then(|v| v.as_array_mut())
+    else {
+        return;
+    };
+    let Some(section) = sections.iter_mut().find(|s| {
+        s.get("releaseType").and_then(|v| v.as_str()) == Some(release_type)
+    }) else {
+        return;
+    };
+    section["hasMore"] = json!(has_more);
+    let Some(existing) = section.get_mut("cards").and_then(|v| v.as_array_mut()) else {
+        return;
+    };
+    let seen: HashSet<String> = existing
+        .iter()
+        .filter_map(|c| c.get("id").and_then(|v| v.as_str()).map(str::to_string))
+        .collect();
+    for card in cards {
+        if seen.contains(&card.id) {
+            continue;
+        }
+        if let Ok(value) = serde_json::to_value(card) {
+            existing.push(value);
+        }
+    }
+}
+
+/// Fetch + publish (perf-marked like phase 5), then kick the progressive
+/// enrichment (Magazine stories + the MusicBrainz Network sidebar) off in the
+/// background. The returned JSON is what main.rs writes onto the bridge; every
+/// later pass re-publishes the SAME document through `publish_patch`.
 pub async fn load_artist_view(
     runtime: &Arc<AppRuntime<LoggingAdapter>>,
     artist_id: &str,
 ) -> Result<String, String> {
     let t = Instant::now();
-    let data = load_artist(runtime, artist_id).await?;
+    let mut data = load_artist(runtime, artist_id).await?;
     let sections: usize = data.release_sections.iter().map(|s| s.cards.len()).sum();
     stash_top_queue(&data);
+
+    // Seed the sidebar's own loading flags BEFORE serializing so the sections
+    // paint their "Loading…" state with the first frame. `mb_available` is the
+    // user's MusicBrainz opt-in read straight from the core: false here means
+    // the enrichment task never even starts, so no MB request is issued.
+    let mb_on = runtime.core().musicbrainz_is_enabled().await;
+    data.network.mb_available = mb_on;
+    data.network.origin_loading = mb_on;
+    data.network.relationships_loading = mb_on;
+    data.network.discovery_loading = mb_on;
+    data.stories_loading = true;
+
     let json = serde_json::to_string(&data).map_err(|e| e.to_string())?;
     log::info!(
         "[qbz-qt][perf] artist load: {:?} ({} top tracks, {} releases in {} sections)",
@@ -500,5 +701,487 @@ pub async fn load_artist_view(
         sections,
         data.release_sections.len(),
     );
+
+    // Stash the document for the progressive passes, under a fresh generation.
+    let generation = ARTIST_GEN.fetch_add(1, Ordering::SeqCst) + 1;
+    match serde_json::from_str::<serde_json::Value>(&json) {
+        Ok(doc) => {
+            if let Ok(mut guard) = ARTIST_DOC.lock() {
+                *guard = Some((generation, doc));
+            }
+        }
+        Err(e) => log::warn!("[qbz-qt] artist doc stash failed: {e}"),
+    }
+
+    let similar_names: Vec<String> =
+        data.similar_artists.iter().map(|s| s.name.clone()).collect();
+    spawn_enrichment(
+        runtime.clone(),
+        generation,
+        artist_id.to_string(),
+        data.name.clone(),
+        similar_names,
+        mb_on,
+    );
+
     Ok(json)
+}
+
+// ==================== Progressive enrichment (stories + MusicBrainz) =======
+
+/// Monotonic id for the artist page currently on screen. Every background
+/// pass carries the generation it was started for and is dropped when the
+/// user has navigated on — a slow MB reply can never repaint a later artist.
+static ARTIST_GEN: AtomicU64 = AtomicU64::new(0);
+/// The last published artist document, kept so a partial update can be merged
+/// into it and the WHOLE document re-published (the bridge carries exactly one
+/// JSON property, phase-23 pattern).
+static ARTIST_DOC: Mutex<Option<(u64, serde_json::Value)>> = Mutex::new(None);
+
+/// Merge `f`'s edits into the stashed document and re-publish it, but only
+/// while `generation` is still the page on screen.
+fn publish_patch(generation: u64, f: impl FnOnce(&mut serde_json::Value)) {
+    let json = {
+        let Ok(mut guard) = ARTIST_DOC.lock() else {
+            return;
+        };
+        let Some((current, doc)) = guard.as_mut() else {
+            return;
+        };
+        if *current != generation {
+            return;
+        }
+        f(doc);
+        match serde_json::to_string(&*doc) {
+            Ok(s) => s,
+            Err(e) => {
+                log::warn!("[qbz-qt] artist doc republish failed: {e}");
+                return;
+            }
+        }
+    };
+    crate::artist_bridge::ui(move |mut b| {
+        b.as_mut().set_artist_json(QString::from(json.as_str()));
+    });
+}
+
+/// Patch fields inside the `network` object and re-publish.
+fn publish_network(generation: u64, fields: Vec<(&'static str, serde_json::Value)>) {
+    publish_patch(generation, move |doc| {
+        if let Some(net) = doc.get_mut("network").and_then(|v| v.as_object_mut()) {
+            for (key, value) in fields {
+                net.insert(key.to_string(), value);
+            }
+        }
+    });
+}
+
+/// Every MB section off at once — MB disabled, no confident match, or the
+/// resolve failed. The sidebar renders NOTHING for them (opt-in rule).
+fn publish_mb_unavailable(generation: u64) {
+    publish_network(
+        generation,
+        vec![
+            ("mbAvailable", json!(false)),
+            ("originLoading", json!(false)),
+            ("relationshipsLoading", json!(false)),
+            ("discoveryLoading", json!(false)),
+        ],
+    );
+}
+
+fn spawn_enrichment(
+    runtime: Arc<AppRuntime<LoggingAdapter>>,
+    generation: u64,
+    artist_id: String,
+    artist_name: String,
+    similar_names: Vec<String>,
+    mb_on: bool,
+) {
+    // --- Magazine stories (Qobuz editorial, MB-independent) ---------------
+    {
+        let runtime = runtime.clone();
+        crate::spawn(async move {
+            let stories = load_stories(&runtime, &artist_id).await;
+            publish_patch(generation, move |doc| {
+                doc["stories"] =
+                    serde_json::to_value(&stories).unwrap_or_else(|_| json!([]));
+                doc["storiesLoading"] = json!(false);
+            });
+        });
+    }
+
+    // --- MusicBrainz network sidebar --------------------------------------
+    // Hard gate: with MB off nothing below runs, so nothing leaves the process.
+    if !mb_on {
+        return;
+    }
+    crate::spawn(async move {
+        let meta = match load_mb_metadata(&runtime, &artist_name).await {
+            Ok(Some(meta)) => meta,
+            Ok(None) => {
+                publish_mb_unavailable(generation);
+                return;
+            }
+            Err(e) => {
+                log::warn!("[qbz-qt] MB metadata load failed: {e}");
+                publish_mb_unavailable(generation);
+                return;
+            }
+        };
+        let mbid = meta.mbid.clone();
+        publish_network(
+            generation,
+            vec![
+                ("mbid", json!(mbid.clone())),
+                (
+                    "origin",
+                    serde_json::to_value(&meta.origin).unwrap_or_else(|_| json!({})),
+                ),
+                ("originLoading", json!(false)),
+            ],
+        );
+
+        match load_mb_relationships(&runtime, &mbid).await {
+            Ok(rel) => publish_network(
+                generation,
+                vec![
+                    (
+                        "relationships",
+                        serde_json::to_value(&rel).unwrap_or_else(|_| json!({})),
+                    ),
+                    ("relationshipsLoading", json!(false)),
+                ],
+            ),
+            Err(e) => {
+                log::warn!("[qbz-qt] MB relationships failed: {e}");
+                publish_network(generation, vec![("relationshipsLoading", json!(false))]);
+            }
+        }
+
+        match load_mb_discovery(&runtime, &mbid, &artist_name, similar_names).await {
+            Ok((tag, rows)) => publish_network(
+                generation,
+                vec![
+                    ("discoveryTag", json!(tag)),
+                    (
+                        "discovery",
+                        serde_json::to_value(&rows).unwrap_or_else(|_| json!([])),
+                    ),
+                    ("discoveryLoading", json!(false)),
+                ],
+            ),
+            Err(e) => {
+                log::warn!("[qbz-qt] MB discovery failed: {e}");
+                publish_network(generation, vec![("discoveryLoading", json!(false))]);
+            }
+        }
+    });
+}
+
+// ----- Magazine stories ---------------------------------------------------
+
+fn map_story(item: ArtistStoryItem) -> StoryRow {
+    let author = item
+        .authors
+        .and_then(|list| list.into_iter().next())
+        .map(|a| a.name)
+        .unwrap_or_default();
+    // `image` is a ready-to-use arc-cdn URL; fall back to the first `images[]`.
+    let art_url = item
+        .image
+        .or_else(|| {
+            item.images
+                .and_then(|list| list.into_iter().next())
+                .map(|img| img.url)
+        })
+        .unwrap_or_default();
+    StoryRow {
+        url: format!("https://play.qobuz.com/magazine/story/{}", item.id),
+        // Magazine content comes from a CMS: titles carry entities (&amp; …),
+        // excerpts may additionally carry markup.
+        title: qbz_text_utils::strip_html::decode_html_entities(&item.title),
+        author,
+        excerpt: item
+            .description_short
+            .as_deref()
+            .map(qbz_text_utils::strip_html::strip_html)
+            .unwrap_or_default(),
+        art_url,
+    }
+}
+
+/// The artist's Magazine stories (limit 2, like the official client). Any
+/// failure yields an empty list and the tab shows "No stories".
+async fn load_stories(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    artist_id: &str,
+) -> Vec<StoryRow> {
+    let Ok(id) = artist_id.parse::<u64>() else {
+        return Vec::new();
+    };
+    match runtime.core().get_artist_story(id, 0, 2).await {
+        Ok(resp) => resp.items.into_iter().map(map_story).collect(),
+        Err(e) => {
+            log::warn!("[qbz-qt] artist story load failed: {e}");
+            Vec::new()
+        }
+    }
+}
+
+// ----- MusicBrainz: Origin ------------------------------------------------
+
+struct MbMetadata {
+    mbid: String,
+    origin: MbOriginJson,
+}
+
+/// Resolve the artist name to an MBID, then fetch its metadata. `Ok(None)` =
+/// MB disabled or no confident match — the caller hides every MB section.
+async fn load_mb_metadata(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    artist_name: &str,
+) -> Result<Option<MbMetadata>, String> {
+    if !runtime.core().musicbrainz_is_enabled().await {
+        return Ok(None);
+    }
+    let resolved = runtime
+        .core()
+        .musicbrainz_resolve_artist(artist_name)
+        .await
+        .map_err(|e| e.to_string())?;
+    let Some(resolved) = resolved else {
+        return Ok(None);
+    };
+    let mbid = resolved.mbid;
+    if mbid.is_empty() {
+        return Ok(None);
+    }
+    let meta = runtime
+        .core()
+        .musicbrainz_get_artist_metadata(&mbid)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(Some(MbMetadata {
+        origin: map_origin(&meta),
+        mbid,
+    }))
+}
+
+fn map_origin(meta: &qbz_integrations::musicbrainz::ArtistMetadata) -> MbOriginJson {
+    use qbz_integrations::musicbrainz::ArtistType;
+
+    let is_person = matches!(meta.artist_type, ArtistType::Person);
+    let begin_date = meta
+        .life_span
+        .as_ref()
+        .and_then(|ls| ls.begin.as_deref().map(format_mb_date_short))
+        .unwrap_or_default();
+    let end_date = meta
+        .life_span
+        .as_ref()
+        .and_then(|ls| ls.end.as_deref().map(format_mb_date_short))
+        .unwrap_or_default();
+    let location_display = meta
+        .location
+        .as_ref()
+        .map(|loc| loc.display_name.clone())
+        .unwrap_or_default();
+    let has_data =
+        !begin_date.is_empty() || !end_date.is_empty() || !location_display.is_empty();
+    MbOriginJson {
+        is_person,
+        begin_date,
+        end_date,
+        location_display,
+        has_data,
+    }
+}
+
+/// A MusicBrainz partial date as "1990" / "May 1990" / "May 14, 1990"
+/// (artist.rs `format_mb_date_short`; month names go through the catalog).
+fn format_mb_date_short(date: &str) -> String {
+    let parts: Vec<&str> = date.split('-').collect();
+    let month = |m: &str| -> Option<&'static str> {
+        Some(match m {
+            "01" => qbz_i18n::mark("January"),
+            "02" => qbz_i18n::mark("February"),
+            "03" => qbz_i18n::mark("March"),
+            "04" => qbz_i18n::mark("April"),
+            "05" => qbz_i18n::mark("May"),
+            "06" => qbz_i18n::mark("June"),
+            "07" => qbz_i18n::mark("July"),
+            "08" => qbz_i18n::mark("August"),
+            "09" => qbz_i18n::mark("September"),
+            "10" => qbz_i18n::mark("October"),
+            "11" => qbz_i18n::mark("November"),
+            "12" => qbz_i18n::mark("December"),
+            _ => return None,
+        })
+    };
+    match parts.as_slice() {
+        [y] => (*y).to_string(),
+        [y, m] => match month(m) {
+            Some(name) => {
+                let name_tr = qbz_i18n::t(name);
+                qbz_i18n::t_args("{} {}", &[name_tr.as_str(), *y])
+            }
+            None => date.to_string(),
+        },
+        [y, m, d] => match month(m) {
+            Some(name) => {
+                let day = d.trim_start_matches('0');
+                let name_tr = qbz_i18n::t(name);
+                qbz_i18n::t_args("{} {}, {}", &[name_tr.as_str(), day, *y])
+            }
+            None => date.to_string(),
+        },
+        _ => date.to_string(),
+    }
+}
+
+// ----- MusicBrainz: Relationships -----------------------------------------
+
+async fn load_mb_relationships(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    mbid: &str,
+) -> Result<MbRelationshipsJson, String> {
+    let relations = runtime
+        .core()
+        .musicbrainz_get_artist_relationships(mbid)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(map_relationships(relations))
+}
+
+fn map_relationships(
+    rels: qbz_integrations::musicbrainz::ArtistRelationships,
+) -> MbRelationshipsJson {
+    let members = group_relations(rels.members, "Band Member");
+    let groups = group_relations(rels.groups, "Band");
+    let collaborators = group_relations(rels.collaborators, "Collaborator");
+    let has_data = !members.is_empty() || !groups.is_empty() || !collaborators.is_empty();
+    MbRelationshipsJson {
+        members,
+        groups,
+        collaborators,
+        has_data,
+    }
+}
+
+/// Group repeated relations by mbid, combining their roles (artist.rs
+/// `group_relations` / Tauri's `groupMembersByMbid`).
+fn group_relations(
+    rels: Vec<qbz_integrations::musicbrainz::RelatedArtist>,
+    default_role: &str,
+) -> Vec<MbRelationshipJson> {
+    struct Pending {
+        name: String,
+        roles: Vec<String>,
+        begin: Option<String>,
+        end: Option<String>,
+    }
+    let mut by_mbid: HashMap<String, Pending> = HashMap::new();
+    let mut order: Vec<String> = Vec::new();
+    for r in rels {
+        let begin = r.period.as_ref().and_then(|p| p.begin.clone());
+        let end = r.period.as_ref().and_then(|p| p.end.clone());
+        match by_mbid.get_mut(&r.mbid) {
+            Some(existing) => {
+                if let Some(role) = r.role.clone() {
+                    if !existing.roles.iter().any(|rr| rr == &role) {
+                        existing.roles.push(role);
+                    }
+                }
+            }
+            None => {
+                order.push(r.mbid.clone());
+                let mut roles = Vec::new();
+                if let Some(role) = r.role.clone() {
+                    roles.push(role);
+                }
+                by_mbid.insert(
+                    r.mbid.clone(),
+                    Pending {
+                        name: r.name,
+                        roles,
+                        begin,
+                        end,
+                    },
+                );
+            }
+        }
+    }
+    order
+        .into_iter()
+        .filter_map(|mbid| by_mbid.remove(&mbid).map(|p| (mbid, p)))
+        .map(|(mbid, p)| {
+            let period = format_period(p.begin.as_deref(), p.end.as_deref());
+            let tooltip = if !p.roles.is_empty() {
+                let roles_joined = p.roles.join(", ");
+                if period.is_empty() {
+                    roles_joined
+                } else {
+                    format!("{roles_joined} ({period})")
+                }
+            } else if !period.is_empty() {
+                period.clone()
+            } else {
+                p.name.clone()
+            };
+            let role = p
+                .roles
+                .first()
+                .cloned()
+                .unwrap_or_else(|| default_role.to_string());
+            MbRelationshipJson {
+                mbid,
+                name: p.name,
+                role,
+                tooltip,
+            }
+        })
+        .collect()
+}
+
+fn format_period(begin: Option<&str>, end: Option<&str>) -> String {
+    if begin.is_some() || end.is_some() {
+        format!("{} - {}", begin.unwrap_or("?"), end.unwrap_or("present"))
+    } else {
+        String::new()
+    }
+}
+
+// ----- MusicBrainz: Discovery ("You may also like") -----------------------
+
+/// Tag-seeded discovery candidates, validated against Qobuz by the core.
+/// Returns `(primary_tag, rows)`.
+///
+/// The `dismissed_per_tag` / `known_artists` callbacks are EMPTY here: the
+/// Slint app feeds them from its `discovery_dismiss`, `play_history` and
+/// `reco` stores, none of which this POC opens. Empty = no exclusion, which
+/// is exactly what a first-run Slint profile does.
+async fn load_mb_discovery(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    seed_mbid: &str,
+    seed_name: &str,
+    similar_names: Vec<String>,
+) -> Result<(String, Vec<MbDiscoveryJson>), String> {
+    let dismissed = |_tag: &str| HashSet::<String>::new();
+    let known = || (HashSet::<u64>::new(), HashSet::<String>::new());
+    let response = runtime
+        .core()
+        .musicbrainz_discover_artists(seed_mbid, seed_name, &similar_names, &dismissed, &known)
+        .await
+        .map_err(|e| e.to_string())?;
+    let rows = response
+        .artists
+        .into_iter()
+        .map(|a| MbDiscoveryJson {
+            mbid: a.mbid,
+            name: a.name,
+            qobuz_id: a.qobuz_id.map(|id| id.to_string()).unwrap_or_default(),
+        })
+        .collect();
+    Ok((response.primary_tag, rows))
 }

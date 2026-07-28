@@ -8,9 +8,9 @@
 // same artist", "Listening suggestions").
 //
 // POC-NOTEs: multi-select + bulk bar, offline download column, booklet,
-// external links, custom-cover menu, album-info modal, the header
-// atmosphere (album-header-gradient pref) — out of scope (visible stubs
-// are inert). Text keeps the theme colors (header-light = false here).
+// custom-cover menu, album-info modal, the header atmosphere
+// (album-header-gradient pref) — out of scope (visible stubs are inert).
+// Text keeps the theme colors (header-light = false here).
 
 import QtQuick
 import QtQuick.Controls
@@ -151,6 +151,53 @@ Rectangle {
         font.weight: theme.weightSemibold
         font.letterSpacing: 1
     }
+
+    // One EXTERNAL LINKS brand icon (AlbumPageView.slint BrandLink): the bare
+    // brand SVG in its NATIVE colors — no tint pass, no visible label, the
+    // name lives in the hover tooltip (Feishin-style inline links).
+    component BrandLink: Rectangle {
+        property string iconSource: ""
+        property string name: ""
+        property string url: ""
+        width: 30
+        height: 30
+        radius: 6
+        color: brandArea.containsMouse ? theme.surfaceHover : "transparent"
+        Image {
+            anchors.centerIn: parent
+            source: iconSource
+            width: 18
+            height: 18
+            sourceSize: Qt.size(36, 36)
+            fillMode: Image.PreserveAspectFit
+            opacity: brandArea.containsMouse ? 1.0 : 0.85
+            Behavior on opacity { NumberAnimation { duration: 120 } }
+        }
+        MouseArea {
+            id: brandArea
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            // Deep link only — the browser does the work, nothing is fetched
+            // here and no integration has to be connected.
+            onClicked: if (url !== "") Qt.openUrlExternally(url)
+            // The Slint BrandLink carries the name in the shared tooltip
+            // bubble; the Qt port rides Qt's own ToolTip (LocalMultiSelectBar
+            // precedent).
+            ToolTip.visible: containsMouse && name !== ""
+            ToolTip.text: name
+            ToolTip.delay: 350
+        }
+    }
+
+    // Absolute qrc prefix for the brand SVGs — same rule as QbzIcon: a
+    // relative URL resolves against the CONSUMER's document depth.
+    readonly property string brandDir: "qrc:/qt/qml/com/blitzfc/qbz/qml/assets/brand/"
+
+    // Whether the right-hand album sidebar has anything to show at all.
+    readonly property bool hasSidebar: (header.label || "") !== ""
+                                       || awards.length > 0
+                                       || header.showExternalLinks === true
 
     // ============================ the page ================================
     Flickable {
@@ -379,7 +426,7 @@ Rectangle {
                 spacing: 32
 
                 Column {
-                    width: parent.width - ((header.label || "") !== "" || awards.length > 0 ? 232 : 0)
+                    width: parent.width - (root.hasSidebar ? 232 : 0)
                     spacing: 0
 
                     // Loading.
@@ -598,9 +645,9 @@ Rectangle {
                     }
                 }
 
-                // Label / awards sidebar (200px).
+                // Label / awards / external-links sidebar (200px).
                 Column {
-                    visible: (header.label || "") !== "" || awards.length > 0
+                    visible: root.hasSidebar
                     width: 200
                     spacing: 24
 
@@ -631,6 +678,38 @@ Rectangle {
                                 gradA: "#b45309"
                                 gradB: "#eab308"
                                 // POC-NOTE: no award view yet.
+                            }
+                        }
+                    }
+
+                    // EXTERNAL LINKS — Last.fm / Discogs / MusicBrainz deep
+                    // links for this release. Present whenever the album has
+                    // an artist and a title; they are ordinary web URLs, so
+                    // they neither require nor touch a connected integration.
+                    Column {
+                        visible: header.showExternalLinks === true
+                        width: parent.width
+                        spacing: 8
+                        SidebarHeading { text: QbzSession.tr("EXTERNAL LINKS", QbzSession.trRev) }
+                        Row {
+                            spacing: 8
+                            BrandLink {
+                                visible: (header.lastfmUrl || "") !== ""
+                                iconSource: root.brandDir + "brand-lastfm.svg"
+                                name: "Last.fm"
+                                url: header.lastfmUrl || ""
+                            }
+                            BrandLink {
+                                visible: (header.discogsUrl || "") !== ""
+                                iconSource: root.brandDir + "brand-discogs.svg"
+                                name: "Discogs"
+                                url: header.discogsUrl || ""
+                            }
+                            BrandLink {
+                                visible: (header.musicbrainzUrl || "") !== ""
+                                iconSource: root.brandDir + "brand-musicbrainz.svg"
+                                name: "MusicBrainz"
+                                url: header.musicbrainzUrl || ""
                             }
                         }
                     }
