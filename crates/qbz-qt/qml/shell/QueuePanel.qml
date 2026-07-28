@@ -631,6 +631,7 @@ Rectangle {
                 font.pixelSize: 11
             }
             Row {
+                id: footerRow
                 width: parent.width
                 leftPadding: theme.spacingMd
                 rightPadding: theme.spacingMd
@@ -638,8 +639,14 @@ Rectangle {
                 bottomPadding: 10
                 spacing: theme.spacingXs
 
+                // The row's usable width — `parent.width` here is the PANEL
+                // width, padding included; using it raw is what pushed the
+                // search field out of the 300px column.
+                readonly property int contentWidth:
+                    width - leftPadding - rightPadding
+
                 // Action 1 — Clear queue (wired).
-                QbzIconButton { btnSize: 30 
+                QbzIconButton { btnSize: 30
                     name: "trash-list"
                     onClicked: QbzQueue.queueClear()
                 }
@@ -651,42 +658,24 @@ Rectangle {
                 // Action 4 — sleep timer (INERT engine — POC-NOTE).
                 QbzIconButton { btnSize: 30; name: "clock" }
 
-                // Inline queue search field (wired).
-                Rectangle {
-                    width: parent.width - 4 * 30 - 4 * theme.spacingXs
-                    height: 30
-                    radius: theme.radiusSm
-                    color: theme.surfaceElevated
-                    Row {
-                        anchors.fill: parent
-                        anchors.leftMargin: 9
-                        anchors.rightMargin: 7
-                        spacing: 6
-                        QbzIcon {
-                            name: "search"
-                            width: 13
-                            height: 13
-                            anchors.verticalCenter: parent.verticalCenter
-                            tintName: "muted"
-                        }
-                        TextInput {
-                            width: parent.width - 20
-                            height: parent.height
-                            color: theme.textPrimary
-                            font.pixelSize: 12
-                            verticalAlignment: Text.AlignVCenter
-                            clip: true
-                            onTextEdited: QbzQueue.queueSetSearch(text)
-                            Text {
-                                visible: parent.text === ""
-                                anchors.fill: parent
-                                text: QbzSession.tr("Search queue", QbzSession.trRev)
-                                color: theme.textMuted
-                                font.pixelSize: 12
-                                verticalAlignment: Text.AlignVCenter
-                            }
-                        }
-                    }
+                // Filler so the collapsed magnifier sits at the right edge;
+                // the field opens LEFT across it (5 gaps of spacingXs).
+                Item {
+                    width: Math.max(0, footerRow.contentWidth - 4 * 30 - 30
+                                       - 5 * theme.spacingXs)
+                    height: 1
+                }
+                // Inline queue search (wired) — the shared expandable control.
+                QbzLineEdit {
+                    searchMode: true
+                    expandable: true
+                    sm: true
+                    // Bound to the PANEL, never wider: it opens leftward over
+                    // the four action buttons, exactly like the Slint
+                    // ExpandableSearch does over its neighbours.
+                    openWidth: Math.max(90, footerRow.contentWidth)
+                    placeholder: QbzSession.tr("Search queue", QbzSession.trRev)
+                    onEdited: function (v) { QbzQueue.queueSetSearch(v) }
                 }
             }
         }

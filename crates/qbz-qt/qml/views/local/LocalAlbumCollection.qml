@@ -19,6 +19,7 @@
 import QtQuick
 import com.blitzfc.qbz
 import "../../cards"
+import "../../controls"
 import "../../theme"
 
 Item {
@@ -162,6 +163,30 @@ Item {
                             required property var modelData
                             width: 200
                             height: 246
+
+                            // Right-click menu for the card (AlbumCard.slint's
+                            // album-menu, local arm: no favourite, no Block —
+                            // the Slint hides Block for source local/plex).
+                            // The card's own ⋯ overlay button opens AlbumCard's
+                            // built-in menu; see the GLUE note about aligning
+                            // that one's entries with these.
+                            CardMenu {
+                                id: cardMenu
+                                menuWidth: 196
+                                entries: [
+                                    { "label": QbzSession.tr("Open album", QbzSession.trRev), "icon": "library-big", "action": "open" },
+                                    { "label": QbzSession.tr("Play", QbzSession.trRev), "icon": "play-fill", "action": "play" },
+                                    { "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-start", "action": "next" },
+                                    { "label": QbzSession.tr("Play later", QbzSession.trRev), "icon": "list-plus", "action": "later" },
+                                    { "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "action": "queue" },
+                                ]
+                                onPicked: function (a) {
+                                    if (a === "open") root.openRequested(cardCell.modelData.id)
+                                    else if (a === "play") root.playRequested(cardCell.modelData.id)
+                                    else root.enqueueRequested(cardCell.modelData.id, a)
+                                }
+                            }
+
                             AlbumCard {
                                 localMode: true
                                 albumId: cardCell.modelData.id
@@ -180,6 +205,16 @@ Item {
                                 onPlayRequested: root.playRequested(cardCell.modelData.id)
                                 onEnqueueRequested: function (m) {
                                     root.enqueueRequested(cardCell.modelData.id, m)
+                                }
+                            }
+                            // RIGHT-only, declared after the card so every
+                            // left click still reaches the card's own areas.
+                            MouseArea {
+                                id: cardRc
+                                anchors.fill: parent
+                                acceptedButtons: Qt.RightButton
+                                onClicked: function (mouse) {
+                                    cardMenu.openAtCursor(cardRc, mouse.x, mouse.y)
                                 }
                             }
                             // Multi-select tick — the collection view's
@@ -216,6 +251,9 @@ Item {
                     checked: root.selected[modelData.items[0].id] === true
                     onOpened: root.openRequested(modelData.items[0].id)
                     onPlayRequested: root.playRequested(modelData.items[0].id)
+                    onEnqueueRequested: function (m) {
+                        root.enqueueRequested(modelData.items[0].id, m)
+                    }
                     onToggleSelect: root.toggleSelect(modelData.items[0].id)
                 }
             }

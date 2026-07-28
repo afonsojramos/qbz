@@ -216,7 +216,8 @@ Rectangle {
                             var m = [
                                 { "label": QbzSession.tr("Open album", QbzSession.trRev), "icon": "library-big", "action": "open" },
                                 { "label": QbzSession.tr("Play", QbzSession.trRev), "icon": "play-fill", "action": "play" },
-                                { "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-plus", "action": "next" },
+                                { "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-start", "action": "next" },
+                                { "label": QbzSession.tr("Play later", QbzSession.trRev), "icon": "list-plus", "action": "later" },
                                 { "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "action": "queue" },
                             ]
                             if (!root.localMode) {
@@ -264,13 +265,15 @@ Rectangle {
                                         if (a === "open") root.openRequested()
                                         else if (a === "play") root.playRequested()
                                         else if (a === "next") root.enqueueRequested("next")
-                                        else if (a === "queue") root.enqueueRequested("later")
+                                        else if (a === "later") root.enqueueRequested("later")
+                                        else if (a === "queue") root.enqueueRequested("queue")
                                         return
                                     }
                                     if (a === "open") QbzAlbum.openAlbum(root.albumId)
                                     else if (a === "play") QbzPlayer.playAlbum(root.albumId)
                                     else if (a === "next") QbzPlayer.enqueueAlbum(root.albumId, "next")
-                                    else if (a === "queue") QbzPlayer.enqueueAlbum(root.albumId, "later")
+                                    else if (a === "later") QbzPlayer.enqueueAlbum(root.albumId, "later")
+                                    else if (a === "queue") QbzPlayer.enqueueAlbum(root.albumId, "queue")
                                     else if (a === "favorite") root.toggleFavorite()
                                     // "block" (no blacklist store): inert —
                                     // POC-NOTE.

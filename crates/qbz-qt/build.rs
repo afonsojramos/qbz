@@ -97,6 +97,8 @@ fn main() {
                 "qml/views/PlaylistView.qml",
                 "qml/views/SearchView.qml",
                 "qml/views/SectionRail.qml",
+                "qml/views/local/LocalTip.qml",
+                "qml/views/local/LocalIconSelect.qml",
                 "qml/shell/FavToggle.qml",
                 "qml/shell/InfoCreditCell.qml",
                 "qml/shell/InfoMetaCell.qml",

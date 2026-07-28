@@ -6,8 +6,17 @@
 // music glyph and the segment name. The selection cue is the 3px accent bar
 // on the left edge — ADR-008: never a pill.
 
+// Right-click opens a folder queue menu. DIVERGENCE: LocalLibraryView.slint
+// gives the tree rail no per-row menu (only the detail pane's Play button and
+// the bulk bar), but the owner asked for working context menus on the local
+// rows and every entry here rides a seam that already exists
+// (QbzLocal.playFolder / enqueue("folder", path, mode) — local_playback.rs
+// `list_folder_tracks_recursive`). TRACK leaves get no menu: their `path` is
+// a file path, not a track id, so no track arm accepts it.
+
 import QtQuick
 import com.blitzfc.qbz
+import "../../controls"
 import "../../theme"
 
 Rectangle {
@@ -32,8 +41,30 @@ Rectangle {
         id: rowArea
         anchors.fill: parent
         hoverEnabled: true
+        acceptedButtons: Qt.LeftButton | Qt.RightButton
         cursorShape: root.node.isFolder ? Qt.PointingHandCursor : Qt.ArrowCursor
-        onClicked: if (root.node.isFolder) root.activated()
+        onClicked: function (mouse) {
+            if (mouse.button === Qt.RightButton) {
+                if (root.node.isFolder) folderMenu.openAtCursor(rowArea, mouse.x, mouse.y)
+                return
+            }
+            if (root.node.isFolder) root.activated()
+        }
+    }
+
+    CardMenu {
+        id: folderMenu
+        menuWidth: 200
+        entries: [
+            { "label": QbzSession.tr("Play", QbzSession.trRev), "icon": "play-fill", "action": "play" },
+            { "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-start", "action": "next" },
+            { "label": QbzSession.tr("Play later", QbzSession.trRev), "icon": "list-plus", "action": "later" },
+            { "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "action": "queue" },
+        ]
+        onPicked: function (a) {
+            if (a === "play") QbzLocal.playFolder(root.node.path)
+            else QbzLocal.enqueue("folder", root.node.path, a)
+        }
     }
 
     Rectangle {

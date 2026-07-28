@@ -62,7 +62,9 @@ Item {
                     onClicked: QbzLocal.playFolder(root.view.selectedFolder)
                 }
                 Column {
-                    width: parent.width - 40 - 200 - 60 - 3 * 12
+                    // The search collapses to a 30px magnifier and opens LEFT
+                    // over this column, so the name block owns that space.
+                    width: parent.width - 40 - 30 - 60 - 3 * 12
                     anchors.verticalCenter: parent.verticalCenter
                     spacing: 2
                     Text {
@@ -85,8 +87,6 @@ Item {
                 LocalSearchBox {
                     anchors.verticalCenter: parent.verticalCenter
                     boxWidth: 200
-                    iconSize: 14
-                    leftPad: 10
                     placeholder: QbzSession.tr("Search albums...", QbzSession.trRev)
                     onEdited: function (v) { root.view.folderDetailSearch = v }
                 }
@@ -197,8 +197,30 @@ Item {
                                 id: subArea
                                 anchors.fill: parent
                                 hoverEnabled: true
+                                acceptedButtons: Qt.LeftButton | Qt.RightButton
                                 cursorShape: Qt.PointingHandCursor
-                                onClicked: root.view.selectFolder(subRow.modelData.path)
+                                onClicked: function (mouse) {
+                                    if (mouse.button === Qt.RightButton) {
+                                        subMenu.openAtCursor(subArea, mouse.x, mouse.y)
+                                        return
+                                    }
+                                    root.view.selectFolder(subRow.modelData.path)
+                                }
+                            }
+                            // Same folder queue menu as the tree rows.
+                            CardMenu {
+                                id: subMenu
+                                menuWidth: 200
+                                entries: [
+                                    { "label": QbzSession.tr("Play", QbzSession.trRev), "icon": "play-fill", "action": "play" },
+                                    { "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-start", "action": "next" },
+                                    { "label": QbzSession.tr("Play later", QbzSession.trRev), "icon": "list-plus", "action": "later" },
+                                    { "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "action": "queue" },
+                                ]
+                                onPicked: function (a) {
+                                    if (a === "play") QbzLocal.playFolder(subRow.modelData.path)
+                                    else QbzLocal.enqueue("folder", subRow.modelData.path, a)
+                                }
                             }
                         }
                     }

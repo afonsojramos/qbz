@@ -8,6 +8,14 @@
 // tab has rows OR a live search; the Folders flat-only block hides in tree
 // mode while the Flat/Tree toggle stays; Artists shows the search only when
 // there are artists.
+//
+// PRESENTATION DIVERGENCE (owner request — the row was too crowded):
+//   * search   -> the EXPANDABLE form (Slint already uses ExpandableSearch
+//                 here; the port used to mount an always-open 200px box);
+//   * sort     -> LocalIconSelect "arrow-up-down"  (Slint: text QbzSelect)
+//   * grouping -> LocalIconSelect "layers"         (Slint: text QbzSelect)
+//   * filter   -> unchanged icon-only button (matches Slint) + a tooltip.
+// Every option list, key mapping and callback is untouched.
 
 import QtQuick
 import com.blitzfc.qbz
@@ -38,6 +46,29 @@ Row {
         QbzSession.tr("Group by letter", QbzSession.trRev),
         QbzSession.tr("Group by artist", QbzSession.trRev),
     ]
+    // Tooltip leads for the icon-only controls.
+    readonly property string sortTip: QbzSession.tr("Sort", QbzSession.trRev)
+    readonly property string groupTip: QbzSession.tr("Grouping", QbzSession.trRev)
+
+    readonly property var tracksSortIds: ["default", "artist-asc", "artist-desc",
+        "title-asc", "title-desc", "year-desc", "year-asc", "added-desc"]
+    readonly property var tracksSortLabels: [
+        QbzSession.tr("Default", QbzSession.trRev),
+        QbzSession.tr("Artist A-Z", QbzSession.trRev),
+        QbzSession.tr("Artist Z-A", QbzSession.trRev),
+        QbzSession.tr("Title A-Z", QbzSession.trRev),
+        QbzSession.tr("Title Z-A", QbzSession.trRev),
+        QbzSession.tr("Year (newest)", QbzSession.trRev),
+        QbzSession.tr("Year (oldest)", QbzSession.trRev),
+        QbzSession.tr("Date added", QbzSession.trRev),
+    ]
+    readonly property var tracksGroupIds: ["off", "album", "artist", "name"]
+    readonly property var tracksGroupLabels: [
+        QbzSession.tr("No grouping", QbzSession.trRev),
+        QbzSession.tr("By album", QbzSession.trRev),
+        QbzSession.tr("By artist", QbzSession.trRev),
+        QbzSession.tr("By name", QbzSession.trRev),
+    ]
 
     height: 30
     spacing: 8
@@ -50,29 +81,33 @@ Row {
         height: parent.height
 
         LocalSearchBox {
-            elevated: true
+            anchors.verticalCenter: parent.verticalCenter
             placeholder: QbzSession.tr("Search", QbzSession.trRev)
             onEdited: function (v) { root.view.albumsSearch = v }
         }
-        QbzSelect {
-            menuWidth: 180
-            height: 30
+        LocalIconSelect {
             anchors.verticalCenter: parent.verticalCenter
+            iconName: "arrow-up-down"
+            label: root.sortTip
+            menuWidth: 190
             options: root.sortLabels
             currentIndex: Math.max(0, root.sortIds.indexOf(root.view.albumsSort))
             onSelected: function (i) { root.view.albumsSort = root.sortIds[i] }
         }
-        QbzSelect {
-            menuWidth: 160
-            height: 30
+        LocalIconSelect {
             anchors.verticalCenter: parent.verticalCenter
+            iconName: "layers"
+            label: root.groupTip
+            menuWidth: 180
             options: root.groupLabels
+            marked: root.view.albumsGroup !== "off"
             currentIndex: Math.max(0, root.groupIds.indexOf(root.view.albumsGroup))
             onSelected: function (i) { root.view.albumsGroup = root.groupIds[i] }
         }
         // Album identity ("Albums by") — what one album IS. A QUERY change
         // (the grouping happens in SQL), so it reloads the set; persisted,
-        // shared with the Slint app.
+        // shared with the Slint app. Kept as a LABELLED select: it changes
+        // what the tab shows, not how it is ordered, and no icon says that.
         QbzSelect {
             menuWidth: 190
             height: 30
@@ -111,6 +146,13 @@ Row {
                     cursorShape: Qt.PointingHandCursor
                     onClicked: root.view.filterOpen = !root.view.filterOpen
                 }
+            }
+            LocalTip {
+                visible: filtArea.containsMouse
+                text: root.view.filterCount > 0
+                    ? QbzSession.tr("Filters", QbzSession.trRev)
+                        + " (" + root.view.filterCount + ")"
+                    : QbzSession.tr("Quality, format and source filters", QbzSession.trRev)
             }
             Rectangle {
                 visible: root.view.filterCount > 0
@@ -156,7 +198,7 @@ Row {
             onClicked: root.view.toggleTracksMultiSelect()
         }
         LocalSearchBox {
-            elevated: true
+            anchors.verticalCenter: parent.verticalCenter
             placeholder: QbzSession.tr("Search", QbzSession.trRev)
             onEdited: function (v) {
                 root.view.tracksSearch = v
@@ -169,44 +211,24 @@ Row {
                 onTriggered: QbzLocal.tracksSearch(root.view.tracksSearch)
             }
         }
-        QbzSelect {
-            menuWidth: 180
-            height: 30
+        LocalIconSelect {
             anchors.verticalCenter: parent.verticalCenter
-            options: [
-                QbzSession.tr("Default", QbzSession.trRev),
-                QbzSession.tr("Artist A-Z", QbzSession.trRev),
-                QbzSession.tr("Artist Z-A", QbzSession.trRev),
-                QbzSession.tr("Title A-Z", QbzSession.trRev),
-                QbzSession.tr("Title Z-A", QbzSession.trRev),
-                QbzSession.tr("Year (newest)", QbzSession.trRev),
-                QbzSession.tr("Year (oldest)", QbzSession.trRev),
-                QbzSession.tr("Date added", QbzSession.trRev),
-            ]
-            currentIndex: Math.max(0, ["default", "artist-asc", "artist-desc",
-                "title-asc", "title-desc", "year-desc", "year-asc",
-                "added-desc"].indexOf(QbzLocal.localTracksSort))
-            onSelected: function (i) {
-                QbzLocal.tracksSetSort(["default", "artist-asc", "artist-desc",
-                    "title-asc", "title-desc", "year-desc", "year-asc",
-                    "added-desc"][i])
-            }
+            iconName: "arrow-up-down"
+            label: root.sortTip
+            menuWidth: 190
+            options: root.tracksSortLabels
+            currentIndex: Math.max(0, root.tracksSortIds.indexOf(QbzLocal.localTracksSort))
+            onSelected: function (i) { QbzLocal.tracksSetSort(root.tracksSortIds[i]) }
         }
-        QbzSelect {
-            menuWidth: 160
-            height: 30
+        LocalIconSelect {
             anchors.verticalCenter: parent.verticalCenter
-            options: [
-                QbzSession.tr("No grouping", QbzSession.trRev),
-                QbzSession.tr("By album", QbzSession.trRev),
-                QbzSession.tr("By artist", QbzSession.trRev),
-                QbzSession.tr("By name", QbzSession.trRev),
-            ]
-            currentIndex: Math.max(0, ["off", "album", "artist", "name"]
-                .indexOf(root.view.tracksGroup))
-            onSelected: function (i) {
-                root.view.tracksGroup = ["off", "album", "artist", "name"][i]
-            }
+            iconName: "layers"
+            label: root.groupTip
+            menuWidth: 180
+            options: root.tracksGroupLabels
+            marked: root.view.tracksGroup !== "off"
+            currentIndex: Math.max(0, root.tracksGroupIds.indexOf(root.view.tracksGroup))
+            onSelected: function (i) { root.view.tracksGroup = root.tracksGroupIds[i] }
         }
     }
 
@@ -224,23 +246,26 @@ Row {
             spacing: 8
             height: parent.height
             LocalSearchBox {
-                elevated: true
+                anchors.verticalCenter: parent.verticalCenter
                 placeholder: QbzSession.tr("Search", QbzSession.trRev)
                 onEdited: function (v) { root.view.foldersSearch = v }
             }
-            QbzSelect {
-                menuWidth: 150
-                height: 30
+            LocalIconSelect {
                 anchors.verticalCenter: parent.verticalCenter
+                iconName: "arrow-up-down"
+                label: root.sortTip
+                menuWidth: 170
                 options: root.sortLabels
                 currentIndex: Math.max(0, root.sortIds.indexOf(root.view.foldersSort))
                 onSelected: function (i) { root.view.foldersSort = root.sortIds[i] }
             }
-            QbzSelect {
-                menuWidth: 150
-                height: 30
+            LocalIconSelect {
                 anchors.verticalCenter: parent.verticalCenter
+                iconName: "layers"
+                label: root.groupTip
+                menuWidth: 180
                 options: root.groupLabels
+                marked: root.view.foldersGroup !== "off"
                 currentIndex: Math.max(0, root.groupIds.indexOf(root.view.foldersGroup))
                 onSelected: function (i) { root.view.foldersGroup = root.groupIds[i] }
             }
@@ -269,7 +294,7 @@ Row {
     LocalSearchBox {
         visible: root.view && root.view.activeTab === "artists"
             && root.view.artists.length > 0
-        elevated: true
+        anchors.verticalCenter: parent.verticalCenter
         placeholder: QbzSession.tr("Search artists", QbzSession.trRev)
         onEdited: function (v) { root.view.artistsSearch = v }
     }

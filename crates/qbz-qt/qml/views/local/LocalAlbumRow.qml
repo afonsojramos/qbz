@@ -2,9 +2,16 @@
 // surfaces (AlbumCollectionView's list mode, mounted by
 // LocalLibraryView.slint:1255 with show-source / show-source-badge on).
 //
-// 56px: cover, title + artist, year, track count, quality mark and the
-// source column. Multi-select puts the shared checkbox in front of the
-// cover, as the collection view does.
+// 56px: cover, title + artist, year, track count, quality mark, the source
+// column and the trailing ⋯ overflow. Multi-select puts the shared checkbox
+// in front of the cover, as the collection view does.
+//
+// The ⋯ menu is AlbumListRow.slint:381 minus its two Qobuz-only entries: the
+// favourite heart (local albums are not catalog favourites) and "Block this
+// album" (which the Slint itself hides for source local/plex, :435). What is
+// left is the five entries Slint always shows — Open album, Play, Play next,
+// Play later, Add to queue — and all five are wired. Right-clicking the row
+// opens the same menu at the pointer.
 
 import QtQuick
 import com.blitzfc.qbz
@@ -21,6 +28,7 @@ Rectangle {
     property bool checked: false
     signal opened()
     signal playRequested()
+    signal enqueueRequested(string mode)
     signal toggleSelect()
 
     QbzTheme { id: theme }
@@ -33,9 +41,34 @@ Rectangle {
         id: rowArea
         anchors.fill: parent
         hoverEnabled: true
+        acceptedButtons: Qt.LeftButton | Qt.RightButton
         cursorShape: Qt.PointingHandCursor
-        onClicked: root.selectMode ? root.toggleSelect() : root.opened()
+        onClicked: function (mouse) {
+            if (mouse.button === Qt.RightButton) {
+                rowMenu.openAtCursor(rowArea, mouse.x, mouse.y)
+                return
+            }
+            if (root.selectMode) root.toggleSelect()
+            else root.opened()
+        }
         onDoubleClicked: if (!root.selectMode) root.playRequested()
+    }
+
+    CardMenu {
+        id: rowMenu
+        menuWidth: 196
+        entries: [
+            { "label": QbzSession.tr("Open album", QbzSession.trRev), "icon": "library-big", "action": "open" },
+            { "label": QbzSession.tr("Play", QbzSession.trRev), "icon": "play-fill", "action": "play" },
+            { "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-start", "action": "next" },
+            { "label": QbzSession.tr("Play later", QbzSession.trRev), "icon": "list-plus", "action": "later" },
+            { "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "action": "queue" },
+        ]
+        onPicked: function (a) {
+            if (a === "open") root.opened()
+            else if (a === "play") root.playRequested()
+            else root.enqueueRequested(a)
+        }
     }
 
     Row {
@@ -68,8 +101,9 @@ Rectangle {
             }
         }
         Column {
-            width: parent.width - 40 - 70 - 90 - 92 - (root.showSource ? 34 : 0)
-                - (root.selectMode ? 28 : 0) - 5 * 12
+            width: parent.width - 40 - 70 - 90 - 92 - 32
+                - (root.showSource ? 34 : 0)
+                - (root.selectMode ? 28 : 0) - 6 * 12
             anchors.verticalCenter: parent.verticalCenter
             spacing: 2
             Text {
@@ -123,6 +157,28 @@ Rectangle {
                 height: 14
                 anchors.verticalCenter: parent.verticalCenter
                 tintName: root.item.source === "plex" ? "accent" : "muted"
+            }
+        }
+        // Trailing ⋯ overflow (AlbumListRow.slint:360).
+        Rectangle {
+            width: 32
+            height: 32
+            radius: 6
+            anchors.verticalCenter: parent.verticalCenter
+            color: moreArea.containsMouse ? theme.surfaceElevated : "transparent"
+            QbzIcon {
+                name: "ellipsis"
+                width: 18
+                height: 18
+                anchors.centerIn: parent
+                tintName: moreArea.containsMouse ? "primary" : "muted"
+            }
+            MouseArea {
+                id: moreArea
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: function (mouse) { rowMenu.openAtCursor(moreArea, mouse.x, mouse.y) }
             }
         }
     }

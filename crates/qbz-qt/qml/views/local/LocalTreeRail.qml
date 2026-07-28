@@ -53,10 +53,14 @@ Item {
                 iconSize: 15
                 onClicked: QbzLocal.ephemeralOpen()
             }
+            // Filler: the search collapses to a 30px magnifier, so the slot
+            // stays right-aligned and the field opens LEFT over this gap.
+            Item {
+                width: Math.max(0, parent.width - 3 * 30 - 30 - 4 * 4)
+                height: 1
+            }
             LocalSearchBox {
                 boxWidth: parent.width - 3 * 34
-                leftPad: 8
-                rightPad: 6
                 placeholder: QbzSession.tr("Search folders", QbzSession.trRev)
                 onEdited: function (v) {
                     root.view.treeSearch = v
