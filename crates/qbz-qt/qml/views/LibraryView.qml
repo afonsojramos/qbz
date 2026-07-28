@@ -356,9 +356,24 @@ Rectangle {
                 clip: true
                 RoundedImage {
                     anchors.fill: parent
+                    visible: !lrCollage.visible
                     source: root.artMap[item.artKey] || ""
                     radius: item.kind === "artist" ? 22 : 6
-                    fit: item.kind === "label" ? "contain" : "crop"
+                    // A Qobuz playlist's own graphic is contain-fitted like a
+                    // label logo — cropping it cuts the wordmark.
+                    fit: (item.kind === "label" || item.playlistOwnImage === true)
+                        ? "contain" : "crop"
+                }
+                // User playlists have no graphic of their own, so they show the
+                // member-cover mosaic instead of a blank tile.
+                PlaylistCollage {
+                    id: lrCollage
+                    anchors.fill: parent
+                    visible: item.kind === "playlist"
+                        && item.playlistOwnImage !== true
+                        && (root.artMap[item.artKey] || "") === ""
+                    urls: item.covers || []
+                    radius: 6
                 }
                 Rectangle {
                     visible: item.kind === "track" || item.kind === "album" || item.kind === "playlist"

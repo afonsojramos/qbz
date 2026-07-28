@@ -43,6 +43,7 @@ fn main() {
                 "qml/cards/ArtistCard.qml",
                 "qml/cards/LabelCard.qml",
                 "qml/cards/PlaylistCard.qml",
+                "qml/cards/PlaylistCollage.qml",
                 "qml/cards/SlimCard.qml",
                 "qml/cards/TrackCard.qml",
                 "qml/controls/CardMenu.qml",

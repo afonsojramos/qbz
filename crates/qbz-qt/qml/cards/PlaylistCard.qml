@@ -13,6 +13,16 @@
 // playlistFollowing, isFavorite } plus the scalar artSource / artworkUrl
 // / isPinned props (the AlbumCard pattern).
 //
+// Artwork, two arms (1:1 with Tauri, which has TWO playlist cards):
+//   - `item.playlistOwnImage` — the playlist carries its OWN Qobuz graphic
+//     (`image_rectangle`). Those are landscape and cropping butchers them,
+//     so they render CONTAIN (QobuzPlaylistCard: `object-fit: contain`).
+//   - otherwise — the mosaic of member-track covers from `item.covers`
+//     (FavoritePlaylistCard -> PlaylistCollage). Rows without either get
+//     the collage's list-music placeholder.
+// Surfaces that publish neither field (Home rails, Search) keep the single
+// crop-fitted cover they already passed through `artSource`.
+//
 // Ownership tri-state (Slint): owned -> heart (library favorite);
 // foreign followed -> check; foreign -> user-plus (Qobuz follow).
 
@@ -27,8 +37,21 @@ Rectangle {
     property var item: ({})
     // Host-resolved artwork path (the AlbumCard artSource pattern).
     property string artSource: ""
-    // Remote cover URL for the pin payload ("" when the host has none).
-    property string artworkUrl: ""
+    // Remote cover URL for the pin payload. Defaults to whatever the row
+    // carries — the playlist's own graphic, else its first member cover —
+    // so a pinned playlist keeps art in the Pinned rail; hosts that resolve
+    // it themselves may still override.
+    property string artworkUrl: (root.item && root.item.imageUrl)
+        ? root.item.imageUrl
+        : (root.collageUrls.length > 0 ? root.collageUrls[0] : "")
+
+    // Member-track covers for the mosaic arm ([] on surfaces that publish a
+    // single pre-resolved cover instead).
+    readonly property var collageUrls: (root.item && root.item.covers)
+        ? root.item.covers : []
+    // The row's image is the playlist's own Qobuz graphic -> contain.
+    readonly property bool ownImage: root.item
+        ? root.item.playlistOwnImage === true : false
     // Pinned state (AlbumCard pattern: scalar prop, optimistic flip on
     // click — the model re-publish re-creates the delegate).
     property bool isPinned: false
@@ -51,9 +74,22 @@ Rectangle {
             radius: theme.radiusSm
             color: theme.surfaceElevated
             clip: true
+            // Arm 1 — a resolved single cover. Contain for the playlist's
+            // own (landscape) Qobuz graphic, crop for everything else.
             RoundedImage {
                 anchors.fill: parent
+                visible: root.artSource !== ""
                 source: root.artSource
+                radius: theme.radiusSm
+                fit: root.ownImage ? "contain" : "crop"
+            }
+            // Arm 2 — the member-cover mosaic. A row that HAS its own
+            // graphic passes no urls, so it shows the placeholder while
+            // that graphic downloads instead of flashing a mosaic.
+            PlaylistCollage {
+                anchors.fill: parent
+                visible: root.artSource === ""
+                urls: root.ownImage ? [] : root.collageUrls
                 radius: theme.radiusSm
             }
             Rectangle {

@@ -604,6 +604,14 @@ pub struct Playlist {
     pub genres: Option<Vec<PlaylistGenre>>,
     pub images150: Option<Vec<String>>,
     pub images300: Option<Vec<String>>,
+    /// The playlist's OWN Qobuz artwork (editorial playlists). The `images*`
+    /// lists above are MEMBER-ALBUM covers, which is why a Qobuz playlist
+    /// card binding them shows an album sleeve instead of the playlist
+    /// graphic. Absent on user playlists, which fall back to the collage.
+    #[serde(default)]
+    pub image_rectangle: Option<Vec<String>>,
+    #[serde(default)]
+    pub image_rectangle_mini: Option<Vec<String>>,
     pub slug: Option<String>,
     pub users_count: Option<u32>,
 }

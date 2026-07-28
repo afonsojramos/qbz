@@ -79,8 +79,30 @@ pub struct FeedItem {
     pub playlist_following: bool,
     #[serde(rename = "isPinned", default)]
     pub is_pinned: bool,
+    /// Playlist rows only: up to four de-duplicated member-track covers —
+    /// the 2x2 mosaic the card renders when the playlist has no artwork of
+    /// its OWN (Tauri `FavoritePlaylistCard` -> `PlaylistCollage`, Slint
+    /// `PlaylistCollage.slint`). Skipped when empty so the ~10k-row feed
+    /// JSON does not grow an `"covers":[]` per non-playlist row.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub covers: Vec<String>,
+    /// True when `image_url` is the playlist's OWN Qobuz artwork
+    /// (`image_rectangle`) instead of a member-track cover. The card then
+    /// renders it CONTAIN — those graphics are landscape and cropping
+    /// butchers them (Tauri `QobuzPlaylistCard`: `object-fit: contain`).
+    #[serde(
+        rename = "playlistOwnImage",
+        default,
+        skip_serializing_if = "is_false"
+    )]
+    pub playlist_own_image: bool,
     /// Recency proxy in [0,1]; 0 = most-recently added (per source).
     pub added_rank: f32,
+}
+
+/// `skip_serializing_if` predicate for the default-false flags above.
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl FeedItem {
@@ -324,13 +346,50 @@ fn map_artist(artist: Artist) -> FeedItem {
     .keyed()
 }
 
-fn map_playlist_row(playlist: &Playlist, is_following: bool) -> FeedItem {
-    let cover_url = [&playlist.images300, &playlist.images150, &playlist.images]
+/// Up to four de-duplicated member-track covers (`images300` > `images150`
+/// > `images`) — the collage source. Same picker as `sidebar_qt::load` and
+/// `qbz::search::playlist_cover_urls`; these lists are the covers of the
+/// playlist's MEMBER ALBUMS, never the playlist's own artwork.
+fn playlist_cover_urls(playlist: &Playlist) -> Vec<String> {
+    let source = [&playlist.images300, &playlist.images150, &playlist.images]
         .into_iter()
         .flatten()
-        .find(|v| !v.is_empty())
-        .and_then(|list| list.iter().find(|u| !u.is_empty()).cloned())
-        .unwrap_or_default();
+        .find(|v| !v.is_empty());
+    let mut out: Vec<String> = Vec::new();
+    if let Some(list) = source {
+        for url in list {
+            if url.is_empty() || out.contains(url) {
+                continue;
+            }
+            out.push(url.clone());
+            if out.len() == 4 {
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// The playlist's OWN Qobuz artwork: the editorial `image_rectangle`
+/// graphic (`image_rectangle_mini` as the lighter fallback). Only Qobuz
+/// editorial playlists carry one — user-created playlists have none and
+/// fall back to the member-cover collage, exactly the Tauri split between
+/// `QobuzPlaylistCard` (`image.rectangle`, contain-fitted) and
+/// `FavoritePlaylistCard` (`PlaylistCollage`).
+fn playlist_own_image(playlist: &Playlist) -> String {
+    [&playlist.image_rectangle, &playlist.image_rectangle_mini]
+        .into_iter()
+        .flatten()
+        .find_map(|list| list.iter().find(|u| !u.is_empty()).cloned())
+        .unwrap_or_default()
+}
+
+fn map_playlist_row(playlist: &Playlist, is_following: bool) -> FeedItem {
+    // The card's single image is the playlist's own Qobuz artwork ONLY.
+    // Falling back to `images300[0]` here is what put a member ALBUM cover
+    // on every playlist card; the mosaic is fed separately via `covers`.
+    let cover_url = playlist_own_image(playlist);
+    let covers = playlist_cover_urls(playlist);
     let mut subtitle = playlist.owner.name.clone();
     if playlist.tracks_count > 0 {
         let count = playlist.tracks_count;
@@ -350,7 +409,9 @@ fn map_playlist_row(playlist: &Playlist, is_following: bool) -> FeedItem {
         id: playlist.id.to_string(),
         title: playlist.name.clone(),
         subtitle,
+        playlist_own_image: !cover_url.is_empty(),
         image_url: cover_url,
+        covers,
         is_favorite: !is_following,
         playlist_owned: owned,
         playlist_following: is_following,
