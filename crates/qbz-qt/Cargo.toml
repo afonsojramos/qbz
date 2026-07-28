@@ -39,6 +39,7 @@ qbz-i18n = { path = "../qbz-i18n" }
 qbz-log = { path = "../qbz-log" }
 
 rusqlite = { version = "0.31", features = ["bundled"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 
 [build-dependencies]
 cxx-qt-build = "0.7"

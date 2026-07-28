@@ -19,7 +19,11 @@ import com.blitzfc.qbz
 
 Rectangle {
     id: root
-    color: theme.surfaceCard
+    // surface-card @ 0.5 while the ambient background is active (phase 14,
+    // HeaderBar.slint's with-alpha(app-background-surface-alpha)).
+    color: ambientOn ? theme.surfaceCardA50 : theme.surfaceCard
+    readonly property bool ambientOn: QbzBridge.ambientMode > 0 && QbzBridge.npHasTrack
+       
 
     // The host ApplicationWindow (custom chrome); null in previews.
     property var hostWindow: null
@@ -540,6 +544,15 @@ Rectangle {
                 }
             }
 
+            AppMenuItem {
+                name: "layout-grid"
+                label: QbzBridge.tr("Ambient background")
+                checkedItem: QbzBridge.ambientMode > 0
+                onClicked: {
+                    QbzBridge.toggleAmbientBackground()
+                    // Applies LIVE (pure QML layering); the check flips now.
+                }
+            }
             AppMenuItem {
                 name: "layout-grid"
                 label: QbzBridge.tr("Use system title bar")

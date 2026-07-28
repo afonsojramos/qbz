@@ -508,6 +508,10 @@ pub async fn refresh_now_playing(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
     // Artwork through the same cache pipeline as Home (attach + background
     // download + republish — single url here).
     crate::artwork_qt::attach_now_playing(&track.artwork_url.clone().unwrap_or_default());
+    // Ambient background triad (phase 14): recompute from the new track's
+    // cover (no-op until the cover lands on disk — the previous palette
+    // stays, like the Slint's default-until-resolved).
+    crate::ambient_qt::update_for_artwork(&track.artwork_url.clone().unwrap_or_default());
     // Lyrics for the new track (loading state, then the doc).
     crate::lyrics_qt::publish_loading();
     let runtime = runtime.clone();

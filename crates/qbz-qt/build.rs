@@ -57,6 +57,7 @@ fn main() {
                 "qml/QbzScrollBar.qml",
                 "qml/QbzSpinner.qml",
                 "qml/RoundedImage.qml",
+                "qml/AmbientField.qml",
                 "qml/QbzContextMenu.qml",
             ],
             qrc_files: &qrc_refs,

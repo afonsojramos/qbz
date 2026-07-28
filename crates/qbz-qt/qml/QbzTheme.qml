@@ -28,6 +28,16 @@ QtObject {
     readonly property color borderSubtle: "#14ffffff"
     readonly property color borderMuted: "#38ffffff"
     readonly property color cardShadow: "#66000000"
+    // Ambient-background layering (phase 14): the alpha variants the Slint
+    // applies when the dynamic background is active — chrome surface-card
+    // at 0.5, the frosted content panel surface-main at 0.22 (+ hairline),
+    // thin bars surface-main at 0.3 (AppearanceState knobs baked at the
+    // defaults; the live values ride QbzBridge.ambientSurfaceAlpha /
+    // ambientBarAlpha for the QBZ_BG_* env knobs).
+    readonly property color surfaceCardA50: "#801a1a1a"
+    readonly property color surfaceMainA22: "#380f0f0f"
+    readonly property color surfaceMainA30: "#4d0f0f0f"
+    readonly property color frostBorder: "#1affffff"
 
     // --- Spacing (spacing.slint) --------------------------------------
     readonly property int spacingXs: 4

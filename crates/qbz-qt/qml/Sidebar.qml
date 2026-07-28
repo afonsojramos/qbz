@@ -59,7 +59,10 @@ Rectangle {
     width: QbzBridge.sidebarState === 2 ? 0
          : QbzBridge.sidebarState === 1 ? theme.sidebarMiniWidth
          : theme.sidebarOpenWidth
-    color: theme.surfaceCard
+    // surface-card @ 0.5 while the ambient background is active (phase 14).
+    color: ambientOn ? theme.surfaceCardA50 : theme.surfaceCard
+    readonly property bool ambientOn: QbzBridge.ambientMode > 0 && QbzBridge.npHasTrack
+       
     // Square edges; clip keeps content from spilling while the width
     // animates (same as the Slint root).
     clip: true

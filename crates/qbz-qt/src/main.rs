@@ -16,6 +16,7 @@ mod nav_qt;
 mod now_playing;
 mod offline_fwd;
 mod album_qt;
+mod ambient_qt;
 mod artist_qt;
 mod lyrics_qt;
 mod playback_qt;
@@ -744,6 +745,14 @@ pub(crate) fn toggle_system_title_bar() {
     let next = settings_qt::toggle_system_title_bar();
     log::info!("[qbz-qt] use_system_title_bar -> {next} (applies on next launch)");
     ui(move |mut b| b.as_mut().set_system_title_bar_pref(next));
+}
+
+/// App-menu ambient toggle: persist the flipped pref and apply LIVE (the
+/// ambient layer is pure QML — no restart needed).
+pub(crate) fn toggle_ambient_background() {
+    let mode = settings_qt::toggle_ambient_background();
+    log::info!("[qbz-qt] app_background -> {}", if mode == 1 { "ambient" } else { "off" });
+    ui(move |mut b| b.as_mut().set_ambient_mode(mode));
 }
 
 fn load_library_once() {

@@ -159,6 +159,21 @@ pub mod qbz_bridge {
         // flips live when the user toggles, applies on the next launch).
         #[qproperty(bool, system_title_bar_pref)]
 
+        // --- Ambient background (phase 14) --------------------------------
+        // 0 = off, 1 = on (the ambient look; the owner's store carries
+        // "ambient"). Live — toggling applies immediately (pure QML
+        // layering). Combined in QML with npHasTrack for the D4 no-track
+        // rule.
+        #[qproperty(i32, ambient_mode)]
+        // Album-art triad (ambient_qt.rs), pushed on track change.
+        #[qproperty(QString, ambient_primary)]
+        #[qproperty(QString, ambient_secondary)]
+        #[qproperty(QString, ambient_accent)]
+        // Look knobs (Slint AppearanceState defaults; QBZ_BG_* env seed).
+        #[qproperty(f32, ambient_dim)]
+        #[qproperty(f32, ambient_surface_alpha)]
+        #[qproperty(f32, ambient_bar_alpha)]
+
         type QbzBridge = super::QbzBridgeRust;
 
         /// Called once from Main.qml's Component.onCompleted: registers the
@@ -393,6 +408,12 @@ pub mod qbz_bridge {
         /// creation, 1:1 Slint). Updates `systemTitleBarPref` only.
         #[qinvokable]
         fn toggle_system_title_bar(self: Pin<&mut QbzBridge>);
+
+        /// App-menu ambient toggle: flip the persisted `app_background` pref
+        /// off <-> "ambient" and apply LIVE (pure QML layering — no restart,
+        /// unlike the titlebar).
+        #[qinvokable]
+        fn toggle_ambient_background(self: Pin<&mut QbzBridge>);
     }
 
     impl cxx_qt::Threading for QbzBridge {}
@@ -468,6 +489,13 @@ pub struct QbzBridgeRust {
     settings_json: QString,
     system_title_bar: bool,
     system_title_bar_pref: bool,
+    ambient_mode: i32,
+    ambient_primary: QString,
+    ambient_secondary: QString,
+    ambient_accent: QString,
+    ambient_dim: f32,
+    ambient_surface_alpha: f32,
+    ambient_bar_alpha: f32,
 }
 
 impl Default for QbzBridgeRust {
@@ -533,6 +561,14 @@ impl Default for QbzBridgeRust {
             settings_json: QString::from("{}"),
             system_title_bar: crate::settings_qt::use_system_title_bar(),
             system_title_bar_pref: crate::settings_qt::use_system_title_bar(),
+            ambient_mode: crate::settings_qt::app_background_mode(),
+            // The Slint ImmersiveState default triad (pre-artwork colors).
+            ambient_primary: QString::from("#00dcc8"),
+            ambient_secondary: QString::from("#9632ff"),
+            ambient_accent: QString::from("#3fd9c8"),
+            ambient_dim: crate::settings_qt::ambient_dim(),
+            ambient_surface_alpha: crate::settings_qt::ambient_surface_alpha(),
+            ambient_bar_alpha: crate::settings_qt::ambient_bar_alpha(),
         }
     }
 }
@@ -810,5 +846,9 @@ impl qbz_bridge::QbzBridge {
 
     pub fn toggle_system_title_bar(self: Pin<&mut Self>) {
         crate::toggle_system_title_bar();
+    }
+
+    pub fn toggle_ambient_background(self: Pin<&mut Self>) {
+        crate::toggle_ambient_background();
     }
 }

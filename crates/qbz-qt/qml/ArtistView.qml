@@ -20,7 +20,11 @@ import com.blitzfc.qbz
 
 Rectangle {
     id: root
-    color: theme.surfaceMain
+    // Transparent while the ambient background is active (phase 14 —
+    // HomeView.slint:163: the frosted content panel shows through).
+    color: ambientOn ? "transparent" : theme.surfaceMain
+    readonly property bool ambientOn: QbzBridge.ambientMode > 0 && QbzBridge.npHasTrack
+       
     // Round to the AppShell content-frame bezel (Radius.md): QML clips
     // are rectangular, so the frame's own rounding never reaches the
     // view — the view's own fill must round instead.

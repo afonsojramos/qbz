@@ -17,10 +17,30 @@ import com.blitzfc.qbz
 
 Rectangle {
     id: root
-    // OPAQUE surface-card chrome (phase 12: the translucent-window read
-    // was wrong — the Slint main window is opaque with square corners;
-    // the compositor owns any rounding).
+    // OPAQUE base (the Slint root background is opaque surface-main too —
+    // invisible while the ambient field mounts over it; this IS the D4
+    // no-track fallback). The translucent chrome comes from each chrome
+    // piece's OWN background going surface-card @ 0.5 above the field.
     color: theme.surfaceCard
+
+    // App-wide dynamic background (phase 14): active when the mode pref is
+    // on AND a track is loaded (D4: no track -> opaque theme restored).
+    readonly property bool ambientOn: QbzBridge.ambientMode > 0 && QbzBridge.npHasTrack
+    // The bottom-most visual layer (AppShell.slint:206-242, declared FIRST
+    // so every chrome surface paints above it): the ambient album-colored
+    // field + the dark dim scrim that keeps chrome text legible
+    // (QBZ_BG_DIM-tunable, default 0.35).
+    AmbientField {
+        anchors.fill: parent
+        visible: root.ambientOn
+        running: root.ambientOn
+    }
+    Rectangle {
+        anchors.fill: parent
+        visible: root.ambientOn
+        color: "#000000"
+        opacity: QbzBridge.ambientDim
+    }
 
     // The host ApplicationWindow (custom chrome: drag / maximize / resize).
     property var hostWindow: null
@@ -66,7 +86,7 @@ Rectangle {
         anchors.bottom: npb.top
         width: (QbzBridge.queueOpen || QbzBridge.lyricsOpen) ? theme.queuePanelWidth : 0
         clip: true
-        color: theme.surfaceCard
+        color: root.ambientOn ? theme.surfaceCardA50 : theme.surfaceCard
 
         Behavior on width {
             NumberAnimation { duration: 160; easing.type: Easing.InOutQuad }
@@ -112,8 +132,11 @@ Rectangle {
         anchors.rightMargin: 8
         anchors.bottomMargin: 8
         radius: theme.radiusMd
-        color: theme.surfaceMain
-        border.width: 0
+        // Frosted content panel while the ambient background is active
+        // (AppShell.slint: surface-main @ 0.22 + 1px #ffffff@0.10 hairline).
+        color: root.ambientOn ? theme.surfaceMainA22 : theme.surfaceMain
+        border.width: root.ambientOn ? 1 : 0
+        border.color: theme.frostBorder
         clip: true
 
         Loader {

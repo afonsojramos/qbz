@@ -6617,6 +6617,7 @@ dependencies = [
  "cxx-qt-build",
  "cxx-qt-lib",
  "dirs 5.0.1",
+ "image",
  "log",
  "open",
  "qbz-app",

@@ -156,6 +156,74 @@ pub fn toggle_system_title_bar() -> bool {
     next
 }
 
+// ---------------------------------------------------------------------------
+// ui_prefs.json (app-wide ambient background, phase 14) — the Slint
+// `app_background` enum key: "off" | "ambient" | "blurred"
+// (crates/qbz/src/ui_prefs.rs; default "off", the owner's store carries
+// "ambient"). Same additive key patch.
+// ---------------------------------------------------------------------------
+
+/// Mode index, ui_prefs.rs `app_background_index` semantics, except the POC
+/// has no blurred-art route: 0 = off, 1 = on (ambient look) for BOTH
+/// "ambient" and "blurred" (see ambient_qt.rs POC-NOTE).
+pub fn app_background_mode() -> i32 {
+    let Some(path) = prefs_path() else {
+        return 0;
+    };
+    let key = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|v| {
+            v.get("app_background")
+                .and_then(|q| q.as_str().map(str::to_string))
+        })
+        .unwrap_or_else(|| "off".to_string());
+    if key == "off" { 0 } else { 1 }
+}
+
+/// Live-tuning knobs (Slint AppearanceState defaults; the QBZ_BG_* envs are
+/// the same dev knobs the Slint seeds at startup).
+pub fn ambient_dim() -> f32 {
+    std::env::var("QBZ_BG_DIM")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0.35)
+}
+pub fn ambient_surface_alpha() -> f32 {
+    std::env::var("QBZ_BG_SURFACE_ALPHA")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0.5)
+}
+pub fn ambient_bar_alpha() -> f32 {
+    std::env::var("QBZ_BG_BAR_ALPHA")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0.3)
+}
+
+/// Flip + persist off <-> "ambient" (the owner's mode; "blurred" is not a
+/// POC route). Returns the new mode index (0/1).
+pub fn toggle_ambient_background() -> i32 {
+    let next = app_background_mode() == 0;
+    if let Some(path) = prefs_path() {
+        let mut value: serde_json::Value = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
+        if let Some(obj) = value.as_object_mut() {
+            obj.insert(
+                "app_background".to_string(),
+                serde_json::Value::String(if next { "ambient" } else { "off" }.to_string()),
+            );
+            if let Ok(text) = serde_json::to_string_pretty(&value) {
+                let _ = std::fs::write(&path, text);
+            }
+        }
+    }
+    if next { 1 } else { 0 }
+}
+
 pub const STREAMING_QUALITY_KEYS: &[&str] = &["mp3", "cd", "hires", "hires_plus"];
 pub const STREAMING_QUALITY_LABELS: &[&str] = &["MP3", "CD Quality", "Hi-Res", "Hi-Res+"];
 
