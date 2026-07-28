@@ -393,6 +393,10 @@ pub mod qbz_bridge {
         /// ArtistView per-section "Load more" — the next releases page.
         #[qinvokable]
         fn load_release_section(self: Pin<&mut QbzBridge>, artist_id: QString, release_type: QString, offset: i32);
+        /// Artist-card overlay play (ArtistGridCard): Popular tracks,
+        /// falling back to the studio discography (playback.rs play_artist).
+        #[qinvokable]
+        fn play_artist_card(self: Pin<&mut QbzBridge>, artist_id: QString);
         /// Emitted with the next page of a releases bucket.
         #[qsignal]
         fn release_section_ready(self: Pin<&mut QbzBridge>, release_type: QString, cards_json: QString, has_more: bool);
@@ -883,6 +887,10 @@ impl qbz_bridge::QbzBridge {
 
     pub fn load_release_section(self: Pin<&mut Self>, artist_id: QString, release_type: QString, offset: i32) {
         crate::load_release_section(artist_id.to_string(), release_type.to_string(), offset);
+    }
+
+    pub fn play_artist_card(self: Pin<&mut Self>, artist_id: QString) {
+        crate::play_artist_card(artist_id.to_string());
     }
 
     pub fn settings_bool(self: Pin<&mut Self>, key: QString, value: bool) {

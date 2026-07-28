@@ -47,7 +47,6 @@ Rectangle {
     property bool appearsOnExpanded: false
     property bool otherExpanded: false
     property bool networkOpen: false
-    property bool showBio: false
     property string netTab: "network"
     readonly property int preview: 5
 
@@ -599,7 +598,11 @@ Rectangle {
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: root.showBio = true
+                            onClicked: {
+                                var shell = root.parent
+                                while (shell && shell.openTextModal === undefined) shell = shell.parent
+                                if (shell) shell.openTextModal(artist.name || "", artist.bio || "")
+                            }
                         }
                     }
 
@@ -1487,76 +1490,4 @@ Rectangle {
                 }
             }
         }
-
-    // --- Full-bio modal ----------------------------------------------------
-    Rectangle {
-        visible: root.showBio
-        anchors.fill: parent
-        color: "#bf000000"
-        MouseArea {
-            anchors.fill: parent
-            onClicked: root.showBio = false
-        }
-        Rectangle {
-            anchors.centerIn: parent
-            width: Math.min(root.width - 80, 560)
-            height: Math.min(root.height - 120, 460)
-            radius: theme.radiusMd
-            color: theme.surfaceCard
-            border.width: 1
-            border.color: theme.borderSubtle
-            MouseArea { anchors.fill: parent }
-            Column {
-                anchors.fill: parent
-                anchors.margins: 24
-                spacing: 14
-                Row {
-                    width: parent.width
-                    Text {
-                        width: parent.width - 28
-                        text: artist.name || ""
-                        color: theme.textPrimary
-                        font.pixelSize: theme.fontHeading
-                        font.weight: theme.weightSemibold
-                        anchors.verticalCenter: parent.verticalCenter
-                    }
-                    Rectangle {
-                        width: 28
-                        height: 28
-                        color: bioCloseArea.containsMouse ? theme.surfaceHover : "transparent"
-                        radius: 6
-                        QbzIcon {
-                            anchors.centerIn: parent
-                            name: "x"
-                            width: 18
-                            height: 18
-                            tintName: bioCloseArea.containsMouse ? "primary" : "muted"
-                        }
-                        MouseArea {
-                            id: bioCloseArea
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: root.showBio = false
-                        }
-                    }
-                }
-                Flickable {
-                    width: parent.width
-                    height: parent.height - 42
-                    clip: true
-                    contentWidth: width
-                    contentHeight: bioText.implicitHeight
-                    Text {
-                        id: bioText
-                        width: parent.width
-                        text: artist.bio || ""
-                        color: theme.textSecondary
-                        font.pixelSize: theme.fontBody
-                        wrapMode: Text.WordWrap
-                    }
-                }
-            }
-        }
-    }
 }

@@ -156,4 +156,89 @@ Rectangle {
         anchors.fill: parent
         headerBar: header
     }
+
+    // --- Shared text modal (phase 16) ---------------------------------------
+    // The AppShell-level modal layer (the Slint AppShell modals mount at
+    // window level, ADR-009): the scrim covers the WHOLE window — sidebar /
+    // header / NPB included — and the panel centers on the WINDOW, not on
+    // the content frame. Views reach it via `openTextModal(title, body)`.
+    property bool textModalOpen: false
+    property string textModalTitle: ""
+    property string textModalBody: ""
+    function openTextModal(title, body) {
+        textModalTitle = title
+        textModalBody = body
+        textModalOpen = true
+    }
+
+    Rectangle {
+        visible: root.textModalOpen
+        anchors.fill: parent
+        color: "#bf000000"
+        MouseArea {
+            anchors.fill: parent
+            onClicked: root.textModalOpen = false
+        }
+        Rectangle {
+            anchors.centerIn: parent
+            width: Math.min(root.width - 80, 560)
+            height: Math.min(root.height - 120, 460)
+            radius: theme.radiusMd
+            color: theme.surfaceCard
+            border.width: 1
+            border.color: theme.borderSubtle
+            MouseArea { anchors.fill: parent }
+            Column {
+                anchors.fill: parent
+                anchors.margins: 24
+                spacing: 14
+                Row {
+                    width: parent.width
+                    Text {
+                        width: parent.width - 28
+                        text: root.textModalTitle
+                        color: theme.textPrimary
+                        font.pixelSize: theme.fontHeading
+                        font.weight: theme.weightSemibold
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                    Rectangle {
+                        width: 28
+                        height: 28
+                        color: tmCloseArea.containsMouse ? theme.surfaceHover : "transparent"
+                        radius: 6
+                        QbzIcon {
+                            name: "x"
+                            width: 18
+                            height: 18
+                            anchors.centerIn: parent
+                            tintName: tmCloseArea.containsMouse ? "primary" : "muted"
+                        }
+                        MouseArea {
+                            id: tmCloseArea
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: root.textModalOpen = false
+                        }
+                    }
+                }
+                Flickable {
+                    width: parent.width
+                    height: parent.height - 42
+                    clip: true
+                    contentWidth: width
+                    contentHeight: tmText.implicitHeight
+                    Text {
+                        id: tmText
+                        width: parent.width
+                        text: root.textModalBody
+                        color: theme.textSecondary
+                        font.pixelSize: theme.fontBody
+                        wrapMode: Text.WordWrap
+                    }
+                }
+            }
+        }
+    }
 }

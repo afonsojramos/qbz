@@ -501,6 +501,7 @@ Rectangle {
 
     // --- TrackCard (discover/TrackCard.slint) -----------------------------
     component LibTrackCard: Rectangle {
+        id: trackCard
         property var item: ({})
         color: "transparent"
         readonly property bool overlayOn: tcArtArea.containsMouse || favBtn.hovered
@@ -523,7 +524,7 @@ Rectangle {
                     anchors.fill: parent
                     radius: theme.radiusSm
                     color: "#000000"
-                    opacity: parent.parent.overlayOn ? 0.6 : 0.0
+                    opacity: trackCard.overlayOn ? 0.6 : 0.0
                     Behavior on opacity { NumberAnimation { duration: 150 } }
                 }
                 // Body click PLAYS the track (TrackCard hover).
@@ -540,7 +541,7 @@ Rectangle {
                     y: 120
                     width: 200
                     height: 44
-                    opacity: parent.parent.overlayOn ? 1.0 : 0.0
+                    opacity: trackCard.overlayOn ? 1.0 : 0.0
                     Behavior on opacity { NumberAnimation { duration: 150 } }
                     Item { width: (200 - 44 - 2 * 36 - 2 * 12) / 2; height: 1 }
                     LibOverlayBtn {
@@ -642,14 +643,18 @@ Rectangle {
         }
     }
 
-    // --- ArtistGridCard (discover/ArtistGridCard.slint; the Favorites arm
-    // uses follow-mode "none" and wires ONLY open-artist — the hover overlay
-    // buttons are dead even in Slint there, so they are omitted here;
-    // POC-NOTE) ------------------------------------------------------------
+    // --- ArtistGridCard (discover/ArtistGridCard.slint, phase 16 overlay) --
+    // 200px surface-card frame + 190px circle (gradient + user glyph until
+    // the artwork resolves), scrim 0.55 CLIPPED TO THE CIRCLE, hover overlay
+    // at y=113: play (primary 44 — Popular tracks with the studio-discography
+    // fallback, playback_qt::play_artist) + ⋯ menu (Open artist / Play /
+    // Not interested). The Favorites arm uses follow-mode "none" in Slint, so
+    // the follow button is hidden here too (search/reco arms would show it).
     component LibArtistCard: Rectangle {
+        id: artistCard
         property var item: ({})
         color: "transparent"
-        readonly property bool overlayOn: agArea.containsMouse
+        readonly property bool overlayOn: agArea.containsMouse || agPlay.hovered || agMore.hovered
 
         Column {
             spacing: 0
@@ -657,29 +662,92 @@ Rectangle {
                 width: 200
                 height: 200
                 radius: theme.radiusSm
-                color: theme.surfaceElevated
-                clip: true
-                RoundedImage {
+                color: theme.surfaceCard
+
+                // 190px round portrait, centered (5px surround = the
+                // album-tile frame). All overlay content lives inside so it
+                // clips to the circle.
+                Rectangle {
                     x: 5
                     y: 5
                     width: 190
                     height: 190
-                    source: root.artMap[item.artKey] || ""
                     radius: 95
-                }
-                Rectangle {
-                    anchors.fill: parent
-                    radius: theme.radiusSm
-                    color: "#000000"
-                    opacity: parent.parent.overlayOn ? 0.25 : 0.0
-                    Behavior on opacity { NumberAnimation { duration: 150 } }
-                }
-                MouseArea {
-                    id: agArea
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: QbzBridge.openArtist(item.id)
+                    clip: true
+                    gradient: Gradient {
+                        orientation: Gradient.Horizontal
+                        GradientStop { position: 0.0; color: theme.surfaceElevated }
+                        GradientStop { position: 1.0; color: theme.surfaceCard }
+                    }
+                    // Placeholder glyph until the artwork resolves on top.
+                    QbzIcon {
+                        name: "user"
+                        width: 54
+                        height: 54
+                        anchors.centerIn: parent
+                        tintName: "muted"
+                    }
+                    RoundedImage {
+                        anchors.fill: parent
+                        source: root.artMap[item.artKey] || ""
+                        radius: 95
+                    }
+                    // Hover scrim (clipped to the circle by the parent's clip).
+                    Rectangle {
+                        anchors.fill: parent
+                        radius: 95
+                        color: "#000000"
+                        opacity: artistCard.overlayOn ? 0.55 : 0.0
+                        Behavior on opacity { NumberAnimation { duration: 150 } }
+                    }
+                    // Card-open + hover detector (before the buttons so they
+                    // win the pointer).
+                    MouseArea {
+                        id: agArea
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: QbzBridge.openArtist(item.id)
+                    }
+                    // Hover overlay — play / more (follow hidden: Favorites
+                    // arm is follow-mode "none").
+                    Row {
+                        y: 113
+                        width: 190
+                        height: 44
+                        opacity: artistCard.overlayOn ? 1.0 : 0.0
+                        Behavior on opacity { NumberAnimation { duration: 150 } }
+                        Item { width: (190 - 44 - 36 - 12) / 2; height: 1 }
+                        LibOverlayBtn {
+                            id: agPlay
+                            name: "play-fill"
+                            primary: true
+                            anchors.verticalCenter: parent.verticalCenter
+                            onClicked: QbzBridge.playArtistCard(item.id)
+                        }
+                        LibOverlayBtn {
+                            id: agMore
+                            name: "ellipsis"
+                            anchors.verticalCenter: parent.verticalCenter
+                            onClicked: function (mouse) { agMenu.openAtCursor(agMore, mouse.x, mouse.y) }
+                        }
+                        Item { width: (190 - 44 - 36 - 12) / 2; height: 1 }
+                    }
+                    CardMenu {
+                        id: agMenu
+                        menuWidth: 196
+                        entries: [
+                            { "label": QbzBridge.tr("Open artist"), "icon": "user", "action": "open" },
+                            { "label": QbzBridge.tr("Play"), "icon": "play-fill", "action": "play" },
+                            { "label": QbzBridge.tr("Not interested"), "icon": "thumbs-down", "action": "not-interested" },
+                        ]
+                        onPicked: function (a) {
+                            if (a === "open") QbzBridge.openArtist(item.id)
+                            else if (a === "play") QbzBridge.playArtistCard(item.id)
+                            // "not-interested": the reco dismissal store is
+                            // not open in the POC (POC-NOTE — inert).
+                        }
+                    }
                 }
             }
             Item { width: 1; height: 6 }
@@ -708,6 +776,7 @@ Rectangle {
 
     // --- PlaylistCard (discover/PlaylistCard.slint) ------------------------
     component LibPlaylistCard: Rectangle {
+        id: playlistCard
         property var item: ({})
         color: "transparent"
         readonly property bool overlayOn: plArtArea.containsMouse || plFav.hovered
@@ -730,7 +799,7 @@ Rectangle {
                     anchors.fill: parent
                     radius: theme.radiusSm
                     color: "#000000"
-                    opacity: parent.parent.overlayOn ? 0.6 : 0.0
+                    opacity: playlistCard.overlayOn ? 0.6 : 0.0
                     Behavior on opacity { NumberAnimation { duration: 150 } }
                 }
                 MouseArea {
@@ -745,7 +814,7 @@ Rectangle {
                     y: 120
                     width: 200
                     height: 44
-                    opacity: parent.parent.overlayOn ? 1.0 : 0.0
+                    opacity: playlistCard.overlayOn ? 1.0 : 0.0
                     Behavior on opacity { NumberAnimation { duration: 150 } }
                     Item { width: (200 - 44 - 2 * 36 - 2 * 12) / 2; height: 1 }
                     LibOverlayBtn {
@@ -782,18 +851,29 @@ Rectangle {
                 CardMenu {
                     id: plMenu
                     menuWidth: 196
+                    // PlaylistCard.slint's menu: queueing actions + favorite
+                    // (owned) / follow (foreign). The queueing actions need
+                    // the playlist track-list builder (out of scope) — inert,
+                    // POC-NOTE; favorite stays wired for owned playlists.
                     entries: [
-                        { "label": QbzBridge.tr("Open playlist"), "icon": "list-music", "action": "open" },
                         { "label": QbzBridge.tr("Play"), "icon": "play-fill", "action": "play" },
-                        { "label": item.isFavorite ? QbzBridge.tr("Remove from Library") : QbzBridge.tr("Add to Library"),
-                          "icon": item.isFavorite ? "heart-filled" : "heart", "action": "favorite" },
+                        { "label": QbzBridge.tr("Play next"), "icon": "list-start", "action": "play-next" },
+                        { "label": QbzBridge.tr("Play later"), "icon": "list-plus", "action": "play-later" },
+                        { "label": QbzBridge.tr("Add to queue"), "icon": "list-end", "action": "queue" },
+                        { "label": item.playlistOwned
+                            ? (item.isFavorite ? QbzBridge.tr("Remove from Library") : QbzBridge.tr("Add to Library"))
+                            : (item.playlistFollowing ? QbzBridge.tr("Unfollow on Qobuz") : QbzBridge.tr("Follow on Qobuz")),
+                          "icon": item.playlistOwned ? (item.isFavorite ? "heart-filled" : "heart")
+                              : (item.playlistFollowing ? "check" : "user-plus"),
+                          "action": "favorite" },
                     ]
                     onPicked: function (a) {
-                        // "open"/"play": no playlist view / playlist queue in
-                        // the POC (POC-NOTE — inert).
                         if (a === "favorite") {
-                            item.isFavorite = !item.isFavorite
-                            QbzBridge.libraryToggleFavorite("playlist", item.id)
+                            if (item.playlistOwned) {
+                                item.isFavorite = !item.isFavorite
+                                QbzBridge.libraryToggleFavorite("playlist", item.id)
+                            }
+                            // follow/unfollow: inert (POC-NOTE).
                         }
                     }
                 }

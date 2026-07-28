@@ -124,6 +124,125 @@ async fn fetch_album_queue(
     Ok(tracks)
 }
 
+/// Artist-card play (ArtistGridCard overlay / menu, phase 16) — playback.rs
+/// `play_artist` 1:1: fetch the artist page ONCE, play the Popular tracks;
+/// when the artist has none, fall back to the STUDIO discography (release
+/// buckets album/epSingle/ep/single in page order, deduped), concatenating
+/// each album's tracks and skipping albums that fail (a bulk play must not
+/// abort on one unavailable album).
+pub async fn play_artist(runtime: &Arc<AppRuntime<LoggingAdapter>>, artist_id: &str) -> Result<(), String> {
+    const STUDIO_TYPES: &[&str] = &["album", "epSingle", "ep", "single"];
+    let id: u64 = artist_id
+        .parse()
+        .map_err(|_| format!("invalid artist id: {artist_id}"))?;
+    let page = runtime
+        .core()
+        .get_artist_page(id, None)
+        .await
+        .map_err(|e| format!("get_artist_page {artist_id} failed: {e}"))?;
+    let artist_name = page.name.display.clone();
+
+    // 1) Popular tracks — the primary behavior.
+    let top: Vec<QueueTrack> = page
+        .top_tracks
+        .unwrap_or_default()
+        .iter()
+        .map(|track| {
+            // make_top_track_queue: /artist/page tracks carry a thinner
+            // audio_info than /album/get tracks; fields fall back.
+            let audio = track.audio_info.as_ref();
+            let album = track.album.as_ref();
+            let album_id = album.map(|a| a.id.clone());
+            QueueTrack {
+                id: track.id,
+                title: track.title.clone(),
+                version: track.version.clone(),
+                artist: track
+                    .artist
+                    .as_ref()
+                    .map(|a| a.name.display.clone())
+                    .filter(|n| !n.is_empty())
+                    .unwrap_or_else(|| artist_name.clone()),
+                album: album.map(|a| a.title.clone()).unwrap_or_default(),
+                album_version: None,
+                duration_secs: track.duration.unwrap_or(0) as u64,
+                artwork_url: album
+                    .and_then(|a| a.image.as_ref())
+                    .and_then(|img| img.best().cloned()),
+                hires: audio
+                    .and_then(|a| a.maximum_bit_depth)
+                    .map(|b| b > 16)
+                    .unwrap_or(false),
+                bit_depth: audio.and_then(|a| a.maximum_bit_depth),
+                sample_rate: audio.and_then(|a| a.maximum_sampling_rate),
+                is_local: false,
+                album_id: album_id.clone(),
+                artist_id: track.artist.as_ref().map(|a| a.id),
+                streamable: track
+                    .rights
+                    .as_ref()
+                    .and_then(|r| r.streamable)
+                    .unwrap_or(true),
+                source: Some("qobuz".to_string()),
+                parental_warning: track.parental_warning.unwrap_or(false),
+                source_item_id_hint: album_id,
+                context_kind: Some("artist".to_string()),
+                context_id: Some(artist_id.to_string()),
+            }
+        })
+        .collect();
+    if !top.is_empty() {
+        let first_id = top[0].id;
+        runtime.core().set_queue(top, Some(0)).await;
+        publish_queue(runtime).await;
+        runtime
+            .core()
+            .play_track_resolved(first_id, current_quality(), None, None, 0)
+            .await
+            .map_err(|e| format!("play_track {first_id} failed: {e}"))?;
+        refresh_now_playing(runtime).await;
+        return Ok(());
+    }
+
+    // 2) Fallback — the studio discography (deduped album ids in the page's
+    // section order; compilation/live/other omitted — studio releases only).
+    let mut album_ids: Vec<String> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for group in page.releases.unwrap_or_default() {
+        if STUDIO_TYPES.contains(&group.release_type.as_str()) {
+            for item in group.items {
+                if seen.insert(item.id.clone()) {
+                    album_ids.push(item.id);
+                }
+            }
+        }
+    }
+    if album_ids.is_empty() {
+        return Err(format!("artist {artist_id} has no top tracks and no studio releases"));
+    }
+    let mut queue: Vec<QueueTrack> = Vec::new();
+    for aid in &album_ids {
+        match fetch_album_queue(runtime, aid).await {
+            Ok(tracks) => queue.extend(tracks),
+            Err(e) => log::warn!("[qbz-qt] artist-play: album {aid} skipped: {e}"),
+        }
+    }
+    if queue.is_empty() {
+        return Err(format!("artist {artist_id} studio discography produced no playable tracks"));
+    }
+    log::info!("[qbz-qt] artist-play {artist_id}: discography fallback, {} tracks", queue.len());
+    let first_id = queue[0].id;
+    runtime.core().set_queue(queue, Some(0)).await;
+    publish_queue(runtime).await;
+    runtime
+        .core()
+        .play_track_resolved(first_id, current_quality(), None, None, 0)
+        .await
+        .map_err(|e| format!("play_track {first_id} failed: {e}"))?;
+    refresh_now_playing(runtime).await;
+    Ok(())
+}
+
 /// "Play next" / "Add to queue" for an album (AlbumCard ⋯ menu): resolve
 /// the album's tracks and insert them after the current track (mode
 /// "next") or append them (mode "later").

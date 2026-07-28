@@ -38,7 +38,6 @@ Rectangle {
     property var coverMap: ({})
     // Client-side track search (AlbumActions.search equivalent).
     property string trackQuery: ""
-    property bool showDescription: false
 
     readonly property var visibleTracks: {
         if (trackQuery === "") return tracks
@@ -578,7 +577,11 @@ Rectangle {
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: root.showDescription = true
+                            onClicked: {
+                                var shell = root.parent
+                                while (shell && shell.openTextModal === undefined) shell = shell.parent
+                                if (shell) shell.openTextModal(QbzBridge.tr("About this album"), header.description || "")
+                            }
                         }
                     }
 
@@ -915,78 +918,6 @@ Rectangle {
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         target: pageFlick
-    }
-
-    // --- Full-description modal ------------------------------------------
-    Rectangle {
-        visible: root.showDescription
-        anchors.fill: parent
-        color: "#bf000000"
-        MouseArea {
-            anchors.fill: parent
-            onClicked: root.showDescription = false
-        }
-        Rectangle {
-            anchors.centerIn: parent
-            width: Math.min(root.width - 80, 560)
-            height: Math.min(root.height - 120, 460)
-            radius: theme.radiusMd
-            color: theme.surfaceCard
-            border.width: 1
-            border.color: theme.borderSubtle
-            MouseArea { anchors.fill: parent }
-            Column {
-                anchors.fill: parent
-                anchors.margins: 24
-                spacing: 14
-                Row {
-                    width: parent.width
-                    Text {
-                        width: parent.width - 28
-                        text: QbzBridge.tr("About this album")
-                        color: theme.textPrimary
-                        font.pixelSize: theme.fontHeading
-                        font.weight: theme.weightSemibold
-                        anchors.verticalCenter: parent.verticalCenter
-                    }
-                    Rectangle {
-                        width: 28
-                        height: 28
-                        color: closeArea.containsMouse ? theme.surfaceHover : "transparent"
-                        radius: 6
-                        QbzIcon {
-                            name: "x"
-                            width: 18
-                            height: 18
-                            anchors.centerIn: parent
-                            tintName: closeArea.containsMouse ? "primary" : "muted"
-                        }
-                        MouseArea {
-                            id: closeArea
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: root.showDescription = false
-                        }
-                    }
-                }
-                Flickable {
-                    width: parent.width
-                    height: parent.height - 42
-                    clip: true
-                    contentWidth: width
-                    contentHeight: descText.implicitHeight
-                    Text {
-                        id: descText
-                        width: parent.width
-                        text: header.description || ""
-                        color: theme.textSecondary
-                        font.pixelSize: theme.fontBody
-                        wrapMode: Text.WordWrap
-                    }
-                }
-            }
-        }
     }
 
     // Album ⋯ menu (AlbumContextMenu subset — card menu + pin).

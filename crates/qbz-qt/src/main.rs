@@ -619,6 +619,17 @@ pub(crate) fn play_track(track_id: u64) {
     });
 }
 
+/// Artist-card overlay play (ArtistGridCard): Popular tracks with the
+/// studio-discography fallback.
+pub(crate) fn play_artist_card(artist_id: String) {
+    let runtime = app();
+    spawn(async move {
+        if let Err(e) = playback_qt::play_artist(&runtime, &artist_id).await {
+            log::error!("[qbz-qt] play_artist_card {artist_id} failed: {e}");
+        }
+    });
+}
+
 /// Library track menu: Play next / Play later / Add to queue (single feed
 /// track into the existing queue).
 pub(crate) fn enqueue_track(track_id: u64, mode: String) {
