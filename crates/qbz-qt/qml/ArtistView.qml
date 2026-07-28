@@ -122,31 +122,7 @@ Rectangle {
         }
     }
 
-    component CircleBtn: Rectangle {
-        property string name: ""
-        property bool active: false
-        signal clicked(var mouse)
-        width: 32
-        height: 32
-        radius: 16
-        color: (cbArea.containsMouse || active) ? theme.surfaceHover : theme.surfaceElevated
-        border.width: 1.5
-        border.color: theme.borderMuted
-        QbzIcon {
-            name: parent.name
-            width: 15
-            height: 15
-            anchors.centerIn: parent
-            tintName: parent.active ? "accent" : "primary"
-        }
-        MouseArea {
-            id: cbArea
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onClicked: function (mouse) { parent.clicked(mouse) }
-        }
-    }
+
 
     // Popular Tracks row (TrackRow with artwork + album column).
     component PopularTrackRow: Rectangle {
@@ -611,7 +587,7 @@ Rectangle {
                     Row {
                         width: parent.width
                         spacing: 12
-                        CircleBtn {
+                        QbzCircleAction {
                             name: artist.isFollowing ? "heart-filled" : "heart"
                             active: artist.isFollowing === true
                             anchors.verticalCenter: parent.verticalCenter
@@ -620,19 +596,19 @@ Rectangle {
                                 QbzBridge.libraryToggleFavorite("artist", artist.id)
                             }
                         }
-                        CircleBtn {
+                        QbzCircleAction {
                             id: radioBtn
                             name: "radio"
                             anchors.verticalCenter: parent.verticalCenter
                             onClicked: radioPopup.openBelowRight(radioBtn)
                         }
-                        CircleBtn {
+                        QbzCircleAction {
                             name: "element-connect"
                             active: root.networkOpen
                             anchors.verticalCenter: parent.verticalCenter
                             onClicked: root.networkOpen = !root.networkOpen
                         }
-                        CircleBtn {
+                        QbzCircleAction {
                             id: overflowBtn
                             name: "ellipsis"
                             anchors.verticalCenter: parent.verticalCenter
@@ -805,12 +781,12 @@ Rectangle {
                             onClicked: QbzBridge.playArtistTop(false)
                         }
                     }
-                    CircleBtn {
+                    QbzCircleAction {
                         name: "square-check-big"
                         anchors.verticalCenter: parent.verticalCenter
                         // POC-NOTE: multi-select out of scope.
                     }
-                    CircleBtn {
+                    QbzCircleAction {
                         id: topMenuBtn
                         name: "ellipsis"
                         anchors.verticalCenter: parent.verticalCenter

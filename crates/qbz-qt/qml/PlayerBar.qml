@@ -68,34 +68,7 @@ Rectangle {
     // --- Shared bits -------------------------------------------------------
 
     // Square compact icon button (BarControls.IconButton).
-    component BarIconBtn: Rectangle {
-        property string name: ""
-        property int iconSize: 16
-        property bool active: false
-        property bool btnEnabled: true
-        signal clicked()
 
-        width: 32
-        height: 32
-        radius: theme.radiusSm
-        opacity: btnEnabled ? 1.0 : 0.3
-        color: (biArea.containsMouse && btnEnabled) ? theme.surfaceHover : "transparent"
-        QbzIcon {
-            name: parent.name
-            width: parent.iconSize
-            height: parent.iconSize
-            anchors.centerIn: parent
-            tintName: parent.active ? "accent"
-                : (biArea.containsMouse && parent.btnEnabled) ? "primary" : "secondary"
-        }
-        MouseArea {
-            id: biArea
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: parent.btnEnabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-            onClicked: if (parent.btnEnabled) parent.clicked()
-        }
-    }
 
     // Dot LED (circle-dot on / circle off) + constant-colour label — the
     // New-mode output indicators (SongCard dot-leds).
@@ -145,25 +118,12 @@ Rectangle {
                 elide: Text.ElideRight
                 anchors.verticalCenter: parent.verticalCenter
             }
-            Image {
-                visible: QbzBridge.npQualityTier === "hires"
-                source: "assets/hi-res.svg"
-                width: 42
-                height: 28
+            QualityMini {
+                // The stamp shows the cd glyph for ANY non-hires tier with
+                // a label (not just "cd") — map that exactly.
+                tier: QbzBridge.npQualityTier === "hires" ? "hires"
+                    : (QbzBridge.npQualityLabel !== "" ? "cd" : "")
                 anchors.verticalCenter: parent.verticalCenter
-                sourceSize: Qt.size(84, 56)
-                fillMode: Image.PreserveAspectFit
-            }
-            Rectangle {
-                visible: QbzBridge.npQualityTier !== "hires" && QbzBridge.npQualityLabel !== ""
-                width: 30
-                height: 30
-                radius: 3
-                color: theme.surfaceElevated
-                border.width: 1
-                border.color: theme.borderSubtle
-                anchors.verticalCenter: parent.verticalCenter
-                QbzIcon { name: "cd"; width: 16; height: 16; anchors.centerIn: parent; tintName: "muted" }
             }
         }
         Column {
@@ -328,14 +288,14 @@ Rectangle {
         spacing: playCircle ? 12 : 4
         height: 44
 
-        BarIconBtn {
+        QbzIconButton {
             name: "shuffle"
             active: QbzBridge.npShuffle
             btnEnabled: QbzBridge.npHasTrack
             anchors.verticalCenter: parent.verticalCenter
             onClicked: QbzBridge.toggleShuffle()
         }
-        BarIconBtn {
+        QbzIconButton {
             name: "skip-back"
             btnEnabled: QbzBridge.npHasTrack
             anchors.verticalCenter: parent.verticalCenter
@@ -364,13 +324,13 @@ Rectangle {
                 onClicked: if (QbzBridge.npHasTrack) QbzBridge.togglePlay()
             }
         }
-        BarIconBtn {
+        QbzIconButton {
             name: "skip-forward"
             btnEnabled: QbzBridge.npHasTrack
             anchors.verticalCenter: parent.verticalCenter
             onClicked: QbzBridge.next()
         }
-        BarIconBtn {
+        QbzIconButton {
             name: QbzBridge.npRepeatMode === 2 ? "repeat-1" : "repeat"
             active: QbzBridge.npRepeatMode > 0
             btnEnabled: QbzBridge.npHasTrack
@@ -536,10 +496,10 @@ Rectangle {
                     Item { visible: root.largeActive; width: 12; height: 1 }
 
                     // Qobuz Connect — inert (device flyout out of scope).
-                    BarIconBtn { name: "element-connect" }
+                    QbzIconButton { name: "element-connect" }
 
                     // Now-Playing view — the mode flyout (phase 18).
-                    BarIconBtn {
+                    QbzIconButton {
                         name: "layout-grid"
                         active: viewMenu.opened
                         onClicked: viewMenu.openBelowRight(viewBtn)
@@ -547,7 +507,7 @@ Rectangle {
                     }
 
                     // Lyrics.
-                    BarIconBtn {
+                    QbzIconButton {
                         name: "mic-vocal"
                         active: QbzBridge.lyricsOpen
                         onClicked: QbzBridge.toggleLyrics()
@@ -556,7 +516,7 @@ Rectangle {
                     Item { width: 6; height: 1 }
 
                     // Volume.
-                    BarIconBtn {
+                    QbzIconButton {
                         name: QbzBridge.npMuted ? "volume-x" : "volume-2"
                         active: QbzBridge.npMuted
                         onClicked: QbzBridge.toggleMute()
@@ -598,7 +558,7 @@ Rectangle {
                     Item { width: 6; height: 1 }
 
                     // Queue panel toggle.
-                    BarIconBtn {
+                    QbzIconButton {
                         name: "list-ordered"
                         active: QbzBridge.queueOpen
                         onClicked: QbzBridge.toggleQueue()

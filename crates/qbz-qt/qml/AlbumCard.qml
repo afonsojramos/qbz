@@ -391,31 +391,10 @@ Rectangle {
                 }
             }
             // Icon-only quality badge (QualityBadge.slint).
-            Item {
+            QualityMini {
                 id: qBadge
-                visible: root.qualityTier !== ""
-                width: root.qualityTier === "hires" ? 42 : 30
-                height: 30
+                tier: root.qualityTier
                 anchors.verticalCenter: parent.verticalCenter
-                Image {
-                    visible: root.qualityTier === "hires"
-                    source: "assets/hi-res.svg"
-                    width: 42
-                    height: 28
-                    anchors.centerIn: parent
-                    sourceSize: Qt.size(84, 56)
-                    fillMode: Image.PreserveAspectFit
-                }
-                Rectangle {
-                    visible: root.qualityTier === "cd"
-                    width: 30
-                    height: 30
-                    radius: 3
-                    color: theme.surfaceElevated
-                    border.width: 1
-                    border.color: theme.borderSubtle
-                    QbzIcon { name: "cd"; width: 16; height: 16; anchors.centerIn: parent; tintName: "muted" }
-                }
             }
         }
     }

@@ -51,36 +51,7 @@ Rectangle {
 
     // Square compact icon button (BarControls.IconButton): disabled = dim
     // 0.3 + non-clickable; active = accent tint.
-    component BarIconBtn: Rectangle {
-        property string name: ""
-        property int iconSize: 16
-        property bool active: false
-        property bool btnEnabled: true
-        signal clicked()
 
-        width: 32
-        height: 32
-        radius: theme.radiusSm
-        opacity: btnEnabled ? 1.0 : 0.3
-        color: (biArea.containsMouse && btnEnabled) ? theme.surfaceHover : "transparent"
-
-        QbzIcon {
-            name: parent.name
-            width: parent.iconSize
-            height: parent.iconSize
-            anchors.centerIn: parent
-            tintName: parent.active ? "accent"
-                : (biArea.containsMouse && parent.btnEnabled)
-                    ? "primary" : "secondary"
-        }
-        MouseArea {
-            id: biArea
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: parent.btnEnabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-            onClicked: if (parent.btnEnabled) parent.clicked()
-        }
-    }
 
     // Thin vertical separator (PlayerBarSmall's Sep): a 1px line,
     // border-subtle, ~60% of the row height, vertically centred; the
@@ -284,18 +255,18 @@ Rectangle {
                     anchors.centerIn: parent
                     spacing: 2
 
-                    BarIconBtn {
+                    QbzIconButton {
                         name: "info"
                         btnEnabled: QbzBridge.npHasTrack
                         // POC-NOTE: track-info panel is out of scope.
                     }
-                    BarIconBtn {
+                    QbzIconButton {
                         name: "shuffle"
                         active: QbzBridge.npShuffle
                         btnEnabled: QbzBridge.npHasTrack
                         onClicked: QbzBridge.toggleShuffle()
                     }
-                    BarIconBtn {
+                    QbzIconButton {
                         name: "skip-back"
                         btnEnabled: QbzBridge.npHasTrack
                         onClicked: QbzBridge.previous()
@@ -325,18 +296,18 @@ Rectangle {
                             onClicked: if (QbzBridge.npHasTrack) QbzBridge.togglePlay()
                         }
                     }
-                    BarIconBtn {
+                    QbzIconButton {
                         name: "skip-forward"
                         btnEnabled: QbzBridge.npHasTrack
                         onClicked: QbzBridge.next()
                     }
-                    BarIconBtn {
+                    QbzIconButton {
                         name: QbzBridge.npRepeatMode === 2 ? "repeat-1" : "repeat"
                         active: QbzBridge.npRepeatMode !== 0
                         btnEnabled: QbzBridge.npHasTrack
                         onClicked: QbzBridge.cycleRepeat()
                     }
-                    BarIconBtn {
+                    QbzIconButton {
                         name: "plus"
                         btnEnabled: QbzBridge.npHasTrack
                         // POC-NOTE: the grouped "Add to…" flyout is out of
@@ -403,16 +374,16 @@ Rectangle {
                     // Lyrics are inert visual replicas — their flyouts
                     // (device pickers, audio toggles, NPB-mode menu) are
                     // out of scope for the POC.
-                    BarIconBtn { name: "monitor-speaker" }
-                    BarIconBtn { name: "cast" }
-                    BarIconBtn { name: "settings-2" }
-                    BarIconBtn {
+                    QbzIconButton { name: "monitor-speaker" }
+                    QbzIconButton { name: "cast" }
+                    QbzIconButton { name: "settings-2" }
+                    QbzIconButton {
                         id: smallViewBtn
                         name: "layout-grid"
                         active: smallViewMenu.opened
                         onClicked: smallViewMenu.openBelowRight(smallViewBtn)
                     }
-                    BarIconBtn {
+                    QbzIconButton {
                         name: "mic-vocal"
                         active: QbzBridge.lyricsOpen
                         onClicked: QbzBridge.toggleLyrics()
@@ -421,7 +392,7 @@ Rectangle {
                     Item { width: 4; height: 1 }
 
                     // Volume — mute icon + (WIDE) inline horizontal slider.
-                    BarIconBtn {
+                    QbzIconButton {
                         name: QbzBridge.npMuted ? "volume-x" : "volume-2"
                         active: QbzBridge.npMuted
                         onClicked: QbzBridge.toggleMute()
@@ -464,7 +435,7 @@ Rectangle {
                     Item { width: 4; height: 1 }
 
                     // Queue panel toggle.
-                    BarIconBtn {
+                    QbzIconButton {
                         name: "list-ordered"
                         active: QbzBridge.queueOpen
                         onClicked: QbzBridge.toggleQueue()

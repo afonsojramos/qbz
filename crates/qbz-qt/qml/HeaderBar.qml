@@ -61,65 +61,7 @@ Rectangle {
         : QbzBridge.offlineMode === 2 ? 2
         : QbzBridge.offlineMode === 1 ? 1 : 0
 
-    // Circular history / collapse button (HeaderNavBtn).
-    component HeaderNavBtn: Rectangle {
-        property string name: ""
-        property bool btnEnabled: true
-        signal clicked()
 
-        width: 28
-        height: 28
-        radius: 14
-        opacity: btnEnabled ? 1.0 : 0.4
-        color: (hnArea.containsMouse && btnEnabled) ? theme.surfaceHover : theme.surfaceElevated
-
-        QbzIcon {
-            name: parent.name
-            width: 15
-            height: 15
-            anchors.centerIn: parent
-            tintName: parent.btnEnabled ? "primary" : "muted"
-        }
-        MouseArea {
-            id: hnArea
-            anchors.fill: parent
-            enabled: parent.btnEnabled
-            hoverEnabled: true
-            cursorShape: parent.btnEnabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-            onClicked: parent.clicked()
-        }
-    }
-
-    // Square icon button (HeaderIconButton, 36px) / compact nav (30px).
-    component HeaderIconBtn: Rectangle {
-        property string name: ""
-        property int btnSize: 36
-        property int iconSize: 19
-        property bool active: false
-        signal clicked()
-
-        width: btnSize
-        height: btnSize
-        radius: theme.radiusSm
-        color: active ? theme.surfaceElevated
-             : hiArea.containsMouse ? theme.surfaceHover : "transparent"
-
-        QbzIcon {
-            name: parent.name
-            width: parent.iconSize
-            height: parent.iconSize
-            anchors.centerIn: parent
-            tintName: parent.active ? "accent"
-                : hiArea.containsMouse ? "primary" : "secondary"
-        }
-        MouseArea {
-            id: hiArea
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onClicked: parent.clicked()
-        }
-    }
 
     // --- Left controls ---------------------------------------------------
     Row {
@@ -129,18 +71,18 @@ Rectangle {
         height: 36
         spacing: 6
 
-        HeaderNavBtn {
+        QbzNavButton {
             name: "panel-left"
             anchors.verticalCenter: parent.verticalCenter
             onClicked: QbzBridge.cycleSidebar()
         }
-        HeaderNavBtn {
+        QbzNavButton {
             name: "chevron-left"
             anchors.verticalCenter: parent.verticalCenter
             btnEnabled: QbzBridge.canBack
             onClicked: QbzBridge.navigateBack()
         }
-        HeaderNavBtn {
+        QbzNavButton {
             name: "chevron-right"
             anchors.verticalCenter: parent.verticalCenter
             btnEnabled: QbzBridge.canForward
@@ -156,24 +98,24 @@ Rectangle {
             spacing: 2
 
             Item { width: 6; height: 1 }
-            HeaderIconBtn {
+            QbzIconButton { activeBackground: true 
                 name: "compass"
                 btnSize: 30; iconSize: 16
                 anchors.verticalCenter: parent.verticalCenter
                 visible: !QbzBridge.offline
             }
-            HeaderIconBtn {
+            QbzIconButton { activeBackground: true 
                 name: "music-library-2"
                 btnSize: 30; iconSize: 16
                 anchors.verticalCenter: parent.verticalCenter
                 visible: !QbzBridge.offline
             }
-            HeaderIconBtn {
+            QbzIconButton { activeBackground: true 
                 name: "hard-drive"
                 btnSize: 30; iconSize: 16
                 anchors.verticalCenter: parent.verticalCenter
             }
-            HeaderIconBtn {
+            QbzIconButton { activeBackground: true 
                 name: "qbz-symbolic"
                 btnSize: 30; iconSize: 16
                 anchors.verticalCenter: parent.verticalCenter
@@ -185,7 +127,7 @@ Rectangle {
                 anchors.verticalCenter: parent.verticalCenter
                 color: theme.borderSubtle
             }
-            HeaderIconBtn {
+            QbzIconButton { activeBackground: true 
                 name: "list-music"
                 btnSize: 30; iconSize: 16
                 anchors.verticalCenter: parent.verticalCenter
@@ -476,7 +418,7 @@ Rectangle {
             }
         }
 
-        HeaderIconBtn {
+        QbzIconButton { activeBackground: true 
             name: "menu"
             anchors.verticalCenter: parent.verticalCenter
             onClicked: appMenu.open()

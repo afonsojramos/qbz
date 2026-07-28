@@ -79,35 +79,7 @@ Rectangle {
     }
 
     // Row action icon button (the panel's small IconButton).
-    component PanelIconBtn: Rectangle {
-        property string name: ""
-        property int iconSize: 17
-        property bool active: false
-        property bool btnEnabled: true
-        signal clicked()
 
-        width: 30
-        height: 30
-        radius: theme.radiusSm
-        color: (piArea.containsMouse && btnEnabled) ? theme.surfaceHover : "transparent"
-        QbzIcon {
-            name: parent.name
-            width: parent.iconSize
-            height: parent.iconSize
-            anchors.centerIn: parent
-            tintName: !parent.btnEnabled ? "muted"
-                : parent.active ? "accent"
-                : piArea.containsMouse ? "primary" : "secondary"
-        }
-        MouseArea {
-            id: piArea
-            anchors.fill: parent
-            enabled: parent.btnEnabled
-            hoverEnabled: true
-            cursorShape: parent.btnEnabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-            onClicked: parent.clicked()
-        }
-    }
 
     // One UP NEXT / History row (QueueRow.slint).
     component QueueRow: Rectangle {
@@ -542,7 +514,7 @@ Rectangle {
                             Row {
                                 id: paginator
                                 spacing: theme.spacingMd
-                                PanelIconBtn {
+                                QbzIconButton { btnSize: 30 
                                     name: "chevron-left"
                                     iconSize: 15
                                     btnEnabled: (doc.page || 0) > 0
@@ -554,7 +526,7 @@ Rectangle {
                                     color: theme.textMuted
                                     font.pixelSize: 12
                                 }
-                                PanelIconBtn {
+                                QbzIconButton { btnSize: 30 
                                     name: "chevron-right"
                                     iconSize: 15
                                     btnEnabled: (doc.page || 0) < (doc.pageCount || 1) - 1
@@ -665,17 +637,17 @@ Rectangle {
                 spacing: theme.spacingXs
 
                 // Action 1 — Clear queue (wired).
-                PanelIconBtn {
+                QbzIconButton { btnSize: 30 
                     name: "trash-list"
                     onClicked: QbzBridge.queueClear()
                 }
                 // Action 2 — Save as playlist (INERT: opens a picker modal
                 // upstream — POC-NOTE).
-                PanelIconBtn { name: "add-to-list" }
+                QbzIconButton { btnSize: 30; name: "add-to-list" }
                 // Action 3 — infinite play (INERT engine — POC-NOTE).
-                PanelIconBtn { name: "infinity" }
+                QbzIconButton { btnSize: 30; name: "infinity" }
                 // Action 4 — sleep timer (INERT engine — POC-NOTE).
-                PanelIconBtn { name: "clock" }
+                QbzIconButton { btnSize: 30; name: "clock" }
 
                 // Inline queue search field (wired).
                 Rectangle {

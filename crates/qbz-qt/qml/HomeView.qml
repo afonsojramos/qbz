@@ -50,98 +50,6 @@ Rectangle {
     // ============================ shared components =======================
 
     // Circular page-control button (Carousel's NavButton).
-    component NavBtn: Rectangle {
-        property string name: ""
-        property bool btnEnabled: true
-        signal clicked()
-
-        width: 28
-        height: 28
-        radius: 14
-        opacity: btnEnabled ? 1.0 : 0.4
-        color: (nbArea.containsMouse && btnEnabled) ? theme.surfaceHover : theme.surfaceElevated
-        QbzIcon {
-            name: parent.name
-            width: 15
-            height: 15
-            anchors.centerIn: parent
-            tintName: parent.btnEnabled ? "primary" : "muted"
-        }
-        MouseArea {
-            id: nbArea
-            anchors.fill: parent
-            enabled: parent.btnEnabled
-            hoverEnabled: true
-            cursorShape: parent.btnEnabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-            onClicked: parent.clicked()
-        }
-    }
-
-    // "View all →" header link (Carousel.slint ViewAllLink) — shown when
-    // the section carries a discover endpoint. POC-NOTE: the click is
-    // INERT (the DiscoverBrowse full-list page is out of scope).
-    component ViewAllLink: Rectangle {
-        width: linkText.implicitWidth + 16
-        height: 26
-        radius: 4
-        color: vaArea.containsMouse ? theme.surfaceHover : "transparent"
-        Text {
-            id: linkText
-            anchors.centerIn: parent
-            text: QbzBridge.tr("View all →", QbzBridge.trRev)
-            color: vaArea.containsMouse ? theme.textPrimary : theme.textSecondary
-            font.pixelSize: 14
-            font.weight: theme.weightMedium
-        }
-        MouseArea {
-            id: vaArea
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-        }
-    }
-
-    // Section header: title + [View all] + page chevrons (Carousel header
-    // metrics — the link sits LEFT of the chevrons, Tauri parity).
-    component RailHeader: Item {
-        property string title: ""
-        property bool leftEnabled: false
-        property bool rightEnabled: false
-        property bool showViewAll: false
-        signal pageLeft()
-        signal pageRight()
-
-        width: parent ? parent.width : 0
-        height: 28
-        Text {
-            anchors.left: parent.left
-            anchors.verticalCenter: parent.verticalCenter
-            text: parent.title
-            color: theme.textPrimary
-            font.pixelSize: theme.fontSection
-            font.weight: theme.weightSemibold
-        }
-        Row {
-            anchors.right: parent.right
-            anchors.verticalCenter: parent.verticalCenter
-            spacing: 4
-            ViewAllLink {
-                visible: parent.parent.showViewAll
-                anchors.verticalCenter: parent.verticalCenter
-            }
-            NavBtn {
-                name: "chevron-left"
-                btnEnabled: parent.parent.leftEnabled
-                onClicked: parent.parent.pageLeft()
-            }
-            NavBtn {
-                name: "chevron-right"
-                btnEnabled: parent.parent.rightEnabled
-                onClicked: parent.parent.pageRight()
-            }
-        }
-    }
-
     // Horizontal album rail (Carousel.slint): header + clipped ListView,
     // page chevrons (per-page step like the Slint paging).
     component AlbumRail: Column {
@@ -153,7 +61,7 @@ Rectangle {
         readonly property int step: perPage * 232
         readonly property real maxScroll: Math.max(0, rail.contentWidth - rail.width)
 
-        RailHeader {
+        QbzSectionHeader {
             title: sectionData.title
             leftEnabled: rail.contentX > 1
             rightEnabled: rail.contentX < maxScroll - 1
@@ -232,7 +140,7 @@ Rectangle {
         readonly property int pageCount: Math.max(1, Math.ceil(total / perPage))
         readonly property real maxScroll: (pageCount - 1) * grid.width
 
-        RailHeader {
+        QbzSectionHeader {
             title: sectionData.title
             leftEnabled: grid.contentX > 1
             rightEnabled: grid.contentX < maxScroll - 1
@@ -284,7 +192,7 @@ Rectangle {
         readonly property int perPage: Math.max(1, Math.floor((rail.width + 32) / 232))
         readonly property int step: perPage * 232
 
-        RailHeader {
+        QbzSectionHeader {
             title: sectionData.title
             leftEnabled: rail.contentX > 1
             rightEnabled: rail.contentX < maxScroll - 1
@@ -537,36 +445,16 @@ Rectangle {
                 }
                 Component {
                     id: recentComp
-                    RecentPlaceholder {
+                    QbzEmptyState {
                         property var sectionData: parent.sectionData
                         title: sectionData.title
-                        hint: sectionData.hint
+                        body: sectionData.hint
                     }
                 }
             }
         }
     }
 
-    // Recently-played placeholder (HomeView.slint RecentPlaceholder).
-    component RecentPlaceholder: Column {
-        property string title: ""
-        property string hint: ""
-        width: parent ? parent.width : 0
-        spacing: 10
-        Text {
-            text: title
-            color: theme.textPrimary
-            font.pixelSize: 18
-            font.weight: theme.weightSemibold
-        }
-        Text {
-            text: hint
-            color: theme.textMuted
-            font.pixelSize: 13
-        }
-    }
-
-    // Shimmer block + skeleton rows (HomeSkeleton.slint).
     component Shimmer: Rectangle {
         property bool phase: false
         color: theme.surfaceElevated
@@ -596,38 +484,12 @@ Rectangle {
 
     // ============================ offline gate ============================
     // (OfflinePlaceholder.slint replica; mounted INSTEAD of the view.)
-    Column {
+    QbzOfflinePlaceholder {
         visible: QbzBridge.offline
         anchors.centerIn: parent
-        spacing: 0
-        QbzIcon {
-            name: "cloud-off"
-            width: 56
-            height: 56
-            anchors.horizontalCenter: parent.horizontalCenter
-            tintName: "muted"
-        }
-        Item { width: 1; height: 18 }
-        Text {
-            anchors.horizontalCenter: parent.horizontalCenter
-            text: QbzBridge.tr("You're offline", QbzBridge.trRev)
-            color: theme.textPrimary
-            font.pixelSize: theme.fontHeading
-            font.weight: theme.weightSemibold
-        }
-        Item { width: 1; height: 8 }
-        Text {
-            width: 420
-            text: QbzBridge.offlineMode === 2
-                ? QbzBridge.tr("Offline mode is enabled. Disable it in Settings to use Qobuz.", QbzBridge.trRev)
-                : QbzBridge.tr("No internet connection. Your local library and downloads keep working.", QbzBridge.trRev)
-            color: theme.textSecondary
-            font.pixelSize: theme.fontBody
-            horizontalAlignment: Text.AlignHCenter
-            wrapMode: Text.WordWrap
-        }
-        // POC-NOTE: induced-offline "Open Settings" button omitted — no
-        // Settings view exists in the POC yet.
+        // The induced-only "Open Settings" arm (Slint) is wired:
+        showSettingsAction: true
+        onSettingsClicked: QbzBridge.navigateTo("settings")
     }
 
     // ============================ the view ================================
@@ -646,56 +508,21 @@ Rectangle {
                 // placeholder) + 16px spacing -> the pill starts at 48.
                 x: 48
                 y: 25 - height / 2
-                height: tabPill.height
                 spacing: 16
 
-                Rectangle {
-                    id: tabPill
-                    width: tabRow.width
-                    height: tabRow.height
-                    color: theme.surfaceElevated
-                    radius: 6
-                    Row {
-                        id: tabRow
-                        padding: 3
-                        spacing: 4
-                        Repeater {
-                            model: [
-                                { "id": "home", "label": QbzBridge.tr("Home", QbzBridge.trRev) },
-                                { "id": "editorPicks", "label": QbzBridge.tr("Editor's Picks", QbzBridge.trRev) },
-                                { "id": "forYou", "label": QbzBridge.tr("For You", QbzBridge.trRev) },
-                                { "id": "recommendations", "label": QbzBridge.tr("Recommendations", QbzBridge.trRev) },
-                            ]
-                            delegate: Rectangle {
-                                required property var modelData
-                                property bool active: root.activeTab === modelData.id
-                                width: tabText.implicitWidth + 28
-                                height: tabText.implicitHeight + 12
-                                radius: 4
-                                color: active ? theme.surfaceMain
-                                     : tabArea.containsMouse ? theme.surfaceHover : "transparent"
-                                Text {
-                                    id: tabText
-                                    anchors.centerIn: parent
-                                    text: modelData.label
-                                    color: parent.active ? theme.textPrimary : theme.textMuted
-                                    font.pixelSize: 13
-                                    font.weight: theme.weightMedium
-                                }
-                                MouseArea {
-                                    id: tabArea
-                                    anchors.fill: parent
-                                    hoverEnabled: true
-                                    cursorShape: Qt.PointingHandCursor
-                                    // Data is per-tab JSON (no refetch on
-                                    // switch); scroll resets to top.
-                                    onClicked: {
-                                        root.activeTab = modelData.id
-                                        homeFlick.contentY = 0
-                                    }
-                                }
-                            }
-                        }
+                QbzTabBar {
+                    tabs: [
+                        { "id": "home", "label": QbzBridge.tr("Home", QbzBridge.trRev) },
+                        { "id": "editorPicks", "label": QbzBridge.tr("Editor's Picks", QbzBridge.trRev) },
+                        { "id": "forYou", "label": QbzBridge.tr("For You", QbzBridge.trRev) },
+                        { "id": "recommendations", "label": QbzBridge.tr("Recommendations", QbzBridge.trRev) },
+                    ]
+                    activeId: root.activeTab
+                    // Data is per-tab JSON (no refetch on switch); scroll
+                    // resets to top.
+                    onSelected: function (id) {
+                        root.activeTab = id
+                        homeFlick.contentY = 0
                     }
                 }
             }

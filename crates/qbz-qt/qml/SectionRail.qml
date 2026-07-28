@@ -20,58 +20,14 @@ Column {
     readonly property int step: perPage * 232
     readonly property real maxScroll: Math.max(0, rail.contentWidth - rail.width)
 
-    component RailNavBtn: Rectangle {
-        property string name: ""
-        property bool btnEnabled: true
-        signal clicked()
-        width: 28
-        height: 28
-        radius: 14
-        opacity: btnEnabled ? 1.0 : 0.4
-        color: (nbArea.containsMouse && btnEnabled) ? theme.surfaceHover : theme.surfaceElevated
-        QbzIcon {
-            name: parent.name
-            width: 15
-            height: 15
-            anchors.centerIn: parent
-            tintName: parent.btnEnabled ? "primary" : "muted"
-        }
-        MouseArea {
-            id: nbArea
-            anchors.fill: parent
-            enabled: parent.btnEnabled
-            hoverEnabled: true
-            cursorShape: parent.btnEnabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-            onClicked: parent.clicked()
-        }
-    }
 
-    Item {
-        width: parent.width
-        height: 28
-        Text {
-            anchors.left: parent.left
-            anchors.verticalCenter: parent.verticalCenter
-            text: root.title
-            color: theme.textPrimary
-            font.pixelSize: theme.fontSection
-            font.weight: theme.weightSemibold
-        }
-        Row {
-            anchors.right: parent.right
-            anchors.verticalCenter: parent.verticalCenter
-            spacing: 4
-            RailNavBtn {
-                name: "chevron-left"
-                btnEnabled: rail.contentX > 1
-                onClicked: rail.contentX = Math.max(0, rail.contentX - root.step)
-            }
-            RailNavBtn {
-                name: "chevron-right"
-                btnEnabled: rail.contentX < root.maxScroll - 1
-                onClicked: rail.contentX = Math.min(root.maxScroll, rail.contentX + root.step)
-            }
-        }
+
+    QbzSectionHeader {
+        title: root.title
+        leftEnabled: rail.contentX > 1
+        rightEnabled: rail.contentX < root.maxScroll - 1
+        onPageLeft: rail.contentX = Math.max(0, rail.contentX - root.step)
+        onPageRight: rail.contentX = Math.min(root.maxScroll, rail.contentX + root.step)
     }
 
     Item {

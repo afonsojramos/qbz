@@ -134,325 +134,7 @@ Rectangle {
     }
 
     // --- Circular header action (CircleAction, on-surface variant) -------
-    component CircleBtn: Rectangle {
-        property string name: ""
-        property bool active: false
-        property bool primary: false
-        property bool btnEnabled: true
-        signal clicked()
-        width: primary ? 40 : 32
-        height: primary ? 40 : 32
-        radius: width / 2
-        color: primary ? (cbArea.containsMouse && btnEnabled ? theme.accentHover : theme.accent)
-             : (cbArea.containsMouse || active) ? theme.surfaceHover : theme.surfaceElevated
-        border.width: primary ? 0 : 1.5
-        border.color: theme.borderMuted
-        opacity: btnEnabled ? 1.0 : 0.4
-        QbzIcon {
-            name: parent.name
-            width: primary ? 20 : 15
-            height: primary ? 20 : 15
-            anchors.centerIn: parent
-            tintName: parent.primary ? "black" : (parent.active ? "accent" : "primary")
-        }
-        MouseArea {
-            id: cbArea
-            anchors.fill: parent
-            enabled: parent.btnEnabled
-            hoverEnabled: true
-            cursorShape: parent.btnEnabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-            onClicked: parent.clicked()
-        }
-    }
 
-    // --- Track row (PlaylistView TrackRow: # / 36 art / title+artist /
-    // Album link / Duration / Quality / heart / cloud reserve / ⋯) -------
-    component PlTrackRow: Rectangle {
-        required property var modelData
-        required property int index
-        width: parent ? parent.width : 0
-        height: 50
-        radius: 8
-        color: rowArea.containsMouse ? theme.surfaceHover : "transparent"
-
-        // Shared drag (the row BODY is the source — no grip). Starts past
-        // 6px of press-drag; the release either reorders (in-list, owner)
-        // or adds to the sidebar target (main.rs drag_end).
-        property bool dragging: false
-        property point downPos: Qt.point(0, 0)
-
-        MouseArea {
-            id: rowArea
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onPressed: function (mouse) {
-                parent.downPos = Qt.point(mouse.x, mouse.y)
-            }
-            onPositionChanged: function (mouse) {
-                if (!pressed) return
-                const g = mapToItem(null, mouse.x, mouse.y)
-                if (!parent.dragging
-                    && (Math.abs(mouse.x - parent.downPos.x) > 6
-                        || Math.abs(mouse.y - parent.downPos.y) > 6)) {
-                    parent.dragging = true
-                    // body-drag-started (issue #589): report the source
-                    // index BEFORE the shared drag starts.
-                    if (root.isOwner) {
-                        root.reorderFrom = index
-                        root.reorderOver = -1
-                        root.reorderDropPlaylist = ""
-                    }
-                    QbzBridge.dragStart(modelData.id, modelData.title,
-                        modelData.artist + " · " + modelData.album, g.x, g.y)
-                }
-                if (parent.dragging) {
-                    QbzBridge.dragMove(g.x, g.y)
-                }
-            }
-            onReleased: function (mouse) {
-                if (parent.dragging) {
-                    QbzBridge.dragEnd()
-                    parent.dragging = false
-                } else {
-                    QbzBridge.playlistPlayTrack(modelData.id)
-                }
-            }
-        }
-
-        Row {
-            anchors.fill: parent
-            anchors.leftMargin: 12
-            anchors.rightMargin: 12
-            spacing: 14
-            // # / hover play.
-            Rectangle {
-                width: 32
-                height: parent.height
-                color: "transparent"
-                Text {
-                    visible: !rowArea.containsMouse
-                    anchors.centerIn: parent
-                    text: index + 1
-                    color: theme.textMuted
-                    font.pixelSize: 13
-                }
-                Rectangle {
-                    visible: rowArea.containsMouse
-                    anchors.centerIn: parent
-                    width: 28
-                    height: 28
-                    radius: 14
-                    color: "#3dffffff"
-                    QbzIcon { name: "play-fill"; width: 14; height: 14; anchors.centerIn: parent; tintName: "primary" }
-                }
-            }
-            // 36px artwork cell.
-            Rectangle {
-                width: 36
-                height: 36
-                anchors.verticalCenter: parent.verticalCenter
-                radius: 4
-                color: theme.surfaceElevated
-                clip: true
-                RoundedImage {
-                    anchors.fill: parent
-                    source: modelData.artPath || ""
-                    radius: 4
-                }
-            }
-            // Title (+ explicit) / artist.
-            Column {
-                width: parent.width - 32 - 36 - 220 - 70 - 92 - 28 - 28 - 32 - 8 * 14
-                anchors.verticalCenter: parent.verticalCenter
-                spacing: 2
-                Row {
-                    spacing: 6
-                    Text {
-                        width: Math.min(implicitWidth, parent.parent.width - (modelData.explicit ? 22 : 0))
-                        text: modelData.title
-                        color: theme.textPrimary
-                        font.pixelSize: 14
-                        font.weight: theme.weightMedium
-                        elide: Text.ElideRight
-                    }
-                    Rectangle {
-                        visible: modelData.explicit
-                        width: 16
-                        height: 16
-                        radius: 3
-                        anchors.verticalCenter: parent.verticalCenter
-                        color: theme.surfaceElevated
-                        Text { anchors.centerIn: parent; text: "E"; color: theme.textMuted; font.pixelSize: 10; font.weight: theme.weightSemibold }
-                    }
-                }
-                Text {
-                    width: parent.width
-                    text: modelData.artist
-                    color: theme.textMuted
-                    font.pixelSize: 12
-                    elide: Text.ElideRight
-                }
-            }
-            // Album (link).
-            Text {
-                width: 220
-                anchors.verticalCenter: parent.verticalCenter
-                text: modelData.album
-                color: albumArea.containsMouse ? theme.accent : theme.textMuted
-                font.pixelSize: 12
-                elide: Text.ElideRight
-                MouseArea {
-                    id: albumArea
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: modelData.albumId !== "" ? Qt.PointingHandCursor : Qt.ArrowCursor
-                    onClicked: if (modelData.albumId !== "") QbzBridge.openAlbum(modelData.albumId)
-                }
-            }
-            Text {
-                width: 70
-                anchors.verticalCenter: parent.verticalCenter
-                horizontalAlignment: Text.AlignHCenter
-                text: modelData.duration
-                color: theme.textMuted
-                font.pixelSize: 12
-            }
-            Rectangle {
-                width: 92
-                height: parent.height
-                color: "transparent"
-                Row {
-                    anchors.centerIn: parent
-                    spacing: 6
-                    Image {
-                        visible: modelData.qualityTier === "hires"
-                        source: "assets/hi-res.svg"
-                        width: 42
-                        height: 28
-                        anchors.verticalCenter: parent.verticalCenter
-                        sourceSize: Qt.size(84, 56)
-                        fillMode: Image.PreserveAspectFit
-                    }
-                    Rectangle {
-                        visible: modelData.qualityTier === "cd"
-                        width: 30
-                        height: 30
-                        radius: 3
-                        color: theme.surfaceElevated
-                        border.width: 1
-                        border.color: theme.borderSubtle
-                        QbzIcon { name: "cd"; width: 16; height: 16; anchors.centerIn: parent; tintName: "muted" }
-                    }
-                }
-            }
-            // Favorite.
-            Rectangle {
-                width: 28
-                height: 28
-                radius: 6
-                anchors.verticalCenter: parent.verticalCenter
-                color: heartArea.containsMouse ? theme.surfaceElevated : "transparent"
-                QbzIcon {
-                    name: modelData.isFavorite ? "heart-filled" : "heart"
-                    width: 15
-                    height: 15
-                    anchors.centerIn: parent
-                    tintName: modelData.isFavorite ? "favorite" : "muted"
-                }
-                MouseArea {
-                    id: heartArea
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: {
-                        modelData.isFavorite = !modelData.isFavorite
-                        QbzBridge.libraryToggleFavorite("track", modelData.id)
-                    }
-                }
-            }
-            // Cloud reserve (offline-download column — not ported; the
-            // Slint reserves the slot so the grid stays aligned).
-            Item { width: 28; height: 28 }
-            // ⋯ menu.
-            Rectangle {
-                width: 32
-                height: 32
-                radius: 6
-                anchors.verticalCenter: parent.verticalCenter
-                color: menuArea.containsMouse ? theme.surfaceElevated : "transparent"
-                QbzIcon { name: "ellipsis"; width: 15; height: 15; anchors.centerIn: parent; tintName: "secondary" }
-                MouseArea {
-                    id: menuArea
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: function (mouse) { rowMenu.openAtCursor(menuArea, mouse.x, mouse.y) }
-                }
-            }
-        }
-        QbzContextMenu {
-            id: rowMenu
-            menuWidth: 220
-            Repeater {
-                model: [
-                    { "label": QbzBridge.tr("Play", QbzBridge.trRev), "icon": "play-fill", "action": "play" },
-                    { "label": QbzBridge.tr("Play next", QbzBridge.trRev), "icon": "list-start", "action": "next" },
-                    { "label": QbzBridge.tr("Play later", QbzBridge.trRev), "icon": "list-plus", "action": "later" },
-                    { "label": QbzBridge.tr("Add to queue", QbzBridge.trRev), "icon": "list-end", "action": "queue" },
-                    { "label": QbzBridge.tr("Go to artist", QbzBridge.trRev), "icon": "user", "action": "go-artist", "show": modelData.artistId !== "" },
-                    { "label": QbzBridge.tr("Go to album", QbzBridge.trRev), "icon": "disc", "action": "go-album", "show": modelData.albumId !== "" },
-                    { "label": modelData.isFavorite ? QbzBridge.tr("Remove from Library", QbzBridge.trRev) : QbzBridge.tr("Add to Library", QbzBridge.trRev),
-                      "icon": modelData.isFavorite ? "heart-filled" : "heart", "action": "favorite" },
-                    { "label": QbzBridge.tr("Remove from playlist", QbzBridge.trRev), "icon": "trash-2", "action": "remove", "show": root.isOwner },
-                ]
-                delegate: Rectangle {
-                    required property var modelData
-                    visible: modelData.show === undefined || modelData.show === true
-                    width: parent ? parent.width : 0
-                    height: visible ? 33 : 0
-                    radius: 5
-                    color: rmiArea.containsMouse ? theme.surfaceHover : "transparent"
-                    Row {
-                        anchors.fill: parent
-                        anchors.leftMargin: 8
-                        spacing: 8
-                        QbzIcon { name: modelData.icon; width: 15; height: 15; anchors.verticalCenter: parent.verticalCenter; tintName: "secondary" }
-                        Text {
-                            height: parent.height
-                            text: modelData.label
-                            color: theme.textSecondary
-                            font.pixelSize: 13
-                            verticalAlignment: Text.AlignVCenter
-                            elide: Text.ElideRight
-                        }
-                    }
-                    MouseArea {
-                        id: rmiArea
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: {
-                            rowMenu.close()
-                            var a = modelData.action
-                            var row = parent.parent.parent.modelData
-                            if (a === "play") QbzBridge.playlistPlayTrack(row.id)
-                            else if (a === "next") QbzBridge.playlistEnqueueTrack(row.id, "next")
-                            else if (a === "later") QbzBridge.playlistEnqueueTrack(row.id, "later")
-                            else if (a === "queue") QbzBridge.playlistEnqueueTrack(row.id, "queue")
-                            else if (a === "go-artist") QbzBridge.openArtist(row.artistId)
-                            else if (a === "go-album") QbzBridge.openAlbum(row.albumId)
-                            else if (a === "favorite") {
-                                row.isFavorite = !row.isFavorite
-                                QbzBridge.libraryToggleFavorite("track", row.id)
-                            }
-                            else if (a === "remove") QbzBridge.playlistRemoveTrack(row.playlistTrackId)
-                        }
-                    }
-                }
-            }
-        }
-    }
 
     // ============================ the view ================================
     Column {
@@ -549,45 +231,45 @@ Rectangle {
                 Row {
                     width: parent.width
                     spacing: 12
-                    CircleBtn {
+                    QbzCircleAction {
                         name: "play-fill"
                         primary: true
                         btnEnabled: root.allTracks.length > 0
                         anchors.verticalCenter: parent.verticalCenter
                         onClicked: QbzBridge.playlistPlayAll()
                     }
-                    CircleBtn {
+                    QbzCircleAction {
                         name: "shuffle"
                         btnEnabled: root.allTracks.length > 0
                         anchors.verticalCenter: parent.verticalCenter
                         onClicked: QbzBridge.playlistShuffle()
                     }
-                    CircleBtn {
+                    QbzCircleAction {
                         name: (doc.isFavorite === true) ? "heart-filled" : "heart"
                         active: doc.isFavorite === true
                         anchors.verticalCenter: parent.verticalCenter
                         onClicked: QbzBridge.playlistToggleFavorite()
                     }
-                    CircleBtn {
+                    QbzCircleAction {
                         name: (doc.pinned === true) ? "pin-filled" : "pin"
                         active: doc.pinned === true
                         anchors.verticalCenter: parent.verticalCenter
                         onClicked: QbzBridge.playlistTogglePin()
                     }
-                    CircleBtn {
+                    QbzCircleAction {
                         visible: !root.isOwner
                         name: (doc.isFollowing === true) ? "check" : "user-plus"
                         active: doc.isFollowing === true
                         anchors.verticalCenter: parent.verticalCenter
                         onClicked: QbzBridge.playlistToggleFollow()
                     }
-                    CircleBtn {
+                    QbzCircleAction {
                         visible: !root.isOwner && doc.isCopied !== true
                         name: "copy"
                         anchors.verticalCenter: parent.verticalCenter
                         onClicked: QbzBridge.playlistCopy()
                     }
-                    CircleBtn {
+                    QbzCircleAction {
                         visible: root.isOwner
                         name: "pen-line"
                         anchors.verticalCenter: parent.verticalCenter
@@ -769,7 +451,28 @@ Rectangle {
                 boundsBehavior: Flickable.StopAtBounds
                 cacheBuffer: 500
                 model: root.tracks
-                delegate: PlTrackRow { }
+                delegate: TrackRow {
+                    required property var modelData
+                    required property int index
+                    width: parent ? parent.width : 0
+                    item: modelData
+                    number: index + 1
+                    showArtwork: true
+                    showAlbum: true
+                    showDownload: true
+                    menuShowRemove: root.isOwner
+                    onPlayRequested: QbzBridge.playlistPlayTrack(item.id)
+                    onEnqueueRequested: function (m) { QbzBridge.playlistEnqueueTrack(item.id, m) }
+                    onRemoveRequested: QbzBridge.playlistRemoveTrack(item.playlistTrackId)
+                    onBodyDragStarted: function (n) {
+                        // #589: report the source index BEFORE the shared drag.
+                        if (root.isOwner) {
+                            root.reorderFrom = index
+                            root.reorderOver = -1
+                            root.reorderDropPlaylist = ""
+                        }
+                    }
+                }
             }
 
             // Drop indicator: a 2px accent line at the insertion slot,

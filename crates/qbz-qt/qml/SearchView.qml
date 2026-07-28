@@ -138,248 +138,6 @@ Rectangle {
 
     // Track row (primitives/TrackRow.slint, 50px — number/play, title +
     // explicit, artist, duration, quality, ⋯ menu).
-    component SearchTrackRow: Rectangle {
-        property var item: ({})
-        property int number: 0
-        width: parent ? parent.width : 0
-        height: 50
-        radius: 6
-        color: strArea.containsMouse ? theme.surfaceHover : "transparent"
-
-        property bool dragging: false
-        property point downPos: Qt.point(0, 0)
-        MouseArea {
-            id: strArea
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onPressed: function (mouse) { parent.downPos = Qt.point(mouse.x, mouse.y) }
-            onPositionChanged: function (mouse) {
-                if (!pressed) return
-                const g = mapToItem(null, mouse.x, mouse.y)
-                if (!parent.dragging
-                    && (Math.abs(mouse.x - parent.downPos.x) > 6
-                        || Math.abs(mouse.y - parent.downPos.y) > 6)) {
-                    parent.dragging = true
-                    QbzBridge.dragStart(item.id, item.title,
-                        item.artist + " · " + item.album, g.x, g.y)
-                }
-                if (parent.dragging) QbzBridge.dragMove(g.x, g.y)
-            }
-            onReleased: function (mouse) {
-                if (parent.dragging) {
-                    QbzBridge.dragEnd()
-                    parent.dragging = false
-                } else {
-                    QbzBridge.playTrack(item.id)
-                }
-            }
-        }
-        Row {
-            anchors.fill: parent
-            anchors.leftMargin: 12
-            anchors.rightMargin: 12
-            spacing: 14
-            Rectangle {
-                width: 32
-                height: parent.height
-                color: "transparent"
-                Text {
-                    visible: !strArea.containsMouse
-                    anchors.centerIn: parent
-                    text: number
-                    color: theme.textMuted
-                    font.pixelSize: 13
-                }
-                Rectangle {
-                    visible: strArea.containsMouse
-                    anchors.centerIn: parent
-                    width: 28
-                    height: 28
-                    radius: 14
-                    color: "#3dffffff"
-                    QbzIcon { name: "play-fill"; width: 14; height: 14; anchors.centerIn: parent; tintName: "primary" }
-                }
-            }
-            Column {
-                width: parent.width - 32 - 70 - 92 - 28 - 3 * 14
-                anchors.verticalCenter: parent.verticalCenter
-                spacing: 2
-                Row {
-                    spacing: 6
-                    Text {
-                        width: Math.min(implicitWidth, parent.parent.width - (item.explicit ? 22 : 0))
-                        text: item.title
-                        color: theme.textPrimary
-                        font.pixelSize: 14
-                        font.weight: theme.weightMedium
-                        elide: Text.ElideRight
-                    }
-                    Rectangle {
-                        visible: item.explicit
-                        width: 16
-                        height: 16
-                        radius: 3
-                        anchors.verticalCenter: parent.verticalCenter
-                        color: theme.surfaceElevated
-                        Text { anchors.centerIn: parent; text: "E"; color: theme.textMuted; font.pixelSize: 10; font.weight: theme.weightSemibold }
-                    }
-                }
-                Text {
-                    width: parent.width
-                    text: item.artist
-                    color: theme.textMuted
-                    font.pixelSize: 12
-                    elide: Text.ElideRight
-                }
-            }
-            Text {
-                width: 70
-                anchors.verticalCenter: parent.verticalCenter
-                horizontalAlignment: Text.AlignRight
-                text: item.duration
-                color: theme.textMuted
-                font.pixelSize: 12
-            }
-            Rectangle {
-                width: 92
-                height: parent.height
-                color: "transparent"
-                Row {
-                    anchors.verticalCenter: parent.verticalCenter
-                    spacing: 6
-                    Image {
-                        visible: item.qualityTier === "hires"
-                        source: "assets/hi-res.svg"
-                        width: 42
-                        height: 28
-                        anchors.verticalCenter: parent.verticalCenter
-                        sourceSize: Qt.size(84, 56)
-                        fillMode: Image.PreserveAspectFit
-                    }
-                    Rectangle {
-                        visible: item.qualityTier === "cd"
-                        width: 30
-                        height: 30
-                        radius: 3
-                        color: theme.surfaceElevated
-                        border.width: 1
-                        border.color: theme.borderSubtle
-                        QbzIcon { name: "cd"; width: 16; height: 16; anchors.centerIn: parent; tintName: "muted" }
-                    }
-                }
-            }
-            Rectangle {
-                width: 28
-                height: 28
-                radius: 6
-                anchors.verticalCenter: parent.verticalCenter
-                color: stmArea.containsMouse ? theme.surfaceElevated : "transparent"
-                QbzIcon { name: "ellipsis"; width: 15; height: 15; anchors.centerIn: parent; tintName: "secondary" }
-                MouseArea {
-                    id: stmArea
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: function (mouse) { strMenu.openAtCursor(stmArea, mouse.x, mouse.y) }
-                }
-            }
-        }
-        QbzContextMenu {
-            id: strMenu
-            menuWidth: 196
-            Repeater {
-                model: [
-                    { "label": QbzBridge.tr("Play", QbzBridge.trRev), "icon": "play-fill", "action": "play" },
-                    { "label": QbzBridge.tr("Play next", QbzBridge.trRev), "icon": "list-start", "action": "next" },
-                    { "label": QbzBridge.tr("Play later", QbzBridge.trRev), "icon": "list-plus", "action": "later" },
-                    { "label": QbzBridge.tr("Add to queue", QbzBridge.trRev), "icon": "list-end", "action": "queue" },
-                    { "label": item.artistId !== "" ? QbzBridge.tr("Go to artist", QbzBridge.trRev) : "", "icon": "user", "action": "go-artist" },
-                    { "label": item.albumId !== "" ? QbzBridge.tr("Go to album", QbzBridge.trRev) : "", "icon": "disc", "action": "go-album" },
-                ]
-                delegate: Rectangle {
-                    required property var modelData
-                    visible: modelData.label !== ""
-                    width: parent ? parent.width : 0
-                    height: visible ? 33 : 0
-                    radius: 5
-                    color: smiArea.containsMouse ? theme.surfaceHover : "transparent"
-                    Row {
-                        anchors.fill: parent
-                        anchors.leftMargin: 8
-                        spacing: 8
-                        QbzIcon { name: modelData.icon; width: 15; height: 15; anchors.verticalCenter: parent.verticalCenter; tintName: "secondary" }
-                        Text {
-                            height: parent.height
-                            text: modelData.label
-                            color: theme.textSecondary
-                            font.pixelSize: 13
-                            verticalAlignment: Text.AlignVCenter
-                            elide: Text.ElideRight
-                        }
-                    }
-                    MouseArea {
-                        id: smiArea
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: {
-                            strMenu.close()
-                            var a = modelData.action
-                            if (a === "play") QbzBridge.playTrack(item.id)
-                            else if (a === "next") QbzBridge.enqueueTrack(item.id, "next")
-                            else if (a === "later") QbzBridge.enqueueTrack(item.id, "later")
-                            else if (a === "queue") QbzBridge.enqueueTrack(item.id, "queue")
-                            else if (a === "go-artist") QbzBridge.openArtist(item.artistId)
-                            else if (a === "go-album") QbzBridge.openAlbum(item.albumId)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Section header with an optional "View all" (SectionHeader).
-    component SectionHeader: Item {
-        property string title: ""
-        property bool showMore: false
-        signal moreClicked()
-        width: parent ? parent.width : 0
-        height: 30
-        Text {
-            anchors.left: parent.left
-            anchors.verticalCenter: parent.verticalCenter
-            text: title
-            color: theme.textPrimary
-            font.pixelSize: theme.fontSection
-            font.weight: theme.weightSemibold
-        }
-        Rectangle {
-            visible: showMore
-            anchors.right: parent.right
-            anchors.verticalCenter: parent.verticalCenter
-            width: moreText.implicitWidth + 16
-            height: 26
-            radius: 4
-            color: moreArea.containsMouse ? theme.surfaceHover : "transparent"
-            Text {
-                id: moreText
-                anchors.centerIn: parent
-                text: QbzBridge.tr("View all", QbzBridge.trRev)
-                color: theme.accent
-                font.pixelSize: 14
-                font.weight: theme.weightMedium
-            }
-            MouseArea {
-                id: moreArea
-                anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                onClicked: parent.parent.moreClicked()
-            }
-        }
-    }
-
     // "Load more (loaded / total)" (LoadMoreButton).
     component LoadMoreButton: Item {
         property int loaded: 0
@@ -628,10 +386,12 @@ Rectangle {
                             visible: root.artistsCarousel.length > 0
                             width: parent.width - 224
                             spacing: 12
-                            SectionHeader {
+                            QbzSectionHeader {
                                 title: QbzBridge.tr("Artists", QbzBridge.trRev)
-                                showMore: true
-                                onMoreClicked: QbzBridge.searchTabChanged(3)
+                                showViewAll: true
+                                viewAllAccent: true
+                                showChevrons: false
+                                onViewAllClicked: QbzBridge.searchTabChanged(3)
                             }
                             ListView {
                                 width: parent.width
@@ -653,10 +413,12 @@ Rectangle {
                         visible: root.tab === 0 && (root.mp.kind || "") === "" && root.artists.length > 0
                         width: parent.width
                         spacing: 12
-                        SectionHeader {
+                        QbzSectionHeader {
                             title: QbzBridge.tr("Artists", QbzBridge.trRev)
-                            showMore: true
-                            onMoreClicked: QbzBridge.searchTabChanged(3)
+                            showViewAll: true
+                                viewAllAccent: true
+                                showChevrons: false
+                            onViewAllClicked: QbzBridge.searchTabChanged(3)
                         }
                         ListView {
                             width: parent.width
@@ -678,10 +440,12 @@ Rectangle {
                         visible: root.tab === 0 && root.albums.length > 0
                         width: parent.width
                         spacing: 12
-                        SectionHeader {
+                        QbzSectionHeader {
                             title: QbzBridge.tr("Albums", QbzBridge.trRev)
-                            showMore: true
-                            onMoreClicked: QbzBridge.searchTabChanged(1)
+                            showViewAll: true
+                                viewAllAccent: true
+                                showChevrons: false
+                            onViewAllClicked: QbzBridge.searchTabChanged(1)
                         }
                         ListView {
                             width: parent.width
@@ -740,14 +504,22 @@ Rectangle {
                         visible: (root.tab === 0 || root.tab === 2) && root.tracks.length > 0
                         width: parent.width
                         spacing: 4
-                        SectionHeader {
+                        QbzSectionHeader {
                             title: QbzBridge.tr("Tracks", QbzBridge.trRev)
-                            showMore: root.tab === 0 && (root.doc.tracksTotal || 0) > root.previewCap
-                            onMoreClicked: QbzBridge.searchTabChanged(2)
+                            showViewAll: root.tab === 0 && (root.doc.tracksTotal || 0) > root.previewCap
+                            viewAllAccent: true
+                            showChevrons: false
+                            onViewAllClicked: QbzBridge.searchTabChanged(2)
                         }
                         Repeater {
                             model: root.tab === 2 ? root.tracks : root.tracks.slice(0, root.previewCap)
-                            delegate: SearchTrackRow { item: modelData; number: index + 1 }
+                            delegate: TrackRow {
+                                item: modelData
+                                number: index + 1
+                                menuShowFavorite: false
+                                onPlayRequested: QbzBridge.playTrack(item.id)
+                                onEnqueueRequested: function (m) { QbzBridge.enqueueTrack(item.id, m) }
+                            }
                         }
                     }
                     LoadMoreButton {
@@ -783,10 +555,12 @@ Rectangle {
                         visible: root.tab === 0 && root.playlists.length > 0
                         width: parent.width
                         spacing: 12
-                        SectionHeader {
+                        QbzSectionHeader {
                             title: QbzBridge.tr("Playlists", QbzBridge.trRev)
-                            showMore: true
-                            onMoreClicked: QbzBridge.searchTabChanged(4)
+                            showViewAll: true
+                                viewAllAccent: true
+                                showChevrons: false
+                            onViewAllClicked: QbzBridge.searchTabChanged(4)
                         }
                         ListView {
                             width: parent.width

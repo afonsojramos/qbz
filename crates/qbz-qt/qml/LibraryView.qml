@@ -203,69 +203,6 @@ Rectangle {
     // ============================ components =============================
 
     // Segmented tab (SegmentedTabBar's Segment) with count badge.
-    component SegTab: Rectangle {
-        id: segTabRoot
-        property string label: ""
-        property int count: 0
-        property bool active: false
-        signal clicked()
-
-        width: segRow.implicitWidth
-        height: segRow.implicitHeight
-        radius: 4
-        color: active ? theme.surfaceMain
-             : segArea.containsMouse ? theme.surfaceHover : "transparent"
-
-        Row {
-            id: segRow
-            leftPadding: 12
-            rightPadding: parent && parent.count > 0 ? 8 : 12
-            topPadding: 6
-            bottomPadding: 6
-            spacing: 7
-            Text {
-                text: parent.parent.label
-                color: parent.parent.active ? theme.textPrimary : theme.textMuted
-                font.pixelSize: theme.fontLegal
-                font.weight: theme.weightMedium
-                anchors.verticalCenter: parent.verticalCenter
-            }
-            Rectangle {
-                visible: parent.parent.count > 0
-                width: Math.max(18, countText.implicitWidth + 10)
-                height: 16
-                radius: 8
-                anchors.verticalCenter: parent.verticalCenter
-                color: parent.parent.active ? "#26ffffff" : "#14ffffff"
-                Text {
-                    id: countText
-                    anchors.centerIn: parent
-                    text: segTabRoot.count
-                    color: segTabRoot.active ? theme.textPrimary : theme.textSecondary
-                    font.pixelSize: 11
-                    font.weight: theme.weightMedium
-                }
-            }
-        }
-        // Active underline (redundant shape cue).
-        Rectangle {
-            visible: active
-            x: 4
-            width: parent.width - 8
-            height: 2
-            y: parent.height - 2
-            radius: 1
-            color: theme.accent
-        }
-        MouseArea {
-            id: segArea
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onClicked: parent.clicked()
-        }
-    }
-
     // Small toolbar toggle button (ToggleButton sm): 30px, active = accent.
     component ToolToggle: Rectangle {
         property string name: ""
@@ -338,35 +275,7 @@ Rectangle {
     }
 
     // Card heart (live favorite toggle).
-    component HeartBtn: Rectangle {
-        property bool fav: false
-        property string itemKind: ""
-        property string itemId: ""
-        width: 28
-        height: 28
-        radius: 14
-        color: hbArea.containsMouse ? "#3dffffff" : "#24ffffff"
-        border.width: 1.5
-        border.color: "#ccffffff"
-        QbzIcon {
-            name: parent.fav ? "heart-filled" : "heart"
-            width: 14
-            height: 14
-            anchors.centerIn: parent
-            tintName: parent.fav ? "favorite" : "primary"
-        }
-        MouseArea {
-            id: hbArea
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onClicked: {
-                // Optimistic flip; the signal confirms or rolls back.
-                parent.fav = !parent.fav
-                QbzBridge.libraryToggleFavorite(itemKind, itemId)
-            }
-        }
-    }
+
 
     // Quality mini-badge (hi-res image / cd box).
     // ===================== card families (Slint homologation) =============
@@ -636,202 +545,15 @@ Rectangle {
     }
 
     // --- Tracks-tab row (primitives/TrackRow.slint, 50px) -----------------
-    component TrackListRow: Rectangle {
-        property var item: ({})
-        property int number: 0
-        height: 50
-        radius: 6
-        color: trRowArea.containsMouse ? theme.surfaceHover : "transparent"
-
-        property bool dragging: false
-        property point downPos: Qt.point(0, 0)
-        MouseArea {
-            id: trRowArea
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onPressed: function (mouse) { parent.downPos = Qt.point(mouse.x, mouse.y) }
-            onPositionChanged: function (mouse) {
-                if (!pressed) return
-                const g = mapToItem(null, mouse.x, mouse.y)
-                if (!parent.dragging
-                    && (Math.abs(mouse.x - parent.downPos.x) > 6
-                        || Math.abs(mouse.y - parent.downPos.y) > 6)) {
-                    parent.dragging = true
-                    QbzBridge.dragStart(item.id, item.title,
-                        item.artist + " · " + item.album, g.x, g.y)
-                }
-                if (parent.dragging) QbzBridge.dragMove(g.x, g.y)
-            }
-            onReleased: function (mouse) {
-                if (parent.dragging) {
-                    QbzBridge.dragEnd()
-                    parent.dragging = false
-                } else {
-                    QbzBridge.playTrack(item.id)
-                }
-            }
-        }
-        Row {
-            anchors.fill: parent
-            anchors.leftMargin: 12
-            anchors.rightMargin: 12
-            spacing: 14
-            // # / hover play (TrackRow number cell, 32px).
-            Rectangle {
-                width: 32
-                height: parent.height
-                color: "transparent"
-                Text {
-                    visible: !trRowArea.containsMouse
-                    anchors.centerIn: parent
-                    text: number
-                    color: theme.textMuted
-                    font.pixelSize: 13
-                }
-                Rectangle {
-                    visible: trRowArea.containsMouse
-                    anchors.centerIn: parent
-                    width: 28
-                    height: 28
-                    radius: 14
-                    color: "#3dffffff"
-                    QbzIcon { name: "play-fill"; width: 14; height: 14; anchors.centerIn: parent; tintName: "primary" }
-                }
-            }
-            // Title (+ explicit badge) / artist.
-            Column {
-                width: parent.width - 32 - 70 - 92 - 28 - 28 - 4 * 14
-                anchors.verticalCenter: parent.verticalCenter
-                spacing: 2
-                Row {
-                    spacing: 6
-                    Text {
-                        width: Math.min(implicitWidth, parent.parent.width - (item.explicit ? 22 : 0))
-                        text: item.title
-                        color: theme.textPrimary
-                        font.pixelSize: 14
-                        font.weight: theme.weightMedium
-                        elide: Text.ElideRight
-                    }
-                    Rectangle {
-                        visible: item.explicit
-                        width: 16
-                        height: 16
-                        radius: 3
-                        anchors.verticalCenter: parent.verticalCenter
-                        color: theme.surfaceElevated
-                        Text { anchors.centerIn: parent; text: "E"; color: theme.textMuted; font.pixelSize: 10; font.weight: theme.weightSemibold }
-                    }
-                }
-                Text {
-                    width: parent.width
-                    text: item.artist
-                    color: theme.textMuted
-                    font.pixelSize: 12
-                    elide: Text.ElideRight
-                }
-            }
-            // Duration.
-            Text {
-                width: 70
-                anchors.verticalCenter: parent.verticalCenter
-                horizontalAlignment: Text.AlignRight
-                text: item.duration
-                color: theme.textMuted
-                font.pixelSize: 12
-            }
-            // Quality mini.
-            Rectangle {
-                width: 92
-                height: parent.height
-                color: "transparent"
-                QualityMini { tier: item.qualityTier; anchors.verticalCenter: parent.verticalCenter }
-            }
-            // Heart.
-            Rectangle {
-                width: 28
-                height: 28
-                radius: 6
-                anchors.verticalCenter: parent.verticalCenter
-                color: trHeartArea.containsMouse ? theme.surfaceElevated : "transparent"
-                QbzIcon {
-                    name: item.isFavorite ? "heart-filled" : "heart"
-                    width: 15
-                    height: 15
-                    anchors.centerIn: parent
-                    tintName: item.isFavorite ? "favorite" : "muted"
-                }
-                MouseArea {
-                    id: trHeartArea
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: {
-                        item.isFavorite = !item.isFavorite
-                        QbzBridge.libraryToggleFavorite("track", item.id)
-                    }
-                }
-            }
-            // ⋯ menu.
-            Rectangle {
-                width: 28
-                height: 28
-                radius: 6
-                anchors.verticalCenter: parent.verticalCenter
-                color: trMenuArea.containsMouse ? theme.surfaceElevated : "transparent"
-                QbzIcon { name: "ellipsis"; width: 15; height: 15; anchors.centerIn: parent; tintName: "secondary" }
-                MouseArea {
-                    id: trMenuArea
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: function (mouse) { trMenu.openAtCursor(trMenuArea, mouse.x, mouse.y) }
-                }
-            }
-        }
-        CardMenu {
-            id: trMenu
-            menuWidth: 196
-            entries: root.trackMenuModel(item)
-            onPicked: function (a) { root.trackAction(item, a) }
-        }
-    }
-
     // ============================ view ===================================
 
     // Offline gate (OfflinePlaceholder replica; the Slint offline RAIL is
     // out of scope — see header note).
-    Column {
+    QbzOfflinePlaceholder {
         visible: QbzBridge.offline
         anchors.centerIn: parent
-        spacing: 0
-        QbzIcon {
-            name: "cloud-off"
-            width: 56
-            height: 56
-            anchors.horizontalCenter: parent.horizontalCenter
-            tintName: "muted"
-        }
-        Item { width: 1; height: 18 }
-        Text {
-            anchors.horizontalCenter: parent.horizontalCenter
-            text: QbzBridge.tr("You're offline", QbzBridge.trRev)
-            color: theme.textPrimary
-            font.pixelSize: theme.fontHeading
-            font.weight: theme.weightSemibold
-        }
-        Item { width: 1; height: 8 }
-        Text {
-            width: 420
-            text: QbzBridge.offlineMode === 2
-                ? QbzBridge.tr("Offline mode is enabled. Disable it in Settings to use Qobuz.", QbzBridge.trRev)
-                : QbzBridge.tr("No internet connection. Your local library and downloads keep working.", QbzBridge.trRev)
-            color: theme.textSecondary
-            font.pixelSize: theme.fontBody
-            horizontalAlignment: Text.AlignHCenter
-            wrapMode: Text.WordWrap
-        }
+        showSettingsAction: true
+        onSettingsClicked: QbzBridge.navigateTo("settings")
     }
 
     Column {
@@ -856,12 +578,20 @@ Rectangle {
                     id: tabRow
                     padding: 3
                     spacing: 4
-                    SegTab { label: QbzBridge.tr("All", QbzBridge.trRev); count: counts.all || 0; active: root.activeTab === "all"; onClicked: root.activeTab = "all" }
-                    SegTab { label: QbzBridge.tr("Tracks", QbzBridge.trRev); count: counts.tracks || 0; active: root.activeTab === "tracks"; onClicked: root.activeTab = "tracks" }
-                    SegTab { label: QbzBridge.tr("Albums", QbzBridge.trRev); count: counts.albums || 0; active: root.activeTab === "albums"; onClicked: root.activeTab = "albums" }
-                    SegTab { label: QbzBridge.tr("Artists", QbzBridge.trRev); count: counts.artists || 0; active: root.activeTab === "artists"; onClicked: root.activeTab = "artists" }
-                    SegTab { label: QbzBridge.tr("Playlists", QbzBridge.trRev); count: counts.playlists || 0; active: root.activeTab === "playlists"; onClicked: root.activeTab = "playlists" }
-                    SegTab { label: QbzBridge.tr("Labels", QbzBridge.trRev); count: counts.labels || 0; active: root.activeTab === "labels"; onClicked: root.activeTab = "labels" }
+                    QbzTabBar {
+                        counts: true
+                        underline: true
+                        activeId: root.activeTab
+                        tabs: [
+                            { "id": "all", "label": QbzBridge.tr("All", QbzBridge.trRev), "count": counts.all || 0 },
+                            { "id": "tracks", "label": QbzBridge.tr("Tracks", QbzBridge.trRev), "count": counts.tracks || 0 },
+                            { "id": "albums", "label": QbzBridge.tr("Albums", QbzBridge.trRev), "count": counts.albums || 0 },
+                            { "id": "artists", "label": QbzBridge.tr("Artists", QbzBridge.trRev), "count": counts.artists || 0 },
+                            { "id": "playlists", "label": QbzBridge.tr("Playlists", QbzBridge.trRev), "count": counts.playlists || 0 },
+                            { "id": "labels", "label": QbzBridge.tr("Labels", QbzBridge.trRev), "count": counts.labels || 0 },
+                        ]
+                        onSelected: function (id) { root.activeTab = id }
+                    }
                 }
             }
 
@@ -936,22 +666,11 @@ Rectangle {
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: allSortMenu.open()
+                            onClicked: allSortMenu.openBelowRight(allSortArea)
                         }
-                        Popup {
+                        QbzContextMenu {
                             id: allSortMenu
-                            x: parent.width - 172
-                            y: parent.height + 4
-                            width: 172
-                            padding: 5
-                            closePolicy: Popup.CloseOnPressOutside
-                            background: Rectangle {
-                                color: theme.surfaceMain
-                                radius: theme.radiusSm
-                                border.width: 1
-                                border.color: theme.borderMuted
-                            }
-                            contentItem: Column {
+                            menuWidth: 172
                                 Repeater {
                                     model: [
                                         { "field": "date", "label": QbzBridge.tr("Date added", QbzBridge.trRev) },
@@ -1006,7 +725,6 @@ Rectangle {
                                         }
                                     }
                                 }
-                            }
                         }
                     }
                 }
@@ -1043,22 +761,11 @@ Rectangle {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: albumsSortMenu.open()
+                        onClicked: albumsSortMenu.openBelowRight(albumsSortArea)
                     }
-                    Popup {
+                    QbzContextMenu {
                         id: albumsSortMenu
-                        x: parent.width - 172
-                        y: parent.height + 4
-                        width: 172
-                        padding: 5
-                        closePolicy: Popup.CloseOnPressOutside
-                        background: Rectangle {
-                            color: theme.surfaceMain
-                            radius: theme.radiusSm
-                            border.width: 1
-                            border.color: theme.borderMuted
-                        }
-                        contentItem: Column {
+                        menuWidth: 172
                             Repeater {
                                 model: ["default", "title-asc", "title-desc", "artist-asc"]
                                 delegate: Rectangle {
@@ -1085,7 +792,6 @@ Rectangle {
                                     }
                                 }
                             }
-                        }
                     }
                 }
                 // Playlists sub-tab (Library / Following).
@@ -1300,7 +1006,12 @@ Rectangle {
                     height: root.activeTab === "tracks" ? 50 : 44
                     Component {
                         id: trackRowComp
-                        TrackListRow { item: modelData; number: index + 1 }
+                        TrackRow {
+                            item: modelData
+                            number: index + 1
+                            onPlayRequested: QbzBridge.playTrack(item.id)
+                            onEnqueueRequested: function (m) { QbzBridge.enqueueTrack(item.id, m) }
+                        }
                     }
                     Component {
                         id: feedRowComp
