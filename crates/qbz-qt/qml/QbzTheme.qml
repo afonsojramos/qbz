@@ -1,43 +1,101 @@
-// Shared dark-theme constants for the POC — the values the Slint app
-// pushes into its ThemeColors struct for the dark theme
-// (crates/qbz-ui/ui/foundation/theme.slint, dark block), plus the spacing /
-// radius / typography / layout tokens the shell uses (foundation/*.slint).
+// Shared theme tokens (phase 19: LIVE) — the color tokens now bind to
+// QbzBridge.themeJson, the serialized qbz-theme ThemeColors for the
+// persisted ui_prefs `theme` slug (theme_qt.rs — the Qt equivalent of the
+// Slint theme::push_colors: switching the theme republishes the document
+// and every consumer repaints, no restart). Until the first publish lands
+// the baked dark fallback below applies (the bridge seeds themeJson at
+// construction, so the fallback is purely defensive).
+//
+// The non-color tokens (spacing / radius / typography / layout from
+// foundation/*.slint) stay static regardless of theme.
 //
 // Kept as a plain instantiable QtObject (NOT a pragma Singleton — the
 // cxx-qt-build generated qmldir cannot mark singletons).
 
 import QtQuick
+import com.blitzfc.qbz
 
 QtObject {
-    // --- Theme colors (dark) ------------------------------------------
-    readonly property color surfaceMain: "#0f0f0f"
-    readonly property color surfaceCard: "#1a1a1a"
-    readonly property color surfaceElevated: "#2a2a2a"
-    readonly property color surfaceHover: "#10ffffff"
-    readonly property color textPrimary: "#ffffff"
-    readonly property color textSecondary: "#cccccc"
-    readonly property color textMuted: "#888888"
-    readonly property color textDisabled: "#555555"
-    readonly property color accent: "#4285f4"
-    readonly property color accentHover: "#5a9bf4"
-    readonly property color accentPressed: "#3275e4"
-    readonly property color accentText: "#ffffff"
-    readonly property color warning: "#fbbf24"
-    readonly property color favorite: "#ef4444"
-    // #ffffff14 / #ffffff38 / #00000066 in the Slint ARGB notation.
-    readonly property color borderSubtle: "#14ffffff"
-    readonly property color borderMuted: "#38ffffff"
-    readonly property color cardShadow: "#66000000"
-    // Ambient-background layering (phase 14): the alpha variants the Slint
-    // applies when the dynamic background is active — chrome surface-card
-    // at 0.5, the frosted content panel surface-main at 0.22 (+ hairline),
-    // thin bars surface-main at 0.3 (AppearanceState knobs baked at the
-    // defaults; the live values ride QbzBridge.ambientSurfaceAlpha /
-    // ambientBarAlpha for the QBZ_BG_* env knobs).
-    readonly property color surfaceCardA50: "#801a1a1a"
-    readonly property color surfaceMainA22: "#380f0f0f"
-    readonly property color surfaceMainA30: "#4d0f0f0f"
-    readonly property color frostBorder: "#1affffff"
+    // Baked dark fallback (pre-publish only) — the old static POC tokens.
+    readonly property var _fallback: ({
+        "surfaceMain": "#0f0f0f", "surfaceCard": "#1a1a1a",
+        "surfaceElevated": "#2a2a2a", "surfaceHover": "#10ffffff",
+        "bgHover": "#2a2a2a",
+        "textPrimary": "#ffffff", "textSecondary": "#cccccc",
+        "textMuted": "#888888", "textDisabled": "#555555",
+        "accent": "#4285f4", "accentHover": "#5a9bf4",
+        "accentPressed": "#3275e4", "accentText": "#ffffff",
+        "danger": "#e0564f", "dangerBg": "#26e0564f",
+        "dangerBorder": "#59e0564f", "dangerHover": "#e87670",
+        "warning": "#fbbf24", "warningBg": "#26fbbf24",
+        "warningBorder": "#59fbbf24", "warningHover": "#fdcb47",
+        "success": "#3fae6a", "successBg": "#263fae6a",
+        "successBorder": "#593fae6a", "successHover": "#55bd7e",
+        "borderSubtle": "#14ffffff", "borderMuted": "#38ffffff",
+        "borderStrong": "#59ffffff", "focusRing": "#4285f4",
+        "favorite": "#ef4444", "cardShadow": "#66000000",
+        "surfaceCardA50": "#801a1a1a", "surfaceMainA22": "#380f0f0f",
+        "surfaceMainA30": "#4d0f0f0f", "frostBorder": "#1affffff",
+        "isDark": true
+    })
+
+    readonly property var _doc: {
+        if (QbzBridge.themeJson === "") return _fallback
+        try {
+            return JSON.parse(QbzBridge.themeJson)
+        } catch (e) {
+            return _fallback
+        }
+    }
+    function _c(key) {
+        const v = _doc[key]
+        return v === undefined ? _fallback[key] : v
+    }
+
+    // --- Theme colors (live; ThemeColors contract) ----------------------
+    readonly property bool isDark: _doc.isDark === undefined ? true : _doc.isDark
+    readonly property color surfaceMain: _c("surfaceMain")
+    readonly property color surfaceCard: _c("surfaceCard")
+    readonly property color surfaceElevated: _c("surfaceElevated")
+    readonly property color surfaceHover: _c("surfaceHover")
+    readonly property color bgHover: _c("bgHover")
+    readonly property color textPrimary: _c("textPrimary")
+    readonly property color textSecondary: _c("textSecondary")
+    readonly property color textMuted: _c("textMuted")
+    readonly property color textDisabled: _c("textDisabled")
+    readonly property color accent: _c("accent")
+    readonly property color accentHover: _c("accentHover")
+    readonly property color accentPressed: _c("accentPressed")
+    readonly property color accentText: _c("accentText")
+    readonly property color danger: _c("danger")
+    readonly property color dangerBg: _c("dangerBg")
+    readonly property color dangerBorder: _c("dangerBorder")
+    readonly property color dangerHover: _c("dangerHover")
+    readonly property color warning: _c("warning")
+    readonly property color warningBg: _c("warningBg")
+    readonly property color warningBorder: _c("warningBorder")
+    readonly property color warningHover: _c("warningHover")
+    readonly property color success: _c("success")
+    readonly property color successBg: _c("successBg")
+    readonly property color successBorder: _c("successBorder")
+    readonly property color successHover: _c("successHover")
+    readonly property color borderSubtle: _c("borderSubtle")
+    readonly property color borderMuted: _c("borderMuted")
+    readonly property color borderStrong: _c("borderStrong")
+    readonly property color focusRing: _c("focusRing")
+    readonly property color favorite: _c("favorite")
+    readonly property color cardShadow: _c("cardShadow")
+    // 24 alpha tiers ([4..95]%, white-based dark / black-based light).
+    readonly property var alphaTiers: _doc.alpha === undefined ? [] : _doc.alpha
+    // Ambient-background layering (phase 14; theme-derived since phase 19):
+    // chrome surface-card @50%, frosted content panel surface-main @22%,
+    // thin bars surface-main @30%, hairline = alpha tier 10%. The live
+    // values for the QBZ_BG_* env knobs still ride QbzBridge
+    // .ambientSurfaceAlpha / .ambientBarAlpha.
+    readonly property color surfaceCardA50: _c("surfaceCardA50")
+    readonly property color surfaceMainA22: _c("surfaceMainA22")
+    readonly property color surfaceMainA30: _c("surfaceMainA30")
+    readonly property color frostBorder: _c("frostBorder")
 
     // --- Spacing (spacing.slint) --------------------------------------
     readonly property int spacingXs: 4

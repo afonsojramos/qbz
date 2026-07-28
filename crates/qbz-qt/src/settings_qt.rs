@@ -284,6 +284,107 @@ pub fn show_context_icon() -> bool {
     with_playback(|s| s.get_preferences().map(|p| p.show_context_icon)).unwrap_or(false)
 }
 
+// ---------------------------------------------------------------------------
+// Appearance + Integrations prefs (phase 19) — generic ui_prefs.json
+// accessors (SAME additive patch discipline) + the per-user stores the
+// Appearance/Integrations panels read (tray, My-QBZ branding).
+// ---------------------------------------------------------------------------
+
+pub fn pref_bool(key: &str, default: bool) -> bool {
+    let Some(path) = prefs_path() else {
+        return default;
+    };
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|v| v.get(key).and_then(|q| q.as_bool()))
+        .unwrap_or(default)
+}
+
+pub fn pref_str(key: &str, default: &str) -> String {
+    let Some(path) = prefs_path() else {
+        return default.to_string();
+    };
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|v| v.get(key).and_then(|q| q.as_str().map(str::to_string)))
+        .unwrap_or_else(|| default.to_string())
+}
+
+pub fn save_pref(key: &str, value: serde_json::Value) {
+    let Some(path) = prefs_path() else {
+        return;
+    };
+    let mut doc: serde_json::Value = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    if let Some(obj) = doc.as_object_mut() {
+        obj.insert(key.to_string(), value);
+        if let Ok(text) = serde_json::to_string_pretty(&doc) {
+            let _ = std::fs::write(&path, text);
+        }
+    }
+}
+
+/// The Appearance > app_background index: 0 off / 1 ambient / 2 blurred
+/// (the POC renders blurred AS ambient — ambient_qt.rs POC-NOTE).
+pub fn app_background_index() -> i32 {
+    match pref_str("app_background", "off").as_str() {
+        "ambient" => 1,
+        "blurred" => 2,
+        _ => 0,
+    }
+}
+
+// Tray store (qbz_app::settings::tray — per-user tray_settings.db, the SAME
+// file the Slint tray_settings.rs glue writes).
+static TRAY: OnceLock<qbz_app::settings::tray::TraySettingsState> = OnceLock::new();
+
+fn tray() -> &'static qbz_app::settings::tray::TraySettingsState {
+    TRAY.get_or_init(|| {
+        let state = qbz_app::settings::tray::TraySettingsState::new_empty();
+        if let Some(dir) = crate::sidebar_qt::user_dir() {
+            if let Err(e) = state.init_at(&dir) {
+                log::warn!("[qbz-qt] tray settings store unavailable: {e}");
+            }
+        }
+        state
+    })
+}
+
+// My-QBZ branding (myqbz_prefs.rs — per-user myqbz_branding.json; the label
+// row in LIBRARY & VISUALS).
+fn myqbz_label() -> String {
+    crate::sidebar_qt::user_dir()
+        .map(|d| d.join("myqbz_branding.json"))
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|v| v.get("label").and_then(|q| q.as_str().map(str::to_string)))
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "My QBZ".to_string())
+}
+
+fn save_myqbz_label(label: &str) {
+    let Some(path) = crate::sidebar_qt::user_dir().map(|d| d.join("myqbz_branding.json")) else {
+        return;
+    };
+    let mut doc: serde_json::Value = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    if let Some(obj) = doc.as_object_mut() {
+        obj.insert(
+            "label".to_string(),
+            serde_json::Value::String(label.trim().to_string()),
+        );
+        if let Ok(text) = serde_json::to_string_pretty(&doc) {
+            let _ = std::fs::write(&path, text);
+        }
+    }
+}
+
 pub const STREAMING_QUALITY_KEYS: &[&str] = &["mp3", "cd", "hires", "hires_plus"];
 pub const STREAMING_QUALITY_LABELS: &[&str] = &["MP3", "CD Quality", "Hi-Res", "Hi-Res+"];
 
@@ -303,6 +404,54 @@ const RETRY_BEHAVIOR_LABELS: &[&str] = &["Ask me", "Always try lowest quality", 
 const RETRY_BEHAVIOR_VALUES: &[&str] = &["ask", "always_fallback", "always_skip"];
 const QCONNECT_STARTUP_LABELS: &[&str] = &["Remember state", "On by default", "Off by default"];
 const QCONNECT_STARTUP_VALUES: &[&str] = &["remember_last", "on", "off"];
+// Appearance option tables (AppearanceSettings.slint / ui_prefs.rs).
+const APP_BACKGROUND_LABELS: &[&str] = &["Off", "Ambient", "Blurred art"];
+const APP_BACKGROUND_VALUES: &[&str] = &["off", "ambient", "blurred"];
+const LANGUAGE_LABELS: &[&str] = &[
+    "Auto", "English", "Español", "Français", "Deutsch", "Português", "Русский", "日本語",
+    "Nederlands",
+];
+const LANGUAGE_VALUES: &[&str] = &["auto", "en", "es", "fr", "de", "pt", "ru", "ja", "nl"];
+const UI_SCALE_LABELS: &[&str] = &["Extra small", "Small", "Default", "Large", "Extra large"];
+const UI_SCALE_VALUES: &[&str] = &["xs", "small", "default", "large", "xl"];
+const IMMERSIVE_SEARCH_LABELS: &[&str] =
+    &["Disabled", "Replace current queue", "Play next", "Add to queue"];
+const IMMERSIVE_SEARCH_VALUES: &[&str] = &["disabled", "replace", "next", "queue"];
+const IMMERSIVE_VIEW_LABELS: &[&str] =
+    &["Remember last", "Album Reactive", "Static", "Coverflow", "Spectrum", "Lyrics", "Queue"];
+const IMMERSIVE_VIEW_VALUES: &[&str] =
+    &["remember", "reactive", "static", "coverflow", "spectrum", "lyrics", "queue"];
+const MINI_VIEW_LABELS: &[&str] =
+    &["Remember last used", "Micro", "Compact", "Artwork", "Queue", "Lyrics"];
+const MINI_VIEW_VALUES: &[&str] = &["remember", "micro", "compact", "artwork", "queue", "lyrics"];
+const STARTUP_PAGE_LABELS: &[&str] = &["Home", "Where you left off"];
+const STARTUP_PAGE_VALUES: &[&str] = &["home", "remember"];
+const WC_POSITION_LABELS: &[&str] = &["Left", "Right"];
+const WC_POSITION_VALUES: &[&str] = &["left", "right"];
+const RENDERER_LABELS: &[&str] =
+    &["Auto (recommended)", "GPU", "GPU (compatibility)", "Software"];
+const RENDERER_VALUES: &[&str] = &["auto", "wgpu", "gl", "software"];
+const TRAY_ICON_LABELS: &[&str] = &["Auto", "Mono light", "Mono dark", "Color"];
+const TRAY_ICON_VALUES: &[&str] = &["auto", "mono-light", "mono-dark", "color"];
+
+fn index_of(values: &[&str], key: &str, default: usize) -> i32 {
+    values.iter().position(|v| *v == key).unwrap_or(default) as i32
+}
+
+/// Preferred-GPU dropdown (AppearanceSettings.slint): "Auto (recommended)"
+/// + detected adapter names built in Rust. POC-NOTE: no adapter enumeration
+/// in the POC — the list is Auto + the currently persisted adapter (so the
+/// owner's real value shows selected); picking it again is a no-op.
+fn gpu_power_choice() -> (Vec<String>, i32) {
+    let persisted = pref_str("gpu_power", "auto");
+    let mut opts = vec![qbz_i18n::t("Auto (recommended)")];
+    if persisted != "auto" && !persisted.is_empty() {
+        opts.push(persisted);
+        (opts, 1)
+    } else {
+        (opts, 0)
+    }
+}
 
 #[derive(Clone, Default, Serialize)]
 pub struct DeviceOption {
@@ -386,6 +535,125 @@ pub struct SettingsDoc {
     pub qconnect_device_name: String,
     #[serde(rename = "qconnectDeviceNameDefault")]
     pub qconnect_device_name_default: String,
+    // Appearance (phase 19; the ui_prefs defaults mirror ui_prefs.rs)
+    #[serde(rename = "albumHeaderGradient")]
+    pub album_header_gradient: bool,
+    #[serde(rename = "appBackgroundModes")]
+    pub app_background_modes: Vec<String>,
+    #[serde(rename = "appBackgroundIndex")]
+    pub app_background_index: i32,
+    #[serde(rename = "autoThemeSourceIndex")]
+    pub auto_theme_source_index: i32,
+    #[serde(rename = "intelligentSearch")]
+    pub intelligent_search: bool,
+    pub languages: Vec<String>,
+    #[serde(rename = "languageIndex")]
+    pub language_index: i32,
+    #[serde(rename = "uiScales")]
+    pub ui_scales: Vec<String>,
+    #[serde(rename = "uiScaleIndex")]
+    pub ui_scale_index: i32,
+    #[serde(rename = "immersiveSearchActions")]
+    pub immersive_search_actions: Vec<String>,
+    #[serde(rename = "immersiveSearchActionIndex")]
+    pub immersive_search_action_index: i32,
+    #[serde(rename = "immersiveDefaultViews")]
+    pub immersive_default_views: Vec<String>,
+    #[serde(rename = "immersiveDefaultViewIndex")]
+    pub immersive_default_view_index: i32,
+    #[serde(rename = "navInSidebar")]
+    pub nav_in_sidebar: bool,
+    #[serde(rename = "navHeaderCompact")]
+    pub nav_header_compact: bool,
+    #[serde(rename = "myQbzLabel")]
+    pub my_qbz_label: String,
+    #[serde(rename = "sidebarPlaylistCollage")]
+    pub sidebar_playlist_collage: bool,
+    #[serde(rename = "localLibraryTrackArtwork")]
+    pub local_library_track_artwork: bool,
+    #[serde(rename = "playIndicatorAnimation")]
+    pub play_indicator_animation: bool,
+    #[serde(rename = "invertSwipeNavigation")]
+    pub invert_swipe_navigation: bool,
+    #[serde(rename = "inAppToasts")]
+    pub in_app_toasts: bool,
+    #[serde(rename = "systemNotifications")]
+    pub system_notifications: bool,
+    #[serde(rename = "windowTitleShow")]
+    pub window_title_show: bool,
+    #[serde(rename = "useSystemTitleBar")]
+    pub use_system_title_bar: bool,
+    #[serde(rename = "hideTitleBar")]
+    pub hide_title_bar: bool,
+    #[serde(rename = "wcPositions")]
+    pub wc_positions: Vec<String>,
+    #[serde(rename = "wcPositionIndex")]
+    pub wc_position_index: i32,
+    #[serde(rename = "showWindowControls")]
+    pub show_window_controls: bool,
+    #[serde(rename = "showVolumeSteppers")]
+    pub show_volume_steppers: bool,
+    #[serde(rename = "miniDefaultViews")]
+    pub mini_default_views: Vec<String>,
+    #[serde(rename = "miniDefaultViewIndex")]
+    pub mini_default_view_index: i32,
+    #[serde(rename = "startupPages")]
+    pub startup_pages: Vec<String>,
+    #[serde(rename = "startupPageIndex")]
+    pub startup_page_index: i32,
+    #[serde(rename = "showPurchases")]
+    pub show_purchases: bool,
+    #[serde(rename = "navTbPurchases")]
+    pub nav_tb_purchases: bool,
+    pub renderers: Vec<String>,
+    #[serde(rename = "rendererIndex")]
+    pub renderer_index: i32,
+    #[serde(rename = "gpuPowers")]
+    pub gpu_powers: Vec<String>,
+    #[serde(rename = "gpuPowerIndex")]
+    pub gpu_power_index: i32,
+    // Appearance > SYSTEM TRAY (tray_settings.db)
+    #[serde(rename = "trayEnable")]
+    pub tray_enable: bool,
+    #[serde(rename = "trayCloseToTray")]
+    pub tray_close_to_tray: bool,
+    #[serde(rename = "trayIconThemes")]
+    pub tray_icon_themes: Vec<String>,
+    #[serde(rename = "trayIconThemeIndex")]
+    pub tray_icon_theme_index: i32,
+    // Integrations (phase 19)
+    #[serde(rename = "showRecommendations")]
+    pub show_recommendations: bool,
+    #[serde(rename = "musicbrainzEnabled")]
+    pub musicbrainz_enabled: bool,
+    #[serde(rename = "scrobbleEnabled")]
+    pub scrobble_enabled: bool,
+    #[serde(rename = "scrobbleUiCollapsed")]
+    pub scrobble_ui_collapsed: bool,
+    #[serde(rename = "lastfmEnabled")]
+    pub lastfm_enabled: bool,
+    #[serde(rename = "lastfmAuthed")]
+    pub lastfm_authed: bool,
+    #[serde(rename = "lastfmUsername")]
+    pub lastfm_username: String,
+    #[serde(rename = "lastfmAuthUrl")]
+    pub lastfm_auth_url: String,
+    #[serde(rename = "lastfmBusy")]
+    pub lastfm_busy: bool,
+    #[serde(rename = "listenbrainzEnabled")]
+    pub listenbrainz_enabled: bool,
+    #[serde(rename = "listenbrainzAuthed")]
+    pub listenbrainz_authed: bool,
+    #[serde(rename = "listenbrainzUsername")]
+    pub listenbrainz_username: String,
+    #[serde(rename = "listenbrainzBusy")]
+    pub listenbrainz_busy: bool,
+    #[serde(rename = "integrationsStatusText")]
+    pub integrations_status_text: String,
+    #[serde(rename = "integrationsStatusKind")]
+    pub integrations_status_kind: i32,
+    #[serde(rename = "discordEnabled")]
+    pub discord_enabled: bool,
 }
 
 /// Index -> value maps the select handlers resolve against.
@@ -527,6 +795,8 @@ pub async fn publish_snapshot() {
             .position(|v| *v == audio_settings.quality_fallback_behavior)
             .unwrap_or(0);
         let qconnect_startup = qconnect_load_startup_mode();
+        let scrobble_snap = crate::integrations_qt::scrobble_settings();
+        let integ_ui = crate::integrations_qt::ui_snapshot();
         let qconnect_startup_index = QCONNECT_STARTUP_VALUES
             .iter()
             .position(|v| *v == qconnect_startup)
@@ -595,6 +865,111 @@ pub async fn publish_snapshot() {
             qconnect_startup_index: qconnect_startup_index as i32,
             qconnect_device_name: qconnect_load_device_name().unwrap_or_default(),
             qconnect_device_name_default: qconnect_default_name(),
+            album_header_gradient: pref_bool("album_header_gradient", true),
+            app_background_modes: APP_BACKGROUND_LABELS
+                .iter()
+                .map(|l| qbz_i18n::t(l))
+                .collect(),
+            app_background_index: APP_BACKGROUND_VALUES
+                .iter()
+                .position(|v| *v == pref_str("app_background", "off"))
+                .unwrap_or(0) as i32,
+            auto_theme_source_index: index_of(
+                &["system", "wallpaper", "image"],
+                &pref_str("auto_theme_source", "system"),
+                0,
+            ),
+            intelligent_search: pref_bool("intelligent_search", true),
+            languages: LANGUAGE_LABELS.iter().map(|l| qbz_i18n::t(l)).collect(),
+            language_index: index_of(LANGUAGE_VALUES, &pref_str("language", "auto"), 0),
+            ui_scales: UI_SCALE_LABELS.iter().map(|l| qbz_i18n::t(l)).collect(),
+            ui_scale_index: index_of(UI_SCALE_VALUES, &pref_str("ui_scale", "default"), 2),
+            immersive_search_actions: IMMERSIVE_SEARCH_LABELS
+                .iter()
+                .map(|l| qbz_i18n::t(l))
+                .collect(),
+            immersive_search_action_index: index_of(
+                IMMERSIVE_SEARCH_VALUES,
+                &pref_str("immersive_search_action", "replace"),
+                1,
+            ),
+            immersive_default_views: IMMERSIVE_VIEW_LABELS
+                .iter()
+                .map(|l| qbz_i18n::t(l))
+                .collect(),
+            immersive_default_view_index: index_of(
+                IMMERSIVE_VIEW_VALUES,
+                &pref_str("immersive_default_view", "remember"),
+                0,
+            ),
+            nav_in_sidebar: pref_bool("nav_in_sidebar", true),
+            nav_header_compact: pref_bool("nav_header_compact", true),
+            my_qbz_label: myqbz_label(),
+            sidebar_playlist_collage: pref_bool("sidebar_playlist_collage", true),
+            local_library_track_artwork: pref_bool("local_library_track_artwork", false),
+            play_indicator_animation: pref_bool("play_indicator_animation", false),
+            invert_swipe_navigation: pref_bool("invert_swipe_navigation", false),
+            in_app_toasts: pref_bool("in_app_toasts", true),
+            system_notifications: pref_bool("system_notifications", true),
+            window_title_show: pref_bool("window_title_show", false),
+            use_system_title_bar: use_system_title_bar(),
+            hide_title_bar: pref_bool("hide_title_bar", false),
+            wc_positions: WC_POSITION_LABELS
+                .iter()
+                .map(|l| qbz_i18n::t(l))
+                .collect(),
+            wc_position_index: index_of(WC_POSITION_VALUES, &pref_str("wc_position", "right"), 1),
+            show_window_controls: pref_bool("show_window_controls", true),
+            show_volume_steppers: pref_bool("show_volume_steppers", false),
+            mini_default_views: MINI_VIEW_LABELS
+                .iter()
+                .map(|l| qbz_i18n::t(l))
+                .collect(),
+            mini_default_view_index: index_of(
+                MINI_VIEW_VALUES,
+                &pref_str("mini_default_view", "remember"),
+                0,
+            ),
+            startup_pages: STARTUP_PAGE_LABELS
+                .iter()
+                .map(|l| qbz_i18n::t(l))
+                .collect(),
+            startup_page_index: index_of(STARTUP_PAGE_VALUES, &pref_str("startup_page", "home"), 0),
+            show_purchases: pref_bool("show_purchases", false),
+            nav_tb_purchases: pref_bool("nav_tb_purchases", false),
+            renderers: RENDERER_LABELS.iter().map(|l| qbz_i18n::t(l)).collect(),
+            renderer_index: index_of(RENDERER_VALUES, &pref_str("renderer", "auto"), 0),
+            gpu_powers: gpu_power_choice().0,
+            gpu_power_index: gpu_power_choice().1,
+            tray_enable: tray().get_settings().map(|t| t.enable_tray).unwrap_or(true),
+            tray_close_to_tray: tray()
+                .get_settings()
+                .map(|t| t.close_to_tray)
+                .unwrap_or(false),
+            tray_icon_themes: TRAY_ICON_LABELS
+                .iter()
+                .map(|l| qbz_i18n::t(l))
+                .collect(),
+            tray_icon_theme_index: tray()
+                .get_settings()
+                .map(|t| index_of(TRAY_ICON_VALUES, &t.tray_icon_theme, 0))
+                .unwrap_or(0),
+            show_recommendations: crate::integrations_qt::show_recommendations(),
+            musicbrainz_enabled: pref_bool("musicbrainz_enabled", true),
+            scrobble_enabled: scrobble_snap.enabled,
+            scrobble_ui_collapsed: scrobble_snap.ui_collapsed,
+            lastfm_enabled: scrobble_snap.lastfm_enabled,
+            lastfm_authed: scrobble_snap.lastfm_is_authed(),
+            lastfm_username: scrobble_snap.lastfm_username.clone(),
+            lastfm_auth_url: integ_ui.lastfm_auth_url.clone(),
+            lastfm_busy: integ_ui.lastfm_busy,
+            listenbrainz_enabled: scrobble_snap.listenbrainz_enabled,
+            listenbrainz_authed: scrobble_snap.listenbrainz_is_authed(),
+            listenbrainz_username: scrobble_snap.listenbrainz_username.clone(),
+            listenbrainz_busy: integ_ui.listenbrainz_busy,
+            integrations_status_text: integ_ui.status_text.clone(),
+            integrations_status_kind: integ_ui.status_kind,
+            discord_enabled: crate::integrations_qt::discord_enabled(),
         }
     })
     .await
@@ -724,6 +1099,118 @@ pub async fn settings_bool(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &str,
         "resume-position" => {
             with_playback(|s| s.set_resume_playback_position(value)).map(|_| Apply::None)
         }
+        // --- Appearance (phase 19): plain ui_prefs bools (+ live bridge
+        // side-effects where the POC already has the consumer).
+        "album-header-gradient" => {
+            save_pref("album_header_gradient", serde_json::json!(value));
+            Ok(Apply::None)
+        }
+        "intelligent-search" => {
+            save_pref("intelligent_search", serde_json::json!(value));
+            crate::ui(move |mut b| b.as_mut().set_intelligent_search(value));
+            Ok(Apply::None)
+        }
+        "nav-in-sidebar" => {
+            save_pref("nav_in_sidebar", serde_json::json!(value));
+            Ok(Apply::None)
+        }
+        "nav-header-compact" => {
+            save_pref("nav_header_compact", serde_json::json!(value));
+            Ok(Apply::None)
+        }
+        "sidebar-playlist-collage" => {
+            save_pref("sidebar_playlist_collage", serde_json::json!(value));
+            Ok(Apply::None)
+        }
+        "local-library-track-artwork" => {
+            save_pref("local_library_track_artwork", serde_json::json!(value));
+            Ok(Apply::None)
+        }
+        "play-indicator-animation" => {
+            save_pref("play_indicator_animation", serde_json::json!(value));
+            Ok(Apply::None)
+        }
+        "invert-swipe-navigation" => {
+            save_pref("invert_swipe_navigation", serde_json::json!(value));
+            Ok(Apply::None)
+        }
+        "in-app-toasts" => {
+            save_pref("in_app_toasts", serde_json::json!(value));
+            Ok(Apply::None)
+        }
+        "system-notifications" => {
+            save_pref("system_notifications", serde_json::json!(value));
+            Ok(Apply::None)
+        }
+        "window-title-show" => {
+            save_pref("window_title_show", serde_json::json!(value));
+            Ok(Apply::None)
+        }
+        "use-system-title-bar" => {
+            save_pref("use_system_title_bar", serde_json::json!(value));
+            // Restart semantics (1:1 Slint): the APPLIED mode is untouched;
+            // only the menu/row state flips live.
+            log::info!("[qbz-qt] use_system_title_bar -> {value} (applies on next launch)");
+            crate::ui(move |mut b| b.as_mut().set_system_title_bar_pref(value));
+            Ok(Apply::None)
+        }
+        "hide-title-bar" => {
+            save_pref("hide_title_bar", serde_json::json!(value));
+            Ok(Apply::None)
+        }
+        "show-window-controls" => {
+            save_pref("show_window_controls", serde_json::json!(value));
+            Ok(Apply::None)
+        }
+        "show-volume-steppers" => {
+            save_pref("show_volume_steppers", serde_json::json!(value));
+            Ok(Apply::None)
+        }
+        "show-purchases" => {
+            save_pref("show_purchases", serde_json::json!(value));
+            Ok(Apply::None)
+        }
+        "nav-tb-purchases" => {
+            save_pref("nav_tb_purchases", serde_json::json!(value));
+            Ok(Apply::None)
+        }
+        "tray-enable" => tray()
+            .set_enable_tray(value)
+            .map_err(|e| e.to_string())
+            .map(|_| Apply::None),
+        "tray-close-to-tray" => tray()
+            .set_close_to_tray(value)
+            .map_err(|e| e.to_string())
+            .map(|_| Apply::None),
+        // --- Integrations (phase 19) --------------------------------------
+        "show-recommendations" => {
+            crate::integrations_qt::set_show_recommendations(value).map(|_| Apply::None)
+        }
+        "musicbrainz" => {
+            match crate::integrations_qt::set_musicbrainz_enabled(value) {
+                Ok(()) => {
+                    // Live apply (main.rs:9019-9029 seeds core from this pref).
+                    runtime.core().musicbrainz_set_enabled(value).await;
+                    Ok(Apply::None)
+                }
+                Err(e) => Err(e),
+            }
+        }
+        "scrobble-enable" => {
+            crate::integrations_qt::set_scrobble_enabled(value).map(|_| Apply::None)
+        }
+        "scrobble-collapse" => {
+            crate::integrations_qt::set_scrobble_collapsed(value).map(|_| Apply::None)
+        }
+        "lastfm-enable" => {
+            crate::integrations_qt::set_lastfm_enabled(value).map(|_| Apply::None)
+        }
+        "listenbrainz-enable" => {
+            crate::integrations_qt::set_listenbrainz_enabled(value).map(|_| Apply::None)
+        }
+        "discord-rpc" => {
+            crate::integrations_qt::set_discord_enabled(value).map(|_| Apply::None)
+        }
         other => {
             log::warn!("[qbz-qt] unknown settings bool key: {other}");
             return;
@@ -838,6 +1325,92 @@ pub async fn settings_select(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &st
             };
             qconnect_persist_startup_mode(mode);
         }
+        // --- Appearance (phase 19) ----------------------------------------
+        "app-background" => {
+            let Some(mode) = APP_BACKGROUND_VALUES.get(index) else {
+                return;
+            };
+            save_pref("app_background", serde_json::json!(mode));
+            // Live (pure QML layering; blurred renders AS ambient in the POC).
+            let ambient = if *mode == "off" { 0 } else { 1 };
+            crate::ui(move |mut b| b.as_mut().set_ambient_mode(ambient));
+        }
+        "language" => {
+            let Some(lang) = LANGUAGE_VALUES.get(index) else {
+                return;
+            };
+            save_pref("language", serde_json::json!(lang));
+            // POC-NOTE: live language switching is phase 20; the pref
+            // persists here and applies on the next launch.
+            log::info!("[qbz-qt] language -> {lang} (applies on next launch; live switch is phase 20)");
+        }
+        "ui-scale" => {
+            let Some(scale) = UI_SCALE_VALUES.get(index) else {
+                return;
+            };
+            save_pref("ui_scale", serde_json::json!(scale));
+            log::info!("[qbz-qt] ui_scale -> {scale} (restart to apply)");
+        }
+        "immersive-search-action" => {
+            let Some(v) = IMMERSIVE_SEARCH_VALUES.get(index) else {
+                return;
+            };
+            save_pref("immersive_search_action", serde_json::json!(v));
+        }
+        "immersive-default-view" => {
+            let Some(v) = IMMERSIVE_VIEW_VALUES.get(index) else {
+                return;
+            };
+            save_pref("immersive_default_view", serde_json::json!(v));
+        }
+        "wc-position" => {
+            let Some(v) = WC_POSITION_VALUES.get(index) else {
+                return;
+            };
+            save_pref("wc_position", serde_json::json!(v));
+        }
+        "mini-default-view" => {
+            let Some(v) = MINI_VIEW_VALUES.get(index) else {
+                return;
+            };
+            save_pref("mini_default_view", serde_json::json!(v));
+        }
+        "startup-page" => {
+            let Some(v) = STARTUP_PAGE_VALUES.get(index) else {
+                return;
+            };
+            save_pref("startup_page", serde_json::json!(v));
+        }
+        "renderer" => {
+            let Some(v) = RENDERER_VALUES.get(index) else {
+                return;
+            };
+            save_pref("renderer", serde_json::json!(v));
+            log::info!("[qbz-qt] renderer -> {v} (restart to apply)");
+        }
+        "gpu-power" => {
+            // Only "Auto" is actionable in the POC (no adapter enumeration —
+            // the persisted-name row is display-only).
+            if index == 0 {
+                save_pref("gpu_power", serde_json::json!("auto"));
+                log::info!("[qbz-qt] gpu_power -> auto (restart to apply)");
+            }
+        }
+        "tray-icon-theme" => {
+            let Some(v) = TRAY_ICON_VALUES.get(index) else {
+                return;
+            };
+            if let Err(e) = tray().set_tray_icon_theme(v) {
+                log::error!("[qbz-qt] persist tray icon theme failed: {e}");
+            }
+        }
+        "auto-theme-source" => {
+            const SOURCES: &[&str] = &["system", "wallpaper", "image"];
+            let Some(v) = SOURCES.get(index) else {
+                return;
+            };
+            save_pref("auto_theme_source", serde_json::json!(v));
+        }
         other => log::warn!("[qbz-qt] unknown settings select key: {other}"),
     }
     publish_snapshot().await;
@@ -859,6 +1432,14 @@ pub async fn settings_string(key: &str, value: String) {
         let trimmed = value.trim().to_string();
         let stored = (!trimmed.is_empty()).then_some(trimmed.as_str());
         qconnect_persist_device_name(stored);
+    }
+    if key == "myqbz-label" {
+        save_myqbz_label(&value);
+    }
+    if key == "listenbrainz-token" {
+        // Validates + persists + republishes itself (async flow).
+        crate::integrations_qt::listenbrainz_set_token(&value).await;
+        return;
     }
     publish_snapshot().await;
 }

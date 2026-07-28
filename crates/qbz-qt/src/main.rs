@@ -25,6 +25,8 @@ mod queue_qt;
 mod search_qt;
 mod settings_qt;
 mod sidebar_qt;
+mod theme_qt;
+mod integrations_qt;
 
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -990,6 +992,27 @@ pub(crate) fn settings_reset() {
 pub(crate) fn refresh_devices() {
     let runtime = app();
     spawn(async move { settings_qt::refresh_devices(&runtime).await });
+}
+
+/// Appearance > Theme row: persist the slug + republish the token document
+/// (live switch — QbzTheme.qml rebinds every consumer).
+pub(crate) fn theme_set(slug: String) {
+    theme_qt::set_theme(&slug);
+    theme_qt::publish_theme();
+}
+
+/// Appearance > theme filter cycle (0 All / 1 Dark / 2 Light).
+pub(crate) fn theme_set_filter(index: i32) {
+    let index = index.clamp(0, 2);
+    theme_qt::set_theme_filter(index);
+    ui(move |mut b| b.as_mut().set_theme_filter(index));
+}
+
+/// Integrations panel non-toggle actions (Last.fm connect flow, LB/LFM
+/// disconnects).
+pub(crate) fn integrations_action(action: String) {
+    let runtime = app();
+    spawn(async move { integrations_qt::handle_action(&runtime, &action).await });
 }
 
 /// App-menu chrome toggle: persist the flipped pref and update the menu

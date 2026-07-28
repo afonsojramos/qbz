@@ -37,6 +37,8 @@ qbz-text-utils = { path = "../qbz-text-utils" }
 qbz-credentials = { path = "../qbz-credentials" }
 qbz-i18n = { path = "../qbz-i18n" }
 qbz-log = { path = "../qbz-log" }
+qbz-theme = { path = "../qbz-theme" }
+qbz-integrations = { path = "../qbz-integrations" }
 
 rusqlite = { version = "0.31", features = ["bundled"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }

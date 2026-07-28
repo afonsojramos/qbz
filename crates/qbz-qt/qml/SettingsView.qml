@@ -10,9 +10,10 @@
 // "single source of truth in SettingsState" pattern).
 //
 // POC-NOTEs (deliberate cuts, named for the effort report):
-// - Sub-nav: only Audio + Playback exist (sections 0/1). Appearance,
-//   Offline, Local Library, Blacklist, Integrations, Developer, Flatpak/
-//   Snap and the "Share logs" entry have no backing glue in the POC.
+// - Sections: Audio / Playback / Appearance / Integrations render live
+//   (phase 19); Offline / Local Library / Blacklist / Developer render an
+//   honest placeholder page with the exact section header; the conditional
+//   Flatpak/Snap entry and the "Share logs" LogViewer are not ported.
 // - The NavButtons row inside the 92px header is a 0px placeholder (nav
 //   history lives in the global HeaderBar here, like every other view).
 // - Audio > "Detected device limit" read-only row: skipped — the #638
@@ -33,7 +34,8 @@ Item {
 
     // The parsed settingsJson document ({}) until the first publish lands).
     property var doc: ({})
-    // Active sub-section: 0 = Audio, 1 = Playback (SettingsState.section).
+    // Active sub-section (display order): 0 Audio, 1 Playback, 2 Appearance,
+    // 3 Offline, 4 Local Library, 5 Blacklist, 6 Integrations, 7 Developer.
     property int section: 0
 
     function reload() {
@@ -47,496 +49,6 @@ Item {
     Connections {
         target: QbzBridge
         function onSettingsJsonChanged() { root.reload() }
-    }
-
-    // --- QbzToggle (primitives/QbzToggle.slint) ---------------------------
-    // 40x22 pill r11, 16px knob, accent when on, opacity .4 disabled,
-    // 120ms ease-out knob travel. Emits toggled(newValue); never self-flips.
-    component QbzToggle: Rectangle {
-        property bool checked: false
-        property bool enabled: true
-        signal toggled(bool value)
-
-        width: 40
-        height: 22
-        radius: 11
-        color: checked ? theme.accent : theme.surfaceElevated
-        opacity: enabled ? 1.0 : 0.4
-
-        Rectangle {
-            width: 16
-            height: 16
-            radius: 8
-            color: theme.textPrimary
-            y: 3
-            x: parent.checked ? parent.width - width - 3 : 3
-            Behavior on x { NumberAnimation { duration: 120; easing.type: Easing.OutQuad } }
-        }
-        MouseArea {
-            anchors.fill: parent
-            cursorShape: parent.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-            onClicked: if (parent.enabled) parent.toggled(!parent.checked)
-        }
-    }
-
-    // --- QbzSelect (primitives/QbzSelect.slint, standard size) ------------
-    // 34px bordered control (elevated, hover -> surface-hover) + a Popup
-    // list (surface-main r8 border-muted, 32px rows, capped at 360px with
-    // scroll, optional 42px filter box, 24px group-header rows, "BP" badge
-    // / speaker glyph on device options). `options` entries are either
-    // plain strings or {label, bp, group} objects (the device list).
-    component QbzSelect: Rectangle {
-        property var options: []
-        property int currentIndex: 0
-        property int menuWidth: 240
-        property int popupWidth: 0
-        property bool enabled: true
-        property bool searchable: false
-        signal selected(int index)
-
-        id: selectRoot
-        width: menuWidth
-        height: 34
-        radius: theme.radiusSm
-        border.width: 1
-        border.color: theme.borderSubtle
-        color: selArea.containsMouse && enabled ? theme.surfaceHover : theme.surfaceElevated
-        opacity: enabled ? 1.0 : 0.4
-
-        readonly property int listWidth: Math.max(popupWidth, menuWidth)
-        readonly property int rowHeight: 32
-        readonly property int headerHeight: 24
-        readonly property int searchHeight: searchable ? 42 : 0
-        readonly property int maxListHeight: 360
-        property string filter: ""
-
-        function optLabel(i) {
-            const o = options[i]
-            return (typeof o === "string") ? o : (o && o.label !== undefined ? o.label : "")
-        }
-        function optHasBadges() {
-            return options.length > 0 && typeof options[0] !== "string"
-        }
-        function optBp(i) {
-            const o = options[i]
-            return o && o.bp === true
-        }
-        function optGroup(i) {
-            const o = options[i]
-            return (o && o.group !== undefined) ? o.group : ""
-        }
-
-        Row {
-            anchors.fill: parent
-            anchors.leftMargin: 12
-            anchors.rightMargin: 10
-            spacing: 8
-            Text {
-                width: parent.width - 16 - 8 - badgeSlot.width - (badgeSlot.visible ? 8 : 0)
-                height: parent.height
-                text: selectRoot.currentIndex >= 0 && selectRoot.currentIndex < selectRoot.options.length
-                    ? selectRoot.optLabel(selectRoot.currentIndex) : ""
-                color: theme.textPrimary
-                font.pixelSize: theme.fontBody
-                verticalAlignment: Text.AlignVCenter
-                elide: Text.ElideRight
-            }
-            // Trailing BP badge / speaker glyph for the CURRENT device option.
-            Item {
-                id: badgeSlot
-                visible: selectRoot.optHasBadges()
-                width: visible ? 20 : 0
-                height: parent.height
-                Text {
-                    visible: selectRoot.optHasBadges() && selectRoot.currentIndex < selectRoot.options.length
-                        && selectRoot.optBp(selectRoot.currentIndex)
-                    anchors.centerIn: parent
-                    text: "BP"
-                    color: theme.accent
-                    font.pixelSize: theme.fontLegal
-                    font.weight: theme.weightSemibold
-                    font.letterSpacing: 0.5
-                }
-                QbzIcon {
-                    visible: selectRoot.optHasBadges() && selectRoot.currentIndex < selectRoot.options.length
-                        && !selectRoot.optBp(selectRoot.currentIndex)
-                    name: "volume-2"
-                    width: 14
-                    height: 14
-                    anchors.centerIn: parent
-                    tintName: "muted"
-                }
-            }
-            QbzIcon {
-                name: "chevron-down"
-                width: 16
-                height: 16
-                anchors.verticalCenter: parent.verticalCenter
-                tintName: "muted"
-            }
-        }
-        MouseArea {
-            id: selArea
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: selectRoot.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-            onClicked: {
-                if (selectRoot.enabled) {
-                    selectRoot.filter = ""
-                    popup.open()
-                }
-            }
-        }
-
-        Popup {
-            id: popup
-            parent: selectRoot
-            // Right-anchored: a list wider than the control grows leftward.
-            x: selectRoot.width - selectRoot.listWidth
-            y: selectRoot.height + 4
-            width: selectRoot.listWidth
-            height: selectRoot.searchHeight + Math.min(listContent.contentHeight, selectRoot.maxListHeight) + 10
-            padding: 0
-            closePolicy: Popup.CloseOnPressOutside | Popup.CloseOnEscape
-
-            background: Rectangle {
-                color: theme.surfaceMain
-                radius: theme.radiusSm
-                border.width: 1
-                border.color: theme.borderMuted
-            }
-            contentItem: Item {
-                implicitWidth: selectRoot.listWidth
-                implicitHeight: popup.height
-
-                // Filter box (searchable lists only).
-                Rectangle {
-                    id: searchBox
-                    visible: selectRoot.searchable
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.top: parent.top
-                    height: selectRoot.searchHeight
-                    color: "transparent"
-                    Row {
-                        anchors.fill: parent
-                        anchors.leftMargin: 12
-                        anchors.rightMargin: 12
-                        anchors.bottomMargin: 6
-                        spacing: 8
-                        QbzIcon {
-                            name: "search"
-                            width: 14
-                            height: 14
-                            anchors.verticalCenter: parent.verticalCenter
-                            tintName: "muted"
-                        }
-                        Item {
-                            width: parent.width - 14 - 8
-                            height: parent.height
-                            TextInput {
-                                id: searchInput
-                                anchors.fill: parent
-                                color: theme.textPrimary
-                                font.pixelSize: theme.fontBody
-                                verticalAlignment: Text.AlignVCenter
-                                clip: true
-                                text: selectRoot.filter
-                                onTextChanged: selectRoot.filter = text
-                            }
-                            Text {
-                                visible: searchInput.text === ""
-                                anchors.fill: parent
-                                text: QbzBridge.tr("Search…")
-                                color: theme.textMuted
-                                font.pixelSize: theme.fontBody
-                                verticalAlignment: Text.AlignVCenter
-                            }
-                        }
-                    }
-                }
-
-                ListView {
-                    id: listContent
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.top: searchBox.bottom
-                    anchors.bottom: parent.bottom
-                    anchors.topMargin: 5
-                    anchors.bottomMargin: 5
-                    clip: true
-                    boundsBehavior: Flickable.StopAtBounds
-                    model: selectRoot.options
-
-                    delegate: Column {
-                        id: optRow
-                        required property int index
-                        required property var modelData
-                        width: listContent.width
-
-                        readonly property string label: selectRoot.optLabel(index)
-                        readonly property bool shown: selectRoot.filter === ""
-                            || label.toLowerCase().indexOf(selectRoot.filter.toLowerCase()) >= 0
-
-                        // Group-header row (ALSA device sections).
-                        Rectangle {
-                            visible: optRow.shown && selectRoot.optGroup(optRow.index) !== ""
-                            width: parent.width
-                            height: visible ? selectRoot.headerHeight : 0
-                            color: "transparent"
-                            Text {
-                                anchors.left: parent.left
-                                anchors.right: parent.right
-                                anchors.leftMargin: 12
-                                anchors.rightMargin: 12
-                                anchors.top: parent.top
-                                anchors.topMargin: 4
-                                height: parent.height - 4
-                                text: selectRoot.optGroup(optRow.index)
-                                color: theme.textMuted
-                                font.pixelSize: theme.fontLegal
-                                font.weight: theme.weightSemibold
-                                font.letterSpacing: 0.5
-                                verticalAlignment: Text.AlignVCenter
-                                elide: Text.ElideRight
-                            }
-                        }
-                        Rectangle {
-                            visible: optRow.shown
-                            width: parent.width
-                            height: visible ? selectRoot.rowHeight : 0
-                            color: optArea.containsMouse ? theme.surfaceHover : "transparent"
-                            Row {
-                                anchors.fill: parent
-                                anchors.leftMargin: 12
-                                anchors.rightMargin: 12
-                                spacing: 8
-                                Text {
-                                    width: parent.width - rowBadge.width - (rowBadge.visible ? 8 : 0)
-                                    height: parent.height
-                                    text: optRow.label
-                                    color: optRow.index === selectRoot.currentIndex
-                                        ? theme.accent : theme.textSecondary
-                                    font.pixelSize: theme.fontBody
-                                    verticalAlignment: Text.AlignVCenter
-                                    elide: Text.ElideRight
-                                }
-                                Item {
-                                    id: rowBadge
-                                    visible: selectRoot.optHasBadges()
-                                    width: visible ? 20 : 0
-                                    height: parent.height
-                                    Text {
-                                        visible: selectRoot.optBp(optRow.index)
-                                        anchors.centerIn: parent
-                                        text: "BP"
-                                        color: theme.accent
-                                        font.pixelSize: theme.fontLegal
-                                        font.weight: theme.weightSemibold
-                                        font.letterSpacing: 0.5
-                                    }
-                                    QbzIcon {
-                                        visible: !selectRoot.optBp(optRow.index)
-                                        name: "volume-2"
-                                        width: 14
-                                        height: 14
-                                        anchors.centerIn: parent
-                                        tintName: "muted"
-                                    }
-                                }
-                            }
-                            MouseArea {
-                                id: optArea
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: {
-                                    popup.close()
-                                    selectRoot.selected(optRow.index)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // --- SettingRow (settings/SettingRow.slint) ---------------------------
-    // 52px (64 with a description); label 15 medium + description 12 muted
-    // on the left (opacity .45 when disabled), the control flush right.
-    component SettingRow: Item {
-        property string label: ""
-        property string description: ""
-        property bool rowEnabled: true
-        default property alias control: controlHost.data
-
-        width: parent ? parent.width : 0
-        height: description === "" ? 52 : 64
-
-        Column {
-            anchors.left: parent.left
-            anchors.right: controlHost.left
-            anchors.rightMargin: 24
-            anchors.verticalCenter: parent.verticalCenter
-            spacing: 3
-            opacity: rowEnabled ? 1.0 : 0.45
-            Text {
-                width: parent.width
-                text: label
-                color: theme.textPrimary
-                font.pixelSize: theme.fontBody
-                font.weight: theme.weightMedium
-                elide: Text.ElideRight
-            }
-            Text {
-                visible: description !== ""
-                width: parent.width
-                text: description
-                color: theme.textMuted
-                font.pixelSize: 12
-                wrapMode: Text.WordWrap
-            }
-        }
-        Item {
-            id: controlHost
-            anchors.right: parent.right
-            anchors.verticalCenter: parent.verticalCenter
-            width: childrenRect.width
-            height: childrenRect.height
-        }
-    }
-
-    // --- GroupHeader / Divider --------------------------------------------
-    component GroupHeader: Text {
-        color: theme.textMuted
-        font.pixelSize: 11
-        font.letterSpacing: 1.5
-        font.weight: theme.weightSemibold
-    }
-    component Divider: Rectangle {
-        width: parent ? parent.width : 0
-        height: 1
-        color: theme.borderSubtle
-    }
-    component Spacer12: Item { width: 1; height: 12 }
-
-    // --- QbzSlider (primitives/QbzSlider.slint) ---------------------------
-    // 200x22, 4px r2 track, accent fill, 16px thumb; integer steps. Like the
-    // Slint original the thumb follows the pointer during a drag (local
-    // dragValue) and commits each step via changed(int).
-    component QbzSlider: Item {
-        property int minimum: 0
-        property int maximum: 10
-        property int value: 0
-        signal changed(int newValue)
-
-        width: 200
-        height: 22
-
-        readonly property int thumbSize: 16
-        readonly property real travel: width - thumbSize
-        readonly property real fraction: maximum > minimum
-            ? Math.max(0, Math.min(1, (value - minimum) / (maximum - minimum))) : 0
-        property bool dragging: false
-        property real dragFraction: fraction
-        readonly property real shownFraction: dragging ? dragFraction : fraction
-        onFractionChanged: if (!dragging) dragFraction = fraction
-
-        function commit(frac) {
-            const v = Math.round(minimum + Math.max(0, Math.min(1, frac)) * (maximum - minimum))
-            if (v !== value) changed(v)
-        }
-
-        Rectangle { // track
-            x: 0
-            y: Math.round((parent.height - height) / 2)
-            width: parent.width
-            height: 4
-            radius: 2
-            color: theme.surfaceElevated
-        }
-        Rectangle { // accent fill
-            x: 0
-            y: Math.round((parent.height - height) / 2)
-            width: parent.thumbSize / 2 + parent.shownFraction * parent.travel
-            height: 4
-            radius: 2
-            color: theme.accent
-        }
-        Rectangle { // thumb
-            width: parent.thumbSize
-            height: parent.thumbSize
-            radius: parent.thumbSize / 2
-            x: parent.shownFraction * parent.travel
-            anchors.verticalCenter: parent.verticalCenter
-            color: theme.textPrimary
-        }
-        MouseArea {
-            anchors.fill: parent
-            cursorShape: Qt.PointingHandCursor
-            onPressed: {
-                parent.dragging = true
-                parent.dragFraction = Math.max(0, Math.min(1, (mouse.x - parent.thumbSize / 2) / parent.travel))
-                parent.commit(parent.dragFraction)
-            }
-            onPositionChanged: {
-                if (pressed) {
-                    parent.dragFraction = Math.max(0, Math.min(1, (mouse.x - parent.thumbSize / 2) / parent.travel))
-                    parent.commit(parent.dragFraction)
-                }
-            }
-            onReleased: parent.dragging = false
-        }
-    }
-
-    // --- QbzLineEdit (std-widgets LineEdit, settings styling) -------------
-    // 240px / 34px elevated r8 bordered input; commits on Enter AND on
-    // focus loss (the Tauri onchange semantics — PlaybackSettings.slint).
-    component QbzLineEdit: Rectangle {
-        property string text: ""
-        property string placeholder: ""
-        signal committed(string value)
-
-        width: 240
-        height: 34
-        radius: theme.radiusSm
-        border.width: 1
-        border.color: theme.borderSubtle
-        color: theme.surfaceElevated
-
-        TextInput {
-            id: input
-            anchors.fill: parent
-            anchors.leftMargin: 12
-            anchors.rightMargin: 12
-            color: theme.textPrimary
-            font.pixelSize: theme.fontBody
-            verticalAlignment: Text.AlignVCenter
-            clip: true
-            text: parent.text
-            onAccepted: parent.committed(text)
-            onActiveFocusChanged: if (!activeFocus) parent.committed(text)
-            // External republish (e.g. Reset) re-seeds the field while it is
-            // not being edited.
-            Binding {
-                target: input
-                property: "text"
-                value: input.parent.text
-                when: !input.activeFocus
-            }
-        }
-        Text {
-            visible: input.text === ""
-            anchors.fill: parent
-            anchors.leftMargin: 12
-            anchors.rightMargin: 12
-            text: placeholder
-            color: theme.textMuted
-            font.pixelSize: theme.fontBody
-            verticalAlignment: Text.AlignVCenter
-            elide: Text.ElideRight
-        }
     }
 
     // ============================ the view ================================
@@ -629,10 +141,57 @@ Item {
                         active: root.section === 1
                         onClicked: root.section = 1
                     }
-                    // POC-NOTE: Appearance / Offline / Local Library /
-                    // Blacklist / Integrations / Developer / Flatpak / Snap /
-                    // "Share logs" sub-nav entries are omitted (no backing
-                    // glue in the POC).
+                    SubNavItem {
+                        name: "layers"
+                        label: QbzBridge.tr("Appearance")
+                        active: root.section === 2
+                        onClicked: root.section = 2
+                    }
+                    SubNavItem {
+                        name: "cloud-download"
+                        label: QbzBridge.tr("Offline")
+                        active: root.section === 3
+                        onClicked: root.section = 3
+                    }
+                    SubNavItem {
+                        name: "hard-drive"
+                        label: QbzBridge.tr("Local Library")
+                        active: root.section === 4
+                        onClicked: root.section = 4
+                    }
+                    SubNavItem {
+                        name: "blind-eye"
+                        label: QbzBridge.tr("Blacklist")
+                        active: root.section === 5
+                        onClicked: root.section = 5
+                    }
+                    SubNavItem {
+                        name: "refresh-cw"
+                        label: QbzBridge.tr("Integrations")
+                        active: root.section === 6
+                        onClicked: root.section = 6
+                    }
+                    SubNavItem {
+                        name: "bug"
+                        label: QbzBridge.tr("Developer")
+                        active: root.section === 7
+                        onClicked: root.section = 7
+                    }
+                    // POC-NOTE: the conditional Flatpak/Snap sub-nav entry
+                    // (SandboxState.install-method) is omitted — the POC is
+                    // not a sandboxed install.
+
+                    // "Share logs" footer (SettingsView.slint:202-215),
+                    // pinned to the subnav bottom.
+                    Item { width: 1; height: parent.height - 8 * 42 - 38 - 4 }
+                    SubNavItem {
+                        name: "cloud-upload"
+                        label: QbzBridge.tr("Share logs")
+                        active: false
+                        // POC-NOTE: LogViewerState (copy + upload viewer) is
+                        // not ported — the row is inert.
+                        onClicked: { }
+                    }
                 }
             }
 
@@ -687,9 +246,9 @@ Item {
                             // skipped — the device-cap probe glue is not
                             // ported.
 
-                            Spacer12 { }
-                            Divider { }
-                            Spacer12 { }
+                            SettingsSpacer { }
+                            SettingsDivider { }
+                            SettingsSpacer { }
 
                             GroupHeader { text: QbzBridge.tr("OUTPUT") }
                             SettingRow {
@@ -779,9 +338,9 @@ Item {
                                 }
                             }
 
-                            Spacer12 { }
-                            Divider { }
-                            Spacer12 { }
+                            SettingsSpacer { }
+                            SettingsDivider { }
+                            SettingsSpacer { }
 
                             GroupHeader { text: QbzBridge.tr("BIT-PERFECT") }
                             SettingRow {
@@ -834,9 +393,9 @@ Item {
                             // guided DAC setup) is skipped — DacWizardActions
                             // is not ported.
 
-                            Spacer12 { }
-                            Divider { }
-                            Spacer12 { }
+                            SettingsSpacer { }
+                            SettingsDivider { }
+                            SettingsSpacer { }
 
                             GroupHeader { text: QbzBridge.tr("STARTUP") }
                             SettingRow {
@@ -922,9 +481,9 @@ Item {
                                 }
                             }
 
-                            Spacer12 { }
-                            Divider { }
-                            Spacer12 { }
+                            SettingsSpacer { }
+                            SettingsDivider { }
+                            SettingsSpacer { }
 
                             GroupHeader { text: QbzBridge.tr("SESSION") }
                             SettingRow {
@@ -965,9 +524,9 @@ Item {
                                 }
                             }
 
-                            Spacer12 { }
-                            Divider { }
-                            Spacer12 { }
+                            SettingsSpacer { }
+                            SettingsDivider { }
+                            SettingsSpacer { }
 
                             GroupHeader { text: QbzBridge.tr("STREAMING") }
                             SettingRow {
@@ -1019,6 +578,45 @@ Item {
                                     currentIndex: root.doc.retryBehaviorIndex || 0
                                     onSelected: function (i) { QbzBridge.settingsSelect("retry-behavior", i) }
                                 }
+                            }
+                        }
+
+                        // ================== APPEARANCE (phase 19) ==========
+                        AppearanceSettings {
+                            visible: root.section === 2
+                            width: parent.width
+                            doc: root.doc
+                        }
+
+                        // ================== INTEGRATIONS (phase 19) ========
+                        IntegrationsSettings {
+                            visible: root.section === 6
+                            width: parent.width
+                            doc: root.doc
+                        }
+
+                        // ============ placeholder sections (phase 19) ======
+                        // Offline (3) / Local Library (4) / Blacklist (5) /
+                        // Developer (7): the subnav rows render the EXACT
+                        // section header; the panels land in a later phase
+                        // (POC-NOTE).
+                        Column {
+                            visible: root.section === 3 || root.section === 4
+                                || root.section === 5 || root.section === 7
+                            width: parent.width
+                            spacing: 4
+                            GroupHeader {
+                                text: root.section === 3 ? QbzBridge.tr("OFFLINE")
+                                    : root.section === 4 ? QbzBridge.tr("LOCAL LIBRARY")
+                                    : root.section === 5 ? QbzBridge.tr("BLACKLIST")
+                                    : QbzBridge.tr("DEVELOPER")
+                            }
+                            Text {
+                                width: parent.width
+                                text: QbzBridge.tr("This section is not ported to the Qt frontend yet.")
+                                color: theme.textMuted
+                                font.pixelSize: 12
+                                wrapMode: Text.WordWrap
                             }
                         }
                     }

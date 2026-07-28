@@ -136,6 +136,19 @@ pub mod qbz_bridge {
         // SongCard layers icon.
         #[qproperty(bool, show_context_icon)]
 
+        // --- Theme (phase 19) --------------------------------------------
+        // ONE JSON token document (theme_qt.rs ThemeTokens: 30 colors + 24
+        // alpha tiers + ambient derivations + isDark) — QbzTheme.qml binds
+        // to it, so a theme switch repaints the whole app live (the Slint
+        // theme::push_colors equivalent).
+        #[qproperty(QString, theme_json)]
+        // The persisted ui_prefs theme slug ("oled", "auto", "custom", ...).
+        #[qproperty(QString, theme_slug)]
+        // The dropdown catalog (36 registry themes + Auto/Custom rows).
+        #[qproperty(QString, theme_list_json)]
+        // Dropdown filter: 0 All / 1 Dark / 2 Light (ui_prefs theme_filter).
+        #[qproperty(i32, theme_filter)]
+
         // --- Lyrics panel (phase 9) ----------------------------------------
         #[qproperty(bool, lyrics_open)]
         // One JSON document (lyrics_qt.rs LyricsDoc: status/lines/synced/
@@ -453,6 +466,21 @@ pub mod qbz_bridge {
         #[qinvokable]
         fn refresh_devices(self: Pin<&mut QbzBridge>);
 
+        // --- Theme (phase 19) ---------------------------------------------
+        /// Appearance > Theme row: persist the picked slug + republish
+        /// `themeJson` (live switch).
+        #[qinvokable]
+        fn theme_set(self: Pin<&mut QbzBridge>, slug: QString);
+        /// Appearance > theme filter cycle button (0 All / 1 Dark / 2 Light).
+        #[qinvokable]
+        fn theme_set_filter(self: Pin<&mut QbzBridge>, index: i32);
+
+        // --- Integrations (phase 19) ---------------------------------------
+        /// Non-toggle integration actions (integrations_qt.rs): Last.fm
+        /// connect/open-auth-url/finish/disconnect, ListenBrainz disconnect.
+        #[qinvokable]
+        fn integrations_action(self: Pin<&mut QbzBridge>, action: QString);
+
         /// App-menu chrome toggle: flip the persisted `use_system_title_bar`
         /// pref (applies on the next launch — the window flags are fixed at
         /// creation, 1:1 Slint). Updates `systemTitleBarPref` only.
@@ -631,6 +659,10 @@ pub struct QbzBridgeRust {
     np_artist_id: QString,
     npb_mode: i32,
     show_context_icon: bool,
+    theme_json: QString,
+    theme_slug: QString,
+    theme_list_json: QString,
+    theme_filter: i32,
     queue_json: QString,
     lyrics_open: bool,
     lyrics_json: QString,
@@ -723,6 +755,10 @@ impl Default for QbzBridgeRust {
             np_artist_id: QString::default(),
             npb_mode: crate::settings_qt::npb_mode_index(),
             show_context_icon: crate::settings_qt::show_context_icon(),
+            theme_json: QString::from(crate::theme_qt::theme_json().as_str()),
+            theme_slug: QString::from(crate::theme_qt::current_slug().as_str()),
+            theme_list_json: QString::from(crate::theme_qt::theme_list_json().as_str()),
+            theme_filter: crate::theme_qt::theme_filter(),
             queue_json: QString::from("{}"),
             lyrics_open: false,
             lyrics_json: QString::from("{}"),
@@ -1009,6 +1045,18 @@ impl qbz_bridge::QbzBridge {
 
     pub fn npb_set_mode(self: Pin<&mut Self>, mode: i32) {
         crate::npb_set_mode(mode);
+    }
+
+    pub fn theme_set(self: Pin<&mut Self>, slug: QString) {
+        crate::theme_set(slug.to_string());
+    }
+
+    pub fn theme_set_filter(self: Pin<&mut Self>, index: i32) {
+        crate::theme_set_filter(index);
+    }
+
+    pub fn integrations_action(self: Pin<&mut Self>, action: QString) {
+        crate::integrations_action(action.to_string());
     }
 
     pub fn settings_bool(self: Pin<&mut Self>, key: QString, value: bool) {
