@@ -62,7 +62,7 @@ Rectangle {
     }
 
     Connections {
-        target: QbzBridge
+        target: QbzLibrary
         function onLibraryArtworkReady(key, path) {
             var m = root.coverMap
             m[key] = path

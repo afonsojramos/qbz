@@ -1,7 +1,7 @@
 // Library view — QML port of crates/qbz-ui/ui/favorites/FavoritesView.slint
 // + the Library "All" mixed feed (library_all.rs semantics).
 //
-// Data: QbzBridge.libraryJson (ONE JSON document — the full merged feed;
+// Data: QbzLibrary.libraryJson (ONE JSON document — the full merged feed;
 // tabs/search/sort/source-filters derive HERE in JS, measured per the
 // phase brief) + libraryCountsJson (tab badges). Artwork is id-keyed
 // through the libraryArtworkReady signal into `artMap` (never a
@@ -44,9 +44,9 @@ Rectangle {
     // ============================ state ==================================
     property string activeTab: "all"
 
-    readonly property var counts: JSON.parse(QbzBridge.libraryCountsJson)
+    readonly property var counts: JSON.parse(QbzLibrary.libraryCountsJson)
     // Full merged feed (parsed once per publish — timed for the report).
-    readonly property var feed: parseFeed(QbzBridge.libraryJson)
+    readonly property var feed: parseFeed(QbzLibrary.libraryJson)
     function parseFeed(json) {
         var t = Date.now()
         var f = JSON.parse(json)
@@ -162,11 +162,11 @@ Rectangle {
             if (!keep[key]) { delete m[key]; changed = true }
         }
         if (changed) artMap = Object.assign({}, m)
-        QbzBridge.libraryArtworkWindow(JSON.stringify(keys))
+        QbzLibrary.libraryArtworkWindow(JSON.stringify(keys))
     }
 
     Connections {
-        target: QbzBridge
+        target: QbzLibrary
         function onLibraryArtworkReady(key, path) {
             var m = root.artMap
             m[key] = path
@@ -315,7 +315,7 @@ Rectangle {
         else if (a === "go-album") QbzBridge.openAlbum(item.albumId)
         else if (a === "favorite") {
             item.isFavorite = !item.isFavorite
-            QbzBridge.libraryToggleFavorite("track", item.id)
+            QbzLibrary.libraryToggleFavorite("track", item.id)
         }
     }
 
@@ -557,7 +557,7 @@ Rectangle {
                     QbzBridge.openArtist(item.id)
                 } else if (a === "favorite") {
                     item.isFavorite = !item.isFavorite
-                    QbzBridge.libraryToggleFavorite(item.kind, item.id)
+                    QbzLibrary.libraryToggleFavorite(item.kind, item.id)
                 }
             }
         }
@@ -871,12 +871,12 @@ Rectangle {
             QbzSpinner {
                 anchors.centerIn: parent
                 size: 36
-                visible: QbzBridge.libraryLoading
+                visible: QbzLibrary.libraryLoading
             }
 
             // Error + retry.
             Column {
-                visible: !QbzBridge.libraryLoading && QbzBridge.libraryError !== ""
+                visible: !QbzLibrary.libraryLoading && QbzLibrary.libraryError !== ""
                 anchors.centerIn: parent
                 spacing: 10
                 Text {
@@ -886,7 +886,7 @@ Rectangle {
                     font.weight: theme.weightSemibold
                 }
                 Text {
-                    text: QbzBridge.libraryError
+                    text: QbzLibrary.libraryError
                     color: theme.textMuted
                     font.pixelSize: theme.fontLegal
                 }
@@ -910,7 +910,7 @@ Rectangle {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: QbzBridge.reloadLibrary()
+                        onClicked: QbzLibrary.reloadLibrary()
                     }
                 }
             }
@@ -922,7 +922,7 @@ Rectangle {
                 anchors.leftMargin: 32
                 anchors.rightMargin: 32
                 anchors.topMargin: 16
-                visible: !QbzBridge.libraryLoading && QbzBridge.libraryError === ""
+                visible: !QbzLibrary.libraryLoading && QbzLibrary.libraryError === ""
                     && (root.activeTab !== "all" || root.viewMode === "grid")
                     && root.activeTab !== "tracks"
                 cellWidth: 220
@@ -1007,7 +1007,7 @@ Rectangle {
                 anchors.leftMargin: 32
                 anchors.rightMargin: 32
                 anchors.topMargin: 10
-                visible: !QbzBridge.libraryLoading && QbzBridge.libraryError === ""
+                visible: !QbzLibrary.libraryLoading && QbzLibrary.libraryError === ""
                     && ((root.activeTab === "all" && root.viewMode === "list")
                         || root.activeTab === "tracks")
                 cacheBuffer: 44 * 10

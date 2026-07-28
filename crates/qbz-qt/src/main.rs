@@ -27,6 +27,7 @@ mod queue_bridge;
 mod home_bridge;
 mod viz_bridge;
 mod local_bridge;
+mod library_bridge;
 mod artwork_qt;
 mod bridge;
 mod home_qt;
@@ -282,7 +283,7 @@ pub(crate) fn do_logout() {
             b.as_mut().set_home_error(QString::from(""));
             b.as_mut().set_home_loading(false);
         });
-        ui(|mut b| {
+        library_bridge::ui(|mut b| {
             b.as_mut().set_library_json(QString::from("[]"));
             b.as_mut().set_library_counts_json(QString::from("{}"));
             b.as_mut().set_library_error(QString::from(""));
@@ -516,7 +517,7 @@ pub(crate) fn enqueue_album(album_id: String, mode: String) {
 pub(crate) fn toggle_pin(kind: String, id: String, title: String, subtitle: String, artwork_url: String) {
     if let Some(value) = sidebar_qt::toggle_pin(&kind, &id, &title, &subtitle, &artwork_url) {
         let key = format!("{kind}:{id}");
-        ui(move |mut b| {
+        library_bridge::ui(move |mut b| {
             b.as_mut().pin_changed(QString::from(key.as_str()), value);
         });
     }
@@ -1183,7 +1184,7 @@ pub(crate) fn reload_library() {
         return;
     }
     log_rss("library load start");
-    ui(|mut b| {
+    library_bridge::ui(|mut b| {
         b.as_mut().set_library_loading(true);
         b.as_mut().set_library_error(QString::from(""));
     });
@@ -1209,7 +1210,7 @@ pub(crate) fn reload_library() {
                     "[qbz-qt][perf] library load total: {:?} ({total} items)",
                     t.elapsed(),
                 );
-                ui(move |mut b| {
+                library_bridge::ui(move |mut b| {
                     b.as_mut().set_library_json(QString::from(feed_json.as_str()));
                     b.as_mut()
                         .set_library_counts_json(QString::from(counts_json.as_str()));
@@ -1219,7 +1220,7 @@ pub(crate) fn reload_library() {
             }
             Err(e) => {
                 log::warn!("[qbz-qt] library load failed: {e}");
-                ui(move |mut b| {
+                library_bridge::ui(move |mut b| {
                     b.as_mut().set_library_error(QString::from(e.as_str()));
                     b.as_mut().set_library_loading(false);
                 });
@@ -1285,7 +1286,7 @@ pub(crate) fn library_artwork_window(keys_json: String) {
 }
 
 fn emit_library_artwork(key: String, path: String) {
-    ui(move |mut b| {
+    library_bridge::ui(move |mut b| {
         b.as_mut()
             .library_artwork_ready(QString::from(key.as_str()), QString::from(path.as_str()));
     });
@@ -1298,7 +1299,7 @@ pub(crate) fn library_toggle_favorite(kind: String, id: String) {
     let runtime = app();
     spawn(async move {
         if let Some(value) = library_qt::toggle_favorite(&runtime, &kind, &id).await {
-            ui(move |mut b| {
+            library_bridge::ui(move |mut b| {
                 b.as_mut()
                     .library_favorite_changed(QString::from(key.as_str()), value);
             });

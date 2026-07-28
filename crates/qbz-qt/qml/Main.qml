@@ -52,6 +52,7 @@ ApplicationWindow {
         QbzHome.boot()
         QbzViz.boot()
         QbzLocal.boot()
+        QbzLibrary.boot()
         QbzBridge.boot()
     }
 

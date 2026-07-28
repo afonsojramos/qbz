@@ -24,16 +24,6 @@ pub mod qbz_bridge {
         #[qobject]
         #[qml_element]
         #[qml_singleton]
-        // --- Library view --------------------------------------------------
-        #[qproperty(bool, library_loading)]
-        #[qproperty(QString, library_error)]
-        // One JSON document: the FULL merged feed (tabs/search/sort/source
-        // filters derive QML-side from the parsed array — see library_qt.rs
-        // for the rationale + the measured parse cost).
-        #[qproperty(QString, library_json)]
-        // {tracks, albums, artists, playlists, labels, all} — tab badges.
-        #[qproperty(QString, library_counts_json)]
-
         // --- Album / Artist detail views (phase 8) -------------------------
         #[qproperty(bool, album_loading)]
         #[qproperty(QString, album_json)]
@@ -74,39 +64,6 @@ pub mod qbz_bridge {
         /// when the last domain moves out.
         #[qinvokable]
         fn boot(self: Pin<&mut QbzBridge>);
-
-        /// Library retry button / manual refresh.
-        #[qinvokable]
-        fn reload_library(self: Pin<&mut QbzBridge>);
-
-        /// Windowed artwork: the grid/list reports the mounted window as a
-        /// JSON array of artKeys (tab views filter the feed, so raw indices
-        /// don't map); Rust dispatches covers for those keys (id-keyed via
-        /// `libraryArtworkReady`).
-        #[qinvokable]
-        fn library_artwork_window(self: Pin<&mut QbzBridge>, keys_json: QString);
-
-        /// Card heart: toggle favorite (Qobuz API or the local store,
-        /// routed by id shape); the result arrives via
-        /// `libraryFavoriteChanged`.
-        #[qinvokable]
-        fn library_toggle_favorite(self: Pin<&mut QbzBridge>, kind: QString, id: QString);
-
-        /// Emitted when a dispatched cover lands on disk (id-keyed —
-        /// `{kind}:{id}`); QML updates its artwork map.
-        #[qsignal]
-        fn library_artwork_ready(self: Pin<&mut QbzBridge>, key: QString, path: QString);
-
-        /// Emitted after a heart toggle (optimistic flip + rollback).
-        #[qsignal]
-        fn library_favorite_changed(self: Pin<&mut QbzBridge>, key: QString, value: bool);
-
-        /// AlbumCard pin badge: toggle pin (album/artist/playlist).
-        #[qinvokable]
-        fn toggle_pin(self: Pin<&mut QbzBridge>, kind: QString, id: QString, title: QString, subtitle: QString, artwork_url: QString);
-        /// Emitted after a pin toggle (`{kind}:{id}` key like artKey).
-        #[qsignal]
-        fn pin_changed(self: Pin<&mut QbzBridge>, key: QString, value: bool);
 
         /// Open the album detail view (pushes "album" on the nav stack).
         #[qinvokable]
@@ -237,10 +194,6 @@ use cxx_qt_lib::QString;
 /// generated `set_*` methods on the Qt thread; the struct itself is plain
 /// storage (as required by cxx-qt's Default-constructed qobjects).
 pub struct QbzBridgeRust {
-    library_loading: bool,
-    library_error: QString,
-    library_json: QString,
-    library_counts_json: QString,
     album_loading: bool,
     album_json: QString,
     artist_loading: bool,
@@ -260,10 +213,6 @@ pub struct QbzBridgeRust {
 impl Default for QbzBridgeRust {
     fn default() -> Self {
         Self {
-            library_loading: false,
-            library_error: QString::default(),
-            library_json: QString::from("[]"),
-            library_counts_json: QString::from("{}"),
             album_loading: false,
             album_json: QString::from("{}"),
             artist_loading: false,
@@ -285,28 +234,6 @@ impl Default for QbzBridgeRust {
 impl qbz_bridge::QbzBridge {
     pub fn boot(self: Pin<&mut Self>) {
         crate::register_qt_thread(self.qt_thread());
-    }
-
-    pub fn reload_library(self: Pin<&mut Self>) {
-        crate::reload_library();
-    }
-
-    pub fn library_artwork_window(self: Pin<&mut Self>, keys_json: QString) {
-        crate::library_artwork_window(keys_json.to_string());
-    }
-
-    pub fn library_toggle_favorite(self: Pin<&mut Self>, kind: QString, id: QString) {
-        crate::library_toggle_favorite(kind.to_string(), id.to_string());
-    }
-
-    pub fn toggle_pin(self: Pin<&mut Self>, kind: QString, id: QString, title: QString, subtitle: QString, artwork_url: QString) {
-        crate::toggle_pin(
-            kind.to_string(),
-            id.to_string(),
-            title.to_string(),
-            subtitle.to_string(),
-            artwork_url.to_string(),
-        );
     }
 
     pub fn open_album(self: Pin<&mut Self>, album_id: QString) {

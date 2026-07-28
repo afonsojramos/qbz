@@ -80,7 +80,7 @@ Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                     onClicked: {
                         root.item.isFavorite = !root.item.isFavorite
-                        QbzBridge.libraryToggleFavorite("track", root.item.id)
+                        QbzLibrary.libraryToggleFavorite("track", root.item.id)
                     }
                 }
                 CardOverlayButton {
@@ -193,7 +193,7 @@ Rectangle {
         else if (a === "go-album") QbzBridge.openAlbum(root.item.albumId)
         else if (a === "favorite") {
             root.item.isFavorite = !root.item.isFavorite
-            QbzBridge.libraryToggleFavorite("track", root.item.id)
+            QbzLibrary.libraryToggleFavorite("track", root.item.id)
         }
     }
 }

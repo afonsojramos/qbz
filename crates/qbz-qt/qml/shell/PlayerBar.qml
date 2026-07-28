@@ -755,7 +755,7 @@ Rectangle {
                 if (id !== "") QbzPlayer.enqueueTrack(id, a)
             } else if (a === "album-favorite") {
                 if (QbzPlayer.npAlbumId !== "")
-                    QbzBridge.libraryToggleFavorite("album", QbzPlayer.npAlbumId)
+                    QbzLibrary.libraryToggleFavorite("album", QbzPlayer.npAlbumId)
             }
             // TODO(qt-bridge): "playlist" (add-to-playlist modal) and
             // "mixtape" have no invokable in the Qt port yet — the rows are

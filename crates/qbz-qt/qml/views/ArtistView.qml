@@ -66,13 +66,21 @@ Rectangle {
         return tabs
     }
 
+    // Two blocks, not one: artwork is QbzLibrary's signal and the releases
+    // pager is still QbzBridge's. Retargeting a mixed block wholesale would
+    // silently orphan the other half — QML resolves handlers lazily, so the
+    // discography would just stop loading with nothing in the log.
     Connections {
-        target: QbzBridge
+        target: QbzLibrary
         function onLibraryArtworkReady(key, path) {
             var m = root.coverMap
             m[key] = path
             root.coverMap = Object.assign({}, m)
         }
+    }
+
+    Connections {
+        target: QbzBridge
         function onReleaseSectionReady(releaseType, cardsJson, hasMore) {
             var cards = JSON.parse(cardsJson)
             var sections = root.releaseSections
@@ -306,7 +314,7 @@ Rectangle {
                     cursorShape: Qt.PointingHandCursor
                     onClicked: {
                         row.isFavorite = !row.isFavorite
-                        QbzBridge.libraryToggleFavorite("track", row.id)
+                        QbzLibrary.libraryToggleFavorite("track", row.id)
                     }
                 }
             }
@@ -596,7 +604,7 @@ Rectangle {
                             anchors.verticalCenter: parent.verticalCenter
                             onClicked: {
                                 artist.isFollowing = !artist.isFollowing
-                                QbzBridge.libraryToggleFavorite("artist", artist.id)
+                                QbzLibrary.libraryToggleFavorite("artist", artist.id)
                             }
                         }
                         QbzCircleAction {
@@ -1124,7 +1132,7 @@ Rectangle {
 
     // Library feed access (the phase-5 document, parsed in LibraryView).
     function libraryFeed() {
-        return JSON.parse(QbzBridge.libraryJson)
+        return JSON.parse(QbzLibrary.libraryJson)
     }
 
     // --- Network sidebar (300px, surface-card + 1px left border) ---------
@@ -1385,7 +1393,7 @@ Rectangle {
                             overflowMenu.close()
                             if (modelData.action === "pin") {
                                 artist.isPinned = !artist.isPinned
-                                QbzBridge.togglePin("artist", artist.id, artist.name, "", artist.artUrl)
+                                QbzLibrary.togglePin("artist", artist.id, artist.name, "", artist.artUrl)
                             }
                         }
                     }

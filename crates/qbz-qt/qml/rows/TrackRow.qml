@@ -257,7 +257,7 @@ Rectangle {
                 cursorShape: Qt.PointingHandCursor
                 onClicked: {
                     root.item.isFavorite = !root.item.isFavorite
-                    QbzBridge.libraryToggleFavorite("track", root.item.id)
+                    QbzLibrary.libraryToggleFavorite("track", root.item.id)
                 }
             }
         }
@@ -329,7 +329,7 @@ Rectangle {
             else if (a === "go-album") QbzBridge.openAlbum(root.item.albumId)
             else if (a === "favorite") {
                 root.item.isFavorite = !root.item.isFavorite
-                QbzBridge.libraryToggleFavorite("track", root.item.id)
+                QbzLibrary.libraryToggleFavorite("track", root.item.id)
             } else if (a === "remove") root.removeRequested()
         }
     }

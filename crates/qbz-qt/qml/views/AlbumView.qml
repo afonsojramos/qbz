@@ -67,7 +67,7 @@ Rectangle {
     }
 
     Connections {
-        target: QbzBridge
+        target: QbzLibrary
         function onLibraryArtworkReady(key, path) {
             var m = root.coverMap
             m[key] = path
@@ -350,7 +350,7 @@ Rectangle {
                             anchors.verticalCenter: parent.verticalCenter
                             onClicked: {
                                 header.isFavorite = !header.isFavorite
-                                QbzBridge.libraryToggleFavorite("album", header.id)
+                                QbzLibrary.libraryToggleFavorite("album", header.id)
                             }
                         }
                         // Radio / Mixtape / Info — INERT stubs (POC-NOTE:
@@ -710,10 +710,10 @@ Rectangle {
                             else if (a === "queue") QbzPlayer.enqueueAlbum(header.id, "later")
                             else if (a === "favorite") {
                                 header.isFavorite = !header.isFavorite
-                                QbzBridge.libraryToggleFavorite("album", header.id)
+                                QbzLibrary.libraryToggleFavorite("album", header.id)
                             } else if (a === "pin") {
                                 header.isPinned = !header.isPinned
-                                QbzBridge.togglePin("album", header.id, header.title, header.artist, header.artUrl)
+                                QbzLibrary.togglePin("album", header.id, header.title, header.artist, header.artUrl)
                             }
                         }
                     }

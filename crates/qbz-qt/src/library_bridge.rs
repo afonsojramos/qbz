@@ -1,4 +1,10 @@
-//! QbzLibrary — Library view domain bridge (phase 23 split of the QbzBridge
+//! QbzLibrary — Library view domain bridge.
+//!
+//! The module is `qbz_library_bridge`, NOT `qbz_library`: this crate depends
+//! on the `qbz-library` crate, whose Rust name is `qbz_library`, and a bridge
+//! module by that name is ambiguous at every use site. The QML type name comes
+//! from the QObject (`QbzLibrary`), not from the module, so QML is unaffected.
+//! Original note: Library view domain bridge (phase 23 split of the QbzBridge
 //! God-object; the pattern is documented in main.rs). Props: the merged-feed
 //! document + counts + loading/error. Invokables: reload, windowed artwork
 //! dispatch, favorite/pin toggles. Signals: artwork-ready / favorite-changed
@@ -12,7 +18,7 @@ use cxx_qt::Threading as _;
 use cxx_qt_lib::QString;
 
 #[cxx_qt::bridge]
-pub mod qbz_library {
+pub mod qbz_library_bridge {
     extern "C++" {
         include!("cxx-qt-lib/qstring.h");
         type QString = cxx_qt_lib::QString;
@@ -77,7 +83,7 @@ pub mod qbz_library {
     impl cxx_qt::Threading for QbzLibrary {}
 }
 
-use qbz_library::QbzLibrary;
+use qbz_library_bridge::QbzLibrary;
 
 /// Rust side of the library bridge (plain storage, phase-1 pattern).
 pub struct QbzLibraryRust {
@@ -112,7 +118,7 @@ pub(crate) fn ui(f: impl FnOnce(Pin<&mut QbzLibrary>) + Send + 'static) {
     }
 }
 
-impl qbz_library::QbzLibrary {
+impl qbz_library_bridge::QbzLibrary {
     pub fn boot(self: Pin<&mut Self>) {
         if QT_THREAD.set(self.qt_thread()).is_err() {
             log::warn!("[qbz-qt] library Qt thread already registered");

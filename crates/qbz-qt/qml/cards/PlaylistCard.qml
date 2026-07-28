@@ -121,7 +121,7 @@ Rectangle {
                     onClicked: {
                         if (root.item.playlistOwned) {
                             root.item.isFavorite = !root.item.isFavorite
-                            QbzBridge.libraryToggleFavorite("playlist", root.item.id)
+                            QbzLibrary.libraryToggleFavorite("playlist", root.item.id)
                         } else {
                             root.item.playlistFollowing = !root.item.playlistFollowing
                             QbzBridge.playlistSetFollowById(root.item.id, root.item.playlistFollowing)
@@ -166,7 +166,7 @@ Rectangle {
                     cursorShape: Qt.PointingHandCursor
                     onClicked: {
                         root.isPinned = !root.isPinned
-                        QbzBridge.togglePin("playlist", root.item.id, root.item.title,
+                        QbzLibrary.togglePin("playlist", root.item.id, root.item.title,
                             root.item.subtitle || "", root.artworkUrl)
                     }
                 }
@@ -196,7 +196,7 @@ Rectangle {
                     else if (a === "favorite") {
                         if (root.item.playlistOwned) {
                             root.item.isFavorite = !root.item.isFavorite
-                            QbzBridge.libraryToggleFavorite("playlist", root.item.id)
+                            QbzLibrary.libraryToggleFavorite("playlist", root.item.id)
                         } else {
                             root.item.playlistFollowing = !root.item.playlistFollowing
                             QbzBridge.playlistSetFollowById(root.item.id, root.item.playlistFollowing)

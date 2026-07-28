@@ -62,11 +62,11 @@ Rectangle {
 
     function toggleFavorite() {
         root.isFavorite = !root.isFavorite
-        QbzBridge.libraryToggleFavorite("album", root.albumId)
+        QbzLibrary.libraryToggleFavorite("album", root.albumId)
     }
     function togglePin() {
         root.isPinned = !root.isPinned
-        QbzBridge.togglePin("album", root.albumId, root.title, root.artist, "")
+        QbzLibrary.togglePin("album", root.albumId, root.title, root.artist, "")
     }
 
     Column {

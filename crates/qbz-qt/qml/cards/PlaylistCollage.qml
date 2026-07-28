@@ -109,7 +109,7 @@ Item {
     }
 
     Connections {
-        target: QbzBridge
+        target: QbzLibrary
         // Shared with the feed's artKey-keyed emissions — ignore anything
         // that is not one of OUR urls.
         function onLibraryArtworkReady(key, path) {

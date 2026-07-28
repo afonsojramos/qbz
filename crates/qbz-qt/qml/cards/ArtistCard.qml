@@ -181,7 +181,7 @@ Rectangle {
                     cursorShape: Qt.PointingHandCursor
                     onClicked: {
                         root.isPinned = !root.isPinned
-                        QbzBridge.togglePin("artist", root.item.id, root.item.title,
+                        QbzLibrary.togglePin("artist", root.item.id, root.item.title,
                             root.item.subtitle || "", root.artworkUrl)
                     }
                 }
