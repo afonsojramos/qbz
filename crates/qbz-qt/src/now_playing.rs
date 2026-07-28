@@ -91,6 +91,10 @@ fn mutate(f: impl FnOnce(&mut NowPlayingModel)) {
 
 /// Push the full model onto the bridge (Qt thread hop).
 fn publish(m: &NowPlayingModel) {
+    // Mirror the transport onto the visualizer tap: a paused player parks the
+    // FFT producer instead of re-analyzing a stale ring buffer (the Slint
+    // playback.rs does the same). Cheap atomics, safe off the Qt thread.
+    crate::viz_qt::set_paused(!m.playing);
     let m = m.clone();
     crate::player_bridge::ui(move |mut b| {
         let progress = if m.duration_secs > 0 {
@@ -252,6 +256,7 @@ pub fn set_position(elapsed_secs: i32, duration_secs: i32, playing: bool, cache:
 /// Same as `publish` but honors the poll-fed cache value instead of
 /// mirroring progress.
 fn publish_with_cache(m: &NowPlayingModel) {
+    crate::viz_qt::set_paused(!m.playing);
     let m = m.clone();
     crate::player_bridge::ui(move |mut b| {
         let progress = if m.duration_secs > 0 {

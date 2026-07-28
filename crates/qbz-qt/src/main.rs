@@ -25,6 +25,7 @@ mod shell_bridge;
 mod player_bridge;
 mod queue_bridge;
 mod home_bridge;
+mod viz_bridge;
 mod artwork_qt;
 mod bridge;
 mod home_qt;
@@ -45,6 +46,7 @@ mod settings_qt;
 mod sidebar_qt;
 mod theme_qt;
 mod integrations_qt;
+mod viz_qt;
 
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -842,6 +844,29 @@ pub(crate) fn npb_set_mode(mode: i32) {
     });
 }
 
+/// Large dock, cover eye button: show/hide the FFT band. Persists the pref,
+/// republishes the dock height (the Sidebar's reservation and AppShell's pin
+/// both read it), and gates the capture tap — the band being hidden is what
+/// stops the FFT producer, so an unused visualizer costs zero CPU.
+pub(crate) fn large_toggle_visualizer() {
+    let on = !settings_qt::large_visualizer_on();
+    settings_qt::set_large_visualizer_on(on);
+    let height = shell_bridge::large_dock_height(on);
+    log::info!("[qbz-qt] large visualizer -> {on} (dock height {height})");
+    viz_qt::set_enabled(on);
+    shell_bridge::ui(move |mut b| {
+        b.as_mut().set_large_visualizer_on(on);
+        b.as_mut().set_large_dock_height(height);
+    });
+}
+
+/// Large dock, band click: cycle Bars -> Waveform -> Energy.
+pub(crate) fn large_cycle_spectrum() {
+    let mode = settings_qt::set_large_spectrum_mode((settings_qt::large_spectrum_mode() + 1) % 3);
+    log::info!("[qbz-qt] large spectrum mode -> {mode}");
+    shell_bridge::ui(move |mut b| b.as_mut().set_large_spectrum_mode(mode));
+}
+
 /// Artist-card overlay play (ArtistGridCard): Popular tracks with the
 /// studio-discography fallback.
 pub(crate) fn play_artist_card(artist_id: String) {
@@ -1355,7 +1380,19 @@ fn main() {
     let tokio_runtime = Runtime::new().expect("failed to build the tokio runtime");
     let _ = TOKIO.set(tokio_runtime);
 
-    let runtime = Arc::new(AppRuntime::new(LoggingAdapter::new("[qbz-qt]")));
+    // `with_visualizer` == `new` plus a VisualizerTap wired into the player.
+    // The tap starts DISABLED (it captures nothing and the FFT producer idles),
+    // so this costs nothing until the Large dock's band is shown. It is a
+    // read-only copy downstream of the bit-perfect stream — no device/stream
+    // init is touched.
+    let runtime = Arc::new(AppRuntime::with_visualizer(LoggingAdapter::new(
+        "[qbz-qt]",
+    )));
+    if let Some(tap) = runtime.visualizer_tap().cloned() {
+        viz_qt::install(tap);
+    } else {
+        log::warn!("[qbz-qt] runtime has no visualizer tap; the Large dock band stays empty");
+    }
     let _ = APP.set(runtime);
 
     let mut app = QGuiApplication::new();

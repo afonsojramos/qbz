@@ -32,6 +32,21 @@ Rectangle {
     property bool searchOpen: false
     property bool playlistsCollapsed: false
     property string activePlaylistId: ""
+    // ---- Large-NPB dock space reservation -------------------------------
+    // The cover+spectrum dock is an AppShell-ROOT overlay pinned flush to the
+    // WINDOW bottom-left, so it extends the bar's height BELOW this sidebar
+    // (which stops at npb.top). Only the IN-SIDEBAR portion has to be
+    // reserved, and it shrinks when the band is hidden — that is why the
+    // height comes from the bridge and not a literal.
+    //
+    // Without this the playlist list keeps running to the sidebar's bottom
+    // edge and the rows sit UNDER the album art (Sidebar.slint:1145 reserves
+    // the same way).
+    readonly property bool largeDockActive: QbzShell.npbMode === 3 && QbzShell.sidebarState === 0
+    readonly property real dockReserve: largeDockActive
+        ? Math.max(0, QbzShell.largeDockHeight - theme.npbLargeHeight)
+        : 0
+
     // Flattened entries from the bridge + the url-keyed cover map.
     readonly property var entries: parseEntries(QbzShell.sidebarJson)
     property var coverMap: ({})
@@ -447,7 +462,10 @@ Rectangle {
         Item {
             visible: !root.playlistsCollapsed
             width: parent.width
-            height: parent.height - y - 16
+            // `root.dockReserve` keeps the rows clear of the Large-NPB cover
+            // (0 in every other mode). Clamped so a short window shrinks the
+            // list to nothing instead of giving it a negative height.
+            height: Math.max(0, parent.height - y - 16 - root.dockReserve)
 
             Flickable {
                 id: plFlick

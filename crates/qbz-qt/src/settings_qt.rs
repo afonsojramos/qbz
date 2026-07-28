@@ -278,6 +278,74 @@ pub fn set_npb_mode(index: i32) -> i32 {
     index
 }
 
+// ---------------------------------------------------------------------------
+// Large-NPB dock prefs (the cover's eye toggle + the band's mode cycle)
+// ---------------------------------------------------------------------------
+
+/// Whether the Large dock shows its FFT band. Defaults ON (the Slint dock's
+/// `large-visualizer-on` default) — the eye button is always visible while it
+/// is off, so an accidental hide is one click from being undone.
+pub fn large_visualizer_on() -> bool {
+    let Some(path) = prefs_path() else {
+        return true;
+    };
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|v| {
+            v.get("large_visualizer_on")
+                .and_then(serde_json::Value::as_bool)
+        })
+        .unwrap_or(true)
+}
+
+/// Persist the band visibility; returns the stored value.
+pub fn set_large_visualizer_on(on: bool) -> bool {
+    write_pref("large_visualizer_on", serde_json::Value::Bool(on));
+    on
+}
+
+/// The band's render mode: 0 Bars / 1 Waveform / 2 Energy.
+pub fn large_spectrum_mode() -> i32 {
+    let Some(path) = prefs_path() else {
+        return 0;
+    };
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|v| v.get("large_spectrum_mode").and_then(serde_json::Value::as_i64))
+        .map(|m| (m as i32).clamp(0, 2))
+        .unwrap_or(0)
+}
+
+/// Persist the band mode (clamped 0-2); returns the stored index.
+pub fn set_large_spectrum_mode(mode: i32) -> i32 {
+    let mode = mode.clamp(0, 2);
+    write_pref(
+        "large_spectrum_mode",
+        serde_json::Value::Number(mode.into()),
+    );
+    mode
+}
+
+/// Additive single-key patch of ui_prefs.json (the npb_mode pattern: read,
+/// insert, write back — never clobber keys other surfaces own).
+fn write_pref(key: &str, value: serde_json::Value) {
+    let Some(path) = prefs_path() else {
+        return;
+    };
+    let mut doc: serde_json::Value = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    if let Some(obj) = doc.as_object_mut() {
+        obj.insert(key.to_string(), value);
+        if let Ok(text) = serde_json::to_string_pretty(&doc) {
+            let _ = std::fs::write(&path, text);
+        }
+    }
+}
+
 /// The "Show track playing context" pref (Playback settings; feeds the
 /// SongCard layers icon — SettingsState.show-context-icon).
 pub fn show_context_icon() -> bool {

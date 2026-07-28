@@ -135,4 +135,8 @@ QtObject {
     // Small now-playing bar total height (ShellState.npb-small-height,
     // npb-small-extra is 0 on Linux).
     readonly property int npbSmallHeight: 42
+    // Every other bar mode (New / Classic / Large) — AppShell.slint:396.
+    // The Large dock's sidebar reservation subtracts this, so it must be the
+    // SAME value the shell pins the bar to.
+    readonly property int npbLargeHeight: 112
 }

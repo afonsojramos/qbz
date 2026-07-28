@@ -66,7 +66,7 @@ Rectangle {
         anchors.bottom: parent.bottom
         // Mode-aware height (AppShell.slint:396): Small collapses to one
         // header-tall row; New/Classic/Large keep the full 112px.
-        height: QbzShell.npbMode === 2 ? theme.npbSmallHeight : 112
+        height: QbzShell.npbMode === 2 ? theme.npbSmallHeight : theme.npbLargeHeight
     }
 
     Sidebar {
@@ -154,51 +154,23 @@ Rectangle {
     }
 
     // --- Large NPB (mode 3) cover dock (phase 18) -------------------------
-    // The L's vertical arm: the square now-playing cover pinned flush to
-    // the window bottom-left over the sidebar (SidebarNowPlayingDock.slint,
-    // AppShell.slint:747). Only while Large is ACTIVE (mode 3 + sidebar
-    // open). The spectrum band above the cover is NOT rendered — it needs
-    // the FFT visualizer tap, which the POC does not wire (POC-NOTE).
+    // The L's vertical arm: the square now-playing cover + FFT band, pinned
+    // flush to the window bottom-left over the sidebar
+    // (SidebarNowPlayingDock.slint, AppShell.slint:747). Only while Large is
+    // ACTIVE (mode 3 + sidebar open).
+    //
+    // The height comes from QbzShell.largeDockHeight (it changes with the
+    // band's eye toggle) and Sidebar.qml reserves the same value minus the
+    // bar height — pinning here with a literal would desync the two.
     readonly property bool largeActive: QbzShell.npbMode === 3 && QbzShell.sidebarState === 0
-    Rectangle {
+    SidebarNowPlayingDock {
         visible: root.largeActive
+        // Equal 16px gutters inside the 240px sidebar; the cover is square,
+        // so this width also sets the art size.
         x: 16
-        y: parent.height - 221
         width: 208
-        height: 221
-        color: "transparent"
-        // Drop-shadow approximation (the Slint dock's 24px blur).
-        Rectangle {
-            x: 0
-            y: 17
-            width: 208
-            height: 208
-            radius: theme.radiusMd
-            color: "#66000000"
-        }
-        Rectangle {
-            x: 0
-            y: 13
-            width: 208
-            height: 208
-            radius: theme.radiusMd
-            color: ambientOn ? theme.surfaceMainA22 : theme.surfaceMain
-            clip: true
-            RoundedImage {
-                visible: QbzPlayer.npHasTrack
-                anchors.fill: parent
-                source: QbzPlayer.npArtworkPath
-                radius: theme.radiusMd
-            }
-            QbzIcon {
-                visible: !QbzPlayer.npHasTrack
-                name: "music"
-                width: 66
-                height: 66
-                anchors.centerIn: parent
-                tintName: "muted"
-            }
-        }
+        y: parent.height - QbzShell.largeDockHeight
+        ambientOn: root.ambientOn
     }
 
     // Search cortinilla (phase 15): the live-search dropdown overlay, LAST

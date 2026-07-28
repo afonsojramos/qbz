@@ -38,6 +38,21 @@ pub mod qbz_shell {
         // 3 Large — the ui_prefs npb_mode key, live-switchable.
         #[qproperty(i32, npb_mode)]
 
+        // --- Large-NPB dock (SidebarNowPlayingDock.slint) -----------------
+        // The dock is the L's vertical arm: a square cover pinned flush to the
+        // window bottom-left, with an optional FFT band above it.
+        // Eye toggle on the cover — persists ui_prefs.large_visualizer_on.
+        #[qproperty(bool, large_visualizer_on)]
+        // Band click cycles 0 Bars / 1 Waveform / 2 Energy
+        // (ui_prefs.large_spectrum_mode).
+        #[qproperty(i32, large_spectrum_mode)]
+        // Total dock height, in lockstep with the toggle. The Sidebar reserves
+        // `largeDockHeight - npb height` so the playlist list stops ABOVE the
+        // cover instead of running under it, and AppShell pins the dock at
+        // `height - largeDockHeight`. Both consumers read THIS — never a
+        // literal (Sidebar.slint:1145 is the same contract).
+        #[qproperty(f32, large_dock_height)]
+
         // --- Theme (phase 19) --------------------------------------------
         // ONE JSON token document (theme_qt.rs ThemeTokens: 30 colors + 24
         // alpha tiers + ambient derivations + isDark) — QbzTheme.qml binds
@@ -136,6 +151,15 @@ pub mod qbz_shell {
         #[qinvokable]
         fn npb_set_mode(self: Pin<&mut QbzShell>, mode: i32);
 
+        /// Large dock, cover eye button: show/hide the FFT band. Persists the
+        /// pref, republishes `largeDockHeight`, and gates the capture tap —
+        /// hiding the band stops the FFT producer outright.
+        #[qinvokable]
+        fn large_toggle_visualizer(self: Pin<&mut QbzShell>);
+        /// Large dock, band click: cycle Bars -> Waveform -> Energy.
+        #[qinvokable]
+        fn large_cycle_spectrum(self: Pin<&mut QbzShell>);
+
         // --- Theme (phase 19) ---------------------------------------------
         /// Appearance > Theme row: persist the picked slug + republish
         /// `themeJson` (live switch).
@@ -203,6 +227,9 @@ pub struct QbzShellRust {
     can_back: bool,
     can_forward: bool,
     npb_mode: i32,
+    large_visualizer_on: bool,
+    large_spectrum_mode: i32,
+    large_dock_height: f32,
     theme_json: QString,
     theme_slug: QString,
     theme_list_json: QString,
@@ -239,6 +266,9 @@ impl Default for QbzShellRust {
             can_back: false,
             can_forward: false,
             npb_mode: crate::settings_qt::npb_mode_index(),
+            large_visualizer_on: crate::settings_qt::large_visualizer_on(),
+            large_spectrum_mode: crate::settings_qt::large_spectrum_mode(),
+            large_dock_height: large_dock_height(crate::settings_qt::large_visualizer_on()),
             theme_json: QString::from(crate::theme_qt::theme_json().as_str()),
             theme_slug: QString::from(crate::theme_qt::current_slug().as_str()),
             theme_list_json: QString::from(crate::theme_qt::theme_list_json().as_str()),
@@ -266,6 +296,33 @@ impl Default for QbzShellRust {
             drag_y: 0.0,
             drag_over_playlist_id: QString::default(),
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Large-NPB dock geometry
+// ---------------------------------------------------------------------------
+// SidebarNowPlayingDock.slint's height formula, verbatim. The cover is square
+// and as wide as the sidebar's content column (240 sidebar - 16 left - 16
+// right gutters = 208), so the totals are constants:
+//   ON  = 9 top pad + 42 band + 10 gap + 208 art + 4 bottom gap = 273
+//   OFF = 9 top pad                    + 208 art + 4 bottom gap = 221
+// SidebarNowPlayingDock.qml lays itself out from these SAME numbers — if you
+// change one, change both, or the cover shifts off the window bottom edge.
+pub(crate) const DOCK_ART_SIZE: f32 = 208.0;
+pub(crate) const DOCK_BAND_HEIGHT: f32 = 42.0;
+pub(crate) const DOCK_PAD_TOP: f32 = 9.0;
+pub(crate) const DOCK_PAD_BOTTOM: f32 = 4.0;
+pub(crate) const DOCK_BAND_GAP: f32 = 10.0;
+
+/// Total dock height for a visualizer state.
+pub(crate) fn large_dock_height(visualizer_on: bool) -> f32 {
+    let base = DOCK_PAD_TOP + DOCK_ART_SIZE + DOCK_PAD_BOTTOM;
+    if visualizer_on {
+        base + DOCK_BAND_HEIGHT + DOCK_BAND_GAP
+    } else {
+        base
     }
 }
 
@@ -318,6 +375,14 @@ impl qbz_shell::QbzShell {
 
     pub fn npb_set_mode(self: Pin<&mut Self>, mode: i32) {
         crate::npb_set_mode(mode);
+    }
+
+    pub fn large_toggle_visualizer(self: Pin<&mut Self>) {
+        crate::large_toggle_visualizer();
+    }
+
+    pub fn large_cycle_spectrum(self: Pin<&mut Self>) {
+        crate::large_cycle_spectrum();
     }
 
     pub fn theme_set(self: Pin<&mut Self>, slug: QString) {
