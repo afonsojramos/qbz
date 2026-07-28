@@ -97,6 +97,8 @@ fn main() {
                 "qml/views/PlaylistView.qml",
                 "qml/views/SearchView.qml",
                 "qml/views/SectionRail.qml",
+                "qml/shell/SpectrumBand.qml",
+                "qml/shell/VizSettle.qml",
             ],
             qrc_files: &qrc_refs,
             ..Default::default()

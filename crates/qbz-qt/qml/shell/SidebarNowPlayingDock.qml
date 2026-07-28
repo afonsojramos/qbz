@@ -17,22 +17,9 @@
 // `height - largeDockHeight`. Change the arithmetic in one place and the
 // cover slides off the window edge.
 //
-// PERF — this band redraws 30x/s next to a full-window ambient canvas, so
-// every one of these matters:
-//  1. The FFT streams REPLACE their QList each tick, so a Repeater bound to
-//     QbzViz.bars would rebuild every delegate every frame. The Repeaters use
-//     STATIC models (column counts) and bind only each bar's HEIGHT.
-//  2. Each mode caches the list in ONE `var` property per tick. Reading
-//     QbzViz.bars straight from 28 delegates would marshal the QList into a
-//     fresh JS array 28 times a frame (48x512 floats for Waveform — the
-//     expensive one).
-//  3. ONE shared Gradient for every bar, not one object per delegate.
-//  4. No per-bar Behavior: the producer already smooths and clamps in Rust
-//     (qbz-audio), so 28 concurrent QML animations would buy nothing.
-//  5. Only the ACTIVE mode is instantiated (`active:` Loaders) and viz_qt.rs
-//     only publishes the stream that mode consumes.
-//  6. The capture tap is gated by vizShouldRun — a hidden band costs zero:
-//     the producer parks and the drain thread sleeps.
+// The spectrum strip itself lives in SpectrumBand.qml (render modes + motion);
+// its perf contract is documented there. This file owns the gating and the
+// layout arithmetic only.
 //
 // GATING RULE (owner, 2026-07-28): freeze on NOT VISIBLE, never on lost
 // focus — a tiling desktop keeps windows visible and unfocused.
@@ -86,118 +73,13 @@ Item {
     }
 
     // ---- Spectrum band -----------------------------------------------------
-    Rectangle {
-        id: band
-        visible: root.bandOn
+    SpectrumBand {
         x: 0
         y: root.padTop
         width: root.width
         height: root.bandHeight
-        radius: theme.radiusMd
-        color: "#59000000"
-        clip: true
-
-        // Album-derived gradient, reusing the ambient triad (ambient_qt.rs)
-        // instead of a second album-color pipeline — the Slint dock reads
-        // ImmersiveState.spectrum-primary/secondary, which is the same idea.
-        readonly property color topColor: QbzShell.ambientPrimary
-        readonly property color bottomColor: QbzShell.ambientSecondary
-
-        // ONE gradient instance shared by every bar (perf note 3).
-        Gradient {
-            id: barGradient
-            GradientStop { position: 0.0; color: band.topColor }
-            GradientStop { position: 1.0; color: band.bottomColor }
-        }
-
-        // Mode 0 — Bars: 28 MIRRORED columns over the 14 ACTIVE bins (the
-        // 16-bin FFT leaves {1, 15} empty; SpectrumPanel.slint parity).
-        Loader {
-            anchors.fill: parent
-            active: QbzShell.largeSpectrumMode === 0
-            sourceComponent: Item {
-                id: barsMode
-                readonly property var activeBins: [0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
-                readonly property real slot: band.width / 28
-                // Marshal the QList into JS ONCE per tick (perf note 2).
-                readonly property var values: QbzViz.bars
-                Repeater {
-                    model: 28
-                    delegate: Rectangle {
-                        required property int index
-                        // Mirror: columns 14..27 replay 13..0.
-                        readonly property int bin: index < 14
-                            ? barsMode.activeBins[index]
-                            : barsMode.activeBins[27 - index]
-                        readonly property real amp: Math.max(0, Math.min(1, barsMode.values[bin] || 0))
-                        x: index * barsMode.slot + 1
-                        width: barsMode.slot - 2
-                        height: Math.max(2, amp * band.height)
-                        y: band.height - height
-                        radius: 1
-                        gradient: barGradient
-                    }
-                }
-            }
-        }
-
-        // Mode 1 — Waveform: 48 downsampled L columns, mirrored about the
-        // band's vertical centre (the L half is samples 0..255).
-        Loader {
-            anchors.fill: parent
-            active: QbzShell.largeSpectrumMode === 1
-            sourceComponent: Item {
-                id: waveMode
-                readonly property real slot: band.width / 48
-                // 512 floats — marshalling this per delegate would be the
-                // single most expensive thing in the dock (perf note 2).
-                readonly property var values: QbzViz.waveform
-                Repeater {
-                    model: 48
-                    delegate: Rectangle {
-                        required property int index
-                        readonly property real amp: Math.min(1, Math.abs(waveMode.values[index * 5] || 0))
-                        x: index * waveMode.slot + 1
-                        width: waveMode.slot - 2
-                        height: Math.max(2, amp * band.height)
-                        y: (band.height - height) / 2
-                        radius: 1
-                        color: band.topColor
-                    }
-                }
-            }
-        }
-
-        // Mode 2 — Energy: the 5 semantic bands (sub-bass .. air).
-        Loader {
-            anchors.fill: parent
-            active: QbzShell.largeSpectrumMode === 2
-            sourceComponent: Item {
-                id: energyMode
-                readonly property real slot: band.width / 5
-                readonly property var values: QbzViz.energy
-                Repeater {
-                    model: 5
-                    delegate: Rectangle {
-                        required property int index
-                        readonly property real amp: Math.max(0, Math.min(1, energyMode.values[index] || 0))
-                        x: index * energyMode.slot + 3
-                        width: energyMode.slot - 6
-                        height: Math.max(2, amp * band.height)
-                        y: band.height - height
-                        radius: 1
-                        gradient: barGradient
-                    }
-                }
-            }
-        }
-
-        // Click the band → cycle Bars -> Waveform -> Energy (persisted).
-        MouseArea {
-            anchors.fill: parent
-            cursorShape: Qt.PointingHandCursor
-            onClicked: QbzShell.largeCycleSpectrum()
-        }
+        shown: root.bandOn
+        capturing: root.vizShouldRun
     }
 
     // ---- Album cover -------------------------------------------------------

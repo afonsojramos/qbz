@@ -13,6 +13,14 @@
 //! Slint side's persistent `VecModel` + `set_row_data` (qbz/src/visualizer.rs).
 //! The lengths are FIXED (16 / 5 / 512) so an index binding is always safe.
 //!
+//! The publish rate is the producer's `TARGET_FPS` (30) and is NOT the band's
+//! frame rate: `qml/shell/VizSettle.qml` replays each published frame across
+//! the render frames that follow it, which is what the Slint dock gets from its
+//! per-bar `animate bar-h { 90ms }`. Consequences for this side: a late publish
+//! degrades to a hold, never a jump, and raising `TARGET_FPS` would buy no
+//! smoothness — only CPU — because the Rust EMA already band-limits these
+//! streams to ~6 Hz.
+//!
 //! Props: bars (16 log-spaced FFT bins), energy (5 semantic bands),
 //! waveform (256 L + 256 R samples). Invokables: boot + set_enabled.
 //!
