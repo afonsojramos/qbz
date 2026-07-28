@@ -12,12 +12,16 @@
 // Total height 42px (ShellState.npb-small-height; npb-small-extra is 0 on
 // Linux).
 //
-// POC-NOTE: playback is not wired (phase 4) — the bar renders its EMPTY
-// state (NowPlayingState.has-track == false): idle music-glyph art,
-// "Nothing playing" title, transport disabled (opacity 0.3), no time
-// column, no AudioStamp. Connect / Cast / Settings / ViewMode / Lyrics are
-// inert visual replicas (their flyouts are out of scope); Volume, Queue,
-// Shuffle, Repeat, Mute are live against the POC NowPlayingModel.
+// BUTTON SET (phase 24): identical to PlayerBar's, in the Small bar's own
+// order — the transport is the shared cluster (info · shuffle · prev · play ·
+// next · repeat · "+"), and the right cluster keeps PlayerBarSmall's mount
+// order (Connect · Cast · Settings · ViewMode · Lyrics · Volume · Queue).
+// The "+" opens the same "Add to…" flyout as the full bar; the quality stamp
+// is the shared QualityBadge in "compact" mode, not hand-drawn text.
+//
+// Connect / Cast / Settings / ViewMode are still inert visual replicas where
+// no Qt invokable exists (TODO comments at the call sites); Volume, Queue,
+// Shuffle, Repeat, Mute, Lyrics and the add flyout are live.
 
 import QtQuick
 import com.blitzfc.qbz
@@ -44,6 +48,32 @@ Rectangle {
     property real colCentre: 1.0 - 2.0 * root.sideFrac
     // WIDE = inline horizontal volume slider; NARROW = button-only.
     property bool volumeWide: root.width >= 1366
+
+    // Favorite state of the now-playing track (Slint:
+    // QueueState.now-playing-favorite) — the queue document carries it on its
+    // `current` row; re-parsed only when that document changes.
+    readonly property bool npFavorite: {
+        try {
+            var d = JSON.parse(QbzQueue.queueJson)
+            return !!(d && d.current && d.current.isFavorite)
+        } catch (e) {
+            return false
+        }
+    }
+
+    // np_quality_label is "24-bit / 96 kHz" (playback_qt::quality_badge);
+    // QualityBadge wants the raw numbers.
+    readonly property int npBitDepth: {
+        var l = QbzPlayer.npQualityLabel
+        var i = l.indexOf("-bit")
+        return i > 0 ? parseInt(l.substring(0, i)) : 0
+    }
+    readonly property real npSampleRate: {
+        var l = QbzPlayer.npQualityLabel
+        var i = l.indexOf("/")
+        var j = l.indexOf("kHz")
+        return (i >= 0 && j > i) ? parseFloat(l.substring(i + 1, j)) : 0
+    }
 
     function fmt(secs) {
         var m = Math.floor(secs / 60)
@@ -260,7 +290,8 @@ Rectangle {
                     QbzIconButton {
                         name: "info"
                         btnEnabled: QbzPlayer.npHasTrack
-                        // POC-NOTE: track-info panel is out of scope.
+                        // TODO(qt-bridge): no track-info panel in the Qt port
+                        // yet (Slint: media-action(track, id, "track-info")).
                     }
                     QbzIconButton {
                         name: "shuffle"
@@ -309,11 +340,13 @@ Rectangle {
                         btnEnabled: QbzPlayer.npHasTrack
                         onClicked: QbzPlayer.cycleRepeat()
                     }
+                    // "+" — Tauri's add-to-playlist button, grouped into the
+                    // shared "Add to…" flyout in 2.0.
                     QbzIconButton {
+                        id: smallAddBtn
                         name: "plus"
                         btnEnabled: QbzPlayer.npHasTrack
-                        // POC-NOTE: the grouped "Add to…" flyout is out of
-                        // scope.
+                        onClicked: smallAddMenu.openBelowRight(smallAddBtn)
                     }
                 }
             }
@@ -335,33 +368,18 @@ Rectangle {
                     height: parent.height
                     spacing: 1
 
-                    // AudioStamp — tier + detail line, width-clamped.
-                    // POC-NOTE: row 2 (backend/mode LEDs) is not rendered —
-                    // the POC model carries no output-backend state.
-                    Column {
-                        visible: QbzPlayer.npHasTrack
+                    // AudioStamp — the shared QualityBadge in its narrow-bar
+                    // "compact" mode (icon + "24/96"), same component the full
+                    // bar uses. POC-NOTE: row 2 (backend/mode LEDs) is not
+                    // rendered here — the Small stamp has no room for it.
+                    QualityBadge {
+                        visible: QbzPlayer.npHasTrack && QbzPlayer.npQualityLabel !== ""
                         anchors.verticalCenter: parent.verticalCenter
-                        spacing: 1
-                        Row {
-                            spacing: 5
-                            layoutDirection: Qt.RightToLeft
-                            Text {
-                                text: QbzPlayer.npQualityLabel
-                                font.pixelSize: 9
-                                font.weight: theme.weightSemibold
-                                color: theme.textPrimary
-                                elide: Text.ElideRight
-                            }
-                            Text {
-                                text: QbzPlayer.npQualityTier === "hires" ? "HI-RES"
-                                    : QbzPlayer.npQualityTier === "mp3" ? "MP3"
-                                    : QbzPlayer.npQualityTier === "lossless" ? "LOSSLESS" : "CD"
-                                font.pixelSize: 9
-                                font.weight: theme.weightBold
-                                font.letterSpacing: 0.3
-                                color: theme.textSecondary
-                            }
-                        }
+                        mode: "compact"
+                        tierOverride: QbzPlayer.npQualityTier === "hires" ? "hires"
+                            : (QbzPlayer.npQualityLabel !== "" ? "cd" : "")
+                        bitDepth: root.npBitDepth
+                        samplingRate: root.npSampleRate
                     }
 
                     // Separator: AudioStamp | icon cluster (10px toward the
@@ -372,13 +390,32 @@ Rectangle {
                         gapRight: 8
                     }
 
-                    // POC-NOTE: Connect / Cast / Settings / ViewMode /
-                    // Lyrics are inert visual replicas — their flyouts
-                    // (device pickers, audio toggles, NPB-mode menu) are
-                    // out of scope for the POC.
+                    // Qobuz Connect.
+                    // TODO(qt-bridge): no qconnect state/toggle exposed
+                    // (Slint: NowPlayingState.qconnect-connected +
+                    // qconnect-toggle()). Rendered 1:1, inert.
                     QbzIconButton { name: "monitor-speaker" }
+                    // Cast (Chromecast / DLNA).
+                    // TODO(qt-bridge): no cast picker in the Qt port
+                    // (Slint: CastState.picker-open + CastActions.open()).
                     QbzIconButton { name: "cast" }
-                    QbzIconButton { name: "settings-2" }
+                    // Audio settings — Tauri's normalization toggle (2.0
+                    // groups normalization + gapless behind this button).
+                    // TODO(glue): `normalization` is settable through
+                    // settingsBool but NOT published in settingsJson, so the
+                    // state can only be tracked locally; TODO(qt-bridge): the
+                    // Slint two-toggle flyout is not ported — the click
+                    // toggles normalization, exactly like the Tauri button.
+                    QbzIconButton {
+                        id: smallNormBtn
+                        property bool normOn: false
+                        name: "settings-2"
+                        active: normOn
+                        onClicked: {
+                            normOn = !normOn
+                            QbzBridge.settingsBool("normalization", normOn)
+                        }
+                    }
                     QbzIconButton {
                         id: smallViewBtn
                         name: "layout-grid"
@@ -399,39 +436,16 @@ Rectangle {
                         active: QbzPlayer.npMuted
                         onClicked: QbzPlayer.toggleMute()
                     }
-                    Item {
+                    // WIDE: the shared QbzSlider (PlayerBarSmall mounts the
+                    // same primitive at 72px on the 0..1000 scale).
+                    QbzSlider {
                         visible: root.volumeWide
                         width: 72
-                        height: 32
-                        Rectangle {
-                            id: volTrack
-                            width: parent.width
-                            height: 4
-                            radius: 2
-                            anchors.verticalCenter: parent.verticalCenter
-                            color: theme.surfaceElevated
-                            Rectangle {
-                                width: parent.width * QbzPlayer.npVolume
-                                height: parent.height
-                                radius: 2
-                                color: theme.accent
-                            }
-                            Rectangle {
-                                width: 16
-                                height: 16
-                                radius: 8
-                                color: theme.textPrimary
-                                x: parent.width * QbzPlayer.npVolume - width / 2
-                                anchors.verticalCenter: parent.verticalCenter
-                            }
-                        }
-                        MouseArea {
-                            anchors.fill: parent
-                            cursorShape: Qt.PointingHandCursor
-                            onPressed: QbzPlayer.setVolume(Math.min(Math.max(mouseX / width, 0), 1))
-                            onPositionChanged: if (pressed)
-                                QbzPlayer.setVolume(Math.min(Math.max(mouseX / width, 0), 1))
-                        }
+                        anchors.verticalCenter: parent.verticalCenter
+                        minimum: 0
+                        maximum: 1000
+                        value: Math.round(QbzPlayer.npVolume * 1000)
+                        onChanged: function (v) { QbzPlayer.setVolume(v / 1000.0) }
                     }
 
                     Item { width: 4; height: 1 }
@@ -449,4 +463,49 @@ Rectangle {
 
     // The Now-Playing-view mode menu (phase 18 — shared with PlayerBar).
     ViewModeMenu { id: smallViewMenu }
+
+    // "Add to…" flyout behind the transport "+" (TransportControls.slint's
+    // add-menu) — same seven entries, order and icons as the full bar.
+    CardMenu {
+        id: smallAddMenu
+        menuWidth: 232
+        entries: {
+            var m = [
+                {
+                    "label": root.npFavorite
+                        ? QbzSession.tr("Remove from library", QbzSession.trRev)
+                        : QbzSession.tr("Add to library", QbzSession.trRev),
+                    "icon": root.npFavorite ? "heart-filled" : "heart",
+                    "action": "favorite"
+                },
+                { "label": QbzSession.tr("Add to playlist", QbzSession.trRev), "icon": "list-music", "action": "playlist" },
+                { "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "action": "queue" },
+                { "label": QbzSession.tr("Play later", QbzSession.trRev), "icon": "list-plus", "action": "later" },
+                { "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-start", "action": "next" },
+                { "label": QbzSession.tr("Add to mixtape", QbzSession.trRev), "icon": "cassette-tape", "action": "mixtape" },
+            ]
+            if (QbzPlayer.npAlbumId !== "") {
+                m.push({
+                    "label": QbzSession.tr("Add album to collection", QbzSession.trRev),
+                    "icon": "disc-3",
+                    "action": "album-favorite"
+                })
+            }
+            return m
+        }
+        onPicked: function (a) {
+            var id = QbzPlayer.npTrackId
+            if (a === "favorite") {
+                if (id !== "") QbzQueue.queueToggleFavorite("track", id)
+            } else if (a === "queue" || a === "later" || a === "next") {
+                if (id !== "") QbzPlayer.enqueueTrack(id, a)
+            } else if (a === "album-favorite") {
+                if (QbzPlayer.npAlbumId !== "")
+                    QbzBridge.libraryToggleFavorite("album", QbzPlayer.npAlbumId)
+            }
+            // TODO(qt-bridge): "playlist" (add-to-playlist modal) and
+            // "mixtape" have no invokable in the Qt port yet — the rows are
+            // rendered 1:1 with the Slint flyout and do nothing for now.
+        }
+    }
 }

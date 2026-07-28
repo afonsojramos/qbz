@@ -571,6 +571,9 @@ pub struct SettingsDoc {
     #[serde(rename = "showContextIcon")]
     pub show_context_icon: bool,
     pub gapless: bool,
+    /// Settable via settingsBool("normalization", …) but never published
+    /// back, so both now-playing bars had to shadow the toggle locally.
+    pub normalization: bool,
     #[serde(rename = "persistSession")]
     pub persist_session: bool,
     #[serde(rename = "resumePosition")]
@@ -906,6 +909,7 @@ pub async fn publish_snapshot() {
             continue_playback: prefs.autoplay_mode == AutoplayMode::ContinueWithinSource,
             show_context_icon: prefs.show_context_icon,
             gapless: audio_settings.gapless_enabled,
+            normalization: audio_settings.normalization_enabled,
             persist_session: prefs.persist_session,
             resume_position: prefs.resume_playback_position,
             stream_uncached: audio_settings.stream_first_track,

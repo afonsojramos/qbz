@@ -19,11 +19,23 @@
 //                dock, shifted right to clear it) · CENTER transport ·
 //                RIGHT small AudioStamp + cluster.
 //
-// Wired: transport (shuffle/prev/play/next/repeat), seek, volume+mute,
-// lyrics, queue, the Now-Playing-view flyout (npbSetMode), open
-// album/artist via the SongCard meta links. Inert (POC-NOTEs): Connect
-// (device flyout), track-info, the dot-LED output badges use the real
-// backend state but the volume LOCK (ALSA hw / remote) is not enforced.
+// BUTTON SET (phase 24 — 1:1 with the Tauri NowPlayingBar.svelte, via the
+// Slint TransportControls/PlayerBar that descend from it):
+//   transport: info · shuffle · prev · play · next · repeat · "+" (Add to…)
+//              (+ the inline favorite heart in Classic, like Tauri)
+//   right:     Cast · Connect · Lyrics · Now-Playing view · Audio settings
+//              (normalization) · [6px] · Mute · slider · −/+ steppers ·
+//              [6px] · Queue
+// Tauri's Miniplayer + Full screen buttons live inside the Now-Playing view
+// flyout (ViewModeMenu) since 2.0 — that ONE button holds both.
+//
+// Wired: transport (shuffle/prev/play/next/repeat), the add flyout
+// (library / queue / play next / play later / album), seek, volume + mute +
+// steppers, lyrics, queue, the Now-Playing-view flyout (npbSetMode),
+// normalization, open album/artist via the SongCard meta links.
+// Inert (TODO comments at the call sites): Cast, Connect (device flyouts),
+// track-info, add-to-playlist, add-to-mixtape. The volume LOCK (ALSA hw /
+// remote) is still not enforced.
 
 import QtQuick
 import QtQuick.Controls
@@ -60,6 +72,52 @@ Rectangle {
     }
     readonly property bool backendPipewire: settingsDoc.backendIsPipewire === true
     readonly property bool dacPassthrough: settingsDoc.dacPassthrough === true
+    // AppearanceState.show-volume-steppers (PlayerBar.slint gates the −/+
+    // pair on it; Tauri always showed them).
+    readonly property bool showVolumeSteppers: settingsDoc.showVolumeSteppers === true
+
+    // Favorite state of the now-playing track (Slint:
+    // QueueState.now-playing-favorite). The queue document carries it on its
+    // `current` row; this re-parses ONLY when that document changes.
+    readonly property bool npFavorite: {
+        try {
+            var d = JSON.parse(QbzQueue.queueJson)
+            return !!(d && d.current && d.current.isFavorite)
+        } catch (e) {
+            return false
+        }
+    }
+
+    // Audio settings / normalization (Tauri's normalization button; Slint's
+    // "Audio settings" flyout). `normalization` IS settable through
+    // QbzBridge.settingsBool but is NOT published in settingsJson yet, so the
+    // toggle keeps its own value once the user touches it and falls back to
+    // the (currently absent) published field before that.
+    // TODO(glue): publish `normalization` in SettingsDoc — see the report.
+    property bool normTouched: false
+    property bool normLocal: false
+    readonly property bool normalizationOn: normTouched ? normLocal
+        : (settingsDoc.normalization === true)
+    function toggleNormalization() {
+        normLocal = !normalizationOn
+        normTouched = true
+        QbzBridge.settingsBool("normalization", normLocal)
+    }
+
+    // np_quality_label is "24-bit / 96 kHz" (playback_qt::quality_badge);
+    // QualityBadge wants the raw numbers, so split the published string
+    // instead of duplicating the tier logic.
+    readonly property int npBitDepth: {
+        var l = QbzPlayer.npQualityLabel
+        var i = l.indexOf("-bit")
+        return i > 0 ? parseInt(l.substring(0, i)) : 0
+    }
+    readonly property real npSampleRate: {
+        var l = QbzPlayer.npQualityLabel
+        var i = l.indexOf("/")
+        var j = l.indexOf("kHz")
+        return (i >= 0 && j > i) ? parseFloat(l.substring(i + 1, j)) : 0
+    }
 
     function fmt(secs) {
         var m = Math.floor(secs / 60)
@@ -107,26 +165,18 @@ Rectangle {
         height: 30
         layoutDirection: Qt.RightToLeft
 
-        Row {
-            spacing: 5
-            layoutDirection: Qt.RightToLeft
+        // The badge itself is the Tauri QualityBadge in its narrow-bar
+        // "compact" mode (icon + "24/96"), NOT a hand-drawn glyph+label pair.
+        QualityBadge {
+            visible: QbzPlayer.npQualityLabel !== ""
+            mode: "compact"
+            // The stamp shows the cd glyph for ANY non-hires tier with a
+            // label (not just "cd") — map that exactly.
+            tierOverride: QbzPlayer.npQualityTier === "hires" ? "hires"
+                : (QbzPlayer.npQualityLabel !== "" ? "cd" : "")
+            bitDepth: root.npBitDepth
+            samplingRate: root.npSampleRate
             anchors.verticalCenter: parent.verticalCenter
-            Text {
-                visible: QbzPlayer.npQualityLabel !== ""
-                text: QbzPlayer.npQualityLabel
-                font.pixelSize: 9
-                font.weight: theme.weightSemibold
-                color: theme.textPrimary
-                elide: Text.ElideRight
-                anchors.verticalCenter: parent.verticalCenter
-            }
-            QualityMini {
-                // The stamp shows the cd glyph for ANY non-hires tier with
-                // a label (not just "cd") — map that exactly.
-                tier: QbzPlayer.npQualityTier === "hires" ? "hires"
-                    : (QbzPlayer.npQualityLabel !== "" ? "cd" : "")
-                anchors.verticalCenter: parent.verticalCenter
-            }
         }
         Column {
             visible: showLeds
@@ -282,14 +332,61 @@ Rectangle {
         }
     }
 
-    // Transport cluster (TransportControls.slint): shuffle · prev · play ·
-    // next · repeat. play-circle = the filled 44px accent disc (New/Large);
-    // classic-actions = plain glyphs, left-aligned (Classic).
+    // Favorite toggle — the inline heart Classic mounts next to "+" (Tauri's
+    // `.control-btn` heart with fill=currentColor when favorited). NOT a
+    // QbzIconButton: that control only tints accent/primary/secondary/muted
+    // and the favorited heart must take the theme's `favorite` red (Slint
+    // TransportControls uses Theme.favorite the same way).
+    component FavToggle: Rectangle {
+        width: 32
+        height: 32
+        radius: theme.radiusSm
+        opacity: QbzPlayer.npHasTrack ? 1.0 : 0.3
+        color: (favArea.containsMouse && QbzPlayer.npHasTrack) ? theme.surfaceHover : "transparent"
+        QbzIcon {
+            name: root.npFavorite ? "heart-filled" : "heart"
+            width: 16
+            height: 16
+            anchors.centerIn: parent
+            tintName: root.npFavorite ? "favorite"
+                : (favArea.containsMouse ? "primary" : "secondary")
+        }
+        MouseArea {
+            id: favArea
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: QbzPlayer.npHasTrack ? Qt.PointingHandCursor : Qt.ArrowCursor
+            onClicked: if (QbzPlayer.npHasTrack && QbzPlayer.npTrackId !== "")
+                QbzQueue.queueToggleFavorite("track", QbzPlayer.npTrackId)
+        }
+    }
+
+    // Transport cluster (TransportControls.slint): track-info · shuffle ·
+    // prev · play · next · repeat · "+" (Add to… flyout), plus the inline
+    // favorite heart in Classic. 2px spacing on 32px buttons = the same 34px
+    // pitch as Tauri's 30px `.control-btn` + 4px gap.
+    // play-circle = the filled accent disc (New/Large); Classic/Small get the
+    // plain 34px glyph, 20px in BOTH modes exactly like Tauri's size={20}.
     component TransportControls: Row {
+        id: tc
         property bool playCircle: true
-        spacing: playCircle ? 12 : 4
+        // Classic ADDS the inline favorite toggle (Tauri parity).
+        property bool classicActions: false
+        /// Emitted by "+" with the button as anchor, so the flyout is owned
+        /// by the bar (one menu, both mount points).
+        signal addRequested(var anchorItem)
+        spacing: 2
         height: 44
 
+        // Track info — the first control, left of shuffle (1:1 with the
+        // other views; it also restores PLAY's symmetric centring).
+        QbzIconButton {
+            name: "info"
+            btnEnabled: QbzPlayer.npHasTrack
+            anchors.verticalCenter: parent.verticalCenter
+            // TODO(qt-bridge): no track-info panel in the Qt port yet
+            // (Slint: media-action("track", id, "track-info")). Inert.
+        }
         QbzIconButton {
             name: "shuffle"
             active: QbzPlayer.npShuffle
@@ -304,19 +401,21 @@ Rectangle {
             onClicked: QbzPlayer.previous()
         }
         Rectangle {
-            width: playCircle ? 44 : 32
-            height: playCircle ? 44 : 32
-            radius: width / 2
+            width: tc.playCircle ? 38 : 34
+            height: tc.playCircle ? 38 : 34
+            radius: tc.playCircle ? width / 2 : theme.radiusSm
             anchors.verticalCenter: parent.verticalCenter
             opacity: QbzPlayer.npHasTrack ? 1.0 : 0.3
-            color: playCircle ? (playArea.containsMouse && QbzPlayer.npHasTrack ? theme.accentHover : theme.accent)
+            color: tc.playCircle
+                ? (playArea.containsMouse && QbzPlayer.npHasTrack ? theme.accentHover : theme.accent)
                 : ((playArea.containsMouse && QbzPlayer.npHasTrack) ? theme.surfaceHover : "transparent")
             QbzIcon {
                 name: QbzPlayer.npPlaying ? "pause" : "play-fill"
-                width: playCircle ? 20 : 16
-                height: playCircle ? 20 : 16
+                width: 20
+                height: 20
                 anchors.centerIn: parent
-                tintName: playCircle ? "black" : "primary"
+                tintName: tc.playCircle ? "black"
+                    : (playArea.containsMouse ? "accent" : "primary")
             }
             MouseArea {
                 id: playArea
@@ -338,6 +437,19 @@ Rectangle {
             btnEnabled: QbzPlayer.npHasTrack
             anchors.verticalCenter: parent.verticalCenter
             onClicked: QbzPlayer.cycleRepeat()
+        }
+        // "+" — Tauri's add-to-playlist button, grouped into the shared
+        // "Add to…" flyout in 2.0.
+        QbzIconButton {
+            id: addBtn
+            name: "plus"
+            btnEnabled: QbzPlayer.npHasTrack
+            anchors.verticalCenter: parent.verticalCenter
+            onClicked: tc.addRequested(addBtn)
+        }
+        FavToggle {
+            visible: tc.classicActions
+            anchors.verticalCenter: parent.verticalCenter
         }
     }
 
@@ -440,12 +552,14 @@ Rectangle {
                     showBadges: !root.largeActive
                 }
                 // Classic: transport cluster hugging the left edge (plain
-                // play glyph, Tauri arrangement).
+                // play glyph + inline favorite, the Tauri arrangement).
                 TransportControls {
                     visible: root.isClassic
                     anchors.left: parent.left
                     anchors.verticalCenter: parent.verticalCenter
                     playCircle: false
+                    classicActions: true
+                    onAddRequested: function (anchorItem) { addMenu.openBelowRight(anchorItem) }
                 }
             }
 
@@ -462,6 +576,7 @@ Rectangle {
                     visible: !root.isClassic
                     anchors.centerIn: parent
                     playCircle: true
+                    onAddRequested: function (anchorItem) { addMenu.openBelowRight(anchorItem) }
                 }
                 // Classic: the contained glass song card (<=560px cap).
                 SongCard {
@@ -497,64 +612,90 @@ Rectangle {
                     }
                     Item { visible: root.largeActive; width: 12; height: 1 }
 
-                    // Qobuz Connect — inert (device flyout out of scope).
-                    QbzIconButton { name: "element-connect" }
-
-                    // Now-Playing view — the mode flyout (phase 18).
+                    // Cast (Chromecast / DLNA) — Tauri's first right-cluster
+                    // button.
                     QbzIconButton {
-                        name: "layout-grid"
-                        active: viewMenu.opened
-                        onClicked: viewMenu.openBelowRight(viewBtn)
-                        id: viewBtn
+                        name: "cast"
+                        anchors.verticalCenter: parent.verticalCenter
+                        // TODO(qt-bridge): no cast picker in the Qt port
+                        // (Slint: CastState.picker-open + CastActions.open()).
+                        // Rendered 1:1, inert.
+                    }
+
+                    // Qobuz Connect — inert (device flyout out of scope).
+                    // monitor-speaker is the icon both Slint bars use.
+                    QbzIconButton {
+                        name: "monitor-speaker"
+                        anchors.verticalCenter: parent.verticalCenter
+                        // TODO(qt-bridge): no qconnect state/toggle exposed
+                        // (Slint: NowPlayingState.qconnect-connected +
+                        // qconnect-toggle()). Rendered 1:1, inert.
                     }
 
                     // Lyrics.
                     QbzIconButton {
                         name: "mic-vocal"
                         active: QbzShell.lyricsOpen
+                        anchors.verticalCenter: parent.verticalCenter
                         onClicked: QbzShell.toggleLyrics()
+                    }
+
+                    // Now-Playing view — the mode flyout (phase 18). Tauri's
+                    // Miniplayer + Full screen buttons live inside it.
+                    QbzIconButton {
+                        id: viewBtn
+                        name: "layout-grid"
+                        active: viewMenu.opened
+                        anchors.verticalCenter: parent.verticalCenter
+                        onClicked: viewMenu.openBelowRight(viewBtn)
+                    }
+
+                    // Audio settings — Tauri's normalization toggle (2.0
+                    // groups normalization + gapless behind this button).
+                    // TODO(qt-bridge): the Slint two-toggle flyout is not
+                    // ported; the click toggles normalization directly, which
+                    // is exactly what the Tauri button did.
+                    QbzIconButton {
+                        name: "settings-2"
+                        active: root.normalizationOn
+                        anchors.verticalCenter: parent.verticalCenter
+                        onClicked: root.toggleNormalization()
                     }
 
                     Item { width: 6; height: 1 }
 
-                    // Volume.
+                    // Volume: mute · slider · −/+ steppers (the steppers are
+                    // the Tauri volume-step buttons, gated by the appearance
+                    // preference like the Slint bar).
                     QbzIconButton {
                         name: QbzPlayer.npMuted ? "volume-x" : "volume-2"
                         active: QbzPlayer.npMuted
+                        anchors.verticalCenter: parent.verticalCenter
                         onClicked: QbzPlayer.toggleMute()
                     }
-                    Item {
+                    QbzSlider {
                         width: 81
-                        height: 32
-                        Rectangle {
-                            id: volTrack
-                            width: parent.width
-                            height: 4
-                            radius: 2
-                            anchors.verticalCenter: parent.verticalCenter
-                            color: theme.surfaceElevated
-                            Rectangle {
-                                width: parent.width * QbzPlayer.npVolume
-                                height: parent.height
-                                radius: 2
-                                color: theme.accent
-                            }
-                            Rectangle {
-                                width: 16
-                                height: 16
-                                radius: 8
-                                color: theme.textPrimary
-                                x: parent.width * QbzPlayer.npVolume - width / 2
-                                anchors.verticalCenter: parent.verticalCenter
-                            }
-                        }
-                        MouseArea {
-                            anchors.fill: parent
-                            cursorShape: Qt.PointingHandCursor
-                            onPressed: QbzPlayer.setVolume(Math.min(Math.max(mouseX / width, 0), 1))
-                            onPositionChanged: if (pressed)
-                                QbzPlayer.setVolume(Math.min(Math.max(mouseX / width, 0), 1))
-                        }
+                        anchors.verticalCenter: parent.verticalCenter
+                        minimum: 0
+                        // 0..1000: whole steps on a 0..100 scale quantize the
+                        // volume to 1%; 0.1% steps drag fluidly.
+                        maximum: 1000
+                        value: Math.round(QbzPlayer.npVolume * 1000)
+                        onChanged: function (v) { QbzPlayer.setVolume(v / 1000.0) }
+                    }
+                    QbzIconButton {
+                        visible: root.showVolumeSteppers
+                        name: "minus"
+                        iconSize: 15
+                        anchors.verticalCenter: parent.verticalCenter
+                        onClicked: QbzPlayer.setVolume(Math.max(0.0, QbzPlayer.npVolume - 0.05))
+                    }
+                    QbzIconButton {
+                        visible: root.showVolumeSteppers
+                        name: "plus"
+                        iconSize: 15
+                        anchors.verticalCenter: parent.verticalCenter
+                        onClicked: QbzPlayer.setVolume(Math.min(1.0, QbzPlayer.npVolume + 0.05))
                     }
 
                     Item { width: 6; height: 1 }
@@ -563,6 +704,7 @@ Rectangle {
                     QbzIconButton {
                         name: "list-ordered"
                         active: QbzShell.queueOpen
+                        anchors.verticalCenter: parent.verticalCenter
                         onClicked: QbzShell.toggleQueue()
                     }
                 }
@@ -574,4 +716,50 @@ Rectangle {
 
     // The Now-Playing-view mode menu (shared with the Small bar).
     ViewModeMenu { id: viewMenu }
+
+    // "Add to…" flyout behind the transport "+" (TransportControls.slint's
+    // add-menu), on the shared CardMenu surface. Same seven entries, same
+    // order, same icons.
+    CardMenu {
+        id: addMenu
+        menuWidth: 232
+        entries: {
+            var m = [
+                {
+                    "label": root.npFavorite
+                        ? QbzSession.tr("Remove from library", QbzSession.trRev)
+                        : QbzSession.tr("Add to library", QbzSession.trRev),
+                    "icon": root.npFavorite ? "heart-filled" : "heart",
+                    "action": "favorite"
+                },
+                { "label": QbzSession.tr("Add to playlist", QbzSession.trRev), "icon": "list-music", "action": "playlist" },
+                { "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "action": "queue" },
+                { "label": QbzSession.tr("Play later", QbzSession.trRev), "icon": "list-plus", "action": "later" },
+                { "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-start", "action": "next" },
+                { "label": QbzSession.tr("Add to mixtape", QbzSession.trRev), "icon": "cassette-tape", "action": "mixtape" },
+            ]
+            if (QbzPlayer.npAlbumId !== "") {
+                m.push({
+                    "label": QbzSession.tr("Add album to collection", QbzSession.trRev),
+                    "icon": "disc-3",
+                    "action": "album-favorite"
+                })
+            }
+            return m
+        }
+        onPicked: function (a) {
+            var id = QbzPlayer.npTrackId
+            if (a === "favorite") {
+                if (id !== "") QbzQueue.queueToggleFavorite("track", id)
+            } else if (a === "queue" || a === "later" || a === "next") {
+                if (id !== "") QbzPlayer.enqueueTrack(id, a)
+            } else if (a === "album-favorite") {
+                if (QbzPlayer.npAlbumId !== "")
+                    QbzBridge.libraryToggleFavorite("album", QbzPlayer.npAlbumId)
+            }
+            // TODO(qt-bridge): "playlist" (add-to-playlist modal) and
+            // "mixtape" have no invokable in the Qt port yet — the rows are
+            // rendered 1:1 with the Slint flyout and do nothing for now.
+        }
+    }
 }
