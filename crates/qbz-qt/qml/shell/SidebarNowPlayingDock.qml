@@ -17,15 +17,28 @@
 // `height - largeDockHeight`. Change the arithmetic in one place and the
 // cover slides off the window edge.
 //
-// PERF (the rule the ambient field already proved): the FFT streams replace
-// their QList ~30x/s, so a Repeater bound to QbzViz.bars would rebuild every
-// delegate every frame. The Repeaters below use STATIC models (column
-// counts) and bind only each bar's HEIGHT — a tick re-evaluates bindings and
-// instantiates nothing. Only the ACTIVE mode is instantiated (the modes sit
-// behind `active:` Loaders), and the capture tap is gated by vizShouldRun, so
-// a hidden band costs zero CPU: the producer parks and the drain thread sleeps.
+// PERF — this band redraws 30x/s next to a full-window ambient canvas, so
+// every one of these matters:
+//  1. The FFT streams REPLACE their QList each tick, so a Repeater bound to
+//     QbzViz.bars would rebuild every delegate every frame. The Repeaters use
+//     STATIC models (column counts) and bind only each bar's HEIGHT.
+//  2. Each mode caches the list in ONE `var` property per tick. Reading
+//     QbzViz.bars straight from 28 delegates would marshal the QList into a
+//     fresh JS array 28 times a frame (48x512 floats for Waveform — the
+//     expensive one).
+//  3. ONE shared Gradient for every bar, not one object per delegate.
+//  4. No per-bar Behavior: the producer already smooths and clamps in Rust
+//     (qbz-audio), so 28 concurrent QML animations would buy nothing.
+//  5. Only the ACTIVE mode is instantiated (`active:` Loaders) and viz_qt.rs
+//     only publishes the stream that mode consumes.
+//  6. The capture tap is gated by vizShouldRun — a hidden band costs zero:
+//     the producer parks and the drain thread sleeps.
+//
+// GATING RULE (owner, 2026-07-28): freeze on NOT VISIBLE, never on lost
+// focus — a tiling desktop keeps windows visible and unfocused.
 
 import QtQuick
+import QtQuick.Window
 import com.blitzfc.qbz
 import "../theme"
 
@@ -48,11 +61,17 @@ Item {
     // The cover's top edge: below the band when it is shown.
     readonly property int artY: padTop + (bandOn ? bandHeight + bandGap : 0)
 
+    // True unless the window is minimized or hidden — see the GATING RULE.
+    readonly property bool windowShowing: root.Window.window
+        ? (root.Window.window.visibility !== Window.Minimized
+           && root.Window.window.visibility !== Window.Hidden)
+        : true
+
     // Capture gate — the Slint AppShell's `viz-should-run`. OFF stops the FFT
     // producer outright (viz_qt.rs parks it), so leaving Large or hiding the
     // band costs nothing. The transport is mirrored separately (a paused
     // player parks the producer via now_playing.rs).
-    readonly property bool vizShouldRun: root.visible && root.bandOn && root.Window.active
+    readonly property bool vizShouldRun: root.visible && root.bandOn && root.windowShowing
     onVizShouldRunChanged: QbzViz.setEnabled(root.vizShouldRun)
     Component.onCompleted: QbzViz.setEnabled(root.vizShouldRun)
     Component.onDestruction: QbzViz.setEnabled(false)
@@ -84,6 +103,13 @@ Item {
         readonly property color topColor: QbzShell.ambientPrimary
         readonly property color bottomColor: QbzShell.ambientSecondary
 
+        // ONE gradient instance shared by every bar (perf note 3).
+        Gradient {
+            id: barGradient
+            GradientStop { position: 0.0; color: band.topColor }
+            GradientStop { position: 1.0; color: band.bottomColor }
+        }
+
         // Mode 0 — Bars: 28 MIRRORED columns over the 14 ACTIVE bins (the
         // 16-bin FFT leaves {1, 15} empty; SpectrumPanel.slint parity).
         Loader {
@@ -93,6 +119,8 @@ Item {
                 id: barsMode
                 readonly property var activeBins: [0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
                 readonly property real slot: band.width / 28
+                // Marshal the QList into JS ONCE per tick (perf note 2).
+                readonly property var values: QbzViz.bars
                 Repeater {
                     model: 28
                     delegate: Rectangle {
@@ -101,19 +129,13 @@ Item {
                         readonly property int bin: index < 14
                             ? barsMode.activeBins[index]
                             : barsMode.activeBins[27 - index]
-                        readonly property real amp: Math.max(0, Math.min(1, QbzViz.bars[bin] || 0))
+                        readonly property real amp: Math.max(0, Math.min(1, barsMode.values[bin] || 0))
                         x: index * barsMode.slot + 1
                         width: barsMode.slot - 2
                         height: Math.max(2, amp * band.height)
                         y: band.height - height
                         radius: 1
-                        gradient: Gradient {
-                            GradientStop { position: 0.0; color: band.topColor }
-                            GradientStop { position: 1.0; color: band.bottomColor }
-                        }
-                        Behavior on height {
-                            NumberAnimation { duration: 90; easing.type: Easing.OutQuad }
-                        }
+                        gradient: barGradient
                     }
                 }
             }
@@ -127,20 +149,20 @@ Item {
             sourceComponent: Item {
                 id: waveMode
                 readonly property real slot: band.width / 48
+                // 512 floats — marshalling this per delegate would be the
+                // single most expensive thing in the dock (perf note 2).
+                readonly property var values: QbzViz.waveform
                 Repeater {
                     model: 48
                     delegate: Rectangle {
                         required property int index
-                        readonly property real amp: Math.min(1, Math.abs(QbzViz.waveform[index * 5] || 0))
+                        readonly property real amp: Math.min(1, Math.abs(waveMode.values[index * 5] || 0))
                         x: index * waveMode.slot + 1
                         width: waveMode.slot - 2
                         height: Math.max(2, amp * band.height)
                         y: (band.height - height) / 2
                         radius: 1
                         color: band.topColor
-                        Behavior on height {
-                            NumberAnimation { duration: 70; easing.type: Easing.OutQuad }
-                        }
                     }
                 }
             }
@@ -153,23 +175,18 @@ Item {
             sourceComponent: Item {
                 id: energyMode
                 readonly property real slot: band.width / 5
+                readonly property var values: QbzViz.energy
                 Repeater {
                     model: 5
                     delegate: Rectangle {
                         required property int index
-                        readonly property real amp: Math.max(0, Math.min(1, QbzViz.energy[index] || 0))
+                        readonly property real amp: Math.max(0, Math.min(1, energyMode.values[index] || 0))
                         x: index * energyMode.slot + 3
                         width: energyMode.slot - 6
                         height: Math.max(2, amp * band.height)
                         y: band.height - height
                         radius: 1
-                        gradient: Gradient {
-                            GradientStop { position: 0.0; color: band.topColor }
-                            GradientStop { position: 1.0; color: band.bottomColor }
-                        }
-                        Behavior on height {
-                            NumberAnimation { duration: 90; easing.type: Easing.OutQuad }
-                        }
+                        gradient: barGradient
                     }
                 }
             }

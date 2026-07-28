@@ -32,6 +32,7 @@ import QtQuick
 import QtQuick.Controls
 import com.blitzfc.qbz
 import "../controls"
+import "../rows"
 import "../theme"
 
 Rectangle {

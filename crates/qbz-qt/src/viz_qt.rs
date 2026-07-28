@@ -19,7 +19,7 @@
 //! buffer. It touches none of the device/stream init (CLAUDE.md "Audio
 //! backend — PROTECTED"); the tap is a passive sample copy.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::Thread;
 use std::time::Duration;
@@ -70,6 +70,10 @@ struct VizHandles {
 static HANDLES: OnceLock<VizHandles> = OnceLock::new();
 /// Drives the drain loop: false parks it, true runs it at DRAIN_INTERVAL.
 static ENABLED: AtomicBool = AtomicBool::new(false);
+/// The band's render mode (0 Bars / 1 Waveform / 2 Energy). The drain only
+/// publishes the ONE stream that mode consumes: in Bars mode, marshalling the
+/// 512-float waveform into a QList 30 times a second would be pure waste.
+static ACTIVE_MODE: AtomicI32 = AtomicI32::new(0);
 
 fn to_qlist(values: &[f32]) -> QList<f32> {
     let mut list = QList::<f32>::default();
@@ -104,14 +108,22 @@ pub fn install(tap: VisualizerTap) {
                 std::thread::park();
                 continue;
             }
-            if let Some(b) = cells.bars.lock().unwrap().take() {
-                viz_bridge::ui(move |mut v| v.as_mut().set_bars(to_qlist(&b)));
-            }
-            if let Some(b) = cells.energy.lock().unwrap().take() {
-                viz_bridge::ui(move |mut v| v.as_mut().set_energy(to_qlist(&b)));
-            }
-            if let Some(b) = cells.waveform.lock().unwrap().take() {
-                viz_bridge::ui(move |mut v| v.as_mut().set_waveform(to_qlist(b.as_ref())));
+            match ACTIVE_MODE.load(Ordering::Relaxed) {
+                1 => {
+                    if let Some(b) = cells.waveform.lock().unwrap().take() {
+                        viz_bridge::ui(move |mut v| v.as_mut().set_waveform(to_qlist(b.as_ref())));
+                    }
+                }
+                2 => {
+                    if let Some(b) = cells.energy.lock().unwrap().take() {
+                        viz_bridge::ui(move |mut v| v.as_mut().set_energy(to_qlist(&b)));
+                    }
+                }
+                _ => {
+                    if let Some(b) = cells.bars.lock().unwrap().take() {
+                        viz_bridge::ui(move |mut v| v.as_mut().set_bars(to_qlist(&b)));
+                    }
+                }
             }
             std::thread::sleep(DRAIN_INTERVAL);
         })
@@ -142,6 +154,12 @@ pub fn set_enabled(on: bool) {
         h.fft_thread.unpark();
         h.drain_thread.unpark();
     }
+}
+
+/// Point the drain at the stream the band is actually rendering. Called at
+/// install time (from the persisted pref) and on every mode cycle.
+pub fn set_mode(mode: i32) {
+    ACTIVE_MODE.store(mode.clamp(0, 2), Ordering::Relaxed);
 }
 
 /// Mirror the transport onto the tap so a paused player parks the producer.

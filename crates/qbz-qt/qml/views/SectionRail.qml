@@ -5,6 +5,7 @@
 import QtQuick
 import com.blitzfc.qbz
 import "../controls"
+import "../cards"
 import "../theme"
 
 Column {

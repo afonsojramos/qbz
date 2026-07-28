@@ -15,10 +15,16 @@
 // - No audio breathe (the POC has no FFT tap; level_smooth = 0 → the
 //   shader's breathe is a constant 1.0 there anyway) and no grain dither.
 // - Rendered with QPainter (renderTarget Image) so it works on the
-//   software/offscreen path too; 30fps cap + paused when the window is
-//   inactive (the spec's cost controls §6).
+//   software/offscreen path too; 30fps cap + paused when the window is not
+//   being shown (the spec's cost controls §6).
+//
+// GATING RULE (owner, 2026-07-28): freeze on NOT VISIBLE, never on lost
+// focus. A tiling/mosaic desktop keeps windows visible and unfocused all the
+// time — pausing on focus loss would stop the field while the user is
+// looking straight at it. Minimized/hidden is the real "nobody can see it".
 
 import QtQuick
+import QtQuick.Window
 import com.blitzfc.qbz
 
 Canvas {
@@ -31,6 +37,13 @@ Canvas {
     // Set false by the host to freeze the clock (inactive / hidden).
     property bool running: true
 
+    // True unless the window is minimized or hidden — see the GATING RULE at
+    // the top. Focus is deliberately NOT part of this.
+    readonly property bool windowShowing: root.Window.window
+        ? (root.Window.window.visibility !== Window.Minimized
+           && root.Window.window.visibility !== Window.Hidden)
+        : true
+
     renderTarget: Canvas.Image
     renderStrategy: Canvas.Cooperative
 
@@ -40,7 +53,7 @@ Canvas {
     Timer {
         interval: 33
         repeat: true
-        running: root.running && root.visible && root.Window.active
+        running: root.running && root.visible && root.windowShowing
         onTriggered: {
             root.t += interval / 1000.0 * 0.75
             root.requestPaint()

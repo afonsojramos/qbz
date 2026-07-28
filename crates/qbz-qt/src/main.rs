@@ -864,6 +864,9 @@ pub(crate) fn large_toggle_visualizer() {
 pub(crate) fn large_cycle_spectrum() {
     let mode = settings_qt::set_large_spectrum_mode((settings_qt::large_spectrum_mode() + 1) % 3);
     log::info!("[qbz-qt] large spectrum mode -> {mode}");
+    // Point the drain at the new stream BEFORE the UI switches, so the first
+    // frame the new mode renders already has data.
+    viz_qt::set_mode(mode);
     shell_bridge::ui(move |mut b| b.as_mut().set_large_spectrum_mode(mode));
 }
 
@@ -1390,6 +1393,7 @@ fn main() {
     )));
     if let Some(tap) = runtime.visualizer_tap().cloned() {
         viz_qt::install(tap);
+        viz_qt::set_mode(settings_qt::large_spectrum_mode());
     } else {
         log::warn!("[qbz-qt] runtime has no visualizer tap; the Large dock band stays empty");
     }
