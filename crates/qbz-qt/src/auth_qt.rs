@@ -148,6 +148,9 @@ where
     // recovery: a successful login ends any unauthenticated offline session.
     if let Some(dir) = crate::offline_fwd::user_data_dir(user_id) {
         crate::offline_fwd::init_for_user(&dir);
+        // Plex settings live per-user (plex_settings.db); bind the store to
+        // this session so the first Local Library read does not have to.
+        crate::local_plex::init_for_user(&dir);
         // Phase 5: local-favorites store (Library show-local + hearts).
         crate::library_qt::init_local_favorites(&dir);
         // Phase 7: pinned-items store (AlbumCard pin badges).
@@ -251,6 +254,10 @@ where
             // skipped (see module docs).
             if let Some(dir) = crate::offline_fwd::user_data_dir(user_id) {
                 crate::offline_fwd::init_for_user(&dir);
+                crate::local_plex::init_for_user(&dir);
+        // Plex settings live per-user (plex_settings.db); bind the store to
+        // this session so the first Local Library read does not have to.
+        crate::local_plex::init_for_user(&dir);
                 crate::library_qt::init_local_favorites(&dir);
                 crate::sidebar_qt::init_pinned(&dir);
         // Phase 15: intelligent-search service (cortinilla cache+ranking).
@@ -317,6 +324,9 @@ where
     // unauthenticated offline session.
     if let Some(dir) = crate::offline_fwd::user_data_dir(user_id) {
         crate::offline_fwd::init_for_user(&dir);
+        // Plex settings live per-user (plex_settings.db); bind the store to
+        // this session so the first Local Library read does not have to.
+        crate::local_plex::init_for_user(&dir);
         // Phase 5: local-favorites store (Library show-local + hearts).
         crate::library_qt::init_local_favorites(&dir);
         // Phase 7: pinned-items store (AlbumCard pin badges).

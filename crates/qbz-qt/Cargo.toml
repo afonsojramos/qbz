@@ -32,6 +32,7 @@ qbz-models = { path = "../qbz-models" }
 qbz-cache = { path = "../qbz-cache" }
 qbz-offline-cache = { path = "../qbz-offline-cache" }
 qbz-library = { path = "../qbz-library" }
+qbz-plex = { path = "../qbz-plex" }
 qbz-lyrics = { path = "../qbz-lyrics" }
 qbz-text-utils = { path = "../qbz-text-utils" }
 qbz-credentials = { path = "../qbz-credentials" }

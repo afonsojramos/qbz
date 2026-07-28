@@ -10,9 +10,10 @@
 //! evicted QML-side, which is what keeps a 16K-track library from decoding
 //! covers it never shows.
 //!
-//! The invokables stay one-line forwards into `local_library_qt.rs`; the
+//! The invokables stay one-line forwards into the `local_*` modules; the
 //! blocking DB work runs on `spawn_blocking` so the Qt event loop is never
-//! touched by a rusqlite call.
+//! touched by a rusqlite call, and the Plex network work runs on the tokio
+//! runtime.
 
 use std::pin::Pin;
 use std::sync::OnceLock;
@@ -21,7 +22,12 @@ use cxx_qt::CxxQtThread;
 use cxx_qt::Threading as _;
 use cxx_qt_lib::QString;
 
+use crate::local_bridge_ops::{
+    emit_artwork, load_tab_impl, load_tracks, publish_plex_state, publish_tree, reload_browse,
+    run_sync,
+};
 use crate::local_library_qt as lib;
+use crate::local_plex as plex;
 
 #[cxx_qt::bridge]
 pub mod qbz_local {
@@ -36,11 +42,11 @@ pub mod qbz_local {
         #[qml_element]
         #[qml_singleton]
         // --- Availability / chrome ----------------------------------------
-        /// False when there is no per-user library.db or no registered
-        /// folder — the view then shows the "nothing indexed yet" state
-        /// with the route into Settings > Local Library.
+        /// False when there is no per-user library.db, no registered folder
+        /// AND no cached Plex content — the view then shows the "nothing
+        /// indexed yet" state with the route into Settings > Local Library.
         #[qproperty(bool, local_available)]
-        /// {albums, artists, folders, tracks} — the tab badges.
+        /// {albums, artists, folders, tracks, plexTracks} — the tab badges.
         #[qproperty(QString, local_counts_json)]
         /// Album identity: "folder" | "metadata" (persisted; shared with
         /// the Slint frontend's locallibrary_ui.json).
@@ -64,6 +70,9 @@ pub mod qbz_local {
         /// The FLATTENED, search-filtered visible tree — a plain array the
         /// rail windows with a ListView (never a recursive component).
         #[qproperty(QString, local_tree_json)]
+        /// Tracks selected in the tree rail — the bulk bar's counter and its
+        /// visibility gate.
+        #[qproperty(i32, local_tree_selected_count)]
         #[qproperty(bool, local_detail_loading)]
         /// {path, name, trackCount, subfolders[], tracks[]}
         #[qproperty(QString, local_detail_json)]
@@ -79,6 +88,39 @@ pub mod qbz_local {
         #[qproperty(bool, local_album_loading)]
         /// {album:{...}, tracks:[...]} — "" while nothing is open.
         #[qproperty(QString, local_album_json)]
+        /// Mirror of AppearanceState.local-library-track-artwork (ui_prefs,
+        /// default OFF). OFF is the 16k-row freeze guard — keep the default.
+        #[qproperty(bool, local_track_artwork)]
+        /// Artist NAME route from the routed local album page into the Artists
+        /// tab (local/Plex artists carry no catalog id). "" once consumed.
+        #[qproperty(QString, local_pending_artist)]
+        // --- Ephemeral folder (an ad-hoc folder outside the index) ---------
+        /// A session is open: the Folders tab shows the ephemeral pane.
+        #[qproperty(bool, local_ephemeral_active)]
+        /// The folder is being scanned (metadata + CUE + artwork).
+        #[qproperty(bool, local_ephemeral_loading)]
+        /// {name, path, trackCount, multiAlbum, albums:[…]} — "" while closed.
+        #[qproperty(QString, local_ephemeral_json)]
+
+        // --- Plex ----------------------------------------------------------
+        /// Master toggle (Settings > Local Library > Plex). Drives whether
+        /// the browse union includes Plex at all + the source filter chip.
+        #[qproperty(bool, plex_enabled)]
+        /// enabled + LAN address + resolved base url + token — the Slint's
+        /// `plex-available`: gates the header Sync button and every request
+        /// that leaves the process.
+        #[qproperty(bool, plex_available)]
+        /// A manual sync is in flight (`plex-syncing`) — the Sync button's
+        /// busy state.
+        #[qproperty(bool, plex_syncing)]
+        /// Tracks written by the last sync; -1 = never synced this session.
+        #[qproperty(i32, plex_last_sync_tracks)]
+        /// Raw error text from the last Plex operation ("" when fine). QML
+        /// wraps it in its own translated frame.
+        #[qproperty(QString, plex_error)]
+        /// [{key, title, selected}] — the cached library sections + the
+        /// user's selection (Settings > Local Library > Plex).
+        #[qproperty(QString, plex_sections_json)]
 
         type QbzLocal = super::QbzLocalRust;
 
@@ -119,17 +161,74 @@ pub mod qbz_local {
         /// Rail search box (filters the visible set, keeps ancestors).
         #[qinvokable]
         fn tree_search(self: Pin<&mut QbzLocal>, query: QString);
+        /// Rail header: enter / leave multi-select. Leaving DROPS the selection.
+        #[qinvokable]
+        fn tree_set_select_mode(self: Pin<&mut QbzLocal>, on: bool);
+        /// Folder checkbox: toggle every track under it, recursively.
+        #[qinvokable]
+        fn tree_toggle_folder_select(self: Pin<&mut QbzLocal>, path: QString);
+        /// Track checkbox: toggle one row by file path.
+        #[qinvokable]
+        fn tree_toggle_track_select(self: Pin<&mut QbzLocal>, path: QString);
+        /// Tree-rail bulk bar.
+        #[qinvokable]
+        fn folders_bulk_action(self: Pin<&mut QbzLocal>, action: QString);
+        /// Albums-grid / Tracks-table bulk bar. scope = "album" | "track".
+        #[qinvokable]
+        fn bulk_action(self: Pin<&mut QbzLocal>, scope: QString, ids_json: QString, action: QString);
         /// Row body: select a folder and load its detail pane.
         #[qinvokable]
         fn select_folder(self: Pin<&mut QbzLocal>, path: QString);
 
         // --- Album detail ---------------------------------------------------
-        /// Album card click: load the local album detail (header + tracks).
+        /// Album card click: load the local/Plex album detail (header +
+        /// tracks). A `plex:<hash>` id is served from the Plex cache.
         #[qinvokable]
         fn open_album(self: Pin<&mut QbzLocal>, id: QString);
         /// Close the album pane (back to the grid).
         #[qinvokable]
         fn close_album(self: Pin<&mut QbzLocal>);
+        // --- Local album actions -------------------------------------------
+        /// The view consumed the pending artist-name route.
+        #[qinvokable]
+        fn clear_pending_artist(self: Pin<&mut QbzLocal>);
+        /// "Go to artist" on a local/Plex album — a NAME route, not an id.
+        #[qinvokable]
+        fn open_artist_by_name(self: Pin<&mut QbzLocal>, name: QString);
+        /// Album header pencil — LOGGED SEAM (no tag-editor modal yet).
+        #[qinvokable]
+        fn album_edit_tags(self: Pin<&mut QbzLocal>, id: QString);
+        /// Album header list-plus — LOGGED SEAM (no playlist picker yet).
+        #[qinvokable]
+        fn album_add_to_playlist(self: Pin<&mut QbzLocal>, id: QString);
+        /// Album header cassette — LOGGED SEAM (no Mixtape store yet).
+        #[qinvokable]
+        fn album_add_to_mixtape(self: Pin<&mut QbzLocal>, id: QString);
+        /// Version picker: switch the shown physical copy.
+        #[qinvokable]
+        fn album_select_version(self: Pin<&mut QbzLocal>, index: i32);
+        /// Per-disc menu: "play" | "next" | "later" | "queue".
+        #[qinvokable]
+        fn album_disc_action(self: Pin<&mut QbzLocal>, disc: i32, action: QString);
+        // --- Ephemeral folder ------------------------------------------------
+        /// Pick a folder OUTSIDE the library, scan it, show the pane.
+        #[qinvokable]
+        fn ephemeral_open(self: Pin<&mut QbzLocal>);
+        /// Same, for a KNOWN path (no picker).
+        #[qinvokable]
+        fn ephemeral_open_path(self: Pin<&mut QbzLocal>, path: QString);
+        /// Close the session (stops playback if it came from the session).
+        #[qinvokable]
+        fn ephemeral_clear(self: Pin<&mut QbzLocal>);
+        /// Header Play: the whole folder becomes the queue.
+        #[qinvokable]
+        fn ephemeral_play_all(self: Pin<&mut QbzLocal>);
+        /// Per-album Play (multi-album sessions only).
+        #[qinvokable]
+        fn ephemeral_play_album(self: Pin<&mut QbzLocal>, group_key: QString);
+        /// Track row click: the track's album block becomes the queue.
+        #[qinvokable]
+        fn ephemeral_play_track(self: Pin<&mut QbzLocal>, id: QString);
 
         // --- Playback --------------------------------------------------------
         /// Album card / detail header Play (optionally shuffled).
@@ -153,9 +252,37 @@ pub mod qbz_local {
         #[qinvokable]
         fn enqueue(self: Pin<&mut QbzLocal>, kind: QString, id: QString, mode: QString);
 
+        // --- Plex ------------------------------------------------------------
+        /// Header Sync button (#573): re-fetch the Plex sections + tracks
+        /// into the shared cache DB, then reload the browse documents in
+        /// place. No-op when `plexAvailable` is false.
+        #[qinvokable]
+        fn sync_plex(self: Pin<&mut QbzLocal>);
+        /// Master toggle. Turning it OFF collapses the browse union back to
+        /// local-only immediately (the cache DB is kept).
+        #[qinvokable]
+        fn plex_set_enabled(self: Pin<&mut QbzLocal>, enabled: bool);
+        /// Manual connect: resolve + persist `proto://host:32400` + token,
+        /// then run a first sync. LAN addresses only.
+        #[qinvokable]
+        fn plex_connect(self: Pin<&mut QbzLocal>, server_url: QString, token: QString);
+        /// Sign out of Plex: clear creds/sections and purge the cache DB,
+        /// then reload the (now local-only) browse documents.
+        #[qinvokable]
+        fn plex_disconnect(self: Pin<&mut QbzLocal>);
+        /// Persist the selected library section keys (JSON array of strings)
+        /// and re-sync so the cache matches the selection.
+        #[qinvokable]
+        fn set_plex_sections(self: Pin<&mut QbzLocal>, keys_json: QString);
+        /// Re-read the Plex gates + sections from the store (call after the
+        /// settings panel changed something out of band).
+        #[qinvokable]
+        fn refresh_plex(self: Pin<&mut QbzLocal>);
+
         // --- Windowed artwork -------------------------------------------------
         /// The mounted window reports its artKeys; Rust resolves each to a
-        /// 256px thumbnail and emits `localArtworkReady` per hit.
+        /// 256px thumbnail (local cover) or a disk-cached Plex thumb and
+        /// emits `localArtworkReady` per hit.
         #[qinvokable]
         fn artwork_window(self: Pin<&mut QbzLocal>, keys_json: QString);
         /// (key, "file://…") — id-keyed so a cover can never land on the
@@ -183,6 +310,7 @@ pub struct QbzLocalRust {
     local_folders_json: QString,
     local_tree_loading: bool,
     local_tree_json: QString,
+    local_tree_selected_count: i32,
     local_detail_loading: bool,
     local_detail_json: QString,
     local_tracks_loading: bool,
@@ -192,6 +320,17 @@ pub struct QbzLocalRust {
     local_tracks_json: QString,
     local_album_loading: bool,
     local_album_json: QString,
+    local_track_artwork: bool,
+    local_pending_artist: QString,
+    local_ephemeral_active: bool,
+    local_ephemeral_loading: bool,
+    local_ephemeral_json: QString,
+    plex_enabled: bool,
+    plex_available: bool,
+    plex_syncing: bool,
+    plex_last_sync_tracks: i32,
+    plex_error: QString,
+    plex_sections_json: QString,
 }
 
 impl Default for QbzLocalRust {
@@ -209,6 +348,7 @@ impl Default for QbzLocalRust {
             local_folders_json: QString::from("[]"),
             local_tree_loading: false,
             local_tree_json: QString::from("[]"),
+            local_tree_selected_count: 0,
             local_detail_loading: false,
             local_detail_json: QString::from(""),
             local_tracks_loading: false,
@@ -218,6 +358,17 @@ impl Default for QbzLocalRust {
             local_tracks_json: QString::from("[]"),
             local_album_loading: false,
             local_album_json: QString::from(""),
+            local_track_artwork: false,
+            local_pending_artist: QString::default(),
+            local_ephemeral_active: false,
+            local_ephemeral_loading: false,
+            local_ephemeral_json: QString::from(""),
+            plex_enabled: false,
+            plex_available: false,
+            plex_syncing: false,
+            plex_last_sync_tracks: -1,
+            plex_error: QString::default(),
+            plex_sections_json: QString::from("[]"),
         }
     }
 }
@@ -236,22 +387,6 @@ pub(crate) fn ui(f: impl FnOnce(Pin<&mut QbzLocal>) + Send + 'static) {
     }
 }
 
-/// Republish the tab badges + availability after any load.
-fn publish_counts() {
-    let counts = lib::to_json(&lib::counts());
-    ui(move |mut b| {
-        b.as_mut()
-            .set_local_counts_json(QString::from(counts.as_str()));
-    });
-}
-
-fn publish_tree(nodes_json: String) {
-    ui(move |mut b| {
-        b.as_mut()
-            .set_local_tree_json(QString::from(nodes_json.as_str()));
-        b.as_mut().set_local_tree_loading(false);
-    });
-}
 
 impl qbz_local::QbzLocal {
     pub fn boot(self: Pin<&mut Self>) {
@@ -274,6 +409,10 @@ impl qbz_local::QbzLocal {
                     .set_local_tracks_sort(QString::from(sort.as_str()));
             });
         });
+        publish_plex_state();
+        crate::local_album_actions::publish_track_artwork();
+        // Slint parity: re-open the persisted ad-hoc folder at startup.
+        crate::local_ephemeral::rehydrate();
     }
 
     pub fn load_tab(self: Pin<&mut Self>, tab: QString) {
@@ -431,147 +570,182 @@ impl qbz_local::QbzLocal {
         });
     }
 
+    // --- Plex --------------------------------------------------------------
+
+    pub fn sync_plex(self: Pin<&mut Self>) {
+        if plex::is_syncing() {
+            return;
+        }
+        run_sync();
+    }
+
+    pub fn plex_set_enabled(self: Pin<&mut Self>, enabled: bool) {
+        crate::spawn(async move {
+            let _ = tokio::task::spawn_blocking(move || plex::set_enabled(enabled)).await;
+            publish_plex_state();
+            // The union IS the query — the grid/tracks/badges must re-run.
+            reload_browse();
+        });
+    }
+
+    pub fn plex_connect(self: Pin<&mut Self>, server_url: QString, token: QString) {
+        let (url, token) = (server_url.to_string(), token.to_string());
+        crate::spawn(async move {
+            let base = tokio::task::spawn_blocking(move || {
+                plex::set_enabled(true);
+                plex::connect_manual(&url, &token)
+            })
+            .await
+            .unwrap_or_default();
+            if base.is_empty() {
+                // Translated Rust-side (qbz_i18n is the same catalog the
+                // Slint build ships); QML shows `plexError` verbatim.
+                let msg = qbz_i18n::t("Plex server must be a local network address");
+                ui(move |mut b| {
+                    b.as_mut().set_plex_error(QString::from(msg.as_str()));
+                });
+                return;
+            }
+            publish_plex_state();
+            run_sync();
+        });
+    }
+
+    pub fn plex_disconnect(self: Pin<&mut Self>) {
+        crate::spawn(async move {
+            let _ = tokio::task::spawn_blocking(plex::disconnect).await;
+            ui(|mut b| {
+                b.as_mut().set_plex_last_sync_tracks(-1);
+                b.as_mut().set_plex_error(QString::from(""));
+            });
+            publish_plex_state();
+            reload_browse();
+        });
+    }
+
+    pub fn set_plex_sections(self: Pin<&mut Self>, keys_json: QString) {
+        let keys: Vec<String> = serde_json::from_str(&keys_json.to_string()).unwrap_or_default();
+        crate::spawn(async move {
+            let _ = tokio::task::spawn_blocking(move || plex::set_selected_sections(&keys)).await;
+            publish_plex_state();
+            run_sync();
+        });
+    }
+
+    pub fn refresh_plex(self: Pin<&mut Self>) {
+        publish_plex_state();
+    }
+
+    // --- Artwork -----------------------------------------------------------
+
     pub fn artwork_window(self: Pin<&mut Self>, keys_json: QString) {
         let keys: Vec<String> = serde_json::from_str(&keys_json.to_string()).unwrap_or_default();
         if keys.is_empty() {
             return;
         }
         crate::spawn(async move {
-            let hits = tokio::task::spawn_blocking(move || lib::artwork_window_blocking(keys))
+            let window = tokio::task::spawn_blocking(move || lib::resolve_window_blocking(keys))
                 .await
-                .unwrap_or_default();
-            for (key, path) in hits {
-                ui(move |mut b| {
-                    b.as_mut().local_artwork_ready(
-                        QString::from(key.as_str()),
-                        QString::from(path.as_str()),
-                    );
-                });
-            }
+                .ok();
+            let Some(window) = window else {
+                return;
+            };
+            emit_artwork(window.hits);
+            // Plex thumbs that were not on disk: fetch them (network), then
+            // emit whatever landed.
+            let fetched = lib::fetch_plex_misses(window.plex_misses).await;
+            emit_artwork(fetched);
         });
     }
-}
+    // --- Tree selection + bulk actions --------------------------------------
 
-// ---------------------------------------------------------------------------
-// Loaders (each publishes its own tab's document + the shared badges)
-// ---------------------------------------------------------------------------
-
-fn load_tab_impl(tab: String) {
-    match tab.as_str() {
-        "albums" => load_albums(),
-        "artists" => load_artists(),
-        "folders" => load_folders(),
-        "tracks" => load_tracks(true),
-        _ => log::warn!("[qbz-qt] local: unknown tab {tab}"),
+    pub fn tree_set_select_mode(self: Pin<&mut Self>, on: bool) {
+        crate::local_bulk::set_select_mode(on);
     }
-}
 
-fn load_albums() {
-    ui(|mut b| {
-        b.as_mut().set_local_albums_loading(true);
-        b.as_mut().set_local_albums_error(QString::from(""));
-    });
-    crate::spawn(async move {
-        let result = tokio::task::spawn_blocking(lib::load_albums_blocking)
-            .await
-            .unwrap_or_else(|e| Err(e.to_string()));
-        let _ = tokio::task::spawn_blocking(lib::load_counts_blocking).await;
-        match result {
-            Ok(rows) => {
-                let json = lib::to_json(&rows);
-                log::info!("[qbz-qt] local albums published: {} ({} bytes)", rows.len(), json.len());
-                ui(move |mut b| {
-                    b.as_mut()
-                        .set_local_albums_json(QString::from(json.as_str()));
-                    b.as_mut().set_local_albums_loading(false);
-                });
-            }
-            Err(e) => {
-                log::warn!("[qbz-qt] local albums load failed: {e}");
-                ui(move |mut b| {
-                    b.as_mut()
-                        .set_local_albums_error(QString::from(e.as_str()));
-                    b.as_mut().set_local_albums_loading(false);
-                });
-            }
-        }
-        publish_counts();
-    });
-}
+    pub fn tree_toggle_folder_select(self: Pin<&mut Self>, path: QString) {
+        crate::local_bulk::toggle_folder_select(path.to_string());
+    }
 
-fn load_artists() {
-    ui(|mut b| b.as_mut().set_local_artists_loading(true));
-    crate::spawn(async move {
-        let rows = tokio::task::spawn_blocking(lib::load_artists_blocking)
-            .await
-            .unwrap_or_else(|e| Err(e.to_string()))
-            .unwrap_or_default();
-        let json = lib::to_json(&rows);
-        ui(move |mut b| {
-            b.as_mut()
-                .set_local_artists_json(QString::from(json.as_str()));
-            b.as_mut().set_local_artists_loading(false);
+    pub fn tree_toggle_track_select(self: Pin<&mut Self>, path: QString) {
+        crate::local_bulk::toggle_track_select(path.to_string());
+    }
+
+    pub fn folders_bulk_action(self: Pin<&mut Self>, action: QString) {
+        crate::local_bulk::folders_bulk_action(action.to_string());
+    }
+
+    pub fn bulk_action(self: Pin<&mut Self>, scope: QString, ids_json: QString, action: QString) {
+        crate::local_bulk::bulk_action(scope.to_string(), ids_json.to_string(), action.to_string());
+    }
+
+    // --- Local album actions -------------------------------------------------
+
+    pub fn clear_pending_artist(self: Pin<&mut Self>) {
+        crate::local_album_actions::clear_pending_artist();
+    }
+
+    pub fn open_artist_by_name(self: Pin<&mut Self>, name: QString) {
+        crate::local_album_actions::open_artist_by_name(name.to_string());
+    }
+
+    pub fn album_edit_tags(self: Pin<&mut Self>, id: QString) {
+        crate::local_album_actions::edit_tags(id.to_string());
+    }
+
+    pub fn album_add_to_playlist(self: Pin<&mut Self>, id: QString) {
+        crate::local_album_actions::add_to_playlist(id.to_string());
+    }
+
+    pub fn album_add_to_mixtape(self: Pin<&mut Self>, id: QString) {
+        crate::local_album_actions::add_to_mixtape(id.to_string());
+    }
+
+    pub fn album_select_version(self: Pin<&mut Self>, index: i32) {
+        crate::local_album_actions::select_version(index);
+    }
+
+    pub fn album_disc_action(self: Pin<&mut Self>, disc: i32, action: QString) {
+        crate::local_album_actions::disc_action(disc, action.to_string());
+    }
+
+    // --- Ephemeral folder ----------------------------------------------------
+
+    pub fn ephemeral_open(self: Pin<&mut Self>) {
+        crate::local_ephemeral::open();
+    }
+
+    pub fn ephemeral_open_path(self: Pin<&mut Self>, path: QString) {
+        crate::local_ephemeral::open_path(path.to_string());
+    }
+
+    pub fn ephemeral_clear(self: Pin<&mut Self>) {
+        crate::local_ephemeral::clear();
+    }
+
+    pub fn ephemeral_play_all(self: Pin<&mut Self>) {
+        let runtime = crate::app();
+        crate::spawn(async move {
+            crate::local_ephemeral::play_all(&runtime).await;
         });
-        publish_counts();
-    });
-}
+    }
 
-fn load_folders() {
-    ui(|mut b| {
-        b.as_mut().set_local_folders_loading(true);
-        b.as_mut().set_local_tree_loading(true);
-    });
-    crate::spawn(async move {
-        let rows = tokio::task::spawn_blocking(lib::load_folders_blocking)
-            .await
-            .unwrap_or_else(|e| Err(e.to_string()))
-            .unwrap_or_default();
-        let json = lib::to_json(&rows);
-        ui(move |mut b| {
-            b.as_mut()
-                .set_local_folders_json(QString::from(json.as_str()));
-            b.as_mut().set_local_folders_loading(false);
+    pub fn ephemeral_play_album(self: Pin<&mut Self>, group_key: QString) {
+        let key = group_key.to_string();
+        let runtime = crate::app();
+        crate::spawn(async move {
+            crate::local_ephemeral::play_album(&runtime, key).await;
         });
-        // The tree rail seeds from the registered library folders; the
-        // levels below it are fetched on expand.
-        let _ = tokio::task::spawn_blocking(lib::load_tree_roots_blocking).await;
-        publish_tree(lib::to_json(&lib::tree_visible()));
-        publish_counts();
-    });
-}
+    }
 
-fn load_tracks(reset: bool) {
-    ui(move |mut b| {
-        if reset {
-            b.as_mut().set_local_tracks_loading(true);
-        } else {
-            b.as_mut().set_local_tracks_loading_more(true);
-        }
-    });
-    crate::spawn(async move {
-        let result = tokio::task::spawn_blocking(move || lib::load_tracks_page_blocking(reset))
-            .await
-            .unwrap_or_else(|e| Err(e.to_string()));
-        let _ = tokio::task::spawn_blocking(lib::load_counts_blocking).await;
-        match result {
-            Ok((rows, has_more)) => {
-                let json = lib::to_json(&rows);
-                ui(move |mut b| {
-                    b.as_mut()
-                        .set_local_tracks_json(QString::from(json.as_str()));
-                    b.as_mut().set_local_tracks_has_more(has_more);
-                    b.as_mut().set_local_tracks_loading(false);
-                    b.as_mut().set_local_tracks_loading_more(false);
-                });
-            }
-            Err(e) => {
-                log::warn!("[qbz-qt] local tracks load failed: {e}");
-                ui(|mut b| {
-                    b.as_mut().set_local_tracks_loading(false);
-                    b.as_mut().set_local_tracks_loading_more(false);
-                });
-            }
-        }
-        publish_counts();
-    });
+    pub fn ephemeral_play_track(self: Pin<&mut Self>, id: QString) {
+        let Ok(row) = id.to_string().parse::<i64>() else {
+            return;
+        };
+        let runtime = crate::app();
+        crate::spawn(async move {
+            crate::local_ephemeral::play_track(&runtime, row).await;
+        });
+    }
+
 }

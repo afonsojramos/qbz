@@ -6632,6 +6632,7 @@ dependencies = [
  "qbz-lyrics",
  "qbz-models",
  "qbz-offline-cache",
+ "qbz-plex",
  "qbz-qobuz",
  "qbz-text-utils",
  "qbz-theme",

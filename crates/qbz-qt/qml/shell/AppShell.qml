@@ -146,6 +146,7 @@ Rectangle {
             source: QbzShell.currentView === "home" ? "../views/HomeView.qml"
                 : QbzShell.currentView === "library" ? "../views/LibraryView.qml"
                 : QbzShell.currentView === "local" ? "../views/LocalLibraryView.qml"
+                : QbzShell.currentView === "localalbum" ? "../views/LocalAlbumView.qml"
                 : QbzShell.currentView === "album" ? "../views/AlbumView.qml"
                 : QbzShell.currentView === "artist" ? "../views/ArtistView.qml"
                 : QbzShell.currentView === "settings" ? "../settings/SettingsView.qml"
