@@ -10,11 +10,14 @@
 // carousel; per-type tabs = full grid/list + "Load more (n / total)".
 //
 // POC-NOTEs:
-// - The artist cards here replicate ArtistCard/ArtistGridCard inline for
-//   the third time (HomeView/LibraryView carry their own copies); sharing
-//   them is a follow-up refactor, not this phase.
 // - Card click actions: albums/artists navigate; tracks play; playlists
-//   are inert (no playlist view in the POC).
+//   open (openPlaylist is wired; the stale "inert" note was dropped in
+//   phase 21, when every card surface moved to the shared qml/ cards).
+// - The most-popular track hero stays a DISTINCT component
+//   (SearchTrackHero below): in Slint the search hero is
+//   primitives/SearchTrackHero.slint, NOT discover/TrackCard.slint —
+//   the POC variant is 200x246 (centered play, quality as text) to match
+//   the ArtistGridCard hero slot it shares the row with.
 // - The Slint's windowed grid virtualization is not replicated (page size
 //   is 20 — the whole set mounts).
 
@@ -49,105 +52,6 @@ Rectangle {
     readonly property int filterIndex: doc.filterIndex || 0
     readonly property bool hasResults: albums.length + tracks.length + artists.length + playlists.length > 0
     readonly property int previewCap: 6
-
-    // --- Small cards -------------------------------------------------------
-
-    // Circular artist card (ArtistCard.slint: 160x220, 120px circle + name).
-    component SearchArtistCard: Rectangle {
-        property var card: ({})
-        width: 160
-        height: 220
-        color: "transparent"
-        Column {
-            anchors.horizontalCenter: parent.horizontalCenter
-            spacing: 8
-            Item { width: 1; height: 24 }
-            Rectangle {
-                width: 120
-                height: 120
-                radius: 60
-                anchors.horizontalCenter: parent.horizontalCenter
-                color: theme.surfaceElevated
-                clip: true
-                RoundedImage {
-                    anchors.fill: parent
-                    source: card.artPath || ""
-                    radius: 60
-                }
-                MouseArea {
-                    anchors.fill: parent
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: QbzBridge.openArtist(card.id)
-                }
-            }
-            Text {
-                width: 128
-                anchors.horizontalCenter: parent.horizontalCenter
-                text: card.title || ""
-                color: theme.textPrimary
-                font.pixelSize: 14
-                font.weight: theme.weightMedium
-                horizontalAlignment: Text.AlignHCenter
-                elide: Text.ElideRight
-            }
-            Text {
-                visible: (card.subtitle || "") !== ""
-                width: 128
-                anchors.horizontalCenter: parent.horizontalCenter
-                text: card.subtitle || ""
-                color: theme.textMuted
-                font.pixelSize: 12
-                horizontalAlignment: Text.AlignHCenter
-                elide: Text.ElideRight
-            }
-        }
-    }
-
-    // Big (200x246) circular artist card for the Most-popular artist hero
-    // (ArtistGridCard slot — same look as Library's LibArtistCard).
-    component SearchArtistHero: Rectangle {
-        property var card: ({})
-        width: 200
-        height: 246
-        color: "transparent"
-        Column {
-            spacing: 0
-            Rectangle {
-                width: 200
-                height: 200
-                radius: theme.radiusSm
-                color: theme.surfaceElevated
-                clip: true
-                RoundedImage {
-                    x: 5
-                    y: 5
-                    width: 190
-                    height: 190
-                    source: card.artPath || ""
-                    radius: 95
-                }
-                MouseArea {
-                    anchors.fill: parent
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: QbzBridge.openArtist(card.id)
-                }
-            }
-            Item { width: 1; height: 6 }
-            Text {
-                width: 200
-                height: 40
-                text: card.title || ""
-                color: theme.textPrimary
-                font.pixelSize: theme.fontBody - 2
-                font.weight: theme.weightMedium
-                horizontalAlignment: Text.AlignHCenter
-                verticalAlignment: Text.AlignVCenter
-                wrapMode: Text.WordWrap
-                maximumLineCount: 2
-                elide: Text.ElideRight
-            }
-        }
-    }
 
     // Track hero (SearchTrackHero: the 200x246 track card + the quality
     // label as TEXT under the meta).
@@ -227,54 +131,6 @@ Rectangle {
                 text: qualityLabel
                 color: theme.textMuted
                 font.pixelSize: 11
-                elide: Text.ElideRight
-            }
-        }
-    }
-
-    // Playlist card (PlaylistCard.slint meta — cover + title + subtitle).
-    component SearchPlaylistCard: Rectangle {
-        property var card: ({})
-        width: 200
-        height: 246
-        color: "transparent"
-        Column {
-            spacing: 0
-            Rectangle {
-                width: 200
-                height: 200
-                radius: theme.radiusSm
-                color: theme.surfaceElevated
-                clip: true
-                RoundedImage {
-                    anchors.fill: parent
-                    source: card.artPath || ""
-                    radius: theme.radiusSm
-                }
-                MouseArea {
-                    anchors.fill: parent
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: QbzBridge.openPlaylist(card.id)
-                }
-            }
-            Item { width: 1; height: 6 }
-            Text {
-                width: 200
-                height: 20
-                text: card.title || ""
-                color: theme.textPrimary
-                font.pixelSize: theme.fontBody - 2
-                font.weight: theme.weightSemibold
-                verticalAlignment: Text.AlignVCenter
-                elide: Text.ElideRight
-            }
-            Text {
-                width: 200
-                height: 16
-                text: card.subtitle || ""
-                color: theme.textMuted
-                font.pixelSize: theme.fontLink - 1
-                verticalAlignment: Text.AlignVCenter
                 elide: Text.ElideRight
             }
         }
@@ -739,10 +595,11 @@ Rectangle {
                             Item {
                                 width: 200
                                 height: 246
-                                SearchArtistHero {
+                                ArtistCard {
                                     visible: root.mp.kind === "artist"
                                     anchors.horizontalCenter: parent.horizontalCenter
-                                    card: root.mp.artist || ({})
+                                    item: root.mp.artist || ({})
+                                    artSource: (root.mp.artist || ({})).artPath || ""
                                 }
                                 AlbumCard {
                                     visible: root.mp.kind === "album"
@@ -778,13 +635,16 @@ Rectangle {
                             }
                             ListView {
                                 width: parent.width
-                                height: 220
+                                height: 246
                                 orientation: ListView.Horizontal
                                 spacing: 32
                                 clip: true
                                 boundsBehavior: Flickable.StopAtBounds
                                 model: root.artistsCarousel
-                                delegate: SearchArtistCard { card: modelData }
+                                delegate: ArtistCard {
+                                    item: modelData
+                                    artSource: modelData.artPath || ""
+                                }
                             }
                         }
                     }
@@ -800,13 +660,16 @@ Rectangle {
                         }
                         ListView {
                             width: parent.width
-                            height: 220
+                            height: 246
                             orientation: ListView.Horizontal
                             spacing: 32
                             clip: true
                             boundsBehavior: Flickable.StopAtBounds
                             model: root.artists
-                            delegate: SearchArtistCard { card: modelData }
+                            delegate: ArtistCard {
+                                item: modelData
+                                artSource: modelData.artPath || ""
+                            }
                         }
                     }
 
@@ -897,14 +760,17 @@ Rectangle {
                     GridView {
                         visible: root.tab === 3
                         width: parent.width
-                        height: Math.max(0, Math.ceil(count / Math.max(1, Math.floor((width + 16) / 176))) * 236 - 16)
-                        cellWidth: 176
-                        cellHeight: 236
+                        height: Math.max(0, Math.ceil(count / Math.max(1, Math.floor((width + 16) / 216))) * 262 - 16)
+                        cellWidth: 216
+                        cellHeight: 262
                         clip: true
                         boundsBehavior: Flickable.StopAtBounds
                         interactive: false
                         model: root.artists
-                        delegate: SearchArtistCard { card: modelData }
+                        delegate: ArtistCard {
+                            item: modelData
+                            artSource: modelData.artPath || ""
+                        }
                     }
                     LoadMoreButton {
                         visible: root.tab === 3
@@ -930,7 +796,10 @@ Rectangle {
                             clip: true
                             boundsBehavior: Flickable.StopAtBounds
                             model: root.playlists
-                            delegate: SearchPlaylistCard { card: modelData }
+                            delegate: PlaylistCard {
+                                item: modelData
+                                artSource: modelData.artPath || ""
+                            }
                         }
                     }
                     GridView {
@@ -943,7 +812,10 @@ Rectangle {
                         boundsBehavior: Flickable.StopAtBounds
                         interactive: false
                         model: root.playlists
-                        delegate: SearchPlaylistCard { card: modelData }
+                        delegate: PlaylistCard {
+                                item: modelData
+                                artSource: modelData.artPath || ""
+                            }
                     }
                     LoadMoreButton {
                         visible: root.tab === 4

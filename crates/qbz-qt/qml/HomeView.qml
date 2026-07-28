@@ -220,72 +220,7 @@ Rectangle {
         }
     }
 
-    // Slim ranked card (SlimCard.slint): 60px row — rank / 44px thumb /
-    // title+subtitle.
-    component SlimCard: Rectangle {
-        property var card: ({})
-        height: 60
-        radius: theme.radiusSm
-        color: slArea.containsMouse ? theme.surfaceHover : "transparent"
-
-        Row {
-            anchors.fill: parent
-            anchors.leftMargin: 8
-            anchors.rightMargin: 8
-            spacing: 12
-            Text {
-                visible: card.rank !== ""
-                width: 20
-                anchors.verticalCenter: parent.verticalCenter
-                text: card.rank
-                color: theme.textMuted
-                font.pixelSize: theme.fontBody
-                horizontalAlignment: Text.AlignHCenter
-            }
-            Rectangle {
-                width: 44
-                height: 44
-                radius: 4
-                anchors.verticalCenter: parent.verticalCenter
-                color: theme.surfaceElevated
-                clip: true
-                RoundedImage {
-                    anchors.fill: parent
-                    source: card.artPath
-                    radius: 4
-                }
-            }
-            Column {
-                width: parent.width - (card.rank !== "" ? 20 : 0) - 44 - 2 * 12
-                anchors.verticalCenter: parent.verticalCenter
-                spacing: 2
-                Text {
-                    width: parent.width
-                    text: card.title
-                    color: theme.textPrimary
-                    font.pixelSize: theme.fontLink
-                    font.weight: theme.weightMedium
-                    elide: Text.ElideRight
-                }
-                Text {
-                    width: parent.width
-                    text: card.artist
-                    color: theme.textMuted
-                    font.pixelSize: 12
-                    elide: Text.ElideRight
-                }
-            }
-        }
-        MouseArea {
-            id: slArea
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            // Phase 8: slim rows are albums — click opens the album view.
-            onClicked: QbzBridge.openAlbum(card.id)
-        }
-    }
-
+    // Slim rows mount the shared qml/SlimCard.qml (SlimCard.slint).
     // Popular slim grid (SlimCarousel.slint): 4x3 pages of 12, capped 24.
     component SlimGrid: Column {
         property var sectionData: ({})
@@ -340,105 +275,6 @@ Rectangle {
     // render the ArtistGridCard circle, playlists the PlaylistCard square.
     // Fed from the shared per-user pinned_items.db (home_qt "pinned"
     // section; most-recent first).
-    component PinnedArtistCard: Item {
-        property var card: ({})
-        width: 200
-        height: 246
-
-        Column {
-            spacing: 0
-            // Art zone: 200x200 rounded-square surface (AlbumCard parity)
-            // framing a 190px round portrait (ArtistGridCard).
-            Rectangle {
-                width: 200
-                height: 200
-                radius: theme.radiusSm
-                color: theme.surfaceElevated
-                Rectangle {
-                    width: 190
-                    height: 190
-                    radius: 95
-                    anchors.centerIn: parent
-                    color: theme.surfaceMain
-                    clip: true
-                    RoundedImage {
-                        anchors.fill: parent
-                        source: card.artPath || ""
-                        radius: 95
-                    }
-                    MouseArea {
-                        anchors.fill: parent
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: QbzBridge.openArtist(card.id)
-                    }
-                }
-            }
-            Item { width: 1; height: 6 }
-            Text {
-                width: 200
-                text: card.title
-                color: paNameArea.containsMouse ? theme.accent : theme.textPrimary
-                font.pixelSize: theme.fontBody - 2
-                font.weight: theme.weightMedium
-                horizontalAlignment: Text.AlignHCenter
-                wrapMode: Text.WordWrap
-                maximumLineCount: 2
-                elide: Text.ElideRight
-                MouseArea {
-                    id: paNameArea
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: QbzBridge.openArtist(card.id)
-                }
-            }
-        }
-    }
-
-    component PinnedPlaylistCard: Item {
-        property var card: ({})
-        width: 200
-        height: 246
-
-        Column {
-            spacing: 0
-            Rectangle {
-                width: 200
-                height: 200
-                radius: theme.radiusSm
-                color: theme.surfaceElevated
-                clip: true
-                RoundedImage {
-                    anchors.fill: parent
-                    source: card.artPath || ""
-                    radius: theme.radiusSm
-                }
-                MouseArea {
-                    anchors.fill: parent
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: QbzBridge.openPlaylist(card.id)
-                }
-            }
-            Item { width: 1; height: 6 }
-            Text {
-                width: 200
-                text: card.title
-                color: theme.textPrimary
-                font.pixelSize: theme.fontBody - 2
-                font.weight: theme.weightSemibold
-                elide: Text.ElideRight
-            }
-            Text {
-                width: 200
-                visible: card.artist !== ""
-                text: card.artist
-                color: theme.textMuted
-                font.pixelSize: 12
-                elide: Text.ElideRight
-            }
-        }
-    }
-
     component PinnedRail: Column {
         property var sectionData: ({})
         width: parent ? parent.width : 0
@@ -484,11 +320,21 @@ Rectangle {
                     }
                     Component {
                         id: pArtist
-                        PinnedArtistCard { card: modelData }
+                        ArtistCard {
+                            item: modelData
+                            artSource: modelData.artPath || ""
+                            isPinned: true
+                        }
                     }
                     Component {
                         id: pPlaylist
-                        PinnedPlaylistCard { card: modelData }
+                        PlaylistCard {
+                            // Pinned model: { id, title, artist, artPath,
+                            // isPinned } — artist maps to the subtitle line.
+                            item: Object.assign({}, modelData, { subtitle: modelData.subtitle || modelData.artist || "" })
+                            artSource: modelData.artPath || ""
+                            isPinned: true
+                        }
                     }
                     Loader {
                         anchors.fill: parent
@@ -496,99 +342,6 @@ Rectangle {
                             : modelData.itemKind === "playlist" ? pPlaylist : pAlbum
                     }
                 }
-            }
-        }
-    }
-
-    // Playlist card (PlaylistCard.slint): 200x246 — 200px cover + category
-    // subtag + title.
-    component PlaylistCard: Rectangle {
-        property var card: ({})
-        width: 200
-        height: 246
-        color: "transparent"
-
-        Column {
-            spacing: 0
-            Rectangle {
-                width: 200
-                height: 200
-                radius: theme.radiusSm
-                color: theme.surfaceElevated
-                clip: true
-                RoundedImage {
-                    anchors.fill: parent
-                    source: card.artPath
-                    radius: theme.radiusSm
-                }
-                MouseArea {
-                    anchors.fill: parent
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: QbzBridge.openPlaylist(card.id)
-                }
-            }
-            Item { width: 1; height: 8 }
-            Text {
-                visible: card.category !== ""
-                text: card.category
-                color: theme.accent
-                font.pixelSize: 10
-                font.weight: theme.weightSemibold
-                font.letterSpacing: 0.5
-                elide: Text.ElideRight
-                width: 200
-            }
-            Item { width: 1; height: 4 }
-            Text {
-                width: 200
-                text: card.title
-                color: theme.textPrimary
-                font.pixelSize: theme.fontBody - 2
-                font.weight: theme.weightMedium
-                elide: Text.ElideRight
-            }
-        }
-    }
-
-    // Artist card (ArtistCard.slint): 160x220 — 120px circular art + name.
-    component ArtistCard: Rectangle {
-        property var card: ({})
-        width: 160
-        height: 220
-        radius: 12
-        color: "transparent"
-
-        Column {
-            anchors.horizontalCenter: parent.horizontalCenter
-            spacing: 8
-            Item { width: 1; height: 24 }
-            Rectangle {
-                width: 120
-                height: 120
-                radius: 60
-                anchors.horizontalCenter: parent.horizontalCenter
-                color: theme.surfaceElevated
-                clip: true
-                RoundedImage {
-                    anchors.fill: parent
-                    source: card.artPath
-                    radius: 60
-                }
-                MouseArea {
-                    anchors.fill: parent
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: QbzBridge.openArtist(card.id)
-                }
-            }
-            Text {
-                width: 128
-                anchors.horizontalCenter: parent.horizontalCenter
-                text: card.title
-                color: theme.textPrimary
-                font.pixelSize: 14
-                font.weight: theme.weightMedium
-                horizontalAlignment: Text.AlignHCenter
-                elide: Text.ElideRight
             }
         }
     }
@@ -740,7 +493,10 @@ Rectangle {
                             clip: true
                             boundsBehavior: Flickable.StopAtBounds
                             model: sectionData.items
-                            delegate: PlaylistCard { card: modelData }
+                            delegate: PlaylistCard {
+                                item: modelData
+                                artSource: modelData.artPath || ""
+                            }
                         }
                     }
                 }
@@ -762,13 +518,16 @@ Rectangle {
                         }
                         ListView {
                             width: parent.width
-                            height: 220
+                            height: 246
                             orientation: ListView.Horizontal
                             spacing: 32
                             clip: true
                             boundsBehavior: Flickable.StopAtBounds
                             model: sectionData.items
-                            delegate: ArtistCard { card: modelData }
+                            delegate: ArtistCard {
+                                item: modelData
+                                artSource: modelData.artPath || ""
+                            }
                         }
                     }
                 }
