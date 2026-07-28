@@ -345,6 +345,10 @@ pub async fn previous(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
     }
 }
 
+pub(crate) async fn play_queue_track_public(runtime: &Arc<AppRuntime<LoggingAdapter>>, track_id: u64) {
+    play_queue_track(runtime, track_id).await;
+}
+
 async fn play_queue_track(runtime: &Arc<AppRuntime<LoggingAdapter>>, track_id: u64) {
     if let Err(e) = runtime
         .core()
@@ -426,6 +430,7 @@ pub async fn refresh_now_playing(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
         crate::ui(move |mut b| {
             b.as_mut().set_np_track_id(QString::from(""));
         });
+        crate::lyrics_qt::publish_idle();
         return;
     };
     let title = match track.version.as_deref().filter(|v| !v.is_empty()) {
@@ -459,6 +464,13 @@ pub async fn refresh_now_playing(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
     // Artwork through the same cache pipeline as Home (attach + background
     // download + republish — single url here).
     crate::artwork_qt::attach_now_playing(&track.artwork_url.clone().unwrap_or_default());
+    // Lyrics for the new track (loading state, then the doc).
+    crate::lyrics_qt::publish_loading();
+    let runtime = runtime.clone();
+    let track = track.clone();
+    crate::spawn(async move {
+        crate::lyrics_qt::load_for_track(&runtime, &track).await;
+    });
 }
 
 /// Quality tier + exact label from a queue track's bit depth / sample rate
@@ -478,55 +490,10 @@ fn quality_badge(track: &QueueTrack) -> (String, String) {
     (tier, label)
 }
 
-/// Publish the real queue into `queueModel` (now-playing row first, then
-/// up-next rows) as one QVariant per row.
-///
-/// POC-NOTE: rows are JSON-encoded strings inside the QVariants — the same
-/// cxx-qt-lib nesting limitation as homeSectionsJson (a QVariant cannot
-/// hold a QVariantMap in 0.7.3); QML parses each row.
+/// Publish the queue panel document (queue_qt.rs — the full QueueState
+/// port: sections, history, pagination, search).
 pub async fn publish_queue(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
-    let state = runtime.core().get_queue_state().await;
-    #[derive(serde::Serialize)]
-    struct QueueRow {
-        id: String,
-        title: String,
-        artist: String,
-        duration: String,
-        #[serde(rename = "artPath")]
-        art_path: String,
-        current: bool,
-    }
-    let mut rows: Vec<QueueRow> = Vec::new();
-    let mut push = |track: &QueueTrack, current: bool| {
-        rows.push(QueueRow {
-            id: track.id.to_string(),
-            title: track.title.clone(),
-            artist: track.artist.clone(),
-            duration: fmt_mmss(track.duration_secs),
-            art_path: crate::artwork_qt::cached_path(
-                &track.artwork_url.clone().unwrap_or_default(),
-            ),
-            current,
-        });
-    };
-    if let Some(current) = state.current_track.as_ref() {
-        push(current, true);
-    }
-    for track in &state.upcoming {
-        push(track, false);
-    }
-    let json_rows: Vec<String> = rows
-        .iter()
-        .map(|r| serde_json::to_string(r).unwrap_or_default())
-        .collect();
-    crate::ui(move |mut b| {
-        b.as_mut()
-            .set_queue_model(crate::json_rows_to_qvariant_list(json_rows));
-    });
-}
-
-fn fmt_mmss(secs: u64) -> String {
-    format!("{}:{:02}", secs / 60, secs % 60)
+    crate::queue_qt::publish(runtime).await;
 }
 
 // ---------------------------------------------------------------------------

@@ -17,7 +17,9 @@ mod now_playing;
 mod offline_fwd;
 mod album_qt;
 mod artist_qt;
+mod lyrics_qt;
 mod playback_qt;
+mod queue_qt;
 mod sidebar_qt;
 
 use std::pin::Pin;
@@ -466,6 +468,78 @@ pub(crate) fn toggle_pin(kind: String, id: String, title: String, subtitle: Stri
     }
 }
 
+// ============================ Lyrics panel (phase 9) ======================
+
+/// NPB lyrics button / panel close: toggle the column section and — like
+/// LyricsState.panel-opened — re-request the current track's lyrics on
+/// open (cached docs return immediately). The static is the source of
+/// truth (the ui() hop is queued, not synchronous).
+static LYRICS_OPEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub(crate) fn toggle_lyrics() {
+    let open = !LYRICS_OPEN.swap(!LYRICS_OPEN.load(std::sync::atomic::Ordering::SeqCst), std::sync::atomic::Ordering::SeqCst);
+    ui(move |mut b| {
+        b.as_mut().set_lyrics_open(open);
+    });
+    if open {
+        let runtime = app();
+        spawn(async move {
+            if let Some(track) = runtime.core().current_track().await {
+                lyrics_qt::load_for_track(&runtime, &track).await;
+            }
+        });
+    }
+}
+
+// ============================ Queue panel (phase 9) =======================
+
+pub(crate) fn queue_set_page(page: i32) {
+    queue_qt::set_page(page);
+    let runtime = app();
+    spawn(async move { queue_qt::publish(&runtime).await });
+}
+
+pub(crate) fn queue_set_search(query: String) {
+    queue_qt::set_search(&query);
+    let runtime = app();
+    spawn(async move { queue_qt::publish(&runtime).await });
+}
+
+pub(crate) fn queue_play_upcoming(index: i32) {
+    let runtime = app();
+    spawn(async move { queue_qt::play_upcoming(&runtime, index.max(0) as usize).await });
+}
+
+pub(crate) fn queue_remove_upcoming(index: i32) {
+    let runtime = app();
+    spawn(async move { queue_qt::remove_upcoming(&runtime, index.max(0) as usize).await });
+}
+
+pub(crate) fn queue_remove_all_after(index: i32) {
+    let runtime = app();
+    spawn(async move { queue_qt::remove_all_after(&runtime, index.max(0) as usize).await });
+}
+
+pub(crate) fn queue_move_track(from: i32, to: i32) {
+    let runtime = app();
+    spawn(async move { queue_qt::move_track(&runtime, from.max(0) as usize, to.max(0) as usize).await });
+}
+
+pub(crate) fn queue_play_history(index: i32) {
+    let runtime = app();
+    spawn(async move { queue_qt::play_history(&runtime, index.max(0) as usize).await });
+}
+
+pub(crate) fn queue_clear() {
+    let runtime = app();
+    spawn(async move { queue_qt::clear_queue(&runtime).await });
+}
+
+pub(crate) fn queue_toggle_favorite(kind: String, id: String) {
+    let runtime = app();
+    spawn(async move { queue_qt::toggle_favorite(&runtime, &kind, &id).await });
+}
+
 /// AlbumView header Shuffle.
 pub(crate) fn play_album_shuffled(album_id: String) {
     let runtime = app();
@@ -802,20 +876,6 @@ fn publish_home_sections(sections: &[home_qt::HomeSection]) {
     });
 }
 
-/// Build the bridge's `queueModel` QVariantList from per-row JSON strings
-/// (each QVariant carries one QString — see the nesting POC-NOTE in
-/// playback_qt.rs `publish_queue`).
-pub(crate) fn json_rows_to_qvariant_list(
-    rows: Vec<String>,
-) -> cxx_qt_lib::QList<cxx_qt_lib::QVariant> {
-    let mut list = cxx_qt_lib::QList::<cxx_qt_lib::QVariant>::default();
-    for row in rows {
-        list.append(<QString as cxx_qt_lib::QVariantValue>::construct(&QString::from(
-            row.as_str(),
-        )));
-    }
-    list
-}
 
 fn main() {
     qbz_log::install("info");

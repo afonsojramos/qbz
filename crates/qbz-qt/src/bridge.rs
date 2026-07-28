@@ -123,6 +123,17 @@ pub mod qbz_bridge {
         // Now-playing track id (playing-row indicator in track lists).
         #[qproperty(QString, np_track_id)]
 
+        // --- Lyrics panel (phase 9) ----------------------------------------
+        #[qproperty(bool, lyrics_open)]
+        // One JSON document (lyrics_qt.rs LyricsDoc: status/lines/synced/
+        // provider/error).
+        #[qproperty(QString, lyrics_json)]
+
+        // --- Queue panel (phase 9) -----------------------------------------
+        // One JSON document (queue_qt.rs QueueDoc: current/upcoming/history
+        // + pagination + #442 section markers). Supersedes `queueModel`.
+        #[qproperty(QString, queue_json)]
+
         // --- Sidebar playlist tree ---------------------------------------
         // One JSON document: the flattened entries (folders + playlists,
         // expand/sort/search applied Rust-side — sidebar_qt.rs).
@@ -229,6 +240,32 @@ pub mod qbz_bridge {
         /// ArtistView ⋯ "Add all to queue" — appends the top-tracks queue.
         #[qinvokable]
         fn enqueue_artist_top(self: Pin<&mut QbzBridge>);
+
+        /// NPB lyrics button / lyrics panel close X.
+        #[qinvokable]
+        fn toggle_lyrics(self: Pin<&mut QbzBridge>);
+
+        /// Queue panel: tabs/pagination/search.
+        #[qinvokable]
+        fn queue_set_page(self: Pin<&mut QbzBridge>, page: i32);
+        #[qinvokable]
+        fn queue_set_search(self: Pin<&mut QbzBridge>, query: QString);
+        /// Row actions.
+        #[qinvokable]
+        fn queue_play_upcoming(self: Pin<&mut QbzBridge>, index: i32);
+        #[qinvokable]
+        fn queue_remove_upcoming(self: Pin<&mut QbzBridge>, index: i32);
+        #[qinvokable]
+        fn queue_remove_all_after(self: Pin<&mut QbzBridge>, index: i32);
+        #[qinvokable]
+        fn queue_move_track(self: Pin<&mut QbzBridge>, from: i32, to: i32);
+        #[qinvokable]
+        fn queue_play_history(self: Pin<&mut QbzBridge>, index: i32);
+        #[qinvokable]
+        fn queue_toggle_favorite(self: Pin<&mut QbzBridge>, kind: QString, id: QString);
+        /// Footer: Clear queue.
+        #[qinvokable]
+        fn queue_clear(self: Pin<&mut QbzBridge>);
 
         /// Sidebar navigation: record a content view ("home" | "library")
         /// and lazy-load its data on first visit.
@@ -374,6 +411,9 @@ pub struct QbzBridgeRust {
     artist_json: QString,
     view_param_id: QString,
     np_track_id: QString,
+    queue_json: QString,
+    lyrics_open: bool,
+    lyrics_json: QString,
 }
 
 impl Default for QbzBridgeRust {
@@ -431,6 +471,9 @@ impl Default for QbzBridgeRust {
             artist_json: QString::from("{}"),
             view_param_id: QString::default(),
             np_track_id: QString::default(),
+            queue_json: QString::from("{}"),
+            lyrics_open: false,
+            lyrics_json: QString::from("{}"),
         }
     }
 }
@@ -532,6 +575,46 @@ impl qbz_bridge::QbzBridge {
 
     pub fn play_album(self: Pin<&mut Self>, album_id: QString) {
         crate::play_album(album_id.to_string());
+    }
+
+    pub fn queue_set_page(self: Pin<&mut Self>, page: i32) {
+        crate::queue_set_page(page);
+    }
+
+    pub fn queue_set_search(self: Pin<&mut Self>, query: QString) {
+        crate::queue_set_search(query.to_string());
+    }
+
+    pub fn queue_play_upcoming(self: Pin<&mut Self>, index: i32) {
+        crate::queue_play_upcoming(index);
+    }
+
+    pub fn queue_remove_upcoming(self: Pin<&mut Self>, index: i32) {
+        crate::queue_remove_upcoming(index);
+    }
+
+    pub fn queue_remove_all_after(self: Pin<&mut Self>, index: i32) {
+        crate::queue_remove_all_after(index);
+    }
+
+    pub fn queue_move_track(self: Pin<&mut Self>, from: i32, to: i32) {
+        crate::queue_move_track(from, to);
+    }
+
+    pub fn queue_play_history(self: Pin<&mut Self>, index: i32) {
+        crate::queue_play_history(index);
+    }
+
+    pub fn queue_toggle_favorite(self: Pin<&mut Self>, kind: QString, id: QString) {
+        crate::queue_toggle_favorite(kind.to_string(), id.to_string());
+    }
+
+    pub fn queue_clear(self: Pin<&mut Self>) {
+        crate::queue_clear();
+    }
+
+    pub fn toggle_lyrics(self: Pin<&mut Self>) {
+        crate::toggle_lyrics();
     }
 
     pub fn play_album_shuffled(self: Pin<&mut Self>, album_id: QString) {

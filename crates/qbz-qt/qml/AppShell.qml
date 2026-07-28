@@ -59,15 +59,16 @@ Rectangle {
         // Animated 3-state width lives inside the component.
     }
 
-    // Right-side queue column — a layout sibling of the content (it shrinks
-    // the content, no overlay), animated 0 <-> 300 like the Slint AppShell
-    // column (160ms ease-in-out).
+    // Right-side panel column — Queue and/or Lyrics, stacked vertically in
+    // a shared 300px column (Feishin-style, AppShell.slint:684-707). Each
+    // is toggled from its bar button and closed from its own X; the column
+    // is visible when either is open, animated 0 <-> 300 (160ms).
     Rectangle {
         id: queueColumn
         anchors.right: parent.right
         anchors.top: header.bottom
         anchors.bottom: npb.top
-        width: QbzBridge.queueOpen ? theme.queuePanelWidth : 0
+        width: (QbzBridge.queueOpen || QbzBridge.lyricsOpen) ? theme.queuePanelWidth : 0
         clip: true
         color: theme.surfaceCard
 
@@ -76,8 +77,30 @@ Rectangle {
         }
 
         QueuePanel {
-            anchors.fill: parent
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            height: QbzBridge.lyricsOpen
+                ? (QbzBridge.queueOpen ? parent.height / 2 : 0)
+                : parent.height
             visible: QbzBridge.queueOpen
+        }
+        Rectangle {
+            visible: QbzBridge.queueOpen && QbzBridge.lyricsOpen
+            anchors.left: parent.left
+            anchors.right: parent.right
+            y: QbzBridge.lyricsOpen && QbzBridge.queueOpen ? parent.height / 2 : 0
+            height: 1
+            color: theme.borderSubtle
+        }
+        LyricsPanel {
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            height: QbzBridge.lyricsOpen
+                ? (QbzBridge.queueOpen ? parent.height / 2 - 1 : parent.height)
+                : 0
+            visible: QbzBridge.lyricsOpen
         }
     }
 

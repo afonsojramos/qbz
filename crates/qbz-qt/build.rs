@@ -48,6 +48,7 @@ fn main() {
                 "qml/HeaderBar.qml",
                 "qml/NowPlayingBarSmall.qml",
                 "qml/QueuePanel.qml",
+                "qml/LyricsPanel.qml",
                 "qml/HomeView.qml",
                 "qml/LibraryView.qml",
                 "qml/QbzTheme.qml",

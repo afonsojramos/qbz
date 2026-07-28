@@ -1,20 +1,21 @@
 // Right-side Queue panel — QML port of
 // crates/qbz-ui/ui/shell/QueueSidebar.slint.
 //
-// Header with the two tabs ("Queue" / "History"), the NOW PLAYING card,
-// the UP NEXT list, and the empty states. Phase 4: the Queue tab renders
-// the REAL queue (QbzBridge.queueModel — one JSON-encoded row per QVariant,
-// see the nesting POC-NOTE in playback_qt.rs `publish_queue`).
+// Tabs (Queue / History), NOW PLAYING card (live heart), UP NEXT with the
+// #442 "Next in queue" / "Next up" section markers, 40-row pagination,
+// live search filter, row actions (play / remove / remove-all-after /
+// heart), drag reorder (basic press-drag), footer (count line + Clear /
+// stubs + search field), History tab (thumbnail rows, click replays as a
+// fresh single-track queue), exact empty states. Data: QbzBridge.queueJson
+// (queue_qt.rs QueueDoc).
 //
-// POC-NOTEs:
-// - The footer (count line + clear / save-as-playlist / infinite /
-//  sleep-timer actions + inline queue search) is omitted — phase 4 brings
-//  no queue mutations beyond play/next/previous.
-// - The History tab stays empty (no local play-history store in the POC).
-// - Row context menus, drag-reorder, pagination and the now-playing
-//  favorite toggle are out of scope.
+// POC-NOTEs: save-as-playlist (opens a picker modal upstream — inert),
+// infinite-play + sleep timer engines, stop-after marker, row menu's
+// "Add to playlist" / "Track info" entries, ephemeral rows, the ghost
+// drag pill (rows move with a plain displaced animation instead).
 
 import QtQuick
+import QtQuick.Controls
 import com.blitzfc.qbz
 
 Rectangle {
@@ -24,22 +25,39 @@ Rectangle {
 
     // Queue (0) / History (1) — Slint QueueState.tab.
     property int tab: 0
-    // Parsed queue rows: [{id, title, artist, duration, artPath, current}].
-    readonly property var rows: {
-        var out = []
-        for (var i = 0; i < QbzBridge.queueModel.length; i++) {
-            try { out.push(JSON.parse(QbzBridge.queueModel[i])) } catch (e) {}
-        }
-        return out
-    }
-    readonly property var currentRow: rows.length > 0 && rows[0].current ? rows[0] : null
-    readonly property var upcomingRows: currentRow ? rows.slice(1) : rows
-    readonly property bool queueEmpty: rows.length === 0
+    readonly property var doc: JSON.parse(QbzBridge.queueJson)
+    readonly property var currentRow: doc.current || null
+    readonly property var upcoming: doc.upcoming || []
+    readonly property var historyRows: doc.history || []
+    readonly property bool queueEmpty: currentRow === null && (doc.upcomingTotal || 0) === 0
+
+    // url-keyed cover map (shared artwork pipeline).
+    property var coverMap: ({})
+
+    // Drag-reorder state (basic press-drag; ghost is the row's own y).
+    property int dragFrom: -1
 
     QbzTheme { id: theme }
 
-    // One tab — plain text, no pill (QBZ design rule): active brightest,
-    // inactive dim, brighten on hover.
+    Connections {
+        target: QbzBridge
+        function onLibraryArtworkReady(key, path) {
+            var m = root.coverMap
+            m[key] = path
+            root.coverMap = Object.assign({}, m)
+        }
+    }
+    Component.onCompleted: dispatchCovers()
+    onDocChanged: dispatchCovers()
+    function dispatchCovers() {
+        var urls = []
+        if (currentRow && currentRow.artUrl) urls.push(currentRow.artUrl)
+        var i
+        for (i = 0; i < upcoming.length; i++) if (upcoming[i].artUrl) urls.push(upcoming[i].artUrl)
+        for (i = 0; i < historyRows.length; i++) if (historyRows[i].artUrl) urls.push(historyRows[i].artUrl)
+        if (urls.length > 0) QbzBridge.sidebarArtworkWindow(JSON.stringify(urls))
+    }
+
     component QueueTab: Text {
         property bool active: false
         signal clicked()
@@ -60,17 +78,54 @@ Rectangle {
         }
     }
 
-    // One queue row (QueueRow.slint): index or thumbnail, title, artist,
-    // duration.
+    // Row action icon button (the panel's small IconButton).
+    component PanelIconBtn: Rectangle {
+        property string name: ""
+        property int iconSize: 17
+        property bool active: false
+        property bool btnEnabled: true
+        signal clicked()
+
+        width: 30
+        height: 30
+        radius: theme.radiusSm
+        color: (piArea.containsMouse && btnEnabled) ? theme.surfaceHover : "transparent"
+        QbzIcon {
+            name: parent.name
+            width: parent.iconSize
+            height: parent.iconSize
+            anchors.centerIn: parent
+            tintName: !parent.btnEnabled ? "muted"
+                : parent.active ? "accent"
+                : piArea.containsMouse ? "primary" : "secondary"
+        }
+        MouseArea {
+            id: piArea
+            anchors.fill: parent
+            enabled: parent.btnEnabled
+            hoverEnabled: true
+            cursorShape: parent.btnEnabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+            onClicked: parent.clicked()
+        }
+    }
+
+    // One UP NEXT / History row (QueueRow.slint).
     component QueueRow: Rectangle {
         property var row: ({})
         property int rowIndex: 0
         property bool showNumber: true
+        property bool inQueue: true
+
+        readonly property bool hovered: qrArea.containsMouse || menuArea.containsMouse
+        readonly property bool isActive: inQueue && QbzBridge.npTrackId !== "" && QbzBridge.npTrackId === row.id
 
         height: 44
         radius: theme.radiusSm
-        color: qrArea.containsMouse ? theme.surfaceHover
+        color: hovered ? theme.surfaceHover
              : (rowIndex % 2 === 1 ? "#592a2a2a" : "transparent")
+        border.width: root.dragFrom === rowIndex ? 1 : 0
+        border.color: theme.accent
+        opacity: root.dragFrom === rowIndex ? 0.4 : 1.0
 
         Row {
             anchors.fill: parent
@@ -80,11 +135,12 @@ Rectangle {
             anchors.bottomMargin: 4
             spacing: 9
 
+            // Leading: track number (UP NEXT) or thumbnail (History).
             Text {
                 visible: showNumber
                 width: 22
                 anchors.verticalCenter: parent.verticalCenter
-                text: rowIndex + 1
+                text: rowIndex + 1 + (doc.page || 0) * 40
                 color: theme.textMuted
                 font.pixelSize: 12
                 horizontalAlignment: Text.AlignHCenter
@@ -99,22 +155,42 @@ Rectangle {
                 clip: true
                 Image {
                     anchors.fill: parent
-                    source: row.artPath
+                    source: root.coverMap[row.artUrl] || ""
                     fillMode: Image.PreserveAspectCrop
                     asynchronous: true
                 }
             }
+
+            // Title + artist.
             Column {
-                width: parent.width - (showNumber ? 22 : 34) - 9 * 2 - durationText.implicitWidth
+                width: parent.width - (showNumber ? 22 : 34) - durText.width - 32 - 3 * 9
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: 2
-                Text {
-                    width: parent.width
-                    text: row.title
-                    color: theme.textPrimary
-                    font.pixelSize: 12
-                    font.weight: theme.weightMedium
-                    elide: Text.ElideRight
+                Row {
+                    spacing: 5
+                    Text {
+                        text: row.title
+                        color: theme.textPrimary
+                        font.pixelSize: 12
+                        font.weight: theme.weightMedium
+                        elide: Text.ElideRight
+                        width: Math.min(implicitWidth, parent.parent.width - (row.explicit ? 21 : 0))
+                    }
+                    Rectangle {
+                        visible: row.explicit
+                        width: 16
+                        height: 16
+                        radius: 3
+                        anchors.verticalCenter: parent.verticalCenter
+                        color: theme.surfaceElevated
+                        Text {
+                            anchors.centerIn: parent
+                            text: "E"
+                            color: theme.textMuted
+                            font.pixelSize: 9
+                            font.weight: theme.weightSemibold
+                        }
+                    }
                 }
                 Text {
                     width: parent.width
@@ -125,19 +201,107 @@ Rectangle {
                 }
             }
             Text {
-                id: durationText
+                id: durText
                 anchors.verticalCenter: parent.verticalCenter
                 text: row.duration
                 color: theme.textMuted
                 font.pixelSize: 11
             }
+            // ⋯ menu trigger (UP NEXT rows only; always visible, 32px hit).
+            Rectangle {
+                visible: inQueue
+                width: 32
+                height: 32
+                radius: theme.radiusSm
+                anchors.verticalCenter: parent.verticalCenter
+                color: menuArea.containsMouse ? theme.surfaceElevated : "transparent"
+                QbzIcon {
+                    anchors.centerIn: parent
+                    name: "ellipsis"
+                    width: 16
+                    height: 16
+                    tintName: menuArea.containsMouse ? "primary" : "muted"
+                }
+                MouseArea {
+                    id: menuArea
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: rowMenu.open()
+                }
+                Popup {
+                    id: rowMenu
+                    x: width - 196
+                    y: 44
+                    width: 196
+                    padding: 5
+                    closePolicy: Popup.CloseOnPressOutside
+                    background: Rectangle {
+                        color: theme.surfaceMain
+                        radius: theme.radiusSm
+                        border.width: 1
+                        border.color: theme.borderMuted
+                    }
+                    contentItem: Column {
+                        Repeater {
+                            model: [
+                                { "label": QbzBridge.tr("Remove from queue"), "icon": "trash-2", "action": "remove" },
+                                { "label": QbzBridge.tr("Remove all after"), "icon": "list-x", "action": "remove-after" },
+                                { "label": row.isFavorite ? QbzBridge.tr("Remove from Library") : QbzBridge.tr("Add to Library"), "icon": row.isFavorite ? "heart-filled" : "heart", "action": "favorite" },
+                            ]
+                            delegate: Rectangle {
+                                required property var modelData
+                                width: parent ? parent.width : 0
+                                height: 33
+                                radius: 5
+                                color: rmiArea.containsMouse ? theme.surfaceHover : "transparent"
+                                Row {
+                                    anchors.fill: parent
+                                    anchors.leftMargin: 8
+                                    spacing: 8
+                                    QbzIcon { name: modelData.icon; width: 15; height: 15; anchors.verticalCenter: parent.verticalCenter; tintName: "secondary" }
+                                    Text {
+                                        height: parent.height
+                                        width: parent.width - 23
+                                        text: modelData.label
+                                        color: theme.textSecondary
+                                        font.pixelSize: 13
+                                        verticalAlignment: Text.AlignVCenter
+                                        elide: Text.ElideRight
+                                    }
+                                }
+                                MouseArea {
+                                    id: rmiArea
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: {
+                                        rowMenu.close()
+                                        var a = modelData.action
+                                        if (a === "remove") QbzBridge.queueRemoveUpcoming(rowIndex)
+                                        else if (a === "remove-after") QbzBridge.queueRemoveAllAfter(rowIndex)
+                                        else if (a === "favorite") {
+                                            row.isFavorite = !row.isFavorite
+                                            QbzBridge.queueToggleFavorite("track", row.id)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
+
         MouseArea {
             id: qrArea
             anchors.fill: parent
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
-            // POC-NOTE: click-to-play / context menu out of scope.
+            onClicked: {
+                if (inQueue) QbzBridge.queuePlayUpcoming(rowIndex)
+                else QbzBridge.queuePlayHistory(rowIndex)
+            }
         }
     }
 
@@ -177,7 +341,6 @@ Rectangle {
                     onClicked: root.tab = 1
                 }
             }
-            // Close button (mirrors the LyricsSidebar X).
             Rectangle {
                 id: closeBtn
                 anchors.right: parent.right
@@ -212,7 +375,7 @@ Rectangle {
         // --- Body --------------------------------------------------------
         Item {
             width: parent.width
-            height: parent.height - 45
+            height: parent.height - 45 - footerBlock.height
 
             // ===== Queue tab =====
             Flickable {
@@ -241,7 +404,6 @@ Rectangle {
                             font.weight: theme.weightSemibold
                             font.letterSpacing: 0.5
                         }
-                        // Highlighted current-track card.
                         Rectangle {
                             width: parent.width
                             height: 44
@@ -263,13 +425,13 @@ Rectangle {
                                     clip: true
                                     Image {
                                         anchors.fill: parent
-                                        source: root.currentRow ? root.currentRow.artPath : ""
+                                        source: root.currentRow ? (root.coverMap[root.currentRow.artUrl] || "") : ""
                                         fillMode: Image.PreserveAspectCrop
                                         asynchronous: true
                                     }
                                 }
                                 Column {
-                                    width: parent.width - 34 - 9
+                                    width: parent.width - 34 - 28 - 2 * 9
                                     anchors.verticalCenter: parent.verticalCenter
                                     spacing: 2
                                     Text {
@@ -288,13 +450,40 @@ Rectangle {
                                         elide: Text.ElideRight
                                     }
                                 }
+                                // Favorite toggle (wired).
+                                Rectangle {
+                                    width: 28
+                                    height: 28
+                                    radius: theme.radiusSm
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    color: npFavArea.containsMouse ? theme.surfaceHover : "transparent"
+                                    QbzIcon {
+                                        anchors.centerIn: parent
+                                        name: root.currentRow && root.currentRow.isFavorite ? "heart-filled" : "heart"
+                                        width: 17
+                                        height: 17
+                                        tintName: root.currentRow && root.currentRow.isFavorite ? "favorite" : (npFavArea.containsMouse ? "primary" : "muted")
+                                    }
+                                    MouseArea {
+                                        id: npFavArea
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: {
+                                            if (root.currentRow) {
+                                                root.currentRow.isFavorite = !root.currentRow.isFavorite
+                                                QbzBridge.queueToggleFavorite("track", root.currentRow.id)
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
 
                     // UP NEXT section.
                     Column {
-                        visible: root.upcomingRows.length > 0
+                        visible: (doc.upcomingTotal || 0) > 0
                         width: parent.width - 20
                         spacing: 8
                         Text {
@@ -304,14 +493,89 @@ Rectangle {
                             font.weight: theme.weightSemibold
                             font.letterSpacing: 0.5
                         }
+
                         Repeater {
-                            model: root.upcomingRows
-                            delegate: QueueRow {
+                            model: root.upcoming
+                            delegate: Column {
+                                required property var modelData
+                                required property int index
                                 width: parent ? parent.width : 0
-                                row: modelData
-                                rowIndex: index
-                                showNumber: true
+                                // #442 section header above the row.
+                                Row {
+                                    visible: modelData.section !== ""
+                                    height: 22
+                                    spacing: 6
+                                    QbzIcon {
+                                        visible: modelData.section === "next-in-queue"
+                                        name: "list-start"
+                                        width: 13
+                                        height: 13
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        tintName: "accent"
+                                    }
+                                    Text {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        text: modelData.section === "next-in-queue"
+                                            ? QbzBridge.tr("Next in queue") : QbzBridge.tr("Next up")
+                                        color: theme.textMuted
+                                        font.pixelSize: 11
+                                        font.weight: theme.weightSemibold
+                                        font.letterSpacing: 0.5
+                                    }
+                                }
+                                QueueRow {
+                                    width: parent.width
+                                    row: modelData
+                                    rowIndex: index
+                                    showNumber: true
+                                    inQueue: true
+                                    // Basic press-drag reorder (POC: no ghost pill).
+                                    MouseArea {
+                                        anchors.fill: parent
+                                        onPressAndHold: root.dragFrom = index
+                                        onReleased: {
+                                            if (root.dragFrom >= 0) {
+                                                var target = Math.max(0, Math.min(root.upcoming.length - 1,
+                                                    Math.floor((parent.mapToItem(null, mouseX, mouseY).y - queueBody.mapToItem(null, 0, 0).y - 40) / 44)))
+                                                QbzBridge.queueMoveTrack((doc.page || 0) * 40 + root.dragFrom, (doc.page || 0) * 40 + target)
+                                                root.dragFrom = -1
+                                            }
+                                        }
+                                    }
+                                }
                             }
+                        }
+
+                        // Paginator (plain text controls, no pills).
+                        Row {
+                            visible: (doc.pageCount || 1) > 1
+                            width: parent.width
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            spacing: theme.spacingMd
+                            Item { width: (parent.width - paginator.width) / 2; height: 1 }
+                            Row {
+                                id: paginator
+                                spacing: theme.spacingMd
+                                PanelIconBtn {
+                                    name: "chevron-left"
+                                    iconSize: 15
+                                    btnEnabled: (doc.page || 0) > 0
+                                    onClicked: QbzBridge.queueSetPage((doc.page || 0) - 1)
+                                }
+                                Text {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: QbzBridge.tr("Page {} of {}").replace("{}", (doc.page || 0) + 1).replace("{}", doc.pageCount || 1)
+                                    color: theme.textMuted
+                                    font.pixelSize: 12
+                                }
+                                PanelIconBtn {
+                                    name: "chevron-right"
+                                    iconSize: 15
+                                    btnEnabled: (doc.page || 0) < (doc.pageCount || 1) - 1
+                                    onClicked: QbzBridge.queueSetPage((doc.page || 0) + 1)
+                                }
+                            }
+                            Item { width: (parent.width - paginator.width) / 2; height: 1 }
                         }
                     }
 
@@ -342,28 +606,127 @@ Rectangle {
             }
 
             // ===== History tab =====
-            Column {
+            Flickable {
                 visible: root.tab === 1
                 anchors.fill: parent
-                anchors.margins: 10
-                spacing: 8
+                clip: true
+                contentWidth: width
+                contentHeight: historyBody.implicitHeight
+                boundsBehavior: Flickable.StopAtBounds
 
-                Text {
-                    text: QbzBridge.tr("RECENTLY PLAYED")
-                    color: theme.textMuted
-                    font.pixelSize: 11
-                    font.weight: theme.weightSemibold
-                    font.letterSpacing: 0.5
-                }
-                // POC-NOTE: history is always empty until the local
-                // play-history store is wired.
-                Text {
+                Column {
+                    id: historyBody
                     width: parent.width
-                    topPadding: 48 - 10
-                    text: QbzBridge.tr("Nothing played yet")
-                    color: theme.textMuted
-                    font.pixelSize: theme.fontBody
-                    horizontalAlignment: Text.AlignHCenter
+                    padding: 10
+                    spacing: 8
+
+                    Text {
+                        text: QbzBridge.tr("RECENTLY PLAYED")
+                        color: theme.textMuted
+                        font.pixelSize: 11
+                        font.weight: theme.weightSemibold
+                        font.letterSpacing: 0.5
+                    }
+                    Repeater {
+                        model: root.historyRows
+                        delegate: QueueRow {
+                            width: parent.width
+                            row: modelData
+                            rowIndex: index
+                            showNumber: false
+                            inQueue: false
+                        }
+                    }
+                    Text {
+                        visible: root.historyRows.length === 0
+                        width: parent.width
+                        topPadding: 48 - 10
+                        text: QbzBridge.tr("Nothing played yet")
+                        color: theme.textMuted
+                        font.pixelSize: theme.fontBody
+                        horizontalAlignment: Text.AlignHCenter
+                    }
+                }
+            }
+        }
+
+        // --- Footer: count + actions + inline search (Queue tab) ---------
+        Column {
+            id: footerBlock
+            visible: root.tab === 0 && !root.queueEmpty
+            width: parent.width
+            spacing: 0
+            Rectangle { width: parent.width; height: 1; color: theme.borderSubtle }
+            Text {
+                visible: (doc.upcomingTotal || 0) > 0
+                width: parent.width
+                leftPadding: theme.spacingMd
+                rightPadding: theme.spacingMd
+                topPadding: 8
+                text: (doc.upcomingTotal === 1
+                        ? QbzBridge.tr("Showing {} of {} track.")
+                        : QbzBridge.tr("Showing {} of {} tracks."))
+                      .replace("{}", doc.pageEnd || 0).replace("{}", doc.upcomingTotal || 0)
+                color: theme.textMuted
+                font.pixelSize: 11
+            }
+            Row {
+                width: parent.width
+                leftPadding: theme.spacingMd
+                rightPadding: theme.spacingMd
+                topPadding: 10
+                bottomPadding: 10
+                spacing: theme.spacingXs
+
+                // Action 1 — Clear queue (wired).
+                PanelIconBtn {
+                    name: "trash-list"
+                    onClicked: QbzBridge.queueClear()
+                }
+                // Action 2 — Save as playlist (INERT: opens a picker modal
+                // upstream — POC-NOTE).
+                PanelIconBtn { name: "add-to-list" }
+                // Action 3 — infinite play (INERT engine — POC-NOTE).
+                PanelIconBtn { name: "infinity" }
+                // Action 4 — sleep timer (INERT engine — POC-NOTE).
+                PanelIconBtn { name: "clock" }
+
+                // Inline queue search field (wired).
+                Rectangle {
+                    width: parent.width - 4 * 30 - 4 * theme.spacingXs
+                    height: 30
+                    radius: theme.radiusSm
+                    color: theme.surfaceElevated
+                    Row {
+                        anchors.fill: parent
+                        anchors.leftMargin: 9
+                        anchors.rightMargin: 7
+                        spacing: 6
+                        QbzIcon {
+                            name: "search"
+                            width: 13
+                            height: 13
+                            anchors.verticalCenter: parent.verticalCenter
+                            tintName: "muted"
+                        }
+                        TextInput {
+                            width: parent.width - 20
+                            height: parent.height
+                            color: theme.textPrimary
+                            font.pixelSize: 12
+                            verticalAlignment: Text.AlignVCenter
+                            clip: true
+                            onTextEdited: QbzBridge.queueSetSearch(text)
+                            Text {
+                                visible: parent.text === ""
+                                anchors.fill: parent
+                                text: QbzBridge.tr("Search queue")
+                                color: theme.textMuted
+                                font.pixelSize: 12
+                                verticalAlignment: Text.AlignVCenter
+                            }
+                        }
+                    }
                 }
             }
         }

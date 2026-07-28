@@ -6626,6 +6626,7 @@ dependencies = [
  "qbz-i18n",
  "qbz-library",
  "qbz-log",
+ "qbz-lyrics",
  "qbz-models",
  "qbz-offline-cache",
  "qbz-qobuz",

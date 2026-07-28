@@ -404,7 +404,11 @@ Rectangle {
                     BarIconBtn { name: "cast" }
                     BarIconBtn { name: "settings-2" }
                     BarIconBtn { name: "layout-grid" }
-                    BarIconBtn { name: "mic-vocal" }
+                    BarIconBtn {
+                        name: "mic-vocal"
+                        active: QbzBridge.lyricsOpen
+                        onClicked: QbzBridge.toggleLyrics()
+                    }
 
                     Item { width: 4; height: 1 }
 
