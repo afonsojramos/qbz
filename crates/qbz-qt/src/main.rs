@@ -154,6 +154,10 @@ fn enter_shell(session: auth_qt::SessionInfo) {
     load_home_once();
     // Phase 4: the 1 Hz playback state pump (idempotent).
     playback_qt::start_poll_loop(app());
+    // Integrations runtime: applies the persisted MusicBrainz / Discord /
+    // ListenBrainz opt-ins and starts the scrobble-queue flush watcher.
+    // Strictly opt-in — every one of them is inert until the user connects it.
+    integrations_qt::start(&app());
     // Phase 7: the sidebar playlist tree.
     load_sidebar_once();
     // Phase 10: seed the playback request tier from the persisted
@@ -254,6 +258,9 @@ pub(crate) fn do_logout() {
         if let Err(e) = auth_qt::logout(&runtime).await {
             log::error!("[qbz-qt] logout failed: {e}");
         }
+        // Integrations: drop the Discord presence so a signed-out session
+        // stops advertising what was playing (the Slint discord_rpc::clear).
+        integrations_qt::discord_clear();
         // A later login must re-fetch Home + Library (new user, fresh data).
         *HOME_LOADED.lock().unwrap() = false;
         *LIBRARY_LOADED.lock().unwrap() = false;

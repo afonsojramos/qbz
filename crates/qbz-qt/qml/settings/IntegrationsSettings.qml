@@ -1,16 +1,14 @@
-// Settings > Integrations (phase 19) — the QML port of
+// Settings > Integrations — the QML port of
 // crates/qbz-ui/ui/settings/IntegrationsSettings.slint. Row order, group
 // headers and auth-gating mirror the Slint 1:1; all state rides the single
 // settingsJson document (integrations_qt.rs over the SAME scrobbler /
-// discover / ui_prefs stores the Slint app uses).
+// discover / ui_prefs / offline-queue stores the Slint app uses).
 //
-// POC-NOTEs (named in integrations_qt.rs too):
-// - No live scrobbling (scrobble::start / on_track_changed not ported) —
-//   toggles + credentials persist for the Slint scrobbler / a future port.
-// - Discord: the pref + live DiscordRpc flag flip; presence updates are
-//   not fed (no NowListening pushes on track change).
-// - The Last.fm connect flow opens the system browser (open::that) — the
-//   offscreen smoke never clicks it.
+// Every integration here is STRICTLY OPT-IN: nothing connects, fires or
+// queues until the user signs the service in and its toggles are on.
+//
+// NOTE: the Last.fm connect flow opens the system browser (open::that) — the
+// offscreen smoke never clicks it.
 
 import QtQuick
 import com.blitzfc.qbz
@@ -25,6 +23,21 @@ Column {
     QbzTheme { id: theme }
 
     spacing: 4
+
+    // The Slint mirrors the in-progress token in
+    // ScrobbleState.listenbrainz-token-input so its "Connect ListenBrainz"
+    // button can submit it. QbzLineEdit only publishes the COMMITTED value
+    // (it commits on Enter / focus loss, and a SettingsButton click does not
+    // steal focus from the TextInput), so read the live value off its inner
+    // input — the one child that has an echoMode.
+    function lbTokenText() {
+        for (var i = 0; i < lbTokenField.children.length; ++i) {
+            var c = lbTokenField.children[i]
+            if (c && c.echoMode !== undefined)
+                return c.text
+        }
+        return ""
+    }
 
     // ======================= RECOMMENDATIONS =============================
     GroupHeader { text: QbzSession.tr("RECOMMENDATIONS", QbzSession.trRev) }
@@ -99,9 +112,10 @@ Column {
                 color: colArea.containsMouse ? theme.surfaceHover : "transparent"
                 QbzIcon {
                     anchors.centerIn: parent
+                    // 28px hit-box / 18px glyph (IntegrationsSettings.slint:129).
                     name: root.doc.scrobbleUiCollapsed === true ? "chevron-right" : "chevron-down"
-                    width: 16
-                    height: 16
+                    width: 18
+                    height: 18
                     tintName: "secondary"
                 }
                 MouseArea {
@@ -155,7 +169,10 @@ Column {
                 }
                 SettingsButton {
                     visible: (root.doc.lastfmAuthUrl || "") !== ""
-                    text: QbzSession.tr("Finish", QbzSession.trRev)
+                    text: root.doc.lastfmBusy === true
+                        ? QbzSession.tr("Working...", QbzSession.trRev)
+                        : QbzSession.tr("Finish", QbzSession.trRev)
+                    enabled: root.doc.lastfmBusy !== true
                     onClicked: QbzBridge.integrationsAction("lastfm-finish")
                 }
             }
@@ -190,9 +207,27 @@ Column {
             label: QbzSession.tr("User token", QbzSession.trRev)
             description: QbzSession.tr("From listenbrainz.org/settings.", QbzSession.trRev)
             QbzLineEdit {
+                id: lbTokenField
                 isPassword: true
+                enabled: root.doc.listenbrainzBusy !== true
                 placeholder: QbzSession.tr("ListenBrainz token", QbzSession.trRev)
+                // Enter (and focus loss) validates, like the Slint `accepted`.
                 onCommitted: function (v) { QbzBridge.settingsString("listenbrainz-token", v) }
+                // The row hides once the sign-in lands; drop the typed token
+                // with it (Slint resets listenbrainz-token-input on success).
+                onVisibleChanged: if (!visible) text = ""
+            }
+        }
+        SettingRow {
+            visible: root.doc.listenbrainzAuthed !== true
+            label: QbzSession.tr("Save token", QbzSession.trRev)
+            description: QbzSession.tr("Validates the token against ListenBrainz.", QbzSession.trRev)
+            SettingsButton {
+                text: root.doc.listenbrainzBusy === true
+                    ? QbzSession.tr("Validating...", QbzSession.trRev)
+                    : QbzSession.tr("Connect ListenBrainz", QbzSession.trRev)
+                enabled: root.doc.listenbrainzBusy !== true
+                onClicked: QbzBridge.settingsString("listenbrainz-token", root.lbTokenText())
             }
         }
         SettingRow {

@@ -710,6 +710,11 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                 let _ = runtime.core().sync_current_to_id(track_id).await;
                 refresh_now_playing(&runtime).await;
                 publish_queue(&runtime).await;
+                // Integrations: scrobble now-playing + arm the delayed
+                // scrobble, and refresh the Discord presence. This is the
+                // DE-DUPED track edge on purpose — firing it from
+                // refresh_now_playing would re-arm the timer on every republish.
+                crate::integrations_qt::on_track_change_edge(&runtime);
                 last_track_id = track_id;
             }
 
@@ -748,6 +753,9 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
             }
 
             seen_position = position;
+            if is_playing != was_playing {
+                crate::integrations_qt::discord_push(&runtime);
+            }
             was_playing = is_playing;
         }
     });
