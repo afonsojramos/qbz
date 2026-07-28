@@ -554,6 +554,10 @@ Rectangle {
         property string title: ""
         property var rows: []
         property string iconName: "user"
+        /// The MusicBrainz role this group represents ("member", "producer",
+        /// …) — passed to the resolver so a same-name match in another role is
+        /// not treated as this musician.
+        property string roleKey: ""
         property bool expanded: false
         signal toggled()
         visible: rows.length > 0
@@ -574,11 +578,13 @@ Rectangle {
                 label: modelData.name
                 tooltip: modelData.tooltip
                 iconName: relGroup.iconName
-                // POC-NOTE: the Slint row resolves the musician through
-                // MusicBrainz and lands on the Qobuz artist (or its
-                // MusicianPageView). Neither exists here, so the row is
-                // informational — see GLUE in the handoff report.
-                navigable: false
+                // Relationship rows carry a NAME, not a catalog id, so the
+                // click resolves through MusicBrainz first. Only a confirmed
+                // match navigates (resolve_musician logs and stays put
+                // otherwise) — landing the user on a same-name artist is worse
+                // than the row doing nothing.
+                navigable: true
+                onClicked: QbzArtist.resolveMusician(modelData.name, relGroup.roleKey || "")
             }
         }
         Text {
@@ -1561,6 +1567,7 @@ Rectangle {
                                      && (mbRelationships.members || []).length > 0
                             title: QbzSession.tr("Members & Former", QbzSession.trRev)
                             rows: mbRelationships.members || []
+                            roleKey: "member"
                             iconName: "user"
                             expanded: root.membersExpanded
                             onToggled: root.membersExpanded = !root.membersExpanded
@@ -1570,6 +1577,7 @@ Rectangle {
                                      && (mbRelationships.groups || []).length > 0
                             title: QbzSession.tr("Member Of", QbzSession.trRev)
                             rows: mbRelationships.groups || []
+                            roleKey: "member of"
                             iconName: "music"
                             expanded: root.groupsExpanded
                             onToggled: root.groupsExpanded = !root.groupsExpanded
@@ -1579,6 +1587,7 @@ Rectangle {
                                      && (mbRelationships.collaborators || []).length > 0
                             title: QbzSession.tr("Collaborators", QbzSession.trRev)
                             rows: mbRelationships.collaborators || []
+                            roleKey: "collaborator"
                             iconName: "user"
                             expanded: root.collabsExpanded
                             onToggled: root.collabsExpanded = !root.collabsExpanded

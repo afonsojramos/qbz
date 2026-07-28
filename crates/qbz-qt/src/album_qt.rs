@@ -126,6 +126,10 @@ pub struct AlbumViewData {
     #[serde(rename = "moreFromArtist")]
     pub more_from_artist: Vec<AlbumCardData>,
     pub suggestions: Vec<AlbumCardData>,
+    /// Last.fm "similar albums" — empty (and silent) unless the user connected
+    /// Last.fm. See external_reco_qt.rs.
+    #[serde(rename = "similarAlbums")]
+    pub similar_albums: Vec<AlbumCardData>,
 }
 
 fn mmss(secs: u32) -> String {
@@ -504,6 +508,22 @@ pub async fn load_more_from_artist(
         .collect()
 }
 
+/// One Last.fm recommendation as the card shape the two Qobuz rows already use,
+/// so the third row reuses their delegate instead of a fourth card variant.
+fn reco_to_card(r: qbz_external_reco::AlbumReco) -> AlbumCardData {
+    AlbumCardData {
+        id: r.qobuz_album_id,
+        title: r.title,
+        artist: r.artist,
+        artist_id: r.artist_id,
+        genre: String::new(),
+        year: r.year,
+        quality_tier: r.quality_tier,
+        quality_detail: r.quality_label,
+        art_url: r.artwork_url,
+    }
+}
+
 /// "Listening suggestions" — /album/suggest, minus the open album.
 pub async fn load_suggestions(
     runtime: &Arc<AppRuntime<LoggingAdapter>>,
@@ -566,6 +586,32 @@ pub async fn load_album_view(
     );
     data.more_from_artist = more;
     data.suggestions = suggestions;
+    // Last.fm row: seeded on the album's artist, excluding what the two Qobuz
+    // rows already show. A no-op with Last.fm disconnected — no network call.
+    let exclude_pairs: Vec<(String, String)> = data
+        .more_from_artist
+        .iter()
+        .chain(data.suggestions.iter())
+        .map(|c| (c.artist.to_lowercase(), c.title.to_lowercase()))
+        .collect();
+    let exclude_ids: std::collections::HashSet<String> = data
+        .more_from_artist
+        .iter()
+        .chain(data.suggestions.iter())
+        .map(|c| c.id.clone())
+        .chain(std::iter::once(album_id.to_string()))
+        .collect();
+    data.similar_albums = crate::external_reco_qt::similar_albums(
+        runtime,
+        album_id,
+        &data.header.artist,
+        &exclude_pairs,
+        &exclude_ids,
+    )
+    .await
+    .into_iter()
+    .map(reco_to_card)
+    .collect();
     let json = serde_json::to_string(&data).map_err(|e| e.to_string())?;
     log::info!(
         "[qbz-qt][perf] album load: {:?} ({} tracks, {} more, {} suggestions)",

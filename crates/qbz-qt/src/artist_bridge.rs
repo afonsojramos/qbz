@@ -52,6 +52,10 @@ pub mod qbz_artist_bridge {
         /// Open the artist detail view (pushes "artist" on the nav stack).
         #[qinvokable]
         fn open_artist(self: Pin<&mut QbzArtist>, artist_id: QString);
+        /// Artist-network / relationship row: resolve a musician NAME (they
+        /// carry no catalog id) and open their artist page when confident.
+        #[qinvokable]
+        fn resolve_musician(self: Pin<&mut QbzArtist>, name: QString, role: QString);
 
         /// ArtistView per-section "Load more" — the next releases page.
         #[qinvokable]
@@ -110,4 +114,8 @@ impl qbz_artist_bridge::QbzArtist {
     pub fn load_release_section(self: Pin<&mut Self>, artist_id: QString, release_type: QString, offset: i32) {
         crate::load_release_section(artist_id.to_string(), release_type.to_string(), offset);
     }
+    pub fn resolve_musician(self: Pin<&mut Self>, name: QString, role: QString) {
+        crate::resolve_musician(name.to_string(), role.to_string());
+    }
+
 }

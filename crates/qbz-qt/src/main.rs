@@ -54,6 +54,7 @@ mod quality_state;
 mod offline_fwd;
 mod album_qt;
 mod track_info_qt;
+mod external_reco_qt;
 mod ambient_qt;
 mod artist_qt;
 mod lyrics_qt;
@@ -887,6 +888,24 @@ pub(crate) fn large_cycle_spectrum() {
     // frame the new mode renders already has data.
     viz_qt::set_mode(mode);
     shell_bridge::ui(move |mut b| b.as_mut().set_large_spectrum_mode(mode));
+}
+
+/// Artist-network row click: resolve a musician NAME to a Qobuz artist and open
+/// their page. Only a CONFIRMED match navigates — a guess would drop the user on
+/// the wrong artist, which is worse than the row doing nothing.
+pub(crate) fn resolve_musician(name: String, role: String) {
+    let runtime = app();
+    spawn(async move {
+        match runtime.core().musicbrainz_resolve_musician(&name, &role).await {
+            Ok(r) => match (r.confidence, r.qobuz_artist_id) {
+                (qbz_integrations::musicbrainz::MusicianConfidence::Confirmed, Some(id)) => {
+                    open_artist(id.to_string());
+                }
+                _ => log::info!("[qbz-qt] musician '{name}' not confidently resolved; not navigating"),
+            },
+            Err(e) => log::warn!("[qbz-qt] musician resolve failed for '{name}': {e}"),
+        }
+    });
 }
 
 /// Artist-card overlay play (ArtistGridCard): Popular tracks with the

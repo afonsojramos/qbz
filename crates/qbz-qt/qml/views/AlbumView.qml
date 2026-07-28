@@ -86,6 +86,10 @@ Rectangle {
         for (var i = 0; i < more.length; i++) if (more[i].artUrl) urls.push(more[i].artUrl)
         var sug = album.suggestions || []
         for (i = 0; i < sug.length; i++) if (sug[i].artUrl) urls.push(sug[i].artUrl)
+        // The Last.fm row's covers ride the same dispatch — without this its
+        // cards would render as empty frames.
+        var sim = album.similarAlbums || []
+        for (i = 0; i < sim.length; i++) if (sim[i].artUrl) urls.push(sim[i].artUrl)
         if (urls.length > 0) QbzShell.sidebarArtworkWindow(JSON.stringify(urls))
     }
 
@@ -729,6 +733,17 @@ Rectangle {
                 visible: (album.suggestions || []).length > 0
                 title: QbzSession.tr("Listening suggestions", QbzSession.trRev)
                 items: album.suggestions || []
+                coverMap: root.coverMap
+            }
+            // Last.fm row. Absent — not empty — when Last.fm is not connected:
+            // external_reco_qt returns nothing and makes no network call, so the
+            // rail simply never becomes visible. Reuses the same delegate as the
+            // two Qobuz rows rather than a fourth card variant.
+            Item { visible: (album.similarAlbums || []).length > 0; width: 1; height: 40 }
+            SectionRail {
+                visible: (album.similarAlbums || []).length > 0
+                title: QbzSession.tr("Similar albums", QbzSession.trRev)
+                items: album.similarAlbums || []
                 coverMap: root.coverMap
             }
         }

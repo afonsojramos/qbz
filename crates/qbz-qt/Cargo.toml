@@ -40,6 +40,9 @@ qbz-i18n = { path = "../qbz-i18n" }
 qbz-log = { path = "../qbz-log" }
 qbz-theme = { path = "../qbz-theme" }
 qbz-integrations = { path = "../qbz-integrations" }
+# Last.fm "similar albums" row on the album page (external_reco_qt.rs).
+qbz-external-reco = { path = "../qbz-external-reco" }
+async-trait = "0.1"
 
 rusqlite = { version = "0.31", features = ["bundled"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }

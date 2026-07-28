@@ -6612,6 +6612,7 @@ dependencies = [
 name = "qbz-qt"
 version = "2.0.2"
 dependencies = [
+ "async-trait",
  "cxx",
  "cxx-qt",
  "cxx-qt-build",
@@ -6625,6 +6626,7 @@ dependencies = [
  "qbz-cache",
  "qbz-core",
  "qbz-credentials",
+ "qbz-external-reco",
  "qbz-i18n",
  "qbz-integrations",
  "qbz-library",
