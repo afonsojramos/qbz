@@ -13,16 +13,19 @@
 // Linux).
 //
 // BUTTON SET (phase 24): identical to PlayerBar's, in the Small bar's own
-// order — the transport is the shared cluster (info · shuffle · prev · play ·
-// next · repeat · "+"), and the right cluster keeps PlayerBarSmall's mount
-// order (Connect · Cast · Settings · ViewMode · Lyrics · Volume · Queue).
+// order — the transport is LITERALLY the shared cluster since phase 25
+// (shell/TransportControls.qml: info · shuffle · prev · play · next · repeat ·
+// "+"), and the right cluster keeps PlayerBarSmall's mount order (Connect ·
+// Cast · Settings · ViewMode · Lyrics · Volume · Queue).
 // The "+" opens the same "Add to…" flyout as the full bar; the quality stamp
 // is AudioStamp.qml — the inline 2-row stamp (quality line over the backend /
 // mode LEDs) that PlayerBarSmall.slint mounts, shared with the Large bar.
 //
 // Connect / Cast / Settings / ViewMode are still inert visual replicas where
 // no Qt invokable exists (TODO comments at the call sites); Volume, Queue,
-// Shuffle, Repeat, Mute, Lyrics and the add flyout are live.
+// Shuffle, Repeat, Mute, Lyrics and the add flyout are live. Track Info (the
+// (i) button and the song-card title) opens shell/TrackInfoModal.qml — it
+// needs the QbzAlbum.openTrackInfo glue, see that file's header.
 
 import QtQuick
 import com.blitzfc.qbz
@@ -67,6 +70,23 @@ Rectangle {
         var s = Math.floor(secs % 60)
         return m + ":" + (s < 10 ? "0" : "") + s
     }
+
+    // --- Track Info (album/TrackInfoModal.slint) -------------------------
+    // The (i) button and the song-card title open the MODAL (scrim + centered
+    // card) — PlayerBarSmall.slint fires media-action("track", id,
+    // "track-info") and AppShell mounts TrackInfoModal. Slint gates it on
+    // !NowPlayingState.is-ephemeral (no metadata page for local / Plex /
+    // ephemeral rows); the Qt port publishes no source flag, so a numeric
+    // track id stands in for it. TODO(glue): publish np_source.
+    readonly property bool qobuzTrack: QbzPlayer.npHasTrack
+        && /^[0-9]+$/.test(QbzPlayer.npTrackId)
+    function openTrackInfo() {
+        if (!root.qobuzTrack)
+            return
+        trackInfo.openFor(QbzPlayer.npTrackId)
+    }
+
+    TrackInfoModal { id: trackInfo }
 
     // Square compact icon button (BarControls.IconButton): disabled = dim
     // 0.3 + non-clickable; active = accent tint.
@@ -218,6 +238,15 @@ Rectangle {
                                 font.pixelSize: 13
                                 font.weight: theme.weightMedium
                                 elide: Text.ElideRight
+                                // Title -> Track Info (SongCard.slint fires
+                                // track-info from the title). Child of the
+                                // Text so it takes no room in the Column.
+                                MouseArea {
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: root.qobuzTrack ? Qt.PointingHandCursor : Qt.ArrowCursor
+                                    onClicked: root.openTrackInfo()
+                                }
                             }
                             Text {
                                 visible: QbzPlayer.npHasTrack
@@ -270,71 +299,16 @@ Rectangle {
                 width: (root.width - 6) * root.colCentre
                 clip: true
 
-                Row {
+                // The SHARED cluster (shell/TransportControls.qml) — the
+                // Small bar's own copy was a byte-for-byte twin of the full
+                // bar's at playCircle:false / classicActions:false.
+                TransportControls {
                     anchors.centerIn: parent
-                    spacing: 2
-
-                    QbzIconButton {
-                        name: "info"
-                        btnEnabled: QbzPlayer.npHasTrack
-                        // TODO(qt-bridge): no track-info panel in the Qt port
-                        // yet (Slint: media-action(track, id, "track-info")).
-                    }
-                    QbzIconButton {
-                        name: "shuffle"
-                        active: QbzPlayer.npShuffle
-                        btnEnabled: QbzPlayer.npHasTrack
-                        onClicked: QbzPlayer.toggleShuffle()
-                    }
-                    QbzIconButton {
-                        name: "skip-back"
-                        btnEnabled: QbzPlayer.npHasTrack
-                        onClicked: QbzPlayer.previous()
-                    }
-                    // Play/pause — the Classic plain glyph (play-circle:
-                    // false in Small): 34px, 20px glyph, text-primary,
-                    // accent on hover.
-                    Rectangle {
-                        width: 34
-                        height: 34
-                        radius: theme.radiusSm
-                        opacity: QbzPlayer.npHasTrack ? 1.0 : 0.3
-                        color: (playArea.containsMouse && QbzPlayer.npHasTrack)
-                            ? theme.surfaceHover : "transparent"
-                        QbzIcon {
-                            name: QbzPlayer.npPlaying ? "pause" : "play-fill"
-                            width: 20
-                            height: 20
-                            anchors.centerIn: parent
-                            tintName: playArea.containsMouse ? "accent" : "primary"
-                        }
-                        MouseArea {
-                            id: playArea
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: QbzPlayer.npHasTrack ? Qt.PointingHandCursor : Qt.ArrowCursor
-                            onClicked: if (QbzPlayer.npHasTrack) QbzPlayer.togglePlay()
-                        }
-                    }
-                    QbzIconButton {
-                        name: "skip-forward"
-                        btnEnabled: QbzPlayer.npHasTrack
-                        onClicked: QbzPlayer.next()
-                    }
-                    QbzIconButton {
-                        name: QbzPlayer.npRepeatMode === 2 ? "repeat-1" : "repeat"
-                        active: QbzPlayer.npRepeatMode !== 0
-                        btnEnabled: QbzPlayer.npHasTrack
-                        onClicked: QbzPlayer.cycleRepeat()
-                    }
-                    // "+" — Tauri's add-to-playlist button, grouped into the
-                    // shared "Add to…" flyout in 2.0.
-                    QbzIconButton {
-                        id: smallAddBtn
-                        name: "plus"
-                        btnEnabled: QbzPlayer.npHasTrack
-                        onClicked: smallAddMenu.openBelowRight(smallAddBtn)
-                    }
+                    height: 34
+                    playCircle: false
+                    favorite: root.npFavorite
+                    onAddRequested: function (anchorItem) { smallAddMenu.openBelowRight(anchorItem) }
+                    onTrackInfoRequested: root.openTrackInfo()
                 }
             }
 
@@ -419,12 +393,14 @@ Rectangle {
                     // Volume — mute icon + (WIDE) inline horizontal slider.
                     QbzIconButton {
                         name: QbzPlayer.npMuted ? "volume-x" : "volume-2"
+                        btnEnabled: !QbzPlayer.npVolumeLocked
                         active: QbzPlayer.npMuted
                         onClicked: QbzPlayer.toggleMute()
                     }
                     // WIDE: the shared QbzSlider (PlayerBarSmall mounts the
                     // same primitive at 72px on the 0..1000 scale).
                     QbzSlider {
+                        enabled: !QbzPlayer.npVolumeLocked
                         visible: root.volumeWide
                         width: 72
                         anchors.verticalCenter: parent.verticalCenter

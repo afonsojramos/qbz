@@ -53,6 +53,7 @@ mod output_labels;
 mod quality_state;
 mod offline_fwd;
 mod album_qt;
+mod track_info_qt;
 mod ambient_qt;
 mod artist_qt;
 mod lyrics_qt;

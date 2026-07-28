@@ -39,6 +39,9 @@ pub mod qbz_album_bridge {
         // ONE JSON document (album_qt.rs AlbumViewData: header + track rows
         // + works/goodies/related buckets); QML JSON.parse()s it once.
         #[qproperty(QString, album_json)]
+        // --- Track Info modal (qml/shell/TrackInfoModal.qml) --------------
+        #[qproperty(bool, track_info_loading)]
+        #[qproperty(QString, track_info_json)]
 
         type QbzAlbum = super::QbzAlbumRust;
 
@@ -50,6 +53,10 @@ pub mod qbz_album_bridge {
         /// Open the album detail view (pushes "album" on the nav stack).
         #[qinvokable]
         fn open_album(self: Pin<&mut QbzAlbum>, album_id: QString);
+        /// Info button on either now-playing bar: fetch + publish the Track
+        /// Info document (track_info_qt.rs).
+        #[qinvokable]
+        fn open_track_info(self: Pin<&mut QbzAlbum>, track_id: QString);
     }
 
     impl cxx_qt::Threading for QbzAlbum {}
@@ -61,6 +68,8 @@ use qbz_album_bridge::QbzAlbum;
 pub struct QbzAlbumRust {
     album_loading: bool,
     album_json: QString,
+    track_info_loading: bool,
+    track_info_json: QString,
 }
 
 impl Default for QbzAlbumRust {
@@ -68,6 +77,8 @@ impl Default for QbzAlbumRust {
         Self {
             album_loading: false,
             album_json: QString::from("{}"),
+            track_info_loading: false,
+            track_info_json: QString::from("{}"),
         }
     }
 }
@@ -96,4 +107,8 @@ impl qbz_album_bridge::QbzAlbum {
     pub fn open_album(self: Pin<&mut Self>, album_id: QString) {
         crate::open_album(album_id.to_string());
     }
+    pub fn open_track_info(self: Pin<&mut Self>, track_id: QString) {
+        crate::track_info_qt::open(track_id.to_string());
+    }
+
 }

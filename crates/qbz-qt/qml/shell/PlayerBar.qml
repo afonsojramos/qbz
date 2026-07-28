@@ -40,10 +40,17 @@
 // Wired: transport (shuffle/prev/play/next/repeat), the add flyout
 // (library / queue / play next / play later / album), seek, volume + mute +
 // steppers, lyrics, queue, the Now-Playing-view flyout (npbSetMode),
-// normalization, open album/artist via the SongCard meta links.
+// normalization, open album/artist via the SongCard meta links, and Track
+// Info — the (i) button and the song-card title open shell/TrackInfoModal.qml
+// (needs the QbzAlbum.openTrackInfo glue; see that file's header).
 // Inert (TODO comments at the call sites): Cast, Connect (device flyouts),
-// track-info, add-to-playlist, add-to-mixtape. The volume LOCK (ALSA hw /
-// remote) is still not enforced.
+// add-to-playlist, add-to-mixtape. The volume LOCK (ALSA hw / remote) is
+// still not enforced.
+//
+// SIZE (project rule): the inline SongCard / TransportControls / FavToggle
+// components moved out to shell/SongCard.qml, shell/TransportControls.qml and
+// shell/FavToggle.qml in phase 25 — TransportControls is now shared with the
+// Small bar instead of being duplicated there.
 
 import QtQuick
 import QtQuick.Controls
@@ -120,280 +127,30 @@ Rectangle {
         return m + ":" + (s < 10 ? "0" : "") + s
     }
 
+    // --- Track Info (album/TrackInfoModal.slint) ---------------------------
+    // The (i) button and the song-card title open the MODAL (scrim + centered
+    // card), which is what the .slint does: the bars fire
+    // media-action("track", id, "track-info") and AppShell mounts
+    // TrackInfoModal gated on TrackInfoState.open. Slint gates the trigger on
+    // NowPlayingState.source == "qobuz" (no DB row / metadata page for local /
+    // Plex / ephemeral); the Qt port publishes no np_source, so a numeric
+    // track id stands in for it. TODO(glue): publish np_source.
+    function openTrackInfo() {
+        if (!QbzPlayer.npHasTrack)
+            return
+        var id = QbzPlayer.npTrackId
+        if (!/^[0-9]+$/.test(id))
+            return
+        trackInfo.openFor(id)
+    }
+
+    TrackInfoModal { id: trackInfo }
+
     // --- Shared bits -------------------------------------------------------
-
-    // SongCard (SongCard.slint): cover + title + context meta + the in-card
-    // audio stamp. `glass` renders the Classic contained card.
-    component SongCard: Rectangle {
-        property bool showArt: true
-        property bool showBadges: true
-        property bool glass: false
-        property int artSize: glass ? 60 : 74
-        width: 200
-        height: glass ? 64 : 74
-        radius: glass ? 8 : 0
-        color: ambientOn ? "transparent" : (glass ? theme.surfaceElevated : "transparent")
-
-        Row {
-            anchors.left: parent.left
-            // SongCard.slint's inner-row width formula: the card minus the
-            // stamp + a 4px gap ONLY when the stamp is rendered (Large hides
-            // it — the AudioStamp moves to the right column — so the text
-            // column must reclaim those 132px).
-            anchors.right: stamp.visible ? stamp.left : parent.right
-            anchors.rightMargin: stamp.visible ? 4 : 0
-            height: parent.height
-            spacing: 0
-
-            Item {
-                visible: showArt
-                width: showArt ? artSize : 0
-                height: parent.height
-                Rectangle {
-                    width: artSize
-                    height: artSize
-                    anchors.centerIn: parent
-                    radius: 6
-                    color: theme.surfaceElevated
-                    clip: true
-                    RoundedImage {
-                        visible: QbzPlayer.npHasTrack
-                        anchors.fill: parent
-                        source: QbzPlayer.npArtworkPath
-                        radius: 6
-                    }
-                    QbzIcon {
-                        visible: !QbzPlayer.npHasTrack
-                        name: "music"
-                        width: artSize * 0.5
-                        height: artSize * 0.5
-                        anchors.centerIn: parent
-                        tintName: "muted"
-                    }
-                    // Fetch overlay (resolving/downloading).
-                    Rectangle {
-                        visible: QbzPlayer.npHasTrack && QbzPlayer.npLoading
-                        anchors.fill: parent
-                        radius: 6
-                        color: "#aa000000"
-                        QbzSpinner {
-                            width: artSize * 0.5
-                            height: artSize * 0.5
-                            anchors.centerIn: parent
-                            size: artSize * 0.5
-                        }
-                    }
-                }
-            }
-            Item { width: showArt ? 11 : 0; height: 1 }
-
-            Column {
-                width: parent.width - (showArt ? artSize + 11 : 0)
-                anchors.verticalCenter: parent.verticalCenter
-                spacing: 4
-                Text {
-                    width: parent.width
-                    text: QbzPlayer.npHasTrack ? QbzPlayer.npTitle : QbzSession.tr("Nothing playing", QbzSession.trRev)
-                    color: theme.textPrimary
-                    font.pixelSize: theme.fontBody
-                    font.weight: theme.weightMedium
-                    elide: Text.ElideRight
-                }
-                Row {
-                    visible: QbzPlayer.npHasTrack
-                    spacing: 7
-                    height: 18
-                    // Context-stack icon ("Show track playing context" pref).
-                    Rectangle {
-                        visible: QbzPlayer.showContextIcon
-                        width: 16
-                        height: 18
-                        radius: 3
-                        color: ctxArea.containsMouse ? theme.surfaceHover : "transparent"
-                        QbzIcon {
-                            name: "layers"
-                            width: 13
-                            height: 13
-                            anchors.verticalCenter: parent.verticalCenter
-                            tintName: ctxArea.containsMouse ? "primary" : "muted"
-                        }
-                        MouseArea {
-                            id: ctxArea
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: if (QbzPlayer.npAlbumId !== "") QbzAlbum.openAlbum(QbzPlayer.npAlbumId)
-                        }
-                    }
-                    Text {
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: QbzPlayer.npArtist
-                        color: artistArea.containsMouse && QbzPlayer.npArtistId !== "" ? theme.accent : theme.textMuted
-                        font.pixelSize: 12
-                        elide: Text.ElideRight
-                        MouseArea {
-                            id: artistArea
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: QbzPlayer.npArtistId !== "" ? Qt.PointingHandCursor : Qt.ArrowCursor
-                            onClicked: if (QbzPlayer.npArtistId !== "") QbzArtist.openArtist(QbzPlayer.npArtistId)
-                        }
-                    }
-                    Rectangle {
-                        width: 3
-                        height: 3
-                        radius: 1.5
-                        color: theme.textMuted
-                        anchors.verticalCenter: parent.verticalCenter
-                    }
-                    Text {
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: QbzPlayer.npAlbum
-                        color: albumArea.containsMouse && QbzPlayer.npAlbumId !== "" ? theme.accent : theme.textMuted
-                        font.pixelSize: 12
-                        elide: Text.ElideRight
-                        MouseArea {
-                            id: albumArea
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: QbzPlayer.npAlbumId !== "" ? Qt.PointingHandCursor : Qt.ArrowCursor
-                            onClicked: if (QbzPlayer.npAlbumId !== "") QbzAlbum.openAlbum(QbzPlayer.npAlbumId)
-                        }
-                    }
-                }
-            }
-        }
-        SongCardStamp {
-            id: stamp
-            visible: showBadges && QbzPlayer.npHasTrack
-            anchors.right: parent.right
-            // Classic (glass) insets the stamp by pad + stamp-right-margin
-            // (2px each) so it clears the visible card border.
-            anchors.rightMargin: glass ? 4 : 0
-            anchors.verticalCenter: parent.verticalCenter
-        }
-    }
-
-    // Favorite toggle — the inline heart Classic mounts next to "+" (Tauri's
-    // `.control-btn` heart with fill=currentColor when favorited). NOT a
-    // QbzIconButton: that control only tints accent/primary/secondary/muted
-    // and the favorited heart must take the theme's `favorite` red (Slint
-    // TransportControls uses Theme.favorite the same way).
-    component FavToggle: Rectangle {
-        width: 32
-        height: 32
-        radius: theme.radiusSm
-        opacity: QbzPlayer.npHasTrack ? 1.0 : 0.3
-        color: (favArea.containsMouse && QbzPlayer.npHasTrack) ? theme.surfaceHover : "transparent"
-        QbzIcon {
-            name: root.npFavorite ? "heart-filled" : "heart"
-            width: 16
-            height: 16
-            anchors.centerIn: parent
-            tintName: root.npFavorite ? "favorite"
-                : (favArea.containsMouse ? "primary" : "secondary")
-        }
-        MouseArea {
-            id: favArea
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: QbzPlayer.npHasTrack ? Qt.PointingHandCursor : Qt.ArrowCursor
-            onClicked: if (QbzPlayer.npHasTrack && QbzPlayer.npTrackId !== "")
-                QbzQueue.queueToggleFavorite("track", QbzPlayer.npTrackId)
-        }
-    }
-
-    // Transport cluster (TransportControls.slint): track-info · shuffle ·
-    // prev · play · next · repeat · "+" (Add to… flyout), plus the inline
-    // favorite heart in Classic. 2px spacing on 32px buttons = the same 34px
-    // pitch as Tauri's 30px `.control-btn` + 4px gap.
-    // play-circle = the filled accent disc (New/Large); Classic/Small get the
-    // plain 34px glyph, 20px in BOTH modes exactly like Tauri's size={20}.
-    component TransportControls: Row {
-        id: tc
-        property bool playCircle: true
-        // Classic ADDS the inline favorite toggle (Tauri parity).
-        property bool classicActions: false
-        /// Emitted by "+" with the button as anchor, so the flyout is owned
-        /// by the bar (one menu, both mount points).
-        signal addRequested(var anchorItem)
-        spacing: 2
-        height: 44
-
-        // Track info — the first control, left of shuffle (1:1 with the
-        // other views; it also restores PLAY's symmetric centring).
-        QbzIconButton {
-            name: "info"
-            btnEnabled: QbzPlayer.npHasTrack
-            anchors.verticalCenter: parent.verticalCenter
-            // TODO(qt-bridge): no track-info panel in the Qt port yet
-            // (Slint: media-action("track", id, "track-info")). Inert.
-        }
-        QbzIconButton {
-            name: "shuffle"
-            active: QbzPlayer.npShuffle
-            btnEnabled: QbzPlayer.npHasTrack
-            anchors.verticalCenter: parent.verticalCenter
-            onClicked: QbzPlayer.toggleShuffle()
-        }
-        QbzIconButton {
-            name: "skip-back"
-            btnEnabled: QbzPlayer.npHasTrack
-            anchors.verticalCenter: parent.verticalCenter
-            onClicked: QbzPlayer.previous()
-        }
-        Rectangle {
-            width: tc.playCircle ? 38 : 34
-            height: tc.playCircle ? 38 : 34
-            radius: tc.playCircle ? width / 2 : theme.radiusSm
-            anchors.verticalCenter: parent.verticalCenter
-            opacity: QbzPlayer.npHasTrack ? 1.0 : 0.3
-            color: tc.playCircle
-                ? (playArea.containsMouse && QbzPlayer.npHasTrack ? theme.accentHover : theme.accent)
-                : ((playArea.containsMouse && QbzPlayer.npHasTrack) ? theme.surfaceHover : "transparent")
-            QbzIcon {
-                name: QbzPlayer.npPlaying ? "pause" : "play-fill"
-                width: 20
-                height: 20
-                anchors.centerIn: parent
-                tintName: tc.playCircle ? "black"
-                    : (playArea.containsMouse ? "accent" : "primary")
-            }
-            MouseArea {
-                id: playArea
-                anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: QbzPlayer.npHasTrack ? Qt.PointingHandCursor : Qt.ArrowCursor
-                onClicked: if (QbzPlayer.npHasTrack) QbzPlayer.togglePlay()
-            }
-        }
-        QbzIconButton {
-            name: "skip-forward"
-            btnEnabled: QbzPlayer.npHasTrack
-            anchors.verticalCenter: parent.verticalCenter
-            onClicked: QbzPlayer.next()
-        }
-        QbzIconButton {
-            name: QbzPlayer.npRepeatMode === 2 ? "repeat-1" : "repeat"
-            active: QbzPlayer.npRepeatMode > 0
-            btnEnabled: QbzPlayer.npHasTrack
-            anchors.verticalCenter: parent.verticalCenter
-            onClicked: QbzPlayer.cycleRepeat()
-        }
-        // "+" — Tauri's add-to-playlist button, grouped into the shared
-        // "Add to…" flyout in 2.0.
-        QbzIconButton {
-            id: addBtn
-            name: "plus"
-            btnEnabled: QbzPlayer.npHasTrack
-            anchors.verticalCenter: parent.verticalCenter
-            onClicked: tc.addRequested(addBtn)
-        }
-        FavToggle {
-            visible: tc.classicActions
-            anchors.verticalCenter: parent.verticalCenter
-        }
-    }
+    // SongCard / TransportControls / FavToggle were inline components here
+    // until phase 25; they now live in their own files (shell/SongCard.qml,
+    // shell/TransportControls.qml, shell/FavToggle.qml) and TransportControls
+    // is shared with the Small bar.
 
     // ============================ the bar =================================
     Column {
@@ -492,6 +249,7 @@ Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                     showArt: !root.largeActive
                     showBadges: !root.largeActive
+                    onTrackInfoRequested: root.openTrackInfo()
                 }
                 // Classic: transport cluster hugging the left edge (plain
                 // play glyph + inline favorite, the Tauri arrangement).
@@ -501,7 +259,9 @@ Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                     playCircle: false
                     classicActions: true
+                    favorite: root.npFavorite
                     onAddRequested: function (anchorItem) { addMenu.openBelowRight(anchorItem) }
+                    onTrackInfoRequested: root.openTrackInfo()
                 }
             }
 
@@ -518,7 +278,9 @@ Rectangle {
                     visible: !root.isClassic
                     anchors.centerIn: parent
                     playCircle: true
+                    favorite: root.npFavorite
                     onAddRequested: function (anchorItem) { addMenu.openBelowRight(anchorItem) }
+                    onTrackInfoRequested: root.openTrackInfo()
                 }
                 // Classic: the contained glass song card (<=560px cap).
                 SongCard {
@@ -527,6 +289,7 @@ Rectangle {
                     width: Math.min(parent.width, 560)
                     anchors.horizontalCenter: parent.horizontalCenter
                     anchors.verticalCenter: parent.verticalCenter
+                    onTrackInfoRequested: root.openTrackInfo()
                 }
             }
 
@@ -612,11 +375,13 @@ Rectangle {
                     // preference like the Slint bar).
                     QbzIconButton {
                         name: QbzPlayer.npMuted ? "volume-x" : "volume-2"
+                        btnEnabled: !QbzPlayer.npVolumeLocked
                         active: QbzPlayer.npMuted
                         anchors.verticalCenter: parent.verticalCenter
                         onClicked: QbzPlayer.toggleMute()
                     }
                     QbzSlider {
+                        enabled: !QbzPlayer.npVolumeLocked
                         width: 81
                         anchors.verticalCenter: parent.verticalCenter
                         minimum: 0
@@ -631,6 +396,7 @@ Rectangle {
                         name: "minus"
                         iconSize: 15
                         anchors.verticalCenter: parent.verticalCenter
+                        btnEnabled: !QbzPlayer.npVolumeLocked
                         onClicked: QbzPlayer.setVolume(Math.max(0.0, QbzPlayer.npVolume - 0.05))
                     }
                     QbzIconButton {
@@ -638,6 +404,7 @@ Rectangle {
                         name: "plus"
                         iconSize: 15
                         anchors.verticalCenter: parent.verticalCenter
+                        btnEnabled: !QbzPlayer.npVolumeLocked
                         onClicked: QbzPlayer.setVolume(Math.min(1.0, QbzPlayer.npVolume + 0.05))
                     }
 
