@@ -16,6 +16,9 @@ pub struct NowPlayingModel {
     pub has_track: bool,
     pub title: String,
     pub artist: String,
+    pub album: String,
+    pub album_id: String,
+    pub artist_id: String,
     pub artwork_path: String,
     pub elapsed_secs: i32,
     pub duration_secs: i32,
@@ -40,6 +43,9 @@ impl Default for NowPlayingModel {
             has_track: false,
             title: String::new(),
             artist: String::new(),
+            album: String::new(),
+            album_id: String::new(),
+            artist_id: String::new(),
             artwork_path: String::new(),
             elapsed_secs: 0,
             duration_secs: 0,
@@ -60,6 +66,9 @@ static MODEL: Mutex<NowPlayingModel> = Mutex::new(NowPlayingModel {
     has_track: false,
     title: String::new(),
     artist: String::new(),
+    album: String::new(),
+    album_id: String::new(),
+    artist_id: String::new(),
     artwork_path: String::new(),
     elapsed_secs: 0,
     duration_secs: 0,
@@ -92,6 +101,11 @@ fn publish(m: &NowPlayingModel) {
         b.as_mut().set_np_has_track(m.has_track);
         b.as_mut().set_np_title(QString::from(m.title.as_str()));
         b.as_mut().set_np_artist(QString::from(m.artist.as_str()));
+        b.as_mut().set_np_album(QString::from(m.album.as_str()));
+        b.as_mut()
+            .set_np_album_id(QString::from(m.album_id.as_str()));
+        b.as_mut()
+            .set_np_artist_id(QString::from(m.artist_id.as_str()));
         b.as_mut()
             .set_np_artwork_path(QString::from(m.artwork_path.as_str()));
         b.as_mut().set_np_elapsed_secs(m.elapsed_secs);
@@ -157,6 +171,9 @@ pub fn set_playing(playing: bool) {
 pub struct TrackMeta {
     pub title: String,
     pub artist: String,
+    pub album: String,
+    pub album_id: String,
+    pub artist_id: String,
     pub duration_secs: i32,
     pub quality_tier: String,
     pub quality_label: String,
@@ -172,6 +189,9 @@ pub fn set_track(meta: TrackMeta) {
         m.has_track = true;
         m.title = meta.title;
         m.artist = meta.artist;
+        m.album = meta.album;
+        m.album_id = meta.album_id;
+        m.artist_id = meta.artist_id;
         m.duration_secs = meta.duration_secs;
         m.elapsed_secs = 0;
         m.quality_tier = meta.quality_tier;
@@ -242,6 +262,11 @@ fn publish_with_cache(m: &NowPlayingModel) {
         b.as_mut().set_np_has_track(m.has_track);
         b.as_mut().set_np_title(QString::from(m.title.as_str()));
         b.as_mut().set_np_artist(QString::from(m.artist.as_str()));
+        b.as_mut().set_np_album(QString::from(m.album.as_str()));
+        b.as_mut()
+            .set_np_album_id(QString::from(m.album_id.as_str()));
+        b.as_mut()
+            .set_np_artist_id(QString::from(m.artist_id.as_str()));
         b.as_mut()
             .set_np_artwork_path(QString::from(m.artwork_path.as_str()));
         b.as_mut().set_np_elapsed_secs(m.elapsed_secs);

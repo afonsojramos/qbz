@@ -126,6 +126,15 @@ pub mod qbz_bridge {
         #[qproperty(QString, view_param_id)]
         // Now-playing track id (playing-row indicator in track lists).
         #[qproperty(QString, np_track_id)]
+        #[qproperty(QString, np_album)]
+        #[qproperty(QString, np_album_id)]
+        #[qproperty(QString, np_artist_id)]
+        // Now-playing bar mode (phase 18): 0 New / 1 Classic / 2 Small /
+        // 3 Large — the ui_prefs npb_mode key, live-switchable.
+        #[qproperty(i32, npb_mode)]
+        // "Show track playing context" pref (Playback settings) — feeds the
+        // SongCard layers icon.
+        #[qproperty(bool, show_context_icon)]
 
         // --- Lyrics panel (phase 9) ----------------------------------------
         #[qproperty(bool, lyrics_open)]
@@ -414,6 +423,11 @@ pub mod qbz_bridge {
         /// falling back to the studio discography (playback.rs play_artist).
         #[qinvokable]
         fn play_artist_card(self: Pin<&mut QbzBridge>, artist_id: QString);
+        /// Now-Playing-view flyout: switch the bar mode (0 New / 1 Classic /
+        /// 2 Small / 3 Large) — persists ui_prefs.npb_mode; Large forces the
+        /// sidebar open (the Slint "large" arm).
+        #[qinvokable]
+        fn npb_set_mode(self: Pin<&mut QbzBridge>, mode: i32);
         /// Emitted with the next page of a releases bucket.
         #[qsignal]
         fn release_section_ready(self: Pin<&mut QbzBridge>, release_type: QString, cards_json: QString, has_more: bool);
@@ -612,6 +626,11 @@ pub struct QbzBridgeRust {
     artist_json: QString,
     view_param_id: QString,
     np_track_id: QString,
+    np_album: QString,
+    np_album_id: QString,
+    np_artist_id: QString,
+    npb_mode: i32,
+    show_context_icon: bool,
     queue_json: QString,
     lyrics_open: bool,
     lyrics_json: QString,
@@ -699,6 +718,11 @@ impl Default for QbzBridgeRust {
             artist_json: QString::from("{}"),
             view_param_id: QString::default(),
             np_track_id: QString::default(),
+            np_album: QString::default(),
+            np_album_id: QString::default(),
+            np_artist_id: QString::default(),
+            npb_mode: crate::settings_qt::npb_mode_index(),
+            show_context_icon: crate::settings_qt::show_context_icon(),
             queue_json: QString::from("{}"),
             lyrics_open: false,
             lyrics_json: QString::from("{}"),
@@ -981,6 +1005,10 @@ impl qbz_bridge::QbzBridge {
 
     pub fn play_artist_card(self: Pin<&mut Self>, artist_id: QString) {
         crate::play_artist_card(artist_id.to_string());
+    }
+
+    pub fn npb_set_mode(self: Pin<&mut Self>, mode: i32) {
+        crate::npb_set_mode(mode);
     }
 
     pub fn settings_bool(self: Pin<&mut Self>, key: QString, value: bool) {

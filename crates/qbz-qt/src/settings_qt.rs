@@ -224,6 +224,66 @@ pub fn toggle_ambient_background() -> i32 {
     if next { 1 } else { 0 }
 }
 
+// ---------------------------------------------------------------------------
+// ui_prefs.json (now-playing bar mode, phase 18) — the Slint `npb_mode` key:
+// "new" | "classic" | "small" | "large" (ui_prefs.rs:357-360; maps to
+// ShellState.npb-mode 0/1/2/3). Same additive key patch.
+// ---------------------------------------------------------------------------
+
+/// The persisted mode as a bridge index (unknown keys fall back to "new").
+pub fn npb_mode_index() -> i32 {
+    let Some(path) = prefs_path() else {
+        return 0;
+    };
+    let key = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|v| v.get("npb_mode").and_then(|q| q.as_str().map(str::to_string)))
+        .unwrap_or_else(|| "new".to_string());
+    match key.as_str() {
+        "classic" => 1,
+        "small" => 2,
+        "large" => 3,
+        _ => 0,
+    }
+}
+
+fn npb_mode_key(index: i32) -> &'static str {
+    match index {
+        1 => "classic",
+        2 => "small",
+        3 => "large",
+        _ => "new",
+    }
+}
+
+/// Persist a mode index (0-3) to the shared key; returns the index.
+pub fn set_npb_mode(index: i32) -> i32 {
+    let index = index.clamp(0, 3);
+    if let Some(path) = prefs_path() {
+        let mut value: serde_json::Value = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
+        if let Some(obj) = value.as_object_mut() {
+            obj.insert(
+                "npb_mode".to_string(),
+                serde_json::Value::String(npb_mode_key(index).to_string()),
+            );
+            if let Ok(text) = serde_json::to_string_pretty(&value) {
+                let _ = std::fs::write(&path, text);
+            }
+        }
+    }
+    index
+}
+
+/// The "Show track playing context" pref (Playback settings; feeds the
+/// SongCard layers icon — SettingsState.show-context-icon).
+pub fn show_context_icon() -> bool {
+    with_playback(|s| s.get_preferences().map(|p| p.show_context_icon)).unwrap_or(false)
+}
+
 pub const STREAMING_QUALITY_KEYS: &[&str] = &["mp3", "cd", "hires", "hires_plus"];
 pub const STREAMING_QUALITY_LABELS: &[&str] = &["MP3", "CD Quality", "Hi-Res", "Hi-Res+"];
 

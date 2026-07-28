@@ -1,6 +1,6 @@
 // Bottom now-playing / transport bar — QML port of
-// crates/qbz-ui/ui/shell/PlayerBarSmall.slint (Mode C "Small", the only
-// variant in this POC).
+// crates/qbz-ui/ui/shell/PlayerBarSmall.slint (Mode C "Small"). Mounted by
+// the NowPlayingBar seam when npbMode == 2 (phase 18).
 //
 // 3px full-width top seekbar (3-color: background / cache / progress),
 // then the symmetric 3-column controls row (~39px):
@@ -406,7 +406,12 @@ Rectangle {
                     BarIconBtn { name: "monitor-speaker" }
                     BarIconBtn { name: "cast" }
                     BarIconBtn { name: "settings-2" }
-                    BarIconBtn { name: "layout-grid" }
+                    BarIconBtn {
+                        id: smallViewBtn
+                        name: "layout-grid"
+                        active: smallViewMenu.opened
+                        onClicked: smallViewMenu.openBelowRight(smallViewBtn)
+                    }
                     BarIconBtn {
                         name: "mic-vocal"
                         active: QbzBridge.lyricsOpen
@@ -468,4 +473,7 @@ Rectangle {
             }
         }
     }
+
+    // The Now-Playing-view mode menu (phase 18 — shared with PlayerBar).
+    ViewModeMenu { id: smallViewMenu }
 }

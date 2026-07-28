@@ -801,6 +801,19 @@ pub(crate) fn playlist_set_follow_by_id(playlist_id: u64, follow: bool) {
     spawn(async move { playlist_qt::set_follow_by_id(&runtime, playlist_id, follow).await });
 }
 
+/// Now-Playing-view flyout: switch + persist the bar mode. Large forces
+/// the sidebar open (the Slint "large" arm — the dock needs it).
+pub(crate) fn npb_set_mode(mode: i32) {
+    let mode = settings_qt::set_npb_mode(mode);
+    log::info!("[qbz-qt] npb_mode -> {mode}");
+    ui(move |mut b| {
+        if mode == 3 {
+            b.as_mut().set_sidebar_state(0);
+        }
+        b.as_mut().set_npb_mode(mode);
+    });
+}
+
 /// Artist-card overlay play (ArtistGridCard): Popular tracks with the
 /// studio-discography fallback.
 pub(crate) fn play_artist_card(artist_id: String) {

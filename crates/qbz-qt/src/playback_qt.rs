@@ -613,6 +613,12 @@ pub(crate) async fn refresh_now_playing(runtime: &Arc<AppRuntime<LoggingAdapter>
     crate::now_playing::set_track(crate::now_playing::TrackMeta {
         title,
         artist: track.artist.clone(),
+        album: track.album.clone(),
+        album_id: track.album_id.clone().unwrap_or_default(),
+        artist_id: track
+            .artist_id
+            .map(|id| id.to_string())
+            .unwrap_or_default(),
         duration_secs: track.duration_secs as i32,
         quality_tier: tier,
         quality_label: label,

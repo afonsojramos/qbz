@@ -58,13 +58,14 @@ Rectangle {
         // the compositor's business).
     }
 
-    NowPlayingBarSmall {
+    NowPlayingBar {
         id: npb
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
-        height: theme.npbSmallHeight
-        // Square corners (see the header note above).
+        // Mode-aware height (AppShell.slint:396): Small collapses to one
+        // header-tall row; New/Classic/Large keep the full 112px.
+        height: QbzBridge.npbMode === 2 ? theme.npbSmallHeight : 112
     }
 
     Sidebar {
@@ -148,6 +149,54 @@ Rectangle {
                 : QbzBridge.currentView === "settings" ? "SettingsView.qml"
                 : QbzBridge.currentView === "search" ? "SearchView.qml"
                 : QbzBridge.currentView === "playlist" ? "PlaylistView.qml" : ""
+        }
+    }
+
+    // --- Large NPB (mode 3) cover dock (phase 18) -------------------------
+    // The L's vertical arm: the square now-playing cover pinned flush to
+    // the window bottom-left over the sidebar (SidebarNowPlayingDock.slint,
+    // AppShell.slint:747). Only while Large is ACTIVE (mode 3 + sidebar
+    // open). The spectrum band above the cover is NOT rendered — it needs
+    // the FFT visualizer tap, which the POC does not wire (POC-NOTE).
+    readonly property bool largeActive: QbzBridge.npbMode === 3 && QbzBridge.sidebarState === 0
+    Rectangle {
+        visible: root.largeActive
+        x: 16
+        y: parent.height - 221
+        width: 208
+        height: 221
+        color: "transparent"
+        // Drop-shadow approximation (the Slint dock's 24px blur).
+        Rectangle {
+            x: 0
+            y: 17
+            width: 208
+            height: 208
+            radius: theme.radiusMd
+            color: "#66000000"
+        }
+        Rectangle {
+            x: 0
+            y: 13
+            width: 208
+            height: 208
+            radius: theme.radiusMd
+            color: ambientOn ? theme.surfaceMainA22 : theme.surfaceMain
+            clip: true
+            RoundedImage {
+                visible: QbzBridge.npHasTrack
+                anchors.fill: parent
+                source: QbzBridge.npArtworkPath
+                radius: theme.radiusMd
+            }
+            QbzIcon {
+                visible: !QbzBridge.npHasTrack
+                name: "music"
+                width: 66
+                height: 66
+                anchors.centerIn: parent
+                tintName: "muted"
+            }
         }
     }
 
