@@ -26,9 +26,9 @@
 //!   search, `load_cortinilla`/`append_local_sections`) are NOT ported —
 //!   the POC's cortinilla/page are Qobuz-only. Offline, the Qobuz call
 //!   fails and both surfaces show their empty states.
-//! - Artist "following" flags come back false on the page (no favorites
-//!   snapshot is consulted — the follow toggles still hit the API like
-//!   every other POC surface).
+//! - Artist "following" flags are resolved from `fav_cache_qt` (the ported
+//!   favourite-id cache) — they used to be hard-`false`, which made a search
+//!   hit on a followed artist draw "Follow" and un-follow them on click.
 //! - The album/artist blacklist filter is passed empty (the blacklist
 //!   store is not open in this POC, same as earlier phases).
 
@@ -196,6 +196,12 @@ pub struct ArtistRow {
     #[serde(rename = "artPath")]
     pub art_path: String,
     pub following: bool,
+    /// Pin badge state at build time (`CardRow` carries the album twin).
+    /// ArtistCard draws the same glyph as the album card, and a row that
+    /// never carries the flag makes it lie — the first click on an
+    /// already-pinned artist UN-pins it.
+    #[serde(rename = "isPinned")]
+    pub is_pinned: bool,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -207,10 +213,27 @@ pub struct PlaylistRow {
     pub art_url: String,
     #[serde(rename = "artPath")]
     pub art_path: String,
-    #[serde(rename = "isOwned")]
+    /// The ownership tri-state, under the names `cards/PlaylistCard.qml`
+    /// actually reads (`item.playlistOwned` / `item.playlistFollowing`).
+    ///
+    /// They used to serialize as `isOwned` / `isFollowing`: names NOTHING in
+    /// the tree consumed (verified by grep over `qml/` — the only
+    /// `isFollowing` readers are LabelView's label doc, PlaylistView's
+    /// playlist doc and ArtistView's artist doc, three different structs). So
+    /// the fields were on the wire, and the card still saw `undefined` on both
+    /// and fell into the "foreign playlist, offer Follow" arm. `library_qt::
+    /// FeedItem` and `home_qt::HomeCard` already publish these two spellings;
+    /// one card must read one contract on every surface.
+    #[serde(rename = "playlistOwned")]
     pub is_owned: bool,
-    #[serde(rename = "isFollowing")]
+    #[serde(rename = "playlistFollowing")]
     pub is_following: bool,
+    /// The library heart — only drawn on the OWNED arm of the tri-state.
+    #[serde(rename = "isFavorite")]
+    pub is_favorite: bool,
+    /// Pin badge state at build time — see `ArtistRow::is_pinned`.
+    #[serde(rename = "isPinned")]
+    pub is_pinned: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -259,6 +282,17 @@ fn format_album_title(title: &str, version: Option<&str>) -> String {
 
 fn map_album(album: &Album) -> CardRow {
     CardRow {
+        // Pin badge state from the per-user store (search.rs stamps it the
+        // same way). The field existed on the wire but nothing ever filled
+        // it, so every search card drew the hollow glyph and the first
+        // click on an already-pinned album UN-pinned it.
+        is_pinned: crate::sidebar_qt::is_pinned("album", &album.id),
+        // Heart at build time. `CardRow` has always DECLARED `is_favorite`
+        // (line 158) and nothing ever filled it, so `SearchView.qml` mounts
+        // AlbumCard with `isFavorite: false`: a favourited album drew hollow
+        // and, now that the toggle takes its direction from the populated
+        // cache, the first click REMOVED it from the library.
+        is_favorite: crate::fav_cache_qt::is_album_favorite(&album.id),
         id: album.id.clone(),
         title: format_album_title(&album.title, album.version.as_deref()),
         artist: album.artist.name.clone(),
@@ -294,6 +328,11 @@ fn map_track(track: &Track) -> TrackRow {
         .map(|p| (p.name, p.id.to_string()))
         .unwrap_or_default();
     TrackRow {
+        // Same story as `map_album`: the field was declared (line 186) and
+        // never stamped, so every search track row drew the empty heart and
+        // the first click sent `favorite/delete` on a track the user had
+        // favourited.
+        is_favorite: crate::fav_cache_qt::contains_track(track.id),
         id: track.id.to_string(),
         title,
         artist,
@@ -312,8 +351,17 @@ fn map_track(track: &Track) -> TrackRow {
     }
 }
 
-fn map_artist(artist: &Artist, following: bool) -> ArtistRow {
+/// `following` is DERIVED, not passed in. Every call site handed it `false`
+/// (the module's POC-NOTE said "no favorites snapshot is consulted"), which
+/// meant a search hit on an artist the user follows drew "Follow" and the
+/// click un-followed them. The snapshot exists now — `fav_cache_qt` — and the
+/// reference does exactly this (`search.rs::map_most_popular` resolves the
+/// same flag from its `favorite_artists` set), so the parameter is gone rather
+/// than left as a lie every caller has to remember not to tell.
+fn map_artist(artist: &Artist) -> ArtistRow {
+    let following = crate::fav_cache_qt::is_artist_favorite(artist.id);
     ArtistRow {
+        is_pinned: crate::sidebar_qt::is_pinned("artist", &artist.id.to_string()),
         id: artist.id.to_string(),
         title: artist.name.clone(),
         subtitle: match artist.albums_count {
@@ -351,6 +399,22 @@ fn map_playlist(playlist: &Playlist) -> PlaylistRow {
         };
     }
     PlaylistRow {
+        is_pinned: crate::sidebar_qt::is_pinned("playlist", &playlist.id.to_string()),
+        // The overlay tri-state. `is_owned` is authoritative from the owner id
+        // — that is exactly what the reference does (search.rs:367,
+        // `current_user_id() == playlist.owner.id`) and it is the half that
+        // matters most: without it a search hit on the user's OWN playlist
+        // offered "Follow on Qobuz" and the click subscribed them to
+        // themselves. `is_following` is only knowable from the user's own
+        // playlist list, so it comes from the ownership snapshot (the
+        // reference leaves it `false` here; this is a strict improvement and
+        // degrades to `false` before the first snapshot).
+        is_owned: crate::playlist_qt::owns(playlist.owner.id),
+        is_following: crate::playlist_qt::is_following(playlist.id),
+        // The heart is the qbz-local library.db flag, mirrored in the cache.
+        // PlaylistCard only draws it on the OWNED arm, which is precisely why
+        // it has to be stamped together with `is_owned` and not before it.
+        is_favorite: crate::fav_cache_qt::is_playlist_favorite(playlist.id),
         id: playlist.id.to_string(),
         title: playlist.name.clone(),
         subtitle,
@@ -434,7 +498,7 @@ fn map_search_all_to_cortinilla(query: &str, results: &SearchAllResults) -> Cort
         id: a.id.to_string(),
         source: "qobuz".into(),
         title: a.name.clone(),
-        subtitle: map_artist(a, false).subtitle,
+        subtitle: map_artist(a).subtitle,
         art_url: a
             .image
             .as_ref()
@@ -884,6 +948,135 @@ fn is_current_page_version(v: u64) -> bool {
     PAGE_VERSION.load(Ordering::SeqCst) == v
 }
 
+/// A pin/unpin just landed: patch the CACHED page rows carrying `(kind, id)`.
+///
+/// Third sibling of `home_qt::apply_pin_change` and
+/// `recommendations_qt::apply_pin_change`, and it publishes nothing for the
+/// same reason they do not: the cards on screen are corrected in place by
+/// `QbzLibrary.pinChanged`, so no model is replaced and no delegate is torn
+/// down.
+///
+/// Why search NEEDED it, specifically: `PAGE` is not a build-once cache — the
+/// artwork pass in `submit` re-publishes the SAME document ~a second later
+/// with only `art_path` mutated, and `tab_changed` / `load_more` /
+/// `filter_changed` each publish the cache too. Every one of those swaps the
+/// model out from under the card, so a pin made in the meantime was reverted
+/// by the stale `isPinned` the cache still held — the optimistic flip
+/// visibly undone by artwork landing.
+///
+/// The alternative (re-stamping `is_pinned` from the store inside
+/// `publish_page`) was rejected: `sidebar_qt::is_pinned` is a sqlite query per
+/// row, so that would put one query per album + artist + playlist row on EVERY
+/// publish, including the two that a single search already triggers. Patching
+/// the cache once per pin click is O(rows) in memory and matches the shape the
+/// other two caches already use — the reference does the same thing with its
+/// `set_*_row_pinned` model walks.
+///
+/// Tracks are not pinnable, so the track list is not walked. The cortinilla
+/// snapshot (`LAST_CORT`) is not walked either: `CortRow` carries no pin flag
+/// and the dropdown draws no badge.
+pub(crate) fn apply_pin_change(kind: &str, id: &str, pinned: bool) {
+    if !matches!(kind, "album" | "artist" | "playlist") {
+        return;
+    }
+    let Ok(mut guard) = PAGE.lock() else {
+        return;
+    };
+    let Some(page) = guard.as_mut() else {
+        return;
+    };
+    let doc = &mut page.doc;
+    match kind {
+        "album" => {
+            for row in doc.albums.iter_mut().filter(|r| r.id == id) {
+                row.is_pinned = pinned;
+            }
+            if let Some(row) = doc.most_popular.album.as_mut().filter(|r| r.id == id) {
+                row.is_pinned = pinned;
+            }
+        }
+        "artist" => {
+            // `artists_carousel` holds CLONES of `artists` rows (the All-tab
+            // dedupe copies them), so both lists have to be walked or the
+            // carousel keeps the stale badge.
+            for row in doc.artists.iter_mut().filter(|r| r.id == id) {
+                row.is_pinned = pinned;
+            }
+            for row in doc.artists_carousel.iter_mut().filter(|r| r.id == id) {
+                row.is_pinned = pinned;
+            }
+            if let Some(row) = doc.most_popular.artist.as_mut().filter(|r| r.id == id) {
+                row.is_pinned = pinned;
+            }
+        }
+        _ => {
+            for row in doc.playlists.iter_mut().filter(|r| r.id == id) {
+                row.is_pinned = pinned;
+            }
+        }
+    }
+}
+
+/// A favourite toggle just SETTLED: patch the cached page rows.
+///
+/// Same shape as [`apply_pin_change`], same reason it publishes nothing — and
+/// search needs it MORE than the pin twin does, because its cached document is
+/// re-published on a timer the user does not control (the artwork pass after
+/// `submit`). Heart an album in the results grid, wait for a cover to land,
+/// and the model swap put the hollow heart back over an album now IN the
+/// library; the next click removed it.
+///
+/// Tracks are included here (unlike the pin twin) — track rows do draw a
+/// heart. The cortinilla snapshot is not: `CortRow` carries no favourite flag.
+pub(crate) fn apply_favorite_change(kind: &str, id: &str, favorite: bool) {
+    if !matches!(kind, "album" | "track" | "artist" | "playlist") {
+        return;
+    }
+    let Ok(mut guard) = PAGE.lock() else {
+        return;
+    };
+    let Some(page) = guard.as_mut() else {
+        return;
+    };
+    let doc = &mut page.doc;
+    match kind {
+        "album" => {
+            for row in doc.albums.iter_mut().filter(|r| r.id == id) {
+                row.is_favorite = favorite;
+            }
+            if let Some(row) = doc.most_popular.album.as_mut().filter(|r| r.id == id) {
+                row.is_favorite = favorite;
+            }
+        }
+        "track" => {
+            for row in doc.tracks.iter_mut().filter(|r| r.id == id) {
+                row.is_favorite = favorite;
+            }
+            if let Some(row) = doc.most_popular.track.as_mut().filter(|r| r.id == id) {
+                row.is_favorite = favorite;
+            }
+        }
+        "artist" => {
+            // `following` is this row type's heart. Both lists again — the
+            // carousel holds clones (see `apply_pin_change`).
+            for row in doc.artists.iter_mut().filter(|r| r.id == id) {
+                row.following = favorite;
+            }
+            for row in doc.artists_carousel.iter_mut().filter(|r| r.id == id) {
+                row.following = favorite;
+            }
+            if let Some(row) = doc.most_popular.artist.as_mut().filter(|r| r.id == id) {
+                row.following = favorite;
+            }
+        }
+        _ => {
+            for row in doc.playlists.iter_mut().filter(|r| r.id == id) {
+                row.is_favorite = favorite;
+            }
+        }
+    }
+}
+
 fn publish_page(doc: &SearchPageDoc) {
     let json = serde_json::to_string(doc).unwrap_or_else(|_| "{}".into());
     crate::ui(move |mut b| {
@@ -963,12 +1156,12 @@ pub async fn submit(runtime: &Arc<AppRuntime<LoggingAdapter>>, query: &str, tab:
 
     let mut albums: Vec<CardRow> = results.albums.items.iter().map(map_album).collect();
     let mut tracks: Vec<TrackRow> = results.tracks.items.iter().map(map_track).collect();
-    let mut artists: Vec<ArtistRow> = results.artists.items.iter().map(|a| map_artist(a, false)).collect();
+    let mut artists: Vec<ArtistRow> = results.artists.items.iter().map(map_artist).collect();
     let mut playlists: Vec<PlaylistRow> = results.playlists.items.iter().map(map_playlist).collect();
 
     let (mp_kind, mut mp_album, mut mp_artist, mut mp_track, mp_quality) = match &results.most_popular {
         Some(MostPopularItem::Albums(a)) => ("album".to_string(), Some(map_album(a)), None, None, quality_label(a.maximum_bit_depth, a.maximum_sampling_rate)),
-        Some(MostPopularItem::Artists(a)) => ("artist".to_string(), None, Some(map_artist(a, false)), None, String::new()),
+        Some(MostPopularItem::Artists(a)) => ("artist".to_string(), None, Some(map_artist(a)), None, String::new()),
         Some(MostPopularItem::Tracks(t)) => {
             ("track".to_string(), None, None, Some(map_track(t)), quality_label(t.maximum_bit_depth, t.maximum_sampling_rate))
         }
@@ -1140,7 +1333,7 @@ pub async fn load_more(runtime: &Arc<AppRuntime<LoggingAdapter>>, tab: i32) {
         },
         3 => match runtime.core().search_artists(&query, PAGE_SIZE, offset, search_type.as_deref()).await {
             Ok(page) => {
-                let mut rows: Vec<ArtistRow> = page.items.iter().map(|a| map_artist(a, false)).collect();
+                let mut rows: Vec<ArtistRow> = page.items.iter().map(map_artist).collect();
                 let missing = attach_urls(rows.iter_mut().map(|r| (r.art_url.clone(), &mut r.art_path)).collect());
                 let total = page.total as i32;
                 let mut guard = PAGE.lock().unwrap();
@@ -1231,7 +1424,7 @@ pub async fn filter_changed(runtime: &Arc<AppRuntime<LoggingAdapter>>, index: i3
     }
     // Artists (the API takes the search_type too, 1:1 the Slint filter).
     if let Ok(page) = runtime.core().search_artists(&query, PAGE_SIZE, 0, search_type.as_deref()).await {
-        let mut rows: Vec<ArtistRow> = page.items.iter().map(|a| map_artist(a, false)).collect();
+        let mut rows: Vec<ArtistRow> = page.items.iter().map(map_artist).collect();
         let _ = attach_urls(rows.iter_mut().map(|r| (r.art_url.clone(), &mut r.art_path)).collect());
         let total = page.total as i32;
         let mut guard = PAGE.lock().unwrap();

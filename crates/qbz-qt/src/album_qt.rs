@@ -72,6 +72,12 @@ pub struct TrackRow {
     /// Artwork url ("" on album view; artist top-tracks carry it).
     #[serde(rename = "artUrl")]
     pub artwork_url: String,
+    /// Heart state at build time. `TrackRow.qml` reads `item.isFavorite`; the
+    /// field simply did not exist, so every row on the album / artist / label
+    /// pages serialized without it, QML saw `undefined`, and EVERY track heart
+    /// drew empty — including on tracks the user had favourited.
+    #[serde(rename = "isFavorite")]
+    pub is_favorite: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -89,6 +95,18 @@ pub struct AlbumCardData {
     pub quality_detail: String,
     #[serde(rename = "artUrl")]
     pub art_url: String,
+    /// Pin badge state at build time. The carousels that mount these rows
+    /// (SectionRail on Album/Artist pages) draw the same AlbumCard glyph as
+    /// Home, and a row that never carries the flag makes the glyph lie —
+    /// the first click on an already-pinned album UN-pins it.
+    #[serde(rename = "isPinned")]
+    pub is_pinned: bool,
+    /// Heart state at build time, twin of `home_qt::HomeCard::is_favorite`.
+    /// These rows feed the SAME `cards/AlbumCard.qml` — `SectionRail.qml` and
+    /// `AlbumCollection.qml` are the mounts — so the same rule applies: the
+    /// glyph must not disagree with what a click will do.
+    #[serde(rename = "isFavorite")]
+    pub is_favorite: bool,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -424,6 +442,7 @@ fn map_track(track: &Track) -> TrackRow {
         .map(|p| (p.name.clone(), p.id.to_string()))
         .unwrap_or_default();
     TrackRow {
+        is_favorite: crate::fav_cache_qt::contains_track(track.id),
         id: track.id.to_string(),
         number: track.track_number.to_string(),
         title,
@@ -531,12 +550,11 @@ pub async fn load_album(runtime: &Arc<AppRuntime<LoggingAdapter>>, album_id: &st
         lastfm_url,
         discogs_url,
         musicbrainz_url,
-        is_favorite: crate::library_qt::with_library(|d| {
-            d.feed
-                .iter()
-                .any(|i| i.kind == "album" && i.id == album.id && i.is_favorite)
-        })
-        .unwrap_or(false),
+        // Through `library_qt::is_favorite`, never the raw feed: the feed is
+        // filled only by `load_library_once()`, so a direct scan drew an EMPTY
+        // heart on an album the user HAS favourited until Library was opened —
+        // and the toggle then read the same false and re-added it.
+        is_favorite: crate::library_qt::is_favorite("album", &album.id),
         is_pinned: crate::sidebar_qt::is_pinned("album", &album.id),
         id: album.id,
         title,
@@ -604,6 +622,9 @@ fn map_release_card(release: &qbz_models::PageArtistRelease) -> AlbumCardData {
         .map(|a| a.id.to_string())
         .unwrap_or_default();
     AlbumCardData {
+        is_pinned: crate::sidebar_qt::is_pinned("album", &release.id),
+        // Heart from the favourite-id cache (see `AlbumCardData::is_favorite`).
+        is_favorite: crate::fav_cache_qt::is_album_favorite(&release.id),
         id: release.id.clone(),
         title: release.title.clone(),
         artist,
@@ -663,6 +684,8 @@ pub async fn load_more_from_artist(
 /// so the third row reuses their delegate instead of a fourth card variant.
 fn reco_to_card(r: qbz_external_reco::AlbumReco) -> AlbumCardData {
     AlbumCardData {
+        is_pinned: crate::sidebar_qt::is_pinned("album", &r.qobuz_album_id),
+        is_favorite: crate::fav_cache_qt::is_album_favorite(&r.qobuz_album_id),
         id: r.qobuz_album_id,
         title: r.title,
         artist: r.artist,
@@ -708,6 +731,8 @@ pub async fn load_suggestions(
                 .and_then(|d| d.original.clone().or(d.download.clone()).or(d.stream.clone()))
                 .or(a.release_date_original.clone());
             AlbumCardData {
+                is_pinned: crate::sidebar_qt::is_pinned("album", &a.id),
+                is_favorite: crate::fav_cache_qt::is_album_favorite(&a.id),
                 id: a.id.clone(),
                 title: a.title.clone(),
                 artist: a.artist.name.clone(),

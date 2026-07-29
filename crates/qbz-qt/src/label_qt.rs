@@ -468,10 +468,11 @@ fn track_row_value(row: &TrackRow) -> Value {
     let mut value = serde_json::to_value(row).unwrap_or_else(|_| Value::Object(Default::default()));
     if let Some(obj) = value.as_object_mut() {
         obj.insert("artPath".to_string(), Value::String(String::new()));
-        // TrackRow.qml's favourite heart reads `item.isFavorite`; the Qt port
-        // has no favourites cache (home_qt POC-NOTE), so it starts unset and
-        // the toggle still hits the API.
-        obj.insert("isFavorite".to_string(), Value::Bool(false));
+        // `isFavorite` used to be hard-written false here, because the port
+        // had no favourites cache. It has one now (`fav_cache_qt`) and
+        // `TrackRow::is_favorite` carries the seeded value through the
+        // serialization above — overwriting it would put the empty heart back
+        // on tracks the user HAS favourited.
     }
     value
 }
@@ -503,11 +504,28 @@ pub fn toggle_follow() {
     publish_label();
     let runtime = crate::app();
     crate::spawn(async move {
+        // SINGULAR — `/favorite/create|delete` take `label_ids`, and the
+        // client derives that key as `format!("{fav_type}_ids")`. The plural
+        // spelling belongs to `/favorite/getUserFavorites`'s `type` param
+        // (see `favorite_label_ids` below); sending it here produced
+        // `labels_ids=…`, an unknown param — create no-opped, delete 404'd.
+        // Reference: qbz/src/main.rs:13054 `add_favorite("label", …)`.
         let result = if next {
-            runtime.core().add_favorite("labels", &id).await
+            runtime.core().add_favorite("label", &id).await
         } else {
-            runtime.core().remove_favorite("labels", &id).await
+            runtime.core().remove_favorite("label", &id).await
         };
+        if result.is_ok() {
+            // Keep the cache in step so re-opening the page (or the next
+            // launch, or a failed `getUserFavorites`) shows what just
+            // happened instead of the pre-toggle state.
+            crate::fav_cache_qt::set("label", &id, next);
+            // …and through the shared settle point, so the Library feed row
+            // and the document caches learn about it too. A label followed
+            // from here otherwise stayed un-followed in the Library grid
+            // until the next full reload.
+            crate::emit_library_favorite("label", &id, next);
+        }
         if let Err(e) = result {
             log::warn!("[qbz-qt] label follow toggle failed ({id}): {e}");
             {
@@ -986,24 +1004,58 @@ fn build_jump_tabs(doc: &LabelDoc) -> Vec<JumpTab> {
 //  Parsing helpers (ported from label.rs — the Svelte getX helpers)
 // ===========================================================================
 
-/// The user's favorite-label ids. Best-effort: an error yields an empty set.
+/// The user's favorite-label ids, for the header Follow state and the
+/// More-Labels cards.
+///
+/// PLURAL. `/favorite/getUserFavorites` takes `type` from a closed list and
+/// answers 400 otherwise: `Invalid argument: type (accepted values are albums,
+/// tracks, artists, articles, labels, awards)` — `qbz-qobuz` passes `fav_type`
+/// straight into that param (client.rs `get_favorites`). This asked for
+/// "label" and 400'd on EVERY label-page open (observed in qbz.log,
+/// 2026-07-29), which returned an empty set, seeded `is_following: false` even
+/// for labels the user follows, and left `toggle_follow` permanently on its
+/// add branch — there was no way to unfollow a label from a freshly opened
+/// page. The parser two lines down was already reading the plural envelope key
+/// `labels`, which is the tell.
+///
+/// (The singular spelling belongs to `/favorite/create|delete`, whose param is
+/// `label_ids` — see `toggle_follow`. Same word, two endpoints, two
+/// conventions.)
+///
+/// The result also refreshes `fav_cache_qt`, and the cache is the fallback
+/// when the fetch fails or the session is offline — otherwise a network blip
+/// still produces the "cannot unfollow" state described above.
 async fn favorite_label_ids(
     runtime: &std::sync::Arc<qbz_app::shell::AppRuntime<qbz_core::LoggingAdapter>>,
 ) -> HashSet<u64> {
-    match runtime.core().get_favorites("label", 500, 0).await {
-        Ok(v) => v
-            .get("labels")
-            .and_then(|l| l.get("items"))
-            .and_then(|i| i.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|it| it.get("id").and_then(|x| x.as_u64()))
-                    .collect()
-            })
-            .unwrap_or_default(),
+    match runtime.core().get_favorites("labels", 500, 0).await {
+        Ok(v) => {
+            let ids: HashSet<u64> = v
+                .get("labels")
+                .and_then(|l| l.get("items"))
+                .and_then(|i| i.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|it| it.get("id").and_then(|x| x.as_u64()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            // ONE page (limit 500, offset 0 — the reference's shape). Mirror
+            // it as a full replace only when it clearly IS the whole set; a
+            // brim-full page may have a second one behind it and would wipe
+            // what the properly-paged shell warm put there.
+            if ids.len() < 500 {
+                let mirror = ids.clone();
+                let _ = tokio::task::spawn_blocking(move || {
+                    crate::fav_cache_qt::set_all_labels(mirror)
+                })
+                .await;
+            }
+            ids
+        }
         Err(e) => {
-            log::warn!("[qbz-qt] favorite labels fetch failed: {e}");
-            HashSet::new()
+            log::warn!("[qbz-qt] favorite labels fetch failed, falling back to the cache: {e}");
+            crate::fav_cache_qt::all_labels()
         }
     }
 }
@@ -1196,6 +1248,7 @@ fn parse_top_track(index: usize, raw: &Value) -> TrackRow {
         .and_then(|v| v.as_f64())
         .or_else(|| raw.get("maximum_sampling_rate").and_then(|v| v.as_f64()));
     TrackRow {
+        is_favorite: id.parse::<u64>().map(crate::fav_cache_qt::contains_track).unwrap_or(false),
         id,
         number: (index + 1).to_string(),
         title,
@@ -1227,8 +1280,21 @@ fn parse_playlist(raw: &Value) -> HomeCard {
         .unwrap_or("Qobuz")
         .to_string();
     let track_count = raw.get("tracks_count").and_then(|v| v.as_u64()).unwrap_or(0);
+    let id = raw.get("id").map(value_to_string).unwrap_or_default();
+    let pid = id.parse::<u64>().ok();
     HomeCard {
-        id: raw.get("id").map(value_to_string).unwrap_or_default(),
+        // Pin badge state from the per-user store, like every other card
+        // row: without it PlaylistCard draws the hollow glyph on a playlist
+        // that IS pinned and the first click un-pins it.
+        is_pinned: crate::sidebar_qt::is_pinned("playlist", &id),
+        // Heart + the ownership tri-state. `/label/page` playlists arrive as
+        // raw JSON with no owner block worth trusting, so ownership is
+        // resolved by ID against the user's own playlist list rather than by
+        // comparing an owner field that may not be there.
+        is_favorite: pid.map(crate::fav_cache_qt::is_playlist_favorite).unwrap_or(false),
+        playlist_owned: pid.map(crate::playlist_qt::is_owned).unwrap_or(false),
+        playlist_following: pid.map(crate::playlist_qt::is_following).unwrap_or(false),
+        id,
         title: raw
             .get("name")
             .and_then(|v| v.as_str())
@@ -1241,8 +1307,15 @@ fn parse_playlist(raw: &Value) -> HomeCard {
 }
 
 fn parse_artist(raw: &Value) -> HomeCard {
+    let id = raw.get("id").map(value_to_string).unwrap_or_default();
     HomeCard {
-        id: raw.get("id").map(value_to_string).unwrap_or_default(),
+        // Same seed as the playlist rows above (ArtistCard's glyph).
+        is_pinned: crate::sidebar_qt::is_pinned("artist", &id),
+        is_favorite: id
+            .parse::<u64>()
+            .map(crate::fav_cache_qt::is_artist_favorite)
+            .unwrap_or(false),
+        id,
         title: raw.get("name").map(name_display).unwrap_or_default(),
         item_kind: "artist".to_string(),
         art_url: parse_artist_image(raw),
@@ -1262,6 +1335,11 @@ fn parse_more_labels(resp: &qbz_models::LabelExploreResponse, current: u64) -> V
                 return None;
             }
             Some(HomeCard {
+                // "More labels" rows ARE followable entities — the follow set
+                // is the same one the header reads (`favorite_label_ids` /
+                // `fav_cache_qt`), so a label the user already follows draws
+                // the followed state here too.
+                is_favorite: crate::fav_cache_qt::is_label_favorite(id),
                 id: id.to_string(),
                 title: item
                     .get("name")

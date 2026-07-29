@@ -103,6 +103,12 @@ fn mutate(f: impl FnOnce(&mut Rows)) {
 
 fn card_from_artist(a: &ArtistReco) -> HomeCard {
     HomeCard {
+        // Pin badge state from the per-user store (Slint keeps the reco
+        // models live through `set_artist_row_pinned`); [`apply_pin_change`]
+        // keeps it live here after the build.
+        is_pinned: crate::sidebar_qt::is_pinned("artist", &a.qobuz_artist_id.to_string()),
+        // Follow state from the favourite-id cache, like every other producer.
+        is_favorite: crate::fav_cache_qt::is_artist_favorite(a.qobuz_artist_id),
         id: a.qobuz_artist_id.to_string(),
         title: a.name.clone(),
         // ArtistCard renders `item.subtitle` as the muted "Similar to …" line.
@@ -115,6 +121,8 @@ fn card_from_artist(a: &ArtistReco) -> HomeCard {
 
 fn card_from_album(a: &AlbumReco) -> HomeCard {
     HomeCard {
+        is_pinned: crate::sidebar_qt::is_pinned("album", &a.qobuz_album_id),
+        is_favorite: crate::fav_cache_qt::is_album_favorite(&a.qobuz_album_id),
         id: a.qobuz_album_id.clone(),
         title: a.title.clone(),
         artist: a.artist.clone(),
@@ -129,6 +137,7 @@ fn card_from_album(a: &AlbumReco) -> HomeCard {
 
 fn card_from_track(t: &TrackReco) -> HomeCard {
     HomeCard {
+        is_favorite: crate::fav_cache_qt::contains_track(t.qobuz_track_id),
         id: t.qobuz_track_id.to_string(),
         title: t.title.clone(),
         artist: t.artist.clone(),
@@ -253,6 +262,87 @@ fn publish_snapshot(download: bool) {
 // ---------------------------------------------------------------------------
 // Entry points
 // ---------------------------------------------------------------------------
+
+/// Pin twin of `home_qt::apply_pin_change` for THIS tab's cache: flip the
+/// `isPinned` flag on every cached row carrying `(kind, id)`. The
+/// Recommendations tab is a separate document (`recoSectionsJson`) fed by
+/// [`ROWS`], not by the Discover candidate cache, so the home-side patch
+/// cannot reach it — and a row left stale here comes back the next time
+/// this document is published (a tab re-entry, a cover landing, a language
+/// switch) and un-does the badge.
+///
+/// It deliberately does NOT republish: the glyphs on screen are corrected
+/// in place by `QbzLibrary.pinChanged`, which every card listens to, and
+/// this tab's rails are instantiated as soon as it has been opened once —
+/// so a publish here would tear down and rebuild its delegate models on
+/// every pin click made ANYWHERE in the app. No pinned rail lives here, so
+/// the cache patch is the whole job.
+///
+/// No-op before the first build: nothing is cached, and the eventual build
+/// stamps the flags from the store itself.
+pub(crate) fn apply_pin_change(kind: &str, id: &str, pinned: bool) {
+    // Track rails (weekly_exploration / weekly_jams) draw no pin glyph —
+    // tracks are not pinnable — so only the two card kinds reach the cache.
+    if !LOADED.load(Ordering::SeqCst) || !matches!(kind, "album" | "artist") {
+        return;
+    }
+    mutate(|rows| {
+        let lists: Vec<&mut Vec<HomeCard>> = if kind == "album" {
+            vec![
+                &mut rows.rec_albums,
+                &mut rows.fresh_releases,
+                &mut rows.deep_cut_albums,
+                &mut rows.top_albums,
+            ]
+        } else {
+            vec![
+                &mut rows.rec_artists_common,
+                &mut rows.rec_artists_recent,
+                &mut rows.top_artists,
+            ]
+        };
+        for list in lists {
+            for card in list.iter_mut() {
+                if card.id == id {
+                    card.is_pinned = pinned;
+                }
+            }
+        }
+    });
+}
+
+/// Favourite twin of [`apply_pin_change`] for this tab's cache.
+///
+/// The reco document is published again on every tab re-entry, cover landing
+/// and language switch, straight from [`ROWS`] — so a heart set on this tab
+/// (or anywhere else, on a row this tab also shows) was undone by the next
+/// one of those. Track rails are included: they draw hearts.
+pub(crate) fn apply_favorite_change(kind: &str, id: &str, favorite: bool) {
+    if !LOADED.load(Ordering::SeqCst) || !matches!(kind, "album" | "artist" | "track") {
+        return;
+    }
+    mutate(|rows| {
+        let lists: Vec<&mut Vec<HomeCard>> = match kind {
+            "album" => vec![
+                &mut rows.rec_albums,
+                &mut rows.fresh_releases,
+                &mut rows.deep_cut_albums,
+                &mut rows.top_albums,
+            ],
+            "artist" => vec![
+                &mut rows.rec_artists_common,
+                &mut rows.rec_artists_recent,
+                &mut rows.top_artists,
+            ],
+            _ => vec![&mut rows.weekly_exploration, &mut rows.weekly_jams],
+        };
+        for list in lists {
+            for card in list.iter_mut().filter(|c| c.id == id) {
+                card.is_favorite = favorite;
+            }
+        }
+    });
+}
 
 /// Lazy first load — called when the Recommendations tab becomes visible.
 /// Idempotent: a second open repaints from [`ROWS`] without touching the

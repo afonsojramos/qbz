@@ -146,6 +146,104 @@ pub fn set_user_id(id: u64) {
     USER_ID.store(id, std::sync::atomic::Ordering::SeqCst);
 }
 
+// ---------------------------------------------------------------------------
+// Ownership / follow authority for playlist CARDS
+// ---------------------------------------------------------------------------
+
+/// The ids of playlists in the signed-in user's own playlist list, split by
+/// owner: `OWNED` (owner.id == this user) and `FOLLOWED` (a foreign playlist
+/// the user is subscribed to — `playlist/subscribe`).
+///
+/// Why this exists: `PlaylistCard`'s overlay is a TRI-state — owned draws the
+/// library heart, foreign-followed draws the check, foreign draws user-plus —
+/// and it reads `item.playlistOwned` / `item.playlistFollowing`. Every
+/// producer except the Library feed shipped neither, so every playlist card on
+/// Discover, Search and Browse collapsed to the third arm: a playlist the user
+/// OWNS offered "Follow on Qobuz", and the first click subscribed the user to
+/// their own playlist.
+///
+/// `/playlist/get` carries `owner`, so ownership could be derived per row —
+/// but "am I subscribed to this?" cannot: it is only knowable from the user's
+/// own playlist list. Both halves therefore come from the SAME snapshot, taken
+/// where that list is already fetched: `sidebar_qt::load` at shell entry and
+/// `library_qt::load_library`, neither of which adds a request for this.
+///
+/// Before the first snapshot both sets are empty and every card falls back to
+/// the pre-existing behaviour (`false`, the foreign arm) — the same window
+/// `fav_cache_qt` has before its disk seed, and never worse than today.
+static OWNED_PLAYLISTS: std::sync::LazyLock<Mutex<std::collections::HashSet<u64>>> =
+    std::sync::LazyLock::new(|| Mutex::new(std::collections::HashSet::new()));
+static FOLLOWED_PLAYLISTS: std::sync::LazyLock<Mutex<std::collections::HashSet<u64>>> =
+    std::sync::LazyLock::new(|| Mutex::new(std::collections::HashSet::new()));
+
+/// Replace both sets from one `get_user_playlists()` response, as
+/// `(playlist id, owner id)` pairs. Callers pass pairs rather than the models
+/// so this stays independent of which of the two fetchers happens to run.
+pub fn set_user_playlists(pairs: &[(u64, u64)]) {
+    let uid = USER_ID.load(std::sync::atomic::Ordering::SeqCst);
+    let mut owned = std::collections::HashSet::new();
+    let mut followed = std::collections::HashSet::new();
+    for &(id, owner) in pairs {
+        // uid == 0 means "no session id yet" — claiming ownership on an id
+        // that has not been set would mark EVERY row owned.
+        if uid != 0 && owner == uid {
+            owned.insert(id);
+        } else {
+            followed.insert(id);
+        }
+    }
+    log::info!(
+        "[qbz-qt] playlist ownership snapshot: {} owned / {} followed",
+        owned.len(),
+        followed.len()
+    );
+    if let Ok(mut g) = OWNED_PLAYLISTS.lock() {
+        *g = owned;
+    }
+    if let Ok(mut g) = FOLLOWED_PLAYLISTS.lock() {
+        *g = followed;
+    }
+}
+
+/// Does the signed-in user own this playlist, by OWNER id? The cheap arm —
+/// every card producer already has `owner.id` on the row it is mapping, so it
+/// needs no set lookup at all.
+pub fn owns(owner_id: u64) -> bool {
+    let uid = USER_ID.load(std::sync::atomic::Ordering::SeqCst);
+    uid != 0 && owner_id == uid
+}
+
+/// Does the user own this playlist, by PLAYLIST id? For producers whose row
+/// carries no owner (the label page's raw JSON playlists).
+pub fn is_owned(playlist_id: u64) -> bool {
+    OWNED_PLAYLISTS
+        .lock()
+        .map(|g| g.contains(&playlist_id))
+        .unwrap_or(false)
+}
+
+/// Is the user subscribed to this FOREIGN playlist?
+pub fn is_following(playlist_id: u64) -> bool {
+    FOLLOWED_PLAYLISTS
+        .lock()
+        .map(|g| g.contains(&playlist_id))
+        .unwrap_or(false)
+}
+
+/// Keep the follow set in step with a subscribe / unsubscribe that just
+/// landed, so the next card built draws the settled glyph instead of the
+/// snapshot's. Called from both follow seams (`toggle_follow` on the open
+/// page, `set_follow_by_id` from a card overlay).
+fn mark_following(playlist_id: u64, following: bool) {
+    if let Ok(mut g) = FOLLOWED_PLAYLISTS.lock() {
+        if following {
+            g.insert(playlist_id);
+        } else {
+            g.remove(&playlist_id);
+        }
+    }
+}
+
 fn publish(doc: &PlaylistDoc) {
     let json = serde_json::to_string(doc).unwrap_or_else(|_| "{}".into());
     crate::ui(move |mut b| {
@@ -202,6 +300,12 @@ fn map_track(track: &Track) -> PlaylistTrackRow {
         .map(|p| (p.name, p.id.to_string()))
         .unwrap_or_default();
     PlaylistTrackRow {
+        // Heart state at build time, from the favourite-id cache — the same
+        // O(1) read `album_qt` / `artist_qt` / `label_qt` rows use. It was
+        // never stamped here, so `TrackRow.qml` saw `undefined` on every
+        // playlist row: a favourited track drew the empty heart and the first
+        // click sent `favorite/delete`, REMOVING it from the library.
+        is_favorite: crate::fav_cache_qt::contains_track(track.id),
         id: track.id.to_string(),
         playlist_track_id: track.id,
         title,
@@ -419,17 +523,37 @@ pub async fn load(runtime: &Arc<AppRuntime<LoggingAdapter>>, playlist_id: u64) -
         }
     }
 
-    // Header state: favorite/following from the Library feed when present;
-    // owner from the session user; pinned from the shared store.
-    let (is_favorite, is_following) = crate::library_qt::with_library(|d| {
-        d.feed
-            .iter()
-            .find(|i| i.kind == "playlist" && i.id == playlist_id.to_string())
-            .map(|i| (i.is_favorite, i.playlist_following))
-            .unwrap_or((false, false))
-    })
-    .unwrap_or((false, false));
+    // Header state.
+    //
+    // The heart used to be derived from `library_qt::with_library(...)` — a
+    // raw scan of the Library feed, which `load_library_once()` fills only
+    // when the user opens the Library view. The WRITE, meanwhile, decides its
+    // direction from `library.db` (`toggle_playlist_favorite`). So on a fresh
+    // launch the header drew an empty heart on a playlist that IS hearted and
+    // the first click un-hearted it: display and direction read two different
+    // sources. `library_qt::is_favorite("playlist", …)` now answers from the
+    // library.db mirror in `fav_cache_qt` — the same authority the write reads
+    // — and only falls back to the feed.
+    let is_favorite = crate::library_qt::is_favorite("playlist", &playlist_id.to_string());
     let is_owner = pl.owner.id != 0 && pl.owner.id == USER_ID.load(std::sync::atomic::Ordering::SeqCst);
+    // Following is only meaningful for a FOREIGN playlist, and its authority
+    // is the user's own playlist list (the ownership snapshot). The feed stays
+    // as the fallback for the window before the first snapshot lands.
+    // `self::` on purpose: the `let` below shadows the free function in the
+    // value namespace, and reading `is_following(...)` inside its own
+    // initializer is a trap the next reader should not have to resolve.
+    let is_following = !is_owner
+        && (self::is_following(playlist_id)
+            || crate::library_qt::with_library(|d| {
+                d.feed
+                    .iter()
+                    .any(|i| {
+                        i.kind == "playlist"
+                            && i.id == playlist_id.to_string()
+                            && i.playlist_following
+                    })
+            })
+            .unwrap_or(false));
     let pinned = crate::sidebar_qt::is_pinned("playlist", &playlist_id.to_string());
 
     // Custom drag order (applied when sort == custom).
@@ -605,16 +729,52 @@ pub fn set_search(query: &str) {
 // Header actions
 // ---------------------------------------------------------------------------
 
-/// Favorite toggle (owned playlist heart; optimistic flip + signal).
+/// Favorite toggle (owned playlist heart): optimistic flip, then SETTLE on
+/// what the store actually did.
+///
+/// The heart is the qbz-local library.db flag, not a Qobuz favorite — the
+/// favorites endpoints have no `playlist_ids` param, so the previous route
+/// through the favorites API could never have worked (see
+/// `library_qt::toggle_playlist_favorite`). The direction is decided by the
+/// db read inside that helper, exactly as the reference does
+/// (`playlist_toggle_favorite_by_id`, main.rs:2196), so this must not keep
+/// its optimistic guess when the two disagree — it re-seeds the header AND
+/// the Library feed row from the returned value.
 pub fn toggle_favorite() {
-    let doc = with_doc(|d| {
+    let Some((id, optimistic, doc)) = with_doc(|d| {
         d.is_favorite = !d.is_favorite;
         (d.id.clone(), d.is_favorite, d.clone())
+    }) else {
+        return;
+    };
+    publish(&doc);
+    let runtime = crate::app();
+    crate::spawn(async move {
+        let settled = crate::library_qt::toggle_favorite(&runtime, "playlist", &id).await;
+        let Some(settled) = settled else {
+            // Unroutable (non-Qobuz id) — undo the optimistic flip.
+            revert_favorite(&id, !optimistic);
+            return;
+        };
+        if settled != optimistic {
+            revert_favorite(&id, settled);
+        }
+        crate::emit_library_favorite("playlist", &id, settled);
     });
-    if let Some((id, value, doc)) = doc {
+}
+
+/// Re-seed the open playlist's heart (only while that playlist is still the
+/// one on screen — the user may have navigated away during the db write).
+fn revert_favorite(id: &str, value: bool) {
+    let doc = with_doc(|d| {
+        if d.id != id {
+            return None;
+        }
+        d.is_favorite = value;
+        Some(d.clone())
+    });
+    if let Some(Some(doc)) = doc {
         publish(&doc);
-        crate::library_toggle_favorite("playlist".to_string(), id.clone());
-        let _ = (id, value);
     }
 }
 
@@ -642,6 +802,10 @@ pub async fn toggle_follow(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
             let doc = d.clone();
             publish(&doc);
         });
+    } else {
+        // Settle the ownership snapshot so every card built from here on
+        // draws the check (or the user-plus) that matches what just happened.
+        mark_following(pid, follow);
     }
 }
 
@@ -912,6 +1076,9 @@ pub async fn set_follow_by_id(
     if let Err(e) = res {
         log::error!("[qbz-qt] playlist {playlist_id} follow={follow} failed: {e}");
     } else {
+        // Keep the ownership snapshot in step: `reload_sidebar` will refresh
+        // it from the server anyway, but not before the next card is built.
+        mark_following(playlist_id, follow);
         crate::reload_sidebar();
     }
 }

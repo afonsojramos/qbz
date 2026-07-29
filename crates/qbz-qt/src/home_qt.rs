@@ -74,6 +74,31 @@ pub struct HomeCard {
     pub ribbon_kind: String,
     #[serde(rename = "isPinned", default)]
     pub is_pinned: bool,
+    /// Heart state at BUILD time, from `fav_cache_qt` — the row's own kind
+    /// decides which set is asked (albums for the album rails, tracks for
+    /// `slimTracks`, artists, playlists, labels).
+    ///
+    /// The field did not exist, so twelve `AlbumCard` mounts across
+    /// HomeView / SearchView / ArtistView / LabelView / AlbumCollection /
+    /// SectionRail hard-wrote `isFavorite: false`. Once `toggle_favorite`
+    /// started taking its DIRECTION from the (populated) favourites cache,
+    /// that turned into an active hazard rather than a cosmetic one: on a
+    /// fresh launch a Home > New Releases album that IS in the library drew
+    /// the hollow heart and read "Add to Library", and clicking it REMOVED
+    /// the album. Display and action now read the same set.
+    #[serde(rename = "isFavorite", default)]
+    pub is_favorite: bool,
+    /// Playlist rows only — `PlaylistCard`'s overlay is a TRI-state and reads
+    /// exactly these two names (the same spelling `library_qt::FeedItem`
+    /// publishes, so one card reads one contract on every surface):
+    /// owned -> library heart, foreign+followed -> check, foreign -> user-plus.
+    /// Neither was ever published here, so every Discover / Search / Browse
+    /// playlist card collapsed to the third arm — including the user's OWN
+    /// playlists, where the first click subscribed them to themselves.
+    #[serde(rename = "playlistOwned", default)]
+    pub playlist_owned: bool,
+    #[serde(rename = "playlistFollowing", default)]
+    pub playlist_following: bool,
     /// Slim rows ("Popular albums"): the 1-based rank ("" = none).
     pub rank: String,
     /// Local play count. NON-ZERO ONLY on the Most Played Albums page —
@@ -172,6 +197,83 @@ pub struct Personalized {
     pub similar_title: String,
 }
 
+/// The "Pinned" rail's rows, read straight from the per-user pinned store
+/// (newest pin first).
+///
+/// This is the ONE rebuild path: the session load AND every pin/unpin
+/// mutation re-run it (see [`publish_pinned`] / [`apply_pin_change`]),
+/// exactly like `pinned_section::rebuild_pinned` in the Slint build. The
+/// ADR-006 per-user stores have no change-notify, so a mutation site that
+/// does not re-run this leaves the rail stale until the next
+/// /discover/index fetch — which is precisely the bug this split exists to
+/// make impossible to reintroduce.
+///
+/// The store keeps ONE display snapshot per row, taken at pin time; it is
+/// published into BOTH `artist` and `subtitle` because the three cards read
+/// different slots (AlbumCard's second line is `artist`, ArtistCard's and
+/// PlaylistCard's is `item.subtitle`). Publishing only one of them is what
+/// made a pinned artist draw a blank second line — and, because the card
+/// hands its own `item.subtitle` back to `togglePin`, re-pinning that row
+/// from the rail then persisted the blank.
+fn pinned_cards() -> Vec<HomeCard> {
+    crate::sidebar_qt::list_pinned()
+        .into_iter()
+        .map(|p| HomeCard {
+            // The pinned rail is MIXED, so the heart / tri-state seeds are
+            // routed by the row's own stored kind rather than by the rail's.
+            is_favorite: crate::fav_cache_qt::is_favorite(&p.kind, &p.id),
+            playlist_owned: p.kind == "playlist"
+                && p.id.parse::<u64>().map(crate::playlist_qt::is_owned).unwrap_or(false),
+            playlist_following: p.kind == "playlist"
+                && p.id.parse::<u64>().map(crate::playlist_qt::is_following).unwrap_or(false),
+            id: p.id,
+            title: p.title,
+            artist: p.subtitle.clone(),
+            subtitle: p.subtitle,
+            art_url: p.artwork_url,
+            item_kind: p.kind,
+            is_pinned: true,
+            ..Default::default()
+        })
+        .collect()
+}
+
+/// Serialize the pinned rows onto their own bridge property.
+fn push_pinned(cards: &[HomeCard]) {
+    let json = serde_json::to_string(cards).unwrap_or_else(|_| "[]".to_string());
+    crate::home_bridge::ui(move |mut b| {
+        b.as_mut().set_pinned_json(QString::from(json.as_str()));
+    });
+}
+
+/// Rebuild + publish the Pinned rail ALONE (`pinnedJson`), covers included.
+///
+/// The rail is rebuilt wholesale rather than spliced because the store owns
+/// both the ORDER (newest pin first) and the display snapshot, and
+/// re-pinning an existing row is an upsert that moves it to the head.
+///
+/// Nothing else is republished: the three tab documents carry the pinned
+/// section as an EMPTY ordering slot, so only this rail's delegates are
+/// re-created. Every OTHER surface's pin glyph is corrected in place by the
+/// `QbzLibrary.pinChanged` fan-out the cards listen to — the port's
+/// equivalent of the Slint `set_*_row_pinned` model walks.
+pub(crate) fn publish_pinned() {
+    let mut cards = pinned_cards();
+    let missing = attach_card_art(&mut cards);
+    push_pinned(&cards);
+    if missing.is_empty() {
+        return;
+    }
+    // A just-pinned row usually has an uncached cover; it lands with one
+    // more publish of this same property, exactly like the initial load.
+    crate::spawn(async move {
+        crate::artwork_qt::download_missing(missing).await;
+        let mut cards = cards;
+        let _ = attach_card_art(&mut cards);
+        push_pinned(&cards);
+    });
+}
+
 /// All sections any Discover tab can render, in construction order (the
 /// per-tab assembly clones from here). Ids are the DiscoverySectionId keys;
 /// "mostStreamed#album" is the EDITOR-tab variant (album carousel — the
@@ -194,30 +296,20 @@ fn build_candidates(
     push_albums(&mut out, "newReleases", qbz_i18n::t("New Releases"), "/discover/newReleases", containers.new_releases);
     push_albums(&mut out, "pressAwards", qbz_i18n::t("Press Accolades"), "/discover/pressAward", containers.press_awards);
 
-    // Pinned rail (phase 11) — the user's mixed pinned albums/artists/
-    // playlists from the shared per-user store. Self-hides while empty.
-    let pinned: Vec<HomeCard> = crate::sidebar_qt::list_pinned()
-        .into_iter()
-        .map(|p| HomeCard {
-            id: p.id,
-            title: p.title,
-            artist: p.subtitle,
-            art_url: p.artwork_url,
-            item_kind: p.kind,
-            is_pinned: true,
-            ..Default::default()
-        })
-        .collect();
-    if !pinned.is_empty() {
-        out.push(HomeSection {
-            id: "pinned".to_string(),
-            title: qbz_i18n::t("Pinned"),
-            kind: "pinned".to_string(),
-            hint: String::new(),
-            endpoint: String::new(),
-            items: pinned,
-        });
-    }
+    // Pinned rail (phase 11) — the ORDERING SLOT only: the rows travel on
+    // `pinnedJson` (see `publish_pinned`), so the section is pushed
+    // unconditionally and stays empty. HomeView hides the rail while the
+    // pinned document is empty, which is the same self-hide the Slint arm
+    // does with `PinnedState.items.length > 0` on a descriptor that is
+    // likewise always present.
+    out.push(HomeSection {
+        id: "pinned".to_string(),
+        title: qbz_i18n::t("Pinned"),
+        kind: "pinned".to_string(),
+        hint: String::new(),
+        endpoint: String::new(),
+        items: Vec::new(),
+    });
 
     // Qobuz Mixes (For You) — four STATIC navigation tiles (QobuzMixesRow:
     // no per-tile data, always rendered when the pref is on).
@@ -225,6 +317,29 @@ fn build_candidates(
         id: "qobuzMixes".to_string(),
         title: qbz_i18n::t("Qobuz Mixes"),
         kind: "mixes".to_string(),
+        hint: String::new(),
+        endpoint: String::new(),
+        items: Vec::new(),
+    });
+
+    // Radio Stations + Artist Spotlight (For You) — ORDERING SLOTS only, the
+    // `pinned` split above: the rows travel on `radioStationsJson` /
+    // `spotlightJson` (src/foryou_qt.rs), so both sections are pushed
+    // unconditionally and stay empty. HomeView hides each rail while its own
+    // document is empty, which is the same self-hide the Slint arms do
+    // (`ForYouState.radio-stations.length > 0` / `spotlight-visible`).
+    out.push(HomeSection {
+        id: "radioStations".to_string(),
+        title: qbz_i18n::t("Radio Stations"),
+        kind: "radio".to_string(),
+        hint: String::new(),
+        endpoint: String::new(),
+        items: Vec::new(),
+    });
+    out.push(HomeSection {
+        id: "artistSpotlight".to_string(),
+        title: qbz_i18n::t("Spotlight"),
+        kind: "spotlight".to_string(),
         hint: String::new(),
         endpoint: String::new(),
         items: Vec::new(),
@@ -313,6 +428,7 @@ fn build_candidates(
         .into_iter()
         .map(|r| HomeCard {
             is_pinned: crate::sidebar_qt::is_pinned("album", &r.album_id),
+            is_favorite: crate::fav_cache_qt::is_album_favorite(&r.album_id),
             id: r.album_id,
             title: r.title,
             artist: r.artist,
@@ -624,12 +740,15 @@ pub(crate) fn publish(sections: &DiscoverSections) {
 }
 
 /// Re-render + republish the three tabs from the CACHED candidates and the
-/// freshly persisted prefs. The configurator's post-mutation hook: no
-/// network, so a toggle / reorder lands on the next frame. A section that
-/// was disabled at fetch time may still have uncached covers — those
-/// download in the background and trigger one more publish, exactly like the
-/// initial load.
-pub(crate) fn republish_from_prefs() {
+/// freshly persisted prefs. The configurator's post-mutation hook
+/// (show/hide/reorder/reset): no network, so a toggle lands on the next
+/// frame. A section that was disabled at fetch time may still have uncached
+/// covers — those download in the background and trigger one more publish,
+/// exactly like the initial load.
+///
+/// A pin/unpin does NOT come through here: it is a per-click mutation, and
+/// this rebuilds every delegate model in the view (see [`apply_pin_change`]).
+pub(crate) fn republish_cached() {
     let candidates = match CANDIDATES.lock() {
         Ok(c) if !c.is_empty() => c.clone(),
         // Nothing fetched yet — the next load_home publishes with the new prefs.
@@ -653,6 +772,102 @@ pub(crate) fn republish_from_prefs() {
     }
 }
 
+/// A pin/unpin just landed in the per-user store: patch the CACHED candidate
+/// rows and rebuild the Pinned rail. NOTHING here republishes the three tab
+/// documents.
+///
+/// Two halves, in the Slint order (`qbz/src/main.rs` `on_toggle_pin`):
+///
+///  1. Flip `isPinned` on every CACHED card carrying this `(kind, id)`. The
+///     cache is not what the user is looking at — the cards already on
+///     screen are corrected by `QbzLibrary.pinChanged`, which every card
+///     listens to. This half exists so the NEXT republish (a configurator
+///     show/hide/reorder, a cover landing) does not resurrect the stale
+///     flag, and so a delegate created later — a rail scrolled into view,
+///     a tab first opened — reads the truth.
+///  2. Rebuild the Pinned rail from the store, on its own property.
+///
+/// Publishing the whole world instead was measurably wrong: `republish_cached`
+/// runs a sqlite prefs load, `assemble`, an artwork attach over ~500 cards
+/// and three serde serializations on the UI hop, HomeView re-parses all three
+/// documents, and every rail's Repeater + nested ListView tears down and
+/// rebuilds its delegates — per pin click, with the horizontal scroll of
+/// every rail reset to 0. That teardown is also the only crash signature this
+/// build has (`libQt6QmlModels`), so a per-click mutation is the last thing
+/// that should trigger it.
+///
+/// The cache patch is a no-op before the first fetch (nothing cached yet —
+/// the pending `load_home` reads the store itself); the rail is published
+/// either way, because the store is readable from session activation on.
+pub(crate) fn apply_pin_change(kind: &str, id: &str, pinned: bool) {
+    if let Ok(mut candidates) = CANDIDATES.lock() {
+        for section in candidates.iter_mut() {
+            // Which store kind a rail's rows carry. `slim` rows ARE albums
+            // but SlimCard draws no pin glyph, `slimTracks` are tracks,
+            // `mixes` / `recentPlaceholder` hold no rows at all, and
+            // `pinned` / `radio` / `spotlight` are empty ordering slots
+            // (their rows ride their own bridge properties) — none need the
+            // walk.
+            let row_kind = match section.kind.as_str() {
+                "album" => "album",
+                "artists" => "artist",
+                "playlist" => "playlist",
+                _ => continue,
+            };
+            if row_kind != kind {
+                continue;
+            }
+            for card in section.items.iter_mut() {
+                if card.id == id {
+                    card.is_pinned = pinned;
+                }
+            }
+        }
+    }
+    publish_pinned();
+}
+
+/// A favourite toggle just SETTLED (`main::emit_library_favorite`): patch the
+/// cached candidate rows so the next republish does not resurrect the old
+/// heart. Publishes nothing, for the same reason [`apply_pin_change`] does not.
+///
+/// The pin twin above exists because the pinned STORE has no change-notify.
+/// This one exists for a different reason: `is_favorite` IS re-readable in
+/// O(1) from `fav_cache_qt` at any time, but the candidate cache is a
+/// SNAPSHOT taken at fetch time, and `republish_cached` (a Discover
+/// show/hide/reorder/reset, or a cover landing) re-serializes it verbatim.
+/// Without this, hearting an album on Home and then opening the section
+/// configurator put the hollow heart back — and the next click on it would
+/// have removed the album the user just added.
+///
+/// Kind routing is by the RAIL's kind, not the row's, because that is what a
+/// HomeCard's position tells us: `album`/`slim` rails hold albums, `artists`
+/// artists, `playlist` playlists, `slimTracks` tracks. `pinned` is the empty
+/// ordering slot (its rows live on `pinnedJson`, rebuilt from the store on
+/// every change), `radio`/`spotlight` are the same kind of slot (rows on
+/// `radioStationsJson` / `spotlightJson` — see the boundary note in
+/// `foryou_qt`), and `mixes`/`recentPlaceholder` hold no rows.
+pub(crate) fn apply_favorite_change(kind: &str, id: &str, favorite: bool) {
+    let Ok(mut candidates) = CANDIDATES.lock() else {
+        return;
+    };
+    for section in candidates.iter_mut() {
+        let row_kind = match section.kind.as_str() {
+            "album" | "slim" => "album",
+            "artists" => "artist",
+            "playlist" => "playlist",
+            "slimTracks" => "track",
+            _ => continue,
+        };
+        if row_kind != kind {
+            continue;
+        }
+        for card in section.items.iter_mut().filter(|c| c.id == id) {
+            card.is_favorite = favorite;
+        }
+    }
+}
+
 /// Fetch the discover index — honoring the shared "discover" genre selection
 /// (`genre_filter_qt`), 1:1 with the Slint `current_genre_filter()` — and the
 /// personalized rails concurrently (mirrors home.rs's `join!`), then map
@@ -669,6 +884,10 @@ where
     // list in the background so the popup opens instantly and a REMEMBERED
     // Library > All selection resolves to names (see warm_up's docs).
     crate::genre_filter_qt::warm_up();
+    // The Pinned rail rides its OWN property and is local-only (sqlite +
+    // the image cache), so it publishes here, ahead of the index fetch,
+    // instead of waiting for the network round trip to settle.
+    publish_pinned();
     // Wave 1 — the index plus everything that needs no seed. The favorites
     // are fetched ONCE each and feed several rails (Library Albums +
     // Rediscover; Top Artists + Artists to Follow).
@@ -740,6 +959,15 @@ where
         personalized.to_follow.len(),
         personalized.similar.len(),
     );
+    // Discover > For You, the two rails whose rows do not travel inside the
+    // tab documents (src/foryou_qt.rs). Radio is LOCAL — it re-uses the
+    // recents + favourites already in hand, so it costs no request and can
+    // publish immediately. Spotlight needs ONE /artist/page for the rotated
+    // favourite, so it is spawned and lands on its own property whenever it
+    // resolves, instead of holding the whole index behind it.
+    crate::foryou_qt::publish_radio(crate::foryou_qt::build_radio(&recent_albums, &fav_albums));
+    crate::foryou_qt::spawn_spotlight(crate::app(), fav_artists);
+
     let candidates = build_candidates(response.containers, personalized);
     let sections = assemble(&candidates, &load_prefs());
     if let Ok(mut cache) = CANDIDATES.lock() {
@@ -779,8 +1007,13 @@ pub(crate) fn map_album(album: DiscoverAlbum) -> HomeCard {
         .or(album.image.small)
         .unwrap_or_default();
     let is_pinned = crate::sidebar_qt::is_pinned("album", &album.id);
+    // Heart from the favourite-id cache, the reference's `card_to_item`
+    // (home.rs:679 `fav_cache::is_album_favorite`) — O(1), no fetch, correct
+    // offline and from first paint.
+    let is_favorite = crate::fav_cache_qt::is_album_favorite(&album.id);
     HomeCard {
         is_pinned,
+        is_favorite,
         id: album.id,
         title: album.title,
         artist,
@@ -813,6 +1046,23 @@ pub(crate) fn map_playlist(p: DiscoverPlaylist) -> HomeCard {
         .map(|t| t.name.to_uppercase())
         .unwrap_or_default();
     HomeCard {
+        // Pin badge state from the per-user store (home.rs
+        // `playlist_to_item`). Without the seed the rail's glyph reads
+        // "unpinned" for a playlist that IS pinned, and the first click
+        // un-pins it instead of pinning.
+        is_pinned: crate::sidebar_qt::is_pinned("playlist", &p.id.to_string()),
+        // The library heart (the qbz-local library.db flag).
+        is_favorite: crate::fav_cache_qt::is_playlist_favorite(p.id),
+        // The overlay tri-state. The reference hard-writes both `false` here
+        // (home.rs `playlist_to_item`:732) because its `PlaylistCardData`
+        // carries no owner — `DiscoverPlaylist` DOES, and "am I subscribed to
+        // this?" is answered by the ownership snapshot, so the Qt rail can
+        // draw the state the Slint one guesses at. Strictly a superset: an
+        // editorial playlist's owner is Qobuz, so it still resolves to the
+        // foreign arm, and both sets are empty (== today's behaviour) until
+        // the first `get_user_playlists` lands.
+        playlist_owned: crate::playlist_qt::owns(p.owner.id),
+        playlist_following: crate::playlist_qt::is_following(p.id),
         id: p.id.to_string(),
         title: p.name,
         category,
@@ -835,6 +1085,12 @@ fn map_slim(index: usize, album: DiscoverAlbum) -> HomeCard {
         .or(album.image.large)
         .unwrap_or_default();
     HomeCard {
+        // `SlimCard.qml` draws neither heart nor pin today, so nothing reads
+        // this — it is stamped anyway because HomeCard is ONE struct shared by
+        // every rail, and "the producers that happen to feed a card with a
+        // glyph" is exactly the rule that left twelve mounts hard-wired to
+        // false. A future SlimCard with a heart inherits a correct row.
+        is_favorite: crate::fav_cache_qt::is_album_favorite(&album.id),
         id: album.id,
         title: album.title,
         artist: subtitle,
@@ -960,6 +1216,15 @@ pub(crate) fn map_flat_album(album: Album) -> HomeCard {
         _ => String::new(),
     };
     HomeCard {
+        // Pin badge state from the per-user store (foryou.rs `album_items`).
+        // These are the personalized rails — Library Albums, Release Watch,
+        // Rediscover, Similar — and without the seed every one of their pin
+        // glyphs reads "unpinned" no matter what the store says.
+        is_pinned: crate::sidebar_qt::is_pinned("album", &album.id),
+        // Heart, same line of `album_items` (foryou.rs:568). This mapper also
+        // feeds the LABEL page's Releases / Critics' Picks carousels and
+        // DiscoverBrowse, so one stamp covers four surfaces.
+        is_favorite: crate::fav_cache_qt::is_album_favorite(&album.id),
         id: album.id,
         title: album.title,
         artist: album.artist.name,
@@ -983,6 +1248,7 @@ pub(crate) fn map_flat_album(album: Album) -> HomeCard {
 pub(crate) fn map_recent_album(a: crate::recently_qt::RecentAlbum) -> HomeCard {
     HomeCard {
         is_pinned: crate::sidebar_qt::is_pinned("album", &a.id),
+        is_favorite: crate::fav_cache_qt::is_album_favorite(&a.id),
         id: a.id,
         title: a.title,
         artist: a.artist,
@@ -1002,6 +1268,9 @@ pub(crate) fn map_recent_album(a: crate::recently_qt::RecentAlbum) -> HomeCard {
 /// Map one recently-played track onto a slim row (`slimTracks` — click plays).
 fn map_recent_track(t: crate::recently_qt::RecentTrack) -> HomeCard {
     HomeCard {
+        // TRACK ids here, not album ids — the `slimTracks` rail is the one
+        // place a HomeCard row is a track.
+        is_favorite: t.id.parse::<u64>().map(crate::fav_cache_qt::contains_track).unwrap_or(false),
         id: t.id,
         title: t.title,
         artist: t.subtitle,
@@ -1067,6 +1336,15 @@ where
 fn map_fav_artist(a: Artist) -> HomeCard {
     HomeCard {
         is_pinned: crate::sidebar_qt::is_pinned("artist", &a.id.to_string()),
+        // Follow state. This mapper feeds BOTH "Your Top Artists" (all
+        // followed, so always true) and "Artists to Follow" (all NOT followed
+        // by construction — `fetch_to_follow` excludes the favourites) — but
+        // the two are only correct by construction TODAY: the exclusion set is
+        // the favourite-artist fetch, and a follow made during the session
+        // does not re-run it. Reading the cache keeps the row honest whatever
+        // the rail's provenance, and it is what `ArtistCard` will bind to when
+        // its follow affordance lands (it draws only the pin badge today).
+        is_favorite: crate::fav_cache_qt::is_artist_favorite(a.id),
         id: a.id.to_string(),
         title: a.name,
         item_kind: "artist".to_string(),

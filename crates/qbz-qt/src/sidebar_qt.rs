@@ -142,41 +142,52 @@ static SEARCH: Mutex<String> = Mutex::new(String::new());
 pub async fn load(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
     log::debug!("[qbz-qt] sidebar load: fetching user playlists");
     let playlists: Vec<SidebarPlaylist> = match runtime.core().get_user_playlists().await {
-        Ok(pls) => pls
-            .into_iter()
-            .map(|p| {
-                let cover_urls = {
-                    let source = [&p.images300, &p.images150, &p.images]
-                        .into_iter()
-                        .flatten()
-                        .find(|v| !v.is_empty());
-                    let mut out: Vec<String> = Vec::new();
-                    if let Some(list) = source {
-                        for url in list {
-                            if !url.is_empty() && !out.contains(url) {
-                                out.push(url.clone());
-                            }
-                            if out.len() == 4 {
-                                break;
-                            }
-                        }
-                    }
-                    out
-                };
-                SidebarPlaylist {
-                    id: p.id,
-                    name: p.name,
-                    tracks_count: p.tracks_count,
-                    cover_urls,
-                    position: 0,
-                }
-            })
-            .collect(),
+        Ok(pls) => {
+            // Same response, second consumer: the playlist ownership /
+            // follow snapshot every PlaylistCard's tri-state overlay reads
+            // (`playlist_qt::set_user_playlists`). This is the earliest point
+            // in the session where the user's own playlist list exists, and
+            // it costs no extra request — the alternative was every card
+            // rendering the "follow a foreign playlist" arm until the Library
+            // view had been opened at least once.
+            let pairs: Vec<(u64, u64)> = pls.iter().map(|p| (p.id, p.owner.id)).collect();
+            crate::playlist_qt::set_user_playlists(&pairs);
+            pls
+        }
         Err(e) => {
             log::warn!("[qbz-qt] sidebar playlists load failed: {e}");
             Vec::new()
         }
-    };
+    }
+    .into_iter()
+    .map(|p| {
+        let cover_urls = {
+            let source = [&p.images300, &p.images150, &p.images]
+                .into_iter()
+                .flatten()
+                .find(|v| !v.is_empty());
+            let mut out: Vec<String> = Vec::new();
+            if let Some(list) = source {
+                for url in list {
+                    if !url.is_empty() && !out.contains(url) {
+                        out.push(url.clone());
+                    }
+                    if out.len() == 4 {
+                        break;
+                    }
+                }
+            }
+            out
+        };
+        SidebarPlaylist {
+            id: p.id,
+            name: p.name,
+            tracks_count: p.tracks_count,
+            cover_urls,
+            position: 0,
+        }
+    })
+    .collect();
 
     log::debug!("[qbz-qt] sidebar load: playlists fetch settled, reading folders");
     let (folders, folder_map, positions, hidden_playlists) = folders_blocking();

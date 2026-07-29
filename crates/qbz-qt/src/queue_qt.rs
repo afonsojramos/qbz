@@ -124,21 +124,30 @@ fn canonical_u64(s: &str) -> Option<u64> {
 /// scan, which is exactly why the lag shows up with a local album loaded.
 ///
 /// The Slint reference resolves the same truth in O(1) from `fav_cache`'s
-/// `HashSet<u64>` (`crates/qbz/src/queue.rs:230`); this is the port of that
-/// shape onto the feed we have: one lock, one pass, allocation-free lookups.
+/// `HashSet<u64>` (`crates/qbz/src/queue.rs:230`); the port now has that cache
+/// (`fav_cache_qt`), so it is the PRIMARY source — the library feed is empty
+/// until the user opens the Library view, which is why the now-playing heart
+/// used to draw blank on favourited tracks for the whole session. The feed is
+/// unioned in because it is the fresher of the two once loaded.
 fn favorite_track_ids() -> HashSet<u64> {
-    crate::library_qt::with_library(|d| {
+    let mut ids = crate::fav_cache_qt::all_tracks();
+    if let Some(feed_ids) = crate::library_qt::with_library(|d| {
         d.feed
             .iter()
             .filter(|i| i.is_favorite && i.kind == "track")
             .filter_map(|i| canonical_u64(&i.id))
-            .collect()
-    })
-    .unwrap_or_default()
+            .collect::<HashSet<u64>>()
+    }) {
+        ids.extend(feed_ids);
+    }
+    ids
 }
 
 fn row_from(track: &QueueTrack, favorites: &HashSet<u64>) -> QueueRow {
-    let is_favorite = favorites.contains(&track.id);
+    // LOCAL/Plex rows carry a library.db row id, not a Qobuz track id, so a
+    // numeric collision with the favourite set would light a heart on the
+    // wrong row — and `toggle_favorite` below refuses to act on those anyway.
+    let is_favorite = !track.is_local && favorites.contains(&track.id);
     let tier = match track.bit_depth {
         Some(d) if d >= 24 => "hires",
         Some(_) => "cd",
@@ -481,7 +490,7 @@ pub async fn clear_queue(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
 /// GUARD: a LOCAL/Plex row's `id` is a library.db row id which is NUMERIC,
 /// so `library_qt::is_local_feed_id` (which recognizes local tracks only by
 /// their non-numeric FILE-PATH feed ids) would classify it as a Qobuz id and
-/// send `add_favorite("tracks", "<db row id>")` — favoriting an unrelated
+/// send `add_favorite("track", "<db row id>")` — favoriting an unrelated
 /// catalog track. Local hearts have no seam in this port (`local_bulk.rs`
 /// documents the same gap), so the mutation is refused here AND the row
 /// publishes `isLocal` so the panel can drop the control instead of showing
@@ -504,6 +513,14 @@ pub async fn toggle_favorite(
             return;
         }
     }
-    let _ = crate::library_qt::toggle_favorite(runtime, kind, id).await;
+    // Through the shared settle point, not `library_qt::toggle_favorite`
+    // alone: the queue panel used to swallow the settled value, so a heart
+    // set from here never reached `libraryFavoriteChanged` (LibraryView /
+    // AlbumView / ArtistView kept the old glyph) nor the document caches
+    // (Home / Search / Recommendations re-published the pre-toggle heart on
+    // their next republish). The panel itself still repaints from `publish`.
+    if let Some(value) = crate::library_qt::toggle_favorite(runtime, kind, id).await {
+        crate::emit_library_favorite(kind, id, value);
+    }
     publish(runtime).await;
 }

@@ -18,8 +18,11 @@
 //! POC-NOTEs:
 //! - Blacklist banner/filter, "In library" PLAYLISTS sub-lists, jump-tab
 //!   scroll-tracking: out of scope.
-//! - `is_following` seeds from the phase-5 library feed (the Slint app
-//!   resolves it from the favorites cache — same truth, different path).
+//! - `is_following` seeds from `library_qt::is_favorite` — the favourite-id
+//!   cache first (the reference's `fav_cache`, now ported as `fav_cache_qt`),
+//!   the phase-5 library feed second. It used to read the feed ALONE, which is
+//!   empty until the Library view is opened: the heart drew un-followed on
+//!   artists the user follows, and the toggle then re-ADDED the follow.
 //! - Discovery runs with EMPTY `dismissed_per_tag` / `known_artists`
 //!   callbacks: the Slint app feeds those from `discovery_dismiss` +
 //!   `play_history` + `reco`, none of which this POC brings up. That is the
@@ -253,6 +256,10 @@ pub(crate) fn map_release(release: &PageArtistRelease) -> AlbumCardData {
         .as_ref()
         .and_then(|a| a.maximum_sampling_rate);
     AlbumCardData {
+        is_pinned: crate::sidebar_qt::is_pinned("album", &release.id),
+        // Heart from the favourite-id cache — the artist page's Releases grid
+        // mounts the same AlbumCard as Home (see `AlbumCardData::is_favorite`).
+        is_favorite: crate::fav_cache_qt::is_album_favorite(&release.id),
         id: release.id.clone(),
         title: release.title.clone(),
         artist,
@@ -299,6 +306,7 @@ fn map_track(index: usize, track: PageArtistTrack) -> TrackRow {
     let bit_depth = track.audio_info.as_ref().and_then(|a| a.maximum_bit_depth);
     let sample_rate = track.audio_info.as_ref().and_then(|a| a.maximum_sampling_rate);
     TrackRow {
+        is_favorite: crate::fav_cache_qt::contains_track(track.id),
         id: track.id.to_string(),
         number: (index + 1).to_string(),
         title,
@@ -507,21 +515,21 @@ fn map_artist(page: PageArtistResponse) -> ArtistViewData {
         });
     }
 
-    let (library_count, is_following) = crate::library_qt::with_library(|d| {
-        let count = d
-            .feed
+    // The library COUNT is feed-only by nature (it counts owned items), but the
+    // follow state must not be: the feed is empty until the Library view is
+    // opened, so this drew an un-followed heart on artists the user follows —
+    // and `toggle_favorite` then read the same false and re-added the follow.
+    // `library_qt::is_favorite` checks the favourite-id cache first.
+    let library_count = crate::library_qt::with_library(|d| {
+        d.feed
             .iter()
             .filter(|i| {
                 (i.kind == "album" || i.kind == "track") && i.artist_id == page.id.to_string()
             })
-            .count() as i64;
-        let following = d
-            .feed
-            .iter()
-            .any(|i| i.kind == "artist" && i.id == page.id.to_string() && i.is_favorite);
-        (count, following)
+            .count() as i64
     })
-    .unwrap_or((0, false));
+    .unwrap_or(0);
+    let is_following = crate::library_qt::is_favorite("artist", &page.id.to_string());
 
     ArtistViewData {
         id: page.id.to_string(),

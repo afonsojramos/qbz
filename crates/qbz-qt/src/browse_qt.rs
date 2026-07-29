@@ -804,6 +804,10 @@ fn load_history(generation: u64) {
                     })
                     .map(|r| HomeCard {
                         is_pinned: crate::sidebar_qt::is_pinned("album", &r.album_id),
+                        // Heart, same seed as every other album card — this
+                        // page's rows are built here rather than through
+                        // `home_qt::map_*`, so it needs its own stamp.
+                        is_favorite: crate::fav_cache_qt::is_album_favorite(&r.album_id),
                         id: r.album_id,
                         title: r.title,
                         artist: r.artist,

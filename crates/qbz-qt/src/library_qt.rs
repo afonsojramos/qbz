@@ -22,8 +22,11 @@
 //!   it needs the qbz-library scan DB, which the POC never opens. The
 //!   show-local toggle and the "favorites" scope (hearted local items) work
 //!   via the LocalFavoritesService (now initialized, per owner).
-//! - Playlist follow/copy affordances: hearts route to the favorites API
-//!   only; subscribe/unsubscribe is not wired.
+//! - Playlist follow/copy affordances: a feed row's heart is the qbz-LOCAL
+//!   library.db flag (`toggle_playlist_favorite` — Qobuz has no
+//!   `playlist_ids` favorite param); subscribe/unsubscribe of a FOREIGN
+//!   playlist only exists on the playlist page (`playlist_qt::toggle_follow`),
+//!   not on the feed rows.
 //! - Purchase download states / Play purchases / multi-select / group
 //!   modes / alpha jumps: out of scope.
 
@@ -211,6 +214,67 @@ async fn fetch_favorites(
     Ok((all_items, total))
 }
 
+/// Refresh the favourite-id cache from the network — the online half of the
+/// disk-first lifecycle (`fav_cache_qt::init_for_user` already seeded it at
+/// session activation). Fired once per shell entry from `main::enter_shell`,
+/// which is where the reference warms the same cache
+/// (`crates/qbz/src/main.rs:418-500`, four `tokio::spawn`s next to the
+/// sidebar load). Skipped offline: there the disk seed IS the truth.
+///
+/// Reuses `fetch_favorites` — the same paged reader the Library load uses, so
+/// the paging/cap semantics cannot drift between the two. Each type is
+/// independent: one failing (labels 400'd for months) must not cost the
+/// other three.
+pub async fn warm_favorites_cache(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
+    let t = Instant::now();
+    // Album ids are TEXT (Qobuz mixes numeric and alphanumeric catalog ids);
+    // tracks / artists / labels are numeric.
+    match fetch_favorites(runtime, "albums").await {
+        Ok((items, _)) => {
+            let ids: std::collections::HashSet<String> = items
+                .iter()
+                .filter_map(|it| it.get("id"))
+                .filter_map(|v| match v {
+                    serde_json::Value::String(s) => Some(s.clone()),
+                    serde_json::Value::Number(n) => Some(n.to_string()),
+                    _ => None,
+                })
+                .collect();
+            let n = ids.len();
+            let _ = tokio::task::spawn_blocking(move || crate::fav_cache_qt::set_all_albums(ids)).await;
+            log::info!("[qbz-qt] favorites cache warmed: {n} albums");
+        }
+        Err(e) => log::warn!("[qbz-qt] favorites cache album warm failed: {e}"),
+    }
+    warm_numeric(runtime, "tracks", crate::fav_cache_qt::set_all_tracks).await;
+    warm_numeric(runtime, "artists", crate::fav_cache_qt::set_all_artists).await;
+    // PLURAL here, singular on `/favorite/create|delete` — see the
+    // `toggle_favorite` note. This is the `type` param's spelling.
+    warm_numeric(runtime, "labels", crate::fav_cache_qt::set_all_labels).await;
+    log::info!("[qbz-qt][perf] favorites cache warm: {:?}", t.elapsed());
+}
+
+/// One numeric favourites type -> its cache setter. `apply` is a plain fn
+/// pointer so the blocking disk write can move onto a blocking hop.
+async fn warm_numeric(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    key: &str,
+    apply: fn(std::collections::HashSet<u64>),
+) {
+    match fetch_favorites(runtime, key).await {
+        Ok((items, _)) => {
+            let ids: std::collections::HashSet<u64> = items
+                .iter()
+                .filter_map(|it| it.get("id").and_then(|v| v.as_u64()))
+                .collect();
+            let n = ids.len();
+            let _ = tokio::task::spawn_blocking(move || apply(ids)).await;
+            log::info!("[qbz-qt] favorites cache warmed: {n} {key}");
+        }
+        Err(e) => log::warn!("[qbz-qt] favorites cache {key} warm failed: {e}"),
+    }
+}
+
 fn parse_items<T: serde::de::DeserializeOwned>(items: Vec<serde_json::Value>, what: &str) -> Vec<T> {
     items
         .into_iter()
@@ -331,6 +395,11 @@ fn map_album(album: Album) -> FeedItem {
 
 fn map_artist(artist: Artist) -> FeedItem {
     FeedItem {
+        // Pin badge state from the per-user store. The album mapper above
+        // has always seeded it; the artist and playlist rows did not, so
+        // every artist/playlist card in the Library grid drew the hollow
+        // glyph and the first click un-pinned what the user meant to pin.
+        is_pinned: crate::sidebar_qt::is_pinned("artist", &artist.id.to_string()),
         kind: "artist".into(),
         group: "following".into(),
         source: "qobuz".into(),
@@ -403,6 +472,8 @@ fn map_playlist_row(playlist: &Playlist, is_following: bool) -> FeedItem {
     let uid = UserDataPaths::load_last_user_id();
     let owned = uid.map(|uid| uid == playlist.owner.id).unwrap_or(false);
     FeedItem {
+        // Pin badge state from the per-user store (see `map_artist`).
+        is_pinned: crate::sidebar_qt::is_pinned("playlist", &playlist.id.to_string()),
         kind: "playlist".into(),
         group: if is_following { "following" } else { "favorites" }.into(),
         source: "qobuz".into(),
@@ -412,7 +483,15 @@ fn map_playlist_row(playlist: &Playlist, is_following: bool) -> FeedItem {
         playlist_own_image: !cover_url.is_empty(),
         image_url: cover_url,
         covers,
-        is_favorite: !is_following,
+        // The library.db heart, NOT "this row landed in the favorites group".
+        // `!is_following` answers a different question — which BUCKET the row
+        // was fetched into — and the cards render this field as the heart while
+        // `toggle_playlist_favorite` takes its direction from library.db. With
+        // the two conflated, every OWNED playlist drew a filled heart reading
+        // "Remove from Library" even when it had never been hearted, and the
+        // click wrote `false` over a flag that was already false. The bucket is
+        // still available to callers as `group` / `playlist_following`.
+        is_favorite: crate::fav_cache_qt::is_favorite("playlist", &playlist.id.to_string()),
         playlist_owned: owned,
         playlist_following: is_following,
         ..Default::default()
@@ -447,6 +526,14 @@ pub async fn load_library(runtime: &Arc<AppRuntime<LoggingAdapter>>) -> Result<u
         .get_user_playlists()
         .await
         .map_err(|e| e.to_string())?;
+    // Refresh the playlist ownership / follow snapshot from this same
+    // response (see `playlist_qt::set_user_playlists`) — the Library load is
+    // the second of the two places that fetch the user's playlist list, and
+    // the fresher of the two.
+    {
+        let pairs: Vec<(u64, u64)> = all_playlists.iter().map(|p| (p.id, p.owner.id)).collect();
+        crate::playlist_qt::set_user_playlists(&pairs);
+    }
     let uid = UserDataPaths::load_last_user_id();
     let following: Vec<FeedItem> = match uid {
         Some(uid) => all_playlists
@@ -464,8 +551,13 @@ pub async fn load_library(runtime: &Arc<AppRuntime<LoggingAdapter>>) -> Result<u
             pl_favorites.push(map_playlist_row(p, false));
         }
     }
-    // Hearted playlist ids from the per-user library.db (favorites.rs).
+    // Hearted playlist ids from the per-user library.db (favorites.rs). This
+    // is the SAME set `fav_cache_qt` mirrors for the card producers, so
+    // refresh the mirror while it is in hand — the session seed was taken at
+    // activation and a heart set from another surface since then would
+    // otherwise only reach it through that surface's own write-through.
     let fav_pl_ids = crate::library_db_qt::favorite_playlist_ids();
+    crate::fav_cache_qt::set_all_playlists(fav_pl_ids.iter().copied().collect());
     for fid in fav_pl_ids {
         if !seen.insert(fid) {
             continue;
@@ -640,6 +732,15 @@ async fn fetch_purchases(
         .map(|a| {
             let tier = if a.hires { "hires" } else { "cd" };
             FeedItem {
+                // Purchase rows are the ONE group in this feed whose flags are
+                // not implied by the group itself: a purchased album can also
+                // be pinned and can also be a favourite, and both were left at
+                // their `Default` false. The card then drew a hollow heart and
+                // an unpinned badge over an album that IS both, and the first
+                // click on either REMOVED it. Same two O(1) reads every other
+                // producer does.
+                is_pinned: crate::sidebar_qt::is_pinned("album", &a.id),
+                is_favorite: crate::fav_cache_qt::is_album_favorite(&a.id),
                 kind: "album".into(),
                 group: "purchases".into(),
                 source: "qobuz".into(),
@@ -668,6 +769,9 @@ async fn fetch_purchases(
                 .unwrap_or_default();
             let tier = if t.hires { "hires" } else { "cd" };
             FeedItem {
+                // Tracks are not pinnable, but they ARE favouritable — see the
+                // album arm above for why this cannot stay at Default::false.
+                is_favorite: crate::fav_cache_qt::contains_track(t.id),
                 kind: "track".into(),
                 group: "purchases".into(),
                 source: "qobuz".into(),
@@ -724,9 +828,76 @@ pub fn with_library_mut<R>(f: impl FnOnce(&mut LibraryData) -> R) -> Option<R> {
     LIBRARY.lock().unwrap().as_mut().map(f)
 }
 
+/// THE heart-state read for a Qobuz entity — the one every publisher and the
+/// toggle direction must go through.
+///
+/// Two sources, in cost order:
+///  1. `fav_cache_qt` — O(1), seeded from `favorites_cache.db` at session
+///     activation and refreshed by `warm_favorites_cache` at shell entry, so
+///     it is populated from first paint and while offline.
+///  2. the Library feed — a linear scan, populated only after the user opens
+///     the Library view, kept as a fast path in the sense the brief meant it:
+///     it is the freshest thing there is once loaded, so a favourite that
+///     landed after the warm still lights up.
+///
+/// The two never disagree for long because every mutation writes BOTH (see
+/// `toggle_favorite` / `set_feed_favorite`), which is what makes the OR safe:
+/// an un-favourite clears the cache entry AND the feed flag.
+///
+/// Playlists are not Qobuz favourites at all — their flag lives in
+/// `library.db` (see `library_db_qt`) — but they ARE in the cache: it keeps a
+/// mirror of that set precisely so this function and
+/// `toggle_playlist_favorite` read one authority instead of two. Local / Plex
+/// rows are not in the cache (their authority is the local-favorites store)
+/// and fall through to the feed.
+///
+/// COST: the feed arm is a linear scan of up to 10k rows. That is correct for
+/// a detail HEADER (one call per page open) and wrong for a card rail — row
+/// producers call `fav_cache_qt::is_favorite` directly, which is the O(1) half
+/// alone. See its docs.
+pub fn is_favorite(kind: &str, id: &str) -> bool {
+    if !is_local_feed_id(kind, id) && crate::fav_cache_qt::is_favorite(kind, id) {
+        return true;
+    }
+    // Playlists STOP at the cache. For album/track/artist/label the feed flag
+    // and the cache flag answer the same question, so OR-ing the feed in only
+    // widens coverage. A playlist row's `is_favorite` used to mean "fetched
+    // into the favorites bucket", and even now that it mirrors library.db the
+    // feed is a stale snapshot of it — one that a toggle does not refresh. The
+    // OR would therefore resurrect a heart the user just cleared, in the one
+    // caller this rule sends here (the playlist header), which is precisely
+    // the display-vs-direction split the cache exists to close.
+    if kind == "playlist" {
+        return false;
+    }
+    with_library(|d| {
+        d.feed
+            .iter()
+            .any(|i| i.kind == kind && i.id == id && i.is_favorite)
+    })
+    .unwrap_or(false)
+}
+
 /// Flip a heart. Qobuz ids route to the favorites API; local/Plex ids to
-/// the local-favorites store (library_all.rs `is_local_feed_id` routing).
-/// Returns the new state, or None when the toggle failed.
+/// the local-favorites store (library_all.rs `is_local_feed_id` routing);
+/// playlists to the local library.db (see `toggle_playlist_favorite`).
+///
+/// Returns the state the UI should now show: the FLIPPED value on success,
+/// the UNCHANGED one when the write failed (so the caller's optimistic flip
+/// rolls back instead of leaving a heart lit over a 404), and None only when
+/// the kind is unroutable or the store could not be reached at all.
+///
+/// THE TYPE STRING IS SINGULAR. `/favorite/create` and `/favorite/delete`
+/// take `album_ids | artist_ids | track_ids | label_ids | award_ids`
+/// (inferred OpenAPI v10.0.0.0-beta, §Favorites), and the client builds the
+/// query key as `format!("{fav_type}_ids")` (qbz-qobuz client.rs
+/// `add_favorite`/`remove_favorite`) — so the reference passes "track" /
+/// "album" / "artist" / "label" everywhere (qbz/src/main.rs:2265, :12082,
+/// :12942, :13054). Passing the PLURAL `type` spelling that
+/// `/favorite/getUserFavorites` wants produced `artists_ids=…`: an unknown
+/// param, so the delete matched nothing and came back 404 Not Found, while
+/// the create silently no-opped with the heart left lit. Same word, two
+/// endpoints, two conventions — do not unify them.
 pub async fn toggle_favorite(
     runtime: &Arc<AppRuntime<LoggingAdapter>>,
     kind: &str,
@@ -735,19 +906,24 @@ pub async fn toggle_favorite(
     if is_local_feed_id(kind, id) {
         return toggle_local(kind, id);
     }
+    if kind == "playlist" {
+        return toggle_playlist_favorite(id).await;
+    }
     let fav_type = match kind {
-        "track" => "tracks",
-        "album" => "albums",
-        "artist" => "artists",
-        "label" => "labels",
-        "playlist" => "playlists",
-        _ => return None,
+        "track" | "album" | "artist" | "label" => kind,
+        _ => {
+            log::warn!("[qbz-qt] favorite toggle: unroutable kind '{kind}' ({id})");
+            return None;
+        }
     };
-    let current = with_library(|d| {
-        d.feed
-            .iter()
-            .any(|i| i.kind == kind && i.id == id && i.is_favorite)
-    })?;
+    // Direction from `is_favorite` — cache first, feed second. It used to come
+    // from the feed ALONE, which `load_library_once()` fills only when the user
+    // opens the Library view (main.rs `navigate_to("library")`): until then
+    // every read answered false, so every click sent `favorite/create` — a
+    // server no-op — while the UI flipped to filled. Un-favouriting was
+    // impossible from every detail page, card and row. The publishers read the
+    // same function now, so the drawn heart and the action cannot disagree.
+    let current = is_favorite(kind, id);
     let result = if current {
         runtime.core().remove_favorite(fav_type, id).await
     } else {
@@ -757,19 +933,72 @@ pub async fn toggle_favorite(
         Ok(()) => {
             let new_state = !current;
             set_feed_favorite(kind, id, new_state);
+            // Mirror to memory + `favorites_cache.db`, so the next page open
+            // (and the next launch) agrees with what just happened.
+            crate::fav_cache_qt::set(kind, id, new_state);
             Some(new_state)
         }
         Err(e) => {
             log::error!("[qbz-qt] favorite toggle ({kind}:{id}) failed: {e}");
-            None
+            // Report the UNCHANGED state: the caller flipped optimistically.
+            Some(current)
         }
     }
 }
 
+/// The playlist heart is a qbz-LOCAL flag, never a Qobuz favorite — the
+/// favorites endpoints have no `playlist_ids` param (inferred OpenAPI
+/// §Favorites lists five, none of them playlists), which is exactly why the
+/// reference sends this to `db.set_playlist_favorite` instead
+/// (qbz/src/main.rs:13652 + `playlist_toggle_favorite_by_id`:2196). Routing
+/// it to `/favorite/create` produced `playlists_ids=…`, i.e. a create that
+/// changed nothing and a delete that 404'd.
+///
+/// Direction comes from the db, not from the caller's rendered state: a card
+/// cannot know it (main.rs:2198, verbatim reasoning). Follow/unfollow of a
+/// FOREIGN playlist is a different action entirely (`playlist/subscribe`,
+/// wired in `playlist_qt::toggle_follow`) and is not touched here.
+async fn toggle_playlist_favorite(id: &str) -> Option<bool> {
+    let Ok(pid) = id.parse::<u64>() else {
+        log::warn!("[qbz-qt] playlist favorite: non-Qobuz id '{id}' — refusing");
+        return None;
+    };
+    // rusqlite off the async path (library_db_qt holds a blocking Connection).
+    // Read + write in ONE blocking hop so nothing can interleave between the
+    // direction read and the write.
+    let new_state = tokio::task::spawn_blocking(move || {
+        let current = crate::library_db_qt::is_favorite_playlist(pid);
+        let next = !current;
+        if crate::library_db_qt::set_favorite_playlist(pid, next) {
+            // Write-through to the in-memory mirror IN THE SAME HOP, so no
+            // card can be built between the db write and the mirror update
+            // and read the pre-toggle value.
+            crate::fav_cache_qt::set_playlist(pid, next);
+            next
+        } else {
+            log::error!("[qbz-qt] playlist {pid} favorite write failed");
+            current
+        }
+    })
+    .await
+    .ok()?;
+    set_feed_favorite("playlist", id, new_state);
+    Some(new_state)
+}
+
+/// Local/Plex heart against the local-favorites store. Same contract as
+/// `toggle_favorite`: the flipped state on success, the UNCHANGED state when
+/// the store write failed (so the caller's optimistic flip rolls back — the
+/// `.ok()?` arms used to swallow that as "nothing happened" and the heart
+/// kept the flip), None only when there is no store to talk to at all.
 fn toggle_local(kind: &str, id: &str) -> Option<bool> {
     let service = LOCAL_FAVS.get()?.lock().unwrap();
-    let new_state = if service.is_favorite(kind, id) {
-        service.unfavorite(kind, id).ok()?;
+    let current = service.is_favorite(kind, id);
+    let new_state = if current {
+        if let Err(e) = service.unfavorite(kind, id) {
+            log::error!("[qbz-qt] local unfavorite ({kind}:{id}) failed: {e}");
+            return Some(current);
+        }
         false
     } else {
         // Re-favorite: rebuild the snapshot from the feed row.
@@ -787,8 +1016,16 @@ fn toggle_local(kind: &str, id: &str) -> Option<bool> {
                     source: item.source.clone(),
                     favorited_at: 0,
                 })
-        })??;
-        service.favorite(&snap).ok()?;
+        })
+        .flatten();
+        let Some(snap) = snap else {
+            log::warn!("[qbz-qt] local favorite ({kind}:{id}): no feed row to snapshot");
+            return Some(current);
+        };
+        if let Err(e) = service.favorite(&snap) {
+            log::error!("[qbz-qt] local favorite ({kind}:{id}) failed: {e}");
+            return Some(current);
+        }
         true
     };
     set_feed_favorite(kind, id, new_state);
@@ -818,10 +1055,33 @@ pub(crate) fn is_local_album_key(id: &str) -> bool {
 
 /// Flip the favorite flag on the stored feed row (model-of-truth for the
 /// `libraryFavoriteChanged` signal).
+///
+/// ALL matching rows, not the first: one entity can appear twice in the merged
+/// feed under the same `(kind, id)` — a purchased album that is also a
+/// favourite lands once in the `favorites` group and once in `purchases`.
+/// `find` updated only one of them, and since `is_favorite` answers with
+/// `any(...)`, an un-favourite that left the second row lit kept reading
+/// "favourite" and the next click re-added it.
 fn set_feed_favorite(kind: &str, id: &str, value: bool) {
     with_library_mut(|d| {
-        if let Some(item) = d.feed.iter_mut().find(|i| i.kind == kind && i.id == id) {
+        for item in d.feed.iter_mut().filter(|i| i.kind == kind && i.id == id) {
             item.is_favorite = value;
+        }
+    });
+}
+
+/// A pin/unpin just landed: patch the cached feed rows so a later
+/// serialization of this document does not resurrect the stale flag.
+///
+/// Twin of `home_qt::apply_pin_change` / `search_qt::apply_pin_change`, and
+/// like them it publishes NOTHING: the rows on screen are corrected in place
+/// by `QbzLibrary.pinChanged`, which `LibraryView.qml` listens to, and
+/// re-serializing a 10k-row feed per pin click is exactly the delegate-model
+/// teardown this split exists to avoid.
+pub(crate) fn apply_pin_change(kind: &str, id: &str, pinned: bool) {
+    with_library_mut(|d| {
+        for item in d.feed.iter_mut().filter(|i| i.kind == kind && i.id == id) {
+            item.is_pinned = pinned;
         }
     });
 }

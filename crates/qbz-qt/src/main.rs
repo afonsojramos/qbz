@@ -35,6 +35,8 @@ mod artwork_qt;
 mod atmosphere_qt;
 mod bridge;
 mod discover_config_qt;
+mod fav_cache_qt;
+mod foryou_qt;
 mod genre_filter_qt;
 mod home_qt;
 mod icon_tint_qt;
@@ -113,6 +115,10 @@ static LOGIN_TASK: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
 /// once per shell entry; `reloadHome()` bypasses the flag).
 static HOME_LOADED: Mutex<bool> = Mutex::new(false);
 
+/// Whether the favourite-id cache has had its network refresh this session
+/// (`warm_favorites_once`). Reset on logout with the rest.
+static FAV_WARMED: Mutex<bool> = Mutex::new(false);
+
 pub(crate) fn register_qt_thread(thread: CxxQtThread<QbzBridge>) {
     if QT_THREAD.set(thread).is_err() {
         log::warn!("[qbz-qt] Qt thread handle already registered");
@@ -190,6 +196,12 @@ fn enter_shell(session: auth_qt::SessionInfo) {
     integrations_qt::start(&app());
     // Phase 7: the sidebar playlist tree.
     load_sidebar_once();
+    // Refresh the favourite-id cache from the network. The disk seed already
+    // ran at session activation (auth_qt -> fav_cache_qt::init_for_user);
+    // this is the reference's shell-entry warm (crates/qbz/src/main.rs:418-500)
+    // and it is what keeps album / artist / track / label hearts — and the
+    // toggle direction behind them — correct without ever opening Library.
+    warm_favorites_once();
     // Phase 10: seed the playback request tier from the persisted
     // streaming-quality pref (Settings > Audio writes it live after this).
     playback_qt::set_streaming_quality(&settings_qt::streaming_quality());
@@ -297,9 +309,13 @@ pub(crate) fn do_logout() {
         // The local-library documents are per-user; a later login must not
         // inherit the previous user's cached tree.
         local_library_qt::reset();
-        // A later login must re-fetch Home + Library (new user, fresh data).
+        // A later login must re-fetch Home + Library (new user, fresh data)
+        // and re-warm the favourite-id cache that `auth_qt::logout` just
+        // emptied — otherwise the next account's hearts stay blank until it
+        // opens Library.
         *HOME_LOADED.lock().unwrap() = false;
         *LIBRARY_LOADED.lock().unwrap() = false;
+        *FAV_WARMED.lock().unwrap() = false;
         session_bridge::ui(|mut b| {
             b.as_mut().set_session_user_name(QString::from(""));
             b.as_mut().set_session_subscription(QString::from(""));
@@ -340,6 +356,32 @@ fn load_home_once() {
     }
     *HOME_LOADED.lock().unwrap() = true;
     reload_home();
+}
+
+// ============================ Favourites cache =============================
+
+/// Network refresh of the favourite-id cache, once per shell entry.
+///
+/// Skipped offline on purpose: the disk seed from `init_for_user` is the truth
+/// there, and the Qobuz gate would refuse the calls anyway. The flag is reset
+/// on logout alongside HOME_LOADED — `fav_cache_qt::teardown()` empties the
+/// sets, so a second login in the same process MUST be able to warm again.
+fn warm_favorites_once() {
+    if offline_fwd::engine().status().is_offline() {
+        log::info!("[qbz-qt] favorites cache warm skipped (offline session)");
+        return;
+    }
+    {
+        let mut guard = FAV_WARMED.lock().unwrap();
+        if *guard {
+            return;
+        }
+        *guard = true;
+    }
+    let runtime = app();
+    spawn(async move {
+        library_qt::warm_favorites_cache(&runtime).await;
+    });
 }
 
 // ============================ Playback (phase 4) ===========================
@@ -555,13 +597,45 @@ pub(crate) fn enqueue_album(album_id: String, mode: String) {
     });
 }
 
-/// AlbumCard pin badge: toggle + signal the result.
+/// Card / detail-header pin badge: mutate the store, then fan the result out
+/// — the ADR-006 per-user stores have no change-notify, so the mutation site
+/// owns the fan-out (Slint's `on_toggle_pin` does the same thing: badge walk
+/// over the live models, then `pinned_section::rebuild_pinned`).
+///
+/// FIVE consumers, and only ONE of them re-renders anything:
+///  - `pin-changed` (`{kind}:{id}`) — the badge walk. Every AlbumCard /
+///    ArtistCard / PlaylistCard on screen listens for its own key and flips
+///    its glyph in place, and the Library All feed patches its own row. No
+///    model is replaced, so no delegate is torn down.
+///  - `home_qt::apply_pin_change` — patches the cached candidate rows (for
+///    the NEXT republish, whatever causes it) and rebuilds the Pinned rail
+///    on its own `pinnedJson` property. The three tab documents are left
+///    alone.
+///  - `recommendations_qt::apply_pin_change` — same shape for that tab's
+///    separate cache; badge-only (it has no pinned rail).
+///  - `search_qt::apply_pin_change` — same again. Search NEEDS it because its
+///    cached page is re-published routinely (the artwork pass after `submit`,
+///    plus `tab_changed` / `load_more` / `filter_changed`), and each of those
+///    swaps the model out from under the card: without the patch the stale
+///    `isPinned` in the cache silently reverted the user's flip a second after
+///    the click, whenever a cover happened to land.
+///  - `library_qt::apply_pin_change` — patches the cached merged feed. Only
+///    re-serialized by a full `reload_library` today, so it is the cheap
+///    insurance rather than a live bug.
+///
+/// EVERY consumer here is a cache patch or an in-place badge signal. The rule
+/// this encodes: a per-click mutation must never republish a document. See
+/// `home_qt::apply_pin_change`'s docs for what republishing cost.
 pub(crate) fn toggle_pin(kind: String, id: String, title: String, subtitle: String, artwork_url: String) {
     if let Some(value) = sidebar_qt::toggle_pin(&kind, &id, &title, &subtitle, &artwork_url) {
         let key = format!("{kind}:{id}");
         library_bridge::ui(move |mut b| {
             b.as_mut().pin_changed(QString::from(key.as_str()), value);
         });
+        home_qt::apply_pin_change(&kind, &id, value);
+        recommendations_qt::apply_pin_change(&kind, &id, value);
+        search_qt::apply_pin_change(&kind, &id, value);
+        library_qt::apply_pin_change(&kind, &id, value);
     }
 }
 
@@ -1355,17 +1429,67 @@ fn emit_library_artwork(key: String, path: String) {
 
 /// Card heart: toggle + signal the result (or the unchanged state on
 /// failure, so the UI rolls back).
+///
+/// The rollback half only became real once `library_qt::toggle_favorite`
+/// started returning `Some(current)` on a failed write instead of `None` —
+/// while it returned None this emitted nothing and every optimistic flip
+/// stuck, which is how a 404'd un-favorite still read as un-favorited until
+/// the next library reload. NOTE the signal is only USEFUL where somebody
+/// connects it. Listeners today: `LibraryView.qml`, `AlbumView.qml` (header
+/// heart, `album:{id}`) and `ArtistView.qml` (header follow `artist:{id}` +
+/// its Popular Tracks / Appears On rows, `track:{id}`), plus — since the round
+/// that made the optimistic flips reconcilable — `cards/AlbumCard`,
+/// `cards/ArtistCard`, `cards/PlaylistCard`, `rows/TrackRow`, `TrackCard`,
+/// `QueuePanel` and `shell/PlayerBar`. So every heart in the app settles here.
+///
+/// Do NOT "fix" a stale heart by republishing a document from a toggle. That
+/// hands `model:` a new array, and `QQuickItemView::setModel()` resets the
+/// scroll offset AND tears down the QQmlDelegateModel — which is this build's
+/// only crash signature (a null read at libQt6QmlModels[420c5], reproduced
+/// live). The signal exists so a badge can be patched in place instead.
 pub(crate) fn library_toggle_favorite(kind: String, id: String) {
-    let key = library_qt::feed_key(&kind, &id);
     let runtime = app();
     spawn(async move {
         if let Some(value) = library_qt::toggle_favorite(&runtime, &kind, &id).await {
-            library_bridge::ui(move |mut b| {
-                b.as_mut()
-                    .library_favorite_changed(QString::from(key.as_str()), value);
-            });
+            emit_library_favorite(&kind, &id, value);
         }
     });
+}
+
+/// THE settle point for a heart, wherever the click came from: emit the
+/// in-place signal, then fan the settled value into the document caches.
+///
+/// Split out of `library_toggle_favorite` so a domain that owns its own header
+/// state (playlist_qt) can settle BOTH its document and the feed row from the
+/// one authoritative answer instead of guessing twice — and now so that every
+/// mutation site reaches the fan-out through one door.
+///
+/// The fan-out is the favourite twin of `toggle_pin`'s, and it exists because
+/// build-time stamping alone is not enough: the three caches below are
+/// SNAPSHOTS that get re-serialized later (Discover's section configurator,
+/// search's post-`submit` artwork pass, a reco tab re-entry), and a snapshot
+/// re-published after a toggle put the pre-toggle heart back on screen — over
+/// an item whose real state had changed, so the next click did the opposite of
+/// what the glyph advertised. Each patches its own rows and publishes NOTHING;
+/// the cards on screen are already correct from their optimistic flip and the
+/// `libraryFavoriteChanged` signal.
+///
+/// NOT yet covered — the PAGE-lifetime documents, whose republish window is
+/// the couple of seconds between a page opening and its artwork/deferred rows
+/// landing: `album_qt` (header + track rows), `artist_qt` (header + top
+/// tracks), `playlist_qt` (track rows), `label_qt` (header + cards + top
+/// tracks), `browse_qt` (cards). They are listed here rather than left
+/// unmentioned; the fix is one `apply_favorite_change` per module, identical
+/// in shape to the three below.
+pub(crate) fn emit_library_favorite(kind: &str, id: &str, value: bool) {
+    let key = library_qt::feed_key(kind, id);
+    library_bridge::ui(move |mut b| {
+        b.as_mut()
+            .library_favorite_changed(QString::from(key.as_str()), value);
+    });
+    home_qt::apply_favorite_change(kind, id, value);
+    recommendations_qt::apply_favorite_change(kind, id, value);
+    search_qt::apply_favorite_change(kind, id, value);
 }
 
 /// `reloadHome()` invokable / auto-load worker: fetch + publish + artwork.
