@@ -980,6 +980,9 @@ Rectangle {
             // long bio pushes the fade down with no manual tuning.
             height: page.y + jumpBar.y
             tint: artist.headerColor || ""
+            // Route A: the blurred field. Empty until the cover resolves, and the
+            // flat tint stands in meanwhile (HeaderGradient handles the swap).
+            atmosphere: artist.headerAtmosphere || ""
             active: root.headerAtmoOn
         }
 

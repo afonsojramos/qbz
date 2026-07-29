@@ -9,25 +9,25 @@
 //! POC-NOTEs (skipped vs the Slint controller):
 //! - Artist/album blacklist filtering (T8): the blacklist store is not
 //!   opened in this POC (phase-1 skip), so no rows are dropped.
-//! - Recently-played rails (local play-history store): OUT OF SCOPE — the
-//!   view renders the Slint empty-data placeholders instead.
 //! - Reco-scored taste ordering of favorite albums (reco store skipped):
-//!   favorites render in plain favorite order.
-//! - Most Played Albums / Radio / similar-albums / rediscover / essentials /
-//!   to-follow / spotlight rows (For You): reco-engine and local-history
-//!   rails out of scope (their pref entries are skipped). Qobuz Mixes
-//!   renders as the four static navigation tiles (the mix DETAIL views are
-//!   out of scope — tiles inert).
-//! - Recommendations tab: the external reco engine (crates/qbz/src/
-//!   external_reco.rs — seeded similar albums, weeklies builders, dismissal
-//!   stores) is not ported; the tab renders a placeholder while the
-//!   `showRecommendations` pref gates its visibility (1:1 Slint).
+//!   favorites render in plain favorite order, and Rediscover falls back to
+//!   the local "not in the recently-played window" heuristic (the same
+//!   fallback the Slint build uses while its reco store is cold).
+//! - Radio Stations (For You): the port has no album-radio invokable, so the
+//!   rail is NOT built — a tile that starts nothing is worse than an absent
+//!   rail. Artist Spotlight likewise has no ported panel.
+//! - Qobuz Mixes renders as the four static navigation tiles (the mix DETAIL
+//!   views are out of scope — tiles inert).
 //! - The "View all" full-list pages: the rails show the link when the
 //!   section carries an endpoint (1:1 header) but the click is INERT — the
 //!   DiscoverBrowse page is out of scope.
 //! - Editor's Picks / For You: RENDERING parity (same rails as the Slint
-//!   descriptor arms, prefs-driven order); the progressive per-branch lazy
-//!   load is simplified to the single discover-index fetch.
+//!   descriptor arms, prefs-driven order); the Slint per-branch LAZY For You
+//!   load is flattened into this one pass, so the rails that need a wave-1
+//!   seed (similar albums, artists to follow) add one extra concurrent
+//!   round trip to the home load.
+//! - Recommendations tab: ported in `recommendations_qt` (this module only
+//!   supplies the shared `HomeSection`/`HomeCard` transport).
 
 use std::sync::{Arc, Mutex};
 
@@ -48,6 +48,11 @@ pub struct HomeCard {
     pub id: String,
     pub title: String,
     pub artist: String,
+    /// Artist rails only: the muted second line ArtistCard renders under the
+    /// name (the reco "Similar to X, Y" caption). Omitted from the wire when
+    /// empty — every QML reader is `|| ""`-guarded.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub subtitle: String,
     #[serde(rename = "artistId")]
     pub artist_id: String,
     pub genre: String,
@@ -82,8 +87,10 @@ pub struct HomeCard {
 pub struct HomeSection {
     pub id: String,
     pub title: String,
-    /// "album" | "slim" | "playlist" | "artists" | "pinned" |
-    /// "recentPlaceholder".
+    /// "album" | "slim" | "slimTracks" | "playlist" | "artists" | "pinned" |
+    /// "mixes" | "recentPlaceholder". `slim` rows are ALBUMS (click opens the
+    /// album); `slimTracks` rows are TRACKS (click plays) — same card, two
+    /// activations, so the kind carries the difference.
     pub kind: String,
     /// Placeholder hint for recentPlaceholder sections.
     pub hint: String,
@@ -129,16 +136,43 @@ pub struct DiscoverSections {
     pub for_you: Vec<HomeSection>,
 }
 
+/// The personalized (non-discover-index) rails, resolved alongside the index.
+/// Every one of them self-hides while empty, 1:1 with the Slint arms.
+#[derive(Default)]
+pub struct Personalized {
+    /// "Library Albums" — the user's favorite albums.
+    pub favorite_albums: Vec<HomeCard>,
+    /// "Release Watch" — /release/watch.
+    pub release_watch: Vec<HomeCard>,
+    /// "Your Top Artists" — favorite artists.
+    pub top_artists: Vec<HomeCard>,
+    /// "Rediscover Your Library" — favorites absent from the recent window.
+    pub rediscover: Vec<HomeCard>,
+    /// "Artists to Follow" — similar artists off the favorite-artist seeds.
+    pub to_follow: Vec<HomeCard>,
+    /// "More From Your Library" / "Similar to {seed}" — /album/suggest.
+    pub similar: Vec<HomeCard>,
+    /// The localized title for `similar` (it names its seed album).
+    pub similar_title: String,
+}
+
 /// All sections any Discover tab can render, in construction order (the
 /// per-tab assembly clones from here). Ids are the DiscoverySectionId keys;
 /// "mostStreamed#album" is the EDITOR-tab variant (album carousel — the
 /// Home tab renders the same data as the "Popular albums" slim grid).
 fn build_candidates(
     containers: qbz_models::DiscoverContainers,
-    favorite_albums: Vec<HomeCard>,
-    release_watch: Vec<HomeCard>,
-    top_artists: Vec<HomeCard>,
+    p: Personalized,
 ) -> Vec<HomeSection> {
+    let Personalized {
+        favorite_albums,
+        release_watch,
+        top_artists,
+        rediscover,
+        to_follow,
+        similar,
+        similar_title,
+    } = p;
     let mut out: Vec<HomeSection> = Vec::new();
 
     push_albums(&mut out, "newReleases", qbz_i18n::t("New Releases"), "/discover/newReleases", containers.new_releases);
@@ -202,25 +236,88 @@ fn build_candidates(
         });
     }
 
-    // Recently-played rails are OUT OF SCOPE (local store) — the Slint
-    // empty-data placeholders render instead (Home only; the For You arms
-    // self-hide on empty data, so the forYou assembly drops these).
-    out.push(HomeSection {
-        id: "recentlyPlayedAlbums".to_string(),
-        title: qbz_i18n::t("Recently Played Albums"),
-        kind: "recentPlaceholder".to_string(),
-        hint: qbz_i18n::t("Albums you play will appear here."),
-        endpoint: String::new(),
-        items: Vec::new(),
-    });
-    out.push(HomeSection {
-        id: "continueListening".to_string(),
-        title: qbz_i18n::t("Recently Played Tracks"),
-        kind: "recentPlaceholder".to_string(),
-        hint: qbz_i18n::t("Tracks you play will appear here."),
-        endpoint: String::new(),
-        items: Vec::new(),
-    });
+    // Recently-played rails — the SHARED local history file
+    // (`recently_qt`, the same `recently_played.json` the Slint build
+    // writes). With data they are a real album carousel / slim TRACK
+    // carousel; empty they keep the Slint placeholders, which the For You
+    // assembly drops (its arms self-hide instead).
+    let recent_albums: Vec<HomeCard> = crate::recently_qt::load_albums()
+        .into_iter()
+        .map(map_recent_album)
+        .collect();
+    if recent_albums.is_empty() {
+        out.push(HomeSection {
+            id: "recentlyPlayedAlbums".to_string(),
+            title: qbz_i18n::t("Recently Played Albums"),
+            kind: "recentPlaceholder".to_string(),
+            hint: qbz_i18n::t("Albums you play will appear here."),
+            endpoint: String::new(),
+            items: Vec::new(),
+        });
+    } else {
+        out.push(HomeSection {
+            id: "recentlyPlayedAlbums".to_string(),
+            title: qbz_i18n::t("Recently Played Albums"),
+            kind: "album".to_string(),
+            hint: String::new(),
+            // Slint's "View all" here opens a LOCAL page (not a /discover
+            // endpoint); that page is not ported, so no header link.
+            endpoint: String::new(),
+            items: recent_albums,
+        });
+    }
+    let recent_tracks: Vec<HomeCard> = crate::recently_qt::load_tracks()
+        .into_iter()
+        .take(24)
+        .map(map_recent_track)
+        .collect();
+    if recent_tracks.is_empty() {
+        out.push(HomeSection {
+            id: "continueListening".to_string(),
+            title: qbz_i18n::t("Recently Played Tracks"),
+            kind: "recentPlaceholder".to_string(),
+            hint: qbz_i18n::t("Tracks you play will appear here."),
+            endpoint: String::new(),
+            items: Vec::new(),
+        });
+    } else {
+        out.push(HomeSection {
+            id: "continueListening".to_string(),
+            title: qbz_i18n::t("Recently Played Tracks"),
+            kind: "slimTracks".to_string(),
+            hint: String::new(),
+            endpoint: String::new(),
+            items: recent_tracks,
+        });
+    }
+
+    // Most Played Albums — ranked by LOCAL play count
+    // (`album_play_history`, the shared per-app SQLite store). No network.
+    let most_played: Vec<HomeCard> = qbz_app::settings::album_play_history::top_albums(20)
+        .into_iter()
+        .map(|r| HomeCard {
+            is_pinned: crate::sidebar_qt::is_pinned("album", &r.album_id),
+            id: r.album_id,
+            title: r.title,
+            artist: r.artist,
+            artist_id: r.artist_id,
+            year: r.year,
+            quality_tier: r.quality_tier,
+            quality_label: r.quality_label,
+            art_url: r.artwork_url,
+            ..HomeCard::default()
+        })
+        .collect();
+    if !most_played.is_empty() {
+        out.push(HomeSection {
+            id: "mostPlayedAlbums".to_string(),
+            title: qbz_i18n::t("Most Played Albums"),
+            kind: "album".to_string(),
+            hint: String::new(),
+            endpoint: String::new(),
+            items: most_played,
+        });
+    }
 
     push_albums(
         &mut out,
@@ -306,6 +403,39 @@ fn build_candidates(
             items: top_artists,
         });
     }
+    // For You: "More From Your Library" (/album/suggest, seeded by the most
+    // recent — else the first favorite — album; the title names its seed,
+    // 1:1 with the Slint `apply_more_from_library`).
+    if !similar.is_empty() {
+        out.push(HomeSection {
+            id: "similarAlbums".to_string(),
+            title: similar_title,
+            kind: "album".to_string(),
+            hint: String::new(),
+            endpoint: String::new(),
+            items: similar,
+        });
+    }
+    if !rediscover.is_empty() {
+        out.push(HomeSection {
+            id: "rediscoverLibrary".to_string(),
+            title: qbz_i18n::t("Rediscover Your Library"),
+            kind: "album".to_string(),
+            hint: String::new(),
+            endpoint: String::new(),
+            items: rediscover,
+        });
+    }
+    if !to_follow.is_empty() {
+        out.push(HomeSection {
+            id: "artistsToFollow".to_string(),
+            title: qbz_i18n::t("Artists to Follow"),
+            kind: "artists".to_string(),
+            hint: String::new(),
+            endpoint: String::new(),
+            items: to_follow,
+        });
+    }
 
     out
 }
@@ -314,9 +444,16 @@ fn build_candidates(
 /// pref ids in pref order (a disabled entry hides the section; a pref id
 /// the POC does not implement is skipped). `most_streamed_variant` picks
 /// the slim (Home) or album (Editor's Picks) candidate for the
-/// "mostStreamed" pref id. When `include_tail` (Home only), candidates
-/// with NO prefs entry at all append at the end (phase-11 behavior);
+/// "mostStreamed" pref id. When `include_tail` (Home only), candidates the
+/// prefs know NOTHING about append at the end (phase-11 behavior);
 /// tab-specific "#" variants never leak through the tail.
+///
+/// The tail is measured against ALL THREE tab lists, not just this tab's: a
+/// section that another tab owns but this one deliberately omits (For You's
+/// `similarAlbums` / `rediscoverLibrary` / `artistsToFollow`) is an
+/// intentional absence, and appending it here would silently graft For You
+/// rails onto Home. This is the port's equivalent of the Slint
+/// `HOME_RENDERABLE` guard.
 fn order_by_prefs(
     candidates: &[HomeSection],
     prefs: &qbz_app::settings::discover_prefs::DiscoverPrefs,
@@ -324,6 +461,7 @@ fn order_by_prefs(
     most_streamed_variant: &str,
     include_tail: bool,
 ) -> Vec<HomeSection> {
+    use qbz_app::settings::discover_prefs::DiscoveryTab;
     let tab_prefs = prefs.tab(tab);
     let mut gated: Vec<HomeSection> = Vec::new();
     for pref in tab_prefs {
@@ -340,8 +478,14 @@ fn order_by_prefs(
         }
     }
     if include_tail {
-        let known: std::collections::HashSet<&str> =
-            tab_prefs.iter().map(|p| p.id.as_str()).collect();
+        let known: std::collections::HashSet<&str> = [
+            DiscoveryTab::Home,
+            DiscoveryTab::EditorPicks,
+            DiscoveryTab::ForYou,
+        ]
+        .into_iter()
+        .flat_map(|t| prefs.tab(t).iter().map(|p| p.id.as_str()))
+        .collect();
         for s in candidates {
             if !s.id.contains('#') && !known.contains(s.id.as_str()) && !gated.iter().any(|g| g.id == s.id) {
                 gated.push(s.clone());
@@ -490,25 +634,78 @@ where
     // list in the background so the popup opens instantly and a REMEMBERED
     // Library > All selection resolves to names (see warm_up's docs).
     crate::genre_filter_qt::warm_up();
-    let (response, favorite_albums, release_watch, top_artists) = tokio::join!(
+    // Wave 1 — the index plus everything that needs no seed. The favorites
+    // are fetched ONCE each and feed several rails (Library Albums +
+    // Rediscover; Top Artists + Artists to Follow).
+    let (response, fav_albums, release_watch, fav_artists) = tokio::join!(
         runtime.core().get_discover_index(genre_ids),
-        favorite_album_cards(runtime),
+        fetch_fav_albums(runtime),
         fetch_release_watch(runtime),
-        top_artist_cards(runtime),
+        fetch_fav_artists(runtime),
     );
     let response = response.map_err(|e| e.to_string())?;
-    log::info!(
-        "[qbz-qt] discover index fetched; building home sections (fav={}, rw={}, artists={})",
-        favorite_albums.len(),
-        release_watch.len(),
-        top_artists.len(),
+
+    // Wave 2 — the two rails that need a wave-1 (or local-history) seed.
+    // Both are silent when their seed is missing: no favorites and no
+    // history means no request at all.
+    let recent_albums = crate::recently_qt::load_albums();
+    // `/album/suggest` only resolves QOBUZ album ids, so a locally-played or
+    // Plex album is not eligible as the seed (the same source guard the Slint
+    // Radio rail applies; empty source = legacy entry, treated as Qobuz).
+    let seed: Option<(String, String)> = recent_albums
+        .iter()
+        .find(|a| a.source.is_empty() || a.source.eq_ignore_ascii_case("qobuz"))
+        .map(|a| (a.id.clone(), a.title.clone()))
+        .or_else(|| fav_albums.first().map(|a| (a.id.clone(), a.title.clone())))
+        .filter(|(id, _)| !id.is_empty());
+    let (similar, to_follow) = tokio::join!(
+        async {
+            match seed.as_ref() {
+                Some((id, _)) => fetch_suggest(runtime, id).await,
+                None => Vec::new(),
+            }
+        },
+        fetch_to_follow(runtime, &fav_artists),
     );
-    let candidates = build_candidates(
-        response.containers,
-        favorite_albums,
+
+    // Rediscover: favorites the user has NOT played recently. The Slint build
+    // prefers its reco store's "forgotten favorites" when warm and falls back
+    // to exactly this heuristic when cold; this port only has the fallback.
+    let recent_ids: std::collections::HashSet<String> =
+        recent_albums.iter().map(|a| a.id.clone()).collect();
+    let rediscover: Vec<HomeCard> = fav_albums
+        .iter()
+        .filter(|a| !recent_ids.contains(&a.id))
+        .take(18)
+        .cloned()
+        .map(map_flat_album)
+        .collect();
+
+    let personalized = Personalized {
+        favorite_albums: fav_albums.iter().take(18).cloned().map(map_flat_album).collect(),
         release_watch,
-        top_artists,
+        top_artists: fav_artists.iter().take(18).cloned().map(map_fav_artist).collect(),
+        rediscover,
+        to_follow,
+        similar_title: match seed.as_ref() {
+            Some((_, title)) if !title.is_empty() => {
+                qbz_i18n::t_args("Similar to {}", &[title.as_str()])
+            }
+            _ => qbz_i18n::t("More From Your Library"),
+        },
+        similar,
+    };
+    log::info!(
+        "[qbz-qt] discover index fetched; building home sections (fav={}, rw={}, artists={}, \
+         rediscover={}, toFollow={}, similar={})",
+        personalized.favorite_albums.len(),
+        personalized.release_watch.len(),
+        personalized.top_artists.len(),
+        personalized.rediscover.len(),
+        personalized.to_follow.len(),
+        personalized.similar.len(),
     );
+    let candidates = build_candidates(response.containers, personalized);
     let sections = assemble(&candidates, &load_prefs());
     if let Ok(mut cache) = CANDIDATES.lock() {
         *cache = candidates;
@@ -740,18 +937,53 @@ fn map_flat_album(album: Album) -> HomeCard {
     }
 }
 
-/// "Library Albums" — favorite albums, capped at 18, in favorite order
-/// (reco taste-ordering skipped — cold reco store = no reorder upstream).
-async fn favorite_album_cards<A>(runtime: &Arc<AppRuntime<A>>) -> Vec<HomeCard>
+/// Map one recently-played album (local history) onto a card. The stored ISO
+/// release date is localized here exactly as the discover cards do.
+fn map_recent_album(a: crate::recently_qt::RecentAlbum) -> HomeCard {
+    HomeCard {
+        is_pinned: crate::sidebar_qt::is_pinned("album", &a.id),
+        id: a.id,
+        title: a.title,
+        artist: a.artist,
+        genre: a.genre,
+        year: if a.release_date.is_empty() {
+            String::new()
+        } else {
+            qbz_text_utils::dates::release_label(Some(a.release_date.as_str()))
+        },
+        quality_tier: a.quality_tier,
+        quality_label: a.quality_label,
+        art_url: a.artwork_url,
+        ..HomeCard::default()
+    }
+}
+
+/// Map one recently-played track onto a slim row (`slimTracks` — click plays).
+fn map_recent_track(t: crate::recently_qt::RecentTrack) -> HomeCard {
+    HomeCard {
+        id: t.id,
+        title: t.title,
+        artist: t.subtitle,
+        art_url: if t.artwork_url.is_empty() {
+            t.album_artwork_url
+        } else {
+            t.artwork_url
+        },
+        ..HomeCard::default()
+    }
+}
+
+/// The user's favorite albums, in favorite order. ONE fetch feeding both the
+/// "Library Albums" rail and Rediscover (reco taste-ordering skipped — the
+/// port has no reco store, so favorites keep their Qobuz order).
+async fn fetch_fav_albums<A>(runtime: &Arc<AppRuntime<A>>) -> Vec<Album>
 where
     A: FrontendAdapter + Send + Sync + 'static,
 {
     match runtime.core().get_favorites("albums", 100, 0).await {
-        Ok(value) => qbz_models::lenient::parse_items_array::<Album>(&value, "albums", "home fav album")
-            .into_iter()
-            .take(18)
-            .map(map_flat_album)
-            .collect(),
+        Ok(value) => {
+            qbz_models::lenient::parse_items_array::<Album>(&value, "albums", "home fav album")
+        }
         Err(e) => {
             log::warn!("[qbz-qt] favorite albums fetch failed: {e}");
             Vec::new()
@@ -774,27 +1006,116 @@ where
     }
 }
 
-/// "Your Top Artists" — favorite artists, capped 18.
-async fn top_artist_cards<A>(runtime: &Arc<AppRuntime<A>>) -> Vec<HomeCard>
+/// The user's favorite artists. ONE fetch feeding both "Your Top Artists"
+/// and the "Artists to Follow" similar-artist seeds.
+async fn fetch_fav_artists<A>(runtime: &Arc<AppRuntime<A>>) -> Vec<Artist>
 where
     A: FrontendAdapter + Send + Sync + 'static,
 {
     match runtime.core().get_favorites("artists", 50, 0).await {
-        Ok(value) => qbz_models::lenient::parse_items_array::<Artist>(&value, "artists", "home artist")
-            .into_iter()
-            .take(18)
-            .map(|a| HomeCard {
-                id: a.id.to_string(),
-                title: a.name,
-                art_url: a
-                    .image
-                    .and_then(|img| img.best().cloned())
-                    .unwrap_or_default(),
-                ..HomeCard::default()
-            })
-            .collect(),
+        Ok(value) => {
+            qbz_models::lenient::parse_items_array::<Artist>(&value, "artists", "home artist")
+        }
         Err(e) => {
             log::warn!("[qbz-qt] favorite artists fetch failed: {e}");
+            Vec::new()
+        }
+    }
+}
+
+fn map_fav_artist(a: Artist) -> HomeCard {
+    HomeCard {
+        is_pinned: crate::sidebar_qt::is_pinned("artist", &a.id.to_string()),
+        id: a.id.to_string(),
+        title: a.name,
+        item_kind: "artist".to_string(),
+        art_url: a
+            .image
+            .and_then(|img| img.best().cloned())
+            .unwrap_or_default(),
+        ..HomeCard::default()
+    }
+}
+
+/// Seeds for "Artists to Follow" (foryou.rs `ARTIST_SEEDS`).
+const ARTIST_SEEDS: usize = 4;
+/// Similar artists requested per seed (foryou.rs `SIMILAR_PER_SEED`).
+const SIMILAR_PER_SEED: u32 = 10;
+/// Display cap for the row (foryou.rs `FOLLOW_MAX`).
+const FOLLOW_MAX: usize = 18;
+
+/// Similar artists for ONE seed (absent seed -> no request, empty result).
+async fn seed_similar<A>(runtime: &Arc<AppRuntime<A>>, seed: Option<u64>) -> Vec<Artist>
+where
+    A: FrontendAdapter + Send + Sync + 'static,
+{
+    let Some(id) = seed else {
+        return Vec::new();
+    };
+    match runtime.core().get_similar_artists(id, SIMILAR_PER_SEED, 0).await {
+        Ok(page) => page.items,
+        Err(e) => {
+            log::warn!("[qbz-qt] similar artists fetch failed (seed {id}): {e}");
+            Vec::new()
+        }
+    }
+}
+
+/// "Artists to Follow" — similar artists off up to [`ARTIST_SEEDS`]
+/// favorites, excluding the ones already followed. The seed calls run
+/// CONCURRENTLY, but the dedup + [`FOLLOW_MAX`] cap are then applied
+/// sequentially IN SEED ORDER, so the membership matches the reference's
+/// sequential loop exactly. No favorites -> no seeds -> no request.
+async fn fetch_to_follow<A>(runtime: &Arc<AppRuntime<A>>, fav_artists: &[Artist]) -> Vec<HomeCard>
+where
+    A: FrontendAdapter + Send + Sync + 'static,
+{
+    let seeds: Vec<u64> = fav_artists.iter().take(ARTIST_SEEDS).map(|a| a.id).collect();
+    if seeds.is_empty() {
+        return Vec::new();
+    }
+    // Fixed 4-wide fan-out (ARTIST_SEEDS); missing seeds resolve instantly.
+    let (s0, s1, s2, s3) = tokio::join!(
+        seed_similar(runtime, seeds.first().copied()),
+        seed_similar(runtime, seeds.get(1).copied()),
+        seed_similar(runtime, seeds.get(2).copied()),
+        seed_similar(runtime, seeds.get(3).copied()),
+    );
+
+    let mut seen: std::collections::HashSet<u64> = fav_artists.iter().map(|a| a.id).collect();
+    let mut out: Vec<HomeCard> = Vec::new();
+    'outer: for group in [s0, s1, s2, s3] {
+        for artist in group {
+            if out.len() >= FOLLOW_MAX {
+                break 'outer;
+            }
+            if seen.insert(artist.id) {
+                out.push(map_fav_artist(artist));
+            }
+        }
+    }
+    out
+}
+
+/// "More From Your Library" — `/album/suggest` for a seed album, capped 18.
+async fn fetch_suggest<A>(runtime: &Arc<AppRuntime<A>>, album_id: &str) -> Vec<HomeCard>
+where
+    A: FrontendAdapter + Send + Sync + 'static,
+{
+    if album_id.is_empty() {
+        return Vec::new();
+    }
+    match runtime.core().get_album_suggest(album_id).await {
+        Ok(resp) => resp
+            .albums
+            .map(|p| p.items)
+            .unwrap_or_default()
+            .into_iter()
+            .take(18)
+            .map(map_flat_album)
+            .collect(),
+        Err(e) => {
+            log::warn!("[qbz-qt] album suggest fetch failed: {e}");
             Vec::new()
         }
     }

@@ -31,15 +31,20 @@ const LASTFM_SIMILAR_TTL_SECS: i64 = 30 * 24 * 60 * 60;
 
 static CACHE_DIR: OnceLock<Option<std::path::PathBuf>> = OnceLock::new();
 
-fn cache_dir() -> Option<std::path::PathBuf> {
+/// The directory holding `external_reco_cache.db`. Shared with the Discover
+/// Recommendations tab (`recommendations_qt`) ON PURPOSE: one resolution +
+/// results cache for both surfaces, so a similar-albums lookup paid for here
+/// is reused there and vice versa.
+pub(crate) fn cache_dir() -> Option<std::path::PathBuf> {
     CACHE_DIR
         .get_or_init(|| dirs::cache_dir().map(|d| d.join("qbz")))
         .clone()
 }
 
 /// The daily rotation seed, so the row varies day to day but is stable within
-/// one day (matching the Slint `rotation_seed`).
-fn rotation_seed() -> u64 {
+/// one day (matching the Slint `rotation_seed`). Shared with
+/// `recommendations_qt` so both surfaces rotate together.
+pub(crate) fn rotation_seed() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() / 86_400)
@@ -48,8 +53,11 @@ fn rotation_seed() -> u64 {
 
 // ── RecoCatalog over QbzCore (errors -> empty) ──────────────────────────────
 
-struct CoreRecoCatalog {
-    runtime: Arc<AppRuntime<LoggingAdapter>>,
+/// THE `RecoCatalog` adapter over `QbzCore` for this frontend. Shared with the
+/// Discover Recommendations tab (`recommendations_qt`) — there is exactly one
+/// adapter in the port, not one per surface.
+pub(crate) struct CoreRecoCatalog {
+    pub(crate) runtime: Arc<AppRuntime<LoggingAdapter>>,
 }
 
 #[async_trait]

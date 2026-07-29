@@ -387,6 +387,9 @@ Rectangle {
             // a long editorial description gave the header.
             height: page.y + headerDivider.y
             tint: album.headerColor || ""
+            // Route A: the blurred field. Empty until the cover resolves, and the
+            // flat tint stands in meanwhile (HeaderGradient handles the swap).
+            atmosphere: album.headerAtmosphere || ""
             active: root.headerAtmoOn
         }
 

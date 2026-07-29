@@ -35,6 +35,12 @@ pub mod qbz_home {
         // HomeSection shape, ordered by each tab's discover prefs).
         #[qproperty(QString, editor_sections_json)]
         #[qproperty(QString, for_you_sections_json)]
+        // Recommendations tab (the 4th) — same HomeSection shape, published
+        // by src/recommendations_qt.rs. LAZY: nothing is fetched until the
+        // view calls `loadRecommendations()`, and a row whose service is not
+        // connected is simply absent from the document.
+        #[qproperty(QString, reco_sections_json)]
+        #[qproperty(bool, reco_loading)]
 
         type QbzHome = super::QbzHomeRust;
 
@@ -47,6 +53,11 @@ pub mod qbz_home {
         /// index + rails and republish `homeSectionsJson`.
         #[qinvokable]
         fn reload_home(self: Pin<&mut QbzHome>);
+
+        /// Discover > Recommendations became visible: build the tab once per
+        /// session (idempotent; a re-entry only repaints from memory).
+        #[qinvokable]
+        fn load_recommendations(self: Pin<&mut QbzHome>);
     }
 
     impl cxx_qt::Threading for QbzHome {}
@@ -61,6 +72,8 @@ pub struct QbzHomeRust {
     home_sections_json: QString,
     editor_sections_json: QString,
     for_you_sections_json: QString,
+    reco_sections_json: QString,
+    reco_loading: bool,
 }
 
 impl Default for QbzHomeRust {
@@ -71,6 +84,8 @@ impl Default for QbzHomeRust {
             home_sections_json: QString::from("[]"),
             editor_sections_json: QString::from("[]"),
             for_you_sections_json: QString::from("[]"),
+            reco_sections_json: QString::from("[]"),
+            reco_loading: false,
         }
     }
 }
@@ -98,5 +113,9 @@ impl qbz_home::QbzHome {
 
     pub fn reload_home(self: Pin<&mut Self>) {
         crate::reload_home();
+    }
+
+    pub fn load_recommendations(self: Pin<&mut Self>) {
+        crate::recommendations_qt::ensure_loaded();
     }
 }

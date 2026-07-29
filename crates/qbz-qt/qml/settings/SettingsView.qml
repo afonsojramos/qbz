@@ -108,7 +108,11 @@ Item {
                             width: 16
                             height: 16
                             anchors.verticalCenter: parent.verticalCenter
-                            tintName: parent.parent.active ? "primary" : "secondary"
+                            // Theme tokens on both arms — the row sits on
+                            // surface-elevated / surface-hover, so the active
+                            // glyph is "textPrimary" and NOT the fixed-white
+                            // "primary" bake (white-on-white on light themes).
+                            tintName: parent.parent.active ? "textPrimary" : "secondary"
                         }
                         Text {
                             height: parent.height

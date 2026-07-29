@@ -175,6 +175,50 @@ fn paginate(total: usize, requested_page: usize) -> (usize, usize, usize, usize)
     (page, page_count, start, end)
 }
 
+/// Queue-wide upcoming indices of the rows the panel is CURRENTLY showing, in
+/// display order (search filter + pagination applied) — the hoisted port of
+/// `crates/qbz/src/queue.rs::resolve_upcoming_index`, resolved once per action
+/// so one call answers every row on the page.
+///
+/// WHY IT EXISTS: the QML hands PAGE-LOCAL row numbers, and `page * PAGE_SIZE
+/// + row` is the queue index ONLY while the search box is empty. With a query
+/// active the page walks the FILTERED list, so that arithmetic names a
+/// different track than the one under the pointer — the core indexes the
+/// unfiltered upcoming list. Every row mutation (play / remove /
+/// remove-all-after / drag reorder) resolves through here, which is also what
+/// makes the reorder's insertion slot land on the right gap when the panel is
+/// paged or filtered.
+///
+/// The `paginate` call clamps the page exactly like `publish` does, so the
+/// slice is the one on screen even if `VIEW.page` is momentarily past the end.
+fn page_row_indices(upcoming: &[QueueTrack], query: &str, page: usize) -> Vec<usize> {
+    if query.is_empty() {
+        let (_, _, start, end) = paginate(upcoming.len(), page);
+        return (start..end).collect();
+    }
+    let matches: Vec<usize> = upcoming
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| matches_query(t, query))
+        .map(|(i, _)| i)
+        .collect();
+    let (_, _, start, end) = paginate(matches.len(), page);
+    matches[start..end].to_vec()
+}
+
+/// `page_row_indices` against the live queue + the current view state. ONE
+/// `get_queue_state_full` per user action (the mutations below all await a
+/// core call anyway); the returned vector is at most PAGE_SIZE long.
+async fn current_page_indices(runtime: &Arc<AppRuntime<LoggingAdapter>>) -> Vec<usize> {
+    let (search, page) = {
+        let view = VIEW.lock().unwrap();
+        (view.search.clone(), view.page)
+    };
+    let query = search.trim().to_lowercase();
+    let state = runtime.core().get_queue_state_full().await;
+    page_row_indices(&state.upcoming, &query, page)
+}
+
 /// Search predicate — same truth as `display_title(t)` + artist, minus the
 /// intermediate `display_title` clone in the (dominant) version-less case.
 /// Runs over the WHOLE upcoming list on every keystroke, so the saved
@@ -339,31 +383,73 @@ pub fn set_page(page: i32) {
 }
 
 pub async fn play_upcoming(runtime: &Arc<AppRuntime<LoggingAdapter>>, page_index: usize) {
-    let start = VIEW.lock().unwrap().page * PAGE_SIZE;
-    let upcoming_index = start + page_index;
+    let Some(&upcoming_index) = current_page_indices(runtime).await.get(page_index) else {
+        log::warn!("[qbz-qt] queue: play_upcoming {page_index} out of range");
+        return;
+    };
     if let Some(track) = runtime.core().play_upcoming_at(upcoming_index).await {
         crate::playback_qt::play_queue_track_public(runtime, track.id).await;
     }
 }
 
 pub async fn remove_upcoming(runtime: &Arc<AppRuntime<LoggingAdapter>>, page_index: usize) {
-    let start = VIEW.lock().unwrap().page * PAGE_SIZE;
-    let upcoming_index = start + page_index;
+    let Some(&upcoming_index) = current_page_indices(runtime).await.get(page_index) else {
+        log::warn!("[qbz-qt] queue: remove_upcoming {page_index} out of range");
+        return;
+    };
     runtime.core().remove_upcoming_track(upcoming_index).await;
     publish(runtime).await;
 }
 
 pub async fn remove_all_after(runtime: &Arc<AppRuntime<LoggingAdapter>>, page_index: usize) {
-    let start = VIEW.lock().unwrap().page * PAGE_SIZE;
-    let upcoming_index = start + page_index;
+    let Some(&upcoming_index) = current_page_indices(runtime).await.get(page_index) else {
+        log::warn!("[qbz-qt] queue: remove_all_after {page_index} out of range");
+        return;
+    };
     runtime.core().remove_upcoming_after(upcoming_index).await;
     publish(runtime).await;
 }
 
-/// Drag reorder with QUEUE-WIDE indices (the QML list is unfiltered when
-/// drag is enabled, so page-local == page*40 + row).
-pub async fn move_track(runtime: &Arc<AppRuntime<LoggingAdapter>>, from: usize, to: usize) {
-    runtime.core().move_track(from, to).await;
+/// Drag reorder — move the PAGE-LOCAL row `from_page` to the insertion slot
+/// `to_slot` (0..=page_len), the contract of `QueueSidebar.slint`'s
+/// `QueueState.reorder`. Both ends resolve to QUEUE-WIDE upcoming indices
+/// through `page_row_indices` first: the panel hands page-local numbers like
+/// every other row action, and under a search filter (or on page >= 1 of a
+/// filtered list) a page-local number is a position in the FILTERED list, not
+/// in the queue — passing it straight to the core moved a different track.
+///
+/// Slot semantics (Slint 1:1): slot k < page_len inserts BEFORE page-local row
+/// k; slot == page_len appends after the last visible row (one past it in
+/// queue-wide upcoming space). `to == from` and `to == from + 1` are the same
+/// gap and are dropped by the panel before they get here; `from_q == to_q` is
+/// re-checked below because the two page-local slots can collapse onto one
+/// queue index once the filter is resolved.
+///
+/// POC-NOTE: the Slint arm first offers the move to the QConnect cloud
+/// (WS-authoritative when connected); there is no QConnect seam in this port,
+/// so the local core path is the only one.
+pub async fn move_track(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    from_page: usize,
+    to_slot: usize,
+) {
+    let page_rows = current_page_indices(runtime).await;
+    let Some(&from_q) = page_rows.get(from_page) else {
+        log::warn!("[qbz-qt] queue: reorder from {from_page} out of range");
+        return;
+    };
+    let to_q = if to_slot >= page_rows.len() {
+        match page_rows.last() {
+            Some(&last) => last + 1,
+            None => return,
+        }
+    } else {
+        page_rows[to_slot]
+    };
+    if from_q == to_q {
+        return;
+    }
+    runtime.core().move_track(from_q, to_q).await;
     publish(runtime).await;
 }
 
@@ -374,7 +460,10 @@ pub async fn play_history(runtime: &Arc<AppRuntime<LoggingAdapter>>, index: usiz
         log::warn!("[qbz-qt] queue: play_history {index} out of range");
         return;
     };
-    runtime.core().set_queue(vec![track.clone()], Some(0)).await;
+    // Through the stamping seam: a history row already carries the origin it
+    // was played from, so it survives the replay; a legacy row with none falls
+    // back to its own album instead of publishing a dead layers glyph.
+    crate::playback_qt::set_queue_stamped(runtime, vec![track.clone()], Some(0), None).await;
     crate::playback_qt::play_queue_track_public(runtime, track.id).await;
 }
 

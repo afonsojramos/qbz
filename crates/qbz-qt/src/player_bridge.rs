@@ -95,6 +95,12 @@ pub mod qbz_player {
         #[qproperty(QString, np_album)]
         #[qproperty(QString, np_album_id)]
         #[qproperty(QString, np_artist_id)]
+        // "Playing from" ORIGIN of the current track (NowPlayingState
+        // context-kind / context-id): the container the queue was launched
+        // from, republished on every track change. kind is "album" | "artist"
+        // | "playlist" | "label"; the song-card layers glyph navigates there.
+        #[qproperty(QString, np_context_kind)]
+        #[qproperty(QString, np_context_id)]
         // "Show track playing context" pref (Playback settings) — feeds the
         // SongCard layers icon.
         #[qproperty(bool, show_context_icon)]
@@ -212,6 +218,8 @@ pub struct QbzPlayerRust {
     np_album: QString,
     np_album_id: QString,
     np_artist_id: QString,
+    np_context_kind: QString,
+    np_context_id: QString,
     show_context_icon: bool,
 }
 
@@ -257,6 +265,12 @@ impl Default for QbzPlayerRust {
             np_album: QString::default(),
             np_album_id: QString::default(),
             np_artist_id: QString::default(),
+            np_context_kind: QString::default(),
+            np_context_id: QString::default(),
+            // Seed only — this runs when the QML engine constructs the
+            // singleton, which can be BEFORE the playback-preferences store is
+            // open (then it reads false). `now_playing::publish_show_context_icon`
+            // re-publishes it on shell entry and on the Settings toggle.
             show_context_icon: crate::settings_qt::show_context_icon(),
         }
     }

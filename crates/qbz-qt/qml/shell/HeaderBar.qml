@@ -138,7 +138,11 @@ Rectangle {
                 width: navTab.showIcon ? 14 : 0
                 height: 14
                 anchors.verticalCenter: parent.verticalCenter
-                tintName: navTab.isActive ? "primary" : "secondary"
+                // Both arms are THEME tokens (the tab sits on surface-elevated
+                // / surface-hover): "textPrimary", never the fixed-white
+                // "primary" bake, or the active tab is white-on-white on every
+                // light theme. See the vocabulary in QbzIcon.qml.
+                tintName: navTab.isActive ? "textPrimary" : "secondary"
             }
             Text {
                 height: parent.height
@@ -193,7 +197,7 @@ Rectangle {
             width: 16
             height: 16
             anchors.centerIn: parent
-            tintName: cnb.isActive ? "primary" : "secondary"
+            tintName: cnb.isActive ? "textPrimary" : "secondary"
         }
         MouseArea {
             id: cnbArea
@@ -308,7 +312,7 @@ Rectangle {
                     width: 16
                     height: 16
                     anchors.centerIn: parent
-                    tintName: plPopup.opened ? "primary" : "secondary"
+                    tintName: plPopup.opened ? "textPrimary" : "secondary"
                 }
                 MouseArea {
                     id: plBtnArea
@@ -579,11 +583,15 @@ Rectangle {
                 }
             }
         }
-        // Placeholder (centered when empty + unfocused, left once typing).
+        // Placeholder — centered on the WHOLE box, exactly like
+        // HeaderBar.slint:792 (`width: parent.width; horizontal-alignment:
+        // center`). The magnifier is absolutely positioned at x:10 and takes
+        // no layout space, so it must not shift the placeholder either: the
+        // 30px left inset this used to carry pushed "Search" 15px right of
+        // the field's centre, which is what reads as "not centred".
         Text {
             visible: searchInput.text === "" && !searchInput.activeFocus
             anchors.fill: parent
-            anchors.leftMargin: 30
             text: QbzSession.tr("Search", QbzSession.trRev)
             color: theme.textMuted
             font.pixelSize: 13
@@ -617,7 +625,7 @@ Rectangle {
                 width: 12
                 height: 12
                 anchors.centerIn: parent
-                tintName: clearArea.containsMouse ? "primary" : "muted"
+                tintName: clearArea.containsMouse ? "textPrimary" : "muted"
             }
             MouseArea {
                 id: clearArea
@@ -835,7 +843,11 @@ Rectangle {
                 width: 14
                 height: 14
                 anchors.centerIn: parent
-                tintName: wcCloseArea.containsMouse ? "primary" : "secondary"
+                // The hover fill is a FIXED #e81123 under every theme, so the
+                // hovered glyph is literal white ("white"), not a theme
+                // token — the one place in this file where the fixed bake is
+                // the right answer.
+                tintName: wcCloseArea.containsMouse ? "white" : "secondary"
             }
             MouseArea {
                 id: wcCloseArea

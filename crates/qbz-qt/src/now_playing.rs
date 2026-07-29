@@ -35,6 +35,14 @@ pub struct NowPlayingModel {
     pub album: String,
     pub album_id: String,
     pub artist_id: String,
+    /// "Playing from" ORIGIN of the current track — the container the queue was
+    /// launched from, re-derived per track change (never a stale global).
+    /// `context_kind` is "album" | "artist" | "playlist" | "label";
+    /// `context_id` is that container's navigation id. Feeds the song-card
+    /// layers glyph (SongCard.slint `ctx-kind` / `ctx-id`, :151-156). Empty id
+    /// = no origin -> the card falls back to the track's own album.
+    pub context_kind: String,
+    pub context_id: String,
     pub artwork_path: String,
     pub elapsed_secs: i32,
     pub duration_secs: i32,
@@ -112,6 +120,10 @@ fn publish(m: &NowPlayingModel) {
         b.as_mut()
             .set_np_artist_id(QString::from(m.artist_id.as_str()));
         b.as_mut()
+            .set_np_context_kind(QString::from(m.context_kind.as_str()));
+        b.as_mut()
+            .set_np_context_id(QString::from(m.context_id.as_str()));
+        b.as_mut()
             .set_np_artwork_path(QString::from(m.artwork_path.as_str()));
         b.as_mut().set_np_elapsed_secs(m.elapsed_secs);
         b.as_mut().set_np_duration_secs(m.duration_secs);
@@ -153,10 +165,29 @@ fn publish(m: &NowPlayingModel) {
 pub fn publish_current() {
     let (_, snapshot) = with_model(|_| ());
     publish(&snapshot);
+    // The layers-glyph preference (see `publish_show_context_icon`).
+    publish_show_context_icon();
     // Seed the two output LEDs + the volume-lock flag at shell entry too, so
     // the stamp is correct before the first track ever plays (the bridge
     // defaults are the unlit SYST/DEFAULT pair).
     crate::output_labels::publish_current();
+}
+
+/// Re-publish the "Show track playing context" preference onto the bar (the
+/// song-card layers glyph gate).
+///
+/// The bridge seeds `show_context_icon` exactly ONCE, in
+/// `QbzPlayerRust::default()` (player_bridge.rs:260) — i.e. when the QML engine
+/// constructs the singleton, which is before a session exists — and
+/// `settings_qt::show_context_icon` (settings_qt.rs:422-424) returns FALSE
+/// whenever the playback-preferences store is not open at that instant
+/// (`unwrap_or(false)`). Nothing republished it afterwards, so the glyph could
+/// latch OFF for the whole run and the Settings > Playback toggle wrote the DB
+/// with no visible effect — a control that renders and does nothing. Call this
+/// on shell entry and from the toggle.
+pub fn publish_show_context_icon() {
+    let show = crate::settings_qt::show_context_icon();
+    crate::player_bridge::ui(move |mut b| b.as_mut().set_show_context_icon(show));
 }
 
 // --- Pure-UI toggles (mutate + republish) --------------------------------
@@ -199,6 +230,12 @@ pub struct TrackMeta {
     pub album: String,
     pub album_id: String,
     pub artist_id: String,
+    /// Container origin of THIS track ("album" | "artist" | "playlist" |
+    /// "label" + its id). Never optional at this seam: `refresh_now_playing`
+    /// resolves the fallback (the track's own album) before it gets here, so a
+    /// caller cannot publish a track with no origin at all.
+    pub context_kind: String,
+    pub context_id: String,
     pub duration_secs: i32,
     pub quality_tier: String,
     pub quality_label: String,
@@ -220,6 +257,8 @@ pub fn set_track(meta: TrackMeta) {
         m.album = meta.album;
         m.album_id = meta.album_id;
         m.artist_id = meta.artist_id;
+        m.context_kind = meta.context_kind;
+        m.context_id = meta.context_id;
         m.duration_secs = meta.duration_secs;
         m.elapsed_secs = 0;
         m.cache = 0.0;

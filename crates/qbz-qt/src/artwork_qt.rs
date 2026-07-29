@@ -446,3 +446,42 @@ mod tests {
         assert_eq!(cached_path("/nonexistent/qbz/cover.jpg"), "");
     }
 }
+
+// ---------------------------------------------------------------------------
+// Scaled derivatives
+// ---------------------------------------------------------------------------
+
+/// A cover re-encoded to exactly `w`x`h`. Canvas `drawImage` does not filter
+/// when it scales — a 600px cover drawn into a 200px cell throws away 8 of
+/// every 9 pixels, which is the aliasing the owner sees as poor render
+/// quality. Handing the Canvas a file that is ALREADY the target size makes
+/// the draw 1:1 and removes the resample entirely.
+///
+/// Blocking: decodes and resizes. Call from `spawn_blocking`.
+pub fn scaled_path(path: &str, w: u32, h: u32) -> Option<std::path::PathBuf> {
+    if w == 0 || h == 0 {
+        return None;
+    }
+    let src = path.strip_prefix("file://").unwrap_or(path);
+    let dir = dirs::cache_dir()?.join("qbz").join("images").join("scaled");
+    std::fs::create_dir_all(&dir).ok()?;
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::hash::Hash::hash(&src, &mut hasher);
+    let out = dir.join(format!(
+        "{:016x}_{w}x{h}.jpg",
+        std::hash::Hasher::finish(&hasher)
+    ));
+    if out.is_file() {
+        return Some(out);
+    }
+
+    let img = image::open(src).ok()?;
+    // Upscaling would only cost bytes — hand back the source instead.
+    if img.width() <= w && img.height() <= h {
+        return Some(std::path::PathBuf::from(src));
+    }
+    let scaled = image::imageops::thumbnail(&img.to_rgb8(), w, h);
+    scaled.save(&out).ok()?;
+    Some(out)
+}

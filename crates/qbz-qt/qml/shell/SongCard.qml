@@ -6,11 +6,21 @@
 // surface-elevated fill); New uses the flush 74px variant. Large mounts it
 // with showArt/showBadges false — the cover lives in the sidebar dock and the
 // AudioStamp moves to the right cluster, so the text column reclaims the
-// stamp's 132px.
+// stamp's 132px. `textCenter` is the SMALL-bar variant (SongCard.slint:329,
+// mounted by PlayerBarSmall.slint:239-251): a 37px bordered cover, a 13px
+// title and the title+meta collapsed into a tight centred group, no in-card
+// stamp.
 //
 // The title click opens Track Info (SongCard.slint: `root.track-info()` from
 // the title TouchArea, Qobuz-only) — the host bar owns the modal, this just
 // emits `trackInfoRequested()`.
+//
+// META ROW (SongCard.slint:20-49 `MetaLink` + :486-540): [layers] artist · album.
+// The two labels share the leftover width on the Slint's stretch budget —
+// artist 2, album 1 — each capped at its natural width and free to shrink to
+// nothing. A plain Row of unbounded Texts is what let the album slide past the
+// card wall and vanish under the audio stamp / the bar column's `clip: true`
+// (PlayerBar.qml:249): `elide` does NOTHING on a Text with no explicit width.
 
 import QtQuick
 import com.blitzfc.qbz
@@ -23,6 +33,18 @@ Rectangle {
     property bool showBadges: true
     property bool glass: false
     property int artSize: glass ? 60 : 74
+    // Optional cover border (SongCard.slint art-border-width / -color). OFF by
+    // default so New/Classic/Large are untouched; Small passes 3px surface-card.
+    property int artBorderWidth: 0
+    property color artBorderColor: "transparent"
+    // Cover -> text gap (SongCard.slint art-text-gap: 11px default, 9px Small).
+    property int artTextGap: 11
+    // Title size (SongCard.slint title-font-size: Typography.body default,
+    // 13px on the Small bar).
+    property real titleFontSize: theme.fontBody
+    // Small bar: title+meta as a TIGHT centred group instead of the
+    // full-height, space-distributed column.
+    property bool textCenter: false
 
     /// Title clicked — the host opens the Track Info modal.
     signal trackInfoRequested()
@@ -34,6 +56,34 @@ Rectangle {
     // not carry one. TODO(glue): publish np_source (see the report).
     readonly property bool qobuzTrack: QbzPlayer.npHasTrack
         && /^[0-9]+$/.test(QbzPlayer.npTrackId)
+
+    // "Playing from" origin, 1:1 with SongCard.slint:151-156: the CURRENT
+    // track's own stamped container, falling back to its album when it carries
+    // none (the Slint fallback in playback.rs:1959-1965).
+    readonly property string ctxKind: QbzPlayer.npContextId !== ""
+        ? QbzPlayer.npContextKind : "album"
+    readonly property string ctxId: QbzPlayer.npContextId !== ""
+        ? QbzPlayer.npContextId : QbzPlayer.npAlbumId
+
+    // SongCard.slint fires `open-context(kind, id)`, which the bar routes to
+    // `media-action(kind, id, "open")` — qbz/src/main.rs:12695 (artist), :12701
+    // (album), :12707 (playlist), :13206 (label).
+    function openContext() {
+        if (root.ctxId === "")
+            return
+        if (root.ctxKind === "artist") {
+            QbzArtist.openArtist(root.ctxId)
+        } else if (root.ctxKind === "playlist") {
+            QbzBridge.openPlaylist(root.ctxId)
+        } else if (root.ctxKind === "album") {
+            QbzAlbum.openAlbum(root.ctxId)
+        } else if (QbzPlayer.npAlbumId !== "") {
+            // "label" (and anything added later) has no landing page in this
+            // port — LabelCard.qml documents the same gap. Fall back to the
+            // track's album so the glyph is never a dead control.
+            QbzAlbum.openAlbum(QbzPlayer.npAlbumId)
+        }
+    }
 
     QbzTheme { id: theme }
 
@@ -52,8 +102,8 @@ Rectangle {
     Row {
         anchors.left: parent.left
         // SongCard.slint's inner-row width formula: the card minus the
-        // stamp + a 4px gap ONLY when the stamp is rendered (Large hides
-        // it — the AudioStamp moves to the right column — so the text
+        // stamp + a 4px gap ONLY when the stamp is rendered (Large and Small
+        // hide it — the AudioStamp moves to the right column — so the text
         // column must reclaim those 132px).
         anchors.right: stamp.visible ? stamp.left : parent.right
         anchors.rightMargin: stamp.visible ? 4 : 0
@@ -70,6 +120,8 @@ Rectangle {
                 anchors.centerIn: parent
                 radius: 6
                 color: theme.surfaceElevated
+                border.width: root.artBorderWidth
+                border.color: root.artBorderColor
                 clip: true
                 RoundedImage {
                     visible: QbzPlayer.npHasTrack
@@ -106,18 +158,21 @@ Rectangle {
                 }
             }
         }
-        Item { width: root.showArt ? 11 : 0; height: 1 }
+        Item { width: root.showArt ? root.artTextGap : 0; height: 1 }
 
         Column {
-            width: parent.width - (root.showArt ? root.artSize + 11 : 0)
+            width: parent.width - (root.showArt ? root.artSize + root.artTextGap : 0)
             anchors.verticalCenter: parent.verticalCenter
-            spacing: 4
+            // textCenter tightens the inter-line gap to 1px so the two lines
+            // read as one block beside the small cover (SongCard.slint:333);
+            // the default column keeps its 4px.
+            spacing: root.textCenter ? 1 : 4
             Text {
                 width: parent.width
                 text: QbzPlayer.npHasTrack ? QbzPlayer.npTitle
                     : QbzSession.tr("Nothing playing", QbzSession.trRev)
                 color: theme.textPrimary
-                font.pixelSize: theme.fontBody
+                font.pixelSize: root.titleFontSize
                 font.weight: theme.weightMedium
                 elide: Text.ElideRight
                 // Title -> Track Info (SongCard.slint). The MouseArea is a
@@ -130,65 +185,135 @@ Rectangle {
                     onClicked: if (root.qobuzTrack) root.trackInfoRequested()
                 }
             }
-            Row {
+
+            // --- Meta row: [layers] artist · album ------------------------
+            Item {
+                id: metaRow
                 visible: QbzPlayer.npHasTrack
-                spacing: 7
+                width: parent.width
+                // Row height is driven by the 16x18 context box (SongCard.slint).
                 height: 18
-                // Context-stack icon ("Show track playing context" pref).
-                Rectangle {
-                    visible: QbzPlayer.showContextIcon
-                    width: 16
-                    height: 18
-                    radius: 3
-                    color: ctxArea.containsMouse ? theme.surfaceHover : "transparent"
-                    QbzIcon {
-                        name: "layers"
-                        width: 13
-                        height: 13
+
+                // Natural (unelided) label widths. `implicitWidth` on a Text
+                // that already HAS an explicit width is not a safe source here
+                // — TextMetrics measures the string itself and never feeds the
+                // width binding back into the layout.
+                TextMetrics {
+                    id: artistMetrics
+                    font: artistText.font
+                    text: artistText.text
+                }
+                TextMetrics {
+                    id: albumMetrics
+                    font: albumText.font
+                    text: albumText.text
+                }
+
+                // Fixed furniture: the context box (+ its 7px gap when shown)
+                // and the separator dot with a 7px gap on each side.
+                readonly property real fixedW: (ctxBox.visible ? 16 + 7 : 0) + 3 + 14
+                readonly property real avail: Math.max(0, metaRow.width - metaRow.fixedW)
+                // Slint stretch 2 (artist) : 1 (album), each capped at its own
+                // natural width and free to shrink to 0 (SongCard.slint:22-31):
+                // a long album elides before the artist does, and both keep a
+                // readable slice instead of one pushing the other off the card.
+                readonly property var budget: {
+                    var a = artistMetrics.width
+                    var b = albumMetrics.width
+                    var av = metaRow.avail
+                    if (a + b <= av)
+                        return [a, b]
+                    var qa = av * 2 / 3
+                    var qb = av - qa
+                    if (a < qa) {
+                        qa = a
+                        qb = av - a
+                    } else if (b < qb) {
+                        qb = b
+                        qa = av - b
+                    }
+                    return [Math.floor(qa), Math.floor(qb)]
+                }
+
+                readonly property bool artistLinked: QbzPlayer.npArtistId !== ""
+                readonly property bool albumLinked: QbzPlayer.npAlbumId !== ""
+
+                Row {
+                    anchors.fill: parent
+                    spacing: 7
+
+                    // Context-stack icon ("Show track playing context" pref) —
+                    // opens the container playback was launched from.
+                    Rectangle {
+                        id: ctxBox
+                        visible: QbzPlayer.showContextIcon
+                        width: 16
+                        height: 18
+                        radius: 3
+                        color: ctxArea.containsMouse ? theme.surfaceHover : "transparent"
+                        QbzIcon {
+                            name: "layers"
+                            width: 13
+                            height: 13
+                            // Flush LEFT (SongCard.slint pins x: 0) so the meta
+                            // line starts on the title's column.
+                            x: 0
+                            anchors.verticalCenter: parent.verticalCenter
+                            tintName: ctxArea.containsMouse ? root.tintStrong : "muted"
+                        }
+                        MouseArea {
+                            id: ctxArea
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: root.ctxId !== "" ? Qt.PointingHandCursor : Qt.ArrowCursor
+                            onClicked: root.openContext()
+                        }
+                    }
+
+                    Text {
+                        id: artistText
+                        width: metaRow.budget[0]
+                        height: parent.height
+                        verticalAlignment: Text.AlignVCenter
+                        text: QbzPlayer.npArtist
+                        color: artistArea.containsMouse && metaRow.artistLinked
+                            ? theme.textPrimary : theme.textMuted
+                        font.pixelSize: 11
+                        elide: Text.ElideRight
+                        MouseArea {
+                            id: artistArea
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: metaRow.artistLinked ? Qt.PointingHandCursor : Qt.ArrowCursor
+                            onClicked: if (metaRow.artistLinked) QbzArtist.openArtist(QbzPlayer.npArtistId)
+                        }
+                    }
+
+                    Rectangle {
+                        width: 3
+                        height: 3
+                        radius: 1.5
+                        color: theme.textMuted
                         anchors.verticalCenter: parent.verticalCenter
-                        tintName: ctxArea.containsMouse ? root.tintStrong : "muted"
                     }
-                    MouseArea {
-                        id: ctxArea
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: if (QbzPlayer.npAlbumId !== "") QbzAlbum.openAlbum(QbzPlayer.npAlbumId)
-                    }
-                }
-                Text {
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: QbzPlayer.npArtist
-                    color: artistArea.containsMouse && QbzPlayer.npArtistId !== "" ? theme.accent : theme.textMuted
-                    font.pixelSize: 12
-                    elide: Text.ElideRight
-                    MouseArea {
-                        id: artistArea
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: QbzPlayer.npArtistId !== "" ? Qt.PointingHandCursor : Qt.ArrowCursor
-                        onClicked: if (QbzPlayer.npArtistId !== "") QbzArtist.openArtist(QbzPlayer.npArtistId)
-                    }
-                }
-                Rectangle {
-                    width: 3
-                    height: 3
-                    radius: 1.5
-                    color: theme.textMuted
-                    anchors.verticalCenter: parent.verticalCenter
-                }
-                Text {
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: QbzPlayer.npAlbum
-                    color: albumArea.containsMouse && QbzPlayer.npAlbumId !== "" ? theme.accent : theme.textMuted
-                    font.pixelSize: 12
-                    elide: Text.ElideRight
-                    MouseArea {
-                        id: albumArea
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: QbzPlayer.npAlbumId !== "" ? Qt.PointingHandCursor : Qt.ArrowCursor
-                        onClicked: if (QbzPlayer.npAlbumId !== "") QbzAlbum.openAlbum(QbzPlayer.npAlbumId)
+
+                    Text {
+                        id: albumText
+                        width: metaRow.budget[1]
+                        height: parent.height
+                        verticalAlignment: Text.AlignVCenter
+                        text: QbzPlayer.npAlbum
+                        color: albumArea.containsMouse && metaRow.albumLinked
+                            ? theme.textPrimary : theme.textMuted
+                        font.pixelSize: 11
+                        elide: Text.ElideRight
+                        MouseArea {
+                            id: albumArea
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: metaRow.albumLinked ? Qt.PointingHandCursor : Qt.ArrowCursor
+                            onClicked: if (metaRow.albumLinked) QbzAlbum.openAlbum(QbzPlayer.npAlbumId)
+                        }
                     }
                 }
             }

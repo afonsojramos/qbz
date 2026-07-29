@@ -1281,7 +1281,11 @@ pub async fn settings_bool(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &str,
             with_playback(|s| s.set_autoplay_mode(mode)).map(|_| Apply::None)
         }
         "show-context-icon" => {
-            with_playback(|s| s.set_show_context_icon(value)).map(|_| Apply::None)
+            let r = with_playback(|s| s.set_show_context_icon(value)).map(|_| Apply::None);
+            // Republish: the bar reads this to decide whether the context glyph
+            // shows, so persisting alone left the toggle inert until a restart.
+            crate::now_playing::publish_current();
+            r
         }
         "persist-session" => {
             with_playback(|s| s.set_persist_session(value)).map(|_| Apply::None)

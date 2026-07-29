@@ -257,13 +257,27 @@ fn spawn_header_color(generation: u64, artwork_url: String) {
             return;
         }
         let path = path.trim_start_matches("file://").to_string();
+        // One decode, two products: the flat tint (the FALLBACK arm) and the
+        // blurred atmosphere Slint actually renders behind the header.
+        let p2 = path.clone();
         let hex = tokio::task::spawn_blocking(move || header_tint_hex(&path))
             .await
             .ok()
             .flatten();
-        if let Some(hex) = hex {
+        let atmo = tokio::task::spawn_blocking(move || {
+            crate::atmosphere_qt::for_cover_blocking(&p2)
+        })
+        .await
+        .ok()
+        .flatten();
+        if hex.is_some() || atmo.is_some() {
             publish_patch(generation, move |doc| {
-                doc["headerColor"] = json!(hex);
+                if let Some(hex) = hex {
+                    doc["headerColor"] = json!(hex);
+                }
+                if let Some(atmo) = atmo {
+                    doc["headerAtmosphere"] = json!(atmo);
+                }
             });
         }
     });

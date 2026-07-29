@@ -4,8 +4,9 @@
 //!
 //! Wired:
 //! - load: `get_playlist` (full track list inline) + header mapping
-//!   (server cover else first-track cover, owner/count/total duration,
-//!   HTML-stripped description + word-boundary 160-char short).
+//!   (the playlist's OWN `image_rectangle` graphic else the member-cover
+//!   mosaic urls, owner/count/total duration, HTML-stripped description +
+//!   word-boundary 160-char short).
 //! - play all / shuffle (the playlist track list as the queue).
 //! - favorite toggle (owned), follow/unfollow (foreign, subscribe API,
 //!   optimistic flip + revert), copy-to-library (create + add all ids),
@@ -35,7 +36,7 @@ use std::sync::{Arc, Mutex};
 use cxx_qt_lib::QString;
 use qbz_app::shell::AppRuntime;
 use qbz_core::LoggingAdapter;
-use qbz_models::{QueueTrack, Track};
+use qbz_models::{Playlist, QueueTrack, Track};
 use serde::Serialize;
 
 // ---------------------------------------------------------------------------
@@ -86,10 +87,25 @@ pub struct PlaylistDoc {
     pub description: String,
     #[serde(rename = "descriptionShort")]
     pub description_short: String,
+    /// The playlist's OWN Qobuz artwork (`image_rectangle`), and NOTHING
+    /// else — EMPTY for every playlist without one (user playlists, and
+    /// editorial ones whose graphic Qobuz omits). The `images*` lists are
+    /// member-ALBUM covers; binding them here is what put an album sleeve
+    /// where the playlist graphic belongs (same divergence the cards had).
+    /// The header renders this CONTAIN — the graphics are landscape and
+    /// cropping cuts the wordmark.
     #[serde(rename = "coverUrl")]
     pub cover_url: String,
     #[serde(rename = "coverPath")]
     pub cover_path: String,
+    /// Mosaic source for a playlist with no artwork of its own: up to four
+    /// de-duplicated MEMBER-ALBUM covers (`images300` > `images150` >
+    /// `images`, else the first four distinct track covers — the Slint
+    /// header's 2x2 collage reads `tracks[0..3].artwork`). The view feeds
+    /// them to the shared `cards/PlaylistCollage.qml`, which resolves the
+    /// urls itself and owns the empty (list-music) state.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub covers: Vec<String>,
     pub tracks: Vec<PlaylistTrackRow>,
     #[serde(rename = "trackCount")]
     pub track_count: i32,
@@ -274,6 +290,63 @@ fn total_duration_label(tracks: &[PlaylistTrackRow]) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Header artwork (the same split the cards use — library_qt.rs
+// `playlist_own_image` / `playlist_cover_urls`; kept local because those are
+// private to that module. Hoisting the pair into one shared helper is the
+// obvious follow-up, see the report.)
+// ---------------------------------------------------------------------------
+
+/// The playlist's OWN Qobuz graphic (`image_rectangle`, `..._mini` as the
+/// lighter fallback). Only editorial playlists carry one.
+fn playlist_own_image(playlist: &Playlist) -> String {
+    [&playlist.image_rectangle, &playlist.image_rectangle_mini]
+        .into_iter()
+        .flatten()
+        .find_map(|list| list.iter().find(|u| !u.is_empty()).cloned())
+        .unwrap_or_default()
+}
+
+/// Up to four de-duplicated MEMBER-ALBUM covers for the header mosaic:
+/// the server lists first (`images300` > `images150` > `images` — the same
+/// picker as the sidebar tree and the cards, so one playlist shows the same
+/// mosaic everywhere), else the first four distinct track covers (what the
+/// Slint header's 2x2 collage reads).
+fn collage_urls(playlist: &Playlist, tracks: &[Track]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let push = |url: String, out: &mut Vec<String>| {
+        if !url.is_empty() && !out.contains(&url) {
+            out.push(url);
+        }
+    };
+    let listed = [&playlist.images300, &playlist.images150, &playlist.images]
+        .into_iter()
+        .flatten()
+        .find(|v| !v.is_empty());
+    if let Some(list) = listed {
+        for url in list {
+            push(url.clone(), &mut out);
+            if out.len() == 4 {
+                return out;
+            }
+        }
+    }
+    if out.is_empty() {
+        for track in tracks {
+            let url = track
+                .album
+                .as_ref()
+                .and_then(|a| a.image.best().cloned())
+                .unwrap_or_default();
+            push(url, &mut out);
+            if out.len() == 4 {
+                break;
+            }
+        }
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
 // Load
 // ---------------------------------------------------------------------------
 
@@ -291,23 +364,21 @@ pub async fn load(runtime: &Arc<AppRuntime<LoggingAdapter>>, playlist_id: u64) -
         publish(doc);
     }
 
-    let pl = runtime
+    let mut pl = runtime
         .core()
         .get_playlist(playlist_id)
         .await
         .map_err(|e| format!("get_playlist {playlist_id} failed: {e}"))?;
-    let tracks = pl.tracks.map(|c| c.items).unwrap_or_default();
-    let cover_url = pl
-        .images
-        .as_ref()
-        .and_then(|imgs| imgs.first().cloned())
-        .or_else(|| {
-            tracks
-                .first()
-                .and_then(|t| t.album.as_ref())
-                .and_then(|a| a.image.best().cloned())
-        })
-        .unwrap_or_default();
+    // `take` (not clone): the header helpers below still need `&pl`, and the
+    // track list is the heavy half of the response.
+    let tracks = pl.tracks.take().map(|c| c.items).unwrap_or_default();
+    // Header artwork, two arms — 1:1 with the cards (PlaylistCard.qml):
+    // the playlist's OWN graphic, else the member-cover mosaic. `images[0]`
+    // (and the first track's sleeve) is a MEMBER-ALBUM cover: binding it
+    // here is exactly what rendered an album sleeve as the playlist's
+    // artwork, and it also starved the collage of its tiles.
+    let cover_url = playlist_own_image(&pl);
+    let covers = collage_urls(&pl, &tracks);
     let description = pl
         .description
         .map(|d| qbz_text_utils::strip_html::strip_html(&d))
@@ -363,6 +434,7 @@ pub async fn load(runtime: &Arc<AppRuntime<LoggingAdapter>>, playlist_id: u64) -
         doc.description = description;
         doc.cover_url = cover_url.clone();
         doc.cover_path = cover_path;
+        doc.covers = covers;
         doc.tracks = rows;
         doc.track_count = track_count;
         doc.total_duration = total_duration;
@@ -569,13 +641,15 @@ pub fn toggle_pin() {
         doc
     });
     if let Some(doc) = doc {
-        crate::toggle_pin(
-            "playlist".to_string(),
-            doc.id,
-            doc.name,
-            doc.owner,
-            doc.cover_url,
-        );
+        // Pin payload artwork: the playlist's own graphic, else its first
+        // member cover so the Pinned rail card still has art (PlaylistCard's
+        // `artworkUrl` falls back the same way).
+        let art = if doc.cover_url.is_empty() {
+            doc.covers.first().cloned().unwrap_or_default()
+        } else {
+            doc.cover_url.clone()
+        };
+        crate::toggle_pin("playlist".to_string(), doc.id, doc.name, doc.owner, art);
     }
 }
 

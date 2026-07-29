@@ -75,14 +75,39 @@ Item {
     // logs a warning on every re-evaluation.
     readonly property color tintColor: root.tint === "" ? "transparent" : root.tint
 
-    visible: root.active && root.tint !== ""
+    visible: root.active && (root.tint !== "" || root.hasAtmosphere)
     // Never eat clicks meant for the header controls painted on top.
     enabled: false
 
-    // Band 1 — the artwork tint. Solid down to the 82% mark (route A's image
-    // field is opaque over exactly that span); the last 18% is band 4's job.
+    /// ROUTE A — the blurred artwork field Slint actually renders
+    /// (`ImmersiveAtmosphere`, AlbumPageView.slint:222). It needs no shader:
+    /// the atmosphere is a 128x128 image produced in Rust
+    /// (atmosphere_qt.rs, the immersive.rs pipeline ported stage for stage),
+    /// so it works on the software path like any other picture. Empty means
+    /// the cover has not resolved yet and route B stands in.
+    property string atmosphere: ""
+    readonly property bool hasAtmosphere: root.atmosphere !== ""
+
+    Image {
+        anchors.fill: parent
+        source: root.atmosphere
+        visible: root.hasAtmosphere
+        // 128px stretched across a whole header IS the design — the source is
+        // eight pixels of colour blurred out, so smooth scaling is the point.
+        smooth: true
+        fillMode: Image.Stretch
+        // ImmersiveAtmosphere.slint's base-opacity for a static header field.
+        opacity: 0.92
+        asynchronous: true
+    }
+
+    // Band 1 — ROUTE B, the flat tint. This is Slint's FALLBACK, painted only
+    // while no atmosphere exists; shipping it as the design is what made the
+    // header read as a plain ugly gradient. Solid to the 82% mark, the last
+    // 18% is band 4's job.
     Rectangle {
         anchors.fill: parent
+        visible: !root.hasAtmosphere
         gradient: Gradient {
             GradientStop { position: 0.0; color: root.tintColor }
             GradientStop { position: 0.16; color: root.tintColor }

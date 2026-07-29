@@ -5,8 +5,9 @@
 // Data: QbzHome.homeSectionsJson (one JSON document — see bridge.rs),
 // published by src/home_qt.rs; artwork file:// paths resolve through the
 // qbz-cache image cache. Section kinds: "album" | "playlist" | "slim" |
-// "artists" | "pinned" | "recentPlaceholder". Rail ORDER + VISIBILITY
-// follow the persisted Discover prefs (phase 11, discover_prefs.db).
+// "slimTracks" | "artists" | "pinned" | "mixes" | "recentPlaceholder". Rail
+// ORDER + VISIBILITY follow the persisted Discover prefs (phase 11,
+// discover_prefs.db).
 //
 // POC-NOTEs:
 // - The genre filter (shared GenreFilterPopup, context "discover") and the
@@ -14,12 +15,14 @@
 //  selection feeds get_discover_index and persists to genre_filter.json; the
 //  configurator persists to discover_prefs.db and re-renders the tabs from
 //  the cached section data. The gear is DISABLED on the Recommendations tab
-//  — its Slint arm configures the external reco engine, which is not ported.
+//  — its Slint arm also carries the reco cache-window + "Refresh now"
+//  controls, which DiscoverConfigModal.qml does not have, so it would open
+//  empty.
 // - Editor's Picks / For You mount the same rails, ordered by each tab's
-//  discover prefs (phase 13); Recommendations renders a placeholder — the
-//  external reco engine (external_reco.rs) is not ported. The tab bar is
-//  always fully visible (the Slint showRecommendations gate is not wired;
-//  the pref is ON for this user anyway).
+//  discover prefs (phase 13). Recommendations is the external-reco engine
+//  (src/recommendations_qt.rs), LAZY-loaded the first time the tab becomes
+//  visible, and the tab itself is gated on the persisted showRecommendations
+//  pref exactly as in Slint.
 // - Card clicks / hover actions (play / favorite / more / pin) and
 //  "View all" / context menus are inert — album/artist pages, playback
 //  and per-user stores are later phases.
@@ -53,7 +56,27 @@ Rectangle {
     readonly property var sections: JSON.parse(QbzHome.homeSectionsJson)
     readonly property var editorSections: JSON.parse(QbzHome.editorSectionsJson)
     readonly property var forYouSections: JSON.parse(QbzHome.forYouSectionsJson)
+    // Recommendations (the 4th tab). Lazy: the document stays "[]" until the
+    // tab is first shown and src/recommendations_qt.rs publishes into it.
+    readonly property var recoSections: JSON.parse(QbzHome.recoSectionsJson)
     property string activeTab: "home"
+
+    // Slint gates the 4th tab on the persisted `show_recommendations` pref
+    // (discover_prefs.db). The port publishes it inside the settings document
+    // (settings_qt SettingsDoc.showRecommendations) — read it straight off the
+    // bridge singleton, the NavFlyout precedent.
+    readonly property bool showRecommendations: {
+        try {
+            return JSON.parse(QbzBridge.settingsJson).showRecommendations !== false
+        } catch (e) {
+            return true
+        }
+    }
+    // Never leave the user parked on a tab that just disappeared.
+    onShowRecommendationsChanged: {
+        if (!showRecommendations && root.activeTab === "recommendations")
+            root.activeTab = "home"
+    }
 
     // --- shared genre filter, "discover" context -------------------------
     // Read STRAIGHT off the bridge singleton, not off genrePopup: the popup
@@ -83,13 +106,17 @@ Rectangle {
     // Runs only while something can actually be shimmering: the first fetch
     // (section skeletons), a card still waiting for its cover, or the grace
     // window in which landed covers are still decoding (artHold).
-    readonly property bool skelNeeded: QbzHome.homeLoading || root.artPending
-        || root.artHold
+    readonly property bool skelNeeded: QbzHome.homeLoading || QbzHome.recoLoading
+        || root.artPending || root.artHold
+    // The sections document the active tab is rendering.
+    readonly property var activeSections:
+        root.activeTab === "editorPicks" ? root.editorSections
+        : root.activeTab === "forYou" ? root.forYouSections
+        : root.activeTab === "recommendations" ? root.recoSections
+        : root.sections
     // Cheap "some card in the mounted rails has artUrl but no artPath yet"
     // probe — recomputed only when a sections document is republished.
-    readonly property bool artPending: root.anyArtPending(
-        root.activeTab === "editorPicks" ? root.editorSections
-        : root.activeTab === "forYou" ? root.forYouSections : root.sections)
+    readonly property bool artPending: root.anyArtPending(root.activeSections)
     function anyArtPending(model) {
         for (var s = 0; s < model.length; s++) {
             var items = model[s].items || []
@@ -227,10 +254,77 @@ Rectangle {
         }
     }
 
-    // Slim rows mount the shared qml/SlimCard.qml (SlimCard.slint).
+    // TrackSlimRow — the TRACK flavour of the slim row. Visually the shared
+    // qml/cards/SlimCard.qml (same 60px row, 44px thumb, title/subtitle),
+    // but the whole-row click PLAYS the track instead of opening an album.
+    // SlimCard hardcodes `QbzAlbum.openAlbum(card.id)`, so mounting it for a
+    // track row would navigate to an album id that does not exist — a control
+    // that renders and does the WRONG thing. The consolidation (a `kind` /
+    // `activated()` seam on SlimCard, then delete this) is in the handoff.
+    component TrackSlimRow: Rectangle {
+        property var card: ({})
+        height: 60
+        radius: theme.radiusSm
+        color: trArea.containsMouse ? theme.surfaceHover : "transparent"
+
+        Row {
+            anchors.fill: parent
+            anchors.leftMargin: 8
+            anchors.rightMargin: 8
+            spacing: 12
+            Rectangle {
+                width: 44
+                height: 44
+                radius: 4
+                anchors.verticalCenter: parent.verticalCenter
+                color: theme.surfaceElevated
+                clip: true
+                RoundedImage {
+                    anchors.fill: parent
+                    source: card.artPath || ""
+                    radius: 4
+                }
+            }
+            Column {
+                width: parent.width - 44 - 2 * 12
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: 2
+                Text {
+                    width: parent.width
+                    text: card.title || ""
+                    color: theme.textPrimary
+                    font.pixelSize: theme.fontLink
+                    font.weight: theme.weightMedium
+                    elide: Text.ElideRight
+                }
+                Text {
+                    width: parent.width
+                    text: card.artist || ""
+                    color: theme.textMuted
+                    font.pixelSize: 12
+                    elide: Text.ElideRight
+                }
+            }
+        }
+        MouseArea {
+            id: trArea
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: QbzPlayer.playTrack(card.id)
+        }
+    }
+
+    // Slim rows mount the shared qml/cards/SlimCard.qml (SlimCard.slint) for
+    // ALBUM data and TrackSlimRow for TRACK data — one paging shell, two row
+    // flavours (Slint's SlimCarousel is likewise shared by Popular albums and
+    // Recently Played Tracks).
     // Popular slim grid (SlimCarousel.slint): 4x3 pages of 12, capped 24.
     component SlimGrid: Column {
+        id: sgrid
         property var sectionData: ({})
+        // true = the rows are TRACKS (click plays), false = ALBUMS (click opens).
+        property bool tracks: false
         width: parent ? parent.width : 0
         spacing: 12
 
@@ -242,10 +336,10 @@ Rectangle {
         QbzSectionHeader {
             title: sectionData.title
             leftEnabled: grid.contentX > 1
-            rightEnabled: grid.contentX < maxScroll - 1
+            rightEnabled: grid.contentX < sgrid.maxScroll - 1
             showViewAll: (sectionData.endpoint || "") !== ""
             onPageLeft: grid.contentX = Math.max(0, grid.contentX - grid.width)
-            onPageRight: grid.contentX = Math.min(maxScroll, grid.contentX + grid.width)
+            onPageRight: grid.contentX = Math.min(sgrid.maxScroll, grid.contentX + grid.width)
         }
         Item {
             width: parent.width
@@ -255,22 +349,38 @@ Rectangle {
                 id: grid
                 width: parent.width
                 height: parent.height
-                contentWidth: pageCount * width
+                contentWidth: sgrid.pageCount * width
                 contentHeight: height
                 boundsBehavior: Flickable.StopAtBounds
                 readonly property real cellWidth: (width - 3 * 8) / 4
 
                 Repeater {
                     model: sectionData.items
-                    delegate: SlimCard {
-                        readonly property int slot: index % perPage
-                        readonly property int pageIdx: Math.floor(index / perPage)
-                        visible: index < total
+                    delegate: Item {
+                        required property var modelData
+                        required property int index
+                        readonly property int slot: index % sgrid.perPage
+                        readonly property int pageIdx: Math.floor(index / sgrid.perPage)
+                        visible: index < sgrid.total
                         width: grid.cellWidth
                         height: 60
                         x: pageIdx * grid.width + (slot % 4) * (grid.cellWidth + 8)
                         y: Math.floor(slot / 4) * (60 + 8)
-                        card: modelData
+
+                        // The PinnedRail dispatch pattern: Components declared
+                        // in the delegate scope, so `modelData` resolves.
+                        Component {
+                            id: albumRowComp
+                            SlimCard { card: modelData }
+                        }
+                        Component {
+                            id: trackRowComp
+                            TrackSlimRow { card: modelData }
+                        }
+                        Loader {
+                            anchors.fill: parent
+                            sourceComponent: sgrid.tracks ? trackRowComp : albumRowComp
+                        }
                     }
                 }
             }
@@ -482,6 +592,7 @@ Rectangle {
                 sourceComponent: modelData.kind === "album" ? albumRailComp
                     : modelData.kind === "playlist" ? playlistRailComp
                     : modelData.kind === "slim" ? slimGridComp
+                    : modelData.kind === "slimTracks" ? trackGridComp
                     : modelData.kind === "artists" ? artistRailComp
                     : modelData.kind === "pinned" ? pinnedRailComp
                     : modelData.kind === "mixes" ? mixesRailComp
@@ -526,6 +637,10 @@ Rectangle {
                 Component {
                     id: slimGridComp
                     SlimGrid { sectionData: parent.sectionData }
+                }
+                Component {
+                    id: trackGridComp
+                    SlimGrid { sectionData: parent.sectionData; tracks: true }
                 }
                 Component {
                     id: artistRailComp
@@ -633,12 +748,18 @@ Rectangle {
                 spacing: 16
 
                 QbzTabBar {
-                    tabs: [
-                        { "id": "home", "label": QbzSession.tr("Home", QbzSession.trRev) },
-                        { "id": "editorPicks", "label": QbzSession.tr("Editor's Picks", QbzSession.trRev) },
-                        { "id": "forYou", "label": QbzSession.tr("For You", QbzSession.trRev) },
-                        { "id": "recommendations", "label": QbzSession.tr("Recommendations", QbzSession.trRev) },
-                    ]
+                    // The 4th tab is present only while the pref is on (1:1
+                    // with the Slint `if SettingsState.show-recommendations`).
+                    tabs: {
+                        var t = [
+                            { "id": "home", "label": QbzSession.tr("Home", QbzSession.trRev) },
+                            { "id": "editorPicks", "label": QbzSession.tr("Editor's Picks", QbzSession.trRev) },
+                            { "id": "forYou", "label": QbzSession.tr("For You", QbzSession.trRev) },
+                        ]
+                        if (root.showRecommendations)
+                            t.push({ "id": "recommendations", "label": QbzSession.tr("Recommendations", QbzSession.trRev) })
+                        return t
+                    }
                     activeId: root.activeTab
                     // Data is per-tab JSON (no refetch on switch); scroll
                     // resets to top.
@@ -843,26 +964,51 @@ Rectangle {
                     SectionRails { sectionsModel: root.forYouSections }
                 }
 
-                // ===== Recommendations (POC-NOTE placeholder) =============
-                // The tab follows the Slint gating (showRecommendations pref
-                // — ON for this user, so the tab shows); the CONTENT is the
-                // external reco engine (crates/qbz/src/external_reco.rs —
-                // seeded similar albums, weeklies builders, dismissal
-                // stores), which is not ported to the POC.
+                // ===== Recommendations (external reco engine) =============
+                // qbz-external-reco (Last.fm + ListenBrainz -> Qobuz), driven
+                // by src/recommendations_qt.rs. LAZY: the first time this
+                // column becomes visible it asks Rust to build the tab; every
+                // later entry repaints from memory / the engine's own result
+                // cache, so reopening Discover costs no external traffic.
+                //
+                // The load is kicked BOTH on mount and on becoming visible:
+                // the view is instantiated while Home is the active tab, so a
+                // visible-only hook would be thrown away on the mount pass and
+                // a mount-only hook would never fire for a tab switch.
                 Column {
+                    id: recoTab
                     visible: root.activeTab === "recommendations"
                     width: parent.width - 64
-                    spacing: 10
-                    Text {
-                        text: QbzSession.tr("Recommendations", QbzSession.trRev)
-                        color: theme.textPrimary
-                        font.pixelSize: theme.fontSection
-                        font.weight: theme.weightSemibold
+                    spacing: 40
+
+                    function kick() {
+                        if (recoTab.visible)
+                            QbzHome.loadRecommendations()
                     }
-                    Text {
-                        text: "QBZ Qt POC — the external recommendations engine is not ported (external_reco.rs)"
-                        color: theme.textMuted
-                        font.pixelSize: 13
+                    Component.onCompleted: recoTab.kick()
+                    onVisibleChanged: recoTab.kick()
+
+                    // Same two-row shimmer as the other tabs, while the first
+                    // build is in flight and nothing has painted yet.
+                    TabSkeleton {
+                        visible: QbzHome.recoLoading && root.recoSections.length === 0
+                        phase: root.skelPhase
+                    }
+
+                    // Rails resolve progressively — a row that is still
+                    // building, or whose service is not connected, is simply
+                    // ABSENT from the document (never an empty frame).
+                    SectionRails { sectionsModel: root.recoSections }
+
+                    // Nothing built and nothing in flight: the Slint empty
+                    // state, verbatim msgids.
+                    QbzEmptyState {
+                        visible: !QbzHome.recoLoading && root.recoSections.length === 0
+                        width: parent.width
+                        title: QbzSession.tr("No recommendations yet", QbzSession.trRev)
+                        body: QbzSession.tr("Connect Last.fm or ListenBrainz in Settings, or play more music, to get personalized recommendations.", QbzSession.trRev)
+                        actionLabel: QbzSession.tr("Open Settings", QbzSession.trRev)
+                        onActionClicked: QbzShell.navigateTo("settings")
                     }
                 }
             }

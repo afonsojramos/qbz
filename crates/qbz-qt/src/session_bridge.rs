@@ -84,6 +84,15 @@ pub mod qbz_session {
         /// when the language changes live.
         #[qinvokable]
         fn tr(self: &QbzSession, msgid: QString, rev: i32) -> QString;
+        /// Ask for `path` (a file:// cover) re-encoded to exactly w*h DEVICE
+        /// pixels. Answers on `artScaledReady`; a derivative already on disk
+        /// answers on the next event-loop pass.
+        #[qinvokable]
+        fn art_scaled(self: Pin<&mut QbzSession>, path: QString, w: i32, h: i32);
+        /// (requested path, derivative url) — keyed by the REQUEST so a
+        /// recycled delegate cannot take the previous row's cover.
+        #[qsignal]
+        fn art_scaled_ready(self: Pin<&mut QbzSession>, path: QString, scaled: QString);
     }
 
     impl cxx_qt::Threading for QbzSession {}
@@ -185,4 +194,22 @@ impl qbz_session::QbzSession {
         let _ = rev; // binding dependency only (see the bridge declaration)
         QString::from(&qbz_i18n::t(&msgid.to_string()))
     }
+    pub fn art_scaled(self: Pin<&mut Self>, path: QString, w: i32, h: i32) {
+        let (p, w, h) = (path.to_string(), w.max(0) as u32, h.max(0) as u32);
+        crate::spawn(async move {
+            let key = p.clone();
+            let out = tokio::task::spawn_blocking(move || crate::artwork_qt::scaled_path(&p, w, h))
+                .await
+                .ok()
+                .flatten();
+            if let Some(out) = out {
+                let url = crate::artwork_qt::file_url(&out.to_string_lossy());
+                ui(move |mut b| {
+                    b.as_mut()
+                        .art_scaled_ready(QString::from(key.as_str()), QString::from(url.as_str()));
+                });
+            }
+        });
+    }
+
 }

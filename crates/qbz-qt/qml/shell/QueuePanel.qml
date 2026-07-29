@@ -4,15 +4,14 @@
 // Tabs (Queue / History), NOW PLAYING card (live heart), UP NEXT with the
 // #442 "Next in queue" / "Next up" section markers, 40-row pagination,
 // live search filter, row actions (play / remove / remove-all-after /
-// heart), drag reorder (basic press-drag), footer (count line + Clear /
-// stubs + search field), History tab (thumbnail rows, click replays as a
-// fresh single-track queue), exact empty states. Data: QbzQueue.queueJson
-// (queue_qt.rs QueueDoc).
+// heart), drag reorder (6px press-drag, drop indicator + floating ghost),
+// footer (count line + Clear / stubs + search field), History tab
+// (thumbnail rows, click replays as a fresh single-track queue), exact
+// empty states. Data: QbzQueue.queueJson (queue_qt.rs QueueDoc).
 //
 // POC-NOTEs: save-as-playlist (opens a picker modal upstream — inert),
 // infinite-play + sleep timer engines, stop-after marker, row menu's
-// "Add to playlist" / "Track info" entries, ephemeral rows, the ghost
-// drag pill (rows move with a plain displaced animation instead).
+// "Add to playlist" / "Track info" entries, ephemeral rows.
 
 import QtQuick
 import QtQuick.Controls
@@ -37,10 +36,51 @@ Rectangle {
     // url-keyed cover map (shared artwork pipeline).
     property var coverMap: ({})
 
-    // Drag-reorder state (basic press-drag; ghost is the row's own y).
-    property int dragFrom: -1
+    // --- UP NEXT drag-reorder state (QueueSidebar.slint:371-410) ---------
+    // Panel-local on purpose: this is NOT the QbzShell drag global (that one
+    // is the track -> sidebar-playlist ghost, and its drag_end() posts an
+    // "add tracks to playlist" — a reorder must never reach it).
+    // ALL indices here are PAGE-LOCAL, which is exactly what queue_qt.rs's
+    // move_track takes (it resolves page-local -> queue-wide itself, filter
+    // and pagination included) — same contract as play/remove/remove-after.
+    property bool reorderActive: false
+    property int reorderFrom: -1      // page-local index of the dragged row
+    property int reorderOver: -1      // insertion slot, 0..N
+    property real reorderPointerY: 0  // live pointer WINDOW y (drives the ghost)
 
     QbzTheme { id: theme }
+
+    // Pointer window-Y -> insertion slot [0..N]. The Slint does this with a
+    // fixed 44px stride plus a 22px correction per #442 section header; here
+    // the rows' real geometry answers it directly (the delegate exposes its
+    // row center in window space), so section headers, the list padding and
+    // the 8px inter-row spacing are all accounted for without a second
+    // arithmetic model to keep in sync. Top half of row k -> slot k, bottom
+    // half -> slot k+1, past the last row -> N (append). <=40 rows per page.
+    function slotFromPointer(winY) {
+        var n = root.upcoming.length
+        for (var i = 0; i < n; i++) {
+            var d = upcomingRepeater.itemAt(i)
+            if (d && winY < d.rowCenterY())
+                return i
+        }
+        return n
+    }
+
+    // Commit — QueueSidebar.slint commit-reorder(). `to == from` and
+    // `to == from + 1` both drop back onto the SAME gap, so neither reaches
+    // the bridge (move_track's from == to early return would swallow them
+    // anyway, at the cost of a queue round-trip and a republish).
+    function commitReorder() {
+        var from = root.reorderFrom
+        var to = root.reorderOver
+        root.reorderActive = false
+        root.reorderFrom = -1
+        root.reorderOver = -1
+        if (from < 0 || to < 0 || to === from || to === from + 1)
+            return
+        QbzQueue.queueMoveTrack(from, to)
+    }
 
     Connections {
         target: QbzLibrary
@@ -122,21 +162,35 @@ Rectangle {
 
     // One UP NEXT / History row (QueueRow.slint).
     component QueueRow: Rectangle {
+        id: qrRoot
         property var row: ({})
         property int rowIndex: 0
         property bool showNumber: true
         property bool inQueue: true
+        /// Drag-reorder source? UP NEXT rows only — History has no order to
+        /// commit, and it keeps its drag-scroll because of this (see qrArea's
+        /// preventStealing).
+        property bool reorderable: false
 
         readonly property bool hovered: qrArea.containsMouse || menuArea.containsMouse
         readonly property bool isActive: inQueue && QbzPlayer.npTrackId !== "" && QbzPlayer.npTrackId === row.id
+        readonly property bool dragSource: reorderable && root.reorderActive
+            && root.reorderFrom === rowIndex
+
+        // Row center in WINDOW space — what slotFromPointer() measures the
+        // pointer against. A function, not a binding: mapToItem() is not
+        // reactive, and it is only ever read during a live drag.
+        function rowCenterY() {
+            return qrRoot.mapToItem(null, 0, qrRoot.height / 2).y
+        }
 
         height: 44
         radius: theme.radiusSm
         color: hovered ? theme.surfaceHover
              : (rowIndex % 2 === 1 ? "#592a2a2a" : "transparent")
-        border.width: root.dragFrom === rowIndex ? 1 : 0
+        border.width: dragSource ? 1 : 0
         border.color: theme.accent
-        opacity: root.dragFrom === rowIndex ? 0.4 : 1.0
+        opacity: dragSource ? 0.4 : 1.0
 
         Row {
             anchors.fill: parent
@@ -301,15 +355,114 @@ Rectangle {
             }
         }
 
+        // Row body: click plays, >6px press-drag reorders (QueueSidebar
+        // .slint's `ta` does both from one TouchArea — one area per row, not
+        // two stacked).
         MouseArea {
             id: qrArea
             anchors.fill: parent
+            // BEHIND the row's own controls. Declaration order IS z-order in
+            // QML and this fills the row from the last declaration, so at the
+            // default z it sat on top of the ⋯ button and swallowed its press
+            // — the menu never opened, the row just played. Same fix (and the
+            // same reason the .slint declares its TouchArea BEFORE the
+            // content) as rows/TrackRow.qml's trArea.
+            z: -1
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
+            // THE reason drag-reorder scrolled instead of reordering: the
+            // enclosing Flickable filters its children's mouse events and
+            // grabs the press once the pointer moves past
+            // QStyleHints.startDragDistance (~10px), after which this area
+            // gets `canceled`, never `released`. Keeping the grab here is the
+            // Qt equivalent of QueueSidebar.slint's `interactive: false` on
+            // the queue Flickable — but scoped to the row and without that
+            // side effect: Qt's Flickable also drops WHEEL events when it is
+            // non-interactive, so wheel + scrollbar keep working, and only a
+            // press that starts ON an UP NEXT row is denied to the flick.
+            // (Consequence, same as the Slint: no drag-scroll while
+            // reordering — pagination covers long lists.)
+            preventStealing: qrRoot.reorderable
+            property real downY: 0
+            property bool dragging: false
+            // A release that ended a drag must NOT also play the track
+            // (`clicked` fires after `released`).
+            property bool suppressClick: false
+            onPressed: function (mouse) {
+                qrArea.downY = qrArea.mapToItem(null, mouse.x, mouse.y).y
+                qrArea.dragging = false
+            }
+            onPositionChanged: function (mouse) {
+                if (!qrRoot.reorderable || !qrArea.pressed)
+                    return
+                // WINDOW space for both the threshold and the slot, so a
+                // wheel-scroll mid-gesture cannot corrupt either.
+                var winY = qrArea.mapToItem(null, mouse.x, mouse.y).y
+                if (!qrArea.dragging && Math.abs(winY - qrArea.downY) > 6) {
+                    qrArea.dragging = true
+                    root.reorderActive = true
+                    root.reorderFrom = qrRoot.rowIndex
+                    root.reorderOver = qrRoot.rowIndex
+                }
+                if (qrArea.dragging) {
+                    root.reorderPointerY = winY
+                    root.reorderOver = root.slotFromPointer(winY)
+                }
+            }
+            onReleased: {
+                if (!qrArea.dragging)
+                    return
+                qrArea.dragging = false
+                qrArea.suppressClick = true
+                root.commitReorder()
+            }
+            // Safety net (the .slint keeps one too): if the grab is lost
+            // mid-drag the release never arrives here, and without this the
+            // panel would stay stuck in reorderActive with a ghost pinned to
+            // the last pointer position.
+            onCanceled: {
+                if (!qrArea.dragging)
+                    return
+                qrArea.dragging = false
+                qrArea.suppressClick = true
+                root.commitReorder()
+            }
             onClicked: {
+                if (qrArea.suppressClick) {
+                    qrArea.suppressClick = false
+                    return
+                }
                 if (inQueue) QbzQueue.queuePlayUpcoming(rowIndex)
                 else QbzQueue.queuePlayHistory(rowIndex)
             }
+        }
+
+        // Drop indicator — the .slint draws one 2px accent line at the
+        // insertion slot, hidden on the two no-op slots (from, from+1). Here
+        // it rides the row that OWNS the slot (its top edge, and the last
+        // row's bottom edge for the append slot), which needs no overlay
+        // geometry and stays correct across the section headers.
+        Rectangle {
+            visible: qrRoot.reorderable && root.reorderActive
+                && root.reorderOver === qrRoot.rowIndex
+                && root.reorderOver !== root.reorderFrom
+                && root.reorderOver !== root.reorderFrom + 1
+            y: -1
+            width: parent.width
+            height: 2
+            radius: 1
+            color: theme.accent
+        }
+        Rectangle {
+            visible: qrRoot.reorderable && root.reorderActive
+                && root.reorderOver === root.upcoming.length
+                && qrRoot.rowIndex === root.upcoming.length - 1
+                && root.reorderFrom !== root.upcoming.length - 1
+            y: parent.height - 1
+            width: parent.width
+            height: 2
+            radius: 1
+            color: theme.accent
         }
     }
 
@@ -511,11 +664,16 @@ Rectangle {
                         }
 
                         Repeater {
+                            id: upcomingRepeater
                             model: root.upcoming
                             delegate: Column {
+                                id: upDelegate
                                 required property var modelData
                                 required property int index
                                 width: parent ? parent.width : 0
+                                // Row center in window space — slotFromPointer()
+                                // reads it off the Repeater's items.
+                                function rowCenterY() { return qrow.rowCenterY() }
                                 // #442 section header above the row.
                                 Row {
                                     visible: modelData.section !== ""
@@ -540,24 +698,13 @@ Rectangle {
                                     }
                                 }
                                 QueueRow {
+                                    id: qrow
                                     width: parent.width
                                     row: modelData
                                     rowIndex: index
                                     showNumber: true
                                     inQueue: true
-                                    // Basic press-drag reorder (POC: no ghost pill).
-                                    MouseArea {
-                                        anchors.fill: parent
-                                        onPressAndHold: root.dragFrom = index
-                                        onReleased: {
-                                            if (root.dragFrom >= 0) {
-                                                var target = Math.max(0, Math.min(root.upcoming.length - 1,
-                                                    Math.floor((parent.mapToItem(null, mouseX, mouseY).y - queueBody.mapToItem(null, 0, 0).y - 40) / 44)))
-                                                QbzQueue.queueMoveTrack((doc.page || 0) * 40 + root.dragFrom, (doc.page || 0) * 40 + target)
-                                                root.dragFrom = -1
-                                            }
-                                        }
-                                    }
+                                    reorderable: true
                                 }
                             }
                         }
@@ -734,6 +881,38 @@ Rectangle {
                     onEdited: function (v) { QbzQueue.queueSetSearch(v) }
                 }
             }
+        }
+    }
+
+    // Floating drag ghost (QueueSidebar.slint:1098-1130) — a pill following
+    // the pointer with the dragged track's title, so it is clear something is
+    // being moved. A free child of the panel ROOT (not of the Column, which
+    // would stack it), declared LAST so it renders above the list, and with
+    // no mouse target of its own. The live pointer window-Y is converted into
+    // panel-local space here; mapToItem() is re-evaluated on every
+    // reorderPointerY change, which is the only thing that moves it.
+    Rectangle {
+        visible: root.reorderActive && root.reorderFrom >= 0
+            && root.reorderFrom < root.upcoming.length
+        x: theme.spacingMd
+        y: root.reorderPointerY - root.mapToItem(null, 0, 0).y - height / 2
+        width: root.width - 2 * theme.spacingMd
+        height: 34
+        radius: theme.radiusSm
+        color: theme.surfaceElevated
+        border.width: 1
+        border.color: theme.accent
+        opacity: 0.95
+        Text {
+            anchors.fill: parent
+            anchors.leftMargin: theme.spacingSm
+            anchors.rightMargin: theme.spacingSm
+            verticalAlignment: Text.AlignVCenter
+            text: parent.visible ? (root.upcoming[root.reorderFrom].title || "") : ""
+            color: theme.textPrimary
+            font.pixelSize: 12
+            font.weight: theme.weightMedium
+            elide: Text.ElideRight
         }
     }
 }

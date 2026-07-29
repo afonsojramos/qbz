@@ -2,8 +2,10 @@
 // (phase 17). ONE JSON document (QbzBridge.playlistJson, playlist_qt.rs
 // PlaylistDoc: header + track rows + ownership/follow/pin/sort/search).
 //
-// Header: 150px cover (server image, else first-track cover, else the
-// placeholder glyph), "PLAYLIST" eyebrow, name, description-short + Read
+// Header: 150px cover (the playlist's OWN Qobuz graphic contain-fitted,
+// else the member-cover mosaic via the shared cards/PlaylistCollage.qml,
+// which also supplies the placeholder glyph),
+// "PLAYLIST" eyebrow, name, description-short + Read
 // more (the shared AppShell text modal), owner • N tracks • duration,
 // the action row: Play / Shuffle / heart (owned, wired) / pin (wired) /
 // follow (foreign, subscribe API) / copy (foreign, create+add) / edit
@@ -36,6 +38,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Window
 import com.blitzfc.qbz
+import "../cards"
 import "../controls"
 import "../rows"
 import "../theme"
@@ -84,9 +87,14 @@ Rectangle {
         ? (root.Window.window.visibility !== Window.Minimized
            && root.Window.window.visibility !== Window.Hidden)
         : true
+    // True when this playlist carries artwork of its OWN (`image_rectangle`
+    // — editorial playlists). playlist_qt.rs publishes coverUrl/coverPath for
+    // that graphic ONLY; everything else falls back to the member-cover
+    // mosaic in `doc.covers`.
+    readonly property bool hasOwnArt: (doc.coverUrl || "") !== ""
     // The cover is its OWN progressive item: it clears the moment the
     // playlist's own cover lands, independently of the track rows.
-    readonly property bool coverPending: (doc.coverUrl || "") !== ""
+    readonly property bool coverPending: root.hasOwnArt
         && (doc.coverPath || "") === ""
     // The header has no data at all until the first document lands
     // (playlist_qt.rs publishes `{ loading: true }` with empty fields).
@@ -202,36 +210,48 @@ Rectangle {
             width: parent.width
             spacing: 24
 
-            // Cover.
+            // Cover — the SAME two arms as PlaylistCard.qml (the card fix of
+            // this session, applied to the detail header):
+            //   1. the playlist's OWN Qobuz graphic (`image_rectangle`,
+            //      published as coverUrl/coverPath) — CONTAIN, because those
+            //      are landscape and cropping cuts the wordmark;
+            //   2. otherwise the member-cover MOSAIC through the shared
+            //      cards/PlaylistCollage.qml (no second collage), which also
+            //      owns the list-music empty state.
+            // `doc.covers` are MEMBER-ALBUM covers, never the playlist's own
+            // artwork — binding one of them as the header image is the bug
+            // this replaces.
             Rectangle {
                 width: 150
                 height: 150
                 radius: theme.radiusMd
                 color: theme.surfaceElevated
                 clip: true
+                // Arm 2 first: the collage is the BACKDROP. Declaration order
+                // is z-order, so the resolved single cover and the skeleton
+                // below must come after it.
+                PlaylistCollage {
+                    anchors.fill: parent
+                    visible: (doc.coverPath || "") === ""
+                    // A playlist that HAS its own graphic passes no urls, so
+                    // it shows the placeholder while that graphic downloads
+                    // instead of flashing a member mosaic (PlaylistCard rule).
+                    urls: root.hasOwnArt ? [] : (doc.covers || [])
+                    radius: theme.radiusMd
+                }
                 RoundedImage {
                     visible: (doc.coverPath || "") !== ""
                     anchors.fill: parent
                     source: doc.coverPath || ""
                     radius: theme.radiusMd
-                }
-                QbzIcon {
-                    // Hidden only while the placeholder is actually up; the
-                    // moment it settles (or the cover lands) the designed
-                    // empty-state glyph is what the user sees.
-                    visible: (doc.coverPath || "") === ""
-                        && (!root.coverPending || plCoverSkel.settled)
-                    name: "list-music"
-                    width: 56
-                    height: 56
-                    anchors.centerIn: parent
-                    tintName: "muted"
+                    fit: root.hasOwnArt ? "contain" : "crop"
                 }
                 // Per-item: the cover shimmers until THIS playlist's cover
                 // lands, then clears on its own. settleMs bounds it — a
                 // failed download republishes the document with an empty
                 // coverPath and would otherwise shimmer forever; on settle
-                // the placeholder fades and the glyph above takes over.
+                // the placeholder fades and the collage below takes over
+                // (empty urls -> its list-music glyph, the old empty state).
                 QbzSkeleton {
                     id: plCoverSkel
                     visible: root.coverPending

@@ -56,6 +56,147 @@ static MUTED: AtomicBool = AtomicBool::new(false);
 static PREMUTE_VOLUME: AtomicU64 = AtomicU64::new(0);
 
 // ---------------------------------------------------------------------------
+// Playback CONTEXT — the "playing from" origin (song-card layers glyph)
+// ---------------------------------------------------------------------------
+
+/// The container a queue was launched FROM. `kind` is "album" | "artist" |
+/// "playlist" | "label" and `id` that container's navigation id — 1:1 with the
+/// Slint `open-context(kind, id)` -> `media-action(kind, id, "open")` arms
+/// (qbz/src/main.rs:12695 artist, :12701 album, :12707 playlist, :13206 label).
+///
+/// HARDENING (owner ask): the origin is NOT something a play path has to
+/// remember. It travels WITH the queue — every play/enqueue entry point in this
+/// module funnels through `set_queue_stamped` / `stamped`, which stamp it onto
+/// EVERY track, and when the caller passes none it is DERIVED from the queue
+/// itself (`derive_context`). A new entry point therefore cannot silently ship
+/// an unstamped queue; the worst case is the same album fallback the Slint uses
+/// in `refresh_now_playing_meta` (playback.rs:1959-1965).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlayContext {
+    pub kind: String,
+    pub id: String,
+}
+
+impl PlayContext {
+    /// None for an empty kind/id — an empty context must never be stamped (it
+    /// would shadow the per-track album fallback with a dead glyph).
+    pub fn new(kind: &str, id: &str) -> Option<Self> {
+        if kind.is_empty() || id.is_empty() {
+            return None;
+        }
+        Some(Self { kind: kind.to_string(), id: id.to_string() })
+    }
+
+    pub fn album(id: &str) -> Option<Self> {
+        Self::new("album", id)
+    }
+
+    pub fn artist(id: &str) -> Option<Self> {
+        Self::new("artist", id)
+    }
+
+    #[allow(dead_code)] // used once the playlist play path routes through here
+    pub fn playlist(id: &str) -> Option<Self> {
+        Self::new("playlist", id)
+    }
+}
+
+/// Infer the container from the queue itself: one shared album -> that album,
+/// otherwise one shared artist -> that artist (an artist page's Popular Tracks
+/// span many albums but ONE artist — the exact case that shipped contextless).
+/// Nothing shared -> None, and the per-track album fallback takes over.
+fn derive_context(tracks: &[QueueTrack]) -> Option<PlayContext> {
+    let mut album: Option<&str> = None;
+    let mut one_album = true;
+    let mut artist: Option<u64> = None;
+    let mut one_artist = true;
+
+    for track in tracks {
+        match track.album_id.as_deref().filter(|s| !s.is_empty()) {
+            None => one_album = false,
+            Some(id) => {
+                if let Some(prev) = album {
+                    if prev != id {
+                        one_album = false;
+                    }
+                } else {
+                    album = Some(id);
+                }
+            }
+        }
+        match track.artist_id {
+            None => one_artist = false,
+            Some(id) => {
+                if let Some(prev) = artist {
+                    if prev != id {
+                        one_artist = false;
+                    }
+                } else {
+                    artist = Some(id);
+                }
+            }
+        }
+    }
+
+    if one_album {
+        if let Some(id) = album {
+            return PlayContext::album(id);
+        }
+    }
+    // A SINGLE track that shares "one artist" is not an artist container — it
+    // is a bare track play, whose Slint fallback is its own album. Only a
+    // multi-track queue earns the artist origin.
+    if one_artist && tracks.len() > 1 {
+        if let Some(id) = artist {
+            return PlayContext::artist(&id.to_string());
+        }
+    }
+    None
+}
+
+/// Stamp the origin onto every track that does not already carry one. Tracks
+/// that arrive pre-stamped (the album/playlist/local builders) keep theirs, so
+/// a mixed queue stays honest per row.
+fn stamp_context(tracks: &mut [QueueTrack], explicit: Option<PlayContext>) {
+    let resolved = match explicit {
+        Some(ctx) => Some(ctx),
+        None => derive_context(tracks),
+    };
+    let Some(ctx) = resolved else {
+        return;
+    };
+    for track in tracks.iter_mut() {
+        let already_stamped = track.context_kind.as_deref().is_some_and(|k| !k.is_empty())
+            && track.context_id.as_deref().is_some_and(|i| !i.is_empty());
+        if already_stamped {
+            continue;
+        }
+        track.context_kind = Some(ctx.kind.clone());
+        track.context_id = Some(ctx.id.clone());
+    }
+}
+
+/// The ONLY `core().set_queue` call in this module — every play path goes
+/// through it, so the origin can never be dropped on the floor.
+pub(crate) async fn set_queue_stamped(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    mut tracks: Vec<QueueTrack>,
+    start: Option<usize>,
+    context: Option<PlayContext>,
+) {
+    stamp_context(&mut tracks, context);
+    runtime.core().set_queue(tracks, start).await;
+}
+
+/// Same guarantee for the ADD paths (play-next / add-to-queue): appended tracks
+/// carry their own origin, so the glyph stays right after the queue advances
+/// into them.
+fn stamped(mut tracks: Vec<QueueTrack>, context: Option<PlayContext>) -> Vec<QueueTrack> {
+    stamp_context(&mut tracks, context);
+    tracks
+}
+
+// ---------------------------------------------------------------------------
 // Play an album (album-card click on Home)
 // ---------------------------------------------------------------------------
 
@@ -193,7 +334,7 @@ pub async fn play_artist(runtime: &Arc<AppRuntime<LoggingAdapter>>, artist_id: &
         .collect();
     if !top.is_empty() {
         let first_id = top[0].id;
-        runtime.core().set_queue(top, Some(0)).await;
+        set_queue_stamped(runtime, top, Some(0), PlayContext::artist(artist_id)).await;
         publish_queue(runtime).await;
         runtime
             .core()
@@ -232,7 +373,14 @@ pub async fn play_artist(runtime: &Arc<AppRuntime<LoggingAdapter>>, artist_id: &
     }
     log::info!("[qbz-qt] artist-play {artist_id}: discography fallback, {} tracks", queue.len());
     let first_id = queue[0].id;
-    runtime.core().set_queue(queue, Some(0)).await;
+    // The discography queue arrives pre-stamped per ALBUM (fetch_album_queue);
+    // the artist origin is what the user launched, so it wins here — the
+    // explicit context overrides the per-album stamp for the whole queue.
+    for track in queue.iter_mut() {
+        track.context_kind = None;
+        track.context_id = None;
+    }
+    set_queue_stamped(runtime, queue, Some(0), PlayContext::artist(artist_id)).await;
     publish_queue(runtime).await;
     runtime
         .core()
@@ -251,7 +399,10 @@ pub async fn enqueue_album(
     album_id: &str,
     mode: &str,
 ) -> Result<(), String> {
-    let tracks = fetch_album_queue(runtime, album_id).await?;
+    let tracks = stamped(
+        fetch_album_queue(runtime, album_id).await?,
+        PlayContext::album(album_id),
+    );
     log::info!("[qbz-qt] enqueue_album {album_id} ({mode}): {} tracks", tracks.len());
     if mode == "next" {
         // add_track_next inserts directly after the current track — feed
@@ -286,7 +437,7 @@ pub async fn play_album_from(
     let start = start_index.min(tracks.len() - 1);
     let first_id = tracks[start].id;
     let count = tracks.len();
-    runtime.core().set_queue(tracks, Some(start)).await;
+    set_queue_stamped(runtime, tracks, Some(start), PlayContext::album(album_id)).await;
     publish_queue(runtime).await;
     log::info!("[qbz-qt] play_album: queue set ({count} tracks), playing track {first_id}");
     runtime
@@ -309,7 +460,7 @@ pub async fn play_album_from_track(
     let tracks = fetch_album_queue(runtime, album_id).await?;
     let start = tracks.iter().position(|t| t.id == track_id).unwrap_or(0);
     let first_id = tracks[start].id;
-    runtime.core().set_queue(tracks, Some(start)).await;
+    set_queue_stamped(runtime, tracks, Some(start), PlayContext::album(album_id)).await;
     publish_queue(runtime).await;
     runtime
         .core()
@@ -322,11 +473,29 @@ pub async fn play_album_from_track(
 
 /// Play a pre-built queue starting at `start` (ArtistView Popular Tracks:
 /// the visible list becomes the queue, anchored at the clicked track).
+///
+/// The origin is DERIVED from the queue when the caller has none (see
+/// `stamp_context`), so this path can never publish a contextless track — the
+/// artist page's Popular Tracks span many albums but one artist and resolve to
+/// ("artist", artist_id) without the caller lifting a finger.
 pub async fn play_track_list(
     runtime: &Arc<AppRuntime<LoggingAdapter>>,
     tracks: Vec<QueueTrack>,
     start: usize,
     shuffle: bool,
+) -> Result<(), String> {
+    play_track_list_in(runtime, tracks, start, shuffle, None).await
+}
+
+/// `play_track_list` with an EXPLICIT origin — preferred whenever the caller
+/// knows it (artist page, playlist, label), because it survives a queue whose
+/// tracks share nothing derivable.
+pub async fn play_track_list_in(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    tracks: Vec<QueueTrack>,
+    start: usize,
+    shuffle: bool,
+    context: Option<PlayContext>,
 ) -> Result<(), String> {
     if tracks.is_empty() {
         return Err("empty track list".to_string());
@@ -337,7 +506,7 @@ pub async fn play_track_list(
     }
     let start = start.min(tracks.len() - 1);
     let first_id = tracks[start].id;
-    runtime.core().set_queue(tracks, Some(start)).await;
+    set_queue_stamped(runtime, tracks, Some(start), context).await;
     publish_queue(runtime).await;
     runtime
         .core()
@@ -356,7 +525,7 @@ pub async fn enqueue_track_list(
     if tracks.is_empty() {
         return Err("empty track list".to_string());
     }
-    runtime.core().add_tracks(tracks).await;
+    runtime.core().add_tracks(stamped(tracks, None)).await;
     publish_queue(runtime).await;
     Ok(())
 }
@@ -450,7 +619,9 @@ pub async fn play_single_track(
     track_id: u64,
 ) -> Result<(), String> {
     let qt = feed_queue_track(track_id)?;
-    runtime.core().set_queue(vec![qt], Some(0)).await;
+    // Bare single-track play: no container origin, so the derive falls to the
+    // track's own album — same landing spot as the Slint fallback.
+    set_queue_stamped(runtime, vec![qt], Some(0), None).await;
     publish_queue(runtime).await;
     log::info!("[qbz-qt] play_single_track: playing {track_id}");
     runtime
@@ -470,7 +641,9 @@ pub async fn enqueue_single_track(
     track_id: u64,
     mode: &str,
 ) -> Result<(), String> {
-    let qt = feed_queue_track(track_id)?;
+    let qt = stamped(vec![feed_queue_track(track_id)?], None)
+        .pop()
+        .expect("one track in, one track out");
     match mode {
         "next" => runtime.core().add_track_next(qt).await,
         "later" => runtime.core().add_track_later(qt).await,
@@ -618,15 +791,40 @@ pub(crate) async fn refresh_now_playing(runtime: &Arc<AppRuntime<LoggingAdapter>
         track.duration_secs,
     );
     let (tier, label) = quality_badge(&track);
+    let album_id = track.album_id.clone().unwrap_or_default();
+    // Album with its release variant appended ("Octavarium (2009 Remaster)"),
+    // 1:1 with the Slint `album_display` (playback.rs:1941-1949).
+    let album_display = match track
+        .album_version
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        Some(v) => format!("{} ({v})", track.album),
+        None => track.album.clone(),
+    };
+    // "Playing from" origin for the song-card layers glyph, re-derived from the
+    // CURRENT track's own stamp on EVERY change (never a stale global) —
+    // playback.rs:1953-1965. A track with no container origin falls back to its
+    // own album, exactly like the Slint.
+    let (context_kind, context_id) = match (
+        track.context_kind.as_deref().filter(|s| !s.is_empty()),
+        track.context_id.as_deref().filter(|s| !s.is_empty()),
+    ) {
+        (Some(kind), Some(id)) => (kind.to_string(), id.to_string()),
+        _ => ("album".to_string(), album_id.clone()),
+    };
     crate::now_playing::set_track(crate::now_playing::TrackMeta {
         title,
         artist: track.artist.clone(),
-        album: track.album.clone(),
-        album_id: track.album_id.clone().unwrap_or_default(),
+        album: album_display,
+        album_id,
         artist_id: track
             .artist_id
             .map(|id| id.to_string())
             .unwrap_or_default(),
+        context_kind,
+        context_id,
         duration_secs: track.duration_secs as i32,
         quality_tier: tier,
         quality_label: label,
@@ -736,6 +934,13 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                 // DE-DUPED track edge on purpose — firing it from
                 // refresh_now_playing would re-arm the timer on every republish.
                 crate::integrations_qt::on_track_change_edge(&runtime);
+                // Local play history — Recently Played and Most Played read the
+                // same file the other frontends write; without this the Qt build
+                // shows their history and never adds to it. Same de-duped edge
+                // as the scrobblers, never from refresh_now_playing.
+                if let Some(track) = runtime.core().get_queue_state().await.current_track {
+                    crate::recently_qt::record_queue_track(&track);
+                }
                 last_track_id = track_id;
             }
 
