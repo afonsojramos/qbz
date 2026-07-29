@@ -317,4 +317,9 @@ Rectangle {
             }
         }
     }
+
+    // LAST child = above every surface, exactly like ArtPreviewOverlay.slint's
+    // mount in AppShell.slint. Non-interactive, so it never steals the hover
+    // that is keeping it open (see the file header).
+    ArtPreviewOverlay { }
 }

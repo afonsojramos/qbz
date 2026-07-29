@@ -43,7 +43,7 @@ fn main() {
         .qt_module("QuickControls2")
         .qml_module(QmlModule {
             uri: "com.blitzfc.qbz",
-            rust_files: &["src/bridge.rs", "src/session_bridge.rs", "src/shell_bridge.rs", "src/player_bridge.rs", "src/queue_bridge.rs", "src/home_bridge.rs", "src/viz_bridge.rs", "src/local_bridge.rs", "src/library_bridge.rs", "src/album_bridge.rs", "src/artist_bridge.rs", "src/lyrics_qt.rs", "src/icon_tint_qt.rs"],
+            rust_files: &["src/bridge.rs", "src/session_bridge.rs", "src/shell_bridge.rs", "src/player_bridge.rs", "src/queue_bridge.rs", "src/home_bridge.rs", "src/viz_bridge.rs", "src/local_bridge.rs", "src/library_bridge.rs", "src/album_bridge.rs", "src/artist_bridge.rs", "src/lyrics_qt.rs", "src/icon_tint_qt.rs", "src/cast_bridge.rs"],
             qml_files: &[
                 "qml/LoginScreen.qml",
                 "qml/Main.qml",
@@ -82,6 +82,7 @@ fn main() {
                 "qml/settings/SettingsView.qml",
                 "qml/shell/AmbientField.qml",
                 "qml/shell/AppShell.qml",
+                "qml/shell/ArtPreviewOverlay.qml",
                 "qml/shell/Cortinilla.qml",
                 "qml/shell/HeaderBar.qml",
                 "qml/shell/LyricsPanel.qml",
@@ -105,6 +106,7 @@ fn main() {
                 "qml/views/PlaylistView.qml",
                 "qml/views/SearchView.qml",
                 "qml/views/SectionRail.qml",
+                "qml/shell/CastPicker.qml",
                 "qml/controls/BrowseGenreButton.qml",
                 "qml/controls/QbzToggleButton.qml",
                 "qml/controls/ViewModeToggle.qml",

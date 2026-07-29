@@ -156,6 +156,28 @@ Rectangle {
                         size: root.artSize * 0.5
                     }
                 }
+                // Hover trigger for the floating 220px preview
+                // (SongCard.slint:296). Topmost so the cover, the idle glyph
+                // and the fetch scrim below it stay reachable; NoButton so it
+                // reports hover only and every click passes through to them.
+                // The anchor is published in WINDOW coordinates because the
+                // overlay lives at the shell root.
+                MouseArea {
+                    id: artHover
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    acceptedButtons: Qt.NoButton
+                    onContainsMouseChanged: {
+                        if (containsMouse && QbzPlayer.npHasTrack) {
+                            var pt = mapToItem(null, width / 2, 0)
+                            QbzShell.artPreviewX = pt.x
+                            QbzShell.artPreviewY = pt.y
+                            QbzShell.artPreviewShow = true
+                        } else if (!containsMouse) {
+                            QbzShell.artPreviewShow = false
+                        }
+                    }
+                }
             }
         }
         Item { width: root.showArt ? root.artTextGap : 0; height: 1 }

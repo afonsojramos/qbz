@@ -131,6 +131,15 @@ pub mod qbz_shell {
         #[qproperty(f32, drag_x)]
         #[qproperty(f32, drag_y)]
         #[qproperty(QString, drag_over_playlist_id)]
+        // Floating album-art preview over the now-playing bar's small cover
+        // (SongCard.slint:296 + ArtPreviewOverlay.slint). Anchor is in WINDOW
+        // coordinates: x = the cover's horizontal centre, y = its top edge.
+        // Carried here for the same reason the drag ghost is: the trigger
+        // lives inside the bar, the overlay must paint above every surface, and
+        // the two are in different .qml files.
+        #[qproperty(bool, art_preview_show)]
+        #[qproperty(f32, art_preview_x)]
+        #[qproperty(f32, art_preview_y)]
 
         type QbzShell = super::QbzShellRust;
 
@@ -279,6 +288,9 @@ pub struct QbzShellRust {
     drag_x: f32,
     drag_y: f32,
     drag_over_playlist_id: QString,
+    art_preview_show: bool,
+    art_preview_x: f32,
+    art_preview_y: f32,
 }
 
 impl Default for QbzShellRust {
@@ -322,6 +334,9 @@ impl Default for QbzShellRust {
             drag_x: 0.0,
             drag_y: 0.0,
             drag_over_playlist_id: QString::default(),
+            art_preview_show: false,
+            art_preview_x: 0.0,
+            art_preview_y: 0.0,
         }
     }
 }
