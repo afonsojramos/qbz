@@ -4,7 +4,9 @@
 //
 // 3px full-width top seekbar (3-color: background / cache / progress),
 // then the symmetric 3-column controls row (~39px):
-//   LEFT   — 37px album art + 2-line title/artist + fixed time column
+//   LEFT   — the SHARED shell/SongCard.qml in its text-center (Small) arm
+//            (37px bordered cover + 13px title over the [layers] · artist ·
+//            album meta row) + the fixed 40px time column
 //   CENTER — transport cluster (info · shuffle · prev · play · next ·
 //            repeat · +)
 //   RIGHT  — AudioStamp · Connect · Cast · Settings · ViewMode · Lyrics ·
@@ -47,14 +49,16 @@ Rectangle {
 
     // Responsive side fraction — IDENTICAL to PlayerBarSmall's mechanism:
     // LEFT and RIGHT columns share this fraction so the CENTER transport
-    // column lands PLAY on the window centre.
-    //   width <  1366  -> 39% | 22% | 39%
-    //   1366..<1920    -> 30% | 40% | 30%
-    //   width >= 1920  -> 25% | 50% | 25%
-    property real sideFrac: root.width >= 1920 ? 0.25 : (root.width >= 1366 ? 0.30 : 0.39)
+    // column lands PLAY on the window centre. The breakpoints (39/30/25 at
+    // 1366 / 1920) are the SHARED theme token, so this bar and PlayerBar can
+    // never drift apart — see QbzTheme.npbSideFrac.
+    // `root.width` IS the window width: the bar is anchored left-to-right on
+    // the shell root, exactly like PlayerBarSmall.slint reads its own root.
+    property real sideFrac: theme.npbSideFrac(root.width)
     property real colCentre: 1.0 - 2.0 * root.sideFrac
     // WIDE = inline horizontal volume slider; NARROW = button-only.
-    property bool volumeWide: root.width >= 1366
+    // Same 1366 edge as the side fraction (PlayerBarSmall.slint:152).
+    property bool volumeWide: root.width >= theme.npbBreakMid
 
     // Favorite state of the now-playing track (Slint:
     // QueueState.now-playing-favorite) — the queue document carries it on its
@@ -181,7 +185,7 @@ Rectangle {
             width: parent.width
             height: parent.height - 3
 
-            // ---- LEFT column: art + title/artist + time column ---------
+            // ---- LEFT column: SongCard + Sep + time column --------------
             Item {
                 anchors.left: parent.left
                 anchors.top: parent.top
@@ -193,81 +197,37 @@ Rectangle {
                     anchors.fill: parent
                     spacing: 0
 
-                    // Song card: 37px art (3px surface-card border, flush to
-                    // the window's left edge) + tight 2-line text block.
+                    // Song card: the SHARED shell/SongCard.qml in its
+                    // text-center arm — 37px cover (3px surface-card border,
+                    // flush to the window's left edge) + the 13px title over
+                    // the [layers] · artist · album meta row. 1:1 with
+                    // PlayerBarSmall.slint:238-267, which mounts the very same
+                    // SongCard with these exact knobs.
+                    //
+                    // This REPLACES a hand-rolled 2-line copy (art + title +
+                    // artist Text) that silently dropped three things living
+                    // only inside SongCard: the context glyph, the album link
+                    // and the floating cover preview (SongCard's artHover is
+                    // the ONLY writer of QbzShell.artPreviewShow, so the
+                    // shell's ArtPreviewOverlay was simply never armed in
+                    // Small). Rule 5 — reuse, don't fork.
+                    //
                     // Width = the column minus the Sep + time column, so the
-                    // title elides at exactly the free space.
-                    Item {
+                    // title and the meta budget elide at exactly the free
+                    // space. Height = the 39px controls row: BOTH must be
+                    // explicit, because SongCard's own defaults are 200x74 and
+                    // a 74px card would push the 37px cover off-centre.
+                    SongCard {
                         height: parent.height
                         width: parent.width - (QbzPlayer.npHasTrack ? 59 : 0)
-
-                        Rectangle {
-                            id: artBox
-                            width: 37
-                            height: 37
-                            anchors.verticalCenter: parent.verticalCenter
-                            radius: 6
-                            border.width: 3
-                            border.color: theme.surfaceCard
-                            color: theme.surfaceElevated
-                            clip: true
-
-                            RoundedImage {
-                                anchors.fill: parent
-                                source: QbzPlayer.npArtworkPath
-                                radius: 6
-                            }
-                            // Idle (no track): a STATIC album glyph
-                            // placeholder (50% of the art size, muted).
-                            QbzIcon {
-                                visible: !QbzPlayer.npHasTrack
-                                name: "music"
-                                width: 18.5
-                                height: 18.5
-                                anchors.centerIn: parent
-                                tintName: "muted"
-                            }
-                        }
-
-                        // Title + artist — constrained to the art's inner
-                        // height (37 − 2×3 = 31px) and vertically centred
-                        // (SongCard text-center).
-                        Column {
-                            id: metaBlock
-                            width: Math.max(0, parent.width - 37 - 9)
-                            height: 31
-                            anchors.left: artBox.right
-                            anchors.leftMargin: 9
-                            anchors.verticalCenter: parent.verticalCenter
-                            spacing: 1
-
-                            Text {
-                                width: parent.width
-                                text: QbzPlayer.npHasTrack
-                                    ? QbzPlayer.npTitle : QbzSession.tr("Nothing playing", QbzSession.trRev)
-                                color: theme.textPrimary
-                                font.pixelSize: 13
-                                font.weight: theme.weightMedium
-                                elide: Text.ElideRight
-                                // Title -> Track Info (SongCard.slint fires
-                                // track-info from the title). Child of the
-                                // Text so it takes no room in the Column.
-                                MouseArea {
-                                    anchors.fill: parent
-                                    hoverEnabled: true
-                                    cursorShape: root.qobuzTrack ? Qt.PointingHandCursor : Qt.ArrowCursor
-                                    onClicked: root.openTrackInfo()
-                                }
-                            }
-                            Text {
-                                visible: QbzPlayer.npHasTrack
-                                width: parent.width
-                                text: QbzPlayer.npArtist
-                                color: theme.textMuted
-                                font.pixelSize: 11
-                                elide: Text.ElideRight
-                            }
-                        }
+                        artSize: 37
+                        artBorderWidth: 3
+                        artBorderColor: theme.surfaceCard
+                        artTextGap: 9
+                        titleFontSize: 13
+                        showBadges: false
+                        textCenter: true
+                        onTrackInfoRequested: root.openTrackInfo()
                     }
 
                     // Separator: song-card | time column (8px toward the

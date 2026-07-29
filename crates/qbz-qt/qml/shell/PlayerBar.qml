@@ -71,8 +71,12 @@ Rectangle {
 
     // Responsive zones (PlayerBar.slint). Classic fixes col-side at 0.324;
     // New/Large use the width-driven side fraction. Both keep the two side
-    // columns EQUAL so the centre column stays dead centre.
-    property real sideFrac: root.width >= 1920 ? 0.25 : (root.width >= 1366 ? 0.30 : 0.39)
+    // columns EQUAL so the centre column stays dead centre. The breakpoints
+    // are the SHARED theme token (QbzTheme.npbSideFrac) — the Small bar reads
+    // the same one, so the two bars cannot drift apart.
+    // `root.width` IS the window width: the bar is anchored left-to-right on
+    // the shell root, exactly like PlayerBar.slint reads its own root.
+    property real sideFrac: theme.npbSideFrac(root.width)
     property real colSide: isClassic ? 0.324 : sideFrac
     property real colCentre: 1.0 - 2.0 * colSide
     // The docked-cover width the Large seek arm + song card must clear

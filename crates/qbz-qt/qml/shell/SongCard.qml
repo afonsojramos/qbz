@@ -87,12 +87,10 @@ Rectangle {
 
     QbzTheme { id: theme }
 
-    // Bake matching the LIVE Theme.text-primary (SongCard.slint:504 tints the
-    // context-stack glyph text-primary on hover, text-muted idle). A
-    // hardcoded bake name is a dark-theme-only colour — see QbzIconButton's
-    // header. text-muted keeps the "muted" bake: #888888 reads on both
-    // polarities.
-    readonly property string tintStrong: theme.textPrimary.hslLightness > 0.5 ? "primary" : "black"
+    // SongCard.slint:504 tints the context-stack glyph text-primary on hover,
+    // text-muted idle. Both are runtime-tinted (see QbzIconButton's header),
+    // so this is the live token, not a fixed bake picked by lightness.
+    readonly property string tintStrong: "textPrimary"
 
     width: 200
     height: glass ? 64 : 74

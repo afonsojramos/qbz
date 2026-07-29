@@ -253,7 +253,7 @@ Rectangle {
                             width: 18
                             height: 18
                             anchors.centerIn: parent
-                            tintName: tmCloseArea.containsMouse ? "primary" : "muted"
+                            tintName: tmCloseArea.containsMouse ? "textPrimary" : "muted"
                         }
                         MouseArea {
                             id: tmCloseArea
