@@ -10,6 +10,28 @@
 // secondary, muted, accent, warning} (script-generated from the originals,
 // also rewriting fill="currentColor"). `tintName` switches variants
 // dynamically (hover = secondary -> primary), served from qrc.
+//
+// TWO WAYS A BAKE SILENTLY LIES — both have already shipped here:
+//
+//  1. NO VARIANT ON DISK -> the Image resolves to nothing and the glyph is
+//     simply ABSENT. Nothing is logged. Every `name` an
+//     app site can ask for must exist in every `tintName` that site can ask
+//     for; `favorite/` and `amber/` are deliberately partial (favorite =
+//     heart/heart-filled/link/trash-2..., amber = monitor-speaker only), so
+//     only widen a caller's tint set after checking the dir.
+//  2. THE BAKE RAN BUT RECOLOURED NOTHING -> the glyph renders in the SVG's
+//     OWN colour in every tint, which for a Feather-style file with no
+//     paint attribute means BLACK (SVG's initial `fill` is black, and
+//     `currentColor` with no inherited `color` resolves to black too). The
+//     original baker only rewrote `stroke="..."` / `fill="currentColor"` on
+//     the ROOT element, so three icons whose colour lives elsewhere came out
+//     byte-identical in all seven dirs: element-connect (fill-based, no fill
+//     attribute at all), home-gear (same, plus a `fill="none"` backdrop
+//     path that must stay none) and copy (`stroke="currentColor"`).
+//     Re-baked by putting the tint on the ROOT element and letting the
+//     children inherit it — the convention play-fill/qbz-symbolic already
+//     used. CHECK FOR THIS with a content hash: if
+//     primary/<name>.svg == black/<name>.svg the icon is not tinted at all.
 
 import QtQuick
 

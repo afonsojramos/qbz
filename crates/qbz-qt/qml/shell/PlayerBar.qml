@@ -183,11 +183,18 @@ Rectangle {
                 radius: 2
                 anchors.verticalCenter: parent.verticalCenter
                 color: theme.surfaceElevated
+                // Buffered / cache line — SeekBar.slint:58 paints it
+                // text-muted @0.35, NOT border-muted: border-muted is an
+                // alpha-over-surface token (white-based on dark themes,
+                // black-based on light), so it inverted against the
+                // surface-elevated rail on light themes. The Small bar
+                // already used the right pair.
                 Rectangle {
                     width: parent.width * Math.min(Math.max(QbzPlayer.npCacheProgress, 0), 1)
                     height: parent.height
                     radius: 2
-                    color: theme.borderMuted
+                    color: theme.textMuted
+                    opacity: 0.35
                 }
                 Rectangle {
                     width: parent.width * Math.min(Math.max(QbzPlayer.npProgress, 0), 1)

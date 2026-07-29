@@ -23,6 +23,25 @@ Item {
     readonly property var eph: view ? view.ephemeral : null
     readonly property var albums: eph && eph.albums ? eph.albums : []
 
+    // Same rule as LocalFolderDetail: the host reports this pane's covers as
+    // one window when the document changes, so re-opening the pane on an
+    // unchanged document (leaving and returning to the Folders tab) needs its
+    // own trigger, or the evicted covers never come back.
+    Component.onCompleted: if (view && visible) view.reportEphemeralWindow()
+    Component.onDestruction: if (view) view.releaseWindow("ephemeral")
+    onVisibleChanged: {
+        if (!view) return
+        if (visible) view.reportEphemeralWindow()
+        else view.releaseWindow("ephemeral")
+    }
+    Connections {
+        target: root.view
+        function onArtworkRefresh() {
+            if (root.visible) root.view.reportEphemeralWindow()
+            else root.view.releaseWindow("ephemeral")
+        }
+    }
+
     Flickable {
         id: pane
         anchors.fill: parent

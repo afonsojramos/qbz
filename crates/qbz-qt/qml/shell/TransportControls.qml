@@ -32,6 +32,15 @@ Row {
 
     QbzTheme { id: theme }
 
+    // Bakes matching the LIVE tokens (see QbzIconButton's header: the icon
+    // tints are frozen SVG colours, so a hardcoded name is a dark-theme-only
+    // colour). `tintOnAccent` is the glyph sitting ON the filled play disc:
+    // the disc is Theme.accent, so its glyph is Theme.accent-text — which is
+    // near-white on some themes and near-black on others (qbz-theme picks it
+    // for worst-case contrast against the accent), never a fixed "black".
+    readonly property string tintStrong: theme.textPrimary.hslLightness > 0.5 ? "primary" : "black"
+    readonly property string tintOnAccent: theme.accentText.hslLightness > 0.5 ? "primary" : "black"
+
     spacing: 2
     height: 44
 
@@ -70,8 +79,8 @@ Row {
             width: 20
             height: 20
             anchors.centerIn: parent
-            tintName: tc.playCircle ? "black"
-                : (playArea.containsMouse ? "accent" : "primary")
+            tintName: tc.playCircle ? tc.tintOnAccent
+                : (playArea.containsMouse ? "accent" : tc.tintStrong)
         }
         MouseArea {
             id: playArea

@@ -118,12 +118,42 @@ Rectangle {
 
     QbzTheme { id: theme }
 
+    // --- Polarity-baked tokens for the play cell (#638) -------------------
+    // `theme.alphaTier(pct)` IS Slint's `Theme.alpha-N`: one ramp per theme,
+    // white-based on dark, black-based on light. The `.length` guard covers
+    // the pre-publish frame QbzTheme documents (its baked fallback carries no
+    // ramp) — without it the disc would render fill-less AND ring-less, which
+    // is the exact failure this block exists to prevent. The literals are the
+    // Slint dark values and their light-polarity mirrors.
+    readonly property color playCellFill: theme.alphaTiers.length > 0
+        ? theme.alphaTier(10) : (theme.isDark ? "#1affffff" : "#1a000000")
+    readonly property color playCellRing: theme.alphaTiers.length > 0
+        ? theme.alphaTier(15) : (theme.isDark ? "#26ffffff" : "#26000000")
+    /// Slint's `Theme.text-primary` icon tint in baked-variant terms: the
+    /// "primary" bake is a literal #ffffff (QbzIcon.qml), so a light theme
+    /// has to take "black" or the glyph is white-on-white. Also drives the
+    /// hover tints of the row's trailing controls, which had the same hole.
+    readonly property string playGlyphTint: theme.isDark ? "primary" : "black"
+    /// TrackRow.slint:123-125 — the row hover is `Theme.alpha-8`, not
+    /// surface-hover, and the .slint says why: "Hover uses the polarity-baked
+    /// alpha ramp so the hover state is visible on light themes too". The
+    /// zebra stripe stays the literal, per the same comment ("Zebra kept
+    /// as-is to avoid a visible dark-theme stripe shift").
+    readonly property color rowHoverBg: theme.alphaTiers.length > 0
+        ? theme.alphaTier(8) : (theme.isDark ? "#14ffffff" : "#14000000")
+
     width: parent ? parent.width : 0
     height: 50
     radius: 8
-    color: hovered ? theme.surfaceHover : (zebra && number % 2 === 0 ? "#07ffffff" : "transparent")
+    color: hovered ? rowHoverBg : (zebra && number % 2 === 0 ? "#07ffffff" : "transparent")
 
-    readonly property bool hovered: trArea.containsMouse || favArea.containsMouse || moreArea.containsMouse
+    // `playArea` is in here for the reason TrackPlayCell.slint:76-79 spells
+    // out: the cell owns a hover-enabled area of its own, and "Slint's
+    // has-hover does not propagate to ancestor TouchAreas" — Qt's does not
+    // either, so without this the row (and the play circle with it) would go
+    // un-hovered exactly while the pointer sits on the play button.
+    readonly property bool hovered: trArea.containsMouse || favArea.containsMouse
+        || moreArea.containsMouse || playArea.containsMouse
     readonly property bool isActive: QbzPlayer.npTrackId === (item.id || "")
     readonly property int cellsRight: 70 + 92 + (showFavorite ? 28 : 0) + (showDownload ? 28 : 0) + (showMenu ? 32 : 0)
     readonly property int cellsLeft: 32 + (showArtwork ? 36 : 0) + (showAlbum ? 220 : 0)
@@ -147,33 +177,90 @@ Rectangle {
         anchors.rightMargin: 12
         spacing: 14
 
-        // Number cell — swaps to play on hover (pause when active+playing).
+        // Number cell — the number-variant of primitives/TrackPlayCell.slint
+        // (:172-232), the play affordance shared by every track row.
+        //
+        // --- LIGHT-THEME LEGIBILITY (Slint 2.0.2 / #638, "Track-row play
+        // --- glyph … legible on light themes") ---------------------------
+        // TrackPlayCell.slint:201-207 states the defect and the fix in its
+        // own words: "Circular backing so the play/pause glyph is legible on
+        // EVERY theme (the old bare #ffffff glyph vanished on light themes —
+        // white-on-white, no scrim like the artwork variant has). Fill/border/
+        // shadow use the polarity-baked alpha ramp (black-alpha on light,
+        // white-alpha on dark) and the glyph uses text-primary."
+        //
+        // The port had the pre-fix shape: a hardcoded `#3dffffff` disc, no
+        // ring, and the "primary" icon bake — which is a literal #ffffff, not
+        // text-primary (QbzIcon.qml bakes tints into the SVG). Both halves are
+        // now the polarity-baked ramp: theme.alphaTier() is white-based on
+        // dark themes and black-based on light (qbz-theme colors.rs:125-129,
+        // republished per theme by theme_qt.rs), and `playGlyphTint` resolves
+        // text-primary to the only baked dark variant when the theme is light.
+        //
+        // Numbers off the .slint: 24px disc, 1.5px ring ("a 1px stroked circle
+        // aliases badly in femtovg", :215), 16px glyph.
+        // The accent-ring arm (:208-229) is the playing row: transparent fill,
+        // accent circumference, accent glyph.
+        // POC-NOTE: the .slint also drops a 6px `card-shadow` under the disc.
+        // Qt's DropShadow is a Qt5Compat graphical effect and renders NOTHING
+        // on this port's software path (the finding that killed ColorOverlay
+        // in QbzIcon), so the shadow is dropped rather than faked; the ring
+        // carries the separation on its own.
         Item {
+            id: playCell
             width: 32
             height: 40
             anchors.verticalCenter: parent.verticalCenter
+            // `show-overlay: row-hovered || is-active` (TrackPlayCell.slint
+            // :93) — the playing row keeps the affordance at rest, which is
+            // what the accent ring is FOR. The port showed it on hover only,
+            // so the ring never appeared.
+            readonly property bool showOverlay: root.hovered || root.isActive
+            // `accent-ring` (:108): the playing row, static form.
+            readonly property bool accentRing: root.isActive && QbzPlayer.npPlaying
             Text {
-                visible: !trArea.containsMouse
+                visible: !playCell.showOverlay
                 anchors.centerIn: parent
                 text: root.number
                 color: theme.textMuted
                 font.pixelSize: 13
             }
             Rectangle {
-                visible: trArea.containsMouse
+                visible: playCell.showOverlay
                 anchors.centerIn: parent
-                width: 28
-                height: 28
-                radius: 14
-                color: root.isActive && QbzPlayer.npPlaying ? "transparent" : "#3dffffff"
-                border.width: root.isActive && QbzPlayer.npPlaying ? 1.5 : 0
-                border.color: theme.accent
+                width: 24
+                height: 24
+                radius: 12
+                color: playCell.accentRing ? "transparent" : root.playCellFill
+                border.width: 1.5
+                border.color: playCell.accentRing ? theme.accent : root.playCellRing
                 QbzIcon {
                     anchors.centerIn: parent
-                    name: root.isActive && QbzPlayer.npPlaying ? "pause" : "play-fill"
-                    width: 14
-                    height: 14
-                    tintName: root.isActive && QbzPlayer.npPlaying ? "accent" : "primary"
+                    // `show-pause` (:101-104): PAUSE only while the playing
+                    // row is hovered — at rest the playing row shows PLAY,
+                    // "an affordance, not a state badge: the accent ring +
+                    // the row's edge mark carry the state".
+                    name: playCell.accentRing && root.hovered ? "pause" : "play-fill"
+                    width: 16
+                    height: 16
+                    tintName: playCell.accentRing ? "accent" : root.playGlyphTint
+                }
+            }
+            // TrackPlayCell.slint:234-243 — the cell is its OWN click target:
+            // a non-current cell plays the track, the current cell toggles
+            // play/pause. Without it the circle was a control that rendered
+            // and did nothing on the album view (clickPlays:false there, so
+            // the press fell through to the row body, which only reacts to a
+            // double-click). Declared LAST so it sits ABOVE the glyph, and it
+            // is above the row-body area regardless (that one is pinned z:-1).
+            MouseArea {
+                id: playArea
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: {
+                    if (root.isActive) QbzPlayer.togglePlay()
+                    else root.playRequested()
                 }
             }
         }
@@ -323,7 +410,11 @@ Rectangle {
                 name: root.item.isFavorite ? "heart-filled" : "heart"
                 width: 16
                 height: 16
-                tintName: root.item.isFavorite ? "favorite" : (favArea.containsMouse ? "primary" : "muted")
+                // TrackRow.slint:619 — hover raises the glyph to
+                // Theme.text-primary, NOT to white (same #638 hole).
+                tintName: root.item.isFavorite
+                    ? "favorite"
+                    : (favArea.containsMouse ? root.playGlyphTint : "muted")
             }
             MouseArea {
                 id: favArea
@@ -366,7 +457,8 @@ Rectangle {
                 name: "ellipsis"
                 width: 16
                 height: 16
-                tintName: moreArea.containsMouse ? "primary" : "muted"
+                // TrackRow.slint:750 — Theme.text-primary on hover.
+                tintName: moreArea.containsMouse ? root.playGlyphTint : "muted"
             }
             MouseArea {
                 id: moreArea
@@ -493,6 +585,12 @@ Rectangle {
     MouseArea {
         id: trArea
         anchors.fill: parent
+        // BEHIND the row's own controls. Declaration order is z-order in QML,
+        // and this fills the whole row from the LAST declaration — so it sat on
+        // top of the heart / cloud / menu buttons and swallowed their presses.
+        // propagateComposedEvents does not save them: `pressed` is not a
+        // composed event, so only the row's own double-click still worked.
+        z: -1
         hoverEnabled: true
         propagateComposedEvents: true
         // Right press opens the SAME menu as ⋯ (rowMenu), at the pointer.

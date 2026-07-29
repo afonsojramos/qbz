@@ -24,24 +24,44 @@ Item {
     // --------------------------- entry model ------------------------------
     property var entries: []
     property var alphaJumps: []
+    /// The rail's rows in DISPLAY order — the A-Z grouping reorders them, so
+    /// this is NOT `view.artistsVisible` and the window report must index
+    /// into it instead. (Reporting entry indices against `artistsVisible`
+    /// asked for the wrong avatars by the number of letter headers scrolled
+    /// past — up to 27 rows off at the bottom of the rail.)
+    property var flat: []
+    /// entry index -> index into `flat`, -1 for a letter header.
+    property var flatIndex: []
     function rebuild() {
         var groups = view ? view.artistsGrouped : []
         var out = []
         var jumps = []
+        var flatOut = []
+        var idx = []
         for (var i = 0; i < groups.length; i++) {
             var g = groups[i]
             if (!g.items || g.items.length === 0) continue
             jumps.push({ "letter": g.letter, "index": out.length })
             out.push({ "t": 0, "label": g.letter })
-            for (var j = 0; j < g.items.length; j++) out.push({ "t": 1, "item": g.items[j] })
+            idx.push(-1)
+            for (var j = 0; j < g.items.length; j++) {
+                out.push({ "t": 1, "item": g.items[j] })
+                idx.push(flatOut.length)
+                flatOut.push(g.items[j])
+            }
         }
         entries = out
         alphaJumps = jumps
+        flat = flatOut
+        flatIndex = idx
+        report()
     }
-    Component.onCompleted: rebuild()
+    Component.onCompleted: { rebuild(); reportSoon() }
+    Component.onDestruction: if (view) view.releaseWindow("artists-rail")
     Connections {
         target: root.view
         function onArtistsGroupedChanged() { root.rebuild() }
+        function onArtworkRefresh() { root.reportSoon() }
     }
 
     // Loading = the shape of the master/detail pair that is coming: 60px
@@ -140,6 +160,11 @@ Item {
                         model: root.entries
                         onContentYChanged: root.report()
                         onModelChanged: root.report()
+                        onHeightChanged: root.report()
+                        onVisibleChanged: {
+                            if (visible) root.reportSoon()
+                            else if (root.view) root.view.releaseWindow("artists-rail")
+                        }
 
                         delegate: Loader {
                             required property var modelData
@@ -257,6 +282,7 @@ Item {
                     width: parent.width
                     height: parent.height - 60
                     view: root.view
+                    surface: "artist-albums"
                     rows: root.view.artistAlbums
                     grouped: false
                     viewMode: "grid"
@@ -271,12 +297,47 @@ Item {
 
     // Artist avatars ride the same id-keyed artwork window as every other
     // cover; the rail reports its mounted band.
+    //
+    // TRIGGERS: the rail used to report on `contentY` and the model swap
+    // only, and both of those fire while the pane is still behind
+    // `localArtistsLoading` — the report was made against a ListView that had
+    // not laid out, and nothing re-fired once the rows appeared. It now also
+    // reports on mount, on the rebuild, when the pane becomes visible and
+    // when the viewport resizes.
     function report() {
         if (!view || !rail) return
+        if (!rail.visible || root.entries.length === 0) {
+            view.releaseWindow("artists-rail")
+            return
+        }
         var first = rail.indexAt(4, rail.contentY + 1)
         var last = rail.indexAt(4, rail.contentY + Math.max(1, rail.height) - 1)
         if (first < 0) first = 0
-        if (last < 0) last = first + 10
-        view.queueWindowReport(view.artistsVisible, Math.max(0, first - 4), last + 4)
+        if (last < 0) last = Math.min(root.entries.length - 1, first + 12)
+        // Entry band -> rail-row band (letter headers do not carry a cover).
+        var lo = -1
+        var hi = -1
+        for (var i = first; i <= last; i++) {
+            var n = root.flatIndex[i]
+            if (n === undefined || n < 0) continue
+            if (lo < 0) lo = n
+            hi = n
+        }
+        if (lo < 0) { lo = 0; hi = Math.min(root.flat.length - 1, 12) }
+        view.queueWindowReport(root.flat, Math.max(0, lo - 4), hi + 4, "artists-rail")
+    }
+
+    /// Report now, then again once the ListView has laid out — `indexAt`
+    /// answers -1 before that, which is exactly the state of a pane that has
+    /// just been shown.
+    Timer {
+        id: reportSettle
+        interval: 50
+        repeat: false
+        onTriggered: root.report()
+    }
+    function reportSoon() {
+        report()
+        reportSettle.restart()
     }
 }

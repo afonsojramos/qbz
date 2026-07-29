@@ -18,6 +18,12 @@ Rectangle {
 
     QbzTheme { id: theme }
 
+    // Bakes matching the LIVE tokens (TransportControls.slint's fav-ta:
+    // hover -> Theme.text-primary, idle -> Theme.text-secondary). Hardcoded
+    // bake names are dark-theme-only colours — see QbzIconButton's header.
+    readonly property string tintStrong: theme.textPrimary.hslLightness > 0.5 ? "primary" : "black"
+    readonly property string tintWeak: theme.textSecondary.hslLightness > 0.5 ? "secondary" : "muted"
+
     width: 32
     height: 32
     radius: theme.radiusSm
@@ -30,7 +36,7 @@ Rectangle {
         height: 16
         anchors.centerIn: parent
         tintName: root.favorite ? "favorite"
-            : (favArea.containsMouse ? "primary" : "secondary")
+            : (favArea.containsMouse ? root.tintStrong : root.tintWeak)
     }
     MouseArea {
         id: favArea

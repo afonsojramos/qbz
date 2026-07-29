@@ -55,6 +55,20 @@ pub mod qbz_bridge {
         // rows + ownership/follow/pin/sort/search state).
         #[qproperty(QString, playlist_json)]
 
+        // --- Filter by genre (shared, per context) -------------------------
+        // ONE JSON document (genre_filter_qt.rs FilterDoc): the popup model
+        // (chips / tree / remember / advanced / loading) PLUS the per-context
+        // selection counts and selected genre NAMES. Every surface that draws
+        // a genre button reads this one property: Discover (context
+        // "discover", server-side via get_discover_index) and Library > All
+        // (context "library-all", client-side over the feed).
+        #[qproperty(QString, genre_filter_json)]
+
+        // --- Discover section configurator (the toolbar gear) --------------
+        // ONE JSON document (discover_config_qt.rs ConfigDoc: the active
+        // tab's ordered rows + enabled/total counts).
+        #[qproperty(QString, discover_config_json)]
+
         type QbzBridge = super::QbzBridgeRust;
 
         /// TEMP (phase 23 split): registers the QbzBridge Qt-thread
@@ -165,6 +179,51 @@ pub mod qbz_bridge {
         /// Card-level playlist actions (LibPlaylistCard overlay + menu).
         #[qinvokable]
         fn playlist_set_follow_by_id(self: Pin<&mut QbzBridge>, playlist_id: QString, follow: bool);
+
+        // --- Filter by genre -----------------------------------------------
+        /// Genre button click: switch the edited context ("discover" |
+        /// "library-all"), publish the popup model, lazy-load the parent
+        /// genres on first open.
+        #[qinvokable]
+        fn genre_open(self: Pin<&mut QbzBridge>, context: QString);
+        /// Chip / tree-row click: flip the id in the CURRENT context, persist,
+        /// and refresh that context's consumer.
+        #[qinvokable]
+        fn genre_toggle(self: Pin<&mut QbzBridge>, genre_id: QString);
+        /// Advanced tree chevron: expand/collapse + lazy-load that level.
+        #[qinvokable]
+        fn genre_toggle_expand(self: Pin<&mut QbzBridge>, genre_id: QString);
+        /// Advanced-view search box (filters the loaded genres, flat).
+        #[qinvokable]
+        fn genre_search(self: Pin<&mut QbzBridge>, query: QString);
+        /// "Clear filter" — drops the CURRENT context's selection.
+        #[qinvokable]
+        fn genre_clear(self: Pin<&mut QbzBridge>);
+        /// "Remember selection" toggle (off also deletes the persisted file).
+        #[qinvokable]
+        fn genre_set_remember(self: Pin<&mut QbzBridge>, value: bool);
+        /// "Advanced view" toggle (eager-loads every parent's children).
+        #[qinvokable]
+        fn genre_set_advanced(self: Pin<&mut QbzBridge>, value: bool);
+
+        // --- Discover section configurator ---------------------------------
+        /// Gear click: publish the rows for the tab the modal will show.
+        #[qinvokable]
+        fn discover_config_open(self: Pin<&mut QbzBridge>, tab: QString);
+        /// Row click / checkbox: show or hide that section on that tab.
+        #[qinvokable]
+        fn discover_toggle_section(self: Pin<&mut QbzBridge>, tab: QString, section_id: QString);
+        /// Reorder chevrons: -1 up, +1 down (clamped at the boundaries).
+        #[qinvokable]
+        fn discover_move_section(
+            self: Pin<&mut QbzBridge>,
+            tab: QString,
+            section_id: QString,
+            dir: i32,
+        );
+        /// "Reset to defaults" — that tab only.
+        #[qinvokable]
+        fn discover_reset_tab(self: Pin<&mut QbzBridge>, tab: QString);
     }
 
     impl cxx_qt::Threading for QbzBridge {}
@@ -188,6 +247,8 @@ pub struct QbzBridgeRust {
     search_json: QString,
     intelligent_search: bool,
     playlist_json: QString,
+    genre_filter_json: QString,
+    discover_config_json: QString,
 }
 
 impl Default for QbzBridgeRust {
@@ -202,6 +263,16 @@ impl Default for QbzBridgeRust {
             search_json: QString::from("{}"),
             intelligent_search: crate::search_qt::intelligent_search_pref(),
             playlist_json: QString::from("{}"),
+            // Seeded from the PERSISTED selection (no network): a remembered
+            // filter colors both genre buttons and narrows the Library feed
+            // before the popup has ever been opened.
+            genre_filter_json: QString::from(
+                crate::genre_filter_qt::current_json().as_str(),
+            ),
+            // Seeded for the tab Discover mounts on.
+            discover_config_json: QString::from(
+                crate::discover_config_qt::rows_json("home").as_str(),
+            ),
         }
     }
 }
@@ -347,5 +418,49 @@ impl qbz_bridge::QbzBridge {
         if let Ok(pid) = playlist_id.to_string().parse::<u64>() {
             crate::playlist_set_follow_by_id(pid, follow);
         }
+    }
+
+    pub fn genre_open(self: Pin<&mut Self>, context: QString) {
+        crate::genre_filter_qt::open(&context.to_string());
+    }
+
+    pub fn genre_toggle(self: Pin<&mut Self>, genre_id: QString) {
+        crate::genre_filter_qt::toggle(&genre_id.to_string());
+    }
+
+    pub fn genre_toggle_expand(self: Pin<&mut Self>, genre_id: QString) {
+        crate::genre_filter_qt::toggle_expand(&genre_id.to_string());
+    }
+
+    pub fn genre_search(self: Pin<&mut Self>, query: QString) {
+        crate::genre_filter_qt::set_search(&query.to_string());
+    }
+
+    pub fn genre_clear(self: Pin<&mut Self>) {
+        crate::genre_filter_qt::clear();
+    }
+
+    pub fn genre_set_remember(self: Pin<&mut Self>, value: bool) {
+        crate::genre_filter_qt::set_remember(value);
+    }
+
+    pub fn genre_set_advanced(self: Pin<&mut Self>, value: bool) {
+        crate::genre_filter_qt::set_advanced(value);
+    }
+
+    pub fn discover_config_open(self: Pin<&mut Self>, tab: QString) {
+        crate::discover_config_qt::open(&tab.to_string());
+    }
+
+    pub fn discover_toggle_section(self: Pin<&mut Self>, tab: QString, section_id: QString) {
+        crate::discover_config_qt::toggle_section(&tab.to_string(), &section_id.to_string());
+    }
+
+    pub fn discover_move_section(self: Pin<&mut Self>, tab: QString, section_id: QString, dir: i32) {
+        crate::discover_config_qt::move_section(&tab.to_string(), &section_id.to_string(), dir);
+    }
+
+    pub fn discover_reset_tab(self: Pin<&mut Self>, tab: QString) {
+        crate::discover_config_qt::reset_tab(&tab.to_string());
     }
 }

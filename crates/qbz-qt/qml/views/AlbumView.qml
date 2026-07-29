@@ -829,9 +829,28 @@ Rectangle {
                         Text { text: QbzSession.tr("Title", QbzSession.trRev); width: parent.width - 32 - 80 - 80 - 28 - 28 - 32 - 5 * 16 - 24; color: theme.textMuted; font.pixelSize: 13; font.letterSpacing: 0.5; anchors.verticalCenter: parent.verticalCenter; elide: Text.ElideRight }
                         Text { text: QbzSession.tr("Duration", QbzSession.trRev); width: 80; color: theme.textMuted; font.pixelSize: 13; font.letterSpacing: 0.5; horizontalAlignment: Text.AlignHCenter; anchors.verticalCenter: parent.verticalCenter }
                         Text { text: QbzSession.tr("Quality", QbzSession.trRev); width: 80; color: theme.textMuted; font.pixelSize: 13; font.letterSpacing: 0.5; horizontalAlignment: Text.AlignHCenter; anchors.verticalCenter: parent.verticalCenter }
-                        Item { width: 28; height: 1; QbzIcon { name: "heart"; width: 14; height: 14; anchors.centerIn: parent; tintName: "muted" } }
-                        Item { width: 28; height: 1; QbzIcon { name: "cloud-download"; width: 14; height: 14; anchors.centerIn: parent; tintName: "muted" } }
-                        Item { width: 32; height: 1 }
+                        // Heart / offline-cache column heads. AlbumPageView
+                        // .slint:854-877 declares these as `Rectangle { width:
+                        // 28px; }` with NO height — a box-layout child with no
+                        // fixed cross-axis size is STRETCHED to the row, and
+                        // the glyph is then centred inside it (`y: (parent
+                        // .height - self.height) / 2`). The port gave them
+                        // `height: 1`, so `centerIn` centred the glyph on a
+                        // 1px item pinned at the top of the 40px band: the two
+                        // icons floated above the text labels, which do centre.
+                        // Fill the band and centre, exactly as the .slint does.
+                        Item {
+                            width: 28
+                            height: parent.height
+                            QbzIcon { name: "heart"; width: 14; height: 14; anchors.centerIn: parent; tintName: "muted" }
+                        }
+                        Item {
+                            width: 28
+                            height: parent.height
+                            QbzIcon { name: "cloud-download"; width: 14; height: 14; anchors.centerIn: parent; tintName: "muted" }
+                        }
+                        // Aligns with the per-row more-button slot (.slint:878).
+                        Item { width: 32; height: parent.height }
                     }
 
                     // Rows (with Disc / work headers).

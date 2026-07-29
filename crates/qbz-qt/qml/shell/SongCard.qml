@@ -37,6 +37,13 @@ Rectangle {
 
     QbzTheme { id: theme }
 
+    // Bake matching the LIVE Theme.text-primary (SongCard.slint:504 tints the
+    // context-stack glyph text-primary on hover, text-muted idle). A
+    // hardcoded bake name is a dark-theme-only colour — see QbzIconButton's
+    // header. text-muted keeps the "muted" bake: #888888 reads on both
+    // polarities.
+    readonly property string tintStrong: theme.textPrimary.hslLightness > 0.5 ? "primary" : "black"
+
     width: 200
     height: glass ? 64 : 74
     radius: glass ? 8 : 0
@@ -78,7 +85,13 @@ Rectangle {
                     anchors.centerIn: parent
                     tintName: "muted"
                 }
-                // Fetch overlay (resolving/downloading).
+                // Fetch overlay (resolving/downloading). DELIBERATE literal,
+                // not a theme token: this scrim lies over ALBUM ARTWORK, not
+                // over a themed surface, so it must darken in BOTH polarities
+                // — theme.alphaTier() is white-based on dark themes and would
+                // wash the cover out instead of dimming it, and cardShadow is
+                // a per-theme shadow colour, not a scrim. 1:1 with
+                // SongCard.slint:278 (`background: #000000aa`).
                 Rectangle {
                     visible: QbzPlayer.npHasTrack && QbzPlayer.npLoading
                     anchors.fill: parent
@@ -133,7 +146,7 @@ Rectangle {
                         width: 13
                         height: 13
                         anchors.verticalCenter: parent.verticalCenter
-                        tintName: ctxArea.containsMouse ? "primary" : "muted"
+                        tintName: ctxArea.containsMouse ? root.tintStrong : "muted"
                     }
                     MouseArea {
                         id: ctxArea

@@ -7,8 +7,6 @@
 //! `publish_sections` for why not QVariantList-of-QVariantMap.
 //!
 //! POC-NOTEs (skipped vs the Slint controller):
-//! - Genre filter: OUT OF SCOPE — `get_discover_index(None)` (the
-//!   no-filter default).
 //! - Artist/album blacklist filtering (T8): the blacklist store is not
 //!   opened in this POC (phase-1 skip), so no rows are dropped.
 //! - Recently-played rails (local play-history store): OUT OF SCOPE — the
@@ -31,8 +29,9 @@
 //!   descriptor arms, prefs-driven order); the progressive per-branch lazy
 //!   load is simplified to the single discover-index fetch.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
+use cxx_qt_lib::QString;
 use qbz_app::shell::AppRuntime;
 use qbz_core::FrontendAdapter;
 use qbz_models::{
@@ -352,10 +351,9 @@ fn order_by_prefs(
     gated
 }
 
-/// The fixed render order (prefs out of scope — see module docs). Mirrors
-/// the default-enabled Home order for the shared sections, then the
-/// optional rails whose data is fetched anyway.
-fn load_prefs() -> qbz_app::settings::discover_prefs::DiscoverPrefs {
+/// The persisted per-tab section prefs (order + visibility) — the store the
+/// Discover configurator mutates (`discover_config_qt`).
+pub(crate) fn load_prefs() -> qbz_app::settings::discover_prefs::DiscoverPrefs {
     crate::sidebar_qt::user_dir()
         .and_then(|dir| {
             qbz_app::settings::discover_prefs::DiscoverPrefsStore::new_at(&dir).ok()
@@ -364,16 +362,136 @@ fn load_prefs() -> qbz_app::settings::discover_prefs::DiscoverPrefs {
         .unwrap_or_else(qbz_app::settings::discover_prefs::default_prefs)
 }
 
-/// Fetch the discover index (UNFILTERED — genre filter out of scope) and
-/// the personalized rails concurrently (mirrors home.rs's `join!`), then
-/// map everything into plain rows.
+/// Last fetched candidate set, kept so a configurator mutation (show/hide,
+/// reorder, reset) re-renders the three tabs INSTANTLY from cache instead of
+/// re-hitting /discover/index — the Slint configurator re-renders from its
+/// own section cache the same way (`home::rerender_active_tab`).
+static CANDIDATES: Mutex<Vec<HomeSection>> = Mutex::new(Vec::new());
+
+/// Assemble the three tab render lists from a candidate set + prefs.
+fn assemble(
+    candidates: &[HomeSection],
+    prefs: &qbz_app::settings::discover_prefs::DiscoverPrefs,
+) -> DiscoverSections {
+    use qbz_app::settings::discover_prefs::DiscoveryTab;
+    let home = order_by_prefs(candidates, prefs, DiscoveryTab::Home, "mostStreamed", true);
+    let editor = order_by_prefs(candidates, prefs, DiscoveryTab::EditorPicks, "mostStreamed#album", false);
+    // For You: the local-history arms (recentPlaceholder) self-hide on
+    // empty data in Slint — drop them here (local store out of scope).
+    let for_you: Vec<HomeSection> = order_by_prefs(candidates, prefs, DiscoveryTab::ForYou, "mostStreamed", false)
+        .into_iter()
+        .filter(|s| s.kind != "recentPlaceholder")
+        .collect();
+    DiscoverSections {
+        home,
+        editor,
+        for_you,
+    }
+}
+
+/// The SET of section ids the POC can actually RENDER for a tab — the
+/// configurator's row filter (the row ORDER comes from the prefs, not from
+/// here). A pref entry whose rail this port
+/// never builds (radio / spotlight / reco-engine rows, see the module docs)
+/// is dropped instead of listed as a toggle that changes nothing. Returns
+/// EMPTY before the first fetch (nothing is known to render yet) — the
+/// caller then falls back to the full pref list so the modal is never blank.
+pub(crate) fn renderable_ids(tab: qbz_app::settings::discover_prefs::DiscoveryTab) -> Vec<String> {
+    use qbz_app::settings::discover_prefs::DiscoveryTab;
+    let Ok(candidates) = CANDIDATES.lock() else {
+        return Vec::new();
+    };
+    if candidates.is_empty() {
+        return Vec::new();
+    }
+    let variant = if matches!(tab, DiscoveryTab::EditorPicks) {
+        "mostStreamed#album"
+    } else {
+        "mostStreamed"
+    };
+    let mut out: Vec<String> = Vec::new();
+    for section in candidates.iter() {
+        // The For You tab drops the local-history placeholders (see assemble).
+        if matches!(tab, DiscoveryTab::ForYou) && section.kind == "recentPlaceholder" {
+            continue;
+        }
+        if section.id == variant {
+            out.push("mostStreamed".to_string());
+        } else if !section.id.contains('#') {
+            out.push(section.id.clone());
+        }
+    }
+    // Both "mostStreamed" candidates map to the SAME pref id, so the Editor
+    // pass can emit it twice. The caller only does membership tests, so the
+    // set is sorted + deduped rather than kept in candidate order.
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// Serialize + push the three tab documents onto the home bridge.
+pub(crate) fn publish(sections: &DiscoverSections) {
+    let home_json = serde_json::to_string(&sections.home).unwrap_or_else(|_| "[]".to_string());
+    let editor_json = serde_json::to_string(&sections.editor).unwrap_or_else(|_| "[]".to_string());
+    let for_you_json = serde_json::to_string(&sections.for_you).unwrap_or_else(|_| "[]".to_string());
+    crate::home_bridge::ui(move |mut b| {
+        b.as_mut()
+            .set_home_sections_json(QString::from(home_json.as_str()));
+        b.as_mut()
+            .set_editor_sections_json(QString::from(editor_json.as_str()));
+        b.as_mut()
+            .set_for_you_sections_json(QString::from(for_you_json.as_str()));
+    });
+}
+
+/// Re-render + republish the three tabs from the CACHED candidates and the
+/// freshly persisted prefs. The configurator's post-mutation hook: no
+/// network, so a toggle / reorder lands on the next frame. A section that
+/// was disabled at fetch time may still have uncached covers — those
+/// download in the background and trigger one more publish, exactly like the
+/// initial load.
+pub(crate) fn republish_from_prefs() {
+    let candidates = match CANDIDATES.lock() {
+        Ok(c) if !c.is_empty() => c.clone(),
+        // Nothing fetched yet — the next load_home publishes with the new prefs.
+        _ => return,
+    };
+    let mut sections = assemble(&candidates, &load_prefs());
+    let mut missing = crate::artwork_qt::attach_cached(&mut sections.home);
+    missing.extend(crate::artwork_qt::attach_cached(&mut sections.editor));
+    missing.extend(crate::artwork_qt::attach_cached(&mut sections.for_you));
+    missing.dedup();
+    publish(&sections);
+    if !missing.is_empty() {
+        crate::spawn(async move {
+            crate::artwork_qt::download_missing(missing).await;
+            let mut sections = sections;
+            let _ = crate::artwork_qt::attach_cached(&mut sections.home);
+            let _ = crate::artwork_qt::attach_cached(&mut sections.editor);
+            let _ = crate::artwork_qt::attach_cached(&mut sections.for_you);
+            publish(&sections);
+        });
+    }
+}
+
+/// Fetch the discover index — honoring the shared "discover" genre selection
+/// (`genre_filter_qt`), 1:1 with the Slint `current_genre_filter()` — and the
+/// personalized rails concurrently (mirrors home.rs's `join!`), then map
+/// everything into plain rows.
 pub async fn load_home<A>(runtime: &Arc<AppRuntime<A>>) -> Result<DiscoverSections, String>
 where
     A: FrontendAdapter + Send + Sync + 'static,
 {
-    use qbz_app::settings::discover_prefs::DiscoveryTab;
+    // The RAW genre selection (parent OR sub-genre ids, exactly as toggled)
+    // goes straight to /discover/index — Qobuz facets sub-genre ids
+    // server-side; mapping them up to an ancestor silently widens the filter.
+    let genre_ids = crate::genre_filter_qt::discover_genre_ids();
+    // First point in this port that runs with a live session: load the genre
+    // list in the background so the popup opens instantly and a REMEMBERED
+    // Library > All selection resolves to names (see warm_up's docs).
+    crate::genre_filter_qt::warm_up();
     let (response, favorite_albums, release_watch, top_artists) = tokio::join!(
-        runtime.core().get_discover_index(None),
+        runtime.core().get_discover_index(genre_ids),
         favorite_album_cards(runtime),
         fetch_release_watch(runtime),
         top_artist_cards(runtime),
@@ -391,20 +509,11 @@ where
         release_watch,
         top_artists,
     );
-    let prefs = load_prefs();
-    let home = order_by_prefs(&candidates, &prefs, DiscoveryTab::Home, "mostStreamed", true);
-    let editor = order_by_prefs(&candidates, &prefs, DiscoveryTab::EditorPicks, "mostStreamed#album", false);
-    // For You: the local-history arms (recentPlaceholder) self-hide on
-    // empty data in Slint — drop them here (local store out of scope).
-    let for_you: Vec<HomeSection> = order_by_prefs(&candidates, &prefs, DiscoveryTab::ForYou, "mostStreamed", false)
-        .into_iter()
-        .filter(|s| s.kind != "recentPlaceholder")
-        .collect();
-    Ok(DiscoverSections {
-        home,
-        editor,
-        for_you,
-    })
+    let sections = assemble(&candidates, &load_prefs());
+    if let Ok(mut cache) = CANDIDATES.lock() {
+        *cache = candidates;
+    }
+    Ok(sections)
 }
 
 // ---------------------------------------------------------------------------

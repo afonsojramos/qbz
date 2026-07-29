@@ -2,13 +2,19 @@
 // crates/qbz-ui/ui/locallibrary/LocalLibraryView.slint (the shipping
 // behaviour; that file is the ONLY reference).
 //
-// This file owns THREE things and nothing else:
+// This file owns FOUR things and nothing else:
 //   1. state — the Slint LocalLibraryState/LibAlbumFilterState fields;
 //   2. the derived documents (search / sort / filter / grouping / A-Z), in
 //      JS, because QbzLocal publishes ONE JSON document per surface (the
 //      library_qt.rs transport rationale);
 //   3. the fixed chrome (title row, tab bar, toolbar, divider) and which tab
-//      body is mounted.
+//      body is mounted;
+//   4. the ARTWORK WINDOW REGISTRY (`_windows` + `artMap`, below). This one
+//      is here — and pushes the file past the 500-line guideline — because it
+//      is the one policy that CANNOT be split per surface: several cover
+//      surfaces are mounted at once (rail + grid, subfolders + track rows)
+//      and eviction is only correct when it is decided against all of them
+//      together. Splitting it per body is exactly the bug it replaced.
 // Every body, rail, pane, popup and row lives in qml/views/local/.
 //
 // CHROME (identical to FavoritesView / LibraryView, per the Slint header):
@@ -195,19 +201,47 @@ Rectangle {
         // The Artists detail derives from the album set (the DB aggregates
         // the contributor list per album), so make sure it is loaded.
         if (activeTab === "artists" && albums.length === 0) QbzLocal.loadTab("albums")
+        // The tab that just appeared has covers to ask for and the one that
+        // left has covers to let go of. Each surface answers for itself.
+        artworkRefresh()
     }
+
+    /// "Re-report your window." Broadcast for the state changes no single
+    /// surface can observe on its own (the tab switch). A surface that is
+    /// hidden when it hears this releases its slot instead.
+    signal artworkRefresh()
 
     // The folder-detail cover set is SMALL and fully mounted, so the whole
     // set is one window report (the grids/lists window themselves).
-    onFolderDetailChanged: {
-        if (folderDetail) queueWindowReport(folderDetail.subfolders, 0,
-                                            folderDetail.subfolders.length - 1)
-    }
-    onEphemeralChanged: {
-        if (ephemeral && ephemeral.albums) {
-            queueWindowReport(ephemeral.albums, 0, ephemeral.albums.length - 1)
+    //
+    // BOTH of its cover sections contribute. The report used to carry the
+    // subfolder cards only, while LocalFolderDetail ALSO binds `artMap` on
+    // the folder's direct track rows — those rows asked for a key nobody had
+    // requested, so their 36px cell stayed blank forever. The track half is
+    // gated on `trackArtwork` (default OFF), which is why this is a derived
+    // property: flipping the setting re-derives it and re-reports by itself.
+    readonly property var folderDetailArtRows: {
+        if (!folderDetail) return []
+        var out = (folderDetail.subfolders || []).slice()
+        if (trackArtwork && folderDetail.tracks) {
+            for (var i = 0; i < folderDetail.tracks.length; i++)
+                out.push(folderDetail.tracks[i])
         }
+        return out
     }
+    function reportFolderDetailWindow() {
+        var rows = folderDetailArtRows
+        if (rows.length === 0) { releaseWindow("folder-detail"); return }
+        queueWindowReport(rows, 0, rows.length - 1, "folder-detail")
+    }
+    onFolderDetailArtRowsChanged: reportFolderDetailWindow()
+
+    function reportEphemeralWindow() {
+        var rows = (ephemeral && ephemeral.albums) ? ephemeral.albums : []
+        if (rows.length === 0) { releaseWindow("ephemeral"); return }
+        queueWindowReport(rows, 0, rows.length - 1, "ephemeral")
+    }
+    onEphemeralChanged: reportEphemeralWindow()
 
     // ---------------------- derived (JS, per-tab) -------------------------
     function sortRows(rows, key) {
@@ -369,31 +403,89 @@ Rectangle {
 
     // --------------------- windowed artwork ------------------------------
     // Report the mounted window as artKeys and prune covers a full window
-    // away. Identical policy to LibraryView (the Slint eviction, QML-side).
-    function reportWindow(rows, first, last) {
-        if (!rows || rows.length === 0) return
+    // away. Same policy as LibraryView (the Slint eviction, QML-side), with
+    // one correction the port needed: eviction is derived from EVERY live
+    // surface at once, not from the one array the current call carries.
+    //
+    // WHY A REGISTRY AND NOT A SINGLE WINDOW. This view mounts TWO cover
+    // surfaces side by side more often than not: the Artists tab is the
+    // avatar rail plus that artist's album grid, and Folders tree mode is the
+    // subfolder cards plus the folder's track rows. The old per-call eviction
+    // built `keep` from its own rows, so each surface deleted the other's
+    // covers on every report and both settled on grey squares. `_windows`
+    // holds the last window of every live surface keyed by a stable surface
+    // id, and the keep-set is their union.
+    property var _windows: ({})
+
+    /// Record (or drop) one surface's window. An empty or degenerate window
+    /// RELEASES the slot rather than pinning covers the surface no longer
+    /// shows.
+    function applyWindow(key, rows, first, last) {
+        if (!rows || rows.length === 0) { delete root._windows[key]; return }
         last = Math.min(last, rows.length - 1)
         first = Math.max(0, first)
-        if (first > last) return
-        var keys = []
+        if (first > last) { delete root._windows[key]; return }
+        root._windows[key] = { "rows": rows, "first": first, "last": last }
+    }
+
+    /// A surface that unmounts, or scrolls/tabs off screen, stops holding its
+    /// covers. Cheap no-op when the surface was never registered.
+    function releaseWindow(key) {
+        var k = key || "default"
+        if (root._windows[k] === undefined && root._pending[k] === undefined) return
+        delete root._windows[k]
+        delete root._pending[k]
+        flushWindows()
+    }
+
+    /// Evict against the union of every live window, then request what is
+    /// still missing. Keys already resolved are NOT re-sent: `artMap` IS the
+    /// resolved set and a re-request costs Rust a `stat` per key
+    /// (local_artwork.rs phase 1), which a scroll would pay per pass.
+    function flushWindows() {
         var keep = {}
-        var span = last - first + 1
-        var lo = Math.max(0, first - span)
-        var hi = Math.min(rows.length - 1, last + span)
-        var i
-        for (i = lo; i <= hi; i++) if (rows[i].artKey) keep[rows[i].artKey] = true
-        for (i = first; i <= last; i++) if (rows[i].artKey) keys.push(rows[i].artKey)
+        var k, w, rows, i, ak, span, lo, hi
+        for (k in root._windows) {
+            w = root._windows[k]
+            rows = w.rows
+            span = w.last - w.first + 1
+            lo = Math.max(0, w.first - span)
+            hi = Math.min(rows.length - 1, w.last + span)
+            for (i = lo; i <= hi; i++) {
+                ak = rows[i] ? rows[i].artKey : ""
+                if (ak) keep[ak] = true
+            }
+        }
         var m = root.artMap
         var changed = false
-        for (var key in m) {
-            if (!keep[key]) { delete m[key]; changed = true }
-        }
+        for (k in m) if (!keep[k]) { delete m[k]; changed = true }
         // The not-yet-flushed arrivals are evicted too, or a cover that landed
         // for a row we have just scrolled away from would be re-added by the
         // next flush and defeat the eviction.
-        for (key in root._artInbox) if (!keep[key]) delete root._artInbox[key]
+        for (k in root._artInbox) if (!keep[k]) delete root._artInbox[k]
         if (changed) root.artMap = Object.assign({}, m)
+
+        var keys = []
+        var seen = {}
+        for (k in root._windows) {
+            w = root._windows[k]
+            rows = w.rows
+            for (i = w.first; i <= w.last; i++) {
+                ak = rows[i] ? rows[i].artKey : ""
+                if (!ak || seen[ak]) continue
+                if (m[ak] !== undefined || root._artInbox[ak] !== undefined) continue
+                seen[ak] = true
+                keys.push(ak)
+            }
+        }
         if (keys.length > 0) QbzLocal.artworkWindow(JSON.stringify(keys))
+    }
+
+    /// Immediate single-surface report — the leading edge and the rate-limit
+    /// flush both land here.
+    function reportWindow(rows, first, last, key) {
+        applyWindow(key || "default", rows, first, last)
+        flushWindows()
     }
 
     // ------------------------- skeleton pulse ----------------------------
@@ -463,36 +555,54 @@ Rectangle {
     /// The decoded cover for a row, "" until it lands.
     function artPathOf(key) { return root.artMap[key] || "" }
 
-    // Reporting is throttled at 180ms, but LEADING-EDGE: the debounce exists
-    // to stop a scroll from firing a resolution pass per pixel, and a view
-    // that has just mounted is not scrolling. Trailing-only cost every first
-    // paint a flat 180ms before Rust was even asked for a cover — pure
-    // latency on the one report that the user is actually waiting for.
-    // So: report at once if the last pass is older than the window, and
-    // debounce only the reports that arrive inside it.
+    // Reporting is rate-limited to one pass per 180ms, but LEADING-EDGE: the
+    // limiter exists to stop a scroll from firing a resolution pass per pixel,
+    // and a view that has just mounted is not scrolling. Trailing-only cost
+    // every first paint a flat 180ms before Rust was even asked for a cover —
+    // pure latency on the one report the user is actually waiting for.
+    //
+    // TWO THINGS THIS USED TO SWALLOW, both of which read as "grey squares
+    // until I scroll":
+    //   - ONE pending slot for the whole view. Two surfaces reporting inside
+    //     the same 180ms (the artist rail and the artist's album grid do
+    //     exactly that on every selection) meant the second overwrote the
+    //     first and one pane was never requested at all. Pending reports are
+    //     keyed by surface now and ALL of them flush.
+    //   - `restart()` on every call. That is a reset-on-change debounce: a
+    //     continuous flick (or a burst of mount-time reports — rows arrive,
+    //     the column count settles, the tab becomes visible) pushed the
+    //     trailing edge out by another 180ms each time, so the pass fired
+    //     only once everything stopped moving. It is a rate limiter now:
+    //     `start()`, never `restart()`.
     Timer {
         id: windowDebounce
         interval: 180
-        property var pendingRows: []
-        property int pendingFirst: 0
-        property int pendingLast: 0
         onTriggered: {
             root._lastReportMs = Date.now()
-            root.reportWindow(pendingRows, pendingFirst, pendingLast)
+            var pending = root._pending
+            root._pending = ({})
+            var any = false
+            for (var k in pending) {
+                var w = pending[k]
+                root.applyWindow(k, w.rows, w.first, w.last)
+                any = true
+            }
+            if (any) root.flushWindows()
         }
     }
+    /// Surface id -> the window waiting for the next flush.
+    property var _pending: ({})
     // `real` is a double in QML — Date.now() (~1.7e12) needs the range.
     property real _lastReportMs: 0
-    function queueWindowReport(rows, first, last) {
-        windowDebounce.pendingRows = rows
-        windowDebounce.pendingFirst = first
-        windowDebounce.pendingLast = last
+    function queueWindowReport(rows, first, last, key) {
+        var k = key || "default"
         if (!windowDebounce.running
             && Date.now() - root._lastReportMs >= windowDebounce.interval) {
             root._lastReportMs = Date.now()
-            root.reportWindow(rows, first, last)
+            root.reportWindow(rows, first, last, k)
         } else {
-            windowDebounce.restart()
+            root._pending[k] = { "rows": rows, "first": first, "last": last }
+            if (!windowDebounce.running) windowDebounce.start()
         }
         // Covers can now land: keep the shared pulse (and every placeholder's
         // settle hold) alive until artPassMs after the LAST sign of life —

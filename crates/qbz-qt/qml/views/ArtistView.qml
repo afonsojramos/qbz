@@ -132,6 +132,19 @@ Rectangle {
     readonly property color hdrStrong: headerLight ? "#ffffff" : theme.textPrimary
     readonly property color hdrBody: headerLight ? "#e0ffffff" : theme.textSecondary
     readonly property bool hdrOverlay: headerLight
+    /// Slint's `Theme.text-primary` as an ICON tint. Icon tints in this port
+    /// are pre-baked SVG variants (QbzIcon.qml) and the "primary" bake is a
+    /// literal `fill="#ffffff"` — it is not the theme token. Every hover that
+    /// raises a muted glyph to text-primary therefore has to pick the "black"
+    /// bake on a light theme, or the glyph disappears at the moment it is
+    /// supposed to light up. Same #638 class as the track-row play glyph.
+    readonly property string tintOnSurface: theme.isDark ? "primary" : "black"
+    /// TrackRow.slint:123-125 — the row hover uses the polarity-baked alpha
+    /// ramp "so the hover state is visible on light themes too (the old
+    /// #ffffff16 was invisible white-on-white there)". The zebra stripe is
+    /// deliberately left as the literal, per the same comment.
+    readonly property color rowHoverBg: theme.alphaTiers.length > 0
+        ? theme.alphaTier(8) : (theme.isDark ? "#14ffffff" : "#14000000")
     property bool topTracksExpanded: false
     property bool appearsOnExpanded: false
     property bool otherExpanded: false
@@ -248,12 +261,33 @@ Rectangle {
     // pager is QbzArtist's. Retargeting a mixed block wholesale would
     // silently orphan the other half — QML resolves handlers lazily, so the
     // discography would just stop loading with nothing in the log.
+    // Covers arrive ONE AT A TIME, and on a warm cache `sidebar_artwork_window`
+    // emits the whole disk-hit set in a single synchronous loop (main.rs:391).
+    // Rebinding `coverMap` per arrival is quadratic in the page: each arrival
+    // copied the entire map and re-evaluated the cover binding of EVERY
+    // mounted card, so an artist with 200 releases did ~40k binding
+    // evaluations and 200 map copies during the frames the page is trying to
+    // paint. Arrivals are coalesced into ONE rebind per frame — the same fix
+    // LocalLibraryView carries, at O(n) instead of O(n²), with the covers
+    // still appearing progressively (16ms granularity is invisible).
+    property var _coverInbox: ({})
+    Timer {
+        id: coverFlush
+        interval: 16
+        repeat: false
+        onTriggered: {
+            var m = Object.assign({}, root.coverMap, root._coverInbox)
+            root._coverInbox = ({})
+            // A rebind needs a NEW object reference (same-ref assignment is
+            // not a change in QML).
+            root.coverMap = m
+        }
+    }
     Connections {
         target: QbzLibrary
         function onLibraryArtworkReady(key, path) {
-            var m = root.coverMap
-            m[key] = path
-            root.coverMap = Object.assign({}, m)
+            root._coverInbox[key] = path
+            if (!coverFlush.running) coverFlush.start()
         }
     }
 
@@ -339,6 +373,25 @@ Rectangle {
         if (fresh.length > 0) QbzShell.sidebarArtworkWindow(JSON.stringify(fresh))
     }
 
+    // THE RULE FOR THIS FUNCTION: every section of the page that binds
+    // `root.coverMap` has to contribute its urls here, or its covers are
+    // never requested and the section renders empty tiles forever — nothing
+    // downstream reports the omission, because a missing key is
+    // indistinguishable from a cover that has not landed yet.
+    //
+    // Three sections were missing and each one rendered blank:
+    //   - Latest release (`artist.lastRelease`, the reported bug) — one card,
+    //     and the only cover between Popular Tracks and the release grids;
+    //   - Appears On (`artist.appearsOn`) — TrackRow covers, the same
+    //     PopularTrackRow component the collected topTracks use, which is why
+    //     the omission was easy to miss;
+    //   - Playlists (`artist.playlists`) — the 200px rectangle covers of the
+    //     horizontal strip.
+    // Present and collected: the header portrait, Popular Tracks, every
+    // release section (including the collapsed "Other"), and the Magazine
+    // stories. The Network sidebar carries NO covers (ArtistSimilar and
+    // MbDiscoveryJson have no artUrl — artist_qt.rs), so it contributes none.
+    // The In-library tab has its own dispatcher, dispatchLibCovers().
     function dispatchCovers() {
         var urls = []
         if (artist.artUrl) urls.push(artist.artUrl)
@@ -346,11 +399,19 @@ Rectangle {
         // RAW lists: a filtered-out card still needs its cover for when the
         // query is cleared, and this must not re-run per keystroke.
         var rawTop = artist.topTracks || []
+        var rawAppears = artist.appearsOn || []
         var rawSections = artist.releaseSections || []
+        var rawPlaylists = artist.playlists || []
         for (i = 0; i < rawTop.length; i++) if (rawTop[i].artUrl) urls.push(rawTop[i].artUrl)
+        for (i = 0; i < rawAppears.length; i++)
+            if (rawAppears[i].artUrl) urls.push(rawAppears[i].artUrl)
+        if (artist.lastRelease && artist.lastRelease.artUrl)
+            urls.push(artist.lastRelease.artUrl)
         for (i = 0; i < rawSections.length; i++)
             for (j = 0; j < (rawSections[i].cards || []).length; j++)
                 if (rawSections[i].cards[j].artUrl) urls.push(rawSections[i].cards[j].artUrl)
+        for (i = 0; i < rawPlaylists.length; i++)
+            if (rawPlaylists[i].artUrl) urls.push(rawPlaylists[i].artUrl)
         // Magazine story thumbnails ride the same pipeline (arc-cdn URLs).
         for (i = 0; i < stories.length; i++) if (stories[i].artUrl) urls.push(stories[i].artUrl)
         dispatchArtwork(urls)
@@ -381,7 +442,7 @@ Rectangle {
         width: parent ? parent.width : 0
         height: 50
         radius: 8
-        color: hovered ? "#14ffffff" : (rowIndex % 2 === 1 ? "#07ffffff" : "transparent")
+        color: hovered ? root.rowHoverBg : (rowIndex % 2 === 1 ? "#07ffffff" : "transparent")
 
         Rectangle {
             visible: isActive
@@ -541,7 +602,9 @@ Rectangle {
                     name: parent.favorite ? "heart-filled" : "heart"
                     width: 16
                     height: 16
-                    tintName: parent.favorite ? "favorite" : (favArea.containsMouse ? "primary" : "muted")
+                    tintName: parent.favorite
+                        ? "favorite"
+                        : (favArea.containsMouse ? root.tintOnSurface : "muted")
                 }
                 MouseArea {
                     id: favArea
@@ -569,7 +632,7 @@ Rectangle {
                 radius: theme.radiusSm
                 anchors.verticalCenter: parent.verticalCenter
                 color: moreArea.containsMouse ? theme.surfaceElevated : "transparent"
-                QbzIcon { anchors.centerIn: parent; name: "ellipsis"; width: 16; height: 16; tintName: moreArea.containsMouse ? "primary" : "muted" }
+                QbzIcon { anchors.centerIn: parent; name: "ellipsis"; width: 16; height: 16; tintName: moreArea.containsMouse ? root.tintOnSurface : "muted" }
                 MouseArea {
                     id: moreArea
                     anchors.fill: parent
@@ -613,7 +676,7 @@ Rectangle {
                 width: 12
                 height: 12
                 anchors.verticalCenter: parent.verticalCenter
-                tintName: slArea.containsMouse ? "primary" : "muted"
+                tintName: slArea.containsMouse ? root.tintOnSurface : "muted"
             }
             Text {
                 width: parent.width - 20
@@ -1204,25 +1267,28 @@ Rectangle {
                         font.pixelSize: theme.fontHeading
                         font.weight: theme.weightSemibold
                     }
-                    Rectangle {
-                        width: 44
-                        height: 44
-                        radius: 22
+                    // ArtistPageView.slint:732-737 mounts the SHARED
+                    // CircleAction here — `primary: true` plus an explicit
+                    // `on-surface: true` with the .slint's own reason on the
+                    // line above it: "Plain page background (below the header
+                    // divider) — theme-aware variant so it reads on light
+                    // themes." The port hand-rolled a 44px accent disc
+                    // instead, which duplicated the control AND bypassed that
+                    // arm. `overlay` defaults false = the on-surface arm.
+                    QbzCircleAction {
+                        primary: true
+                        name: "play-fill"
                         anchors.verticalCenter: parent.verticalCenter
-                        color: playTopArea.containsMouse ? theme.accentHover : theme.accent
-                        QbzIcon { anchors.centerIn: parent; name: "play-fill"; width: 19; height: 19; tintName: "primary" }
-                        MouseArea {
-                            id: playTopArea
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: QbzPlayer.playArtistTop(false)
-                        }
+                        onClicked: QbzPlayer.playArtistTop(false)
                     }
+                    // Multi-select has no seam on this bridge. Rendered but
+                    // DIMMED and click-gated (CircleAction's own `enabled`
+                    // treatment) rather than a live button that does nothing —
+                    // same call as the header's Radio / Mixtape / Info.
                     QbzCircleAction {
                         name: "square-check-big"
+                        btnEnabled: false
                         anchors.verticalCenter: parent.verticalCenter
-                        // POC-NOTE: multi-select out of scope.
                     }
                     QbzCircleAction {
                         id: topMenuBtn
@@ -1660,7 +1726,7 @@ Rectangle {
                         name: "panel-right-close"
                         width: 18
                         height: 18
-                        tintName: netCloseArea.containsMouse ? "primary" : "muted"
+                        tintName: netCloseArea.containsMouse ? root.tintOnSurface : "muted"
                     }
                     MouseArea {
                         id: netCloseArea
@@ -1883,7 +1949,7 @@ Rectangle {
                                         name: "thumbs-down"
                                         width: 12
                                         height: 12
-                                        tintName: dismissArea.containsMouse ? "primary" : "muted"
+                                        tintName: dismissArea.containsMouse ? root.tintOnSurface : "muted"
                                     }
                                     MouseArea {
                                         id: dismissArea

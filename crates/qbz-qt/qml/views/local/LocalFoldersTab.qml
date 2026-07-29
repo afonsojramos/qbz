@@ -95,6 +95,7 @@ Item {
             anchors.topMargin: 16
             visible: root.view.foldersVisible.length > 0
             view: root.view
+            surface: "folders-flat"
             rows: root.view.foldersVisible
             groups: root.view.foldersGrouped
             grouped: root.view.foldersGroup !== "off"

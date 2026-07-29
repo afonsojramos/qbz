@@ -32,6 +32,8 @@ mod album_bridge;
 mod artist_bridge;
 mod artwork_qt;
 mod bridge;
+mod discover_config_qt;
+mod genre_filter_qt;
 mod home_qt;
 mod library_db_qt;
 mod library_qt;

@@ -24,6 +24,27 @@ Item {
 
     readonly property var detail: view ? view.folderDetail : null
 
+    // The host reports this pane's covers as ONE window (the set is small and
+    // fully mounted — no windowing here). That report fires when the DOCUMENT
+    // changes, which is not enough on its own: switching Folders back to tree
+    // mode, or returning to the tab, re-shows a pane whose document has not
+    // changed since, and the covers had been evicted meanwhile. Re-report
+    // whenever the pane comes back on screen, and let go when it leaves.
+    Component.onCompleted: if (view && visible) view.reportFolderDetailWindow()
+    Component.onDestruction: if (view) view.releaseWindow("folder-detail")
+    onVisibleChanged: {
+        if (!view) return
+        if (visible) view.reportFolderDetailWindow()
+        else view.releaseWindow("folder-detail")
+    }
+    Connections {
+        target: root.view
+        function onArtworkRefresh() {
+            if (root.visible) root.view.reportFolderDetailWindow()
+            else root.view.releaseWindow("folder-detail")
+        }
+    }
+
     LocalNote {
         visible: root.view.selectedFolder === ""
         text: QbzSession.tr("Select a folder to see its contents.", QbzSession.trRev)

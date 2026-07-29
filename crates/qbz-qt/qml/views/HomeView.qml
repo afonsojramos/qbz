@@ -9,8 +9,12 @@
 // follow the persisted Discover prefs (phase 11, discover_prefs.db).
 //
 // POC-NOTEs:
-// - The genre filter + section-configurator gear are INERT visual stubs
-//  (out of scope).
+// - The genre filter (shared GenreFilterPopup, context "discover") and the
+//  section-configurator gear (DiscoverConfigModal) are WIRED: the genre
+//  selection feeds get_discover_index and persists to genre_filter.json; the
+//  configurator persists to discover_prefs.db and re-renders the tabs from
+//  the cached section data. The gear is DISABLED on the Recommendations tab
+//  — its Slint arm configures the external reco engine, which is not ported.
 // - Editor's Picks / For You mount the same rails, ordered by each tab's
 //  discover prefs (phase 13); Recommendations renders a placeholder — the
 //  external reco engine (external_reco.rs) is not ported. The tab bar is
@@ -50,6 +54,21 @@ Rectangle {
     readonly property var editorSections: JSON.parse(QbzHome.editorSectionsJson)
     readonly property var forYouSections: JSON.parse(QbzHome.forYouSectionsJson)
     property string activeTab: "home"
+
+    // --- shared genre filter, "discover" context -------------------------
+    // Read STRAIGHT off the bridge singleton, not off genrePopup: the popup
+    // is declared LAST (z-order) and a creation-time binding that
+    // dereferences a not-yet-created id registers NO dependency, so it would
+    // never re-evaluate. The popup instance is only touched from click
+    // handlers, which run long after creation.
+    readonly property var genreDoc: {
+        try {
+            return JSON.parse(QbzBridge.genreFilterJson)
+        } catch (e) {
+            return {}
+        }
+    }
+    readonly property int genreCount: (genreDoc.counts || {})["discover"] || 0
 
     // --- skeleton pulse ---------------------------------------------------
     // ONE 900ms Timer drives EVERY placeholder in this view (QbzSkeleton's
@@ -630,17 +649,23 @@ Rectangle {
                 }
             }
 
-            // Genre filter + configurator gear — INERT stubs (POC-NOTE).
+            // Genre filter + configurator gear (HomeView.slint right-controls).
             Row {
                 x: parent.width - width - 32
                 y: 25 - height / 2
                 height: 32
                 spacing: 6
+
+                // GenreButton — accent fill + "N genres" while the shared
+                // "discover" selection is non-empty (1:1 Slint).
                 Rectangle {
+                    id: genreBtn
+                    readonly property bool active: root.genreCount > 0
                     width: genreRow.width
                     height: 32
                     radius: 6
-                    color: genreArea.containsMouse ? theme.surfaceHover : theme.surfaceElevated
+                    color: genreBtn.active ? theme.accent
+                         : genreArea.containsMouse ? theme.surfaceHover : theme.surfaceElevated
                     Row {
                         id: genreRow
                         height: parent.height
@@ -652,12 +677,18 @@ Rectangle {
                             width: 14
                             height: 14
                             anchors.verticalCenter: parent.verticalCenter
-                            tintName: "secondary"
+                            tintName: genreBtn.active ? "primary" : "secondary"
                         }
                         Text {
-                            text: QbzSession.tr("Filter by genre", QbzSession.trRev)
-                            color: theme.textSecondary
+                            text: root.genreCount === 0
+                                ? QbzSession.tr("Filter by genre", QbzSession.trRev)
+                                : root.genreCount === 1
+                                    ? QbzSession.tr("1 genre", QbzSession.trRev)
+                                    : QbzSession.tr("{} genres", QbzSession.trRev)
+                                        .replace("{}", root.genreCount)
+                            color: genreBtn.active ? theme.accentText : theme.textSecondary
                             font.pixelSize: 13
+                            font.weight: genreBtn.active ? theme.weightMedium : theme.weightRegular
                             anchors.verticalCenter: parent.verticalCenter
                         }
                     }
@@ -666,13 +697,23 @@ Rectangle {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
+                        onClicked: genrePopup.toggle()
                     }
                 }
+
+                // GearButton — per-tab show/hide + reorder of the Discover
+                // sections. Disabled on Recommendations: its Slint arm
+                // configures the external reco engine (not ported), so the
+                // modal would open empty.
                 Rectangle {
+                    id: gearBtn
+                    readonly property bool gearEnabled: root.activeTab !== "recommendations"
                     width: 32
                     height: 32
                     radius: 4
-                    color: gearArea.containsMouse ? theme.surfaceHover : "transparent"
+                    opacity: gearBtn.gearEnabled ? 1.0 : 0.35
+                    color: (gearBtn.gearEnabled && gearArea.containsMouse)
+                        ? theme.surfaceHover : "transparent"
                     QbzIcon {
                         name: "home-gear"
                         width: 20
@@ -683,8 +724,10 @@ Rectangle {
                     MouseArea {
                         id: gearArea
                         anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
+                        enabled: gearBtn.gearEnabled
+                        hoverEnabled: gearBtn.gearEnabled
+                        cursorShape: gearBtn.gearEnabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                        onClicked: configModal.open(root.activeTab)
                     }
                 }
             }
@@ -833,5 +876,28 @@ Rectangle {
             target: homeFlick
         }
         }
+    }
+
+    // ============================ overlays ================================
+    // Declared LAST: in QML declaration order IS z-order, so these sit above
+    // the toolbar and the rails and keep their own presses (ADR-009 is also
+    // satisfied explicitly by their z). Both are hidden + disabled while
+    // closed, so they never eat a click meant for the view.
+
+    // Shared Filter-by-genre popup, "discover" context: the selection feeds
+    // get_discover_index, so toggling one re-fetches the index.
+    GenreFilterPopup {
+        id: genrePopup
+        anchors.fill: parent
+        context: "discover"
+        // Under the toolbar (56px + the 1px divider + a 5px gap).
+        anchorTop: 62
+        anchorRight: 32
+    }
+
+    // Per-tab section configurator (the gear).
+    DiscoverConfigModal {
+        id: configModal
+        anchors.fill: parent
     }
 }

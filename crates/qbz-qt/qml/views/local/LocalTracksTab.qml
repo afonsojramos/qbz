@@ -27,11 +27,17 @@ Item {
     // --------------------------- entry model ------------------------------
     property var entries: []
     property var alphaJumps: []
+    /// entry index -> index into `view.tracksVisible`, -1 for a group header.
+    /// Group headers inflate the entry indices, so reporting them straight
+    /// into the row array asked for the covers of tracks BELOW the ones on
+    /// screen, by the number of headers scrolled past.
+    property var rowIndex: []
     function rebuild() {
         var rows = view ? view.tracksVisible : []
         var mode = view ? view.tracksGroup : "off"
         var out = []
         var jumps = []
+        var idx = []
         var prev = null
         for (var i = 0; i < rows.length; i++) {
             var t = rows[i]
@@ -42,18 +48,27 @@ Item {
             if (mode !== "off" && key !== "" && key !== prev) {
                 if (mode === "name") jumps.push({ "letter": key, "index": out.length })
                 out.push({ "t": 0, "label": key })
+                idx.push(-1)
                 prev = key
             }
             out.push({ "t": 1, "row": t, "n": i + 1 })
+            idx.push(i)
         }
         entries = out
         alphaJumps = jumps
+        rowIndex = idx
+        report()
     }
-    Component.onCompleted: rebuild()
+    Component.onCompleted: { rebuild(); reportSoon() }
+    Component.onDestruction: if (view) view.releaseWindow("tracks")
     Connections {
         target: root.view
         function onTracksVisibleChanged() { root.rebuild() }
         function onTracksGroupChanged() { root.rebuild() }
+        // The row artwork column is OFF by default; turning it on has to ask
+        // for the covers the rows are already bound to.
+        function onTrackArtworkChanged() { root.reportSoon() }
+        function onArtworkRefresh() { root.reportSoon() }
     }
 
     // First page = the shape of the 50px track rows (the Slint mounts a bare
@@ -132,6 +147,11 @@ Item {
                     }
                 }
                 onModelChanged: root.report()
+                onHeightChanged: root.report()
+                onVisibleChanged: {
+                    if (visible) root.reportSoon()
+                    else if (root.view) root.view.releaseWindow("tracks")
+                }
 
                 delegate: Loader {
                     required property var modelData
@@ -222,14 +242,46 @@ Item {
         }
     }
 
+    // TRIGGERS: `contentY` + the model swap alone never fired for a list that
+    // was still hidden behind `localTracksLoading` when its first page landed
+    // — the covers only started resolving on the first scroll. Mount, the
+    // rebuild, becoming visible and a resize report too.
     function report() {
         if (!view || !list) return
+        // The row artwork column is gated on the appearance setting (default
+        // OFF, for the 16K-track freeze). With it off nothing on this list
+        // renders a cover, so nothing is worth decoding.
+        if (!list.visible || !view.trackArtwork || root.entries.length === 0) {
+            view.releaseWindow("tracks")
+            return
+        }
         var first = list.indexAt(4, list.contentY + 1)
         var last = list.indexAt(4, list.contentY + Math.max(1, list.height) - 1)
         if (first < 0) first = 0
-        if (last < 0) last = first + 12
-        // Entry indices are >= row indices (headers inflate them), so the
-        // clamp inside queueWindowReport keeps this safe.
-        view.queueWindowReport(view.tracksVisible, Math.max(0, first - 4), last + 4)
+        if (last < 0) last = Math.min(root.entries.length - 1, first + 12)
+        // Entry band -> row band (group headers carry no cover).
+        var lo = -1
+        var hi = -1
+        for (var i = first; i <= last; i++) {
+            var n = root.rowIndex[i]
+            if (n === undefined || n < 0) continue
+            if (lo < 0) lo = n
+            hi = n
+        }
+        if (lo < 0) { lo = 0; hi = Math.min(view.tracksVisible.length - 1, 12) }
+        view.queueWindowReport(view.tracksVisible, Math.max(0, lo - 4), hi + 4, "tracks")
+    }
+
+    /// Report now, then again once the ListView has laid out (`indexAt`
+    /// answers -1 until then — the state a just-shown list is in).
+    Timer {
+        id: reportSettle
+        interval: 50
+        repeat: false
+        onTriggered: root.report()
+    }
+    function reportSoon() {
+        report()
+        reportSettle.restart()
     }
 }

@@ -10,10 +10,18 @@
 // pruned (the Slint eviction policy, QML-side).
 //
 // POC-NOTEs:
-// - Genre filter, multi-select, group modes, alpha jumps, play-all /
-//  shuffle bulk actions, playlists-random, artists sidepanel, albums LIST
-//  mode, per-tab persist of view/sort state: out of scope (stubs or
-//  omitted; the All grid+list is the measured 1:1 focus).
+// - Multi-select, group modes, alpha jumps, play-all / shuffle bulk
+//  actions, playlists-random, artists sidepanel, albums LIST mode, per-tab
+//  persist of view/sort state: out of scope (stubs or omitted; the All
+//  grid+list is the measured 1:1 focus).
+// - Filter by genre IS wired, on the All toolbar only — that is the single
+//  place the Slint FavoritesView draws it (FavoritesView.slint:864,
+//  `context: "library-all"`). It filters CLIENT-side over the feed, exactly
+//  like library_all.rs::derive: an item shows when its (lowercased) genre
+//  contains one of the selected genre names (+ their sub-genres), so rows
+//  with no genre at all (artist / label / playlist) drop out while a genre
+//  is selected. The selection lives in the shared per-context store and
+//  persists to genre_filter.json.
 // - Offline: the generic OfflinePlaceholder replica mounts (the Slint
 //  offline RAIL of playable cached favorites needs the offline cache —
 //  not wired).
@@ -93,6 +101,32 @@ Rectangle {
     property bool showLocal: true
     property string viewMode: "grid"    // "grid" | "list"
 
+    // --- shared genre filter, "library-all" context ----------------------
+    // Read STRAIGHT off the bridge singleton, not off libGenrePopup: the
+    // popup is declared LAST (z-order) and a creation-time binding that
+    // dereferences a not-yet-created id registers NO dependency, so it would
+    // never re-evaluate. The popup instance is only touched from click
+    // handlers, which run long after creation.
+    readonly property var genreDoc: {
+        try {
+            return JSON.parse(QbzBridge.genreFilterJson)
+        } catch (e) {
+            return {}
+        }
+    }
+    readonly property int genreCount: (genreDoc.counts || {})["library-all"] || 0
+    // Selected genre NAMES (+ sub-genres), lowercased once here — the port's
+    // FeedItem keeps the display casing (the Slint model lowercases at build
+    // time instead, library_all.rs:540). Reading this inside visibleItems()
+    // is what makes the grid/list model re-derive when a chip is toggled.
+    readonly property var genreNames: {
+        var src = (genreDoc.names || {})["library-all"] || []
+        var out = []
+        for (var i = 0; i < src.length; i++)
+            out.push(String(src[i]).toLowerCase())
+        return out
+    }
+
     // Other-tab state.
     property string tabSearch: ""
     property string albumsSort: "default" // default|title-asc|title-desc|artist-asc
@@ -105,6 +139,10 @@ Rectangle {
         if (activeTab === "all") {
             var needle = search.toLowerCase()
             var anyGroup = showPurchases || showFavorites || showFollowing
+            // Genre gate (library_all.rs::derive): empty = no filter;
+            // otherwise the item's genre must contain one of the selected
+            // names, so genre-less kinds are excluded.
+            var genres = root.genreNames
             for (i = 0; i < feed.length; i++) {
                 var it = feed[i]
                 var isLocal = it.source === "local" || it.source === "plex"
@@ -120,6 +158,15 @@ Rectangle {
                 if (needle !== ""
                     && it.title.toLowerCase().indexOf(needle) < 0
                     && it.artist.toLowerCase().indexOf(needle) < 0) continue
+                if (genres.length > 0) {
+                    var itemGenre = (it.genre || "").toLowerCase()
+                    if (itemGenre === "") continue
+                    var genreHit = false
+                    for (var gi = 0; gi < genres.length; gi++) {
+                        if (itemGenre.indexOf(genres[gi]) >= 0) { genreHit = true; break }
+                    }
+                    if (!genreHit) continue
+                }
                 items.push(it)
             }
             // Canonical ascending order per field, then reverse for the
@@ -266,6 +313,50 @@ Rectangle {
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
             onClicked: parent.clicked()
+        }
+    }
+
+    // Filter-by-genre trigger (FavoritesView.slint's FavGenreButton, sm):
+    // accent fill + "N genres" while the "library-all" selection is active.
+    component GenreToolButton: Rectangle {
+        id: gtb
+        readonly property bool active: root.genreCount > 0
+        width: gtbRow.width
+        height: 30
+        radius: 6
+        color: gtb.active ? theme.accent
+             : gtbArea.containsMouse ? theme.surfaceHover : theme.surfaceElevated
+        Row {
+            id: gtbRow
+            height: parent.height
+            leftPadding: 10
+            rightPadding: 12
+            spacing: 7
+            QbzIcon {
+                name: "list-filter"
+                width: 13
+                height: 13
+                anchors.verticalCenter: parent.verticalCenter
+                tintName: gtb.active ? "primary" : "secondary"
+            }
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: root.genreCount === 0
+                    ? QbzSession.tr("Filter by genre", QbzSession.trRev)
+                    : root.genreCount === 1
+                        ? QbzSession.tr("1 genre", QbzSession.trRev)
+                        : QbzSession.tr("{} genres", QbzSession.trRev)
+                            .replace("{}", root.genreCount)
+                color: gtb.active ? theme.accentText : theme.textSecondary
+                font.pixelSize: 12
+            }
+        }
+        MouseArea {
+            id: gtbArea
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: libGenrePopup.toggle()
         }
     }
 
@@ -694,8 +785,9 @@ Rectangle {
                     ToolToggle { name: "heart"; active: root.showFavorites; onClicked: root.showFavorites = !root.showFavorites }
                     ToolToggle { name: "user-plus"; active: root.showFollowing; onClicked: root.showFollowing = !root.showFollowing }
                     ToolToggle { name: "hard-drive"; active: root.showLocal; onClicked: root.showLocal = !root.showLocal }
-                    // Genre filter — INERT stub (out of scope).
-                    ToolToggle { name: "list-filter"; active: false }
+                    // Filter by genre — shared popup, own "library-all"
+                    // context (FavoritesView.slint:864).
+                    GenreToolButton { }
                     // Grid / list toggle.
                     ToolToggle {
                         name: root.viewMode === "list" ? "layout-grid" : "list"
@@ -1206,5 +1298,20 @@ Rectangle {
         var first = Math.max(0, Math.floor(list.contentY / 44) - 4)
         var last = Math.ceil((list.contentY + list.height) / 44) + 4
         queueWindowReport(first, Math.min(list.model.length - 1, last))
+    }
+
+    // ============================ overlay =================================
+    // Declared LAST: declaration order IS z-order, so the popup sits above
+    // the toolbar and the grid and keeps its own presses. Hidden AND
+    // disabled while closed, so it never eats a click meant for the view.
+    // Its "library-all" context is independent from Discover's "discover"
+    // one — each button carries its own count.
+    GenreFilterPopup {
+        id: libGenrePopup
+        anchors.fill: parent
+        context: "library-all"
+        // Under the 56px toolbar, right-aligned like the Slint overlay.
+        anchorTop: 62
+        anchorRight: 32
     }
 }

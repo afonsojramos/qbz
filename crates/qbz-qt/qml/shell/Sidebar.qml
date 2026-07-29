@@ -12,12 +12,16 @@
 // sections move to the header (HeaderBar.qml) and this sidebar starts at the
 // PLAYLISTS toolbar, exactly like Sidebar.slint:724/817.
 //
-// POC-NOTE: in the Slint app these rows open dropdown flyout menus; the
-// flyouts are out of scope — rows here navigate straight to their view and
-// carry the SidebarDirectRow active treatment (surface-hover bg + primary
-// text/icon) for the current section. Discover / Library / Local Library
-// have views; My QBZ does NOT and is therefore rendered disabled (a row
-// that clicks into nothing is a defect, not a stub).
+// The rows open the same dropdown FLYOUT their Slint counterparts do
+// (SidebarNavRow: hover or click, panel to the RIGHT of the row, headed by
+// the section name) — the panel, its behaviour and the entry catalog live in
+// the shared NavFlyout.qml, which HeaderBar.qml mounts too, so the sections
+// behave identically wherever the nav is hosted. The rows keep the
+// SidebarDirectRow active treatment (surface-hover bg + primary text/icon)
+// for the current section and while their own menu is open.
+// Discover / Library / Local Library route into real views; My QBZ does NOT
+// (no such surface in this port) and is therefore rendered disabled, flyout
+// included (a row that clicks into nothing is a defect, not a stub).
 // The playlist/folder tree below the nav IS live (sidebar_qt.rs: load,
 // sort, search, expand/collapse, drag-drop target); folder CREATION,
 // the Playlist Manager and the importer have no seam and are disabled in
@@ -32,17 +36,12 @@ Rectangle {
     id: root
 
     property bool mini: QbzShell.sidebarState === 1
-    // Which section owns the highlight. DERIVED from the live view, not set on
-    // click: the same rows can live here or in the header, history navigation
-    // (back/forward) must keep the highlight honest, and a click-set local
-    // went stale on both counts. Slint highlights its rows off
-    // HeaderMenuState.open-index — a flyout this port does not have — so the
-    // current view is the faithful stand-in (it is what SidebarDirectRow uses).
-    readonly property string activeNav:
-          QbzShell.currentView === "home" ? "discover"
-        : QbzShell.currentView === "library" ? "library"
-        : (QbzShell.currentView === "local" || QbzShell.currentView === "localalbum") ? "local"
-        : ""
+    // Which section owns the highlight. DERIVED from the live view (in
+    // NavFlyout, shared with the header), not set on click: the same rows can
+    // live here or in the header, and history navigation (back/forward) must
+    // keep the highlight honest. Slint additionally highlights the row whose
+    // menu is open — the rows OR `navFlyout.openId` in for that.
+    readonly property string activeNav: navFlyout.activeSection
     // Playlist tree state (phase 7).
     property bool searchOpen: false
     property bool playlistsCollapsed: false
@@ -87,6 +86,13 @@ Rectangle {
 
     QbzTheme { id: theme }
 
+    // The section-nav dropdown (catalog + panel + open/close behaviour) —
+    // the SAME component HeaderBar.qml mounts. Zero-size and outside the
+    // Column so its origin stays this root's origin (the row coordinates are
+    // mapped into it). The panel renders in the window overlay, so neither
+    // this root's `clip` nor its 240px width can cut it off.
+    NavFlyout { id: navFlyout }
+
     width: QbzShell.sidebarState === 2 ? 0
          : QbzShell.sidebarState === 1 ? theme.sidebarMiniWidth
          : theme.sidebarOpenWidth
@@ -102,23 +108,24 @@ Rectangle {
         NumberAnimation { duration: 160; easing.type: Easing.InOutQuad }
     }
 
-    // One section-nav row (SidebarNavRow / SidebarDirectRow metrics).
+    // One section-nav row (SidebarNavRow / SidebarDirectRow metrics). Hovering
+    // or clicking it opens that section's flyout to the RIGHT of the row.
     component NavRow: Rectangle {
         id: navRow
-        property string navId: ""
-        property string name: ""
-        property string label: ""
-        property bool active: root.activeNav === navId
-        // No view behind this section in this port — render it as
+        // A section from the shared catalog (NavFlyout.sections).
+        property var section: null
+        readonly property bool isActive: section
+            && (root.activeNav === section.id || navFlyout.openId === section.id)
+        // No surface behind this section in this port — rendered as
         // unavailable rather than as a live row that clicks into nothing.
-        property bool disabled: false
-        signal clicked()
+        readonly property bool isEnabled: section && section.enabled
+        readonly property bool lit: isActive || (navArea.containsMouse && isEnabled)
 
         width: parent ? parent.width : 0
         height: 34
         radius: 6
-        opacity: disabled ? 0.45 : 1.0
-        color: (!disabled && (navArea.containsMouse || active)) ? theme.surfaceHover : "transparent"
+        opacity: isEnabled ? 1.0 : 0.45
+        color: lit ? theme.surfaceHover : "transparent"
 
         Row {
             anchors.fill: parent
@@ -130,21 +137,19 @@ Rectangle {
                 width: root.mini ? parent.width : 16
                 height: parent.height
                 QbzIcon {
-                    name: navRow.name
+                    name: navRow.section ? navRow.section.icon : ""
                     width: 16
                     height: 16
                     anchors.centerIn: parent
-                    tintName: (navArea.containsMouse || navRow.active)
-                          ? "primary" : "secondary"
+                    tintName: navRow.lit ? "primary" : "secondary"
                 }
             }
             Text {
                 visible: !root.mini
                 height: parent.height
                 width: parent.width - (root.mini ? 0 : 26)
-                text: navRow.label
-                color: (navArea.containsMouse || navRow.active)
-                       ? theme.textPrimary : theme.textSecondary
+                text: navRow.section ? navRow.section.label : ""
+                color: navRow.lit ? theme.textPrimary : theme.textSecondary
                 font.pixelSize: 13
                 font.weight: theme.weightMedium
                 verticalAlignment: Text.AlignVCenter
@@ -154,10 +159,21 @@ Rectangle {
         MouseArea {
             id: navArea
             anchors.fill: parent
-            enabled: !navRow.disabled
-            hoverEnabled: !navRow.disabled
+            enabled: navRow.isEnabled
+            hoverEnabled: navRow.isEnabled
             cursorShape: Qt.PointingHandCursor
-            onClicked: navRow.clicked()
+            onClicked: navFlyout.openBeside(navRow, navRow.section)
+            onContainsMouseChanged: {
+                if (containsMouse) {
+                    // Hover-to-open; hovering another row overwrites the open
+                    // menu (instant switch, single-open by construction).
+                    navFlyout.triggerHovered = true
+                    navFlyout.openBeside(navRow, navRow.section)
+                } else if (navRow.section && navFlyout.openId === navRow.section.id) {
+                    // Only the row owning the open menu clears the flag.
+                    navFlyout.triggerHovered = false
+                }
+            }
         }
     }
 
@@ -182,37 +198,18 @@ Rectangle {
             width: parent.width
             spacing: 2
 
-            // Qobuz-only sections — HIDDEN entirely while offline (ADR-010).
-            NavRow {
-                navId: "discover"
-                name: "compass"
-                label: QbzSession.tr("Discover", QbzSession.trRev)
-                visible: !QbzSession.offline
-                onClicked: QbzShell.navigateTo("home")
-            }
-            NavRow {
-                navId: "library"
-                name: "music-library-2"
-                label: QbzSession.tr("Library", QbzSession.trRev)
-                visible: !QbzSession.offline
-                onClicked: QbzShell.navigateTo("library")
-            }
-            NavRow {
-                navId: "local"
-                name: "hard-drive"
-                label: QbzSession.tr("Local Library", QbzSession.trRev)
-                onClicked: QbzShell.navigateTo("local")
-            }
-            // GAP: there is no MyQBZ view in this port (AppShell's loader
-            // maps home/library/local/localalbum/album/artist/settings/
-            // search/playlist — no "myqbz"). It used to take the active
-            // treatment on click and go nowhere; it now renders disabled.
-            NavRow {
-                navId: "myqbz"
-                name: "qbz-symbolic"
-                // Slint: MyQbzBrandingState.label, default "My QBZ".
-                label: QbzSession.tr("My QBZ", QbzSession.trRev)
-                disabled: true
+            // The same four sections the header hosts, from the same catalog.
+            // Qobuz-only ones are HIDDEN entirely while offline (ADR-010
+            // mount-site gating, not rendered-disabled); My QBZ carries
+            // enabled: false in the catalog (no surface behind it in this
+            // port) and so renders dimmed and inert, flyout included.
+            Repeater {
+                model: navFlyout.sections
+                delegate: NavRow {
+                    required property var modelData
+                    section: modelData
+                    visible: !(modelData.qobuz && QbzSession.offline)
+                }
             }
         }
 

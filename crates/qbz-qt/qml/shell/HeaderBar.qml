@@ -46,6 +46,14 @@ Rectangle {
 
     QbzTheme { id: theme }
 
+    // The section-nav dropdown (catalog + panel + open/close behaviour).
+    // Zero-size and NOT inside any Row — its origin must stay this root's
+    // origin, because the trigger coordinates are mapped into it. The panel
+    // itself renders in the window overlay, so it is not clipped by the 42px
+    // header (Slint solves the same problem by mounting HeaderMenuOverlay as
+    // the last child of the AppShell root).
+    NavFlyout { id: navFlyout }
+
     // Custom-chrome drag surface (declared FIRST so every interactive
     // element above wins hit-testing): press-and-move starts the system
     // move; double-click toggles maximize. The system grab starts only
@@ -78,29 +86,20 @@ Rectangle {
         : QbzSession.offlineMode === 1 ? 1 : 0
 
     // --- Section nav (shared by both header forms) ------------------------
-    // Same four sections Sidebar.qml lists, in the same order. Slint keeps two
-    // copies of this list too (Sidebar.slint:724 and HeaderBar.slint:858/974)
-    // — the alternative here would be a new singleton .qml file, which needs a
-    // build.rs entry; the list is six lines, so it stays local.
+    // The catalog (sections, their entries, icons and order) and the flyout
+    // panel itself now live in ONE place, NavFlyout.qml — mounted above as
+    // `navFlyout`, and mounted the same way by Sidebar.qml. Slint duplicates
+    // the same literals three times (Sidebar.slint:724, HeaderBar.slint:858
+    // full tabs, :974 compact buttons); the port does not.
     //
-    // `view` is the route QbzShell.navigateTo takes. My QBZ has NO view in
-    // this port (AppShell's loader maps home/library/local/localalbum/album/
-    // artist/settings/search/playlist), so it renders disabled rather than as
-    // a live control that clicks into nothing — same call Sidebar.qml makes.
-    readonly property var navSections: [
-        { "id": "discover", "icon": "compass",          "label": QbzSession.tr("Discover", QbzSession.trRev),      "view": "home",    "qobuz": true,  "enabled": true },
-        { "id": "library",  "icon": "music-library-2",  "label": QbzSession.tr("Library", QbzSession.trRev),       "view": "library", "qobuz": true,  "enabled": true },
-        { "id": "local",    "icon": "hard-drive",       "label": QbzSession.tr("Local Library", QbzSession.trRev), "view": "local",   "qobuz": false, "enabled": true },
-        { "id": "myqbz",    "icon": "qbz-symbolic",     "label": QbzSession.tr("My QBZ", QbzSession.trRev),        "view": "",        "qobuz": false, "enabled": false }
-    ]
+    // Triggers no longer navigate: like their Slint counterparts they OPEN the
+    // section dropdown (on hover and on click), and the ENTRIES navigate.
+    readonly property var navSections: navFlyout.sections
 
-    // Highlighted section — derived from the live view, exactly like
-    // Sidebar.qml (see the note there on why this is not click-set state).
-    readonly property string activeNav:
-          QbzShell.currentView === "home" ? "discover"
-        : QbzShell.currentView === "library" ? "library"
-        : (QbzShell.currentView === "local" || QbzShell.currentView === "localalbum") ? "local"
-        : ""
+    // Highlighted section — derived from the live view (see NavFlyout), OR'd
+    // in the triggers with "my menu is open" (Slint highlights off
+    // HeaderMenuState.open-index).
+    readonly property string activeNav: navFlyout.activeSection
 
     // Which of the two header forms is mounted (mutually exclusive, and both
     // off while the nav lives in the sidebar and the sidebar is not closed).
@@ -116,7 +115,8 @@ Rectangle {
         id: navTab
         property var section: null
         property bool showIcon: true
-        readonly property bool isActive: section && root.activeNav === section.id
+        readonly property bool isActive: section
+            && (root.activeNav === section.id || navFlyout.openId === section.id)
         readonly property bool isEnabled: section && section.enabled
 
         height: 30
@@ -155,7 +155,21 @@ Rectangle {
             enabled: navTab.isEnabled
             hoverEnabled: navTab.isEnabled
             cursorShape: Qt.PointingHandCursor
-            onClicked: QbzShell.navigateTo(navTab.section.view)
+            // Full text tabs name their section already, so the dropdown gets
+            // no title row (HeaderBar.slint:167 sets title: "").
+            onClicked: navFlyout.openUnder(navTab, navTab.section, false)
+            onContainsMouseChanged: {
+                if (containsMouse) {
+                    // Hover-to-open, and hovering a DIFFERENT tab overwrites
+                    // the open menu — instant switch, single-open by design.
+                    navFlyout.triggerHovered = true
+                    navFlyout.openUnder(navTab, navTab.section, false)
+                } else if (navTab.section && navFlyout.openId === navTab.section.id) {
+                    // Only the trigger owning the open menu clears the flag
+                    // (avoids a leave/enter race between adjacent tabs).
+                    navFlyout.triggerHovered = false
+                }
+            }
         }
     }
 
@@ -164,7 +178,8 @@ Rectangle {
     component CompactNavBtn: Rectangle {
         id: cnb
         property var section: null
-        readonly property bool isActive: section && root.activeNav === section.id
+        readonly property bool isActive: section
+            && (root.activeNav === section.id || navFlyout.openId === section.id)
         readonly property bool isEnabled: section && section.enabled
 
         width: 30
@@ -186,7 +201,17 @@ Rectangle {
             enabled: cnb.isEnabled
             hoverEnabled: cnb.isEnabled
             cursorShape: Qt.PointingHandCursor
-            onClicked: QbzShell.navigateTo(cnb.section.view)
+            // Icon-only buttons do NOT name their section, so their dropdown
+            // is headed by the section name + hairline (HeaderBar.slint:223).
+            onClicked: navFlyout.openUnder(cnb, cnb.section, true)
+            onContainsMouseChanged: {
+                if (containsMouse) {
+                    navFlyout.triggerHovered = true
+                    navFlyout.openUnder(cnb, cnb.section, true)
+                } else if (cnb.section && navFlyout.openId === cnb.section.id) {
+                    navFlyout.triggerHovered = false
+                }
+            }
         }
     }
 

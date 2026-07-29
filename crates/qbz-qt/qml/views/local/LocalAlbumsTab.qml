@@ -114,6 +114,7 @@ Item {
                 anchors.fill: parent
                 anchors.rightMargin: root.view.albumsGroup === "alpha" ? 20 : 0
                 view: root.view
+                surface: "albums"
                 rows: root.view.albumsVisible
                 groups: root.view.albumsGrouped
                 grouped: root.view.albumsGroup !== "off"

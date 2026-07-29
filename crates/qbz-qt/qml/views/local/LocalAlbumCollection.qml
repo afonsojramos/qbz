@@ -27,6 +27,10 @@ Item {
 
     /// The LocalLibraryView root — artMap + queueWindowReport live there.
     property var view: null
+    /// Stable id for this cover surface in the host's window registry. Three
+    /// instances of this component can be alive at once (Albums, Folders-flat,
+    /// the Artists detail grid), and they must not share a slot.
+    property string surface: "collection"
     /// Flat album rows (already searched/sorted/filtered by the host).
     property var rows: []
     /// [{ letter, items: [...] }] — only read when `grouped`.
@@ -97,13 +101,26 @@ Item {
     onGroupedChanged: rebuild()
     onViewModeChanged: rebuild()
     onColsChanged: rebuild()
-    Component.onCompleted: rebuild()
+    Component.onCompleted: { rebuild(); reportSoon() }
+    Component.onDestruction: if (view) view.releaseWindow(root.surface)
 
     // ---------------------------------------------------------------------
     // Window report — the MOUNTED entry band, mapped back to flat indices.
     // ---------------------------------------------------------------------
+    // TRIGGERS. A report used to leave here on `contentY` and on the model
+    // swap alone, and BOTH of those fire while this surface is still hidden:
+    // the tab body is mounted behind `localAlbumsLoading` and the rows land
+    // in the same pass, so the one report that mattered was thrown away by
+    // the `!visible` guard below and nothing was requested until the user
+    // moved the list by a pixel. Every state change that can alter the
+    // mounted band now reports: mount, becoming visible, the model rebuild,
+    // a viewport resize, and the scroll.
     function report() {
-        if (!view || !list || !visible || entries.length === 0) return
+        if (!view || !list) return
+        if (!list.visible || entries.length === 0 || width <= 0) {
+            view.releaseWindow(root.surface)
+            return
+        }
         var first = list.indexAt(4, list.contentY + 1)
         var last = list.indexAt(4, list.contentY + Math.max(1, list.height) - 1)
         if (first < 0) first = 0
@@ -112,7 +129,33 @@ Item {
         var hi = entries[last]
         var loIdx = lo ? (lo.t === 1 ? lo.base : 0) : 0
         var hiIdx = hi ? (hi.t === 1 ? hi.base + hi.items.length - 1 : loIdx) : loIdx
-        view.queueWindowReport(flat, loIdx, hiIdx)
+        view.queueWindowReport(flat, loIdx, hiIdx, root.surface)
+    }
+
+    /// Report NOW, then again once layout has settled. `indexAt` answers -1
+    /// until the ListView has laid its delegates out, which is exactly the
+    /// state a just-mounted / just-shown list is in — the immediate call gets
+    /// the covers moving off the conservative fallback band, the second one
+    /// corrects it to the real viewport.
+    Timer {
+        id: reportSettle
+        interval: 50
+        repeat: false
+        onTriggered: root.report()
+    }
+    function reportSoon() {
+        report()
+        reportSettle.restart()
+    }
+
+    onVisibleChanged: {
+        if (visible) reportSoon()
+        else if (view) view.releaseWindow(root.surface)
+    }
+    onHeightChanged: report()
+    Connections {
+        target: root.view
+        function onArtworkRefresh() { root.reportSoon() }
     }
 
     function jumpToEntry(entryIndex) {
@@ -128,6 +171,8 @@ Item {
         model: root.entries
         onContentYChanged: root.report()
         onModelChanged: root.report()
+        onHeightChanged: root.report()
+        onVisibleChanged: if (visible) root.reportSoon()
 
         delegate: Loader {
             required property var modelData

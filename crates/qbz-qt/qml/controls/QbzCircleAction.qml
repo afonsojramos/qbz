@@ -20,6 +20,26 @@
 //        #ffffffcc ring, white glyph.
 // NOTE: the card hover-overlay circles are still the separate
 // CardOverlayButton.qml — same palette, different sizing contract.
+//
+// --- LIGHT-THEME LEGIBILITY (Slint 2.0.2, "CircleAction buttons legible on
+// --- light themes" — docs/release-2.0.2/CHANGELOG.md:213) ----------------
+// The `on-surface` arm IS that fix: CircleAction.slint:30-37 exists exactly
+// because "the default light-on-dark palette (white fills/rings/icons)
+// vanishes on light themes' plain surface". Its secondary glyph is
+// `Theme.text-primary` (CircleAction.slint:73) — the theme's max-contrast
+// colour, DARK on a light theme.
+//
+// The port could not express that, and this is where it was still broken:
+// icon tints here are PRE-BAKED SVG variants (QbzIcon.qml), and the
+// "primary" bake is a hardcoded `fill="#ffffff"` — it is NOT text-primary,
+// it is white. So the on-surface secondary (a `surface-elevated` disc, i.e.
+// near-white on a light theme) was painting a WHITE glyph on it: the exact
+// vanishing act the .slint arm was written to stop. `onSurfaceTint` below
+// resolves text-primary to the only baked dark variant ("black") whenever
+// the active theme is light — theme.isDark is Rust-published from the
+// surface-main luminance (theme_qt.rs:221), the same luminance test Slint's
+// `Theme.is-dark` uses. The OVERLAY arm keeps its literals: it sits on the
+// artwork band, which is dark under every theme.
 
 import QtQuick
 import com.blitzfc.qbz
@@ -37,6 +57,11 @@ Rectangle {
     signal clicked(var mouse)
 
     QbzTheme { id: theme }
+
+    /// Slint's `Theme.text-primary` glyph tint, expressed in baked variants:
+    /// the "primary" bake is a literal #ffffff, so a light theme has to take
+    /// the "black" bake or the glyph paints white-on-near-white.
+    readonly property string onSurfaceTint: theme.isDark ? "primary" : "black"
 
     width: primary ? 44 : 32
     height: primary ? 44 : 32
@@ -56,10 +81,18 @@ Rectangle {
         width: root.primary ? 19 : 15
         height: root.primary ? 19 : 15
         anchors.centerIn: parent
-        // active wins in both arms; then: overlay primary = black glyph on
-        // the white disc, everything else = the light/primary glyph.
-        tintName: root.active ? "accent"
-                : (root.overlay && root.primary ? "black" : "primary")
+        // CircleAction.slint:70-74, verbatim:
+        //   active                  -> Theme.accent
+        //   on-surface + primary    -> #ffffff      (glyph on the accent disc)
+        //   on-surface + secondary  -> Theme.text-primary  <- the light-theme
+        //                              case; "primary" would be white here
+        //   overlay   + primary     -> #000000      (glyph on the white disc)
+        //   overlay   + secondary   -> #ffffff
+        tintName: root.active
+            ? "accent"
+            : (root.overlay
+                ? (root.primary ? "black" : "primary")
+                : (root.primary ? "primary" : root.onSurfaceTint))
     }
     MouseArea {
         id: cbArea
