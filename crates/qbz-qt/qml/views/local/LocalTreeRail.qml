@@ -126,10 +126,16 @@ Item {
             height: parent.height - 38
                 - (root.view.treeSelectMode && QbzLocal.localTreeSelectedCount > 0 ? 44 : 0)
 
-            QbzSpinner {
-                anchors.centerIn: parent
-                size: 28
+            // Lazy level fetch: the rail shows the shape of the tree rows
+            // (26px, small leading glyph) instead of a 28px spinner.
+            QbzSkeleton {
+                variant: "rowList"
+                anchors.fill: parent
                 visible: QbzLocal.localTreeLoading
+                rowH: 26
+                rowGap: 0
+                rowArtSize: 14
+                phase: root.view ? root.view.skelPhase : false
             }
             ListView {
                 id: treeList

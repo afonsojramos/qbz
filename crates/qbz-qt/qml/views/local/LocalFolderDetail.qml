@@ -28,10 +28,33 @@ Item {
         visible: root.view.selectedFolder === ""
         text: QbzSession.tr("Select a folder to see its contents.", QbzSession.trRev)
     }
-    QbzSpinner {
-        anchors.centerIn: parent
-        size: 28
+    // The folder detail is header + subfolder cards + track rows; the pane
+    // fetch replaces a 28px spinner with that shape (a header band, then a
+    // card grid). Two composites = two animators.
+    Column {
         visible: QbzLocal.localDetailLoading
+        anchors.fill: parent
+        anchors.leftMargin: 28
+        anchors.rightMargin: 28
+        anchors.topMargin: 16
+        spacing: 14
+        QbzSkeleton {
+            variant: "text"
+            width: Math.min(parent.width, 420)
+            lines: 2
+            lineHeight: 20
+            phase: root.view ? root.view.skelPhase : false
+        }
+        QbzSkeleton {
+            variant: "cardGrid"
+            width: parent.width
+            height: parent.height - 70
+            cellW: 152
+            cellH: 194
+            cardW: 140
+            cardH: 182
+            phase: root.view ? root.view.skelPhase : false
+        }
     }
 
     Flickable {
@@ -144,6 +167,7 @@ Item {
                             width: subgrid.cw
                             height: subgrid.ch
                             item: modelData
+                            view: root.view
                             artSource: root.view.artMap[modelData.artKey] || ""
                             onOpened: root.view.selectFolder(modelData.path)
                         }
@@ -245,9 +269,11 @@ Item {
                         required property var modelData
                         required property int index
                         width: page.width
+                        view: root.view
                         item: modelData
                         number: modelData.number > 0 ? modelData.number : index + 1
                         showArtwork: root.view.trackArtwork
+                        artSource: root.view.artMap[modelData.artKey] || ""
                         onPlayRequested: QbzLocal.playFolderTrack(
                             root.view.selectedFolder, modelData.id)
                         onEnqueueRequested: function (m) {

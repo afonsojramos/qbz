@@ -8,9 +8,17 @@
 // lines with the icon-only quality badge.
 //
 // Live wiring: play (art click + overlay play), favorite heart (optimistic
-// + signal), pin badge (pinned store), ⋯ context menu (Play / Play next /
-// Add to queue wired through playback_qt; favorite wired; Open album +
-// Block inert — POC-NOTEs: no album page / blacklist store).
+// + signal), pin badge (pinned store), ⋯ context menu — and the SAME menu
+// on a right press anywhere on the artwork or the title.
+//
+// --- Menu inventory vs discover/AlbumCard.slint ------------------------
+//   Open album · Play · Play next · Play later · Add to queue ·
+//   Add to/Remove from Library (show-favorite) · Block this album
+//     (source != local && source != plex)
+// All but the last are live. "Block this album" is gated OFF by
+// `hasBlacklistSeam` below: the Qt bridge exposes the blacklist COUNTERS
+// (settings_qt/devtools.rs) but no block-album invokable, and the row used
+// to render and do nothing at all.
 
 import QtQuick
 import QtQuick.Controls
@@ -47,6 +55,13 @@ Rectangle {
     // "Block this album") are hidden. Nothing else about the card changes,
     // so the two surfaces stay pixel-identical.
     property bool localMode: false
+
+    // Album blacklist ("Block this album"): no write seam on the Qt bridge —
+    // the entry stays out of the menu until one lands, rather than shipping
+    // a row that silently no-ops. Flip this and fill the "block" branch in
+    // `menuAction` together.
+    readonly property bool hasBlacklistSeam: false
+
     signal openRequested()
     signal playRequested()
     signal enqueueRequested(string mode)
@@ -67,6 +82,47 @@ Rectangle {
     function togglePin() {
         root.isPinned = !root.isPinned
         QbzLibrary.togglePin("album", root.albumId, root.title, root.artist, "")
+    }
+
+    // AlbumCard.slint's album-menu, in its order. localMode drops the
+    // catalog-only rows (heart + block); the five navigation/playback rows
+    // are identical and route to the host's signals instead.
+    function menuModel() {
+        var t = QbzSession.tr
+        var r = QbzSession.trRev
+        var m = [
+            { "label": t("Open album", r), "icon": "library-big", "action": "open" },
+            { "label": t("Play", r), "icon": "play-fill", "action": "play" },
+            { "label": t("Play next", r), "icon": "list-start", "action": "next" },
+            // #442 "Play later" — end of the manual block.
+            { "label": t("Play later", r), "icon": "list-plus", "action": "later" },
+            { "label": t("Add to queue", r), "icon": "list-end", "action": "queue" },
+        ]
+        if (!root.localMode) {
+            m.push({ "label": root.isFavorite ? t("Remove from Library", r) : t("Add to Library", r),
+                     "icon": root.isFavorite ? "heart-filled" : "heart", "action": "favorite" })
+            // .slint gates this on a non-local/plex source as well.
+            if (root.hasBlacklistSeam && root.source !== "local" && root.source !== "plex")
+                m.push({ "label": t("Block this album", r), "icon": "blind-eye", "action": "block" })
+        }
+        return m
+    }
+
+    function menuAction(a) {
+        if (root.localMode) {
+            if (a === "open") root.openRequested()
+            else if (a === "play") root.playRequested()
+            else if (a === "next") root.enqueueRequested("next")
+            else if (a === "later") root.enqueueRequested("later")
+            else if (a === "queue") root.enqueueRequested("queue")
+            return
+        }
+        if (a === "open") QbzAlbum.openAlbum(root.albumId)
+        else if (a === "play") QbzPlayer.playAlbum(root.albumId)
+        else if (a === "next") QbzPlayer.enqueueAlbum(root.albumId, "next")
+        else if (a === "later") QbzPlayer.enqueueAlbum(root.albumId, "later")
+        else if (a === "queue") QbzPlayer.enqueueAlbum(root.albumId, "queue")
+        else if (a === "favorite") root.toggleFavorite()
     }
 
     Column {
@@ -128,10 +184,20 @@ Rectangle {
                 anchors.fill: parent
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
+                // Right press opens the SAME menu as the ⋯ button.
+                acceptedButtons: Qt.LeftButton | Qt.RightButton
                 // Phase 8: the card opens the album view (the overlay play
                 // button carries the play affordance).
-                onClicked: root.localMode ? root.openRequested()
-                                          : QbzAlbum.openAlbum(root.albumId)
+                onClicked: function (mouse) {
+                    if (mouse.button === Qt.RightButton) {
+                        albumMenu.openAtCursor(artArea, mouse.x, mouse.y)
+                        return
+                    }
+                    if (root.localMode)
+                        root.openRequested()
+                    else
+                        QbzAlbum.openAlbum(root.albumId)
+                }
             }
 
             // Pin badge — top-right. Hover-revealed like the overlay
@@ -204,84 +270,14 @@ Rectangle {
                 }
             }
 
-            // Context menu (AlbumCard.slint's album-menu): 196px, items
-            // 33px, icon 15 + label 13.
-            QbzContextMenu {
+            // Context menu (AlbumCard.slint's album-menu) — the shared
+            // CardMenu surface, not a second copy of its delegate.
+            CardMenu {
                 id: albumMenu
                 menuWidth: 196
-                    Repeater {
-                        // localMode drops the two catalog-only rows (heart +
-                        // blacklist); the four playback rows are identical.
-                        model: {
-                            var m = [
-                                { "label": QbzSession.tr("Open album", QbzSession.trRev), "icon": "library-big", "action": "open" },
-                                { "label": QbzSession.tr("Play", QbzSession.trRev), "icon": "play-fill", "action": "play" },
-                                { "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-start", "action": "next" },
-                                { "label": QbzSession.tr("Play later", QbzSession.trRev), "icon": "list-plus", "action": "later" },
-                                { "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "action": "queue" },
-                            ]
-                            if (!root.localMode) {
-                                m.push({ "label": root.isFavorite ? QbzSession.tr("Remove from Library", QbzSession.trRev) : QbzSession.tr("Add to Library", QbzSession.trRev), "icon": root.isFavorite ? "heart-filled" : "heart", "action": "favorite" })
-                                m.push({ "label": QbzSession.tr("Block this album", QbzSession.trRev), "icon": "blind-eye", "action": "block" })
-                            }
-                            return m
-                        }
-                        delegate: Rectangle {
-                            required property var modelData
-                            width: parent ? parent.width : 0
-                            height: 33
-                            radius: 5
-                            color: miArea.containsMouse ? theme.surfaceHover : "transparent"
-                            Row {
-                                anchors.fill: parent
-                                anchors.leftMargin: 8
-                                spacing: 8
-                                QbzIcon {
-                                    name: modelData.icon
-                                    width: 15
-                                    height: 15
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    tintName: "secondary"
-                                }
-                                Text {
-                                    height: parent.height
-                                    width: parent.width - 23
-                                    text: modelData.label
-                                    color: theme.textSecondary
-                                    font.pixelSize: 13
-                                    verticalAlignment: Text.AlignVCenter
-                                    elide: Text.ElideRight
-                                }
-                            }
-                            MouseArea {
-                                id: miArea
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: {
-                                    albumMenu.close()
-                                    var a = modelData.action
-                                    if (root.localMode) {
-                                        if (a === "open") root.openRequested()
-                                        else if (a === "play") root.playRequested()
-                                        else if (a === "next") root.enqueueRequested("next")
-                                        else if (a === "later") root.enqueueRequested("later")
-                                        else if (a === "queue") root.enqueueRequested("queue")
-                                        return
-                                    }
-                                    if (a === "open") QbzAlbum.openAlbum(root.albumId)
-                                    else if (a === "play") QbzPlayer.playAlbum(root.albumId)
-                                    else if (a === "next") QbzPlayer.enqueueAlbum(root.albumId, "next")
-                                    else if (a === "later") QbzPlayer.enqueueAlbum(root.albumId, "later")
-                                    else if (a === "queue") QbzPlayer.enqueueAlbum(root.albumId, "queue")
-                                    else if (a === "favorite") root.toggleFavorite()
-                                    // "block" (no blacklist store): inert —
-                                    // POC-NOTE.
-                                }
-                            }
-                        }
-                    }
-                }
+                entries: root.menuModel()
+                onPicked: function (a) { root.menuAction(a) }
+            }
 
             // Award ribbon — content-width, capped at the card width.
             Rectangle {
@@ -364,8 +360,17 @@ Rectangle {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: root.localMode ? root.openRequested()
-                                                  : QbzAlbum.openAlbum(root.albumId)
+                        acceptedButtons: Qt.LeftButton | Qt.RightButton
+                        onClicked: function (mouse) {
+                            if (mouse.button === Qt.RightButton) {
+                                albumMenu.openAtCursor(titleArea, mouse.x, mouse.y)
+                                return
+                            }
+                            if (root.localMode)
+                                root.openRequested()
+                            else
+                                QbzAlbum.openAlbum(root.albumId)
+                        }
                     }
                 }
                 Text {

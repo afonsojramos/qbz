@@ -17,6 +17,8 @@ Rectangle {
     property var item: ({})
     /// Resolved cover for item.artKey (the host's artMap lookup).
     property string artSource: ""
+    /// The LocalLibraryView root (shared skeleton pulse + artwork gate).
+    property var view: null
     signal opened()
 
     QbzTheme { id: theme }
@@ -47,6 +49,17 @@ Rectangle {
                 anchors.fill: parent
                 source: root.artSource
                 radius: 4
+            }
+            // Per-item cover placeholder — clears when THIS folder's cover
+            // lands; settles out when the folder has none (local artwork
+            // resolution drops keys with no cover).
+            QbzSkeleton {
+                variant: "art"
+                anchors.fill: parent
+                blockRadius: 4
+                visible: root.view ? root.view.artPending(root.item.artKey) : false
+                phase: root.view ? root.view.skelPhase : false
+                settleMs: root.view ? root.view.artSettleMs : 0
             }
         }
         Text {

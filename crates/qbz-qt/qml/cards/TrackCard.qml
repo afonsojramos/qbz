@@ -59,13 +59,20 @@ Rectangle {
                 opacity: root.overlayOn ? 0.6 : 0.0
                 Behavior on opacity { NumberAnimation { duration: 150 } }
             }
-            // Body click PLAYS the track (TrackCard hover).
+            // Body click PLAYS the track (TrackCard hover); right press opens
+            // the SAME menu as the ⋯ button.
             MouseArea {
                 id: tcArtArea
                 anchors.fill: parent
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
-                onClicked: QbzPlayer.playTrack(root.item.id)
+                acceptedButtons: Qt.LeftButton | Qt.RightButton
+                onClicked: function (mouse) {
+                    if (mouse.button === Qt.RightButton)
+                        trackMenu.openAtCursor(tcArtArea, mouse.x, mouse.y)
+                    else
+                        QbzPlayer.playTrack(root.item.id)
+                }
             }
             // Hover overlay — favorite / play / more (y=120, h=44,
             // centered, spacing 12).
@@ -145,7 +152,13 @@ Rectangle {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: QbzPlayer.playTrack(root.item.id)
+                        acceptedButtons: Qt.LeftButton | Qt.RightButton
+                        onClicked: function (mouse) {
+                            if (mouse.button === Qt.RightButton)
+                                trackMenu.openAtCursor(tcTitleArea, mouse.x, mouse.y)
+                            else
+                                QbzPlayer.playTrack(root.item.id)
+                        }
                     }
                 }
                 Text {
@@ -171,16 +184,23 @@ Rectangle {
     }
 
     // Track context-menu model (TrackCard.slint track-menu) + dispatch.
+    // COMPLETE against the .slint: Play · Play next · Play later (#442, end
+    // of the manual block) · Add to queue · Go to artist (artist-id != "") ·
+    // Go to album (album-id != "") · favorite. The card menu is deliberately
+    // shorter than the row menu — the .slint card has no radio / share /
+    // offline / track-info rows.
     function menuModel() {
+        var t = QbzSession.tr
+        var r = QbzSession.trRev
         var m = [
-            { "label": QbzSession.tr("Play", QbzSession.trRev), "icon": "play-fill", "action": "play" },
-            { "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-start", "action": "next" },
-            { "label": QbzSession.tr("Play later", QbzSession.trRev), "icon": "list-plus", "action": "later" },
-            { "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "action": "queue" },
+            { "label": t("Play", r), "icon": "play-fill", "action": "play" },
+            { "label": t("Play next", r), "icon": "list-start", "action": "next" },
+            { "label": t("Play later", r), "icon": "list-plus", "action": "later" },
+            { "label": t("Add to queue", r), "icon": "list-end", "action": "queue" },
         ]
-        if (root.item.artistId) m.push({ "label": QbzSession.tr("Go to artist", QbzSession.trRev), "icon": "user", "action": "go-artist" })
-        if (root.item.albumId) m.push({ "label": QbzSession.tr("Go to album", QbzSession.trRev), "icon": "disc", "action": "go-album" })
-        m.push({ "label": root.item.isFavorite ? QbzSession.tr("Remove from Library", QbzSession.trRev) : QbzSession.tr("Add to Library", QbzSession.trRev),
+        if (root.item.artistId) m.push({ "label": t("Go to artist", r), "icon": "user", "action": "go-artist" })
+        if (root.item.albumId) m.push({ "label": t("Go to album", r), "icon": "disc", "action": "go-album" })
+        m.push({ "label": root.item.isFavorite ? t("Remove from Library", r) : t("Add to Library", r),
                  "icon": root.item.isFavorite ? "heart-filled" : "heart", "action": "favorite" })
         return m
     }

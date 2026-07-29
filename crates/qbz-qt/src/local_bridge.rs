@@ -23,8 +23,8 @@ use cxx_qt::Threading as _;
 use cxx_qt_lib::QString;
 
 use crate::local_bridge_ops::{
-    emit_artwork, load_tab_impl, load_tracks, publish_plex_state, publish_tree, reload_browse,
-    run_sync,
+    emit_artwork, emit_artwork_one, load_tab_impl, load_tracks, publish_plex_state, publish_tree,
+    reload_browse, run_sync,
 };
 use crate::local_library_qt as lib;
 use crate::local_plex as plex;
@@ -649,6 +649,8 @@ impl qbz_local::QbzLocal {
             return;
         }
         crate::spawn(async move {
+            // Phase 1 (cheap: memos + one stat per key, no decode) — emit
+            // everything already on disk right away.
             let window = tokio::task::spawn_blocking(move || lib::resolve_window_blocking(keys))
                 .await
                 .ok();
@@ -656,10 +658,22 @@ impl qbz_local::QbzLocal {
                 return;
             };
             emit_artwork(window.hits);
-            // Plex thumbs that were not on disk: fetch them (network), then
-            // emit whatever landed.
-            let fetched = lib::fetch_plex_misses(window.plex_misses).await;
-            emit_artwork(fetched);
+            // Phase 2, both arms in parallel and both STREAMING: each cover
+            // reaches QML through `localArtworkReady` the moment it resolves,
+            // so a first visit fills in progressively instead of landing as
+            // one lump after the whole window is done.
+            //   - cold local covers: bounded blocking pool, started in
+            //     display order (row 1 before row 40);
+            //   - Plex/http misses: network, independent of the CPU work, so
+            //     a slow decode never holds up a downloaded cover.
+            // (`stream_cold` is reached directly — `local_library_qt` only
+            // re-exports the two entry points the older batch flow used.)
+            let cold = crate::local_artwork::stream_cold(window.cold, emit_artwork_one);
+            let remote = async {
+                let fetched = lib::fetch_plex_misses(window.plex_misses).await;
+                emit_artwork(fetched);
+            };
+            tokio::join!(cold, remote);
         });
     }
     // --- Tree selection + bulk actions --------------------------------------

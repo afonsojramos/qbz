@@ -20,9 +20,21 @@
 //   the ArtistGridCard hero slot it shares the row with.
 // - The Slint's windowed grid virtualization is not replicated (page size
 //   is 20 — the whole set mounts).
+//
+// LOADING (a deliberate ADDITION over the Slint's bare LoadingSpinner): the
+// view mounts QbzSkeleton placeholders in the shape of the tab that is
+// coming, plus a per-card cover placeholder that clears when THAT card's
+// cover lands. See the "skeleton plumbing" block below for the cost.
+//
+// SIZE: this file is over the 500-line guideline (it already was at 638
+// before the skeleton work). It is NOT split because every section is one
+// tab of one document and the split would be arbitrary; the skeleton
+// additions are the composite mounts, which are ~8 lines each precisely to
+// keep it from growing further.
 
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Window
 import com.blitzfc.qbz
 import "../cards"
 import "../controls"
@@ -56,6 +68,84 @@ Rectangle {
     readonly property int filterIndex: doc.filterIndex || 0
     readonly property bool hasResults: albums.length + tracks.length + artists.length + playlists.length > 0
     readonly property int previewCap: 6
+
+    // ======================= skeleton plumbing ===========================
+    // ONE 900ms Timer drives EVERY placeholder in this view (QbzSkeleton's
+    // preferred drive mode). GATING RULE: freeze on NOT VISIBLE — the view
+    // hidden, or the window minimized/hidden. NEVER on lost focus (a tiling
+    // desktop keeps windows visible and unfocused).
+    property bool skelPhase: false
+    readonly property bool windowShowing: root.Window.window
+        ? (root.Window.window.visibility !== Window.Minimized
+           && root.Window.window.visibility !== Window.Hidden)
+        : true
+
+    // A card is pending while it HAS a cover url and no local path yet.
+    // Recomputed only when the document is republished (which is also when
+    // covers land), never per frame.
+    function anyPending(rows) {
+        for (var i = 0; i < rows.length; i++) {
+            if ((rows[i].artUrl || "") !== "" && (rows[i].artPath || "") === "") return true
+        }
+        return false
+    }
+    readonly property bool heroPending: {
+        var k = mp.kind || ""
+        if (k === "" || k === "artist") return false
+        var c = k === "album" ? (mp.album || ({})) : (mp.track || ({}))
+        return (c.artUrl || "") !== "" && (c.artPath || "") === ""
+    }
+    readonly property bool artPending: anyPending(albums) || anyPending(tracks)
+        || anyPending(playlists) || heroPending
+
+    // "Load more" has NO bridge-side busy flag: search_qt.rs only sets
+    // doc.loading in submit(), never in load_more(). So the appended-page
+    // placeholder is tracked locally — armed on the click, disarmed the
+    // moment that tab's array actually grows. A page that comes back empty
+    // (end of the result set) never grows it, which is why every appended
+    // placeholder carries settleMs.
+    property int moreTab: -1
+    property int moreFrom: 0
+    function rowsFor(t) {
+        return t === 1 ? albums : t === 2 ? tracks
+            : t === 3 ? artists : t === 4 ? playlists : []
+    }
+    readonly property bool morePending: root.moreTab >= 0
+        && root.moreTab === root.tab
+        && root.rowsFor(root.moreTab).length === root.moreFrom
+    function armLoadMore(t) {
+        root.moreTab = t
+        root.moreFrom = root.rowsFor(t).length
+        QbzBridge.searchLoadMore(t)
+    }
+
+    Timer {
+        interval: 900
+        repeat: true
+        running: (root.loading || root.artPending || root.morePending)
+            && root.visible && root.windowShowing
+        onTriggered: root.skelPhase = !root.skelPhase
+    }
+
+    // Per-item cover placeholder, mounted by every card delegate over the
+    // 200x200 artwork square. A bare Rectangle, so it does not eat the
+    // card's hover/click areas underneath; it clears when THIS card's cover
+    // lands, so a page resolves progressively instead of as a lump.
+    // ARTISTS are deliberately excluded everywhere: ArtistCard already draws
+    // a designed round gradient+glyph portrait for a missing cover, which
+    // reads as a portrait rather than as a hole (same rule as LibraryView).
+    // NOTE: an inline `component` does NOT see this file's outer ids, so it
+    // takes NO `root.` reference — every call site passes `phase:` itself.
+    component CardArtSkeleton: QbzSkeleton {
+        property var card: ({})
+        variant: "art"
+        width: 200
+        height: 200
+        visible: ((card.artUrl || "") !== "") && ((card.artPath || "") === "")
+        // A cover whose download fails republishes the document with an
+        // empty artPath — without this the tile would shimmer forever.
+        settleMs: 6000
+    }
 
     // Track hero (SearchTrackHero: the 200x246 track card + the quality
     // label as TEXT under the meta).
@@ -146,6 +236,10 @@ Rectangle {
     component LoadMoreButton: Item {
         property int loaded: 0
         property int total: 0
+        // The click is reported OUT (the call site arms the appended-page
+        // placeholder and then calls the bridge). An inline component does
+        // not see this file's outer ids, so it must not reach for `root`.
+        signal loadMore()
         width: parent ? parent.width : 0
         visible: loaded < total
         height: visible ? 44 : 0
@@ -170,7 +264,7 @@ Rectangle {
                 anchors.fill: parent
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
-                onClicked: QbzBridge.searchLoadMore(root.tab)
+                onClicked: parent.parent.loadMore()
             }
         }
     }
@@ -383,6 +477,16 @@ Rectangle {
                                     card: root.mp.track || ({})
                                     qualityLabel: root.mp.qualityLabel || ""
                                 }
+                                // Hero cover placeholder (album/track arms —
+                                // the artist arm keeps ArtistCard's designed
+                                // round portrait).
+                                CardArtSkeleton {
+                                    anchors.horizontalCenter: parent.horizontalCenter
+                                    card: root.mp.kind === "album" ? (root.mp.album || ({}))
+                                        : root.mp.kind === "track" ? (root.mp.track || ({}))
+                                        : ({})
+                                    phase: root.skelPhase
+                                }
                             }
                         }
                         // Artists carousel — fills the rest of the row.
@@ -459,17 +563,28 @@ Rectangle {
                             clip: true
                             boundsBehavior: Flickable.StopAtBounds
                             model: root.albums
-                            delegate: AlbumCard {
-                                albumId: modelData.id
-                                title: modelData.title
-                                artist: modelData.artist
-                                artistId: modelData.artistId
-                                genre: modelData.genre
-                                year: modelData.year
-                                qualityTier: modelData.qualityTier
-                                artSource: modelData.artPath || ""
-                                isFavorite: false
-                                isPinned: false
+                            delegate: Item {
+                                required property var modelData
+                                required property int index
+                                width: 200
+                                height: 246
+                                AlbumCard {
+                                    albumId: modelData.id
+                                    title: modelData.title
+                                    artist: modelData.artist
+                                    artistId: modelData.artistId
+                                    genre: modelData.genre
+                                    year: modelData.year
+                                    qualityTier: modelData.qualityTier
+                                    artSource: modelData.artPath || ""
+                                    isFavorite: false
+                                    isPinned: false
+                                }
+                                CardArtSkeleton {
+                                    card: modelData
+                                    phase: root.skelPhase
+                                    cellIndex: index
+                                }
                             }
                         }
                     }
@@ -484,23 +599,49 @@ Rectangle {
                         boundsBehavior: Flickable.StopAtBounds
                         interactive: false
                         model: root.albums
-                        delegate: AlbumCard {
-                            albumId: modelData.id
-                            title: modelData.title
-                            artist: modelData.artist
-                            artistId: modelData.artistId
-                            genre: modelData.genre
-                            year: modelData.year
-                            qualityTier: modelData.qualityTier
-                            artSource: modelData.artPath || ""
-                            isFavorite: false
-                            isPinned: false
+                        delegate: Item {
+                            required property var modelData
+                            required property int index
+                            width: 200
+                            height: 246
+                            AlbumCard {
+                                albumId: modelData.id
+                                title: modelData.title
+                                artist: modelData.artist
+                                artistId: modelData.artistId
+                                genre: modelData.genre
+                                year: modelData.year
+                                qualityTier: modelData.qualityTier
+                                artSource: modelData.artPath || ""
+                                isFavorite: false
+                                isPinned: false
+                            }
+                            CardArtSkeleton {
+                                card: modelData
+                                phase: root.skelPhase
+                                cellIndex: index
+                            }
                         }
+                    }
+                    // The page that "Load more" asked for, in the shape it
+                    // will arrive in. One row of cells, one animator; it
+                    // disappears the moment the array grows (or settles out
+                    // if the page comes back empty).
+                    QbzSkeleton {
+                        visible: root.tab === 1 && root.morePending
+                        variant: "cardGrid"
+                        width: parent.width
+                        height: visible ? 270 : 0
+                        cellW: 224
+                        cellH: 270
+                        phase: root.skelPhase
+                        settleMs: 8000
                     }
                     LoadMoreButton {
                         visible: root.tab === 1
                         loaded: root.albums.length
                         total: root.doc.albumsTotal || 0
+                        onLoadMore: root.armLoadMore(1)
                     }
 
                     // ---- Tracks --------------------------------------------
@@ -526,10 +667,22 @@ Rectangle {
                             }
                         }
                     }
+                    QbzSkeleton {
+                        visible: root.tab === 2 && root.morePending
+                        variant: "rowList"
+                        width: parent.width
+                        height: visible ? 200 : 0
+                        rowH: 50
+                        rowGap: 0
+                        rowArtSize: 36
+                        phase: root.skelPhase
+                        settleMs: 8000
+                    }
                     LoadMoreButton {
                         visible: root.tab === 2
                         loaded: root.tracks.length
                         total: root.doc.tracksTotal || 0
+                        onLoadMore: root.armLoadMore(2)
                     }
 
                     // ---- Artists grid (per-type tab) ------------------------
@@ -548,10 +701,25 @@ Rectangle {
                             artSource: modelData.artPath || ""
                         }
                     }
+                    // Artists: ROUND cells (ArtistGridCard's portrait), and
+                    // no per-item overlay anywhere — a missing artist photo
+                    // has a designed placeholder already.
+                    QbzSkeleton {
+                        visible: root.tab === 3 && root.morePending
+                        variant: "cardGrid"
+                        width: parent.width
+                        height: visible ? 262 : 0
+                        cellW: 216
+                        cellH: 262
+                        roundCells: true
+                        phase: root.skelPhase
+                        settleMs: 8000
+                    }
                     LoadMoreButton {
                         visible: root.tab === 3
                         loaded: root.artists.length
                         total: root.doc.artistsTotal || 0
+                        onLoadMore: root.armLoadMore(3)
                     }
 
                     // ---- Playlists ------------------------------------------
@@ -574,9 +742,20 @@ Rectangle {
                             clip: true
                             boundsBehavior: Flickable.StopAtBounds
                             model: root.playlists
-                            delegate: PlaylistCard {
-                                item: modelData
-                                artSource: modelData.artPath || ""
+                            delegate: Item {
+                                required property var modelData
+                                required property int index
+                                width: 200
+                                height: 246
+                                PlaylistCard {
+                                    item: modelData
+                                    artSource: modelData.artPath || ""
+                                }
+                                CardArtSkeleton {
+                                    card: modelData
+                                    phase: root.skelPhase
+                                    cellIndex: index
+                                }
                             }
                         }
                     }
@@ -590,31 +769,142 @@ Rectangle {
                         boundsBehavior: Flickable.StopAtBounds
                         interactive: false
                         model: root.playlists
-                        delegate: PlaylistCard {
+                        delegate: Item {
+                            required property var modelData
+                            required property int index
+                            width: 200
+                            height: 246
+                            PlaylistCard {
                                 item: modelData
                                 artSource: modelData.artPath || ""
                             }
+                            CardArtSkeleton {
+                                card: modelData
+                                phase: root.skelPhase
+                                cellIndex: index
+                            }
+                        }
+                    }
+                    QbzSkeleton {
+                        visible: root.tab === 4 && root.morePending
+                        variant: "cardGrid"
+                        width: parent.width
+                        height: visible ? 270 : 0
+                        cellW: 224
+                        cellH: 270
+                        phase: root.skelPhase
+                        settleMs: 8000
                     }
                     LoadMoreButton {
                         visible: root.tab === 4
                         loaded: root.playlists.length
                         total: root.doc.playlistsTotal || 0
+                        onLoadMore: root.armLoadMore(4)
                     }
                 }
 
-                // ---- Loading + empty states ---------------------------------
+                // ---- Loading skeleton ---------------------------------------
+                // Shape of the tab that is coming, not a spinner. Mounted for
+                // the WHOLE of `loading`, not only the first search: bodyCol
+                // fades to 0 while a new query is in flight, so a re-search
+                // used to show an empty page with no affordance at all.
+                // COST: at most 8 animators on the All tab (3 title bars, 1
+                // hero card, 2 card composites, 1 slim-row composite); one
+                // composite covers a whole viewport row on ONE animator.
                 Item {
-                    visible: root.loading && !root.hasResults
-                    anchors.fill: parent
+                    id: searchSkel
+                    visible: root.loading
+                    x: 32
+                    y: 0
+                    width: bodyFlick.width - 64
+                    height: bodyFlick.height
+
+                    // All tab: hero + artists carousel + albums + tracks.
                     Column {
-                        anchors.centerIn: parent
-                        spacing: 18
-                        QbzSpinner { size: 36; anchors.horizontalCenter: parent.horizontalCenter }
-                        Text {
-                            text: QbzSession.tr("Searching…", QbzSession.trRev)
-                            color: theme.textMuted
-                            font.pixelSize: 13
+                        visible: root.tab === 0
+                        width: parent.width
+                        spacing: 28
+                        Row {
+                            width: parent.width
+                            spacing: 24
+                            Column {
+                                width: 200
+                                spacing: 12
+                                QbzSkeleton { variant: "block"; width: 160; height: 22; phase: root.skelPhase }
+                                QbzSkeleton { variant: "card"; width: 200; phase: root.skelPhase }
+                            }
+                            Column {
+                                width: parent.width - 224
+                                spacing: 12
+                                QbzSkeleton { variant: "block"; width: 180; height: 22; phase: root.skelPhase }
+                                QbzSkeleton {
+                                    variant: "cardGrid"
+                                    width: parent.width
+                                    height: 246
+                                    cellW: 232
+                                    cellH: 246
+                                    roundCells: true
+                                    phase: root.skelPhase
+                                }
+                            }
                         }
+                        Column {
+                            width: parent.width
+                            spacing: 12
+                            QbzSkeleton { variant: "block"; width: 180; height: 22; phase: root.skelPhase }
+                            QbzSkeleton {
+                                variant: "cardGrid"
+                                width: parent.width
+                                height: 246
+                                cellW: 232
+                                cellH: 246
+                                phase: root.skelPhase
+                            }
+                        }
+                        Column {
+                            width: parent.width
+                            spacing: 8
+                            QbzSkeleton { variant: "block"; width: 180; height: 22; phase: root.skelPhase }
+                            QbzSkeleton {
+                                variant: "rowList"
+                                width: parent.width
+                                height: 300
+                                rowH: 50
+                                rowGap: 0
+                                rowArtSize: 36
+                                phase: root.skelPhase
+                            }
+                        }
+                    }
+
+                    // Albums / Playlists tabs: the 224x270 grid.
+                    QbzSkeleton {
+                        visible: root.tab === 1 || root.tab === 4
+                        variant: "cardGrid"
+                        anchors.fill: parent
+                        cellW: 224
+                        cellH: 270
+                        phase: root.skelPhase
+                    }
+                    // Tracks tab: the 50px TrackRow list.
+                    QbzSkeleton {
+                        visible: root.tab === 2
+                        variant: "rowList"
+                        anchors.fill: parent
+                        rowH: 50
+                        rowGap: 0
+                        rowArtSize: 36
+                        phase: root.skelPhase
+                    }
+                    // Artists tab: round cells on the 216x262 pitch.
+                    QbzSkeleton {
+                        visible: root.tab === 3
+                        variant: "cardGrid"
+                        anchors.fill: parent
+                        cellW: 216
+                        cellH: 262
+                        roundCells: true
+                        phase: root.skelPhase
                     }
                 }
                 Text {

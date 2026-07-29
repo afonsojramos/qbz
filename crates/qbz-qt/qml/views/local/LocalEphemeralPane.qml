@@ -77,11 +77,17 @@ Item {
                 }
             }
 
-            // Scanning.
-            QbzSpinner {
+            // Scanning — the shape of the album blocks that are coming
+            // (56px cover + two text bars per block), not a spinner.
+            QbzSkeleton {
                 visible: QbzLocal.localEphemeralLoading
-                anchors.horizontalCenter: parent.horizontalCenter
-                size: 28
+                variant: "rowList"
+                width: parent.width
+                height: visible ? 3 * 68 : 0
+                rowH: 56
+                rowGap: 12
+                rowArtSize: 56
+                phase: root.view ? root.view.skelPhase : false
             }
 
             // Empty (no playable tracks).
@@ -128,6 +134,17 @@ Item {
                                     anchors.fill: parent
                                     source: root.view.artMap[block.modelData.artKey] || ""
                                     radius: 6
+                                }
+                                // Per-item: clears when THIS album's cover
+                                // lands, settles out when it has none.
+                                QbzSkeleton {
+                                    variant: "art"
+                                    anchors.fill: parent
+                                    blockRadius: 6
+                                    visible: root.view
+                                        ? root.view.artPending(block.modelData.artKey) : false
+                                    phase: root.view ? root.view.skelPhase : false
+                                    settleMs: root.view ? root.view.artSettleMs : 0
                                 }
                             }
                             Column {

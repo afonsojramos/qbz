@@ -207,6 +207,25 @@ Item {
                                     root.enqueueRequested(cardCell.modelData.id, m)
                                 }
                             }
+                            // Per-item cover placeholder: it clears the
+                            // moment THIS album's thumbnail lands in artMap,
+                            // so a scrolled-into page fills in progressively
+                            // instead of as a wall of dead tiles. A bare
+                            // Rectangle — it does not take pointer events, so
+                            // the card's own areas keep working underneath.
+                            // settleMs is mandatory here: local artwork
+                            // resolution drops keys with no cover, so an
+                            // artless album would otherwise shimmer forever
+                            // (see LocalLibraryView.artSettleMs).
+                            QbzSkeleton {
+                                variant: "art"
+                                width: 200
+                                height: 200
+                                visible: root.view
+                                    ? root.view.artPending(cardCell.modelData.artKey) : false
+                                phase: root.view ? root.view.skelPhase : false
+                                settleMs: root.view ? root.view.artSettleMs : 0
+                            }
                             // RIGHT-only, declared after the card so every
                             // left click still reaches the card's own areas.
                             MouseArea {
@@ -243,6 +262,7 @@ Item {
                 id: listRowComp
                 LocalAlbumRow {
                     width: list.width
+                    view: root.view
                     item: modelData.items[0]
                     artSource: root.view
                         ? (root.view.artMap[modelData.items[0].artKey] || "") : ""

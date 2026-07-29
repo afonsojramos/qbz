@@ -25,6 +25,13 @@
 //
 // Ownership tri-state (Slint): owned -> heart (library favorite);
 // foreign followed -> check; foreign -> user-plus (Qobuz follow).
+//
+// --- Menu inventory vs discover/PlaylistCard.slint ---------------------
+//   Play · Play next · Play later · Add to queue ·
+//   Add to Library (is-owned) | Follow/Unfollow on Qobuz (!is-owned) ·
+//   Copy to your library (!is-owned && !is-copied)
+// All live except the last — see `hasCopyByIdSeam`. The ⋯ button and a
+// right press on the cover or the title open the same menu.
 
 import QtQuick
 import com.blitzfc.qbz
@@ -55,6 +62,12 @@ Rectangle {
     // Pinned state (AlbumCard pattern: scalar prop, optimistic flip on
     // click — the model re-publish re-creates the delegate).
     property bool isPinned: false
+
+    // "Copy to your library": QbzBridge.playlistCopy() copies the playlist
+    // that is currently OPEN — it takes no id, so a card cannot call it. The
+    // row stays out of the menu until a by-id copy invokable exists (and
+    // `item.playlistCopied` is published for the .slint's is-copied gate).
+    readonly property bool hasCopyByIdSeam: false
 
     color: "transparent"
 
@@ -104,8 +117,14 @@ Rectangle {
                 anchors.fill: parent
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
-                // body-opens (every Slint mount).
-                onClicked: QbzBridge.openPlaylist(root.item.id)
+                acceptedButtons: Qt.LeftButton | Qt.RightButton
+                // body-opens (every Slint mount); right press = the ⋯ menu.
+                onClicked: function (mouse) {
+                    if (mouse.button === Qt.RightButton)
+                        plMenu.openAtCursor(plArtArea, mouse.x, mouse.y)
+                    else
+                        QbzBridge.openPlaylist(root.item.id)
+                }
             }
             // Hover overlay — fav / play / more (y=120, h=44, centered).
             CardOverlayRow {
@@ -174,35 +193,8 @@ Rectangle {
             CardMenu {
                 id: plMenu
                 menuWidth: 196
-                // PlaylistCard.slint's menu: queueing actions + favorite
-                // (owned) / follow (foreign).
-                entries: [
-                    { "label": QbzSession.tr("Play", QbzSession.trRev), "icon": "play-fill", "action": "play" },
-                    { "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-start", "action": "play-next" },
-                    { "label": QbzSession.tr("Play later", QbzSession.trRev), "icon": "list-plus", "action": "play-later" },
-                    { "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "action": "queue" },
-                    { "label": root.item.playlistOwned
-                        ? (root.item.isFavorite ? QbzSession.tr("Remove from Library", QbzSession.trRev) : QbzSession.tr("Add to Library", QbzSession.trRev))
-                        : (root.item.playlistFollowing ? QbzSession.tr("Unfollow on Qobuz", QbzSession.trRev) : QbzSession.tr("Follow on Qobuz", QbzSession.trRev)),
-                      "icon": root.item.playlistOwned ? (root.item.isFavorite ? "heart-filled" : "heart")
-                          : (root.item.playlistFollowing ? "check" : "user-plus"),
-                      "action": "favorite" },
-                ]
-                onPicked: function (a) {
-                    if (a === "play") QbzPlayer.playPlaylistById(root.item.id)
-                    else if (a === "play-next") QbzPlayer.enqueuePlaylistById(root.item.id, "next")
-                    else if (a === "play-later") QbzPlayer.enqueuePlaylistById(root.item.id, "later")
-                    else if (a === "queue") QbzPlayer.enqueuePlaylistById(root.item.id, "queue")
-                    else if (a === "favorite") {
-                        if (root.item.playlistOwned) {
-                            root.item.isFavorite = !root.item.isFavorite
-                            QbzLibrary.libraryToggleFavorite("playlist", root.item.id)
-                        } else {
-                            root.item.playlistFollowing = !root.item.playlistFollowing
-                            QbzBridge.playlistSetFollowById(root.item.id, root.item.playlistFollowing)
-                        }
-                    }
-                }
+                entries: root.menuModel()
+                onPicked: function (a) { root.menuAction(a) }
             }
         }
         Item { width: 1; height: 6 }
@@ -243,6 +235,59 @@ Rectangle {
                 font.pixelSize: theme.fontLink - 1
                 verticalAlignment: Text.AlignVCenter
                 elide: Text.ElideRight
+            }
+        }
+    }
+
+    // Right-press catcher over the meta block (the cover has its own in
+    // plArtArea). Declared OUTSIDE the Column so it takes no layout space,
+    // and RightButton-only so left clicks still fall through to the text.
+    MouseArea {
+        id: plMetaArea
+        x: 0
+        y: 206
+        width: 200
+        height: 40
+        acceptedButtons: Qt.RightButton
+        onClicked: function (mouse) { plMenu.openAtCursor(plMetaArea, mouse.x, mouse.y) }
+    }
+
+    // PlaylistCard.slint's menu, in its order.
+    function menuModel() {
+        var t = QbzSession.tr
+        var r = QbzSession.trRev
+        var owned = root.item.playlistOwned === true
+        var following = root.item.playlistFollowing === true
+        var m = [
+            { "label": t("Play", r), "icon": "play-fill", "action": "play" },
+            { "label": t("Play next", r), "icon": "list-start", "action": "play-next" },
+            // #442 "Play later" — end of the manual block.
+            { "label": t("Play later", r), "icon": "list-plus", "action": "play-later" },
+            { "label": t("Add to queue", r), "icon": "list-end", "action": "queue" },
+        ]
+        if (owned)
+            m.push({ "label": root.item.isFavorite ? t("Remove from Library", r) : t("Add to Library", r),
+                     "icon": root.item.isFavorite ? "heart-filled" : "heart", "action": "favorite" })
+        else
+            m.push({ "label": following ? t("Unfollow on Qobuz", r) : t("Follow on Qobuz", r),
+                     "icon": following ? "check" : "user-plus", "action": "favorite" })
+        if (root.hasCopyByIdSeam && !owned && root.item.playlistCopied !== true)
+            m.push({ "label": t("Copy to your library", r), "icon": "copy", "action": "copy" })
+        return m
+    }
+
+    function menuAction(a) {
+        if (a === "play") QbzPlayer.playPlaylistById(root.item.id)
+        else if (a === "play-next") QbzPlayer.enqueuePlaylistById(root.item.id, "next")
+        else if (a === "play-later") QbzPlayer.enqueuePlaylistById(root.item.id, "later")
+        else if (a === "queue") QbzPlayer.enqueuePlaylistById(root.item.id, "queue")
+        else if (a === "favorite") {
+            if (root.item.playlistOwned) {
+                root.item.isFavorite = !root.item.isFavorite
+                QbzLibrary.libraryToggleFavorite("playlist", root.item.id)
+            } else {
+                root.item.playlistFollowing = !root.item.playlistFollowing
+                QbzBridge.playlistSetFollowById(root.item.id, root.item.playlistFollowing)
             }
         }
     }

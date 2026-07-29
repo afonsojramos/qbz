@@ -17,9 +17,12 @@
 //    and NO ⋯ menu on a label card, so the overlay row carries exactly one
 //    disc (open) instead of the artist's follow/play/more triplet.
 //
-// POC-NOTE: the label landing page is out of scope — there is no
-// openLabel on the Qt bridge, so every open path funnels through
-// root.openLabel() and is inert until the glue lands.
+// The label landing page is out of scope — there is no openLabel on the Qt
+// bridge. Rather than keep an open affordance that does nothing, the card
+// DISABLES it while `hasLabelViewSeam` is false: no overlay disc, no
+// pointing-hand cursor, no hover scrim, no accent on the title. The tile
+// still renders 1:1; it just does not pretend to be clickable. Flip the
+// constant and fill `openLabel()` when the label view lands.
 //
 // item contract: { id, title, subtitle, imageUrl } plus the
 // host-resolved artSource string prop. The artwork is driven by
@@ -47,13 +50,20 @@ Rectangle {
 
     QbzTheme { id: theme }
 
+    // No label view on the Qt bridge — see the header. Everything that would
+    // navigate is gated on this.
+    readonly property bool hasLabelViewSeam: false
+
     // No logo URL -> the indigo/violet glyph arm (the Slint condition).
     readonly property bool noLogo: !root.item.imageUrl
-    readonly property bool overlayOn: lblArea.containsMouse || lblOpen.hovered
+    readonly property bool overlayOn: root.hasLabelViewSeam
+        && (lblArea.containsMouse || lblOpen.hovered)
 
     // Single funnel for every open path (body, overlay disc, title).
     function openLabel() {
-        // POC-NOTE: no openLabel on the Qt bridge — inert.
+        if (!root.hasLabelViewSeam)
+            return
+        // GLUE NEEDED: QbzBridge/QbzArtist has no openLabel(labelId).
     }
 
     implicitWidth: 200
@@ -130,7 +140,8 @@ Rectangle {
                 MouseArea {
                     id: lblArea
                     anchors.fill: parent
-                    hoverEnabled: true
+                    enabled: root.hasLabelViewSeam
+                    hoverEnabled: root.hasLabelViewSeam
                     cursorShape: Qt.PointingHandCursor
                     onClicked: root.openLabel()
                 }
@@ -142,6 +153,7 @@ Rectangle {
                     shown: root.overlayOn
                     CardOverlayButton {
                         id: lblOpen
+                        visible: root.hasLabelViewSeam
                         name: "disc-3"
                         primary: true
                         anchors.verticalCenter: parent.verticalCenter
@@ -174,7 +186,8 @@ Rectangle {
                 MouseArea {
                     id: lblTitleArea
                     anchors.fill: parent
-                    hoverEnabled: true
+                    enabled: root.hasLabelViewSeam
+                    hoverEnabled: root.hasLabelViewSeam
                     cursorShape: Qt.PointingHandCursor
                     onClicked: root.openLabel()
                 }

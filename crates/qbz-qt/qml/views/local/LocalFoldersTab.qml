@@ -9,6 +9,7 @@
 
 import QtQuick
 import com.blitzfc.qbz
+import "../../controls"
 import "../../theme"
 
 Item {
@@ -25,10 +26,51 @@ Item {
         view: root.view
     }
 
-    QbzSpinner {
-        anchors.centerIn: parent
-        size: 36
+    // Loading = the shape of the arm that is coming. FLAT mode is the same
+    // collection the Albums tab renders; TREE mode is the rail + detail pair
+    // (the rail rows are 34px folder rows with a leading glyph, so the
+    // placeholder uses the small square art cell).
+    QbzSkeleton {
         visible: QbzLocal.localFoldersLoading && !root.view.ephemeralActive
+            && root.view.foldersMode === "flat"
+        variant: root.view.foldersGridView === "grid" ? "cardGrid" : "rowList"
+        anchors.fill: parent
+        anchors.leftMargin: 32
+        anchors.rightMargin: 32
+        anchors.topMargin: 16
+        cellW: 220
+        cellH: 266
+        rowH: 56
+        rowGap: 0
+        rowArtSize: 40
+        phase: root.view.skelPhase
+    }
+    Row {
+        visible: QbzLocal.localFoldersLoading && !root.view.ephemeralActive
+            && root.view.foldersMode !== "flat"
+        anchors.fill: parent
+        anchors.topMargin: 12
+        spacing: 0
+        Item { width: 12; height: 1 }
+        QbzSkeleton {
+            variant: "rowList"
+            width: root.view.treeRailWidth - 24
+            height: parent.height
+            // TreeRow is 26px with a small leading glyph (TreeRow.qml:34).
+            rowH: 26
+            rowGap: 0
+            rowArtSize: 14
+            phase: root.view.skelPhase
+        }
+        Item { width: 19; height: 1 }
+        QbzSkeleton {
+            variant: "cardGrid"
+            width: parent.width - root.view.treeRailWidth - 7
+            height: parent.height
+            cellW: 220
+            cellH: 266
+            phase: root.view.skelPhase
+        }
     }
     LocalNote {
         visible: !QbzLocal.localFoldersLoading && !root.view.ephemeralActive

@@ -16,6 +16,10 @@
 // The background matches ContextMenu.slint (surface-main, Radius.sm,
 // 1px border-muted). Rows go in the default content (33px, icon 15 +
 // label 13 per the existing per-site convention).
+//
+// Right-click parity: every ⋯ site also opens ITS menu on a right press
+// through the same `openAtCursor(area, mouse.x, mouse.y)` — the button and
+// the context gesture must never show different menus.
 
 import QtQuick
 import QtQuick.Controls

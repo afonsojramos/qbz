@@ -114,12 +114,19 @@ pub(crate) fn run_sync() {
     });
 }
 
+/// One resolved cover -> the id-keyed signal. A plain `fn` (not a closure) so
+/// `local_artwork::stream_cold` can take it as a fn pointer and call it from
+/// the blocking pool the moment each thumbnail lands.
+pub(crate) fn emit_artwork_one(key: String, path: String) {
+    ui(move |mut b| {
+        b.as_mut()
+            .local_artwork_ready(QString::from(key.as_str()), QString::from(path.as_str()));
+    });
+}
+
 pub(crate) fn emit_artwork(pairs: Vec<(String, String)>) {
     for (key, path) in pairs {
-        ui(move |mut b| {
-            b.as_mut()
-                .local_artwork_ready(QString::from(key.as_str()), QString::from(path.as_str()));
-        });
+        emit_artwork_one(key, path);
     }
 }
 

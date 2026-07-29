@@ -8,6 +8,7 @@
 
 import QtQuick
 import com.blitzfc.qbz
+import "../../controls"
 import "../../theme"
 
 Item {
@@ -43,10 +44,36 @@ Item {
         function onArtistsGroupedChanged() { root.rebuild() }
     }
 
-    QbzSpinner {
-        anchors.centerIn: parent
-        size: 36
+    // Loading = the shape of the master/detail pair that is coming: 60px
+    // rail rows with a ROUND 48px avatar on the left, the album grid on the
+    // right. Two composites, two animators (see QbzSkeleton COST).
+    Row {
         visible: QbzLocal.localArtistsLoading
+        anchors.fill: parent
+        anchors.topMargin: 12
+        spacing: 0
+        // The rail's own left inset (24), so the placeholder rows land where
+        // the real ones do.
+        Item { width: 24; height: 1 }
+        QbzSkeleton {
+            variant: "rowList"
+            width: 256 - 22
+            height: parent.height
+            rowH: 60
+            rowGap: 2
+            rowArtSize: 48
+            rowArtRound: true
+            phase: root.view.skelPhase
+        }
+        Item { width: 22 + 1; height: 1 }
+        QbzSkeleton {
+            variant: "cardGrid"
+            width: parent.width - 281
+            height: parent.height
+            cellW: 220
+            cellH: 266
+            phase: root.view.skelPhase
+        }
     }
     // Empty library — icon + line (Slint :2222).
     Column {
@@ -136,6 +163,7 @@ Item {
                                 id: artistComp
                                 LocalArtistRow {
                                     width: rail.width
+                                    view: root.view
                                     item: modelData.item
                                     artSource: root.view.artMap[modelData.item.artKey] || ""
                                     selected: root.view.selectedArtist === modelData.item.name

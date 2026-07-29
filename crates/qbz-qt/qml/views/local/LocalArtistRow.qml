@@ -6,6 +6,7 @@
 
 import QtQuick
 import com.blitzfc.qbz
+import "../../controls"
 import "../../theme"
 
 Rectangle {
@@ -14,7 +15,12 @@ Rectangle {
     property var item: ({})
     property bool selected: false
     property string artSource: ""
+    /// The LocalLibraryView root (shared pulse + per-item artwork gate).
+    property var view: null
     signal picked(string name)
+
+    readonly property bool avatarPending: root.view
+        ? root.view.artPending(root.item.artKey) : false
 
     QbzTheme { id: theme }
 
@@ -36,7 +42,11 @@ Rectangle {
             color: theme.surfaceElevated
             clip: true
             QbzIcon {
+                // The designed empty state — hidden only while the
+                // placeholder is actually up, so once it settles the glyph
+                // is what the user is left with (never a blank disc).
                 visible: root.artSource === ""
+                    && (!root.avatarPending || avatarSkel.settled)
                 name: "user"
                 width: 22
                 height: 22
@@ -47,6 +57,15 @@ Rectangle {
                 anchors.fill: parent
                 source: root.artSource
                 radius: 24
+            }
+            // Round per-item placeholder — the avatar shape, not a square.
+            QbzSkeleton {
+                id: avatarSkel
+                variant: "circle"
+                anchors.fill: parent
+                visible: root.avatarPending
+                phase: root.view ? root.view.skelPhase : false
+                settleMs: root.view ? root.view.artSettleMs : 0
             }
         }
         Column {

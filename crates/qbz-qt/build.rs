@@ -43,7 +43,7 @@ fn main() {
         .qt_module("QuickControls2")
         .qml_module(QmlModule {
             uri: "com.blitzfc.qbz",
-            rust_files: &["src/bridge.rs", "src/session_bridge.rs", "src/shell_bridge.rs", "src/player_bridge.rs", "src/queue_bridge.rs", "src/home_bridge.rs", "src/viz_bridge.rs", "src/local_bridge.rs", "src/library_bridge.rs", "src/album_bridge.rs", "src/artist_bridge.rs"],
+            rust_files: &["src/bridge.rs", "src/session_bridge.rs", "src/shell_bridge.rs", "src/player_bridge.rs", "src/queue_bridge.rs", "src/home_bridge.rs", "src/viz_bridge.rs", "src/local_bridge.rs", "src/library_bridge.rs", "src/album_bridge.rs", "src/artist_bridge.rs", "src/lyrics_qt.rs"],
             qml_files: &[
                 "qml/LoginScreen.qml",
                 "qml/Main.qml",
@@ -105,6 +105,11 @@ fn main() {
                 "qml/views/PlaylistView.qml",
                 "qml/views/SearchView.qml",
                 "qml/views/SectionRail.qml",
+                "qml/shell/LyricsControlsFlyout.qml",
+                "qml/shell/LyricsLineRow.qml",
+                "qml/shell/LyricsLinesView.qml",
+                "qml/shell/LyricsSyncEngine.qml",
+                "qml/shell/NavGestureLayer.qml",
                 "qml/controls/QbzCheckbox.qml",
                 "qml/controls/WarningBanner.qml",
                 "qml/settings/AudioSettings.qml",

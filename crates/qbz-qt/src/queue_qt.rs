@@ -12,6 +12,7 @@
 //! - Row favorite seeds from the phase-5 library feed (Slint uses
 //!   fav_cache — same truth).
 
+use std::collections::HashSet;
 use std::sync::Mutex;
 
 use qbz_app::shell::AppRuntime;
@@ -42,6 +43,11 @@ pub struct QueueRow {
     pub art_url: String,
     #[serde(rename = "isFavorite")]
     pub is_favorite: bool,
+    /// LOCAL or Plex row (`QueueTrack::is_local`). The heart is NOT
+    /// clickable on these — see `toggle_favorite`: their `id` is a
+    /// library.db row id, not a Qobuz catalog id.
+    #[serde(rename = "isLocal")]
+    pub is_local: bool,
     /// #442 section header drawn ABOVE this row: "" | "next-in-queue" |
     /// "next-up" (only on the unfiltered list).
     pub section: String,
@@ -94,13 +100,45 @@ fn fmt_duration(secs: u64) -> String {
     format!("{}:{:02}", secs / 60, secs % 60)
 }
 
-fn row_from(track: &QueueTrack) -> QueueRow {
-    let is_favorite = crate::library_qt::with_library(|d| {
+/// Canonical decimal parse — the exact equivalent of the old
+/// `feed_id == track.id.to_string()` string compare (rejects the two forms
+/// `u64::from_str` accepts but `to_string` never emits: a leading `+` and
+/// leading zeros), so the heart state does not change with the lookup shape.
+fn canonical_u64(s: &str) -> Option<u64> {
+    if s.is_empty() || s.starts_with('+') || (s.len() > 1 && s.starts_with('0')) {
+        return None;
+    }
+    s.parse::<u64>().ok()
+}
+
+/// Favorite TRACK ids from the phase-5 library feed — built ONCE per publish.
+///
+/// PERF (owner report: "the queue lags while a local album is loaded"). This
+/// used to be a per-ROW `feed.iter().any(...)`: a full linear scan of the
+/// ~10k-row library feed for EVERY row a publish builds (1 current + <=40 page
+/// + <=50 history — the core caps history at 50, `qbz-player/src/queue.rs:748`),
+/// with a fresh `track.id.to_string()` heap allocation on every compared
+/// element and a separate LIBRARY lock per row. That is ~900k allocations and
+/// ~91 lock round-trips per publish, and a LOCAL row can never match a Qobuz
+/// feed id, so `any()` never short-circuits — every local row paid the FULL
+/// scan, which is exactly why the lag shows up with a local album loaded.
+///
+/// The Slint reference resolves the same truth in O(1) from `fav_cache`'s
+/// `HashSet<u64>` (`crates/qbz/src/queue.rs:230`); this is the port of that
+/// shape onto the feed we have: one lock, one pass, allocation-free lookups.
+fn favorite_track_ids() -> HashSet<u64> {
+    crate::library_qt::with_library(|d| {
         d.feed
             .iter()
-            .any(|i| i.kind == "track" && i.id == track.id.to_string() && i.is_favorite)
+            .filter(|i| i.is_favorite && i.kind == "track")
+            .filter_map(|i| canonical_u64(&i.id))
+            .collect()
     })
-    .unwrap_or(false);
+    .unwrap_or_default()
+}
+
+fn row_from(track: &QueueTrack, favorites: &HashSet<u64>) -> QueueRow {
+    let is_favorite = favorites.contains(&track.id);
     let tier = match track.bit_depth {
         Some(d) if d >= 24 => "hires",
         Some(_) => "cd",
@@ -123,6 +161,7 @@ fn row_from(track: &QueueTrack) -> QueueRow {
         explicit: track.parental_warning,
         art_url: track.artwork_url.clone().unwrap_or_default(),
         is_favorite,
+        is_local: track.is_local,
         section: String::new(),
     }
 }
@@ -136,8 +175,43 @@ fn paginate(total: usize, requested_page: usize) -> (usize, usize, usize, usize)
     (page, page_count, start, end)
 }
 
+/// Search predicate — same truth as `display_title(t)` + artist, minus the
+/// intermediate `display_title` clone in the (dominant) version-less case.
+/// Runs over the WHOLE upcoming list on every keystroke, so the saved
+/// allocation is one per queue track per keypress.
+fn matches_query(track: &QueueTrack, query: &str) -> bool {
+    let title_hit = match track.version.as_deref().filter(|v| !v.is_empty()) {
+        Some(version) => format!("{} ({version})", track.title)
+            .to_lowercase()
+            .contains(query),
+        None => track.title.to_lowercase().contains(query),
+    };
+    title_hit || track.artist.to_lowercase().contains(query)
+}
+
+/// Last document handed to Qt — the publish is skipped when the freshly built
+/// one is byte-identical (`set_queue_json` emits unconditionally, and a
+/// no-op emit is NOT free downstream: THREE QML files re-`JSON.parse` the
+/// document (QueuePanel, PlayerBar, NowPlayingBarSmall) and QueuePanel's
+/// `onDocChanged` re-dispatches the artwork window for every row — one
+/// `stat` + one `libraryArtworkReady` emit + one full `coverMap` object
+/// rebuild per row, invalidating every cover binding in the panel AND the
+/// sidebar). Several user actions publish twice for one change (e.g.
+/// `local_playback::play_rows` -> publish, then the audible step's
+/// `play_queue_track` -> publish again), and the poll loop's track edge
+/// publishes on top of the transport's own. Same dedup convention as
+/// `now_playing::set_effective_stream`.
+static LAST_JSON: Mutex<String> = Mutex::new(String::new());
+
+/// Ids of the LOCAL/Plex rows in the document currently on screen (<=91),
+/// refreshed by every publish — the guard `toggle_favorite` consults so a
+/// local row's library.db id never reaches the Qobuz favorites API.
+static LOCAL_ROW_IDS: std::sync::LazyLock<Mutex<HashSet<u64>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashSet::new()));
+
 /// Build + publish the whole panel document.
 pub async fn publish(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
+    let t_build = std::time::Instant::now();
     let state = runtime.core().get_queue_state_full().await;
     let (search, requested_page) = {
         let view = VIEW.lock().unwrap();
@@ -152,21 +226,21 @@ pub async fn publish(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
         state
             .upcoming
             .iter()
-            .filter(|t| {
-                display_title(t).to_lowercase().contains(&query)
-                    || t.artist.to_lowercase().contains(&query)
-            })
+            .filter(|t| matches_query(t, &query))
             .collect()
     };
     let upcoming_total = filtered.len();
     let (page, page_count, start, end) = paginate(upcoming_total, requested_page);
     VIEW.lock().unwrap().page = page;
 
+    // ONE feed pass for the whole document (see `favorite_track_ids`).
+    let favorites = favorite_track_ids();
+
     let page_rows: Vec<QueueRow> = filtered[start..end]
         .iter()
         .enumerate()
         .map(|(i, t)| {
-            let mut r = row_from(t);
+            let mut r = row_from(t, &favorites);
             if query.is_empty() {
                 let g = start + i;
                 if state.manual_next_count > 0 && g == 0 {
@@ -184,8 +258,15 @@ pub async fn publish(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
         .map(|idx| state.total_tracks.saturating_sub(idx + 1))
         .unwrap_or(state.total_tracks);
 
-    let history: Vec<QueueRow> = state.history.iter().map(row_from).collect();
-    let current = state.current_track.as_ref().map(row_from);
+    // Bounded by construction: the core keeps at most 50 history entries
+    // (`qbz-player/src/queue.rs:748`), so the document cannot grow without
+    // bound — <=91 rows total (1 current + <=40 page + <=50 history).
+    let history: Vec<QueueRow> = state
+        .history
+        .iter()
+        .map(|t| row_from(t, &favorites))
+        .collect();
+    let current = state.current_track.as_ref().map(|t| row_from(t, &favorites));
 
     let doc = QueueDoc {
         has_current: current.is_some(),
@@ -205,7 +286,37 @@ pub async fn publish(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
             qbz_models::RepeatMode::One => 2,
         },
     };
+    let rows = doc.upcoming.len() + doc.history.len() + usize::from(doc.has_current);
+    *LOCAL_ROW_IDS.lock().unwrap() = doc
+        .upcoming
+        .iter()
+        .chain(doc.history.iter())
+        .chain(doc.current.iter())
+        .filter(|r| r.is_local)
+        .filter_map(|r| canonical_u64(&r.id))
+        .collect();
     let json = serde_json::to_string(&doc).unwrap_or_else(|_| "{}".into());
+    // Identical document -> no Qt hop, no QML re-parse, no artwork re-dispatch.
+    // The compare/store and the Qt post stay under ONE lock so two concurrent
+    // publishes cannot post out of order and strand a stale document behind an
+    // up-to-date `LAST_JSON` (there is no `.await` in here, so the guard never
+    // crosses a yield point).
+    let mut last = LAST_JSON.lock().unwrap();
+    if *last == json {
+        log::debug!(
+            "[qbz-qt][perf] queue publish: unchanged, skipped ({rows} rows, {:?})",
+            t_build.elapsed()
+        );
+        return;
+    }
+    last.clear();
+    last.push_str(&json);
+    log::debug!(
+        "[qbz-qt][perf] queue publish: {rows} rows, {} favs, {} bytes, build {:?}",
+        favorites.len(),
+        json.len(),
+        t_build.elapsed()
+    );
     crate::queue_bridge::ui(move |mut b| {
         b.as_mut().set_queue_json(QString::from(json.as_str()));
     });
@@ -277,11 +388,33 @@ pub async fn clear_queue(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
 }
 
 /// Toggle a heart for a queue row (Qobuz favorite), then republish.
+///
+/// GUARD: a LOCAL/Plex row's `id` is a library.db row id which is NUMERIC,
+/// so `library_qt::is_local_feed_id` (which recognizes local tracks only by
+/// their non-numeric FILE-PATH feed ids) would classify it as a Qobuz id and
+/// send `add_favorite("tracks", "<db row id>")` — favoriting an unrelated
+/// catalog track. Local hearts have no seam in this port (`local_bulk.rs`
+/// documents the same gap), so the mutation is refused here AND the row
+/// publishes `isLocal` so the panel can drop the control instead of showing
+/// one that cannot work.
 pub async fn toggle_favorite(
     runtime: &Arc<AppRuntime<LoggingAdapter>>,
     kind: &str,
     id: &str,
 ) {
+    if kind == "track" {
+        let local = canonical_u64(id)
+            .map(|tid| LOCAL_ROW_IDS.lock().unwrap().contains(&tid))
+            .unwrap_or(false);
+        if local {
+            log::warn!(
+                "[qbz-qt] queue favorite: {id} is a LOCAL/Plex row — no local \
+                 favorites seam in this port, refusing to route it to the \
+                 Qobuz favorites API"
+            );
+            return;
+        }
+    }
     let _ = crate::library_qt::toggle_favorite(runtime, kind, id).await;
     publish(runtime).await;
 }

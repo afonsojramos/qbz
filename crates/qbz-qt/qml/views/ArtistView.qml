@@ -105,6 +105,35 @@ Rectangle {
         return out
     }
 
+    // ---- Loading staging (artist_qt.rs publishes in passes) --------------
+    // The Qobuz page lands first; the Magazine stories and each MusicBrainz
+    // sidebar section arrive later on their own flags. Every one of these is
+    // ALSO gated on mbAvailable upstream, so with MusicBrainz off in Settings
+    // (or no confident match) they are absent — placeholder included.
+    readonly property bool primaryLoading: QbzArtist.artistLoading && topTracks.length === 0
+    readonly property bool originPending: network.mbAvailable === true
+                                          && network.originLoading === true
+    readonly property bool relationshipsPending: network.mbAvailable === true
+                                                 && network.relationshipsLoading === true
+    readonly property bool discoveryPending: network.mbAvailable === true
+                                             && network.discoveryLoading === true
+                                             && root.discoveryRows.length === 0
+    readonly property bool similarPending: similarArtists.length === 0 && QbzArtist.artistLoading
+    readonly property bool storiesPending: artist.storiesLoading === true && stories.length === 0
+
+    // ONE 900ms phase for every placeholder on the page (QbzSkeleton's COST
+    // note: N placeholders, 1 timer). Stops dead when nothing is pending.
+    Timer {
+        id: skeletonPhase
+        property bool on: false
+        interval: 900
+        repeat: true
+        running: root.visible && (root.primaryLoading || root.originPending
+                                  || root.relationshipsPending || root.discoveryPending
+                                  || root.similarPending || root.storiesPending)
+        onTriggered: on = !on
+    }
+
     // JUMP TO tabs from the present sections (ArtistState.jump-tabs).
     readonly property var jumpTabs: {
         var tabs = []
@@ -507,11 +536,38 @@ Rectangle {
         font.letterSpacing: 0.5
     }
 
-    // Small 11px muted line — sub-group labels and the "Loading…"/empty
-    // states inside the sidebar sections.
+    // Small 11px muted line — sub-group labels and the empty states inside
+    // the sidebar sections. (The "Loading…" lines are now SidebarSkeleton.)
     component SidebarNote: Text {
         color: theme.textMuted
         font.pixelSize: 12
+    }
+
+    // Placeholder rows for a sidebar section still in flight — the shared
+    // QbzSkeleton at the 28px pitch of SidebarLink, so the section holds its
+    // band and nothing jumps when the real links land.
+    //
+    // `phase` is a property, not a file-scope id lookup: an inline `component`
+    // does not see the enclosing document's ids (QbzSkeleton.qml's gotcha), so
+    // the host passes the one shared timer in.
+    component SidebarSkeleton: Column {
+        id: sbSk
+        property bool phase: false
+        property int rows: 3
+        // -28 = the section Column's left+right padding (see OriginRow).
+        width: parent ? parent.width - 28 : 0
+        spacing: 9
+        Repeater {
+            model: sbSk.rows
+            delegate: QbzSkeleton {
+                required property int index
+                variant: "block"
+                width: sbSk.width * (index % 2 === 0 ? 0.86 : 0.6)
+                height: 13
+                cellIndex: index
+                phase: sbSk.phase
+            }
+        }
     }
 
     // One "KEY   value" row of the MB Origin block.
@@ -744,8 +800,44 @@ Rectangle {
 
             Item { width: 1; height: 22 }
 
+            // --- Artist header skeleton ----------------------------------
+            // Mounted on the primary flag, and the real header is hidden by
+            // the same flag: opening artist B never renders a half-empty
+            // header frame while B's document is in flight.
+            Row {
+                visible: root.primaryLoading
+                width: parent.width - 64
+                spacing: 32
+
+                QbzSkeleton { variant: "circle"; width: 200; height: 200; phase: skeletonPhase.on }
+                Column {
+                    width: parent.width - 200 - 32
+                    spacing: 12
+                    Item { width: 1; height: 10 }
+                    QbzSkeleton { variant: "block"; width: Math.min(360, parent.width); height: 30; cellIndex: 0; phase: skeletonPhase.on }
+                    QbzSkeleton { variant: "block"; width: Math.min(520, parent.width); height: 14; cellIndex: 1; phase: skeletonPhase.on }
+                    QbzSkeleton { variant: "block"; width: Math.min(440, parent.width); height: 14; cellIndex: 2; phase: skeletonPhase.on }
+                    Item { width: 1; height: 14 }
+                    Row {
+                        spacing: 12
+                        Repeater {
+                            model: 4
+                            delegate: QbzSkeleton {
+                                required property int index
+                                variant: "circle"
+                                width: 44
+                                height: 44
+                                cellIndex: index
+                                phase: skeletonPhase.on
+                            }
+                        }
+                    }
+                }
+            }
+
             // --- Artist header ------------------------------------------
             Row {
+                visible: !root.primaryLoading
                 width: parent.width - 64
                 spacing: 32
 
@@ -961,20 +1053,34 @@ Rectangle {
                 }
             }
 
-            // --- Loading -------------------------------------------------
-            Item {
-                visible: QbzArtist.artistLoading && topTracks.length === 0
+            // --- Primary placeholder --------------------------------------
+            // Same flag the spinner used, now in the shape of what is coming:
+            // the Popular Tracks heading plus 5 rows at the PopularTrackRow
+            // 50px pitch (the preview count), so nothing shifts on arrival.
+            Column {
+                visible: root.primaryLoading
                 width: parent.width - 64
-                height: 280
-                Column {
-                    anchors.centerIn: parent
-                    spacing: 18
-                    QbzSpinner { size: 36; anchors.horizontalCenter: parent.horizontalCenter }
-                    Text {
-                        anchors.horizontalCenter: parent.horizontalCenter
-                        text: QbzSession.tr("Loading artist…", QbzSession.trRev)
-                        color: theme.textMuted
-                        font.pixelSize: 13
+                spacing: 0
+
+                QbzSkeleton { variant: "block"; width: 190; height: 22; phase: skeletonPhase.on }
+                Item { width: 1; height: 18 }
+                Repeater {
+                    model: root.preview
+                    delegate: Item {
+                        required property int index
+                        width: parent ? parent.width : 0
+                        height: 50
+                        QbzSkeleton {
+                            anchors.verticalCenter: parent.verticalCenter
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.leftMargin: 12
+                            anchors.rightMargin: 24
+                            height: 40
+                            variant: "row"
+                            cellIndex: index
+                            phase: skeletonPhase.on
+                        }
                     }
                 }
             }
@@ -1469,9 +1575,10 @@ Rectangle {
                         topPadding: 12
                         bottomPadding: 12
                         spacing: 6
-                        SidebarNote {
-                            visible: network.originLoading === true
-                            text: QbzSession.tr("Loading origin…", QbzSession.trRev)
+                        SidebarSkeleton {
+                            visible: root.originPending
+                            rows: 2
+                            phase: skeletonPhase.on
                         }
                         OriginRow {
                             visible: network.originLoading !== true && (mbOrigin.beginDate || "") !== ""
@@ -1530,9 +1637,10 @@ Rectangle {
                         bottomPadding: 6
                         spacing: 4
                         SidebarSectionHeading { text: QbzSession.tr("SIMILAR ARTISTS", QbzSession.trRev) }
-                        SidebarNote {
-                            visible: similarArtists.length === 0 && QbzArtist.artistLoading
-                            text: QbzSession.tr("Loading…", QbzSession.trRev)
+                        SidebarSkeleton {
+                            visible: root.similarPending
+                            rows: 4
+                            phase: skeletonPhase.on
                         }
                         Repeater {
                             model: similarArtists
@@ -1558,9 +1666,10 @@ Rectangle {
                         bottomPadding: 6
                         spacing: 6
                         SidebarSectionHeading { text: QbzSession.tr("RELATIONSHIPS", QbzSession.trRev) }
-                        SidebarNote {
-                            visible: network.relationshipsLoading === true
-                            text: QbzSession.tr("Loading…", QbzSession.trRev)
+                        SidebarSkeleton {
+                            visible: root.relationshipsPending
+                            rows: 3
+                            phase: skeletonPhase.on
                         }
                         RelationshipGroup {
                             visible: network.relationshipsLoading !== true
@@ -1607,9 +1716,10 @@ Rectangle {
                         bottomPadding: 12
                         spacing: 4
                         SidebarSectionHeading { text: QbzSession.tr("YOU MAY ALSO LIKE", QbzSession.trRev) }
-                        SidebarNote {
-                            visible: network.discoveryLoading === true && root.discoveryRows.length === 0
-                            text: QbzSession.tr("Loading…", QbzSession.trRev)
+                        SidebarSkeleton {
+                            visible: root.discoveryPending
+                            rows: 4
+                            phase: skeletonPhase.on
                         }
                         Repeater {
                             model: root.discoveryRows
@@ -1686,9 +1796,33 @@ Rectangle {
                     padding: 12
                     spacing: 10
 
-                    SidebarNote {
-                        visible: artist.storiesLoading === true && stories.length === 0
-                        text: QbzSession.tr("Loading…", QbzSession.trRev)
+                    // Story teasers are fetched after the page (Qobuz
+                    // editorial): two card placeholders in the teaser shape
+                    // while they resolve. Resolved-to-nothing keeps the
+                    // explicit empty line below — this is a TAB body, where a
+                    // blank panel would read as broken.
+                    Column {
+                        visible: root.storiesPending
+                        width: magBody.width - 24
+                        spacing: 12
+                        Repeater {
+                            model: 2
+                            delegate: Column {
+                                required property int index
+                                width: parent ? parent.width : 0
+                                spacing: 6
+                                QbzSkeleton {
+                                    variant: "block"
+                                    width: parent.width
+                                    height: parent.width
+                                    blockRadius: 6
+                                    cellIndex: index
+                                    phase: skeletonPhase.on
+                                }
+                                QbzSkeleton { variant: "block"; width: parent.width * 0.82; height: 14; cellIndex: index; phase: skeletonPhase.on }
+                                QbzSkeleton { variant: "block"; width: parent.width * 0.45; height: 11; cellIndex: index; phase: skeletonPhase.on }
+                            }
+                        }
                     }
                     SidebarNote {
                         visible: artist.storiesLoading !== true && stories.length === 0

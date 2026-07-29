@@ -20,9 +20,20 @@
 // or plain), enqueueRequested(mode) ("next"|"later"|"queue"),
 // removeRequested(), bodyDragStarted(index) (fired BEFORE the shared
 // dragStart — the #589 reorder pre-hook).
-// Favorite toggling and Go-to-artist/album are identical on every site —
-// handled internally. The row BODY is the drag source (6px threshold,
-// ghost + sidebar drops in main.rs).
+// Favorite toggling, Go-to-artist/album, Share and Track info are
+// identical on every site — handled internally. The row BODY is the drag
+// source (6px threshold, ghost + sidebar drops in main.rs) and its RIGHT
+// press opens the very same menu the ⋯ button does.
+//
+// --- Menu inventory vs primitives/TrackContextMenu.slint ----------------
+// The .slint menu is FLAT (no separators) in this order: Play now · Play
+// next · Play later · Add to queue · Create QBZ radio · Create Qobuz radio ·
+// Add to library · Add to mixtape · Add to playlist · Remove from
+// playlist(danger) · Share Qobuz link · Share Song.link · Make available
+// offline | Refresh + Remove offline copy(danger) · Go to album · Go to
+// artist · Track info. Everything the Qt bridge has a seam for is here, in
+// that order; the rest is gated OFF by the `has*Seam` constants below
+// rather than rendered as a row that silently does nothing.
 //
 // Deliberately NOT consolidated here (Slint-distinct): QueuePanel.QueueRow
 // (QueueItem data + queue-op menu + press-and-hold reorder) and
@@ -31,6 +42,7 @@
 import QtQuick
 import com.blitzfc.qbz
 import "../controls"
+import "../shell"
 import "../theme"
 
 Rectangle {
@@ -58,6 +70,36 @@ Rectangle {
     // `playlist add-tracks` as a QOBUZ catalog id — a local row dropped on a
     // playlist would silently add an unrelated catalog track.
     property bool draggable: true
+    // Per-row artwork placeholder (see the 36px cell below). The host view
+    // owns the phase clock so one timer drives every row.
+    property bool artPending: false
+    property bool skelPhase: false
+    property int artSettleMs: 0
+
+    // Catalog-backed row? `draggable` is ALREADY the "item.id is a Qobuz
+    // catalog track id" predicate (the Local Library / ephemeral rows set it
+    // false because their id is a local DB row id — see the note above), so
+    // the two entries that hit the Qobuz catalog by id ride it instead of
+    // asking every host to pass a new arm.
+    readonly property bool catalogRow: root.draggable
+    property bool menuShowShare: root.catalogRow
+    property bool menuShowTrackInfo: root.catalogRow
+
+    // --- Seams the Qt bridge does NOT have yet (menu-parity round) -------
+    // Each maps to a TrackContextMenu.slint entry. OFF = the row is not
+    // built at all, never rendered-and-inert. Flip the constant AND fill the
+    // matching `menuAction` branch when the invokable lands; the entry then
+    // appears in its .slint-correct slot. Why each is missing:
+    //   radio        no radio invokable on any Qt bridge object
+    //   mixtape      QbzLocal.albumAddToMixtape is LOCAL-album only
+    //   playlistAdd  no picker modal, no by-id add (only the sidebar drag)
+    //   songlink     needs the ISRC -> Deezer -> Odesli round-trip (backend)
+    //   offlineCache no per-track cache bridge (the download cell is a stub)
+    readonly property bool hasRadioSeam: false
+    readonly property bool hasMixtapeSeam: false
+    readonly property bool hasPlaylistAddSeam: false
+    readonly property bool hasSonglinkSeam: false
+    readonly property bool hasOfflineCacheSeam: false
 
     signal playRequested()
     signal enqueueRequested(string mode)
@@ -138,6 +180,18 @@ Rectangle {
                 anchors.fill: parent
                 source: root.item.artPath || ""
                 radius: 4
+            }
+            // Per-item cover placeholder — clears when THIS row's cover lands,
+            // which is what makes a long list read as progressive instead of
+            // filling in one lump. Host views drive the three properties;
+            // default-off, so no existing call site changes.
+            QbzSkeleton {
+                variant: "art"
+                anchors.fill: parent
+                blockRadius: 4
+                visible: root.artPending
+                phase: root.skelPhase
+                settleMs: root.artSettleMs
             }
         }
         // Title (+ explicit) / artist.
@@ -304,34 +358,110 @@ Rectangle {
     }
     CardMenu {
         id: rowMenu
-        menuWidth: 220
-        entries: {
-            var m = [
-                { "label": QbzSession.tr("Play", QbzSession.trRev), "icon": "play-fill", "action": "play" },
-                { "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-start", "action": "next" },
-            ]
-            if (root.menuShowLater) m.push({ "label": QbzSession.tr("Play later", QbzSession.trRev), "icon": "list-plus", "action": "later" })
-            m.push({ "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "action": "queue" })
-            if (root.menuShowGoTo && root.item.artistId) m.push({ "label": QbzSession.tr("Go to artist", QbzSession.trRev), "icon": "user", "action": "go-artist" })
-            if (root.menuShowGoTo && root.item.albumId) m.push({ "label": QbzSession.tr("Go to album", QbzSession.trRev), "icon": "disc", "action": "go-album" })
-            if (root.menuShowFavorite) m.push({
-                "label": root.item.isFavorite ? QbzSession.tr("Remove from Library", QbzSession.trRev) : QbzSession.tr("Add to Library", QbzSession.trRev),
-                "icon": root.item.isFavorite ? "heart-filled" : "heart", "action": "favorite" })
-            if (root.menuShowRemove) m.push({ "label": QbzSession.tr("Remove from playlist", QbzSession.trRev), "icon": "trash-2", "action": "remove" })
-            return m
+        menuWidth: 224
+        entries: root.menuModel()
+        onPicked: function (a) { root.menuAction(a) }
+    }
+
+    // TrackContextMenu.slint, in its order. Every row here reaches a live
+    // seam; the seamless ones are gated off above.
+    function menuModel() {
+        var t = QbzSession.tr
+        var r = QbzSession.trRev
+        var m = [
+            { "label": t("Play now", r), "icon": "play-fill", "action": "play" },
+            { "label": t("Play next", r), "icon": "list-start", "action": "next" },
+        ]
+        // #442 "Play later" — the end of the MANUAL block (after everything
+        // already queued by hand, before the source resumes).
+        if (root.menuShowLater)
+            m.push({ "label": t("Play later", r), "icon": "list-plus", "action": "later" })
+        m.push({ "label": t("Add to queue", r), "icon": "list-end", "action": "queue" })
+        if (root.hasRadioSeam) {
+            m.push({ "label": t("Create QBZ radio", r), "icon": "radio", "action": "radio-qbz" })
+            m.push({ "label": t("Create Qobuz radio", r), "icon": "radio", "action": "radio-qobuz" })
         }
-        onPicked: function (a) {
-            if (a === "play") root.playRequested()
-            else if (a === "next") root.enqueueRequested("next")
-            else if (a === "later") root.enqueueRequested("later")
-            else if (a === "queue") root.enqueueRequested("queue")
-            else if (a === "go-artist") QbzArtist.openArtist(root.item.artistId)
-            else if (a === "go-album") QbzAlbum.openAlbum(root.item.albumId)
-            else if (a === "favorite") {
-                root.item.isFavorite = !root.item.isFavorite
-                QbzLibrary.libraryToggleFavorite("track", root.item.id)
-            } else if (a === "remove") root.removeRequested()
-        }
+        if (root.menuShowFavorite)
+            m.push({ "label": root.item.isFavorite ? t("Remove from Library", r) : t("Add to Library", r),
+                     "icon": root.item.isFavorite ? "heart-filled" : "heart", "action": "favorite" })
+        if (root.hasMixtapeSeam)
+            m.push({ "label": t("Add to mixtape", r), "icon": "cassette-tape", "action": "mixtape" })
+        if (root.hasPlaylistAddSeam)
+            m.push({ "label": t("Add to playlist", r), "icon": "list-music", "action": "add-to-playlist" })
+        if (root.menuShowRemove)
+            m.push({ "label": t("Remove from playlist", r), "icon": "trash-2",
+                     "action": "remove", "danger": true })
+        if (root.menuShowShare)
+            m.push({ "label": t("Share Qobuz link", r), "icon": "link", "action": "share-qobuz" })
+        if (root.hasSonglinkSeam)
+            m.push({ "label": t("Share Song.link", r), "icon": "link", "action": "share-songlink" })
+        if (root.hasOfflineCacheSeam)
+            m.push({ "label": t("Make available offline", r), "icon": "cloud-download", "action": "cache" })
+        if (root.menuShowGoTo && root.item.albumId)
+            m.push({ "label": t("Go to album", r), "icon": "disc-3", "action": "go-album" })
+        if (root.menuShowGoTo && root.item.artistId)
+            m.push({ "label": t("Go to artist", r), "icon": "user", "action": "go-artist" })
+        if (root.menuShowTrackInfo)
+            m.push({ "label": t("Track info", r), "icon": "info", "action": "track-info" })
+        return m
+    }
+
+    function menuAction(a) {
+        if (a === "play") root.playRequested()
+        else if (a === "next") root.enqueueRequested("next")
+        else if (a === "later") root.enqueueRequested("later")
+        else if (a === "queue") root.enqueueRequested("queue")
+        else if (a === "go-artist") QbzArtist.openArtist(root.item.artistId)
+        else if (a === "go-album") QbzAlbum.openAlbum(root.item.albumId)
+        else if (a === "favorite") {
+            root.item.isFavorite = !root.item.isFavorite
+            QbzLibrary.libraryToggleFavorite("track", root.item.id)
+        } else if (a === "remove") root.removeRequested()
+        else if (a === "share-qobuz") root.copyToClipboard(
+            "https://open.qobuz.com/track/" + (root.item.id || ""))
+        else if (a === "track-info") root.openTrackInfo()
+    }
+
+    // --- Share (share.rs::qobuz_track_url + copy_to_clipboard) -----------
+    // The .slint arm copies the link and raises a toast; the Qt port has no
+    // toast seam yet (GLUE NEEDED), so the copy is silent — but it IS a real
+    // clipboard write. QtQuick exposes no Clipboard type; TextEdit.copy() is
+    // the supported route, kept in an INACTIVE Loader so a 16K-row list does
+    // not carry one TextEdit per row.
+    Loader {
+        id: clipLoader
+        active: false
+        sourceComponent: TextEdit { visible: false }
+    }
+    function copyToClipboard(text) {
+        if (!text || text === "")
+            return
+        clipLoader.active = true
+        clipLoader.item.text = text
+        clipLoader.item.selectAll()
+        clipLoader.item.copy()
+        clipLoader.active = false
+    }
+
+    // --- Track info (QbzAlbum.openTrackInfo + shell/TrackInfoModal) ------
+    // Same lazy-Loader reason: the modal is a full Popup tree and a list row
+    // must not instantiate one per delegate. Activated on demand, torn down
+    // on close (Qt.callLater so the Popup is not destroyed mid-signal).
+    Loader {
+        id: trackInfoLoader
+        active: false
+        sourceComponent: TrackInfoModal { }
+    }
+    Connections {
+        target: trackInfoLoader.item
+        ignoreUnknownSignals: true
+        function onClosed() { Qt.callLater(function () { trackInfoLoader.active = false }) }
+    }
+    function openTrackInfo() {
+        if (!root.item.id)
+            return
+        trackInfoLoader.active = true
+        trackInfoLoader.item.openFor(root.item.id)
     }
 
     // Shared drag (the row BODY is the source — TrackRow.slint): press-drag
@@ -344,10 +474,21 @@ Rectangle {
         anchors.fill: parent
         hoverEnabled: true
         propagateComposedEvents: true
+        // Right press opens the SAME menu as ⋯ (rowMenu), at the pointer.
+        acceptedButtons: Qt.LeftButton | Qt.RightButton
         cursorShape: root.clickPlays ? Qt.PointingHandCursor : Qt.ArrowCursor
-        onPressed: function (mouse) { root.downPos = Qt.point(mouse.x, mouse.y) }
+        onPressed: function (mouse) {
+            if (mouse.button === Qt.RightButton) {
+                if (root.showMenu)
+                    rowMenu.openAtCursor(trArea, mouse.x, mouse.y)
+                mouse.accepted = true
+                return
+            }
+            root.downPos = Qt.point(mouse.x, mouse.y)
+        }
         onPositionChanged: function (mouse) {
-            if (!pressed || !root.draggable) return
+            // Only a LEFT press drags — a right press is the context gesture.
+            if (!pressed || !(pressedButtons & Qt.LeftButton) || !root.draggable) return
             const g = mapToItem(null, mouse.x, mouse.y)
             if (!root.dragging
                 && (Math.abs(mouse.x - root.downPos.x) > 6
@@ -360,6 +501,8 @@ Rectangle {
             if (root.dragging) QbzShell.dragMove(g.x, g.y)
         }
         onReleased: function (mouse) {
+            if (mouse.button === Qt.RightButton)
+                return
             if (root.dragging) {
                 QbzShell.dragEnd()
                 root.dragging = false
@@ -370,6 +513,9 @@ Rectangle {
                 mouse.accepted = false
             }
         }
-        onDoubleClicked: root.playRequested()
+        onDoubleClicked: function (mouse) {
+            if (mouse.button === Qt.LeftButton)
+                root.playRequested()
+        }
     }
 }

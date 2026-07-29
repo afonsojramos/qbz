@@ -16,6 +16,7 @@
 
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Window
 import com.blitzfc.qbz
 import "../controls"
 import "../theme"
@@ -57,7 +58,43 @@ Rectangle {
         var i
         for (i = 0; i < upcoming.length; i++) if (upcoming[i].artUrl) urls.push(upcoming[i].artUrl)
         for (i = 0; i < historyRows.length; i++) if (historyRows[i].artUrl) urls.push(historyRows[i].artUrl)
-        if (urls.length > 0) QbzShell.sidebarArtworkWindow(JSON.stringify(urls))
+        if (urls.length > 0) {
+            QbzShell.sidebarArtworkWindow(JSON.stringify(urls))
+            root.artPulse = true
+            artPulseOff.restart()
+        }
+    }
+
+    // --- skeleton pulse (PER-ITEM COVERS ONLY) ---------------------------
+    // The queue is LOCAL state — it never "loads", so this panel has no
+    // list-level skeleton ON PURPOSE: there is no asynchronous fetch to
+    // stand in for. What IS asynchronous is each row's cover, which is why
+    // the placeholders here are per-item and nothing else.
+    // GATING RULE: freeze on NOT VISIBLE — the panel collapsed, or the
+    // window minimized/hidden. NEVER on lost focus (a tiling desktop keeps
+    // windows visible and unfocused).
+    property bool skelPhase: false
+    readonly property bool windowShowing: root.Window.window
+        ? (root.Window.window.visibility !== Window.Minimized
+           && root.Window.window.visibility !== Window.Hidden)
+        : true
+    // A cover that never resolves (no art, or a failed fetch) leaves the map
+    // untouched, so every placeholder is bounded — see QbzSkeleton settleMs.
+    readonly property int artSettleMs: 2500
+    property bool artPulse: false
+    Timer {
+        id: artPulseOff
+        interval: root.artSettleMs
+        onTriggered: root.artPulse = false
+    }
+    Timer {
+        interval: 900
+        repeat: true
+        running: root.artPulse && root.visible && root.windowShowing
+        onTriggered: root.skelPhase = !root.skelPhase
+    }
+    function coverPending(url) {
+        return (url || "") !== "" && (root.coverMap[url] || "") === ""
     }
 
     component QueueTab: Text {
@@ -131,6 +168,16 @@ Rectangle {
                     anchors.fill: parent
                     source: root.coverMap[row.artUrl] || ""
                     radius: 4
+                }
+                // Per-item: this thumbnail clears when ITS cover lands, so
+                // History fills in progressively rather than all at once.
+                QbzSkeleton {
+                    variant: "art"
+                    anchors.fill: parent
+                    blockRadius: 4
+                    visible: root.coverPending(row.artUrl)
+                    phase: root.skelPhase
+                    settleMs: root.artSettleMs
                 }
             }
 
@@ -388,6 +435,15 @@ Rectangle {
                                         anchors.fill: parent
                                         source: root.currentRow ? (root.coverMap[root.currentRow.artUrl] || "") : ""
                                         radius: 4
+                                    }
+                                    QbzSkeleton {
+                                        variant: "art"
+                                        anchors.fill: parent
+                                        blockRadius: 4
+                                        visible: root.currentRow
+                                            ? root.coverPending(root.currentRow.artUrl) : false
+                                        phase: root.skelPhase
+                                        settleMs: root.artSettleMs
                                     }
                                 }
                                 Column {

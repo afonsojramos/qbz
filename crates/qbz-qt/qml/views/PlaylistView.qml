@@ -24,12 +24,17 @@
 // add-to-playlist drop (main.rs drag_end). The 2px accent line marks the
 // insertion slot while dragging.
 //
+// LOADING: header + track-row QbzSkeleton placeholders in the shape of what
+// is coming (the Slint mounts a bare LoadingSpinner), plus a per-item cover
+// placeholder that clears when the playlist's own cover lands.
+//
 // POC-NOTEs (playlist_qt.rs has the full list): local playlists,
 // custom-cover set/clear, multi-select + bulk bar, Suggested Songs,
 // offline download, share — not ported.
 
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Window
 import com.blitzfc.qbz
 import "../controls"
 import "../rows"
@@ -67,6 +72,32 @@ Rectangle {
                 || (t.artist || "").toLowerCase().indexOf(needle) >= 0
                 || (t.album || "").toLowerCase().indexOf(needle) >= 0
         })
+    }
+
+    // --- skeleton pulse (QbzSkeleton's preferred drive mode) -------------
+    // ONE 900ms Timer drives EVERY placeholder in this view. GATING RULE:
+    // freeze on NOT VISIBLE — the view hidden, or the window minimized /
+    // hidden. NEVER on lost focus (a tiling desktop keeps windows visible
+    // and unfocused). Same rule as HomeView / LibraryView / AmbientField.
+    property bool skelPhase: false
+    readonly property bool windowShowing: root.Window.window
+        ? (root.Window.window.visibility !== Window.Minimized
+           && root.Window.window.visibility !== Window.Hidden)
+        : true
+    // The cover is its OWN progressive item: it clears the moment the
+    // playlist's own cover lands, independently of the track rows.
+    readonly property bool coverPending: (doc.coverUrl || "") !== ""
+        && (doc.coverPath || "") === ""
+    // The header has no data at all until the first document lands
+    // (playlist_qt.rs publishes `{ loading: true }` with empty fields).
+    readonly property bool headerPending: root.loading && (doc.name || "") === ""
+    readonly property bool listPending: root.loading && root.allTracks.length === 0
+    Timer {
+        interval: 900
+        repeat: true
+        running: (root.headerPending || root.listPending || root.coverPending)
+            && root.visible && root.windowShowing
+        onTriggered: root.skelPhase = !root.skelPhase
     }
 
     function sortLabel() {
@@ -150,8 +181,24 @@ Rectangle {
 
         Item { width: 1; height: 22 }
 
+        // Header placeholder — the SHAPE of the header that is coming
+        // (150px cover + eyebrow/title/description/meta bars + the 7 round
+        // action buttons), not a spinner. Replaced wholesale by the real
+        // header the moment the document lands.
+        QbzSkeleton {
+            visible: root.headerPending
+            variant: "header"
+            width: parent.width
+            height: 150
+            coverSize: 150
+            coverGap: 24
+            actionCount: 7
+            phase: root.skelPhase
+        }
+
         // --- Header ---------------------------------------------------------
         Row {
+            visible: !root.headerPending
             width: parent.width
             spacing: 24
 
@@ -169,12 +216,30 @@ Rectangle {
                     radius: theme.radiusMd
                 }
                 QbzIcon {
+                    // Hidden only while the placeholder is actually up; the
+                    // moment it settles (or the cover lands) the designed
+                    // empty-state glyph is what the user sees.
                     visible: (doc.coverPath || "") === ""
+                        && (!root.coverPending || plCoverSkel.settled)
                     name: "list-music"
                     width: 56
                     height: 56
                     anchors.centerIn: parent
                     tintName: "muted"
+                }
+                // Per-item: the cover shimmers until THIS playlist's cover
+                // lands, then clears on its own. settleMs bounds it — a
+                // failed download republishes the document with an empty
+                // coverPath and would otherwise shimmer forever; on settle
+                // the placeholder fades and the glyph above takes over.
+                QbzSkeleton {
+                    id: plCoverSkel
+                    visible: root.coverPending
+                    variant: "art"
+                    anchors.fill: parent
+                    blockRadius: theme.radiusMd
+                    phase: root.skelPhase
+                    settleMs: 4000
                 }
             }
 
@@ -408,12 +473,9 @@ Rectangle {
 
         Item { width: 1; height: 18 }
 
-        // Loading / empty.
-        QbzSpinner {
-            visible: root.loading
-            anchors.horizontalCenter: parent.horizontalCenter
-            size: 36
-        }
+        // Empty. (The loading state is the row placeholders inside the
+        // track-list area below — the Slint's bare LoadingSpinner said
+        // "busy" but not "this is the shape of what is coming".)
         Text {
             visible: !root.loading && root.allTracks.length === 0
             text: QbzSession.tr("This playlist is empty.", QbzSession.trRev)
@@ -445,6 +507,21 @@ Rectangle {
         Item {
             width: parent.width
             height: parent.height - 28 - 150 - 18 - 50
+
+            // Track-list placeholder: the exact TrackRow footprint (50px
+            // rows, no gap, 36px art cell), one instance for the whole
+            // viewport — ONE animator, not one per row (see QbzSkeleton's
+            // COST note). It unmounts the moment the first rows land.
+            QbzSkeleton {
+                visible: root.listPending
+                variant: "rowList"
+                anchors.fill: parent
+                anchors.rightMargin: 14
+                rowH: 50
+                rowGap: 0
+                rowArtSize: 36
+                phase: root.skelPhase
+            }
 
             ListView {
                 id: trackList

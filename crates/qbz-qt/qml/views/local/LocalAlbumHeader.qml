@@ -20,6 +20,10 @@ Row {
     property string infoLine: ""
     property var versions: []
     property string coverSource: ""
+    /// Per-item cover state, owned by the page (LocalAlbumView).
+    property bool coverPending: false
+    property bool skelPhase: false
+    property int artSettleMs: 0
     signal openArtist(string name)
 
     QbzTheme { id: theme }
@@ -39,6 +43,16 @@ Row {
             anchors.fill: parent
             source: root.coverSource
             radius: 12
+        }
+        // Per-item: clears when THIS album's cover lands; settles out when
+        // the album has none (local artwork drops keys with no cover).
+        QbzSkeleton {
+            variant: "art"
+            anchors.fill: parent
+            blockRadius: 12
+            visible: root.coverPending
+            phase: root.skelPhase
+            settleMs: root.artSettleMs
         }
     }
 

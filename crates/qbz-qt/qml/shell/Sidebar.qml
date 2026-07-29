@@ -10,12 +10,15 @@
 // (ADR-010 mount-site gating).
 //
 // POC-NOTE: in the Slint app these rows open dropdown flyout menus; the
-// flyouts are out of scope — rows here navigate (only "home" exists, so
-// only Discover is live) and carry the SidebarDirectRow active treatment
-// (surface-hover bg + primary text/icon) for the current section.
-// POC-NOTE: the playlist/folder tree below the nav is out of scope; the
-// "PLAYLISTS" header + toolbar render for parity and the Slint empty state
-// shows ("No playlists yet.").
+// flyouts are out of scope — rows here navigate straight to their view and
+// carry the SidebarDirectRow active treatment (surface-hover bg + primary
+// text/icon) for the current section. Discover / Library / Local Library
+// have views; My QBZ does NOT and is therefore rendered disabled (a row
+// that clicks into nothing is a defect, not a stub).
+// The playlist/folder tree below the nav IS live (sidebar_qt.rs: load,
+// sort, search, expand/collapse, drag-drop target); folder CREATION,
+// the Playlist Manager and the importer have no seam and are disabled in
+// the "..." menu.
 
 import QtQuick
 import QtQuick.Controls
@@ -94,12 +97,16 @@ Rectangle {
         property string name: ""
         property string label: ""
         property bool active: root.activeNav === navId
+        // No view behind this section in this port — render it as
+        // unavailable rather than as a live row that clicks into nothing.
+        property bool disabled: false
         signal clicked()
 
         width: parent ? parent.width : 0
         height: 34
         radius: 6
-        color: (navArea.containsMouse || active) ? theme.surfaceHover : "transparent"
+        opacity: disabled ? 0.45 : 1.0
+        color: (!disabled && (navArea.containsMouse || active)) ? theme.surfaceHover : "transparent"
 
         Row {
             anchors.fill: parent
@@ -135,7 +142,8 @@ Rectangle {
         MouseArea {
             id: navArea
             anchors.fill: parent
-            hoverEnabled: true
+            enabled: !navRow.disabled
+            hoverEnabled: !navRow.disabled
             cursorShape: Qt.PointingHandCursor
             onClicked: navRow.clicked()
         }
@@ -185,12 +193,16 @@ Rectangle {
                     QbzShell.navigateTo("local")
                 }
             }
+            // GAP: there is no MyQBZ view in this port (AppShell's loader
+            // maps home/library/local/localalbum/album/artist/settings/
+            // search/playlist — no "myqbz"). It used to take the active
+            // treatment on click and go nowhere; it now renders disabled.
             NavRow {
                 navId: "myqbz"
                 name: "qbz-symbolic"
                 // Slint: MyQbzBrandingState.label, default "My QBZ".
                 label: QbzSession.tr("My QBZ", QbzSession.trRev)
-                onClicked: root.activeNav = "myqbz"
+                disabled: true
             }
         }
 
@@ -399,9 +411,17 @@ Rectangle {
                             }
                         }
                         Rectangle { width: parent.width; height: 1; color: theme.borderSubtle }
-                        // New folder / Manage / Import — visual stubs
-                        // (POC-NOTE: folder management + importer are out
-                        // of scope).
+                        // New folder / Manage playlists / Import — DISABLED.
+                        // GAP, not a half-path: this port has no folder
+                        // creation seam (`sidebar_qt.rs` exposes only
+                        // load/sort/search/toggle-folder — no create/delete),
+                        // no Playlist Manager view, and no importer. They used
+                        // to render as live-looking rows (hover highlight +
+                        // pointing-hand cursor) whose click did nothing at
+                        // all; a control that renders and no-ops is a defect,
+                        // so they now read as unavailable: dimmed, no hover
+                        // treatment, no pointer cursor, no MouseArea. Restore
+                        // the interactive form together with the seam.
                         Repeater {
                             model: [
                                 { "icon": "folder-plus", "label": QbzSession.tr("New folder", QbzSession.trRev) },
@@ -413,25 +433,20 @@ Rectangle {
                                 width: parent ? parent.width : 0
                                 height: 30
                                 radius: 5
-                                color: stubArea.containsMouse ? theme.surfaceHover : "transparent"
+                                color: "transparent"
+                                opacity: 0.4
                                 Row {
                                     anchors.fill: parent
                                     anchors.leftMargin: 8
                                     spacing: 8
-                                    QbzIcon { name: modelData.icon; width: 14; height: 14; anchors.verticalCenter: parent.verticalCenter; tintName: "secondary" }
+                                    QbzIcon { name: modelData.icon; width: 14; height: 14; anchors.verticalCenter: parent.verticalCenter; tintName: "muted" }
                                     Text {
                                         height: parent.height
                                         text: modelData.label
-                                        color: theme.textSecondary
+                                        color: theme.textMuted
                                         font.pixelSize: 13
                                         verticalAlignment: Text.AlignVCenter
                                     }
-                                }
-                                MouseArea {
-                                    id: stubArea
-                                    anchors.fill: parent
-                                    hoverEnabled: true
-                                    cursorShape: Qt.PointingHandCursor
                                 }
                             }
                         }
@@ -578,10 +593,27 @@ Rectangle {
                                         tintName: (rowArea.containsMouse || isActive) ? "primary" : "muted"
                                     }
                                 }
-                                // Name (hidden in mini).
+                                // Name (hidden in mini). A Row is a positioner
+                                // with no stretch, so this width must reserve
+                                // EVERY later cell + its spacing or the excess
+                                // is pushed past the row's right edge and the
+                                // `clip: true` on the Flickable eats it.
+                                // (Sidebar.slint gets this free: its
+                                // HorizontalLayout stretches the name cell.)
+                                // Reserve: 8 + 24 icon slot always; for a
+                                // FOLDER also 8 + 14 chevron, plus 8 + the
+                                // count label while it is laid out. The old
+                                // flat -22 ignored the count, pushing the
+                                // chevron ~15px past the clip — which is why
+                                // the caret vanished on exactly the folders
+                                // that HAVE children (owner report).
                                 Text {
                                     visible: !root.mini
-                                    width: parent.width - 24 - (isFolder ? 22 : 0)
+                                    width: Math.max(0, parent.width - 32
+                                        - (isFolder
+                                            ? 22 + (countLabel.visible
+                                                ? countLabel.implicitWidth + 8 : 0)
+                                            : 0))
                                     height: parent.height
                                     text: modelData.name
                                     color: (rowArea.containsMouse || isActive) ? theme.textPrimary : theme.textSecondary
@@ -590,8 +622,12 @@ Rectangle {
                                     verticalAlignment: Text.AlignVCenter
                                     elide: Text.ElideRight
                                 }
-                                // Folder count (hover) + chevron.
+                                // Folder count (hover) + chevron. The count is
+                                // hover-FADED, not hidden — opacity does not
+                                // free layout space, so it must stay in the
+                                // name's reserve above at all times.
                                 Text {
+                                    id: countLabel
                                     visible: !root.mini && isFolder && modelData.count > 0
                                     height: parent.height
                                     text: modelData.count

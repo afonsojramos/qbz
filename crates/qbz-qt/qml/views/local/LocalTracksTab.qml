@@ -56,10 +56,20 @@ Item {
         function onTracksGroupChanged() { root.rebuild() }
     }
 
-    QbzSpinner {
-        anchors.centerIn: parent
-        size: 36
+    // First page = the shape of the 50px track rows (the Slint mounts a bare
+    // 36px LoadingSpinner). ONE instance for the whole viewport.
+    QbzSkeleton {
+        variant: "rowList"
+        anchors.fill: parent
+        anchors.leftMargin: 32
+        anchors.rightMargin: 32
+        anchors.topMargin: 12
         visible: QbzLocal.localTracksLoading
+        rowH: root.rowH
+        rowGap: 0
+        rowArt: root.view.trackArtwork
+        rowArtSize: 36
+        phase: root.view.skelPhase
     }
     LocalNote {
         visible: !QbzLocal.localTracksLoading && root.view.tracks.length === 0
@@ -148,7 +158,15 @@ Item {
                         id: rowComp
                         LocalTrackRow {
                             width: list.width
+                            view: root.view
                             item: modelData.row
+                            // The row artwork column was rendering a
+                            // permanently blank 36px cell: local track rows
+                            // ship an EMPTY artPath (local_rows.rs:284) and
+                            // nothing ever fed LocalTrackRow.artSource. It is
+                            // the same id-keyed artMap every other local
+                            // surface reads.
+                            artSource: root.view.artMap[modelData.row.artKey] || ""
                             number: modelData.n
                             // Album column hides when the list is already
                             // grouped by album (Slint :1486).
@@ -165,13 +183,21 @@ Item {
                     }
                 }
 
+                // Infinite scroll: the NEXT page in the shape it will arrive
+                // in (3 rows), appended below the last real row. Each
+                // placeholder is replaced by a real row as the page lands.
                 footer: Item {
                     width: list.width
-                    height: QbzLocal.localTracksLoadingMore ? 48 : 0
-                    QbzSpinner {
-                        anchors.centerIn: parent
-                        size: 22
+                    height: QbzLocal.localTracksLoadingMore ? 3 * root.rowH : 0
+                    QbzSkeleton {
+                        variant: "rowList"
+                        anchors.fill: parent
                         visible: QbzLocal.localTracksLoadingMore
+                        rowH: root.rowH
+                        rowGap: 0
+                        rowArt: root.view.trackArtwork
+                        rowArtSize: 36
+                        phase: root.view.skelPhase
                     }
                 }
             }

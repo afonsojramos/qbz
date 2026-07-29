@@ -15,12 +15,18 @@
 // artSource / artworkUrl / isPinned props (the AlbumCard pattern).
 //
 // Arms:
-//  - followMode: "none" (default) | "toggle" — mounts the overlay follow
-//    button + the menu Follow row. POC-NOTE: there is NO artist-follow
-//    API in the Qt bridge, so every surface mounts "none" today; the
-//    "toggle" arm renders but its action is inert.
+//  - followMode: "none" (default) | "toggle" — asks for the overlay follow
+//    button + the menu Follow row. There is NO artist-follow invokable on
+//    the Qt bridge, so `hasFollowSeam` below force-collapses the arm: the
+//    button and the row cannot render inert even if a host sets "toggle".
 //  - subtitle: meta switches to 1-line name + muted subtitle (the Slint
 //    "Similar to…"/search arm); empty = wrap-2 name.
+//
+// --- Menu inventory vs discover/ArtistGridCard.slint -------------------
+//   Open artist · Play · Follow/Following (show-follow) · Not interested
+// The first two are live. The last two are gated off (`hasFollowSeam`,
+// `hasNotInterestedSeam`) — both used to render and do nothing at all.
+// ⋯ and a right press on the portrait or the name open the same menu.
 
 import QtQuick
 import com.blitzfc.qbz
@@ -40,11 +46,22 @@ Rectangle {
     property bool isPinned: false
     property string followMode: "none"
 
+    // --- Seams the Qt bridge does NOT have (menu-parity round) -----------
+    //   hasFollowSeam        -> artist/label follow (no invokable; the
+    //                           .slint routes to media-action(kind, id,
+    //                           "follow"))
+    //   hasNotInterestedSeam -> the reco-scoped dismissal store is not
+    //                           opened by the Qt port
+    // Both entries stay out of the menu (and the follow BUTTON stays out of
+    // the overlay) until their invokable lands.
+    readonly property bool hasFollowSeam: false
+    readonly property bool hasNotInterestedSeam: false
+
     color: "transparent"
 
     QbzTheme { id: theme }
 
-    readonly property bool showFollow: followMode !== "none"
+    readonly property bool showFollow: followMode !== "none" && hasFollowSeam
     readonly property bool overlayOn: agArea.containsMouse || pinArea.containsMouse
         || agFollow.hovered || agPlay.hovered || agMore.hovered
 
@@ -102,7 +119,13 @@ Rectangle {
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: QbzArtist.openArtist(root.item.id)
+                    acceptedButtons: Qt.LeftButton | Qt.RightButton
+                    onClicked: function (mouse) {
+                        if (mouse.button === Qt.RightButton)
+                            agMenu.openAtCursor(agArea, mouse.x, mouse.y)
+                        else
+                            QbzArtist.openArtist(root.item.id)
+                    }
                 }
                 // Hover overlay — follow? / play / more (y=113).
                 CardOverlayRow {
@@ -111,12 +134,13 @@ Rectangle {
                     shown: root.overlayOn
                     CardOverlayButton {
                         id: agFollow
+                        // showFollow already folds in hasFollowSeam, so this
+                        // button never renders while the seam is missing.
                         visible: root.showFollow
                         name: root.item.following ? "check" : "user-plus"
                         active: root.item.following === true
                         anchors.verticalCenter: parent.verticalCenter
-                        // POC-NOTE: no artist-follow API in the Qt bridge.
-                        onClicked: { }
+                        onClicked: root.menuAction("follow")
                     }
                     CardOverlayButton {
                         id: agPlay
@@ -135,25 +159,8 @@ Rectangle {
                 CardMenu {
                     id: agMenu
                     menuWidth: 196
-                    entries: {
-                        var m = [
-                            { "label": QbzSession.tr("Open artist", QbzSession.trRev), "icon": "user", "action": "open" },
-                            { "label": QbzSession.tr("Play", QbzSession.trRev), "icon": "play-fill", "action": "play" },
-                        ]
-                        if (root.showFollow) m.push({
-                            "label": root.item.following ? QbzSession.tr("Following", QbzSession.trRev) : QbzSession.tr("Follow", QbzSession.trRev),
-                            "icon": root.item.following ? "check" : "user-plus",
-                            "action": "follow" })
-                        m.push({ "label": QbzSession.tr("Not interested", QbzSession.trRev), "icon": "thumbs-down", "action": "not-interested" })
-                        return m
-                    }
-                    onPicked: function (a) {
-                        if (a === "open") QbzArtist.openArtist(root.item.id)
-                        else if (a === "play") QbzPlayer.playArtistCard(root.item.id)
-                        // "follow": no artist-follow API (POC-NOTE — inert).
-                        // "not-interested": the reco dismissal store is not
-                        // open in the POC (POC-NOTE — inert).
-                    }
+                    entries: root.menuModel()
+                    onPicked: function (a) { root.menuAction(a) }
                 }
             }
             // Pin badge — top-right of the FRAME (outside the circle clip),
@@ -210,7 +217,13 @@ Rectangle {
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: QbzArtist.openArtist(root.item.id)
+                    acceptedButtons: Qt.LeftButton | Qt.RightButton
+                    onClicked: function (mouse) {
+                        if (mouse.button === Qt.RightButton)
+                            agMenu.openAtCursor(agNameArea, mouse.x, mouse.y)
+                        else
+                            QbzArtist.openArtist(root.item.id)
+                    }
                 }
             }
             Text {
@@ -225,5 +238,30 @@ Rectangle {
                 elide: Text.ElideRight
             }
         }
+    }
+
+    // ArtistGridCard.slint's artist-menu, in its order.
+    function menuModel() {
+        var t = QbzSession.tr
+        var r = QbzSession.trRev
+        var m = [
+            { "label": t("Open artist", r), "icon": "user", "action": "open" },
+            { "label": t("Play", r), "icon": "play-fill", "action": "play" },
+        ]
+        if (root.showFollow)
+            m.push({ "label": root.item.following ? t("Following", r) : t("Follow", r),
+                     "icon": root.item.following ? "check" : "user-plus", "action": "follow" })
+        // Reco-scoped dismissal (NOT the blacklist) — the artist leaves the
+        // Recommendations rails only.
+        if (root.hasNotInterestedSeam)
+            m.push({ "label": t("Not interested", r), "icon": "thumbs-down", "action": "not-interested" })
+        return m
+    }
+
+    function menuAction(a) {
+        if (a === "open") QbzArtist.openArtist(root.item.id)
+        else if (a === "play") QbzPlayer.playArtistCard(root.item.id)
+        // "follow" / "not-interested" are unreachable while their
+        // has*Seam constant is false — the entries are not built.
     }
 }

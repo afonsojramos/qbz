@@ -1,7 +1,23 @@
 //! Album detail data layer — Slint-free port of `crates/qbz/src/album.rs`
-//! (map_album: credits/meta/description/tracks) plus the two bottom
+//! (map_album: credits/meta/description/tracks) plus the three bottom
 //! carousels ("From the same artist" via get_releases_grid, "Listening
-//! suggestions" via get_album_suggest). Publishes ONE JSON document.
+//! suggestions" via get_album_suggest, "Similar albums" via Last.fm).
+//! Publishes ONE JSON document.
+//!
+//! The page publishes PROGRESSIVELY, exactly like `navigate_album` in the
+//! Slint app (`crates/qbz/src/main.rs`): `load_album_view` returns the PRIMARY
+//! document — header + tracks — as soon as `/album/get` lands, and a detached
+//! task then re-publishes the SAME document with each carousel folded in as it
+//! resolves. Before this the whole page waited on the Last.fm row (an external
+//! service plus MusicBrainz) before a single track was rendered.
+//!
+//! Every deferred row carries its OWN loading flag, seeded before the first
+//! serialization so the view can mount a placeholder with the first frame:
+//! `moreLoading`, `suggestionsLoading`, `similarLoading`. A row that CANNOT
+//! resolve (no artist id, Last.fm not connected) is seeded `false` — its
+//! placeholder never appears and the section stays absent, which is also what
+//! an empty result produces. Late replies are generation-guarded, so a slow
+//! Last.fm answer for album A can never paint onto album B.
 //!
 //! POC-NOTEs:
 //! - Booklet download/rasterize, multi-select + bulk bar, DiscHeaderMenu,
@@ -12,13 +28,16 @@
 //!   `qbz-external-reco` engine, which is not a dependency of this crate —
 //!   see the GLUE note in the handoff report. NOT faked here.
 
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use cxx_qt_lib::QString;
 use qbz_app::shell::AppRuntime;
 use qbz_core::LoggingAdapter;
 use qbz_models::{Album, Track};
 use serde::Serialize;
+use serde_json::json;
 
 use crate::home_qt;
 
@@ -130,6 +149,16 @@ pub struct AlbumViewData {
     /// Last.fm. See external_reco_qt.rs.
     #[serde(rename = "similarAlbums")]
     pub similar_albums: Vec<AlbumCardData>,
+    // ---- Deferred-row gates (see the module header) ----------------------
+    // True ONLY while a row that can still produce something is in flight.
+    // The view mounts its skeleton on the flag and the row itself on a
+    // non-empty list, so `false` + empty = the section is simply not there.
+    #[serde(rename = "moreLoading")]
+    pub more_loading: bool,
+    #[serde(rename = "suggestionsLoading")]
+    pub suggestions_loading: bool,
+    #[serde(rename = "similarLoading")]
+    pub similar_loading: bool,
 }
 
 fn mmss(secs: u32) -> String {
@@ -572,7 +601,18 @@ pub async fn load_suggestions(
         .collect()
 }
 
-/// Fetch + publish everything (perf-marked like phase 5).
+/// Is Last.fm connected? Read from the local scrobbler config — no network,
+/// no side effect. Decided BEFORE the first serialization so a disconnected
+/// user never sees a placeholder for a row that will never be requested
+/// (integrations are strictly opt-in).
+fn lastfm_connected() -> bool {
+    let cfg = crate::integrations_qt::scrobble_settings();
+    cfg.lastfm_is_authed() && !cfg.lastfm_username.is_empty()
+}
+
+/// Fetch + publish the PRIMARY album document (header + tracks) and hand it
+/// back for the bridge, then resolve the three carousels in the background.
+/// Perf-marked like phase 5; the mark now measures the time to a USABLE page.
 pub async fn load_album_view(
     runtime: &Arc<AppRuntime<LoggingAdapter>>,
     album_id: &str,
@@ -580,45 +620,171 @@ pub async fn load_album_view(
     let t = Instant::now();
     let mut data = load_album(runtime, album_id).await?;
     let artist_id = data.header.artist_id.clone();
-    let (more, suggestions) = tokio::join!(
-        load_more_from_artist(runtime, &artist_id, album_id),
-        load_suggestions(runtime, album_id),
-    );
-    data.more_from_artist = more;
-    data.suggestions = suggestions;
-    // Last.fm row: seeded on the album's artist, excluding what the two Qobuz
-    // rows already show. A no-op with Last.fm disconnected — no network call.
-    let exclude_pairs: Vec<(String, String)> = data
-        .more_from_artist
-        .iter()
-        .chain(data.suggestions.iter())
-        .map(|c| (c.artist.to_lowercase(), c.title.to_lowercase()))
-        .collect();
-    let exclude_ids: std::collections::HashSet<String> = data
-        .more_from_artist
-        .iter()
-        .chain(data.suggestions.iter())
-        .map(|c| c.id.clone())
-        .chain(std::iter::once(album_id.to_string()))
-        .collect();
-    data.similar_albums = crate::external_reco_qt::similar_albums(
-        runtime,
-        album_id,
-        &data.header.artist,
-        &exclude_pairs,
-        &exclude_ids,
-    )
-    .await
-    .into_iter()
-    .map(reco_to_card)
-    .collect();
+    let artist_name = data.header.artist.clone();
+
+    // Seed the deferred-row gates BEFORE serializing so the view paints their
+    // placeholders with the first frame. A row with nothing to ask for is
+    // false from the start: no skeleton, no empty frame, no request.
+    let lastfm_on = lastfm_connected();
+    data.more_loading = !artist_id.is_empty();
+    data.suggestions_loading = true;
+    data.similar_loading = lastfm_on;
+
     let json = serde_json::to_string(&data).map_err(|e| e.to_string())?;
     log::info!(
-        "[qbz-qt][perf] album load: {:?} ({} tracks, {} more, {} suggestions)",
+        "[qbz-qt][perf] album primary doc: {:?} ({} tracks; rows deferred)",
         t.elapsed(),
         data.tracks.len(),
-        data.more_from_artist.len(),
-        data.suggestions.len(),
     );
+
+    // Stash the document for the deferred passes, under a fresh generation.
+    let generation = ALBUM_GEN.fetch_add(1, Ordering::SeqCst) + 1;
+    match serde_json::from_str::<serde_json::Value>(&json) {
+        Ok(doc) => {
+            if let Ok(mut guard) = ALBUM_DOC.lock() {
+                *guard = Some((generation, doc));
+            }
+        }
+        Err(e) => log::warn!("[qbz-qt] album doc stash failed: {e}"),
+    }
+
+    spawn_deferred_rows(
+        runtime.clone(),
+        generation,
+        album_id.to_string(),
+        artist_id,
+        artist_name,
+        lastfm_on,
+    );
+
     Ok(json)
+}
+
+// ==================== Deferred carousels (progressive publish) =============
+//
+// Same machinery as `artist_qt.rs`'s enrichment pass, aimed at the album
+// bridge: a monotonic generation plus the last published document, so a
+// partial update is merged into it and the WHOLE document re-published (the
+// bridge carries exactly one JSON property, phase-23 pattern).
+//
+// ORDERING: `load_album_view` returns the primary json and main.rs queues it
+// onto the Qt thread with no await in between, while every pass below is
+// gated on a network round-trip first — so the primary publish always
+// precedes the first patch. (Identical assumption to artist_qt.rs.)
+
+/// Monotonic id for the album page currently on screen.
+static ALBUM_GEN: AtomicU64 = AtomicU64::new(0);
+/// The last published album document, kept so a partial update can be merged.
+static ALBUM_DOC: Mutex<Option<(u64, serde_json::Value)>> = Mutex::new(None);
+
+/// Merge `f`'s edits into the stashed document and re-publish it, but only
+/// while `generation` is still the page on screen.
+fn publish_patch(generation: u64, f: impl FnOnce(&mut serde_json::Value)) {
+    let json = {
+        let Ok(mut guard) = ALBUM_DOC.lock() else {
+            return;
+        };
+        let Some((current, doc)) = guard.as_mut() else {
+            return;
+        };
+        if *current != generation {
+            return;
+        }
+        f(doc);
+        match serde_json::to_string(&*doc) {
+            Ok(s) => s,
+            Err(e) => {
+                log::warn!("[qbz-qt] album doc republish failed: {e}");
+                return;
+            }
+        }
+    };
+    crate::album_bridge::ui(move |mut b| {
+        b.as_mut().set_album_json(QString::from(json.as_str()));
+    });
+}
+
+/// Write one carousel's cards + clear its loading flag, in one republish.
+fn publish_row(
+    generation: u64,
+    cards_key: &'static str,
+    loading_key: &'static str,
+    cards: &[AlbumCardData],
+) {
+    let value = serde_json::to_value(cards).unwrap_or_else(|_| json!([]));
+    publish_patch(generation, move |doc| {
+        doc[cards_key] = value;
+        doc[loading_key] = json!(false);
+    });
+}
+
+/// The three bottom rows, resolved after the page is already usable. The two
+/// Qobuz rows run CONCURRENTLY and each paints the moment it lands; the
+/// Last.fm row runs last because it dedups against both.
+fn spawn_deferred_rows(
+    runtime: Arc<AppRuntime<LoggingAdapter>>,
+    generation: u64,
+    album_id: String,
+    artist_id: String,
+    artist_name: String,
+    lastfm_on: bool,
+) {
+    crate::spawn(async move {
+        let t = Instant::now();
+        let (more, suggestions) = tokio::join!(
+            async {
+                // No artist id = nothing to ask for; the gate was already
+                // seeded false, so this is a pure no-op.
+                let more = if artist_id.is_empty() {
+                    Vec::new()
+                } else {
+                    load_more_from_artist(&runtime, &artist_id, &album_id).await
+                };
+                publish_row(generation, "moreFromArtist", "moreLoading", &more);
+                more
+            },
+            async {
+                let suggestions = load_suggestions(&runtime, &album_id).await;
+                publish_row(generation, "suggestions", "suggestionsLoading", &suggestions);
+                suggestions
+            },
+        );
+        log::info!(
+            "[qbz-qt][perf] album qobuz rows: {:?} ({} more, {} suggestions)",
+            t.elapsed(),
+            more.len(),
+            suggestions.len(),
+        );
+
+        // Last.fm row: seeded on the album's artist, excluding what the two
+        // Qobuz rows already show. STRICTLY opt-in — with Last.fm not
+        // connected the gate was seeded false and nothing below runs, so no
+        // request leaves the process and the row is simply absent.
+        if !lastfm_on {
+            return;
+        }
+        let exclude_pairs: Vec<(String, String)> = more
+            .iter()
+            .chain(suggestions.iter())
+            .map(|c| (c.artist.to_lowercase(), c.title.to_lowercase()))
+            .collect();
+        let exclude_ids: std::collections::HashSet<String> = more
+            .iter()
+            .chain(suggestions.iter())
+            .map(|c| c.id.clone())
+            .chain(std::iter::once(album_id.clone()))
+            .collect();
+        let similar: Vec<AlbumCardData> = crate::external_reco_qt::similar_albums(
+            &runtime,
+            &album_id,
+            &artist_name,
+            &exclude_pairs,
+            &exclude_ids,
+        )
+        .await
+        .into_iter()
+        .map(reco_to_card)
+        .collect();
+        publish_row(generation, "similarAlbums", "similarLoading", &similar);
+    });
 }

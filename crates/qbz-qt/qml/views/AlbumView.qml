@@ -50,6 +50,40 @@ Rectangle {
         })
     }
 
+    // ---- Loading staging (album_qt.rs publishes in passes) ---------------
+    // The PRIMARY document (header + tracks) lands as soon as /album/get
+    // answers; each bottom rail arrives later carrying its own flag, so the
+    // page is usable while Qobuz suggestions and the Last.fm row resolve.
+    //
+    // A rail is shown when it HAS cards, its placeholder when its flag is
+    // still up. Both false = the section is ABSENT: `moreLoading` is seeded
+    // false when the album has no artist id and `similarLoading` false when
+    // Last.fm is not connected, so nothing ever spins forever on a row that
+    // will never arrive.
+    readonly property bool primaryLoading: QbzAlbum.albumLoading && tracks.length === 0
+    readonly property bool moreLoading: album.moreLoading === true
+                                        && (album.moreFromArtist || []).length === 0
+    readonly property bool suggestionsLoading: album.suggestionsLoading === true
+                                               && (album.suggestions || []).length === 0
+    readonly property bool similarLoading: album.similarLoading === true
+                                           && (album.similarAlbums || []).length === 0
+
+    // ONE 900ms phase for every placeholder on the page (QbzSkeleton's COST
+    // note: N placeholders, 1 timer). Stops dead when nothing is pending.
+    Timer {
+        id: skeletonPhase
+        property bool on: false
+        interval: 900
+        repeat: true
+        running: root.visible && (root.primaryLoading || root.moreLoading
+                                  || root.suggestionsLoading || root.similarLoading)
+        onTriggered: on = !on
+    }
+
+    // Placeholder cards that fill one rail (SectionRail's 232px pitch).
+    readonly property int railSkeletonCount:
+        Math.max(1, Math.min(8, Math.ceil((root.width - 64) / 232)))
+
     // Disc headers + work headers precede their first row (computed once
     // per track list change, mirroring AlbumState's disc-header-number /
     // work-header model fields).
@@ -74,11 +108,43 @@ Rectangle {
             root.coverMap = Object.assign({}, m)
         }
     }
-    Component.onCompleted: dispatchCovers()
-    onAlbumChanged: dispatchCovers()
+    Component.onCompleted: { syncAlbumState(); dispatchCovers() }
+    onAlbumChanged: { syncAlbumState(); dispatchCovers() }
     // The derived binding settles AFTER onAlbumChanged fires (stale race) —
     // redispatch when the header itself updates.
-    onHeaderChanged: dispatchCovers()
+    onHeaderChanged: { syncAlbumState(); dispatchCovers() }
+
+    // Optimistic heart / pin state. The document is republished once per
+    // deferred rail now, and every republish re-parses `album` — a toggle
+    // written straight onto the parsed object would silently pop back a
+    // second later. Overrides live here and win until the album changes.
+    // (Same pattern, same reason, as ArtistView.localToggles.)
+    property var localToggles: ({})
+    function toggleState(key, fallback) {
+        return localToggles[key] !== undefined ? localToggles[key] : fallback === true
+    }
+    function setToggleState(key, value) {
+        var m = localToggles
+        m[key] = value
+        localToggles = Object.assign({}, m)
+    }
+
+    // Per-album view state is reset ONLY when the id actually changes, or a
+    // deferred rail landing would yank the user's toggles back mid-read.
+    property string loadedAlbumId: ""
+    function syncAlbumState() {
+        var id = (header && header.id) ? header.id : ""
+        if (id === loadedAlbumId)
+            return
+        loadedAlbumId = id
+        localToggles = ({})
+        dispatchedCovers = ({})
+    }
+
+    // Already-requested artwork keys. The document is now published in FOUR
+    // passes (primary, then each rail), and every pass re-fires this — resending
+    // the whole list each time is pure waste, so only what is new goes out.
+    property var dispatchedCovers: ({})
     function dispatchCovers() {
         var urls = []
         if (header && header.artUrl) urls.push(header.artUrl)
@@ -90,7 +156,19 @@ Rectangle {
         // cards would render as empty frames.
         var sim = album.similarAlbums || []
         for (i = 0; i < sim.length; i++) if (sim[i].artUrl) urls.push(sim[i].artUrl)
-        if (urls.length > 0) QbzShell.sidebarArtworkWindow(JSON.stringify(urls))
+
+        var seen = dispatchedCovers
+        var fresh = []
+        for (i = 0; i < urls.length; i++) {
+            if (!seen[urls[i]]) {
+                seen[urls[i]] = true
+                fresh.push(urls[i])
+            }
+        }
+        if (fresh.length > 0) {
+            dispatchedCovers = seen
+            QbzShell.sidebarArtworkWindow(JSON.stringify(fresh))
+        }
     }
 
     // Ghost CircleAction (secondary, on-surface variant): elevated disc,
@@ -154,6 +232,53 @@ Rectangle {
         font.pixelSize: 10
         font.weight: theme.weightSemibold
         font.letterSpacing: 1
+    }
+
+    // Placeholder for a bottom rail that has not resolved yet: the SAME 28px
+    // header band, 232px pitch and 246px card band SectionRail uses, so the
+    // page does not jump when the real cards replace it. Built out of the
+    // shared QbzSkeleton — no local skeleton primitive.
+    //
+    // Everything it needs is a property, not a file-scope id: an inline
+    // `component` does not see the enclosing document's ids (the gotcha
+    // QbzSkeleton.qml documents), so `phase` is passed in by the host.
+    component RailSkeleton: Column {
+        id: railSk
+        property bool phase: false
+        property int cardCount: 4
+        width: parent ? parent.width : 0
+        spacing: 12
+
+        Item {
+            width: parent.width
+            height: 28
+            QbzSkeleton {
+                anchors.left: parent.left
+                anchors.verticalCenter: parent.verticalCenter
+                variant: "block"
+                width: 180
+                height: 20
+                phase: railSk.phase
+            }
+        }
+        Item {
+            width: parent.width
+            height: 246
+            clip: true
+            Row {
+                spacing: 32
+                Repeater {
+                    model: railSk.cardCount
+                    // "card" carries its own 200 x (200+42) footprint.
+                    delegate: QbzSkeleton {
+                        required property int index
+                        variant: "card"
+                        cellIndex: index
+                        phase: railSk.phase
+                    }
+                }
+            }
+        }
     }
 
     // One EXTERNAL LINKS brand icon (AlbumPageView.slint BrandLink): the bare
@@ -224,8 +349,50 @@ Rectangle {
             // NavButtons is a 0px placeholder in the Slint source.
             Item { width: 1; height: 22 }
 
+            // --- Album header skeleton ----------------------------------
+            // Mounted on the primary flag, and the real header is hidden by
+            // the same flag: opening album B never renders a half-empty
+            // header frame while B's document is in flight.
+            Row {
+                visible: root.primaryLoading
+                width: parent.width - 64
+                spacing: 32
+
+                QbzSkeleton {
+                    variant: "block"
+                    width: 224
+                    height: 224
+                    blockRadius: 12
+                    phase: skeletonPhase.on
+                }
+                Column {
+                    width: parent.width - 224 - 32
+                    spacing: 12
+                    Item { width: 1; height: 6 }
+                    QbzSkeleton { variant: "block"; width: Math.min(420, parent.width); height: 30; cellIndex: 0; phase: skeletonPhase.on }
+                    QbzSkeleton { variant: "block"; width: Math.min(260, parent.width); height: 18; cellIndex: 1; phase: skeletonPhase.on }
+                    QbzSkeleton { variant: "block"; width: Math.min(340, parent.width); height: 14; cellIndex: 2; phase: skeletonPhase.on }
+                    Item { width: 1; height: 14 }
+                    Row {
+                        spacing: 12
+                        Repeater {
+                            model: 4
+                            delegate: QbzSkeleton {
+                                required property int index
+                                variant: "circle"
+                                width: 44
+                                height: 44
+                                cellIndex: index
+                                phase: skeletonPhase.on
+                            }
+                        }
+                    }
+                }
+            }
+
             // --- Album header -------------------------------------------
             Row {
+                visible: !root.primaryLoading
                 width: parent.width - 64
                 spacing: 32
 
@@ -396,11 +563,12 @@ Rectangle {
                             onClicked: QbzPlayer.playAlbumShuffled(header.id)
                         }
                         QbzCircleAction {
-                            name: header.isFavorite ? "heart-filled" : "heart"
-                            active: header.isFavorite === true
+                            readonly property bool favorite: root.toggleState("album", header.isFavorite)
+                            name: favorite ? "heart-filled" : "heart"
+                            active: favorite
                             anchors.verticalCenter: parent.verticalCenter
                             onClicked: {
-                                header.isFavorite = !header.isFavorite
+                                root.setToggleState("album", !favorite)
                                 QbzLibrary.libraryToggleFavorite("album", header.id)
                             }
                         }
@@ -433,20 +601,63 @@ Rectangle {
                     width: parent.width - (root.hasSidebar ? 232 : 0)
                     spacing: 0
 
-                    // Loading.
-                    Item {
-                        visible: QbzAlbum.albumLoading && tracks.length === 0
+                    // Track-list placeholder — same flag the spinner used,
+                    // now in the shape of the list it is standing in for
+                    // (toolbar band + column-header band + 8 rows at the
+                    // TrackRow 50px pitch), so nothing shifts on arrival.
+                    Column {
+                        visible: root.primaryLoading
                         width: parent.width
-                        height: 280
-                        Column {
-                            anchors.centerIn: parent
-                            spacing: 18
-                            QbzSpinner { size: 36; anchors.horizontalCenter: parent.horizontalCenter }
-                            Text {
-                                anchors.horizontalCenter: parent.horizontalCenter
-                                text: QbzSession.tr("Loading album…", QbzSession.trRev)
-                                color: theme.textMuted
-                                font.pixelSize: 13
+                        spacing: 0
+
+                        Item { width: 1; height: 52 }
+                        Item { width: 1; height: 40 }
+                        Repeater {
+                            model: 8
+                            delegate: Item {
+                                required property int index
+                                width: parent ? parent.width : 0
+                                height: 50
+                                QbzSkeleton {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    anchors.left: parent.left
+                                    anchors.leftMargin: 12
+                                    variant: "block"
+                                    width: 20
+                                    height: 12
+                                    cellIndex: index
+                                    phase: skeletonPhase.on
+                                }
+                                QbzSkeleton {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    anchors.left: parent.left
+                                    anchors.leftMargin: 60
+                                    variant: "block"
+                                    width: Math.max(90, parent.width * 0.36)
+                                    height: 14
+                                    cellIndex: index
+                                    phase: skeletonPhase.on
+                                }
+                                QbzSkeleton {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    anchors.right: parent.right
+                                    anchors.rightMargin: 128
+                                    variant: "block"
+                                    width: 52
+                                    height: 12
+                                    cellIndex: index
+                                    phase: skeletonPhase.on
+                                }
+                                QbzSkeleton {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    anchors.right: parent.right
+                                    anchors.rightMargin: 48
+                                    variant: "block"
+                                    width: 52
+                                    height: 12
+                                    cellIndex: index
+                                    phase: skeletonPhase.on
+                                }
                             }
                         }
                     }
@@ -721,26 +932,53 @@ Rectangle {
             }
 
             // --- Bottom carousels ---------------------------------------
-            Item { visible: (album.moreFromArtist || []).length > 0; width: 1; height: 40 }
+            // Each one is deferred and paints the moment ITS fetch lands
+            // (album_qt.rs spawn_deferred_rows). While a fetch is out the
+            // rail's placeholder holds its band; when it resolves to nothing
+            // both the placeholder and the rail are gone — no empty frame.
+            Item { visible: moreRail.visible || moreRailSk.visible; width: 1; height: 40 }
+            RailSkeleton {
+                id: moreRailSk
+                visible: root.moreLoading
+                phase: skeletonPhase.on
+                cardCount: root.railSkeletonCount
+            }
             SectionRail {
+                id: moreRail
                 visible: (album.moreFromArtist || []).length > 0
                 title: QbzSession.tr("From the same artist", QbzSession.trRev)
                 items: album.moreFromArtist || []
                 coverMap: root.coverMap
             }
-            Item { visible: (album.suggestions || []).length > 0; width: 1; height: 40 }
+
+            Item { visible: sugRail.visible || sugRailSk.visible; width: 1; height: 40 }
+            RailSkeleton {
+                id: sugRailSk
+                visible: root.suggestionsLoading
+                phase: skeletonPhase.on
+                cardCount: root.railSkeletonCount
+            }
             SectionRail {
+                id: sugRail
                 visible: (album.suggestions || []).length > 0
                 title: QbzSession.tr("Listening suggestions", QbzSession.trRev)
                 items: album.suggestions || []
                 coverMap: root.coverMap
             }
-            // Last.fm row. Absent — not empty — when Last.fm is not connected:
-            // external_reco_qt returns nothing and makes no network call, so the
-            // rail simply never becomes visible. Reuses the same delegate as the
-            // two Qobuz rows rather than a fourth card variant.
-            Item { visible: (album.similarAlbums || []).length > 0; width: 1; height: 40 }
+
+            // Last.fm row. Absent — not empty, and not even a placeholder —
+            // when Last.fm is not connected: album_qt.rs seeds similarLoading
+            // false in that case and makes no network call. Reuses the same
+            // delegate as the two Qobuz rows rather than a fourth card variant.
+            Item { visible: simRail.visible || simRailSk.visible; width: 1; height: 40 }
+            RailSkeleton {
+                id: simRailSk
+                visible: root.similarLoading
+                phase: skeletonPhase.on
+                cardCount: root.railSkeletonCount
+            }
             SectionRail {
+                id: simRail
                 visible: (album.similarAlbums || []).length > 0
                 title: QbzSession.tr("Similar albums", QbzSession.trRev)
                 items: album.similarAlbums || []
@@ -767,8 +1005,8 @@ Rectangle {
                     { "label": QbzSession.tr("Play", QbzSession.trRev), "icon": "play-fill", "action": "play" },
                     { "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-plus", "action": "next" },
                     { "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "action": "queue" },
-                    { "label": header.isFavorite ? QbzSession.tr("Remove from Library", QbzSession.trRev) : QbzSession.tr("Add to Library", QbzSession.trRev), "icon": header.isFavorite ? "heart-filled" : "heart", "action": "favorite" },
-                    { "label": header.isPinned ? QbzSession.tr("Unpin", QbzSession.trRev) : QbzSession.tr("Pin", QbzSession.trRev), "icon": header.isPinned ? "pin-filled" : "pin", "action": "pin" },
+                    { "label": root.toggleState("album", header.isFavorite) ? QbzSession.tr("Remove from Library", QbzSession.trRev) : QbzSession.tr("Add to Library", QbzSession.trRev), "icon": root.toggleState("album", header.isFavorite) ? "heart-filled" : "heart", "action": "favorite" },
+                    { "label": root.toggleState("pin", header.isPinned) ? QbzSession.tr("Unpin", QbzSession.trRev) : QbzSession.tr("Pin", QbzSession.trRev), "icon": root.toggleState("pin", header.isPinned) ? "pin-filled" : "pin", "action": "pin" },
                 ]
                 delegate: Rectangle {
                     required property var modelData
@@ -803,10 +1041,10 @@ Rectangle {
                             else if (a === "next") QbzPlayer.enqueueAlbum(header.id, "next")
                             else if (a === "queue") QbzPlayer.enqueueAlbum(header.id, "later")
                             else if (a === "favorite") {
-                                header.isFavorite = !header.isFavorite
+                                root.setToggleState("album", !root.toggleState("album", header.isFavorite))
                                 QbzLibrary.libraryToggleFavorite("album", header.id)
                             } else if (a === "pin") {
-                                header.isPinned = !header.isPinned
+                                root.setToggleState("pin", !root.toggleState("pin", header.isPinned))
                                 QbzLibrary.togglePin("album", header.id, header.title, header.artist, header.artUrl)
                             }
                         }

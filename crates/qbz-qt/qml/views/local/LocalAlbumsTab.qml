@@ -22,10 +22,32 @@ Item {
 
     QbzTheme { id: theme }
 
-    QbzSpinner {
-        anchors.centerIn: parent
-        size: 36
-        visible: QbzLocal.localAlbumsLoading
+    // Loading = the SHAPE of the collection that is coming (the Slint mounts
+    // a bare 36px LoadingSpinner here), matching the tab's current view mode:
+    // the 220x266 card grid or the 56px list rows. ONE instance for the whole
+    // viewport — one animator, not one per cell (QbzSkeleton COST note).
+    QbzSkeleton {
+        visible: QbzLocal.localAlbumsLoading && root.view.albumsView === "grid"
+        variant: "cardGrid"
+        anchors.fill: parent
+        anchors.leftMargin: 32
+        anchors.rightMargin: 32
+        anchors.topMargin: 16
+        cellW: 220
+        cellH: 266
+        phase: root.view.skelPhase
+    }
+    QbzSkeleton {
+        visible: QbzLocal.localAlbumsLoading && root.view.albumsView !== "grid"
+        variant: "rowList"
+        anchors.fill: parent
+        anchors.leftMargin: 32
+        anchors.rightMargin: 32
+        anchors.topMargin: 16
+        rowH: 56
+        rowGap: 0
+        rowArtSize: 40
+        phase: root.view.skelPhase
     }
 
     // Load error + retry.

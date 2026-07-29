@@ -13,6 +13,7 @@
 // a multi-disc album gets the disc dividers with their per-disc ⋯ menu.
 
 import QtQuick
+import QtQuick.Window
 import com.blitzfc.qbz
 import "../controls"
 import "../theme"
@@ -101,6 +102,33 @@ Rectangle {
         }
     }
 
+    // ------------------------- skeleton pulse ----------------------------
+    // ONE 900ms Timer for the whole page. GATING RULE: freeze on NOT VISIBLE
+    // (view hidden / window minimized), NEVER on lost focus — a tiling
+    // desktop keeps windows visible and unfocused.
+    property bool skelPhase: false
+    readonly property bool windowShowing: root.Window.window
+        ? (root.Window.window.visibility !== Window.Minimized
+           && root.Window.window.visibility !== Window.Hidden)
+        : true
+    readonly property bool pageLoading: QbzLocal.localAlbumLoading
+        && root.tracks.length === 0
+    // Local artwork resolution DROPS keys with no cover (local_artwork.rs),
+    // so the cover placeholder MUST be bounded or an album with no embedded
+    // art shimmers forever. Same constant as LocalLibraryView.artSettleMs.
+    readonly property int artSettleMs: 2500
+    readonly property bool coverPending: root.album
+        ? ((root.album.artKey || "") !== ""
+           && (root.artMap[root.album.artKey] || "") === "")
+        : false
+    Timer {
+        interval: 900
+        repeat: true
+        running: (root.pageLoading || root.coverPending)
+            && root.visible && root.windowShowing
+        onTriggered: root.skelPhase = !root.skelPhase
+    }
+
     // ============================ page ===================================
     // Neutral header band (local albums have no artwork-derived tint yet).
     Rectangle {
@@ -147,13 +175,29 @@ Rectangle {
             Item { width: 1; height: 22 }
 
             // ---- Album header ----
+            // Placeholder in the header's own proportions (224px cover, 32px
+            // gap — LocalAlbumHeader.qml:32/46) until the document lands.
+            QbzSkeleton {
+                visible: root.pageLoading && !root.album
+                variant: "header"
+                width: parent.width
+                height: 224
+                coverSize: 224
+                coverGap: 32
+                actionCount: 5
+                phase: root.skelPhase
+            }
             LocalAlbumHeader {
+                visible: !(root.pageLoading && !root.album)
                 width: parent.width
                 album: root.album
                 allArtists: root.allArtists
                 infoLine: root.infoLine
                 versions: root.versions
                 coverSource: root.album ? (root.artMap[root.album.artKey] || "") : ""
+                coverPending: root.coverPending
+                skelPhase: root.skelPhase
+                artSettleMs: root.artSettleMs
                 onOpenArtist: function (name) { root.openArtist(name) }
             }
 
@@ -162,14 +206,18 @@ Rectangle {
             Item { width: 1; height: 8 }
 
             // ---- Loading ----
-            Item {
-                visible: QbzLocal.localAlbumLoading && root.tracks.length === 0
+            // The track list in the shape it will arrive in (50px rows, no
+            // artwork column on this page), replacing the 36px spinner the
+            // Slint mounts here. ONE instance, ONE animator.
+            QbzSkeleton {
+                visible: root.pageLoading
+                variant: "rowList"
                 width: parent.width
                 height: visible ? 280 : 0
-                QbzSpinner {
-                    anchors.centerIn: parent
-                    size: 36
-                }
+                rowH: 50
+                rowGap: 0
+                rowArt: false
+                phase: root.skelPhase
             }
 
             // ---- Toolbar: quality badge + track search ----

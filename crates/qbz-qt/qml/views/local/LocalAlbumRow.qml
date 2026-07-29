@@ -23,6 +23,10 @@ Rectangle {
 
     property var item: ({})
     property string artSource: ""
+    /// The LocalLibraryView root — the shared skeleton pulse, the per-item
+    /// artwork gate and the settle bound all live there (never duplicated
+    /// per row, so the rule cannot drift between surfaces).
+    property var view: null
     property bool showSource: true
     property bool selectMode: false
     property bool checked: false
@@ -98,6 +102,16 @@ Rectangle {
                 anchors.fill: parent
                 source: root.artSource
                 radius: 4
+            }
+            // Per-item: clears when THIS row's cover lands; settles out when
+            // the album simply has none (local artwork drops such keys).
+            QbzSkeleton {
+                variant: "art"
+                anchors.fill: parent
+                blockRadius: 4
+                visible: root.view ? root.view.artPending(root.item.artKey) : false
+                phase: root.view ? root.view.skelPhase : false
+                settleMs: root.view ? root.view.artSettleMs : 0
             }
         }
         Column {

@@ -49,6 +49,8 @@ Item {
     property bool showAlbum: true
     property bool showArtwork: false
     property string artSource: ""
+    /// The LocalLibraryView root (shared skeleton pulse + artwork gate).
+    property var view: null
     property bool selectMode: false
     property bool checked: false
     signal playRequested()
@@ -58,6 +60,14 @@ Item {
     QbzTheme { id: theme }
 
     height: 50
+
+    // The shared TrackRow takes its artwork from `item.artPath`, and a LOCAL
+    // track row publishes an empty one (local_rows.rs:284) — the cover comes
+    // from the id-keyed artMap instead. Patch it in rather than fork the
+    // shared row; the copy only happens when a cover is actually present.
+    readonly property var rowItem: root.artSource === ""
+        ? root.item
+        : Object.assign({}, root.item, { "artPath": root.artSource })
 
     // Local rows have a local album GROUP KEY and a bare artist NAME; both
     // routes are name/key routes, so each entry is gated on its own datum.
@@ -70,7 +80,7 @@ Item {
         // row would have spent on its own ⋯ — so every other column lands
         // exactly where it did before the menu moved out.
         width: root.width - 26 - 46
-        item: root.item
+        item: root.rowItem
         number: root.number
         showArtwork: root.showArtwork
         showAlbum: root.showAlbum

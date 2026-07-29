@@ -34,6 +34,7 @@
 // album/LocalAlbumView.slint.
 
 import QtQuick
+import QtQuick.Window
 import com.blitzfc.qbz
 import "../controls"
 import "../theme"
@@ -367,6 +368,54 @@ Rectangle {
         if (keys.length > 0) QbzLocal.artworkWindow(JSON.stringify(keys))
     }
 
+    // ------------------------- skeleton pulse ----------------------------
+    // ONE 900ms Timer drives EVERY placeholder in this view AND in every
+    // tab body under views/local/ (they read `view.skelPhase`) — N
+    // placeholders, 1 timer, which is QbzSkeleton's preferred drive mode.
+    // GATING RULE: freeze on NOT VISIBLE — the view hidden, or the window
+    // minimized/hidden. NEVER on lost focus (a tiling desktop keeps windows
+    // visible and unfocused).
+    property bool skelPhase: false
+    readonly property bool windowShowing: root.Window.window
+        ? (root.Window.window.visibility !== Window.Minimized
+           && root.Window.window.visibility !== Window.Hidden)
+        : true
+    readonly property bool anyTabLoading: QbzLocal.localAlbumsLoading
+        || QbzLocal.localArtistsLoading || QbzLocal.localFoldersLoading
+        || QbzLocal.localTreeLoading || QbzLocal.localTracksLoading
+        || QbzLocal.localTracksLoadingMore || QbzLocal.localDetailLoading
+        || QbzLocal.localEphemeralLoading
+
+    // THE CLEANUP RULE FOR LOCAL ARTWORK. src/local_artwork.rs
+    // (`resolve_window_blocking`) DROPS keys with no cover — "the QML map
+    // only ever grows with real hits" — so a local album with no embedded
+    // art NEVER produces an artMap entry. A per-item placeholder gated only
+    // on "artMap has no path yet" would therefore shimmer forever on every
+    // artless album. `artSettleMs` is the bound: each placeholder fades out
+    // by itself that long after it appears, revealing the card's own empty
+    // tile. Per-item clearing still wins whenever the cover DOES arrive.
+    readonly property int artSettleMs: 2500
+    // The pulse only has to run while an artwork window can still resolve:
+    // armed by every window report, disarmed artSettleMs after the last.
+    property bool artPulse: false
+    Timer {
+        id: artPulseOff
+        interval: root.artSettleMs
+        onTriggered: root.artPulse = false
+    }
+    Timer {
+        interval: 900
+        repeat: true
+        running: (root.anyTabLoading || root.artPulse)
+            && root.visible && root.windowShowing
+        onTriggered: root.skelPhase = !root.skelPhase
+    }
+    /// Is THIS row's cover still outstanding? (the per-item gate every local
+    /// surface uses — one place, so the rule cannot drift between tabs.)
+    function artPending(key) {
+        return (key || "") !== "" && (root.artMap[key] || "") === ""
+    }
+
     // Debounced reporting (180ms — the LibraryView throttle).
     Timer {
         id: windowDebounce
@@ -381,6 +430,10 @@ Rectangle {
         windowDebounce.pendingFirst = first
         windowDebounce.pendingLast = last
         windowDebounce.restart()
+        // Covers can now land: keep the shared pulse alive until artSettleMs
+        // after the LAST report (scrolling keeps re-arming it).
+        root.artPulse = true
+        artPulseOff.restart()
     }
 
     // ============================ actions ================================

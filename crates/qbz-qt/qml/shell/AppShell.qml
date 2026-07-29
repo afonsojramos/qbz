@@ -31,6 +31,16 @@ Rectangle {
     // so every chrome surface paints above it): the ambient album-colored
     // field + the dark dim scrim that keeps chrome text legible
     // (QBZ_BG_DIM-tunable, default 0.35).
+    // Window-level history navigation: mouse side buttons + two-finger
+    // horizontal touchpad swipe (#653 parity). Declared FIRST so the whole UI
+    // hit-tests on top of it — a scroll reaches it only when nothing above
+    // consumed it, which is what keeps horizontal carousels scrolling instead
+    // of navigating. Never consumes a wheel event; accepts only the two side
+    // buttons.
+    NavGestureLayer {
+        anchors.fill: parent
+    }
+
     AmbientField {
         anchors.fill: parent
         visible: root.ambientOn
