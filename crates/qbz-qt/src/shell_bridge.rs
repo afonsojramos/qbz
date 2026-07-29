@@ -26,8 +26,25 @@ pub mod qbz_shell {
         #[qml_singleton]
         // --- Shell chrome (Slint ShellState) ----------------------------
         // Three-state sidebar: 0 = open (240px), 1 = mini (64px), 2 = closed.
+        // Seeded from ui_prefs `sidebar_state` and rewritten by cycle_sidebar
+        // (1:1 Slint: persist-sidebar-state).
         #[qproperty(i32, sidebar_state)]
         #[qproperty(bool, queue_open)]
+
+        // --- Section-nav placement (Slint ShellState) ---------------------
+        // ON  = the Discover / Library / Local Library / My QBZ rows live in
+        //       the SIDEBAR (with a hairline under them); the header shows the
+        //       compact icon nav only while the sidebar is fully closed.
+        // OFF = the sections live in the HEADER, after the three history
+        //       buttons, as full text tabs — or as the icon-only compact form
+        //       when `nav_header_compact` is ON (or the sidebar is closed).
+        // Both are LIVE (ui_prefs `nav_in_sidebar` / `nav_header_compact`).
+        #[qproperty(bool, nav_in_sidebar)]
+        #[qproperty(bool, nav_header_compact)]
+        // Playlist rows show a 2x2 micro-collage of track covers instead of
+        // the generic list-music glyph (Slint SidebarState.playlist-collage,
+        // ui_prefs `sidebar_playlist_collage`). Opt-OUT, live.
+        #[qproperty(bool, sidebar_playlist_collage)]
         // Content view id — only "home" exists (phase 3 adds the rest).
         #[qproperty(QString, current_view)]
         // Nav history (src/nav_qt.rs):
@@ -226,6 +243,9 @@ use qbz_shell::QbzShell;
 /// Rust side of the shell bridge (plain storage, phase-1 pattern).
 pub struct QbzShellRust {
     sidebar_state: i32,
+    nav_in_sidebar: bool,
+    nav_header_compact: bool,
+    sidebar_playlist_collage: bool,
     queue_open: bool,
     current_view: QString,
     can_back: bool,
@@ -264,7 +284,10 @@ pub struct QbzShellRust {
 impl Default for QbzShellRust {
     fn default() -> Self {
         Self {
-            sidebar_state: 0,
+            sidebar_state: crate::settings_qt::sidebar_state(),
+            nav_in_sidebar: crate::settings_qt::nav_in_sidebar(),
+            nav_header_compact: crate::settings_qt::nav_header_compact(),
+            sidebar_playlist_collage: crate::settings_qt::sidebar_playlist_collage(),
             queue_open: false,
             current_view: QString::from("home"),
             can_back: false,
@@ -354,6 +377,9 @@ impl qbz_shell::QbzShell {
     pub fn cycle_sidebar(mut self: Pin<&mut Self>) {
         let next = (self.sidebar_state() + 1) % 3;
         self.as_mut().set_sidebar_state(next);
+        // 1:1 Slint (`ShellState.cycle-sidebar` -> persist-sidebar-state): the
+        // state survives the relaunch instead of snapping back to open.
+        crate::settings_qt::set_sidebar_state(next);
     }
 
     pub fn toggle_queue(mut self: Pin<&mut Self>) {

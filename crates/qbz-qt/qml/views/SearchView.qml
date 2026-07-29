@@ -97,6 +97,13 @@ Rectangle {
     }
     readonly property bool artPending: anyPending(albums) || anyPending(tracks)
         || anyPending(playlists) || heroPending
+    // The pulse must OUTLIVE `artPending`: that flag drops when the last PATH
+    // lands, but each of those cards still has a decode + canvas raster ahead
+    // of it and its placeholder is still up (QbzSkeleton's handover). Without
+    // the grace the tiles freeze mid-shimmer for the rest of the wait.
+    property bool artHold: false
+    Timer { id: artHoldOff; interval: 1500; onTriggered: root.artHold = false }
+    onArtPendingChanged: { root.artHold = true; artHoldOff.restart() }
 
     // "Load more" has NO bridge-side busy flag: search_qt.rs only sets
     // doc.loading in submit(), never in load_more(). So the appended-page
@@ -122,7 +129,7 @@ Rectangle {
     Timer {
         interval: 900
         repeat: true
-        running: (root.loading || root.artPending || root.morePending)
+        running: (root.loading || root.artPending || root.artHold || root.morePending)
             && root.visible && root.windowShowing
         onTriggered: root.skelPhase = !root.skelPhase
     }
@@ -141,7 +148,13 @@ Rectangle {
         variant: "art"
         width: 200
         height: 200
-        visible: ((card.artUrl || "") !== "") && ((card.artPath || "") === "")
+        // HANDOVER, not "the path landed": the cards seal their RoundedImage
+        // away, so this rides QbzSkeleton's probe arm — the same pixmap-cache
+        // entry the card is loading, so no second decode — and retires when
+        // that decode finishes. Gating on `artPath !== ""` (what this used to
+        // do) drops the placeholder while the card's canvas is still blank.
+        pending: (card.artUrl || "") !== ""
+        coverSource: card.artPath || ""
         // A cover whose download fails republishes the document with an
         // empty artPath — without this the tile would shimmer forever.
         settleMs: 6000

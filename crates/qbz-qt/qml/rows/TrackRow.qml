@@ -4,18 +4,22 @@
 // SearchView.SearchTrackRow). 50px, radius 8: number→play cell (pause
 // swap + accent pill when it is the now-playing row — Slint-universal),
 // optional 36px art cell, title+explicit / artist column, optional 220px
-// album link, duration, quality (icon QualityMini | bare text), optional
+// album link, duration, quality (BARE QualityBadgeFull — the tier label over
+// the exact bit-depth / sample-rate line), optional
 // heart, optional download slot (offline column — glyph stub or reserved
 // spacer until the offline cache lands, POC-NOTE), ⋯ CardMenu.
 //
 // item contract: { id, title, artist, artistId, album, albumId, number?,
-// duration, qualityTier, explicit, isFavorite, artPath? } (plus
-// playlistTrackId for the remove-from-playlist arm).
+// duration, qualityTier, qualityDetail, explicit, isFavorite, artPath? }
+// (plus playlistTrackId for the remove-from-playlist arm). `qualityDetail`
+// is the bare exact-quality string ("16-bit / 44.1 kHz"); when a producer
+// does not carry it yet the badge degrades to the tier label alone rather
+// than to a blank cell.
 //
 // Arms: showArtwork / showAlbum / showFavorite / showDownload /
 // downloadGlyph / showMenu / zebra / artistLink / clickPlays /
-// qualityStyle ("icon"|"text") / menuShowLater / menuShowGoTo /
-// menuShowFavorite / menuShowRemove.
+// menuShowLater / menuShowGoTo / menuShowFavorite / menuShowRemove.
+// (`qualityStyle` is RETIRED — kept declared, inert, see below.)
 // Signals: playRequested() (per-site play: album-scoped, playlist-scoped
 // or plain), enqueueRequested(mode) ("next"|"later"|"queue"),
 // removeRequested(), bodyDragStarted(index) (fired BEFORE the shared
@@ -59,6 +63,12 @@ Rectangle {
     property bool zebra: false
     property bool artistLink: false
     property bool clickPlays: true
+    /// RETIRED and INERT. primitives/TrackRow.slint has exactly ONE quality
+    /// form (the bare QualityBadgeFull below) — there was never an icon/text
+    /// split to arm. Kept declared ONLY so the two existing call sites that
+    /// still assign it (AlbumView.qml `"text"`, local/LocalTrackRow.qml
+    /// `"icon"`) keep loading; assigning a non-existent property is a hard
+    /// QML instantiation error. Both assignments are listed for removal.
     property string qualityStyle: "icon"
     property bool menuShowLater: true
     property bool menuShowGoTo: true
@@ -269,24 +279,35 @@ Rectangle {
             font.pixelSize: 12
             horizontalAlignment: Text.AlignHCenter
         }
-        // Quality (92px): icon (QualityMini) or bare text.
-        Rectangle {
+        // Quality (92px) — the BARE badge, 1:1 with primitives/TrackRow.slint
+        // 578-592: a 92px cell, `alignment: center` on both axes, holding a
+        // QualityBadgeFull with `show-icon: false` + `bare: true`. That is the
+        // tier label ("CD"/"HI-RES"/"MP3"/"LOSSLESS") stacked over the exact
+        // bit-depth / sample-rate line, with no chip background or border, so
+        // it blends into the row instead of reading as a contained badge.
+        // The .slint has ONE form here — no icon variant, no bare-text
+        // variant — which is why `qualityStyle` above is inert.
+        //
+        // The cell keeps its FIXED 92px. That number is a term of
+        // `cellsRight`, which is what sizes the title column, so a wider badge
+        // MUST NOT widen the cell or the title would be pushed into the
+        // trailing controls. The badge is centred and the cell clips; at 8/9px
+        // the longest real detail ("24-bit / 352.8 kHz") measures ~80px, so
+        // the clip is a guard, never the normal path.
+        //
+        // Cheaper than what it replaces, too: QualityMini resolves to
+        // QualityBadge, which carries a ToolTip popup and a hover MouseArea
+        // per row; this one is two Texts.
+        Item {
             width: 92
             height: parent.height
-            color: "transparent"
-            QualityMini {
-                visible: root.qualityStyle === "icon"
+            clip: true
+            QualityBadgeFull {
+                anchors.centerIn: parent
                 tier: root.item.qualityTier || ""
-                anchors.centerIn: parent
-            }
-            Text {
-                visible: root.qualityStyle === "text"
-                anchors.centerIn: parent
-                text: root.item.qualityTier === "hires" ? "HI-RES" : (root.item.qualityTier === "cd" ? "CD" : "")
-                color: theme.textMuted
-                font.pixelSize: 10
-                font.weight: theme.weightBold
-                horizontalAlignment: Text.AlignHCenter
+                detail: root.item.qualityDetail || ""
+                showIcon: false
+                bare: true
             }
         }
         // Favorite (showFavorite arm).

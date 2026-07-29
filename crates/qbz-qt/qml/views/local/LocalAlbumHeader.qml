@@ -21,7 +21,15 @@ Row {
     property var versions: []
     property string coverSource: ""
     /// Per-item cover state, owned by the page (LocalAlbumView).
+    /// `coverPending` means "this album EXPECTS a cover" — whether one has
+    /// arrived is decided here, by the image's own readiness, never by the
+    /// path being non-empty (see theme/RoundedImage.qml's contract).
     property bool coverPending: false
+    /// Optional: true while the page's artwork pass is still in flight. It
+    /// suspends the settle countdown so a slow cold decode cannot expire the
+    /// placeholder a beat before the cover lands. Defaults to false, so the
+    /// page need not supply it.
+    property bool artPassActive: false
     property bool skelPhase: false
     property int artSettleMs: 0
     signal openArtist(string name)
@@ -40,19 +48,22 @@ Row {
         color: theme.surfaceElevated
         clip: true
         RoundedImage {
+            id: headerArt
             anchors.fill: parent
             source: root.coverSource
             radius: 12
         }
-        // Per-item: clears when THIS album's cover lands; settles out when
+        // Per-item: hands over on the paint, not the path; settles out when
         // the album has none (local artwork drops keys with no cover).
         QbzSkeleton {
             variant: "art"
             anchors.fill: parent
             blockRadius: 12
-            visible: root.coverPending
+            pending: root.coverPending
+            coverReady: headerArt.ready
             phase: root.skelPhase
             settleMs: root.artSettleMs
+            settleHold: root.artPassActive
         }
     }
 

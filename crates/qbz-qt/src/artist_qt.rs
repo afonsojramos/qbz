@@ -212,6 +212,17 @@ pub struct ArtistViewData {
     pub stories_loading: bool,
     /// MusicBrainz-driven Network sidebar sections (filled progressively).
     pub network: ArtistNetwork,
+    // ---- Header atmosphere (controls/HeaderGradient.qml) ------------------
+    /// Artwork-derived header tint, "#rrggbb" ("" until the portrait
+    /// resolves). Same field, same meaning, same producer as the album page's
+    /// (`album_qt::header_tint_hex`) — the Slint derives both from the SAME
+    /// `artwork::header_tint`, so there is one colour pipeline, not two.
+    #[serde(rename = "headerColor")]
+    pub header_color: String,
+    /// `album_header_gradient` as of page load; the view prefers the live
+    /// settings snapshot and falls back to this (see album_qt.rs).
+    #[serde(rename = "headerGradient")]
+    pub header_gradient: bool,
 }
 
 fn mmss(secs: u32) -> String {
@@ -534,6 +545,11 @@ fn map_artist(page: PageArtistResponse) -> ArtistViewData {
         stories: Vec::new(),
         stories_loading: false,
         network: ArtistNetwork::default(),
+        // Header atmosphere: the tint resolves from this page's artwork on a
+        // background pass (spawn_header_color), so the first publish carries
+        // the empty value and the gradient fades in with it.
+        header_color: String::new(),
+        header_gradient: false,
     }
 }
 
@@ -692,6 +708,9 @@ pub async fn load_artist_view(
     data.network.relationships_loading = mb_on;
     data.network.discovery_loading = mb_on;
     data.stories_loading = true;
+    // Header atmosphere — see the ArtistViewData field comments.
+    data.header_gradient = crate::settings_qt::pref_bool("album_header_gradient", true);
+    let header_art = data.artwork_url.clone();
 
     let json = serde_json::to_string(&data).map_err(|e| e.to_string())?;
     log::info!(
@@ -712,6 +731,8 @@ pub async fn load_artist_view(
         }
         Err(e) => log::warn!("[qbz-qt] artist doc stash failed: {e}"),
     }
+
+    spawn_header_color(generation, header_art);
 
     let similar_names: Vec<String> =
         data.similar_artists.iter().map(|s| s.name.clone()).collect();
@@ -762,6 +783,39 @@ fn publish_patch(generation: u64, f: impl FnOnce(&mut serde_json::Value)) {
     };
     crate::artist_bridge::ui(move |mut b| {
         b.as_mut().set_artist_json(QString::from(json.as_str()));
+    });
+}
+
+/// Resolve the artist portrait (downloading it if needed), reduce it to the
+/// header tint (`album_qt::header_tint_hex` — ONE colour pipeline for both
+/// detail pages, exactly as the Slint shares `artwork::header_tint`) and
+/// patch it in. Generation-guarded: a slow portrait for artist A can never
+/// tint artist B's header. Same benign publish-ordering note as
+/// `album_qt::spawn_header_color` — the stash is written first, so a
+/// clobbered publish is recovered by the next enrichment republish (stories
+/// always run).
+fn spawn_header_color(generation: u64, artwork_url: String) {
+    if artwork_url.is_empty() {
+        return;
+    }
+    crate::spawn(async move {
+        if crate::artwork_qt::cached_path(&artwork_url).is_empty() {
+            crate::artwork_qt::download_missing(vec![artwork_url.clone()]).await;
+        }
+        let path = crate::artwork_qt::cached_path(&artwork_url);
+        if path.is_empty() {
+            return;
+        }
+        let path = path.trim_start_matches("file://").to_string();
+        let hex = tokio::task::spawn_blocking(move || crate::album_qt::header_tint_hex(&path))
+            .await
+            .ok()
+            .flatten();
+        if let Some(hex) = hex {
+            publish_patch(generation, move |doc| {
+                doc["headerColor"] = serde_json::json!(hex);
+            });
+        }
     });
 }
 

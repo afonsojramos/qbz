@@ -19,9 +19,16 @@
 // POC-NOTEs: blacklist banner, artist Scene, Share, Create Collection, radio
 // engines (dropdown inert), multi-select, the sticky behavior of the JUMP TO
 // bar (it scrolls with the page).
+//
+// Header atmosphere (ArtistPageView.slint:120-147, 211-247): wired through
+// the shared controls/HeaderGradient.qml — the SAME component AlbumView
+// mounts, because the .slint paints both headers from identical blocks. It
+// carries the .slint's header-colour rules with it (light text + overlay
+// CircleActions while the band is on).
 
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Window
 import com.blitzfc.qbz
 import "../cards"
 import "../controls"
@@ -42,9 +49,54 @@ Rectangle {
     QbzTheme { id: theme }
 
     readonly property var artist: JSON.parse(QbzArtist.artistJson)
-    readonly property var topTracks: artist.topTracks || []
-    readonly property var appearsOn: artist.appearsOn || []
-    readonly property var releaseSections: artist.releaseSections || []
+
+    // ---- In-page search (JumpNavBar's magnifier) -------------------------
+    // artist.rs `filter_artist` (main.rs:14991 wires ArtistActions.search to
+    // it) is a PURE client-side filter over Popular Tracks, Appears On and
+    // every release-section album — no backend round-trip — so it ports as a
+    // filter over the parsed document rather than a bridge call.
+    property string searchQuery: ""
+    readonly property string needle: searchQuery.trim().toLowerCase()
+
+    function matchTrack(t) {
+        return needle === ""
+            || (t.title || "").toLowerCase().indexOf(needle) >= 0
+            || (t.artist || "").toLowerCase().indexOf(needle) >= 0
+    }
+
+    readonly property var topTracks: {
+        var all = artist.topTracks || []
+        if (root.needle === "") return all
+        var out = []
+        for (var i = 0; i < all.length; i++) if (matchTrack(all[i])) out.push(all[i])
+        return out
+    }
+    readonly property var appearsOn: {
+        var all = artist.appearsOn || []
+        if (root.needle === "") return all
+        var out = []
+        for (var i = 0; i < all.length; i++) if (matchTrack(all[i])) out.push(all[i])
+        return out
+    }
+    // A section whose albums all filter out DISAPPEARS (artist.rs:1033), and
+    // Load more is suppressed while a filter is active (:1042 — appending
+    // would bring back unfiltered items).
+    readonly property var releaseSections: {
+        var all = artist.releaseSections || []
+        if (root.needle === "") return all
+        var out = []
+        for (var i = 0; i < all.length; i++) {
+            var kept = []
+            var cards = all[i].cards || []
+            for (var j = 0; j < cards.length; j++)
+                if ((cards[j].title || "").toLowerCase().indexOf(root.needle) >= 0)
+                    kept.push(cards[j])
+            if (kept.length === 0) continue
+            out.push({ "releaseType": all[i].releaseType, "title": all[i].title,
+                       "cards": kept, "hasMore": false })
+        }
+        return out
+    }
     readonly property var labels: artist.labels || []
     readonly property var similarArtists: artist.similarArtists || []
     readonly property var playlists: artist.playlists || []
@@ -59,10 +111,48 @@ Rectangle {
     property var coverMap: ({})
     property string activeJumpTab: "popular-tracks"
     property string artistTab: "catalog"
+
+    // ---- Header atmosphere (ArtistPageView.slint:120-147) ----------------
+    // Same three-line rule as AlbumView (the .slint says "same rule as
+    // AlbumPageView" at :120). The pref is read LIVE off the settings
+    // snapshot where one exists, else off the document (artist_qt.rs).
+    readonly property bool headerGradientPref: {
+        var raw = QbzBridge.settingsJson
+        if (raw && raw.length > 2) {
+            try {
+                var d = JSON.parse(raw)
+                if (d.albumHeaderGradient !== undefined)
+                    return d.albumHeaderGradient === true
+            } catch (e) { /* fall through to the document copy */ }
+        }
+        return artist.headerGradient !== false
+    }
+    readonly property bool headerAtmoOn: headerGradientPref && !ambientOn
+    readonly property bool headerLight: headerGradientPref || ambientOn
+    readonly property color hdrStrong: headerLight ? "#ffffff" : theme.textPrimary
+    readonly property color hdrBody: headerLight ? "#e0ffffff" : theme.textSecondary
+    readonly property bool hdrOverlay: headerLight
     property bool topTracksExpanded: false
     property bool appearsOnExpanded: false
     property bool otherExpanded: false
-    property bool networkOpen: false
+
+    // ---- Network sidebar open/closed -------------------------------------
+    // ShellState.content-constrained (state.slint:4114): window under the NPB
+    // breakpoint AND a right panel (Queue / Lyrics) open. NOT a raw
+    // `root.width < N` — the .slint calls that exact trigger out as the
+    // regression it fixed (ArtistPageView.slint:166-172): at a normal window
+    // the content area is already narrow WITHOUT any panel, so the sidebar
+    // would never auto-open at all.
+    readonly property bool contentConstrained:
+        Window.width > 0 && Window.width < 1366
+        && (QbzShell.queueOpen || QbzShell.lyricsOpen)
+    // The .slint AUTO-collapses on a constrain edge and AUTO-opens when there
+    // is room again, and re-applies the same rule on every artist change
+    // (`changed net-cramped` / `changed net-nav-watch` at :175-180, plus
+    // artist.rs `reset_network_sidebar`). The port opened FALSE and stayed
+    // shut until the user found the button.
+    property bool networkOpen: !contentConstrained
+    onContentConstrainedChanged: networkOpen = !contentConstrained
     property string netTab: "network"
     readonly property int preview: 5
     // Sidebar lists are unbounded upstream (an orchestra can list 150
@@ -110,7 +200,8 @@ Rectangle {
     // sidebar section arrive later on their own flags. Every one of these is
     // ALSO gated on mbAvailable upstream, so with MusicBrainz off in Settings
     // (or no confident match) they are absent — placeholder included.
-    readonly property bool primaryLoading: QbzArtist.artistLoading && topTracks.length === 0
+    readonly property bool primaryLoading: QbzArtist.artistLoading
+                                           && (artist.topTracks || []).length === 0
     readonly property bool originPending: network.mbAvailable === true
                                           && network.originLoading === true
     readonly property bool relationshipsPending: network.mbAvailable === true
@@ -135,15 +226,21 @@ Rectangle {
     }
 
     // JUMP TO tabs from the present sections (ArtistState.jump-tabs).
+    // Built from the RAW document, never the filtered lists: artist.rs
+    // builds jump_tabs ONCE at load (`build_jump_tabs`) and `filter_artist`
+    // does not touch them, so the strip must not reshuffle per keystroke.
     readonly property var jumpTabs: {
         var tabs = []
+        var rawTop = artist.topTracks || []
+        var rawSections = artist.releaseSections || []
+        var rawAppears = artist.appearsOn || []
         if ((artist.bio || "") !== "") tabs.push({ "id": "about", "label": QbzSession.tr("About", QbzSession.trRev) })
-        if (topTracks.length > 0) tabs.push({ "id": "popular-tracks", "label": QbzSession.tr("Popular Tracks", QbzSession.trRev) })
-        for (var i = 0; i < releaseSections.length; i++) {
-            if (releaseSections[i].releaseType !== "other")
-                tabs.push({ "id": releaseSections[i].releaseType, "label": releaseSections[i].title })
+        if (rawTop.length > 0) tabs.push({ "id": "popular-tracks", "label": QbzSession.tr("Popular Tracks", QbzSession.trRev) })
+        for (var i = 0; i < rawSections.length; i++) {
+            if (rawSections[i].releaseType !== "other")
+                tabs.push({ "id": rawSections[i].releaseType, "label": rawSections[i].title })
         }
-        if (appearsOn.length > 0) tabs.push({ "id": "appears-on", "label": QbzSession.tr("Appears On", QbzSession.trRev) })
+        if (rawAppears.length > 0) tabs.push({ "id": "appears-on", "label": QbzSession.tr("Appears On", QbzSession.trRev) })
         return tabs
     }
 
@@ -164,7 +261,10 @@ Rectangle {
         target: QbzArtist
         function onReleaseSectionReady(releaseType, cardsJson, hasMore) {
             var cards = JSON.parse(cardsJson)
-            var sections = root.releaseSections
+            // The document, not root.releaseSections: that one is a FILTERED
+            // projection and may hand back fresh objects, so a push into it
+            // would be dropped on the next re-evaluation.
+            var sections = root.artist.releaseSections || []
             for (var i = 0; i < sections.length; i++) {
                 if (sections[i].releaseType === releaseType) {
                     var seen = {}
@@ -189,7 +289,7 @@ Rectangle {
     }
     // Cover dispatch keys off the raw document (artist.artUrl etc.), so
     // re-fire when the parsed value actually changes (same stale race).
-    onTopTracksChanged: dispatchCovers()
+    // (the raw document drives the dispatch; onArtistChanged above covers it)
     onArtistTabChanged: if (artistTab === "library") dispatchLibCovers()
 
     // The document is republished several times per page (stories, then each
@@ -204,6 +304,10 @@ Rectangle {
         // Slint opens a fresh artist on Network, or on Magazine when
         // MusicBrainz is off (an empty Network tab is worse than none).
         netTab = (artist.network && artist.network.mbAvailable) ? "network" : "magazine"
+        // …and re-applies the room rule (ArtistPageView.slint:178, artist.rs
+        // `reset_network_sidebar`): a new artist re-opens the panel unless
+        // the content area is constrained.
+        networkOpen = !contentConstrained
         dismissedDiscovery = ({})
         localToggles = ({})
         membersExpanded = false
@@ -239,10 +343,14 @@ Rectangle {
         var urls = []
         if (artist.artUrl) urls.push(artist.artUrl)
         var i, j
-        for (i = 0; i < topTracks.length; i++) if (topTracks[i].artUrl) urls.push(topTracks[i].artUrl)
-        for (i = 0; i < releaseSections.length; i++)
-            for (j = 0; j < releaseSections[i].cards.length; j++)
-                if (releaseSections[i].cards[j].artUrl) urls.push(releaseSections[i].cards[j].artUrl)
+        // RAW lists: a filtered-out card still needs its cover for when the
+        // query is cleared, and this must not re-run per keystroke.
+        var rawTop = artist.topTracks || []
+        var rawSections = artist.releaseSections || []
+        for (i = 0; i < rawTop.length; i++) if (rawTop[i].artUrl) urls.push(rawTop[i].artUrl)
+        for (i = 0; i < rawSections.length; i++)
+            for (j = 0; j < (rawSections[i].cards || []).length; j++)
+                if (rawSections[i].cards[j].artUrl) urls.push(rawSections[i].cards[j].artUrl)
         // Magazine story thumbnails ride the same pipeline (arc-cdn URLs).
         for (i = 0; i < stories.length; i++) if (stories[i].artUrl) urls.push(stories[i].artUrl)
         dispatchArtwork(urls)
@@ -698,13 +806,19 @@ Rectangle {
                     // POC-NOTE: dedicated discography page out of scope.
                 }
             }
+            // Per-section sort (ReleaseGrid.slint:70 QbzSelect). No seam:
+            // `set-section-sort` persists per release_type and re-sorts
+            // server-side, and neither exists on this bridge — so the control
+            // is DIMMED and carries no MouseArea at all instead of offering a
+            // pointer cursor over a menu that never opens.
             Rectangle {
                 id: sortBtn
                 width: sortRow.width
                 height: 28
                 radius: 5
+                opacity: 0.4
                 anchors.verticalCenter: parent.verticalCenter
-                color: sortArea.containsMouse ? theme.surfaceHover : theme.surfaceElevated
+                color: theme.surfaceElevated
                 Row {
                     id: sortRow
                     height: parent.height
@@ -719,13 +833,6 @@ Rectangle {
                     }
                     QbzIcon { name: "chevron-down"; width: 12; height: 12; anchors.verticalCenter: parent.verticalCenter; tintName: "secondary" }
                 }
-                MouseArea {
-                    id: sortArea
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    // POC-NOTE: per-section sort menu (server re-sort) not wired.
-                }
             }
         }
 
@@ -739,8 +846,14 @@ Rectangle {
                 delegate: AlbumCard {
                     albumId: modelData.id
                     title: modelData.title
-                    artist: modelData.artist
-                    artistId: modelData.artistId
+                    // The subtitle slot carries the YEAR on the artist page,
+                    // not the artist: artist.rs `card_to_item` (:670-688)
+                    // re-routes `year` through the card's `artist` field
+                    // precisely so the shared card primitive stays unchanged
+                    // ("the artist is redundant since we're already on their
+                    // page"), and blanks artist_id so the line is inert.
+                    artist: modelData.year
+                    artistId: ""
                     genre: modelData.genre
                     year: modelData.year
                     qualityTier: modelData.qualityTier
@@ -779,15 +892,33 @@ Rectangle {
     }
 
     // ============================ the page ================================
+    // FULL WIDTH even with the sidebar open. The .slint reserves the 300px
+    // inside the BODY ROW only (ArtistPageView.slint:1094) — the header and
+    // the JUMP TO bar span the whole window so the gradient covers edge to
+    // edge (:184-191). Narrowing the whole Flickable (the port's old
+    // `anchors.rightMargin`) squeezed the portrait and the bio too.
     Flickable {
         id: flick
         anchors.fill: parent
-        anchors.rightMargin: root.networkOpen ? 300 : 0
         clip: true
         contentWidth: width
         contentHeight: page.implicitHeight
         boundsBehavior: Flickable.StopAtBounds
-        Behavior on anchors.rightMargin { NumberAnimation { duration: 160; easing.type: Easing.InOutQuad } }
+
+        // Artwork-tinted header band — the SAME shared component AlbumView
+        // mounts. First child = painted under the page; inside the Flickable
+        // = scrolls with it (ArtistPageView.slint:213); full-bleed.
+        HeaderGradient {
+            x: 0
+            y: 0
+            width: flick.width
+            // .slint:147 `atmo-height: page.y + body-row.y` — the band ends
+            // exactly where the body begins, i.e. at the JUMP TO strip, so a
+            // long bio pushes the fade down with no manual tuning.
+            height: page.y + jumpBar.y
+            tint: artist.headerColor || ""
+            active: root.headerAtmoOn
+        }
 
         Column {
             id: page
@@ -797,6 +928,12 @@ Rectangle {
             topPadding: 11
             bottomPadding: 100
             spacing: 0
+
+            // Width available to the BODY sections: the page width less the
+            // 32+32 padding, less the sidebar reservation while it is open
+            // (.slint's empty 300px slot in the body row). The header and the
+            // jump strip deliberately do NOT subtract it.
+            readonly property real bodyWidth: width - 64 - (root.networkOpen ? 300 : 0)
 
             Item { width: 1; height: 22 }
 
@@ -865,7 +1002,7 @@ Rectangle {
                     Text {
                         width: parent.width
                         text: artist.name || ""
-                        color: theme.textPrimary
+                        color: root.hdrStrong
                         font.pixelSize: theme.fontSection
                         font.weight: theme.weightBold
                         elide: Text.ElideRight
@@ -876,7 +1013,7 @@ Rectangle {
                         visible: (artist.bio || "") !== ""
                         width: parent.width
                         text: artist.bioShort || ""
-                        color: theme.textSecondary
+                        color: root.hdrBody
                         font.pixelSize: theme.fontLegal
                         wrapMode: Text.WordWrap
                     }
@@ -908,13 +1045,18 @@ Rectangle {
                     }
 
                     Item { width: 1; height: 18 }
-                    // Action row.
+                    // Action row — ArtistPageView.slint:413-591. Four
+                    // circles (NO Play: Popular Tracks carries its own), then
+                    // a stretch, then the catalog/library toggle floated
+                    // right. The palette arm follows the header backdrop
+                    // (`on-surface: root.hdr-on-surface`, :417).
                     Row {
                         width: parent.width
                         spacing: 12
                         QbzCircleAction {
                             readonly property bool following: root.toggleState("artist", artist.isFollowing)
                             name: following ? "heart-filled" : "heart"
+                            overlay: root.hdrOverlay
                             active: following
                             anchors.verticalCenter: parent.verticalCenter
                             onClicked: {
@@ -922,14 +1064,21 @@ Rectangle {
                                 QbzLibrary.libraryToggleFavorite("artist", artist.id)
                             }
                         }
+                        // Radio — the .slint opens a QBZ-radio / Qobuz-radio
+                        // dropdown; neither engine has a seam on this bridge,
+                        // and the dropdown it used to open had two rows that
+                        // just closed themselves. DIMMED and inert-by-
+                        // declaration until an engine lands.
                         QbzCircleAction {
                             id: radioBtn
                             name: "radio"
+                            overlay: root.hdrOverlay
+                            btnEnabled: false
                             anchors.verticalCenter: parent.verticalCenter
-                            onClicked: radioPopup.openBelowRight(radioBtn)
                         }
                         QbzCircleAction {
                             name: "element-connect"
+                            overlay: root.hdrOverlay
                             active: root.networkOpen
                             anchors.verticalCenter: parent.verticalCenter
                             onClicked: root.networkOpen = !root.networkOpen
@@ -937,75 +1086,40 @@ Rectangle {
                         QbzCircleAction {
                             id: overflowBtn
                             name: "ellipsis"
+                            overlay: root.hdrOverlay
                             anchors.verticalCenter: parent.verticalCenter
                             onClicked: function (mouse) { overflowMenu.openAtCursor(overflowBtn, mouse.x, mouse.y) }
                         }
-                        Item { width: parent.width - 4 * 32 - 4 * 12 - segTabs.width; height: 1 }
-                        // From catalog / In library (webplayer parity).
-                        Rectangle {
+                        // Stretch (.slint:579 `Rectangle { horizontal-stretch: 1 }`).
+                        // Clamped: at a narrow window an unclamped negative
+                        // width silently reflows the whole row.
+                        Item {
+                            width: Math.max(0, parent.width - 4 * 32 - 4 * 12
+                                               - (segTabs.visible ? segTabs.width + 12 : 0))
+                            height: 1
+                        }
+                        // From catalog / In library — .slint:582 mounts the
+                        // SHARED SegmentedTabBar; the port hand-rolled a copy
+                        // of it here whose delegate walked the wrong parent
+                        // chain (`parent.parent.modelData` on a Row, and the
+                        // count chip read `active` off the wrong node), so the
+                        // count badge never took its active colours. This is
+                        // the shared control (controls/QbzTabBar.qml), which
+                        // is that same SegmentedTabBar 1:1 — counts on, and
+                        // the 2px accent underline the .slint's Segment draws
+                        // for the active tab (:86-93).
+                        QbzTabBar {
                             id: segTabs
                             visible: (artist.libraryCount || 0) > 0
-                            width: segRow.width
-                            height: segRow.height
                             anchors.verticalCenter: parent.verticalCenter
-                            color: theme.surfaceElevated
-                            radius: 6
-                            Row {
-                                id: segRow
-                                padding: 3
-                                spacing: 4
-                                Repeater {
-                                    model: [
-                                        { "id": "catalog", "label": QbzSession.tr("From catalog", QbzSession.trRev), "count": 0 },
-                                        { "id": "library", "label": QbzSession.tr("In library", QbzSession.trRev), "count": artist.libraryCount || 0 },
-                                    ]
-                                    delegate: Rectangle {
-                                        required property var modelData
-                                        property bool active: root.artistTab === modelData.id
-                                        width: segTabRow.implicitWidth
-                                        height: segTabRow.implicitHeight
-                                        radius: 4
-                                        color: active ? theme.surfaceMain
-                                             : segTabArea.containsMouse ? theme.surfaceHover : "transparent"
-                                        Row {
-                                            id: segTabRow
-                                            leftPadding: 12
-                                            rightPadding: parent && parent.parent.modelData.count > 0 ? 8 : 12
-                                            topPadding: 6
-                                            bottomPadding: 6
-                                            spacing: 7
-                                            Text {
-                                                text: modelData.label
-                                                color: parent.parent.active ? theme.textPrimary : theme.textMuted
-                                                font.pixelSize: theme.fontLegal
-                                                font.weight: theme.weightMedium
-                                            }
-                                            Rectangle {
-                                                visible: modelData.count > 0
-                                                width: Math.max(18, segCountText.implicitWidth + 10)
-                                                height: 16
-                                                radius: 8
-                                                color: parent.parent.active ? "#26ffffff" : "#14ffffff"
-                                                Text {
-                                                    id: segCountText
-                                                    anchors.centerIn: parent
-                                                    text: modelData.count
-                                                    color: parent.parent.active ? theme.textPrimary : theme.textSecondary
-                                                    font.pixelSize: 11
-                                                    font.weight: theme.weightMedium
-                                                }
-                                            }
-                                        }
-                                        MouseArea {
-                                            id: segTabArea
-                                            anchors.fill: parent
-                                            hoverEnabled: true
-                                            cursorShape: Qt.PointingHandCursor
-                                            onClicked: root.artistTab = modelData.id
-                                        }
-                                    }
-                                }
-                            }
+                            counts: true
+                            underline: true
+                            activeId: root.artistTab
+                            tabs: [
+                                { "id": "catalog", "label": QbzSession.tr("From catalog", QbzSession.trRev), "count": 0 },
+                                { "id": "library", "label": QbzSession.tr("In library", QbzSession.trRev), "count": artist.libraryCount || 0 },
+                            ]
+                            onSelected: function (id) { root.artistTab = id }
                         }
                     }
                 }
@@ -1013,44 +1127,25 @@ Rectangle {
 
             Item { width: 1; height: 20 }
 
-            // --- JUMP TO bar (inline; sticky is POC-NOTE) -----------------
-            Rectangle {
+            // --- JUMP TO bar ---------------------------------------------
+            // The SHARED controls/QbzJumpNavBar (primitives/JumpNavBar.slint
+            // 1:1). What the port drew by hand was the tab strip ONLY: no
+            // "JUMP TO" caption, no bottom hairline, no search affordance,
+            // 13px/medium type instead of the .slint's 15px/regular, and the
+            // wrong three tab colours. padH 0 because this Column already
+            // pads 32 — the .slint's own 32px padding lands the strip in the
+            // same place.
+            // POC-NOTE (unchanged): the bar scrolls with the page; the
+            // .slint's sticky clamp (:1120-1126) is not ported.
+            QbzJumpNavBar {
+                id: jumpBar
                 width: parent.width - 64
-                height: 44
-                color: theme.surfaceMain
-                Row {
-                    anchors.left: parent.left
-                    anchors.verticalCenter: parent.verticalCenter
-                    spacing: 16
-                    Repeater {
-                        model: root.jumpTabs
-                        delegate: Column {
-                            required property var modelData
-                            spacing: 0
-                            Text {
-                                text: modelData.label
-                                color: root.activeJumpTab === modelData.id ? theme.textPrimary
-                                     : jumpTabArea.containsMouse ? theme.textSecondary : theme.textMuted
-                                font.pixelSize: 13
-                                font.weight: root.activeJumpTab === modelData.id ? theme.weightSemibold : theme.weightMedium
-                                MouseArea {
-                                    id: jumpTabArea
-                                    anchors.fill: parent
-                                    hoverEnabled: true
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: root.scrollToSection(modelData.id)
-                                }
-                            }
-                            Rectangle {
-                                visible: root.activeJumpTab === modelData.id
-                                width: parent.width
-                                height: 2
-                                radius: 1
-                                color: theme.accent
-                            }
-                        }
-                    }
-                }
+                padH: 0
+                barBg: root.ambientOn ? "transparent" : theme.surfaceMain
+                tabs: root.jumpTabs
+                activeTabId: root.activeJumpTab
+                onTabClicked: function (id) { root.scrollToSection(id) }
+                onSearchEdited: function (text) { root.searchQuery = text }
             }
 
             // --- Primary placeholder --------------------------------------
@@ -1089,7 +1184,10 @@ Rectangle {
             Column {
                 id: sectionAnchors
                 visible: root.artistTab === "catalog" && !QbzArtist.artistLoading
-                width: parent.width - 64
+                // Body width: yields the 300px the sidebar overlay occupies
+                // (.slint's empty reservation slot, :1094) so the content is
+                // never painted under the panel.
+                width: page.bodyWidth
                 spacing: 0
 
                 // --- Popular Tracks -------------------------------------
@@ -1182,8 +1280,10 @@ Rectangle {
                     AlbumCard {
                         albumId: artist.lastRelease ? artist.lastRelease.id : ""
                         title: artist.lastRelease ? artist.lastRelease.title : ""
-                        artist: artist.lastRelease ? artist.lastRelease.artist : ""
-                        artistId: artist.lastRelease ? artist.lastRelease.artistId : ""
+                        // year in the subtitle slot — card_to_item again
+                        // (artist.rs:784 maps last_release through it too).
+                        artist: artist.lastRelease ? artist.lastRelease.year : ""
+                        artistId: ""
                         genre: artist.lastRelease ? artist.lastRelease.genre : ""
                         year: artist.lastRelease ? artist.lastRelease.year : ""
                         qualityTier: artist.lastRelease ? artist.lastRelease.qualityTier : ""
@@ -1362,8 +1462,9 @@ Rectangle {
                                 delegate: AlbumCard {
                                     albumId: modelData.id
                                     title: modelData.title
-                                    artist: modelData.artist
-                                    artistId: modelData.artistId
+                                    // year in the subtitle slot (card_to_item)
+                                    artist: modelData.year
+                                    artistId: ""
                                     genre: modelData.genre
                                     year: modelData.year
                                     qualityTier: modelData.qualityTier
@@ -1380,7 +1481,7 @@ Rectangle {
             Column {
                 id: libraryTab
                 visible: root.artistTab === "library" && !QbzArtist.artistLoading
-                width: parent.width - 64
+                width: page.bodyWidth
                 spacing: 0
                 readonly property var libItems: {
                     var out = []
@@ -1450,13 +1551,20 @@ Rectangle {
             }
         }
 
-        QbzScrollBar {
-            anchors.right: parent.right
-            anchors.rightMargin: 4
-            anchors.top: parent.top
-            anchors.bottom: parent.bottom
-            target: flick
-        }
+    }
+
+    // Gutter scrollbar. A SIBLING of the Flickable, not a child: anything
+    // declared inside a Flickable lands in its contentItem and scrolls away
+    // with the page. Hidden while the network panel is open — that panel pins
+    // to the same right edge and carries its own scroll
+    // (ArtistPageView.slint:1157).
+    QbzScrollBar {
+        visible: !root.networkOpen
+        anchors.right: parent.right
+        anchors.rightMargin: 4
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        target: flick
     }
 
     // Library feed access (the phase-5 document, parsed in LibraryView).
@@ -1465,10 +1573,30 @@ Rectangle {
     }
 
     // --- Network sidebar (300px, surface-card + 1px left border) ---------
+    // BOUNDED, not full-height. ArtistPageView.slint:1178-1195:
+    //   natural-top = the live viewport y of the body row + the JUMP TO bar
+    //                 height  (i.e. the panel starts under the strip, never
+    //                 beside the portrait)
+    //   y           = max(natural-top, sticky-top=44)  — it rides the scroll
+    //                 down and then parks 44px from the top
+    //   height      = root.height - y                 — always flush with the
+    //                 bottom, so no gap appears once it is parked
+    // The port ran it top-to-bottom of the whole view, which put the panel
+    // alongside the header and made it read as app chrome instead of a page
+    // panel.
     Rectangle {
+        id: netPanel
+        // Viewport-relative y of the strip's bottom edge. `jumpBar.y` is
+        // content coords, so subtracting the scroll offset gives the live
+        // viewport position — the same arithmetic the .slint does with
+        // absolute-position.
+        readonly property real naturalTop:
+            page.y + jumpBar.y + jumpBar.height - flick.contentY
+        readonly property real stickyTop: 44
+
         anchors.right: parent.right
-        anchors.top: parent.top
-        anchors.bottom: parent.bottom
+        y: Math.max(naturalTop, stickyTop)
+        height: Math.max(0, root.height - y)
         width: root.networkOpen ? 300 : 0
         clip: true
         color: theme.surfaceCard
@@ -1887,59 +2015,29 @@ Rectangle {
         }
     }
 
-    // --- Radio dropdown (INERT items — POC-NOTE: radio engines) ----------
-    QbzContextMenu {
-        id: radioPopup
-        menuWidth: 180
-            Repeater {
-                model: [QbzSession.tr("QBZ Radio", QbzSession.trRev), QbzSession.tr("Qobuz Radio", QbzSession.trRev)]
-                delegate: Rectangle {
-                    required property string modelData
-                    width: parent ? parent.width : 0
-                    height: 33
-                    radius: 5
-                    color: radioOptArea.containsMouse ? theme.surfaceHover : "transparent"
-                    Row {
-                        anchors.fill: parent
-                        anchors.leftMargin: 8
-                        spacing: 8
-                        QbzIcon { name: "radio"; width: 15; height: 15; anchors.verticalCenter: parent.verticalCenter; tintName: "secondary" }
-                        Text {
-                            height: parent.height
-                            text: modelData
-                            color: theme.textSecondary
-                            font.pixelSize: 13
-                            verticalAlignment: Text.AlignVCenter
-                        }
-                    }
-                    MouseArea {
-                        id: radioOptArea
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: radioPopup.close()
-                    }
-                }
-            }
-        }
-
     // --- ⋯ overflow menu ---------------------------------------------------
     QbzContextMenu {
         id: overflowMenu
         menuWidth: 224
             Repeater {
+                // `live: false` = no seam on this bridge. The .slint greys
+                // its own unavailable rows the same way (Artist Scene is
+                // `enabled: NetworkSidebarState.mb-available`,
+                // ArtistPageView.slint:523) — dimmed, no hover, no click,
+                // and the menu keeps its shape.
                 model: [
-                    { "label": QbzSession.tr("Create Artist Collection", QbzSession.trRev), "icon": "library-big", "action": "stub" },
-                    { "label": QbzSession.tr("Artist Scene", QbzSession.trRev), "icon": "map-pin", "action": "stub" },
-                    { "label": QbzSession.tr("Share", QbzSession.trRev), "icon": "link", "action": "stub" },
-                    { "label": root.toggleState("artistPin", artist.isPinned) ? QbzSession.tr("Unpin", QbzSession.trRev) : QbzSession.tr("Pin", QbzSession.trRev), "icon": root.toggleState("artistPin", artist.isPinned) ? "pin-filled" : "pin", "action": "pin" },
+                    { "label": QbzSession.tr("Create Artist Collection", QbzSession.trRev), "icon": "library-big", "action": "stub", "live": false },
+                    { "label": QbzSession.tr("Artist Scene", QbzSession.trRev), "icon": "map-pin", "action": "stub", "live": false },
+                    { "label": QbzSession.tr("Share", QbzSession.trRev), "icon": "link", "action": "stub", "live": false },
+                    { "label": root.toggleState("artistPin", artist.isPinned) ? QbzSession.tr("Unpin", QbzSession.trRev) : QbzSession.tr("Pin", QbzSession.trRev), "icon": root.toggleState("artistPin", artist.isPinned) ? "pin-filled" : "pin", "action": "pin", "live": true },
                 ]
                 delegate: Rectangle {
                     required property var modelData
                     width: parent ? parent.width : 0
                     height: 33
                     radius: 5
-                    color: omiArea.containsMouse ? theme.surfaceHover : "transparent"
+                    opacity: modelData.live ? 1.0 : 0.4
+                    color: (modelData.live && omiArea.containsMouse) ? theme.surfaceHover : "transparent"
                     Row {
                         anchors.fill: parent
                         anchors.leftMargin: 8
@@ -1958,6 +2056,7 @@ Rectangle {
                     MouseArea {
                         id: omiArea
                         anchors.fill: parent
+                        enabled: modelData.live
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
                         onClicked: {
@@ -1971,11 +2070,16 @@ Rectangle {
                 }
             }
             Rectangle { width: parent.width; height: 1; color: theme.borderSubtle }
+            // Blacklist: the Qt bridge exposes the blacklist COUNTERS but no
+            // artist-block invokable (same gap AlbumCard.qml documents for
+            // "Block this album"), so the row is dimmed and inert rather than
+            // closing the menu and doing nothing.
             Rectangle {
                 width: parent.width
                 height: 33
                 radius: 5
-                color: blArea.containsMouse ? theme.surfaceHover : "transparent"
+                opacity: 0.4
+                color: "transparent"
                 Row {
                     anchors.fill: parent
                     anchors.leftMargin: 8
@@ -1988,13 +2092,6 @@ Rectangle {
                         font.pixelSize: 13
                         verticalAlignment: Text.AlignVCenter
                     }
-                }
-                MouseArea {
-                    id: blArea
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: overflowMenu.close()
                 }
             }
         }

@@ -61,6 +61,10 @@ pub struct PlaylistTrackRow {
     pub duration_secs: u64,
     #[serde(rename = "qualityTier")]
     pub quality_tier: String,
+    /// Bit-depth / rate line for the row's quality badge — every other
+    /// producer already emits it; without it the badge shows a bare tier.
+    #[serde(rename = "qualityDetail")]
+    pub quality_detail: String,
     #[serde(rename = "qualityLabel")]
     pub quality_label: String,
     pub explicit: bool,
@@ -192,6 +196,10 @@ fn map_track(track: &Track) -> PlaylistTrackRow {
         duration: mmss(track.duration),
         duration_secs: track.duration as u64,
         quality_tier: tier(track.maximum_bit_depth).to_string(),
+        quality_detail: crate::home_qt::quality_detail_from_parts(
+            track.maximum_bit_depth,
+            track.maximum_sampling_rate,
+        ),
         quality_label: quality_label(track.maximum_bit_depth, track.maximum_sampling_rate),
         explicit: track.parental_warning,
         art_url: album

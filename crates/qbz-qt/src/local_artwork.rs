@@ -69,7 +69,7 @@ const MEMO_CAP: usize = 8192;
 /// deliberate: it is the point where a window of ~50 covers stops being the
 /// user-visible wait, while the peak resident set stays at four decoded
 /// bitmaps (a 3000px jpeg is ~36 MB decoded) rather than one per core.
-const GEN_WORKERS: usize = 4;
+const GEN_WORKERS: usize = 8;
 
 /// Per-source generation locks, sharded. 64 shards keeps false sharing
 /// between unrelated covers negligible at [`GEN_WORKERS`] × a few overlapping
@@ -191,6 +191,17 @@ pub async fn stream_cold(cold: Vec<(String, String)>, emit: fn(String, String)) 
 /// `stat` on the thumbnail path (which is where a previous run's thumbnails
 /// live). `None` means "must be generated" — the caller defers it to phase 2.
 fn cached_thumbnail(src: &str) -> Option<PathBuf> {
+    // A local cover is very often ALREADY the thumbnail the scanner generated.
+    // Re-hashing its path yields a DIFFERENT filename, so the cold phase decodes
+    // it, Lanczos-resizes it to its own size (a null scale) and re-encodes a
+    // byte-identical-looking duplicate — that is most of the wait before the
+    // first cover appears.
+    if let Ok(dir) = qbz_library::get_thumbnails_dir() {
+        let p = std::path::Path::new(src);
+        if p.starts_with(&dir) && p.is_file() {
+            return Some(p.to_owned());
+        }
+    }
     if let Ok(memo) = THUMBS.read() {
         if let Some(hit) = memo.get(src) {
             if hit.is_file() {

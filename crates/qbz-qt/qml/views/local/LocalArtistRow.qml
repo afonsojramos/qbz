@@ -19,8 +19,10 @@ Rectangle {
     property var view: null
     signal picked(string name)
 
-    readonly property bool avatarPending: root.view
-        ? root.view.artPending(root.item.artKey) : false
+    /// Does this artist expect an avatar at all? (Whether one has ARRIVED is
+    /// the placeholder's business — it hands over on the paint, not the path.)
+    readonly property bool avatarWanted: root.view
+        ? root.view.artWanted(root.item.artKey) : false
 
     QbzTheme { id: theme }
 
@@ -42,11 +44,11 @@ Rectangle {
             color: theme.surfaceElevated
             clip: true
             QbzIcon {
-                // The designed empty state — hidden only while the
-                // placeholder is actually up, so once it settles the glyph
-                // is what the user is left with (never a blank disc).
-                visible: root.artSource === ""
-                    && (!root.avatarPending || avatarSkel.settled)
+                // The designed empty state — shown exactly when there is no
+                // art AND the placeholder has retired, so the user is never
+                // left with a blank disc and never sees the glyph flash
+                // underneath a cover that is about to paint.
+                visible: root.artSource === "" && avatarSkel.retired
                 name: "user"
                 width: 22
                 height: 22
@@ -54,6 +56,7 @@ Rectangle {
                 tintName: "muted"
             }
             RoundedImage {
+                id: avatarArt
                 anchors.fill: parent
                 source: root.artSource
                 radius: 24
@@ -63,9 +66,11 @@ Rectangle {
                 id: avatarSkel
                 variant: "circle"
                 anchors.fill: parent
-                visible: root.avatarPending
+                pending: root.avatarWanted
+                coverReady: avatarArt.ready
                 phase: root.view ? root.view.skelPhase : false
                 settleMs: root.view ? root.view.artSettleMs : 0
+                settleHold: root.view ? root.view.artPulse : false
             }
         }
         Column {

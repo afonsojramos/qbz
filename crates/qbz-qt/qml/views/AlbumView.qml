@@ -8,9 +8,17 @@
 // same artist", "Listening suggestions").
 //
 // POC-NOTEs: multi-select + bulk bar, offline download column, booklet,
-// custom-cover menu, album-info modal, the header atmosphere
-// (album-header-gradient pref) — out of scope (visible stubs are inert).
-// Text keeps the theme colors (header-light = false here).
+// custom-cover menu, album-info modal — out of scope (visible stubs are
+// inert).
+//
+// Header atmosphere (AlbumPageView.slint:161-189, 221-257): the
+// artwork-tinted band IS wired now, through the shared
+// controls/HeaderGradient.qml (route B — see that file for why the blurred
+// route is not available on this path). It brings the .slint's header-colour
+// rules with it: with the band on, the header sits on a DARK backdrop, so
+// the text goes light regardless of theme (`hdrStrong` / `hdrBody`,
+// .slint:169-172) and the CircleActions switch to their overlay palette
+// (`hdrOverlay` = the .slint's inverted `hdr-on-surface`, :179).
 
 import QtQuick
 import QtQuick.Controls
@@ -41,6 +49,34 @@ Rectangle {
     property var coverMap: ({})
     // Client-side track search (AlbumActions.search equivalent).
     property string trackQuery: ""
+
+    // ---- Header atmosphere (AlbumPageView.slint:161-189) -----------------
+    // The pref, LIVE where possible: the settings snapshot is only published
+    // on settings-view open / mutation, so on a cold start it is empty and
+    // the document's own copy (album_qt.rs `headerGradient`) answers instead.
+    readonly property bool headerGradientPref: {
+        var raw = QbzBridge.settingsJson
+        if (raw && raw.length > 2) {
+            try {
+                var d = JSON.parse(raw)
+                if (d.albumHeaderGradient !== undefined)
+                    return d.albumHeaderGradient === true
+            } catch (e) { /* fall through to the document copy */ }
+        }
+        return album.headerGradient !== false
+    }
+    // .slint:168 — the album's own atmosphere is SUPPRESSED under the
+    // app-wide dynamic background (they clash); the dynamic background then
+    // provides the dark backdrop instead.
+    readonly property bool headerAtmoOn: headerGradientPref && !ambientOn
+    // .slint:167 — dark backdrop from EITHER source means light header text.
+    readonly property bool headerLight: headerGradientPref || ambientOn
+    readonly property color hdrStrong: headerLight ? "#ffffff" : theme.textPrimary
+    readonly property color hdrBody: headerLight ? "#e0ffffff" : theme.textSecondary
+    // (the .slint declares an `hdr-muted` tier too, :173, but never binds it
+    //  to anything — not ported rather than ported dead)
+    // .slint:179 — with no dark backdrop the circles use the on-surface arm.
+    readonly property bool hdrOverlay: headerLight
 
     readonly property var visibleTracks: {
         if (trackQuery === "") return tracks
@@ -337,6 +373,23 @@ Rectangle {
         contentHeight: page.implicitHeight
         boundsBehavior: Flickable.StopAtBounds
 
+        // Artwork-tinted header band. FIRST child so it paints under the
+        // page, and inside the Flickable so it scrolls with the content
+        // (AlbumPageView.slint:221 — the atmosphere lives in the Flickable).
+        // Full-bleed on purpose: the page's 32px padding must NOT clip it or
+        // a dark gutter strip appears on the right (.slint:199-202).
+        HeaderGradient {
+            x: 0
+            y: 0
+            width: pageFlick.width
+            // .slint:189 `atmo-height: page.y + header-divider.y` — the band
+            // ends EXACTLY on the header/track-list divider, whatever height
+            // a long editorial description gave the header.
+            height: page.y + headerDivider.y
+            tint: album.headerColor || ""
+            active: root.headerAtmoOn
+        }
+
         Column {
             id: page
             width: parent.width
@@ -418,7 +471,7 @@ Rectangle {
                     Text {
                         width: parent.width
                         text: header.title || ""
-                        color: theme.textPrimary
+                        color: root.hdrStrong
                         font.pixelSize: theme.fontSection
                         font.weight: theme.weightBold
                         elide: Text.ElideRight
@@ -437,13 +490,13 @@ Rectangle {
                                 Text {
                                     visible: index > 0
                                     text: "  •  "
-                                    color: theme.textSecondary
+                                    color: root.hdrBody
                                     font.pixelSize: theme.fontHeading
                                     font.weight: theme.weightBold
                                 }
                                 Text {
                                     text: modelData[0]
-                                    color: creditArea.containsMouse && modelData[1] !== "" ? theme.textPrimary : theme.textSecondary
+                                    color: creditArea.containsMouse && modelData[1] !== "" ? root.hdrStrong : root.hdrBody
                                     font.pixelSize: theme.fontHeading
                                     font.weight: theme.weightBold
                                     MouseArea {
@@ -458,7 +511,7 @@ Rectangle {
                                 Text {
                                     visible: modelData[2] !== ""
                                     text: " (" + modelData[2] + ")"
-                                    color: theme.textSecondary
+                                    color: root.hdrBody
                                     font.pixelSize: theme.fontHeading
                                 }
                             }
@@ -472,12 +525,12 @@ Rectangle {
                         Text {
                             visible: (header.metaPre || "") !== ""
                             text: (header.metaPre || "") + "   •   "
-                            color: theme.textSecondary
+                            color: root.hdrBody
                             font.pixelSize: theme.fontBody
                         }
                         Text {
                             text: header.label || ""
-                            color: labelArea.containsMouse ? theme.accent : theme.textSecondary
+                            color: labelArea.containsMouse ? theme.accent : root.hdrBody
                             font.pixelSize: theme.fontBody
                             MouseArea {
                                 id: labelArea
@@ -490,7 +543,7 @@ Rectangle {
                         Text {
                             visible: (header.metaPost || "") !== ""
                             text: "   •   " + (header.metaPost || "")
-                            color: theme.textSecondary
+                            color: root.hdrBody
                             font.pixelSize: theme.fontBody
                         }
                     }
@@ -498,7 +551,7 @@ Rectangle {
                         visible: (header.labelId || "") === "" || (header.label || "") === ""
                         width: parent.width
                         text: header.infoLine || ""
-                        color: theme.textSecondary
+                        color: root.hdrBody
                         font.pixelSize: theme.fontBody
                         elide: Text.ElideRight
                     }
@@ -509,7 +562,7 @@ Rectangle {
                         visible: (header.description || "") !== ""
                         width: parent.width
                         text: header.descriptionShort || ""
-                        color: theme.textSecondary
+                        color: root.hdrBody
                         font.pixelSize: theme.fontLegal
                         wrapMode: Text.WordWrap
                     }
@@ -533,38 +586,31 @@ Rectangle {
                     }
 
                     Item { width: 1; height: 20 }
-                    // Action row (on-surface CircleActions).
+                    // Action row — AlbumPageView.slint:504-640. One shared
+                    // CircleAction for every button including Play (the
+                    // hand-rolled 44px disc it used to be drifted from the
+                    // control on ring, hover and glyph tint); the palette arm
+                    // follows the header backdrop, exactly like the .slint's
+                    // `on-surface: root.hdr-on-surface`.
                     Row {
                         spacing: 12
-                        // Play — accent disc, white glyph (on-surface primary).
-                        Rectangle {
-                            width: 44
-                            height: 44
-                            radius: 22
-                            color: playHdrArea.containsMouse ? theme.accentHover : theme.accent
-                            QbzIcon {
-                                anchors.centerIn: parent
-                                name: "play-fill"
-                                width: 19
-                                height: 19
-                                tintName: "primary"
-                            }
-                            MouseArea {
-                                id: playHdrArea
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: QbzPlayer.playAlbum(header.id)
-                            }
+                        QbzCircleAction {
+                            primary: true
+                            overlay: root.hdrOverlay
+                            name: "play-fill"
+                            anchors.verticalCenter: parent.verticalCenter
+                            onClicked: QbzPlayer.playAlbum(header.id)
                         }
                         QbzCircleAction {
                             name: "shuffle"
+                            overlay: root.hdrOverlay
                             anchors.verticalCenter: parent.verticalCenter
                             onClicked: QbzPlayer.playAlbumShuffled(header.id)
                         }
                         QbzCircleAction {
                             readonly property bool favorite: root.toggleState("album", header.isFavorite)
                             name: favorite ? "heart-filled" : "heart"
+                            overlay: root.hdrOverlay
                             active: favorite
                             anchors.verticalCenter: parent.verticalCenter
                             onClicked: {
@@ -572,14 +618,34 @@ Rectangle {
                                 QbzLibrary.libraryToggleFavorite("album", header.id)
                             }
                         }
-                        // Radio / Mixtape / Info — INERT stubs (POC-NOTE:
-                        // radio engines, mixtape store, album-info modal).
-                        QbzCircleAction { name: "radio"; anchors.verticalCenter: parent.verticalCenter }
-                        QbzCircleAction { name: "cassette-tape"; anchors.verticalCenter: parent.verticalCenter }
-                        QbzCircleAction { name: "info"; anchors.verticalCenter: parent.verticalCenter }
+                        // Radio / Mixtape / Album info: no seam on this
+                        // bridge (radio engines, mixtape store, credits
+                        // modal). They stay VISIBLE but DISABLED — the
+                        // .slint's own `enabled: false` treatment (dimmed to
+                        // 0.4, click gated) — rather than rendering as live
+                        // buttons that do nothing on click.
+                        QbzCircleAction {
+                            name: "radio"
+                            overlay: root.hdrOverlay
+                            btnEnabled: false
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+                        QbzCircleAction {
+                            name: "cassette-tape"
+                            overlay: root.hdrOverlay
+                            btnEnabled: false
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+                        QbzCircleAction {
+                            name: "info"
+                            overlay: root.hdrOverlay
+                            btnEnabled: false
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
                         QbzCircleAction {
                             id: albumMenuBtn
                             name: "ellipsis"
+                            overlay: root.hdrOverlay
                             anchors.verticalCenter: parent.verticalCenter
                             onClicked: function (mouse) { albumMenu.openAtCursor(albumMenuBtn, mouse.x, mouse.y) }
                         }
@@ -588,8 +654,9 @@ Rectangle {
             }
 
             Item { width: 1; height: 20 }
-            // Header divider (the atmosphere ends here in Slint).
-            Rectangle { width: parent.width - 64; height: 1; color: theme.borderSubtle }
+            // Header divider. The gradient band above sizes itself to THIS
+            // item's y (.slint:189 atmo-height), so it keeps its id.
+            Rectangle { id: headerDivider; width: parent.width - 64; height: 1; color: theme.borderSubtle }
             Item { width: 1; height: 8 }
 
             // --- Track list + label/awards sidebar ----------------------
@@ -668,28 +735,27 @@ Rectangle {
                         width: parent.width
                         height: 52
                         spacing: 16
-                        Row {
+                        // AlbumPageView.slint:692 mounts QualityBadgeFull —
+                        // the contained chip (format mark + tier label over
+                        // the exact bit-depth/rate line), NOT a loose mark
+                        // plus a plain "16-bit / 44.1 kHz" string. The 1:1
+                        // control already exists; this drew its own.
+                        QualityBadgeFull {
                             id: qualityRow
                             anchors.verticalCenter: parent.verticalCenter
-                            spacing: 7
-                            Image {
-                                visible: header.qualityTier === "hires"
-                                source: "../assets/hi-res.svg"
-                                width: 42
-                                height: 28
-                                anchors.verticalCenter: parent.verticalCenter
-                                sourceSize: Qt.size(84, 56)
-                                fillMode: Image.PreserveAspectFit
-                            }
-                            Text {
-                                visible: (header.qualityDetail || "") !== ""
-                                text: header.qualityDetail || ""
-                                color: theme.textMuted
-                                font.pixelSize: 12
-                                anchors.verticalCenter: parent.verticalCenter
-                            }
+                            tier: header.qualityTier || ""
+                            detail: header.qualityDetail || ""
                         }
-                        Item { width: parent.width - qualityRow.width - 168 - 30 - 3 * 16; height: 1 }
+                        // Clamped, and the badge slot only counts when the
+                        // badge is actually there (QualityBadgeFull hides
+                        // itself on an empty tier — an unclamped negative
+                        // width is a silent layout trap).
+                        Item {
+                            width: Math.max(0, parent.width
+                                - (qualityRow.visible ? qualityRow.width + 16 : 0)
+                                - 168 - 30 - 2 * 16)
+                            height: 1
+                        }
                         Rectangle {
                             width: 168
                             height: 34
@@ -729,12 +795,16 @@ Rectangle {
                                 }
                             }
                         }
+                        // Multi-select toggle — no seam on this bridge, so it
+                        // is DIMMED and inert-by-declaration instead of
+                        // rendering as a live button that swallows the click.
                         Rectangle {
                             width: 30
                             height: 30
                             radius: 6
+                            opacity: 0.4
                             anchors.verticalCenter: parent.verticalCenter
-                            color: selectArea.containsMouse ? theme.surfaceHover : theme.surfaceElevated
+                            color: theme.surfaceElevated
                             border.width: 1
                             border.color: theme.borderSubtle
                             QbzIcon {
@@ -742,14 +812,7 @@ Rectangle {
                                 width: 15
                                 height: 15
                                 anchors.centerIn: parent
-                                tintName: selectArea.containsMouse ? "primary" : "secondary"
-                            }
-                            MouseArea {
-                                id: selectArea
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                cursorShape: Qt.PointingHandCursor
-                                // POC-NOTE: multi-select out of scope.
+                                tintName: "secondary"
                             }
                         }
                     }

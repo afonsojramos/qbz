@@ -207,12 +207,15 @@ Item {
                                     root.enqueueRequested(cardCell.modelData.id, m)
                                 }
                             }
-                            // Per-item cover placeholder: it clears the
-                            // moment THIS album's thumbnail lands in artMap,
-                            // so a scrolled-into page fills in progressively
-                            // instead of as a wall of dead tiles. A bare
-                            // Rectangle — it does not take pointer events, so
-                            // the card's own areas keep working underneath.
+                            // Per-item cover placeholder, handed over to the
+                            // art itself: AlbumCard seals its RoundedImage
+                            // away, so this uses QbzSkeleton's probe arm —
+                            // `coverSource` loads the SAME pixmap-cache entry
+                            // the card is loading and retires the placeholder
+                            // when that decode completes, not when the path
+                            // appears. A bare Rectangle, so it does not take
+                            // pointer events and the card's own areas keep
+                            // working underneath.
                             // settleMs is mandatory here: local artwork
                             // resolution drops keys with no cover, so an
                             // artless album would otherwise shimmer forever
@@ -221,10 +224,13 @@ Item {
                                 variant: "art"
                                 width: 200
                                 height: 200
-                                visible: root.view
-                                    ? root.view.artPending(cardCell.modelData.artKey) : false
+                                pending: root.view
+                                    ? root.view.artWanted(cardCell.modelData.artKey) : false
+                                coverSource: root.view
+                                    ? root.view.artPathOf(cardCell.modelData.artKey) : ""
                                 phase: root.view ? root.view.skelPhase : false
                                 settleMs: root.view ? root.view.artSettleMs : 0
+                                settleHold: root.view ? root.view.artPulse : false
                             }
                             // RIGHT-only, declared after the card so every
                             // left click still reaches the card's own areas.

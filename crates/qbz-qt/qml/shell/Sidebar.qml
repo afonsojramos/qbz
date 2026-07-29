@@ -7,7 +7,10 @@
 // Top-level section nav rows (Discover / Library / Local Library / My QBZ)
 // replicate SidebarNavRow: 34px rows, radius 6, 16px icons, 13px/w500
 // labels, surface-hover on hover, Discover + Library HIDDEN while offline
-// (ADR-010 mount-site gating).
+// (ADR-010 mount-site gating). The whole block — rows AND the hairline under
+// them — is mounted only while `QbzShell.navInSidebar` is ON; with it OFF the
+// sections move to the header (HeaderBar.qml) and this sidebar starts at the
+// PLAYLISTS toolbar, exactly like Sidebar.slint:724/817.
 //
 // POC-NOTE: in the Slint app these rows open dropdown flyout menus; the
 // flyouts are out of scope — rows here navigate straight to their view and
@@ -29,8 +32,17 @@ Rectangle {
     id: root
 
     property bool mini: QbzShell.sidebarState === 1
-    // The current section — Discover (home) is the only real view.
-    property string activeNav: "discover"
+    // Which section owns the highlight. DERIVED from the live view, not set on
+    // click: the same rows can live here or in the header, history navigation
+    // (back/forward) must keep the highlight honest, and a click-set local
+    // went stale on both counts. Slint highlights its rows off
+    // HeaderMenuState.open-index — a flyout this port does not have — so the
+    // current view is the faithful stand-in (it is what SidebarDirectRow uses).
+    readonly property string activeNav:
+          QbzShell.currentView === "home" ? "discover"
+        : QbzShell.currentView === "library" ? "library"
+        : (QbzShell.currentView === "local" || QbzShell.currentView === "localalbum") ? "local"
+        : ""
     // Playlist tree state (phase 7).
     property bool searchOpen: false
     property bool playlistsCollapsed: false
@@ -154,12 +166,19 @@ Rectangle {
         anchors.leftMargin: root.mini ? 8 : theme.spacingMd
         anchors.rightMargin: root.mini ? 8 : theme.spacingMd
         anchors.topMargin: root.mini ? 8 : theme.spacingMd
-        anchors.bottomMargin: root.mini ? 8 : theme.spacingMd
+        // Per-side padding so Large can zero ONLY the bottom (Sidebar.slint:719):
+        // the reserved dock band then reaches the true window bottom-left and the
+        // cover sits flush (the L corner). Left/right/top are unchanged.
+        anchors.bottomMargin: root.largeDockActive ? 0 : (root.mini ? 8 : theme.spacingMd)
         spacing: theme.spacingMd
 
         // ---- Section nav -------------------------------------------
         Column {
             id: navColumn
+            // Section-nav placement: OFF moves the whole block to the header.
+            // A Column skips invisible children entirely (no phantom spacing),
+            // so this is the `if` mount-site gate Slint uses.
+            visible: QbzShell.navInSidebar
             width: parent.width
             spacing: 2
 
@@ -169,29 +188,20 @@ Rectangle {
                 name: "compass"
                 label: QbzSession.tr("Discover", QbzSession.trRev)
                 visible: !QbzSession.offline
-                onClicked: {
-                    root.activeNav = "discover"
-                    QbzShell.navigateTo("home")
-                }
+                onClicked: QbzShell.navigateTo("home")
             }
             NavRow {
                 navId: "library"
                 name: "music-library-2"
                 label: QbzSession.tr("Library", QbzSession.trRev)
                 visible: !QbzSession.offline
-                onClicked: {
-                    root.activeNav = "library"
-                    QbzShell.navigateTo("library")
-                }
+                onClicked: QbzShell.navigateTo("library")
             }
             NavRow {
                 navId: "local"
                 name: "hard-drive"
                 label: QbzSession.tr("Local Library", QbzSession.trRev)
-                onClicked: {
-                    root.activeNav = "local"
-                    QbzShell.navigateTo("local")
-                }
+                onClicked: QbzShell.navigateTo("local")
             }
             // GAP: there is no MyQBZ view in this port (AppShell's loader
             // maps home/library/local/localalbum/album/artist/settings/
@@ -206,7 +216,10 @@ Rectangle {
             }
         }
 
+        // Hairline under the section nav — mounted with the nav block, not
+        // on its own (Sidebar.slint:817 gates it on the same flag).
         Rectangle {
+            visible: QbzShell.navInSidebar
             width: parent.width
             height: 1
             color: theme.borderSubtle
@@ -480,10 +493,20 @@ Rectangle {
         Item {
             visible: !root.playlistsCollapsed
             width: parent.width
+            // This is the element that FILLS (Sidebar.slint gives the playlist
+            // Rectangle `vertical-stretch: 1`): everything above it — the nav
+            // block, the hairline, the 22px toolbar — takes its natural height
+            // and the list eats the rest, down to the Column's bottom margin.
             // `root.dockReserve` keeps the rows clear of the Large-NPB cover
             // (0 in every other mode). Clamped so a short window shrinks the
             // list to nothing instead of giving it a negative height.
-            height: Math.max(0, parent.height - y - 16 - root.dockReserve)
+            //
+            // There used to be a trailing `Item { height: 0 }` "filler" after
+            // this one and a matching `- 16` here to pay for the Column spacing
+            // it introduced. Net effect: the list stopped 16px short and the
+            // sidebar read as too short against Slint. Both are gone — the
+            // list is the last child, so its bottom IS the Column's bottom.
+            height: Math.max(0, parent.height - y - root.dockReserve)
 
             Flickable {
                 id: plFlick
@@ -503,6 +526,11 @@ Rectangle {
                         delegate: Rectangle {
                             required property var modelData
                             property bool isFolder: modelData.kind === "folder"
+                            // Slint SidebarRow.use-collage: opt-OUT setting AND
+                            // at least one cover; otherwise the list-music glyph.
+                            property bool useCollage: !isFolder
+                                && QbzShell.sidebarPlaylistCollage
+                                && modelData.covers.length > 0
                             property bool isActive: !isFolder && modelData.id === root.activePlaylistId
                             // Track-drag drop target (Sidebar.slint SidebarRow):
                             // the row self-detects the drop from the shared
@@ -559,7 +587,7 @@ Rectangle {
                                     }
                                     // 2x2 micro-collage (or list-music glyph).
                                     Rectangle {
-                                        visible: !isFolder && modelData.covers.length > 0
+                                        visible: useCollage
                                         width: 20
                                         height: 20
                                         anchors.centerIn: parent
@@ -584,7 +612,7 @@ Rectangle {
                                         }
                                     }
                                     QbzIcon {
-                                        visible: !isFolder && modelData.covers.length === 0
+                                        visible: !isFolder && !useCollage
                                         name: "list-music"
                                         width: 15
                                         height: 15
@@ -684,8 +712,5 @@ Rectangle {
                 }
             }
         }
-
-        // Fill the rest.
-        Item { width: 1; height: 0; }
     }
 }

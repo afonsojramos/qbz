@@ -788,7 +788,7 @@ fn toggle_local(kind: &str, id: &str) -> Option<bool> {
 
 /// library_all.rs `is_local_feed_id` — local tracks are file paths, local
 /// albums group keys, local artists plain names; Qobuz ids are numeric.
-fn is_local_feed_id(kind: &str, id: &str) -> bool {
+pub(crate) fn is_local_feed_id(kind: &str, id: &str) -> bool {
     match kind {
         "track" | "artist" => id.parse::<u64>().is_err(),
         "album" => id.starts_with("plex:") || id.contains('|') || id.contains('/'),

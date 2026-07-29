@@ -131,20 +131,25 @@ Item {
                                     tintName: "muted"
                                 }
                                 RoundedImage {
+                                    id: blockArt
                                     anchors.fill: parent
-                                    source: root.view.artMap[block.modelData.artKey] || ""
+                                    source: root.view
+                                        ? root.view.artPathOf(block.modelData.artKey) : ""
                                     radius: 6
                                 }
-                                // Per-item: clears when THIS album's cover
-                                // lands, settles out when it has none.
+                                // Per-item: hands over when THIS album's
+                                // cover is actually painted, settles out when
+                                // it has none.
                                 QbzSkeleton {
                                     variant: "art"
                                     anchors.fill: parent
                                     blockRadius: 6
-                                    visible: root.view
-                                        ? root.view.artPending(block.modelData.artKey) : false
+                                    pending: root.view
+                                        ? root.view.artWanted(block.modelData.artKey) : false
+                                    coverReady: blockArt.ready
                                     phase: root.view ? root.view.skelPhase : false
                                     settleMs: root.view ? root.view.artSettleMs : 0
+                                    settleHold: root.view ? root.view.artPulse : false
                                 }
                             }
                             Column {

@@ -1,8 +1,20 @@
 // Top header bar — QML port of crates/qbz-ui/ui/shell/HeaderBar.slint.
 //
-// Left: the three "sacred" nav buttons (sidebar cycle, back, forward) and
-// — while the sidebar is fully closed — the compact icon-only section nav
-// (nav-in-sidebar is ON in this POC, so the full text tabs never mount).
+// Left: the three "sacred" nav buttons (sidebar cycle, back, forward) and,
+// after them, the section nav in whichever form the placement prefs ask for
+// (HeaderBar.slint:858 / :974 — the two blocks are mutually exclusive):
+//
+//   navInSidebar ON   -> the sections live in Sidebar.qml. The header shows
+//                        the COMPACT icon nav only while the sidebar is fully
+//                        closed (state 2), plus the separator + playlists
+//                        flyout button, so nothing is unreachable.
+//   navInSidebar OFF  -> the sections live HERE. Full text tabs while the
+//                        sidebar is not fully closed and navHeaderCompact is
+//                        OFF; the compact icon form when navHeaderCompact is
+//                        ON, or whenever the sidebar is fully closed.
+//
+// The search field gives up 60px whenever the nav is in the header, and
+// re-centers with a 220ms animation (HeaderBar.slint:569).
 // Center: the search field, absolutely centered on the window (VISUAL
 // replica — the cortinilla/live-search is out of scope; POC-NOTE).
 // Right: the tri-state offline status badge with its flyout (recovery
@@ -65,7 +77,118 @@ Rectangle {
         : QbzSession.offlineMode === 2 ? 2
         : QbzSession.offlineMode === 1 ? 1 : 0
 
+    // --- Section nav (shared by both header forms) ------------------------
+    // Same four sections Sidebar.qml lists, in the same order. Slint keeps two
+    // copies of this list too (Sidebar.slint:724 and HeaderBar.slint:858/974)
+    // — the alternative here would be a new singleton .qml file, which needs a
+    // build.rs entry; the list is six lines, so it stays local.
+    //
+    // `view` is the route QbzShell.navigateTo takes. My QBZ has NO view in
+    // this port (AppShell's loader maps home/library/local/localalbum/album/
+    // artist/settings/search/playlist), so it renders disabled rather than as
+    // a live control that clicks into nothing — same call Sidebar.qml makes.
+    readonly property var navSections: [
+        { "id": "discover", "icon": "compass",          "label": QbzSession.tr("Discover", QbzSession.trRev),      "view": "home",    "qobuz": true,  "enabled": true },
+        { "id": "library",  "icon": "music-library-2",  "label": QbzSession.tr("Library", QbzSession.trRev),       "view": "library", "qobuz": true,  "enabled": true },
+        { "id": "local",    "icon": "hard-drive",       "label": QbzSession.tr("Local Library", QbzSession.trRev), "view": "local",   "qobuz": false, "enabled": true },
+        { "id": "myqbz",    "icon": "qbz-symbolic",     "label": QbzSession.tr("My QBZ", QbzSession.trRev),        "view": "",        "qobuz": false, "enabled": false }
+    ]
 
+    // Highlighted section — derived from the live view, exactly like
+    // Sidebar.qml (see the note there on why this is not click-set state).
+    readonly property string activeNav:
+          QbzShell.currentView === "home" ? "discover"
+        : QbzShell.currentView === "library" ? "library"
+        : (QbzShell.currentView === "local" || QbzShell.currentView === "localalbum") ? "local"
+        : ""
+
+    // Which of the two header forms is mounted (mutually exclusive, and both
+    // off while the nav lives in the sidebar and the sidebar is not closed).
+    readonly property bool headerTabsOn: !QbzShell.navInSidebar
+        && QbzShell.sidebarState !== 2 && !QbzShell.navHeaderCompact
+    readonly property bool headerCompactOn: QbzShell.sidebarState === 2
+        || (!QbzShell.navInSidebar && QbzShell.navHeaderCompact)
+
+    // Full text tab (HeaderBar.slint NavTab): 30px tall, radius sm, icon 14
+    // (dropped under 1140px), label 11px — semibold + elevated fill when the
+    // section is the current view.
+    component NavTab: Rectangle {
+        id: navTab
+        property var section: null
+        property bool showIcon: true
+        readonly property bool isActive: section && root.activeNav === section.id
+        readonly property bool isEnabled: section && section.enabled
+
+        height: 30
+        width: tabRow.implicitWidth
+        radius: theme.radiusSm
+        opacity: isEnabled ? 1.0 : 0.5
+        color: isActive ? theme.surfaceElevated
+            : (tabArea.containsMouse && isEnabled) ? theme.surfaceHover : "transparent"
+
+        Row {
+            id: tabRow
+            height: parent.height
+            leftPadding: navTab.showIcon ? 9 : 11
+            rightPadding: 11
+            spacing: 6
+            QbzIcon {
+                visible: navTab.showIcon
+                name: navTab.section ? navTab.section.icon : ""
+                width: navTab.showIcon ? 14 : 0
+                height: 14
+                anchors.verticalCenter: parent.verticalCenter
+                tintName: navTab.isActive ? "primary" : "secondary"
+            }
+            Text {
+                height: parent.height
+                text: navTab.section ? navTab.section.label : ""
+                color: theme.textPrimary
+                font.pixelSize: 11
+                font.weight: navTab.isActive ? theme.weightSemibold : theme.weightRegular
+                verticalAlignment: Text.AlignVCenter
+            }
+        }
+        MouseArea {
+            id: tabArea
+            anchors.fill: parent
+            enabled: navTab.isEnabled
+            hoverEnabled: navTab.isEnabled
+            cursorShape: Qt.PointingHandCursor
+            onClicked: QbzShell.navigateTo(navTab.section.view)
+        }
+    }
+
+    // Compact icon-only button (HeaderBar.slint CompactNavBtn): 30x30, icon
+    // 16, elevated fill + primary tint while its section is current.
+    component CompactNavBtn: Rectangle {
+        id: cnb
+        property var section: null
+        readonly property bool isActive: section && root.activeNav === section.id
+        readonly property bool isEnabled: section && section.enabled
+
+        width: 30
+        height: 30
+        radius: theme.radiusSm
+        opacity: isEnabled ? 1.0 : 0.5
+        color: isActive ? theme.surfaceElevated
+            : (cnbArea.containsMouse && isEnabled) ? theme.surfaceHover : "transparent"
+        QbzIcon {
+            name: cnb.section ? cnb.section.icon : ""
+            width: 16
+            height: 16
+            anchors.centerIn: parent
+            tintName: cnb.isActive ? "primary" : "secondary"
+        }
+        MouseArea {
+            id: cnbArea
+            anchors.fill: parent
+            enabled: cnb.isEnabled
+            hoverEnabled: cnb.isEnabled
+            cursorShape: Qt.PointingHandCursor
+            onClicked: QbzShell.navigateTo(cnb.section.view)
+        }
+    }
 
     // --- Left controls ---------------------------------------------------
     Row {
@@ -93,48 +216,238 @@ Rectangle {
             onClicked: QbzShell.navigateForward()
         }
 
-        // Compact section nav — only while the sidebar is fully closed
-        // (Cerrado), so the sections stay reachable. POC-NOTE: these open
-        // dropdown menus in Slint; here they are inert visual replicas.
+        // Full section nav (text tabs) — nav in the header, sidebar not fully
+        // closed, compact form OFF. Sits AFTER the three sacred buttons so it
+        // can never overlap them (HeaderBar.slint:853).
         Row {
-            visible: QbzShell.sidebarState === 2
+            visible: root.headerTabsOn
             height: parent.height
             spacing: 2
 
             Item { width: 6; height: 1 }
-            QbzIconButton { activeBackground: true 
-                name: "compass"
-                btnSize: 30; iconSize: 16
-                anchors.verticalCenter: parent.verticalCenter
-                visible: !QbzSession.offline
+            Repeater {
+                model: root.navSections
+                delegate: NavTab {
+                    required property var modelData
+                    section: modelData
+                    // Qobuz-only sections are HIDDEN while offline (ADR-010
+                    // mount-site gating, not rendered-disabled).
+                    visible: !(modelData.qobuz && QbzSession.offline)
+                    // Tabs drop their icons under the first breakpoint.
+                    showIcon: root.width >= 1140
+                    anchors.verticalCenter: parent.verticalCenter
+                }
             }
-            QbzIconButton { activeBackground: true 
-                name: "music-library-2"
-                btnSize: 30; iconSize: 16
-                anchors.verticalCenter: parent.verticalCenter
-                visible: !QbzSession.offline
+        }
+
+        // Compact section nav — while the sidebar is fully closed (so the
+        // sections stay reachable), or always when the nav is in the header
+        // and "Compact header navigation" is ON (HeaderBar.slint:974).
+        Row {
+            visible: root.headerCompactOn
+            height: parent.height
+            spacing: 2
+
+            Item { width: 6; height: 1 }
+            Repeater {
+                model: root.navSections
+                delegate: CompactNavBtn {
+                    required property var modelData
+                    section: modelData
+                    visible: !(modelData.qobuz && QbzSession.offline)
+                    anchors.verticalCenter: parent.verticalCenter
+                }
             }
-            QbzIconButton { activeBackground: true 
-                name: "hard-drive"
-                btnSize: 30; iconSize: 16
-                anchors.verticalCenter: parent.verticalCenter
-            }
-            QbzIconButton { activeBackground: true 
-                name: "qbz-symbolic"
-                btnSize: 30; iconSize: 16
-                anchors.verticalCenter: parent.verticalCenter
-            }
-            // Thin separator + the playlists flyout button.
+            // Thin separator + the playlists flyout button — ONLY while the
+            // sidebar is really closed. In the opt-in always-compact mode the
+            // sidebar list is still on screen, so the button stays away
+            // (HeaderBar.slint:1078).
             Rectangle {
+                visible: QbzShell.sidebarState === 2
                 width: 1
                 height: 18
                 anchors.verticalCenter: parent.verticalCenter
                 color: theme.borderSubtle
             }
-            QbzIconButton { activeBackground: true 
-                name: "list-music"
-                btnSize: 30; iconSize: 16
+            Rectangle {
+                id: plBtn
+                visible: QbzShell.sidebarState === 2
+                width: 30
+                height: 30
+                radius: theme.radiusSm
                 anchors.verticalCenter: parent.verticalCenter
+                color: plPopup.opened ? theme.surfaceElevated
+                    : plBtnArea.containsMouse ? theme.surfaceHover : "transparent"
+                QbzIcon {
+                    name: "list-music"
+                    width: 16
+                    height: 16
+                    anchors.centerIn: parent
+                    tintName: plPopup.opened ? "primary" : "secondary"
+                }
+                MouseArea {
+                    id: plBtnArea
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: plPopup.open()
+                }
+
+                // Closed-sidebar playlists flyout (SidebarPlaylistsPopup):
+                // 248px wide, a search header over the SAME Rust-side filter
+                // the sidebar uses, then the flat entries (folders toggle in
+                // place, playlists open and close the flyout). Six rows
+                // visible, the rest scroll.
+                // GAP: Slint's footer (Import / Manage playlists) is omitted —
+                // this port has neither seam, and the sidebar "..." menu marks
+                // the same two as unavailable rather than faking them.
+                Popup {
+                    id: plPopup
+                    y: plBtn.height + 6
+                    width: 248
+                    padding: 4
+                    closePolicy: Popup.CloseOnPressOutside | Popup.CloseOnEscape
+
+                    readonly property var entries: JSON.parse(QbzShell.sidebarJson)
+
+                    onClosed: {
+                        // Clear the shared filter so it doesn't silently scope
+                        // the expanded sidebar's list later.
+                        plSearch.text = ""
+                        QbzShell.sidebarSearch("")
+                    }
+
+                    background: Rectangle {
+                        color: theme.surfaceMain
+                        radius: theme.radiusSm
+                        border.width: 1
+                        border.color: theme.borderMuted
+                    }
+                    contentItem: Column {
+                        width: parent.width
+                        spacing: 0
+
+                        // Search header (34px band, 26px field).
+                        Item {
+                            width: parent.width
+                            height: 34
+                            Rectangle {
+                                anchors.centerIn: parent
+                                width: parent.width - 16
+                                height: 26
+                                radius: 4
+                                color: theme.surfaceElevated
+                                border.width: 1
+                                border.color: theme.borderSubtle
+                                TextInput {
+                                    id: plSearch
+                                    anchors.fill: parent
+                                    anchors.leftMargin: 6
+                                    anchors.rightMargin: 6
+                                    color: theme.textPrimary
+                                    font.pixelSize: 12
+                                    verticalAlignment: Text.AlignVCenter
+                                    clip: true
+                                    onTextEdited: QbzShell.sidebarSearch(text)
+                                    Text {
+                                        visible: plSearch.text === ""
+                                        anchors.fill: parent
+                                        text: QbzSession.tr("Search playlists", QbzSession.trRev)
+                                        color: theme.textMuted
+                                        font.pixelSize: 12
+                                        verticalAlignment: Text.AlignVCenter
+                                    }
+                                }
+                            }
+                        }
+
+                        // Entries — 32px rows, six visible then scroll.
+                        Flickable {
+                            width: parent.width
+                            height: Math.max(32, Math.min(plPopup.entries.length, 6) * 32)
+                            clip: true
+                            contentWidth: width
+                            contentHeight: plList.implicitHeight
+                            boundsBehavior: Flickable.StopAtBounds
+
+                            Column {
+                                id: plList
+                                width: parent.width
+                                Repeater {
+                                    model: plPopup.entries
+                                    delegate: Rectangle {
+                                        required property var modelData
+                                        readonly property bool isFolder: modelData.kind === "folder"
+                                        width: plList.width
+                                        height: 32
+                                        radius: 5
+                                        color: ppArea.containsMouse ? theme.surfaceHover : "transparent"
+                                        Row {
+                                            anchors.fill: parent
+                                            anchors.leftMargin: modelData.indent ? 26 : 12
+                                            anchors.rightMargin: 12
+                                            spacing: 8
+                                            QbzIcon {
+                                                name: isFolder
+                                                    ? (modelData.expanded ? "folder-open" : "folder")
+                                                    : "list-music"
+                                                width: 14
+                                                height: 14
+                                                anchors.verticalCenter: parent.verticalCenter
+                                                tintName: isFolder ? "accent" : "muted"
+                                            }
+                                            Text {
+                                                width: parent.width - 22 - (ppCount.visible ? ppCount.implicitWidth + 8 : 0)
+                                                height: parent.height
+                                                text: modelData.name
+                                                color: isFolder ? theme.textPrimary : theme.textSecondary
+                                                font.pixelSize: 13
+                                                font.weight: isFolder ? theme.weightSemibold : theme.weightRegular
+                                                verticalAlignment: Text.AlignVCenter
+                                                elide: Text.ElideRight
+                                            }
+                                            Text {
+                                                id: ppCount
+                                                visible: isFolder && modelData.count > 0
+                                                height: parent.height
+                                                text: modelData.count
+                                                color: theme.textMuted
+                                                font.pixelSize: 11
+                                                verticalAlignment: Text.AlignVCenter
+                                            }
+                                        }
+                                        MouseArea {
+                                            id: ppArea
+                                            anchors.fill: parent
+                                            hoverEnabled: true
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: {
+                                                if (isFolder) {
+                                                    QbzShell.sidebarToggleFolder(modelData.id)
+                                                } else {
+                                                    QbzBridge.openPlaylist(modelData.id)
+                                                    plPopup.close()
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                // Empty state — the flyout would otherwise be a
+                                // blank 32px band with no explanation.
+                                Text {
+                                    visible: plPopup.entries.length === 0
+                                    width: plList.width
+                                    height: 32
+                                    leftPadding: 12
+                                    text: QbzSession.tr("No playlists yet.", QbzSession.trRev)
+                                    color: theme.textMuted
+                                    font.pixelSize: 12
+                                    verticalAlignment: Text.AlignVCenter
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -152,8 +465,14 @@ Rectangle {
         id: searchBox
         x: (root.width - width) / 2
         y: (root.height - height) / 2
-        width: root.width < 960 ? 179 : 256
+        // 80% of the prior search width; gives up 60px to the section nav
+        // whenever that nav lives in the header (HeaderBar.slint:569). The
+        // width animates and `x` re-centers with it.
+        width: (root.width < 960 ? 179 : 256) - (QbzShell.navInSidebar ? 0 : 60)
         height: 32
+        Behavior on width {
+            NumberAnimation { duration: 220; easing.type: Easing.InOutQuad }
+        }
         radius: 6
         border.width: 1
         border.color: searchInput.activeFocus ? theme.accent : theme.borderSubtle

@@ -46,20 +46,23 @@ Rectangle {
                 tintName: "muted"
             }
             RoundedImage {
+                id: subcardArt
                 anchors.fill: parent
                 source: root.artSource
                 radius: 4
             }
-            // Per-item cover placeholder — clears when THIS folder's cover
-            // lands; settles out when the folder has none (local artwork
-            // resolution drops keys with no cover).
+            // Per-item cover placeholder — hands over when the art is on the
+            // canvas, not when the path lands; settles out when the folder
+            // has none (local artwork resolution drops keys with no cover).
             QbzSkeleton {
                 variant: "art"
                 anchors.fill: parent
                 blockRadius: 4
-                visible: root.view ? root.view.artPending(root.item.artKey) : false
+                pending: root.view ? root.view.artWanted(root.item.artKey) : false
+                coverReady: subcardArt.ready
                 phase: root.view ? root.view.skelPhase : false
                 settleMs: root.view ? root.view.artSettleMs : 0
+                settleHold: root.view ? root.view.artPulse : false
             }
         }
         Text {

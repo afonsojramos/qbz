@@ -99,19 +99,23 @@ Rectangle {
             color: theme.surfaceElevated
             clip: true
             RoundedImage {
+                id: rowArt
                 anchors.fill: parent
                 source: root.artSource
                 radius: 4
             }
-            // Per-item: clears when THIS row's cover lands; settles out when
-            // the album simply has none (local artwork drops such keys).
+            // Per-item: hands over the instant the art is actually ON the
+            // canvas (`rowArt.ready`, not "the path landed"); settles out
+            // when the album simply has none (local artwork drops such keys).
             QbzSkeleton {
                 variant: "art"
                 anchors.fill: parent
                 blockRadius: 4
-                visible: root.view ? root.view.artPending(root.item.artKey) : false
+                pending: root.view ? root.view.artWanted(root.item.artKey) : false
+                coverReady: rowArt.ready
                 phase: root.view ? root.view.skelPhase : false
                 settleMs: root.view ? root.view.artSettleMs : 0
+                settleHold: root.view ? root.view.artPulse : false
             }
         }
         Column {

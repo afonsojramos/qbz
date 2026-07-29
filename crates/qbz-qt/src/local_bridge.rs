@@ -493,25 +493,7 @@ impl qbz_local::QbzLocal {
     }
 
     pub fn open_album(self: Pin<&mut Self>, id: QString) {
-        let id = id.to_string();
-        ui(|mut b| {
-            // Clear the previous local album with the loading flag — the same
-            // stale-render the catalog album view had.
-            b.as_mut().set_local_album_json(QString::from(""));
-            b.as_mut().set_local_album_loading(true);
-        });
-        crate::spawn(async move {
-            let detail = tokio::task::spawn_blocking(move || lib::load_album_detail_blocking(&id))
-                .await
-                .ok()
-                .flatten();
-            let json = detail.map(|d| lib::to_json(&d)).unwrap_or_default();
-            ui(move |mut b| {
-                b.as_mut()
-                    .set_local_album_json(QString::from(json.as_str()));
-                b.as_mut().set_local_album_loading(false);
-            });
-        });
+        open_album_by_id(id.to_string());
     }
 
     pub fn close_album(self: Pin<&mut Self>) {
@@ -768,3 +750,31 @@ impl qbz_local::QbzLocal {
     }
 
 }
+
+// ---------------------------------------------------------------------------
+// Local album routing
+// ---------------------------------------------------------------------------
+
+/// Open a LOCAL/Plex album. Lifted out of the invokable so `open_album` in
+/// main.rs can route to it when a local id reaches the catalog path.
+pub(crate) fn open_album_by_id(id: String) {
+    ui(|mut b| {
+        // Clear the previous local album with the loading flag — the same
+        // stale-render the catalog album view had.
+        b.as_mut().set_local_album_json(QString::from(""));
+        b.as_mut().set_local_album_loading(true);
+    });
+    crate::spawn(async move {
+        let detail = tokio::task::spawn_blocking(move || lib::load_album_detail_blocking(&id))
+            .await
+            .ok()
+            .flatten();
+        let json = detail.map(|d| lib::to_json(&d)).unwrap_or_default();
+        ui(move |mut b| {
+            b.as_mut()
+                .set_local_album_json(QString::from(json.as_str()));
+            b.as_mut().set_local_album_loading(false);
+        });
+    });
+}
+

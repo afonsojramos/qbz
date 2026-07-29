@@ -105,6 +105,8 @@ fn main() {
                 "qml/views/PlaylistView.qml",
                 "qml/views/SearchView.qml",
                 "qml/views/SectionRail.qml",
+                "qml/controls/HeaderGradient.qml",
+                "qml/controls/QbzJumpNavBar.qml",
                 "qml/shell/LyricsControlsFlyout.qml",
                 "qml/shell/LyricsLineRow.qml",
                 "qml/shell/LyricsLinesView.qml",

@@ -134,14 +134,38 @@ Rectangle {
     // Decoded-cover map {artKey: "file://…"} — fed by the id-keyed signal.
     property var artMap: ({})
 
+    // Covers arrive ONE AT A TIME (src/local_artwork.rs phase 2 streams each
+    // thumbnail through the id-keyed signal the moment it resolves). Rebinding
+    // `artMap` per arrival is quadratic in the window: each arrival copied the
+    // whole map and re-evaluated the art binding of EVERY mounted cell, so a
+    // 50-cover window did ~2500 binding evaluations and 50 map copies during
+    // exactly the seconds the grid is trying to stay smooth. Arrivals are
+    // coalesced into ONE rebind per frame instead — the covers still appear
+    // progressively (16ms granularity is invisible), at O(n) total cost.
+    property var _artInbox: ({})
+    Timer {
+        id: artFlush
+        interval: 16
+        repeat: false
+        onTriggered: {
+            var m = Object.assign({}, root.artMap, root._artInbox)
+            root._artInbox = ({})
+            // A rebind needs a NEW object reference (same-ref assignment is
+            // not a change in QML).
+            root.artMap = m
+        }
+    }
     Connections {
         target: QbzLocal
         function onLocalArtworkReady(key, path) {
-            var m = root.artMap
-            m[key] = path
-            // A rebind needs a NEW object reference (same-ref assignment is
-            // not a change in QML).
-            root.artMap = Object.assign({}, m)
+            root._artInbox[key] = path
+            if (!artFlush.running) artFlush.start()
+            // An arrival is live evidence that the pass is still running, so
+            // it keeps every placeholder's settle countdown suspended. Without
+            // this the bound is a fixed timeout from the REPORT, and a cold
+            // local library resolves slower than that (see artPassMs).
+            root.artPulse = true
+            artPulseOff.restart()
         }
     }
 
@@ -364,6 +388,10 @@ Rectangle {
         for (var key in m) {
             if (!keep[key]) { delete m[key]; changed = true }
         }
+        // The not-yet-flushed arrivals are evicted too, or a cover that landed
+        // for a row we have just scrolled away from would be re-added by the
+        // next flush and defeat the eviction.
+        for (key in root._artInbox) if (!keep[key]) delete root._artInbox[key]
         if (changed) root.artMap = Object.assign({}, m)
         if (keys.length > 0) QbzLocal.artworkWindow(JSON.stringify(keys))
     }
@@ -392,15 +420,26 @@ Rectangle {
     // art NEVER produces an artMap entry. A per-item placeholder gated only
     // on "artMap has no path yet" would therefore shimmer forever on every
     // artless album. `artSettleMs` is the bound: each placeholder fades out
-    // by itself that long after it appears, revealing the card's own empty
-    // tile. Per-item clearing still wins whenever the cover DOES arrive.
-    readonly property int artSettleMs: 2500
-    // The pulse only has to run while an artwork window can still resolve:
-    // armed by every window report, disarmed artSettleMs after the last.
+    // by itself, revealing the card's own empty tile. Per-item handover
+    // (QbzSkeleton.handedOver) still wins whenever the cover DOES arrive.
+    //
+    // The countdown does NOT start at mount — it starts when the artwork pass
+    // goes quiet (`artPulse` below). A FIRST visit to a cold library decodes
+    // every cover from scratch and takes seconds; a countdown from mount used
+    // to expire a beat BEFORE the covers landed, which is the other half of
+    // "the skeleton disappears before the art is rendered".
+    readonly property int artSettleMs: 1200
+    /// How long after the last sign of life a resolution pass is still
+    /// presumed in flight. Re-armed by every window report AND by every cover
+    /// that arrives, so a slow first visit extends it by itself instead of
+    /// needing a pessimistic constant.
+    readonly property int artPassMs: 2500
+    // The pulse runs while an artwork window can still resolve, and is also
+    // what holds off every placeholder's settle countdown.
     property bool artPulse: false
     Timer {
         id: artPulseOff
-        interval: root.artSettleMs
+        interval: root.artPassMs
         onTriggered: root.artPulse = false
     }
     Timer {
@@ -410,28 +449,54 @@ Rectangle {
             && root.visible && root.windowShowing
         onTriggered: root.skelPhase = !root.skelPhase
     }
-    /// Is THIS row's cover still outstanding? (the per-item gate every local
-    /// surface uses — one place, so the rule cannot drift between tabs.)
-    function artPending(key) {
-        return (key || "") !== "" && (root.artMap[key] || "") === ""
-    }
 
-    // Debounced reporting (180ms — the LibraryView throttle).
+    /// Does THIS row want a cover at all? An empty artKey means the row has
+    /// no artwork slot and there is nothing to wait for.
+    ///
+    /// NOTE — this REPLACED `artPending(key)`, which asked "is the path still
+    /// missing". That predicate is not the placeholder gate and never was:
+    /// it goes false when the PATH lands, while the art needs a further load
+    /// + canvas raster before it is on screen. The placeholder now hands over
+    /// on QbzSkeleton's `coverSource`/`coverReady` (see QbzSkeleton.qml), and
+    /// this function only answers "is a cover expected here".
+    function artWanted(key) { return (key || "") !== "" }
+    /// The decoded cover for a row, "" until it lands.
+    function artPathOf(key) { return root.artMap[key] || "" }
+
+    // Reporting is throttled at 180ms, but LEADING-EDGE: the debounce exists
+    // to stop a scroll from firing a resolution pass per pixel, and a view
+    // that has just mounted is not scrolling. Trailing-only cost every first
+    // paint a flat 180ms before Rust was even asked for a cover — pure
+    // latency on the one report that the user is actually waiting for.
+    // So: report at once if the last pass is older than the window, and
+    // debounce only the reports that arrive inside it.
     Timer {
         id: windowDebounce
         interval: 180
         property var pendingRows: []
         property int pendingFirst: 0
         property int pendingLast: 0
-        onTriggered: root.reportWindow(pendingRows, pendingFirst, pendingLast)
+        onTriggered: {
+            root._lastReportMs = Date.now()
+            root.reportWindow(pendingRows, pendingFirst, pendingLast)
+        }
     }
+    // `real` is a double in QML — Date.now() (~1.7e12) needs the range.
+    property real _lastReportMs: 0
     function queueWindowReport(rows, first, last) {
         windowDebounce.pendingRows = rows
         windowDebounce.pendingFirst = first
         windowDebounce.pendingLast = last
-        windowDebounce.restart()
-        // Covers can now land: keep the shared pulse alive until artSettleMs
-        // after the LAST report (scrolling keeps re-arming it).
+        if (!windowDebounce.running
+            && Date.now() - root._lastReportMs >= windowDebounce.interval) {
+            root._lastReportMs = Date.now()
+            root.reportWindow(rows, first, last)
+        } else {
+            windowDebounce.restart()
+        }
+        // Covers can now land: keep the shared pulse (and every placeholder's
+        // settle hold) alive until artPassMs after the LAST sign of life —
+        // this report, or the next cover that arrives.
         root.artPulse = true
         artPulseOff.restart()
     }

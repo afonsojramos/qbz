@@ -41,7 +41,32 @@
 // skeleton binds `phase:` to it — N placeholders, 1 timer. `selfDrive: true`
 // mounts a private timer for one-off mounts.
 //
-// ── CLEANUP (settleMs) ─────────────────────────────────────────────────────
+// ── COVER HANDOVER (`pending` / `coverReady` / `coverSource`) ──────────────
+// THE BUG THIS EXISTS FOR: every surface used to gate its cover placeholder
+// on `artPath !== ""`. That predicate goes false the moment the PATH lands —
+// but the art is not on screen then. theme/RoundedImage.qml is a Canvas: it
+// still has to load the file through its probe and rasterize it. So the
+// placeholder vanished and the cell sat EMPTY until the canvas painted.
+//
+// The honest gate is "has the image handed over", and there are two arms:
+//   - `coverReady` — bind it to `RoundedImage.ready` when the host can see
+//     the image item (the local rows, the detail headers). EXACT: the
+//     placeholder is still fully opaque on the frame the art appears.
+//   - `coverSource` — the art path, for hosts whose image is sealed inside a
+//     component they do not own (AlbumCard, PlaylistCard, SlimCard, …). This
+//     instance then loads the SAME path through its own hidden probe; because
+//     QQuickPixmapCache is shared and process-wide, that is the SAME cache
+//     entry the card is loading, so it costs no second decode and no second
+//     copy in memory — it only tells us WHEN the decode finished. The card's
+//     canvas paints on the next frame, which the 180ms fade below covers.
+// `pending` is the third input: "this cell wants a cover at all". A row with
+// no artwork slot passes false and gets no placeholder.
+//
+// Call sites that still set `visible:` by hand keep their own (path-based)
+// behaviour — the new default binding only applies where `visible` is left
+// alone. That is deliberate: the gate is opted into file by file.
+//
+// ── CLEANUP (settleMs / settleHold) ────────────────────────────────────────
 // A placeholder gated only on "the payload has not landed" can shimmer
 // FOREVER when the payload never lands. That is not hypothetical: local
 // artwork resolution (src/local_artwork.rs, `resolve_window_blocking`)
@@ -53,6 +78,11 @@
 // stops animating, revealing whatever the real control draws when it has no
 // art (AlbumCard's own empty tile, ArtistCard's designed round portrait).
 // Per-item clearing still wins whenever the item DOES arrive.
+// `settleHold` suspends that countdown while the host knows a resolution pass
+// is still in flight, so a cover that takes longer than settleMs to decode
+// (a COLD local library takes seconds — see LocalLibraryView.artSettleMs)
+// does not settle to an empty tile a beat before it lands. The bound still
+// holds: the host drops the hold when its pass goes quiet.
 
 import QtQuick
 import QtQuick.Window
@@ -131,28 +161,66 @@ Item {
            && root.Window.window.visibility !== Window.Hidden)
         : true
 
+    // ---- cover handover (see the block comment) ---------------------------
+    /// "This cell wants a cover." false retires the placeholder at once.
+    property bool pending: true
+    /// Host-driven readiness — bind to `RoundedImage.ready`.
+    property bool coverReady: false
+    /// Self-probing readiness — the art path, when the image is sealed inside
+    /// a component the host does not own. "" disarms the probe entirely.
+    property string coverSource: ""
+    Image {
+        id: coverProbe
+        source: root.coverSource
+        visible: false
+        asynchronous: true
+        cache: true
+        // NO sourceSize: it is part of the pixmap-cache key, so requesting a
+        // different decode size here would fork a SECOND decode of the same
+        // file instead of riding the one the card already asked for.
+    }
+    /// The art is on screen (or, on the probe arm, decoded and one frame from
+    /// it). This — not the path — is what retires the placeholder.
+    readonly property bool handedOver: root.coverReady
+        || (root.coverSource !== "" && coverProbe.status === Image.Ready)
+
     // ---- cleanup / settle -------------------------------------------------
     // 0 = never settle (the Home/Library mounts, whose documents always
     // republish). > 0 = fade out and stop after that many ms of shimmering.
     property int settleMs: 0
+    /// While true the countdown is suspended: the host's resolution pass is
+    /// still in flight, so "nothing has landed yet" is not yet evidence that
+    /// nothing ever will.
+    property bool settleHold: false
     property bool settled: false
     Timer {
         interval: Math.max(1, root.settleMs)
         repeat: false
-        running: root.settleMs > 0 && !root.settled
+        running: root.settleMs > 0 && !root.settled && !root.settleHold
+            && !root.handedOver
             && root.visible && root.windowShowing
         onTriggered: root.settled = true
     }
     // A recycled delegate re-shows the placeholder for a DIFFERENT item, so
     // the countdown restarts with it.
     onVisibleChanged: if (root.visible) root.settled = false
-    // One 180ms fade, once, at settle — then the instance is inert.
-    opacity: root.settled ? 0.0 : 1.0
+    // A new pass arming the hold un-settles an instance that already gave up:
+    // its cover may be in THIS pass.
+    onSettleHoldChanged: if (root.settleHold) root.settled = false
+    // One 180ms fade, once — at settle, at handover, or when the cell stops
+    // wanting a cover. The fade is what removes the empty frame on handover:
+    // the canvas paints on the next frame (~16ms in), while this is still at
+    // ~91% opacity, so the placeholder dissolves INTO the art.
+    readonly property bool retired: root.settled || root.handedOver || !root.pending
+    opacity: root.retired ? 0.0 : 1.0
     Behavior on opacity { NumberAnimation { duration: 180 } }
+    // Default only — a call site that assigns `visible` replaces this and
+    // keeps its own gate (see the block comment).
+    visible: root.opacity > 0.004
 
     readonly property bool pulsing: root.animated
         && root.cellIndex < root.animatedCap
-        && !root.settled
+        && !root.retired
         && root.visible && root.windowShowing
 
     property bool _localPhase: false
@@ -183,6 +251,11 @@ Item {
 
     Loader {
         anchors.fill: parent
+        // A retired instance frees its rectangles instead of keeping a dead
+        // scene subtree per cell — a settled 48-cell grid is 144 Rectangles.
+        // Keyed off `opacity`, not `visible`, so a call site that overrides
+        // `visible` cannot strand the shape alive mid-fade.
+        active: root.opacity > 0.004
         sourceComponent: (root.variant === "card" || root.variant === "circleCard") ? cellShape
             : root.variant === "row" ? rowShape
             : root.variant === "circle" ? circleShape

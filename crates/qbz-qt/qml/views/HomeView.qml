@@ -62,8 +62,10 @@ Rectangle {
            && root.Window.window.visibility !== Window.Hidden)
         : true
     // Runs only while something can actually be shimmering: the first fetch
-    // (section skeletons) or a card still waiting for its cover.
+    // (section skeletons), a card still waiting for its cover, or the grace
+    // window in which landed covers are still decoding (artHold).
     readonly property bool skelNeeded: QbzHome.homeLoading || root.artPending
+        || root.artHold
     // Cheap "some card in the mounted rails has artUrl but no artPath yet"
     // probe — recomputed only when a sections document is republished.
     readonly property bool artPending: root.anyArtPending(
@@ -79,6 +81,14 @@ Rectangle {
         }
         return false
     }
+    // The pulse must OUTLIVE `artPending`. That flag drops when the last
+    // PATH lands, but every one of those cards still has a decode and a
+    // canvas raster ahead of it and its placeholder is still up (see
+    // QbzSkeleton's handover) — without the grace the tiles would freeze
+    // mid-shimmer for the rest of the wait.
+    property bool artHold: false
+    Timer { id: artHoldOff; interval: 1500; onTriggered: root.artHold = false }
+    onArtPendingChanged: { root.artHold = true; artHoldOff.restart() }
     Timer {
         interval: 900
         repeat: true
@@ -142,18 +152,28 @@ Rectangle {
                         isFavorite: false
                     }
                     // Per-item artwork placeholder: the grey tile shimmers
-                    // until THIS card's cover lands, then disappears on its
-                    // own — the rail fills in progressively instead of all
-                    // at once. A bare Rectangle, so it does not eat the
+                    // until THIS card's cover is ON SCREEN, then dissolves
+                    // into it — the rail fills in progressively instead of
+                    // all at once. A bare Rectangle, so it does not eat the
                     // card's hover/click areas underneath.
+                    // AlbumCard seals its RoundedImage away, so the handover
+                    // uses the probe arm (`coverSource`): it rides the same
+                    // pixmap-cache entry the card is loading and retires on
+                    // the DECODE, never on the path merely appearing — the
+                    // path lands while the card's canvas is still blank.
                     QbzSkeleton {
                         variant: "art"
                         width: 200
                         height: 200
-                        visible: (modelData.artUrl || "") !== ""
-                            && (modelData.artPath || "") === ""
+                        pending: (modelData.artUrl || "") !== ""
+                        coverSource: modelData.artPath || ""
                         phase: root.skelPhase
                         cellIndex: index
+                        // A cover whose download fails republishes the
+                        // document with an empty artPath and no further
+                        // signal, so the tile must be bounded (same rule and
+                        // constant as SearchView's CardArtSkeleton).
+                        settleMs: 6000
                     }
                 }
             }
@@ -318,11 +338,12 @@ Rectangle {
                         variant: "art"
                         width: 200
                         height: 200
-                        visible: modelData.itemKind !== "artist"
+                        pending: modelData.itemKind !== "artist"
                             && (modelData.artUrl || "") !== ""
-                            && (modelData.artPath || "") === ""
+                        coverSource: modelData.artPath || ""
                         phase: root.skelPhase
                         cellIndex: index
+                        settleMs: 6000
                     }
                 }
             }

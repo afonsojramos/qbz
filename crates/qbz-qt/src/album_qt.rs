@@ -159,6 +159,114 @@ pub struct AlbumViewData {
     pub suggestions_loading: bool,
     #[serde(rename = "similarLoading")]
     pub similar_loading: bool,
+    // ---- Header atmosphere (controls/HeaderGradient.qml) ------------------
+    /// Artwork-derived header tint, "#rrggbb" ("" until the cover resolves).
+    /// Patched in by `spawn_header_color` once the cover is on disk.
+    #[serde(rename = "headerColor")]
+    pub header_color: String,
+    /// The `album_header_gradient` appearance pref as of page load. The view
+    /// prefers the LIVE value off `QbzBridge.settingsJson` and falls back to
+    /// this, because the settings snapshot is only published on settings-view
+    /// open / mutation (main.rs `publish_settings`) — on a cold start there is
+    /// no snapshot to read yet.
+    #[serde(rename = "headerGradient")]
+    pub header_gradient: bool,
+}
+
+// ==================== Header tint (the gradient band) ======================
+//
+// 1:1 port of `crates/qbz/src/artwork.rs::header_tint`, the representative
+// colour the Slint hands to the album/artist header gradient
+// (`AlbumState.header-color`, set in album.rs `apply_artwork`). Kept here
+// rather than in artwork_qt.rs because both pages that need it are in this
+// pair of modules.
+//
+// A plain average desaturates badly, so the average is saturation-boosted off
+// its own mean and then normalized to a fixed peak brightness: bright enough
+// to perceive, dark enough to keep white header text readable.
+
+fn header_tint(pixels: &[u8]) -> (u8, u8, u8) {
+    let (mut r, mut g, mut b, mut n) = (0f64, 0f64, 0f64, 0u64);
+    for px in pixels.chunks_exact(4) {
+        if px[3] < 16 {
+            continue;
+        }
+        r += px[0] as f64;
+        g += px[1] as f64;
+        b += px[2] as f64;
+        n += 1;
+    }
+    if n == 0 {
+        return (34, 34, 42);
+    }
+    let nf = n as f64;
+    let (mut r, mut g, mut b) = (r / nf, g / nf, b / nf);
+
+    let mean = (r + g + b) / 3.0;
+    let boost = 2.1;
+    let saturate = |c: f64| (mean + (c - mean) * boost).clamp(0.0, 255.0);
+    r = saturate(r);
+    g = saturate(g);
+    b = saturate(b);
+
+    let peak = r.max(g).max(b).max(1.0);
+    let scale = (138.0 / peak).min(1.7);
+    ((r * scale) as u8, (g * scale) as u8, (b * scale) as u8)
+}
+
+/// Decode a cached cover and reduce it to its header tint, `#rrggbb`.
+/// BLOCKING (decode) — call it from `spawn_blocking`. 64x64 is the sample
+/// size: `header_tint` only ever computes an average, and the Slint feeds it
+/// an already-downscaled decode too (artwork.rs `decode_size`).
+pub(crate) fn header_tint_hex(path: &str) -> Option<String> {
+    let bytes = std::fs::read(path).ok()?;
+    let img = image::load_from_memory(&bytes).ok()?;
+    let tiny = image::imageops::resize(
+        &img.to_rgba8(),
+        64,
+        64,
+        image::imageops::FilterType::Triangle,
+    );
+    let (r, g, b) = header_tint(tiny.as_raw());
+    Some(format!("#{r:02x}{g:02x}{b:02x}"))
+}
+
+/// Resolve `artwork_url` (downloading it if it is not cached yet), reduce it
+/// to a header tint and patch it into the page document. Generation-guarded
+/// like every other deferred pass, so a slow cover for album A can never tint
+/// album B's header.
+///
+/// ORDERING: unlike the carousel passes this one is NOT gated on a network
+/// round-trip (an already-cached cover goes straight to the decode), so on a
+/// multi-threaded runtime it can in principle reach the bridge before
+/// main.rs writes the primary document and be overwritten. That is benign
+/// rather than lossy: `publish_patch` mutates the STASHED document first, so
+/// the tint is carried by the next republish — and the deferred carousels
+/// always republish (their gates are seeded true). Worst case the band fades
+/// in a beat later, never not at all.
+fn spawn_header_color(generation: u64, artwork_url: String) {
+    if artwork_url.is_empty() {
+        return;
+    }
+    crate::spawn(async move {
+        if crate::artwork_qt::cached_path(&artwork_url).is_empty() {
+            crate::artwork_qt::download_missing(vec![artwork_url.clone()]).await;
+        }
+        let path = crate::artwork_qt::cached_path(&artwork_url);
+        if path.is_empty() {
+            return;
+        }
+        let path = path.trim_start_matches("file://").to_string();
+        let hex = tokio::task::spawn_blocking(move || header_tint_hex(&path))
+            .await
+            .ok()
+            .flatten();
+        if let Some(hex) = hex {
+            publish_patch(generation, move |doc| {
+                doc["headerColor"] = json!(hex);
+            });
+        }
+    });
 }
 
 fn mmss(secs: u32) -> String {
@@ -629,6 +737,12 @@ pub async fn load_album_view(
     data.more_loading = !artist_id.is_empty();
     data.suggestions_loading = true;
     data.similar_loading = lastfm_on;
+    // Header atmosphere: the pref rides the document (cold-start fallback —
+    // see the field comment); the tint itself needs the cover on disk, so it
+    // lands as a patch a moment later. `headerColor` stays "" until then and
+    // the band simply does not paint — no colour pop.
+    data.header_gradient = crate::settings_qt::pref_bool("album_header_gradient", true);
+    let header_art = data.header.artwork_url.clone();
 
     let json = serde_json::to_string(&data).map_err(|e| e.to_string())?;
     log::info!(
@@ -648,6 +762,7 @@ pub async fn load_album_view(
         Err(e) => log::warn!("[qbz-qt] album doc stash failed: {e}"),
     }
 
+    spawn_header_color(generation, header_art);
     spawn_deferred_rows(
         runtime.clone(),
         generation,

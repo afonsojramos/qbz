@@ -419,6 +419,16 @@ pub(crate) fn sidebar_artwork_window(urls_json: String) {
 
 /// Open the album detail view: push the nav entry, then fetch + publish.
 pub(crate) fn open_album(album_id: String) {
+    // A LOCAL or Plex album id is a group key or a path, never a Qobuz catalog
+    // id. Sending one to /album/get returns 404 and the view lands empty — the
+    // mixed Library "All" feed hands both kinds to the same card, so the routing
+    // has to happen HERE rather than in each call site.
+    if library_qt::is_local_feed_id("album", &album_id) {
+        nav_qt::record("localalbum");
+        shell_bridge::ui(|mut b| b.as_mut().set_current_view(QString::from("localalbum")));
+        local_bridge::open_album_by_id(album_id);
+        return;
+    }
     if offline_fwd::engine().status().is_offline() {
         return;
     }

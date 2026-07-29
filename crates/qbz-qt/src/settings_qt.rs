@@ -298,6 +298,58 @@ pub fn set_npb_mode(index: i32) -> i32 {
 }
 
 // ---------------------------------------------------------------------------
+// Shell chrome prefs — sidebar state + section-nav placement
+// ---------------------------------------------------------------------------
+// `sidebar_state` is the Slint ui_prefs key (ui_prefs.rs:473, default 0):
+// 0 = open / 1 = mini / 2 = closed. Slint restores it at startup
+// (main.rs:8742) and rewrites it from `ShellState.cycle-sidebar()`
+// (persist-sidebar-state, main.rs:14398). The Qt port used to hardcode 0 on
+// every launch, so a user who left the sidebar mini or closed got it back
+// open — the "initial state is wrong" divergence.
+
+/// The persisted three-state sidebar (clamped 0-2; default 0 = open).
+pub fn sidebar_state() -> i32 {
+    let Some(path) = prefs_path() else {
+        return 0;
+    };
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|v| v.get("sidebar_state").and_then(serde_json::Value::as_i64))
+        .map(|s| (s as i32).clamp(0, 2))
+        .unwrap_or(0)
+}
+
+/// Persist the sidebar state (clamped 0-2); returns the stored value.
+pub fn set_sidebar_state(state: i32) -> i32 {
+    let state = state.clamp(0, 2);
+    write_pref("sidebar_state", serde_json::Value::Number(state.into()));
+    state
+}
+
+/// Section-nav placement defaults — the Slint `ShellState` literals
+/// (state.slint:4124 / :4129). Sidebar ON, compact-header OFF.
+pub const NAV_IN_SIDEBAR_DEFAULT: bool = true;
+pub const NAV_HEADER_COMPACT_DEFAULT: bool = false;
+
+/// Sections live in the sidebar (ON) or in the header (OFF).
+pub fn nav_in_sidebar() -> bool {
+    pref_bool("nav_in_sidebar", NAV_IN_SIDEBAR_DEFAULT)
+}
+
+/// While the nav is in the HEADER: use the icon-only compact form even when
+/// the sidebar is not fully closed. No effect while `nav_in_sidebar` is ON.
+pub fn nav_header_compact() -> bool {
+    pref_bool("nav_header_compact", NAV_HEADER_COMPACT_DEFAULT)
+}
+
+/// Playlist rows draw a 2x2 micro-collage of track covers (Slint
+/// SidebarState.playlist-collage). Opt-OUT — default ON.
+pub fn sidebar_playlist_collage() -> bool {
+    pref_bool("sidebar_playlist_collage", true)
+}
+
+// ---------------------------------------------------------------------------
 // Large-NPB dock prefs (the cover's eye toggle + the band's mode cycle)
 // ---------------------------------------------------------------------------
 
@@ -1037,8 +1089,8 @@ pub async fn publish_snapshot() {
                 &pref_str("immersive_default_view", "remember"),
                 0,
             ),
-            nav_in_sidebar: pref_bool("nav_in_sidebar", true),
-            nav_header_compact: pref_bool("nav_header_compact", true),
+            nav_in_sidebar: nav_in_sidebar(),
+            nav_header_compact: nav_header_compact(),
             my_qbz_label: myqbz_label(),
             sidebar_playlist_collage: pref_bool("sidebar_playlist_collage", true),
             local_library_track_artwork: pref_bool("local_library_track_artwork", false),
@@ -1248,16 +1300,26 @@ pub async fn settings_bool(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &str,
             crate::ui(move |mut b| b.as_mut().set_intelligent_search(value));
             Ok(Apply::None)
         }
+        // Section-nav placement (Slint ShellState.nav-in-sidebar /
+        // .nav-header-compact). Both apply LIVE — Sidebar.qml mounts/unmounts
+        // its nav block and HeaderBar.qml swaps tabs <-> compact icons off the
+        // bridge properties, so the pref push below IS the apply step.
         "nav-in-sidebar" => {
             save_pref("nav_in_sidebar", serde_json::json!(value));
+            crate::shell_bridge::ui(move |mut b| b.as_mut().set_nav_in_sidebar(value));
             Ok(Apply::None)
         }
         "nav-header-compact" => {
             save_pref("nav_header_compact", serde_json::json!(value));
+            crate::shell_bridge::ui(move |mut b| b.as_mut().set_nav_header_compact(value));
             Ok(Apply::None)
         }
         "sidebar-playlist-collage" => {
             save_pref("sidebar_playlist_collage", serde_json::json!(value));
+            // LIVE: the sidebar rows swap collage <-> list-music glyph off the
+            // bridge property. Without this push the row persisted a pref
+            // nothing read — a Settings toggle that did nothing.
+            crate::shell_bridge::ui(move |mut b| b.as_mut().set_sidebar_playlist_collage(value));
             Ok(Apply::None)
         }
         "local-library-track-artwork" => {

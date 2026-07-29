@@ -13,6 +13,28 @@
 // source: artPath; radius: theme.radiusSm }` inside the same rounded
 // placeholder Rectangle (the placeholder's OWN fill rounds fine — only
 // children needed the workaround).
+//
+// ── READINESS CONTRACT (`ready`) ───────────────────────────────────────────
+// A host that draws a loading placeholder over this item MUST gate it on
+// `ready`, never on "the path is non-empty".
+//
+// The path landing means NOTHING here. This is a Canvas: once `source` is
+// assigned the probe still has to load the file through QQuickPixmap and then
+// a paint pass has to rasterize it. A placeholder gated on the path therefore
+// vanishes the instant the path arrives and leaves an EMPTY tile on screen
+// until the canvas paints — the reported bug ("the skeleton disappears before
+// the art is rendered").
+//
+// `ready` is true only when BOTH have happened for the CURRENT source:
+//   1. the dimension probe reached Image.Ready (the pixmap is decoded), and
+//   2. `onPaint` has run a pass that actually drew THAT source.
+// It is derived from `_paintedSource`, so re-assigning `source` drops it back
+// to false with no bookkeeping — a recycled list delegate cannot inherit the
+// previous row's readiness.
+//
+// Hosts that cannot reach this item (the image lives inside AlbumCard,
+// PlaylistCard, …) use the equivalent self-probing arm of the placeholder
+// itself: `QbzSkeleton { coverSource: <path> }` — see QbzSkeleton.qml.
 
 import QtQuick
 
@@ -23,6 +45,15 @@ Canvas {
     // "crop" (PreserveAspectCrop — album art) | "contain"
     // (PreserveAspectFit — label logos, never cropped, LabelCard.slint).
     property string fit: "crop"
+
+    /// THE handover signal — see the READINESS CONTRACT above. True only once
+    /// the current `source` is on screen, not merely known.
+    readonly property bool ready: root._paintedSource !== ""
+        && root._paintedSource === root.source
+    /// The source of the last paint that actually drew pixels. Internal; it
+    /// exists as a property (not a bool flag) so that `ready` invalidates
+    /// itself on every source change.
+    property string _paintedSource: ""
 
     renderTarget: Canvas.Image
     // GUI-thread raster. Cooperative/Threaded rasterize on the SCENE GRAPH
@@ -45,7 +76,11 @@ Canvas {
         onStatusChanged: if (status === Image.Ready || status === Image.Error) root.requestPaint()
     }
 
-    onSourceChanged: loadImage(source)
+    // requestPaint() as well as loadImage(): a delegate recycled onto a row
+    // with NO cover assigns source = "", which emits no imageLoaded, so
+    // without an explicit repaint the canvas would keep showing the previous
+    // row's art under a placeholder that thinks it has nothing to cover.
+    onSourceChanged: { loadImage(source); requestPaint() }
     Component.onCompleted: loadImage(source)
     onImageLoaded: requestPaint()
     onWidthChanged: requestPaint()
@@ -81,6 +116,11 @@ Canvas {
             var dw = iw * scale
             var dh = ih * scale
             ctx.drawImage(source, (w - dw) / 2, (h - dh) / 2, dw, dh)
+            // ONLY here: pixels for `source` are now on the canvas. Anything
+            // earlier (the path arriving, the probe going Ready) would hand
+            // the cell over to an empty tile. Assigning the same string twice
+            // is a no-op in QML, so repeated paints cost no notifications.
+            root._paintedSource = source
         }
     }
 }
