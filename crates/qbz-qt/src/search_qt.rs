@@ -101,35 +101,34 @@ fn rank_within<T>(query: &str, kind: &str, items: &mut Vec<T>, id_of: impl Fn(&T
 }
 
 // ---------------------------------------------------------------------------
-// ui_prefs intelligent_search (the 2.0.0 opt-out, additive like the others)
+// ui_prefs intelligent_search (the 2.0.0 opt-out).
+//
+// Both halves are settings_qt's now. This module used to keep its own path,
+// its own `json!({})` fallback and its own truncating `std::fs::write` on
+// ui_prefs.json — the file the SHIPPING Slint build has open — so one search
+// toggle could hand Slint's `load()` an empty document and let its next save
+// flatten the whole profile. See the write-discipline block in settings_qt.rs.
 // ---------------------------------------------------------------------------
 
 pub fn intelligent_search_pref() -> bool {
-    let Some(path) = dirs::data_dir().map(|d| d.join("qbz").join("ui_prefs.json")) else {
-        return true;
-    };
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-        .and_then(|v| v.get("intelligent_search").and_then(|q| q.as_bool()))
-        .unwrap_or(true)
+    crate::settings_qt::pref_bool("intelligent_search", true)
 }
 
 /// Flip + persist the pref and flip the live kill switch; returns the new value.
+///
+/// The read and the write share ONE document (`toggle_pref_bool`): reading the
+/// old value through `intelligent_search_pref` first would answer a torn read
+/// with the default `true` and then commit `false` over a user who already had
+/// it off. When nothing could be written the live switch is left alone too —
+/// the two must not diverge.
 pub fn toggle_intelligent_search() -> bool {
-    let next = !intelligent_search_pref();
-    if let Some(path) = dirs::data_dir().map(|d| d.join("qbz").join("ui_prefs.json")) {
-        let mut value: serde_json::Value = std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|text| serde_json::from_str(&text).ok())
-            .unwrap_or_else(|| serde_json::json!({}));
-        if let Some(obj) = value.as_object_mut() {
-            obj.insert("intelligent_search".to_string(), serde_json::Value::Bool(next));
-            if let Ok(text) = serde_json::to_string_pretty(&value) {
-                let _ = std::fs::write(&path, text);
-            }
-        }
-    }
+    let Some(next) = crate::settings_qt::toggle_pref_bool("intelligent_search", true) else {
+        let current = intelligent_search_pref();
+        log::warn!(
+            "[qbz-qt] intelligent_search toggle skipped (prefs unreadable) — staying {current}"
+        );
+        return current;
+    };
     set_enabled(next);
     next
 }

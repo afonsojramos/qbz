@@ -185,16 +185,67 @@ pub fn read_prefs() -> Prefs {
     }
 }
 
+/// Merge this struct's four keys into the on-disk document and publish it
+/// ATOMICALLY (`settings_qt::write_json_object_atomic`).
+///
+/// Two changes from the old whole-struct `std::fs::write`, both because this
+/// file is co-owned with the SHIPPING Slint build (`locallibrary_prefs.rs`,
+/// same path):
+///
+/// 1. `fs::write` opens O_TRUNC, so between the truncate and the last byte the
+///    file is short or empty. Slint's reader answers a parse failure with
+///    `Prefs::default()` and writes those defaults back on its next toolbar
+///    change — one unlucky read inside our window resets the user's album
+///    identity and sort. The temp-file + `rename(2)` publish closes it: a
+///    concurrent reader sees the whole old document or the whole new one.
+/// 2. Serializing the struct REPLACED the document, so any key Slint gains
+///    later would be dropped by this frontend on the first toolbar click.
+///    Merging keeps unknown keys, and `read_json_object` refuses to write at
+///    all when the document did not parse rather than rebuilding it.
 pub fn write_prefs(p: &Prefs) {
     let Some(path) = prefs_path() else {
         return;
     };
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+    let Some(mut doc) = crate::settings_qt::read_json_object(&path) else {
+        return;
+    };
+    merge_prefs(&mut doc, p);
+    crate::settings_qt::write_json_object_atomic(&path, &doc);
+}
+
+fn merge_prefs(doc: &mut serde_json::Map<String, serde_json::Value>, p: &Prefs) {
+    if let Ok(serde_json::Value::Object(map)) = serde_json::to_value(p) {
+        for (key, value) in map {
+            doc.insert(key, value);
+        }
     }
-    if let Ok(bytes) = serde_json::to_vec_pretty(p) {
-        let _ = std::fs::write(&path, bytes);
-    }
+}
+
+/// Read-modify-write of ONE document: `edit` sees the prefs as they are on
+/// disk RIGHT NOW and the result goes back into the same map.
+///
+/// The `read_prefs()` -> mutate -> `write_prefs()` shape it replaces has the
+/// torn-read hole: a read that lands inside another process's write window
+/// returns `Prefs::default()`, and the write that follows commits those
+/// defaults over the keys the caller never meant to touch.
+fn update_prefs(edit: impl FnOnce(&mut Prefs)) {
+    let Some(path) = prefs_path() else {
+        return;
+    };
+    let Some(mut doc) = crate::settings_qt::read_json_object(&path) else {
+        return;
+    };
+    // A valid JSON object whose OWN keys are the wrong shape: repair to the
+    // defaults (what every reader on both sides already sees) but say so —
+    // this is the one path here that overwrites values it could not read.
+    let mut prefs: Prefs = serde_json::from_value(serde_json::Value::Object(doc.clone()))
+        .unwrap_or_else(|e| {
+            log::warn!("[qbz-qt] locallibrary_ui.json keys unreadable ({e}) — using defaults");
+            Prefs::default()
+        });
+    edit(&mut prefs);
+    merge_prefs(&mut doc, &prefs);
+    crate::settings_qt::write_json_object_atomic(&path, &doc);
 }
 
 // ---------------------------------------------------------------------------
@@ -209,9 +260,7 @@ pub fn group_mode() -> qbz_library::album_grouping::AlbumGroupMode {
 pub fn set_album_mode(mode: &str) {
     let mode = if mode == "metadata" { "metadata" } else { "folder" };
     state(|s| s.album_mode = mode.to_string());
-    let mut p = read_prefs();
-    p.albums_id_mode = mode.to_string();
-    write_prefs(&p);
+    update_prefs(|p| p.albums_id_mode = mode.to_string());
 }
 
 pub fn album_mode() -> String {
@@ -220,9 +269,7 @@ pub fn album_mode() -> String {
 
 pub fn set_tracks_sort(sort: &str) {
     state(|s| s.tracks_sort = sort.to_string());
-    let mut p = read_prefs();
-    p.tracks_sort = sort.to_string();
-    write_prefs(&p);
+    update_prefs(|p| p.tracks_sort = sort.to_string());
 }
 
 pub fn tracks_sort() -> String {

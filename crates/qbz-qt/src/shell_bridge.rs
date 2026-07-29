@@ -105,6 +105,23 @@ pub mod qbz_shell {
         // flips live when the user toggles, applies on the next launch).
         #[qproperty(bool, system_title_bar_pref)]
 
+        // --- Main-window geometry -----------------------------------------
+        // The restored LOGICAL size + maximized flag from the shared
+        // ui_prefs.json (settings_qt::window_size / window_maximized; the
+        // Slint keys). Seeded at CONSTRUCTION, not at boot(): Main.qml binds
+        // `width`/`height` to these, and the very first frame is already too
+        // late for a post-boot push — same reason `theme_json` is seeded in
+        // Default. Never rewritten at runtime; the save path goes the other
+        // way, through `save_window_geometry`.
+        #[qproperty(f32, window_width)]
+        #[qproperty(f32, window_height)]
+        #[qproperty(bool, window_maximized)]
+        // The app floor (940x600), carried instead of literalised in QML so
+        // the number stays single-sourced with the restore clamp and the
+        // save gate that use it in settings_qt.
+        #[qproperty(f32, window_min_width)]
+        #[qproperty(f32, window_min_height)]
+
         // --- Ambient background (phase 14) --------------------------------
         // 0 = off, 1 = on (the ambient look; the owner's store carries
         // "ambient"). Live — toggling applies immediately (pure QML
@@ -199,6 +216,21 @@ pub mod qbz_shell {
         #[qinvokable]
         fn theme_set_filter(self: Pin<&mut QbzShell>, index: i32);
 
+        /// Main.qml, debounced off every settled resize / visibility flip and
+        /// fired once more on close: persist the FLOATING size plus the
+        /// maximized flag. The whole rule set (floating-only sizes, the app
+        /// minimum, the >0.5px dirty check) lives in
+        /// `settings_qt::save_window_geometry`, mirroring the Slint
+        /// `WindowEvent::Resized` handler — QML only supplies the numbers.
+        #[qinvokable]
+        fn save_window_geometry(
+            self: Pin<&mut QbzShell>,
+            width: f32,
+            height: f32,
+            maximized: bool,
+            fullscreen: bool,
+        );
+
         /// App-menu chrome toggle: flip the persisted `use_system_title_bar`
         /// pref (applies on the next launch — the window flags are fixed at
         /// creation, 1:1 Slint). Updates `systemTitleBarPref` only.
@@ -274,6 +306,11 @@ pub struct QbzShellRust {
     sidebar_sort_asc: bool,
     system_title_bar: bool,
     system_title_bar_pref: bool,
+    window_width: f32,
+    window_height: f32,
+    window_maximized: bool,
+    window_min_width: f32,
+    window_min_height: f32,
     ambient_mode: i32,
     ambient_primary: QString,
     ambient_secondary: QString,
@@ -295,6 +332,9 @@ pub struct QbzShellRust {
 
 impl Default for QbzShellRust {
     fn default() -> Self {
+        // One file read for the restored size (the pair is all-or-nothing —
+        // see settings_qt::window_size).
+        let (window_width, window_height) = crate::settings_qt::window_size();
         Self {
             sidebar_state: crate::settings_qt::sidebar_state(),
             nav_in_sidebar: crate::settings_qt::nav_in_sidebar(),
@@ -319,6 +359,11 @@ impl Default for QbzShellRust {
             sidebar_sort_asc: true,
             system_title_bar: crate::settings_qt::use_system_title_bar(),
             system_title_bar_pref: crate::settings_qt::use_system_title_bar(),
+            window_width,
+            window_height,
+            window_maximized: crate::settings_qt::window_maximized(),
+            window_min_width: crate::settings_qt::WINDOW_MIN_WIDTH,
+            window_min_height: crate::settings_qt::WINDOW_MIN_HEIGHT,
             ambient_mode: crate::settings_qt::app_background_mode(),
             // The Slint ImmersiveState default triad (pre-artwork colors).
             ambient_primary: QString::from("#00dcc8"),
@@ -443,6 +488,16 @@ impl qbz_shell::QbzShell {
 
     pub fn theme_set_filter(self: Pin<&mut Self>, index: i32) {
         crate::theme_set_filter(index);
+    }
+
+    pub fn save_window_geometry(
+        self: Pin<&mut Self>,
+        width: f32,
+        height: f32,
+        maximized: bool,
+        fullscreen: bool,
+    ) {
+        crate::settings_qt::save_window_geometry(width, height, maximized, fullscreen);
     }
 
     pub fn toggle_system_title_bar(self: Pin<&mut Self>) {

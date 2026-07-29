@@ -100,8 +100,244 @@ fn with_playback<T>(
 // every OTHER Slint key survives.
 // ---------------------------------------------------------------------------
 
-fn prefs_path() -> Option<std::path::PathBuf> {
+/// Shared with `theme_qt.rs` (theme + theme_filter) so there is ONE spelling
+/// of the path every reader and writer in the crate agrees on.
+pub(crate) fn prefs_path() -> Option<std::path::PathBuf> {
     Some(dirs::data_dir()?.join("qbz").join("ui_prefs.json"))
+}
+
+// ---------------------------------------------------------------------------
+// The shared-file write discipline — EVERY ui_prefs.json writer in this crate
+// goes through `update_prefs` / `edit_prefs` / `save_pref`, no exceptions.
+// Verify with `grep -rn 'fs::write\|json!({})' crates/qbz-qt/src/`: no hit may
+// touch ui_prefs.json. (theme_qt.rs and search_qt.rs each carried a private
+// copy of both anti-patterns until they were routed through here.)
+//
+// The same `read_json_object` + `write_json_object_atomic` pair covers the
+// other documents this crate co-owns with the Slint app: `myqbz_branding.json`
+// (below) and `locallibrary_ui.json` (local_state.rs).
+//
+// STILL TRUNCATING, in files this module does not own — same failure mode,
+// smaller blast radius, listed so the next sweep has the list rather than a
+// claim: recently_qt.rs (`recently_played.json`, Slint `recently.rs`),
+// genre_filter_qt.rs (`genre_filter.json`, Slint `genre_filter.rs`),
+// lyrics_qt.rs (`lyrics_prefs.json`, Slint `lyrics_prefs.rs`) and
+// playlist_qt.rs (`playlist_orders.json`, Qt-only — races only itself).
+//
+// ui_prefs.json is co-owned with the SHIPPING Slint app and both processes do
+// a whole-document read-modify-write, so two rules decide whether the file
+// survives concurrency:
+//
+// 1. NEVER publish a partial file. `std::fs::write` opens O_TRUNC, so between
+//    the truncate and the last byte the file on disk is short or empty. Slint's
+//    `ui_prefs::load()` (crates/qbz/src/ui_prefs.rs:872-883) answers a parse
+//    failure with `UiPrefs::default()`, and its next `save()` writes those
+//    defaults back — one unlucky read inside our write window wipes theme,
+//    npb_mode, streaming_quality, cast_quality_caps, renderer, the lot. Writing
+//    a sibling temp file and `rename(2)`-ing it onto the target closes the
+//    window: rename within one directory is atomic on Linux, so a concurrent
+//    reader sees either the whole old document or the whole new one.
+//    Window geometry is what made this urgent: it saves on every settled
+//    resize, orders of magnitude more often than a settings toggle.
+//
+// 2. NEVER rebuild the document from scratch. The old fallback was
+//    `unwrap_or_else(|| json!({}))`, which cannot tell "no file yet" (starting
+//    from `{}` is correct) from "the file is there but did not parse" — and
+//    that second case is exactly what Slint's own O_TRUNC window looks like
+//    from over here. `{}` plus our key is a document containing ONLY our key:
+//    the mirror image of the wipe above. A save we cannot do safely is SKIPPED
+//    and logged, never guessed.
+// ---------------------------------------------------------------------------
+
+/// Read a JSON object for a read-modify-write.
+///
+/// `Some(map)` = parsed, and an ABSENT file yields an empty map (a first run
+/// legitimately starts from `{}`). `None` = the path exists but is unreadable
+/// or is not a JSON object — the caller must not write, or it would replace a
+/// document it never managed to read.
+pub(crate) fn read_json_object(
+    path: &std::path::Path,
+) -> Option<serde_json::Map<String, serde_json::Value>> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => match serde_json::from_str::<serde_json::Value>(&text) {
+            Ok(serde_json::Value::Object(map)) => Some(map),
+            // Includes the empty string a mid-write O_TRUNC leaves behind.
+            _ => {
+                log::warn!(
+                    "[qbz-qt] {} did not parse as a JSON object — skipping this \
+                     write instead of rebuilding the document",
+                    path.display()
+                );
+                None
+            }
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(serde_json::Map::new()),
+        Err(e) => {
+            log::warn!(
+                "[qbz-qt] {} unreadable ({e}) — skipping this write",
+                path.display()
+            );
+            None
+        }
+    }
+}
+
+/// Publish a JSON object atomically: the whole document to a sibling temp file,
+/// then `rename` onto the target. The pid in the temp name keeps two QBZ
+/// processes from sharing one scratch file — each rename stays atomic on its
+/// own, so the loser of a race is overwritten as a COMPLETE document rather
+/// than merged byte-wise.
+pub(crate) fn write_json_object_atomic(
+    path: &std::path::Path,
+    doc: &serde_json::Map<String, serde_json::Value>,
+) {
+    use std::io::Write as _;
+
+    let Ok(text) = serde_json::to_string_pretty(doc) else {
+        log::warn!("[qbz-qt] {} serialize failed — not writing", path.display());
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            log::warn!(
+                "[qbz-qt] {} parent directory unavailable ({e}) — not writing",
+                path.display()
+            );
+            return;
+        }
+        sweep_stale_temps(parent);
+    }
+    // `<path>.<pid>.tmp`, built off the full path so it always lands in the
+    // SAME directory: rename is only atomic within one filesystem.
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(format!(".{}.tmp", std::process::id()));
+    let tmp = std::path::PathBuf::from(tmp);
+    // create + write_all + sync_all rather than `fs::write`: the rename only
+    // publishes the NAME, so without the fsync the bytes can still be sitting
+    // in page cache when the box goes down and the reader that follows the
+    // rename finds a zero-length file — the exact wipe the atomic publish
+    // exists to prevent. ext4's `auto_da_alloc` covers this pattern in
+    // practice, but it is a mount option, not a guarantee (and it is not the
+    // only filesystem QBZ runs on).
+    let written = std::fs::File::create(&tmp).and_then(|mut f| {
+        f.write_all(text.as_bytes())?;
+        f.sync_all()
+    });
+    if let Err(e) = written {
+        log::warn!("[qbz-qt] {} temp write failed: {e}", tmp.display());
+        let _ = std::fs::remove_file(&tmp);
+        return;
+    }
+    if let Err(e) = std::fs::rename(&tmp, path) {
+        log::warn!("[qbz-qt] {} atomic rename failed: {e}", path.display());
+        let _ = std::fs::remove_file(&tmp);
+    }
+}
+
+/// A temp file this old cannot belong to a live write (they last
+/// milliseconds); anything younger may be another QBZ process publishing
+/// RIGHT NOW and is none of our business.
+const STALE_TEMP_AGE: Duration = Duration::from_secs(3600);
+
+/// Directories already swept this run — the sweep is one `read_dir` per
+/// directory per process, not one per write.
+static SWEPT_DIRS: Mutex<Vec<std::path::PathBuf>> = Mutex::new(Vec::new());
+
+/// Drop `<name>.<pid>.tmp` leftovers. The publish above removes its own temp
+/// on every failure path, but a SIGKILL between the write and the rename
+/// leaves one behind for good — and a SIGKILL there is not hypothetical
+/// locally: earlyoom shoots processes while a parallel Slint build eats the
+/// box (CLAUDE.md "Build & memory").
+///
+/// Liveness is judged by AGE, not by the pid: `/proc/<pid>` would be
+/// Linux-only, and a pid that has been recycled reads as alive anyway.
+fn sweep_stale_temps(dir: &std::path::Path) {
+    {
+        let Ok(mut swept) = SWEPT_DIRS.lock() else {
+            return;
+        };
+        if swept.iter().any(|d| d.as_path() == dir) {
+            return;
+        }
+        swept.push(dir.to_path_buf());
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        // Only OUR naming: `<something>.<digits>.tmp`.
+        let Some(stem) = name.strip_suffix(".tmp") else {
+            continue;
+        };
+        let Some((_, pid)) = stem.rsplit_once('.') else {
+            continue;
+        };
+        if pid.is_empty() || !pid.bytes().all(|b| b.is_ascii_digit()) {
+            continue;
+        }
+        let stale = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .map(|t| t.elapsed().map(|age| age > STALE_TEMP_AGE).unwrap_or(false))
+            .unwrap_or(false);
+        if stale {
+            match std::fs::remove_file(&path) {
+                Ok(()) => log::info!("[qbz-qt] removed stale temp file {}", path.display()),
+                Err(e) => log::warn!("[qbz-qt] stale temp {} not removed: {e}", path.display()),
+            }
+        }
+    }
+}
+
+/// The ONE read-modify-write of ui_prefs.json, with a value carried OUT of the
+/// closure. `edit` mutates the document and returns
+/// `(anything-actually-changed, payload)` — a `false` skips the write entirely,
+/// which is how the geometry dirty check keeps the many no-op resize events a
+/// WM emits from each costing a rewrite of a file the whole app (and the Slint
+/// build) shares.
+///
+/// The payload is what makes read-then-negate toggles safe: the OLD value has
+/// to be read from the SAME document the new one is written into. Reading it
+/// through `pref_bool` first would answer a torn read (Slint mid-write) with
+/// the DEFAULT, and by the time this write ran the file would be readable
+/// again — committing the negation of a value that was never on disk.
+///
+/// `None` = nothing was written, because the document could not be read
+/// (`read_json_object` refuses rather than rebuilding). Callers must report the
+/// pref UNCHANGED in that case, never the flip they asked for.
+fn edit_prefs<T>(
+    edit: impl FnOnce(&mut serde_json::Map<String, serde_json::Value>) -> (bool, T),
+) -> Option<T> {
+    let path = prefs_path()?;
+    let mut doc = read_json_object(&path)?;
+    let (dirty, out) = edit(&mut doc);
+    if dirty {
+        write_json_object_atomic(&path, &doc);
+    }
+    Some(out)
+}
+
+/// `edit_prefs` for the writers that carry nothing out.
+fn update_prefs(edit: impl FnOnce(&mut serde_json::Map<String, serde_json::Value>) -> bool) {
+    let _ = edit_prefs(|doc| (edit(doc), ()));
+}
+
+/// Flip a shared bool pref in ONE document — read and write inside the same
+/// read-modify-write, never `pref_bool` then `save_pref`. `None` = the
+/// document was unreadable, so nothing was written and nothing flipped.
+pub fn toggle_pref_bool(key: &str, default: bool) -> Option<bool> {
+    edit_prefs(|doc| {
+        let next = !doc
+            .get(key)
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(default);
+        doc.insert(key.to_string(), serde_json::Value::Bool(next));
+        (true, next)
+    })
 }
 
 pub fn streaming_quality() -> String {
@@ -116,22 +352,10 @@ pub fn streaming_quality() -> String {
 }
 
 fn save_streaming_quality(key: &str) {
-    let Some(path) = prefs_path() else {
-        return;
-    };
-    let mut value: serde_json::Value = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|text| serde_json::from_str(&text).ok())
-        .unwrap_or_else(|| serde_json::json!({}));
-    if let Some(obj) = value.as_object_mut() {
-        obj.insert(
-            "streaming_quality".to_string(),
-            serde_json::Value::String(key.to_string()),
-        );
-        if let Ok(text) = serde_json::to_string_pretty(&value) {
-            let _ = std::fs::write(&path, text);
-        }
-    }
+    save_pref(
+        "streaming_quality",
+        serde_json::Value::String(key.to_string()),
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -155,24 +379,19 @@ pub fn use_system_title_bar() -> bool {
 }
 
 /// Flip + persist the pref; returns the new value (for the menu state).
+///
+/// The flip happens INSIDE the read-modify-write (`toggle_pref_bool`) — see
+/// `edit_prefs`. When the document cannot be read nothing is written, and the
+/// menu is told the pref is unchanged rather than being handed a flip the file
+/// never got.
 pub fn toggle_system_title_bar() -> bool {
-    let next = !use_system_title_bar();
-    if let Some(path) = prefs_path() {
-        let mut value: serde_json::Value = std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|text| serde_json::from_str(&text).ok())
-            .unwrap_or_else(|| serde_json::json!({}));
-        if let Some(obj) = value.as_object_mut() {
-            obj.insert(
-                "use_system_title_bar".to_string(),
-                serde_json::Value::Bool(next),
-            );
-            if let Ok(text) = serde_json::to_string_pretty(&value) {
-                let _ = std::fs::write(&path, text);
-            }
-        }
-    }
-    next
+    toggle_pref_bool("use_system_title_bar", true).unwrap_or_else(|| {
+        let current = use_system_title_bar();
+        log::warn!(
+            "[qbz-qt] use_system_title_bar toggle skipped (prefs unreadable) — staying {current}"
+        );
+        current
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -223,24 +442,28 @@ pub fn ambient_bar_alpha() -> f32 {
 
 /// Flip + persist off <-> "ambient" (the owner's mode; "blurred" is not a
 /// POC route). Returns the new mode index (0/1).
+///
+/// Same one-document rule as `toggle_system_title_bar`: the current key is
+/// read inside the write closure, so a torn read can no longer make the app
+/// commit "ambient" over a user who had just turned it off (or the reverse).
 pub fn toggle_ambient_background() -> i32 {
-    let next = app_background_mode() == 0;
-    if let Some(path) = prefs_path() {
-        let mut value: serde_json::Value = std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|text| serde_json::from_str(&text).ok())
-            .unwrap_or_else(|| serde_json::json!({}));
-        if let Some(obj) = value.as_object_mut() {
-            obj.insert(
-                "app_background".to_string(),
-                serde_json::Value::String(if next { "ambient" } else { "off" }.to_string()),
-            );
-            if let Ok(text) = serde_json::to_string_pretty(&value) {
-                let _ = std::fs::write(&path, text);
-            }
-        }
-    }
-    if next { 1 } else { 0 }
+    edit_prefs(|doc| {
+        let was_off = doc
+            .get("app_background")
+            .and_then(|q| q.as_str())
+            .unwrap_or("off")
+            == "off";
+        doc.insert(
+            "app_background".to_string(),
+            serde_json::Value::String(if was_off { "ambient" } else { "off" }.to_string()),
+        );
+        (true, if was_off { 1 } else { 0 })
+    })
+    .unwrap_or_else(|| {
+        let current = app_background_mode();
+        log::warn!("[qbz-qt] app_background toggle skipped (prefs unreadable) — staying {current}");
+        current
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -279,21 +502,10 @@ fn npb_mode_key(index: i32) -> &'static str {
 /// Persist a mode index (0-3) to the shared key; returns the index.
 pub fn set_npb_mode(index: i32) -> i32 {
     let index = index.clamp(0, 3);
-    if let Some(path) = prefs_path() {
-        let mut value: serde_json::Value = std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|text| serde_json::from_str(&text).ok())
-            .unwrap_or_else(|| serde_json::json!({}));
-        if let Some(obj) = value.as_object_mut() {
-            obj.insert(
-                "npb_mode".to_string(),
-                serde_json::Value::String(npb_mode_key(index).to_string()),
-            );
-            if let Ok(text) = serde_json::to_string_pretty(&value) {
-                let _ = std::fs::write(&path, text);
-            }
-        }
-    }
+    save_pref(
+        "npb_mode",
+        serde_json::Value::String(npb_mode_key(index).to_string()),
+    );
     index
 }
 
@@ -323,7 +535,7 @@ pub fn sidebar_state() -> i32 {
 /// Persist the sidebar state (clamped 0-2); returns the stored value.
 pub fn set_sidebar_state(state: i32) -> i32 {
     let state = state.clamp(0, 2);
-    write_pref("sidebar_state", serde_json::Value::Number(state.into()));
+    save_pref("sidebar_state", serde_json::Value::Number(state.into()));
     state
 }
 
@@ -372,7 +584,7 @@ pub fn large_visualizer_on() -> bool {
 
 /// Persist the band visibility; returns the stored value.
 pub fn set_large_visualizer_on(on: bool) -> bool {
-    write_pref("large_visualizer_on", serde_json::Value::Bool(on));
+    save_pref("large_visualizer_on", serde_json::Value::Bool(on));
     on
 }
 
@@ -392,35 +604,240 @@ pub fn large_spectrum_mode() -> i32 {
 /// Persist the band mode (clamped 0-2); returns the stored index.
 pub fn set_large_spectrum_mode(mode: i32) -> i32 {
     let mode = mode.clamp(0, 2);
-    write_pref(
+    save_pref(
         "large_spectrum_mode",
         serde_json::Value::Number(mode.into()),
     );
     mode
 }
 
-/// Additive single-key patch of ui_prefs.json (the npb_mode pattern: read,
-/// insert, write back — never clobber keys other surfaces own).
-fn write_pref(key: &str, value: serde_json::Value) {
-    let Some(path) = prefs_path() else {
-        return;
-    };
-    let mut doc: serde_json::Value = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|text| serde_json::from_str(&text).ok())
-        .unwrap_or_else(|| serde_json::json!({}));
-    if let Some(obj) = doc.as_object_mut() {
-        obj.insert(key.to_string(), value);
-        if let Ok(text) = serde_json::to_string_pretty(&doc) {
-            let _ = std::fs::write(&path, text);
-        }
-    }
-}
-
 /// The "Show track playing context" pref (Playback settings; feeds the
 /// SongCard layers icon — SettingsState.show-context-icon).
 pub fn show_context_icon() -> bool {
     with_playback(|s| s.get_preferences().map(|p| p.show_context_icon)).unwrap_or(false)
+}
+
+// ---------------------------------------------------------------------------
+// Main-window geometry — the Slint `window_width` / `window_height` /
+// `window_maximized` keys (crates/qbz/src/ui_prefs.rs:567-585, restored in
+// crates/qbz/src/main.rs:8211-8282, written by the winit Resized handler at
+// main.rs:1399-1435). SAME shared file, SAME types: the sizes are JSON floats
+// holding LOGICAL (device-independent) pixels, the flag is a bool. Both
+// frontends read each other's numbers, so a type or unit change here silently
+// corrupts the Slint profile — and "unit" includes the interface-size preset,
+// which Slint bakes into its scale factor and this frontend does not
+// (`ui_scale_factor_for` converts; identity under the default preset).
+//
+// Why this exists at all: Main.qml used to hardcode 1280x800 and never save,
+// so the Qt build opened one responsive tier below the Slint build on the same
+// machine (1280 < 1366 flips the now-playing-bar side fraction 0.30 -> 0.39,
+// which caps the Classic song card at ~446px instead of 560 and elides titles
+// ~114px early). The tier logic was never wrong — the window was.
+//
+// NOT carried: `window_x` / `window_y`. Slint stores them as PHYSICAL outer
+// coordinates (main.rs:8271 feeds a `PhysicalPosition`) while QML's
+// `Window.x/y` are device-independent, so writing ours into that key would
+// displace the Slint window by the DPR on any HiDPI display. Position restore
+// is a no-op on Wayland for both toolkits anyway (main.rs:8209), and the
+// owner's store still holds the `i32::MIN` never-saved sentinel — leaving the
+// two keys untouched is exactly what Slint already sees.
+// ---------------------------------------------------------------------------
+
+/// The app's floor, straight from Slint: `app.slint:52-53` declares
+/// `min-width: 940px / UiScale.factor` and the restore clamp repeats it at
+/// `main.rs:8214-8215`.
+///
+/// It stays a FLAT 940 here because the divisor is mirrored in the unit
+/// conversion instead (see `ui_scale_factor_for`), not in the gate: the Qt
+/// POC applies no interface-size preset, so its logical pixel IS the
+/// preset-free one, and 940 preset-free pixels is exactly what Slint's
+/// `940 / factor` scaled-logical minimum comes out to.
+pub const WINDOW_MIN_WIDTH: f32 = 940.0;
+pub const WINDOW_MIN_HEIGHT: f32 = 600.0;
+
+/// The interface-size preset factor for a persisted `ui_scale` slug — the SAME
+/// table as Slint's `ui_prefs::ui_scale_factor` (ui_prefs.rs:243-251).
+///
+/// Why this matters for geometry: Slint bakes the preset into its scale factor
+/// (`SLINT_SCALE_FACTOR = last_dpr * factor`, main.rs:8354-8362), so the
+/// `window_width` it stores is `physical / (dpr * factor)`. Qt applies no
+/// preset, so ITS logical pixel is `physical / dpr`. The two numbers are the
+/// same window only after multiplying by the factor:
+///
+///   qt_logical = slint_logical * factor
+///
+/// which is why the restore multiplies and the save divides. Under the default
+/// preset the factor is exactly 1.0 and both are identities — nothing about
+/// the owner's current profile changes.
+///
+/// Why NOT the alternative (refuse to write while the preset is non-default):
+/// it fixes the corruption but leaves geometry restore silently dead for every
+/// non-default user, and it would have to keep refusing forever, whereas the
+/// conversion is exact. Its one assumption is that both frontends see the same
+/// display DPR — the same assumption Slint's own `last_dpr` bake-in makes, and
+/// wrong only for a window dragged between mismatched monitors between runs,
+/// where the WM clamp catches it anyway.
+///
+/// Mirroring only the GATES (940 / factor on both sides, no conversion) would
+/// be wrong here: a value Slint saved at 752 scaled-logical would then pass and
+/// be applied as a 752-pixel Qt window — below the app's real minimum, because
+/// Qt's content does not shrink with the preset the way the `.slint` bindings
+/// do.
+fn ui_scale_factor_for(slug: &str) -> f32 {
+    match slug {
+        "xs" => 0.8,
+        "small" => 0.9,
+        "large" => 1.2,
+        "xl" => 1.5,
+        _ => 1.0,
+    }
+}
+
+/// The never-saved size. 1180x760 is both `app.slint:47-48`'s preferred size
+/// (what Slint falls back to by doing nothing) and the literal Slint plugs in
+/// at `main.rs:8223-8224` when it has to size the window itself. One number
+/// either way — and emphatically not the old 1280x800.
+pub const WINDOW_DEFAULT_WIDTH: f32 = 1180.0;
+pub const WINDOW_DEFAULT_HEIGHT: f32 = 760.0;
+
+/// Restored floating size in QT logical pixels, one file read for both axes
+/// AND the preset they were written under (`ui_scale_factor_for`) — one
+/// document backs all three, so a preset change mid-read cannot mix units.
+///
+/// The all-or-nothing gate is Slint's `has_saved_size` (main.rs:8220-8221):
+/// BOTH axes must clear the minimum or the pair counts as never saved. A
+/// half-written profile (one key present, one missing or absurd) therefore
+/// opens at the default instead of a 0-wide window.
+pub fn window_size() -> (f32, f32) {
+    let doc = prefs_path()
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok());
+    let axis = |key: &str| -> f32 {
+        doc.as_ref()
+            .and_then(|v| v.get(key))
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(0.0) as f32
+    };
+    let factor = ui_scale_factor_for(
+        doc.as_ref()
+            .and_then(|v| v.get("ui_scale"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("default"),
+    );
+    // The ACCEPTANCE test runs on the STORED value, not the converted one, and
+    // it is asymmetric — because Slint's is. Slint gates on
+    // `stored >= min_logical_w.min(940.0)` with `min_logical_w = 940 / factor`
+    // (main.rs:8214-8221), so the `.min()` pins the threshold at 940 for every
+    // preset at or below 1.0 and only relaxes it for presets above 1.0.
+    // Testing `stored * factor >= 940` instead — which reads like the same
+    // thing — is STRICTER on the small presets: at `xs` (0.8, which the kiosk
+    // image pins) it demands a stored 1175 where Slint accepts 940. A profile
+    // holding 1000x640 was therefore declared never-saved, opened at the
+    // default, and then had 1180/0.8 = 1475 written back over the user's stored
+    // size — in the file the Slint build reads.
+    let (stored_w, stored_h) = (axis("window_width"), axis("window_height"));
+    let floor_w = (WINDOW_MIN_WIDTH / factor).min(WINDOW_MIN_WIDTH);
+    let floor_h = (WINDOW_MIN_HEIGHT / factor).min(WINDOW_MIN_HEIGHT);
+    if stored_w >= floor_w && stored_h >= floor_h {
+        (stored_w * factor, stored_h * factor)
+    } else {
+        (WINDOW_DEFAULT_WIDTH, WINDOW_DEFAULT_HEIGHT)
+    }
+}
+
+/// Last maximized state. Slint only ever RE-APPLIES a true here
+/// (main.rs:8276) — a false leaves the fresh window in its natural state.
+pub fn window_maximized() -> bool {
+    pref_bool("window_maximized", false)
+}
+
+/// Persist the settled geometry — the Slint `WindowEvent::Resized` handler
+/// (main.rs:1399-1435) rule for rule:
+///
+/// - `window_width`/`window_height` hold the FLOATING size ONLY. A maximized
+///   or fullscreen frame must never overwrite them, or the next launch would
+///   reproduce the maximized footprint as a floating window (Slint #618).
+/// - Frames below the app minimum are ignored: a minimize reports 0x0 and
+///   mid-transition frames undershoot.
+/// - The >0.5px dirty check (main.rs:1426-1429) plus the maximized-flag
+///   comparison decide whether the file is rewritten at all. The many no-op
+///   resize events a WM emits must not each cost a read-modify-write of a
+///   file the whole app shares.
+///
+/// Single ATOMIC read-modify-write over the WHOLE document (`update_prefs`):
+/// every other Slint key survives untouched, and the file is never visible in
+/// a half-written state to the Slint process reading it.
+pub fn save_window_geometry(width: f32, height: f32, maximized: bool, fullscreen: bool) {
+    // A non-finite frame never reaches the file. `serde_json::Value::from`
+    // maps NaN/inf to `Value::Null` (there is no JSON spelling for either), and
+    // Slint declares `#[serde(default)] pub window_width: f32` — `default`
+    // covers a MISSING field, NOT an explicit null. A null there fails the
+    // WHOLE `UiPrefs` deserialization, so Slint would fall back to its defaults
+    // and flatten the shared document on its next save. Cheapest possible
+    // guard for the worst possible outcome.
+    if !width.is_finite() || !height.is_finite() {
+        log::warn!("[qbz-qt] ignoring non-finite window geometry {width}x{height}");
+        return;
+    }
+    update_prefs(|doc| {
+        // The preset comes out of the SAME document the sizes go into, so the
+        // stored value and the unit it is stored in can never disagree.
+        // `width`/`height` arrive in QT logical pixels; the file speaks SLINT
+        // scaled-logical (see `ui_scale_factor_for`), so divide on the way in
+        // exactly as `window_size` multiplies on the way out. Identity under
+        // the default preset.
+        let factor = ui_scale_factor_for(
+            doc.get("ui_scale")
+                .and_then(|v| v.as_str())
+                .unwrap_or("default"),
+        );
+        let stored_width = width / factor;
+        let stored_height = height / factor;
+
+        // Read the three previous values first — the dirty comparison decides
+        // whether the document is touched at all, and it compares stored
+        // against stored.
+        let was_maximized = doc
+            .get("window_maximized")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let prev_width = doc
+            .get("window_width")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(0.0) as f32;
+        let prev_height = doc
+            .get("window_height")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(0.0) as f32;
+
+        // The minimum is checked in QT pixels (the frame we were actually
+        // handed); `WINDOW_MIN_*` is already the preset-free floor.
+        let size_dirty = !maximized
+            && !fullscreen
+            && width >= WINDOW_MIN_WIDTH
+            && height >= WINDOW_MIN_HEIGHT
+            && ((prev_width - stored_width).abs() > 0.5
+                || (prev_height - stored_height).abs() > 0.5);
+        if !size_dirty && was_maximized == maximized {
+            return false;
+        }
+
+        doc.insert(
+            "window_maximized".to_string(),
+            serde_json::Value::Bool(maximized),
+        );
+        if size_dirty {
+            doc.insert(
+                "window_width".to_string(),
+                serde_json::Value::from(stored_width as f64),
+            );
+            doc.insert(
+                "window_height".to_string(),
+                serde_json::Value::from(stored_height as f64),
+            );
+        }
+        true
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -451,20 +868,14 @@ pub fn pref_str(key: &str, default: &str) -> String {
         .unwrap_or_else(|| default.to_string())
 }
 
+/// Additive single-key patch of ui_prefs.json — THE writer every other pref
+/// setter in this file funnels through, so they all inherit `update_prefs`'
+/// atomic rename and its refusal to rebuild an unparsable document.
 pub fn save_pref(key: &str, value: serde_json::Value) {
-    let Some(path) = prefs_path() else {
-        return;
-    };
-    let mut doc: serde_json::Value = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|text| serde_json::from_str(&text).ok())
-        .unwrap_or_else(|| serde_json::json!({}));
-    if let Some(obj) = doc.as_object_mut() {
-        obj.insert(key.to_string(), value);
-        if let Ok(text) = serde_json::to_string_pretty(&doc) {
-            let _ = std::fs::write(&path, text);
-        }
-    }
+    update_prefs(|doc| {
+        doc.insert(key.to_string(), value);
+        true
+    });
 }
 
 // Tray store (qbz_app::settings::tray — per-user tray_settings.db, the SAME
@@ -495,23 +906,21 @@ fn myqbz_label() -> String {
         .unwrap_or_else(|| "My QBZ".to_string())
 }
 
+/// myqbz_branding.json is shared with the Slint app the same way ui_prefs.json
+/// is (crates/qbz/src/myqbz_prefs.rs), so it gets the same treatment: atomic
+/// publish, and an unparsable document is left alone instead of rebuilt.
 fn save_myqbz_label(label: &str) {
     let Some(path) = crate::sidebar_qt::user_dir().map(|d| d.join("myqbz_branding.json")) else {
         return;
     };
-    let mut doc: serde_json::Value = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|text| serde_json::from_str(&text).ok())
-        .unwrap_or_else(|| serde_json::json!({}));
-    if let Some(obj) = doc.as_object_mut() {
-        obj.insert(
-            "label".to_string(),
-            serde_json::Value::String(label.trim().to_string()),
-        );
-        if let Ok(text) = serde_json::to_string_pretty(&doc) {
-            let _ = std::fs::write(&path, text);
-        }
-    }
+    let Some(mut doc) = read_json_object(&path) else {
+        return;
+    };
+    doc.insert(
+        "label".to_string(),
+        serde_json::Value::String(label.trim().to_string()),
+    );
+    write_json_object_atomic(&path, &doc);
 }
 
 pub const STREAMING_QUALITY_KEYS: &[&str] = &["mp3", "cd", "hires", "hires_plus"];
@@ -1301,6 +1710,13 @@ pub async fn settings_bool(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &str,
         }
         "intelligent-search" => {
             save_pref("intelligent_search", serde_json::json!(value));
+            // Flip the LIVE kill switch too, not just the pref: the service is
+            // bound once per session (search_qt::init) and reads its own flag,
+            // so persisting alone left the Settings row inert until the next
+            // launch while the app-menu toggle (which does call this) took
+            // effect immediately — two switches, one setting, different
+            // behaviour.
+            crate::search_qt::set_enabled(value);
             crate::ui(move |mut b| b.as_mut().set_intelligent_search(value));
             Ok(Apply::None)
         }

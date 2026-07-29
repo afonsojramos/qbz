@@ -16,36 +16,25 @@ use qbz_theme::{Rgba, ThemeColors, ThemeId};
 use serde::Serialize;
 
 // ---------------------------------------------------------------------------
-// ui_prefs.json keys (theme + theme_filter) — additive patch like
-// settings_qt.rs so every other Slint key survives.
+// ui_prefs.json keys (theme + theme_filter).
+//
+// Writes go through `settings_qt::save_pref` — the ONE atomic read-modify-write
+// of this shared file (see the discipline block in settings_qt.rs). This module
+// used to carry its own copy: a truncating `std::fs::write` plus a
+// `json!({})` fallback, on the same document the SHIPPING Slint build has open.
+// Switching theme while that build ran could hand its `ui_prefs::load()` an
+// empty file, and its next save would flatten npb_mode, streaming_quality,
+// cast_quality_caps, sidebar_state, renderer and the window geometry back to
+// defaults — the whole profile, for a theme click. Reads stay local (a read
+// cannot corrupt anything) but share the one spelling of the path.
 // ---------------------------------------------------------------------------
 
-fn prefs_path() -> Option<std::path::PathBuf> {
-    Some(dirs::data_dir()?.join("qbz").join("ui_prefs.json"))
-}
-
 fn read_pref(key: &str) -> Option<serde_json::Value> {
-    let path = prefs_path()?;
+    let path = crate::settings_qt::prefs_path()?;
     std::fs::read_to_string(path)
         .ok()
         .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
         .and_then(|v| v.get(key).cloned())
-}
-
-fn write_pref(key: &str, value: serde_json::Value) {
-    let Some(path) = prefs_path() else {
-        return;
-    };
-    let mut doc: serde_json::Value = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|text| serde_json::from_str(&text).ok())
-        .unwrap_or_else(|| serde_json::json!({}));
-    if let Some(obj) = doc.as_object_mut() {
-        obj.insert(key.to_string(), value);
-        if let Ok(text) = serde_json::to_string_pretty(&doc) {
-            let _ = std::fs::write(&path, text);
-        }
-    }
 }
 
 /// The persisted theme slug (ui_prefs.rs default: "oled").
@@ -63,12 +52,12 @@ pub fn theme_filter() -> i32 {
 }
 
 pub fn set_theme_filter(index: i32) {
-    write_pref("theme_filter", serde_json::json!(index.clamp(0, 2)));
+    crate::settings_qt::save_pref("theme_filter", serde_json::json!(index.clamp(0, 2)));
 }
 
 /// Persist a new slug (additive); the caller republishes `themeJson`.
 pub fn set_theme(slug: &str) {
-    write_pref("theme", serde_json::Value::String(slug.to_string()));
+    crate::settings_qt::save_pref("theme", serde_json::Value::String(slug.to_string()));
     log::info!("[qbz-qt] theme -> {slug}");
 }
 
