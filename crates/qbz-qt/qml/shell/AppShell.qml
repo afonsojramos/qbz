@@ -14,6 +14,7 @@
 
 import QtQuick
 import com.blitzfc.qbz
+import "../controls"
 import "../theme"
 
 Rectangle {
@@ -84,6 +85,11 @@ Rectangle {
         anchors.left: parent.left
         anchors.top: header.bottom
         anchors.bottom: npb.top
+        // The shared hover-tooltip overlay (declared last, below). The sidebar
+        // clips its own overflow, so the collapsed rail's name bubble HAS to be
+        // rendered out here — same reason Slint mounts SidebarTooltip at the
+        // AppShell level rather than inside Sidebar.slint.
+        tooltip: tooltipOverlay
         // Animated 3-state width lives inside the component.
     }
 
@@ -167,7 +173,151 @@ Rectangle {
                 : QbzShell.currentView === "recentalbums" ? "../views/PlayHistoryView.qml"
                 : QbzShell.currentView === "mostplayedalbums" ? "../views/PlayHistoryView.qml"
                 : QbzShell.currentView === "label" ? "../views/LabelView.qml"
-                : QbzShell.currentView === "labelreleases" ? "../views/LabelReleasesView.qml" : ""
+                : QbzShell.currentView === "labelreleases" ? "../views/LabelReleasesView.qml"
+                // For You > Qobuz Mixes. The whole chain existed —
+                // HomeView's tile -> QbzHome.openMix -> foryou_qt -> nav_qt
+                // records the "mix" view — and MixView.qml is written and
+                // registered in build.rs, but this arm was missing, so every
+                // mix tile navigated to a view nobody mounted and the content
+                // pane simply went blank (back recovered, which is why it read
+                // as "nothing happens" rather than a crash).
+                : QbzShell.currentView === "mix" ? "../views/MixView.qml" : ""
+        }
+    }
+
+    // --- Bezel corners ----------------------------------------------------
+    // `clip: true` on contentFrame is a RECTANGULAR scissor in Qt Quick — it
+    // is a glScissor / QPainter setClipRect and it does NOT follow `radius`.
+    // The radius only shapes that Rectangle's own fill, so anything that
+    // paints opaquely at the frame's corners paints straight over the bezel
+    // and the panel reads square. Slint has no such split: its `clip: true`
+    // on a Rectangle clips to the ROUNDED shape (AppShell.slint:409-414 sets
+    // border-radius + clip on the same element and the album atmosphere
+    // inside it is cut by the arc), which is why the identical structure is
+    // correct there and wrong here. The visible offender is the album/artist
+    // header band (controls/HeaderGradient.qml, full-bleed at y:0), but the
+    // defect is the frame's, not the band's: the band scrolls, so rounding
+    // the band itself would only hold at scroll offset 0 — measured, the
+    // corners go square again the moment the page scrolls and the band's body
+    // reaches the top edge. The mask therefore belongs here, once, and it
+    // covers every present and future view.
+    //
+    // SIBLINGS of contentFrame, not children of it. Inside the frame they sat
+    // at z:0 with the view Loader, so any overlay a VIEW mounts painted over
+    // them and the corners read square while it was open — the pane-filling
+    // modals are exactly that: DiscoverConfigModal z:3100 (HomeView:1130),
+    // GenreFilterPopup z:3000 (Home/Library/DiscoverBrowse/PlaylistBrowse),
+    // TrackInfoModal z:3000 (rows/TrackRow.qml:565, and TrackRow mounts
+    // inside views). Raising the nubs to z:3200 would only win until the next
+    // modal, because ADR-009 fixes in-pane modals at z >= 3000 and says
+    // nothing about a ceiling. Out here the question does not arise: the mask
+    // describes the FRAME's silhouette, so nothing the frame contains can
+    // reach it, whatever z it picks. Window-level overlays declared after
+    // this block still paint over the nubs — Cortinilla, the shared text
+    // modal, the drag ghost, ArtPreviewOverlay — and that is correct: a
+    // window-wide scrim covers the pane corners too. SidebarNowPlayingDock is
+    // also later but lives inside the 240px sidebar (x:16, w:208) and never
+    // touches the frame.
+    //
+    // Mechanism: four small Canvas nubs, each filling its corner square with
+    // the shell colour and punching the quarter-disc back out. Canvas is this
+    // port's rounding primitive for exactly this reason
+    // (theme/RoundedImage.qml, cards/PlaylistCollage.qml): ShaderEffect /
+    // OpacityMask render NOTHING on the software path, and `layer.enabled` +
+    // a rounded mask would cost an FBO the size of the whole content pane
+    // every frame. Cost here is 4 x 12x12 px rastered once, repainted only
+    // when the theme colour or the radius changes.
+    //
+    // The fill is the shell base (`root.color`) because that is literally
+    // what shows through the bezel: the 8px gutter, the HeaderBar above
+    // and the NPB gap below are all surface-card, and nothing else paints
+    // between `root` and the frame while the corners are on.
+    //
+    // Gated on the ambient background being OFF, and that is not a
+    // shortcut: with the dynamic background active the frame goes
+    // translucent (surface-main @ 0.22 + hairline) and the ambient field
+    // is SUPPOSED to show through the corners, so an opaque nub would be
+    // the regression. The same flag also suppresses the album/artist
+    // atmosphere (AlbumView.qml:71 `headerAtmoOn = pref && !ambientOn`,
+    // AlbumPageView.slint:168) — the two states are complementary, never
+    // both.
+    //
+    // WHAT COVERS THE AMBIENT-ON CASE, since this block cannot: nothing that
+    // paints opaquely may reach the frame's corners while the field is
+    // showing through them, and by construction almost nothing does — every
+    // view root goes `color: "transparent"` under ambient (HomeView.qml:53 and
+    // its twelve siblings), and the ones that stay opaque round their own fill
+    // (`radius: 12`, the same trick, applied by the offender instead of by a
+    // mask). Sweeping the pane-level overlay set (ADR-009's z >= 3000) turned
+    // up ONE that did neither: controls/DiscoverConfigModal.qml's scrim, a
+    // full-bleed #bf000000 Rectangle at z:3100.
+    // It now carries `radius: theme.radiusMd` too. GenreFilterPopup's backdrop
+    // is a bare MouseArea (paints nothing) and TrackInfoModal / CastPicker are
+    // parented to the window Overlay, where covering the pane corners is the
+    // correct behaviour. A future full-bleed opaque pane child must round
+    // itself the same way — there is no mask that can do it for it here.
+    BezelCorner { corner: 0; fill: root.color; r: contentFrame.radius
+                  visible: !root.ambientOn
+                  x: contentFrame.x; y: contentFrame.y }
+    BezelCorner { corner: 1; fill: root.color; r: contentFrame.radius
+                  visible: !root.ambientOn
+                  x: contentFrame.x + contentFrame.width - width; y: contentFrame.y }
+    BezelCorner { corner: 2; fill: root.color; r: contentFrame.radius
+                  visible: !root.ambientOn
+                  x: contentFrame.x + contentFrame.width - width
+                  y: contentFrame.y + contentFrame.height - height }
+    BezelCorner { corner: 3; fill: root.color; r: contentFrame.radius
+                  visible: !root.ambientOn
+                  x: contentFrame.x
+                  y: contentFrame.y + contentFrame.height - height }
+
+    // The bezel nub itself. Kept as an inline component (no outer `id` is
+    // referenced inside it — inline components do not share the document's
+    // scope, so the colour and the radius arrive as properties).
+    //
+    // `corner`: 0 = top-left, 1 = top-right, 2 = bottom-right, 3 = bottom-left.
+    // The arc centre is the corner of the r x r square that points INTO the
+    // panel, so the punched-out quarter-disc is the panel side and the painted
+    // remainder is the sliver outside the arc — the exact pixels Qt's
+    // rectangular clip fails to cut.
+    component BezelCorner: Canvas {
+        id: nub
+        property int corner: 0
+        property color fill: "#000000"
+        property int r: 12
+
+        width: nub.r
+        height: nub.r
+        // Purely decorative: never take a click meant for the view underneath.
+        enabled: false
+        // Same pair as RoundedImage/PlaylistCollage — CPU raster, and Immediate
+        // so a repaint cannot land on a pixmap whose Canvas is already gone.
+        renderTarget: Canvas.Image
+        renderStrategy: Canvas.Immediate
+
+        onFillChanged: nub.requestPaint()
+        onRChanged: nub.requestPaint()
+        onCornerChanged: nub.requestPaint()
+
+        onPaint: {
+            var ctx = nub.getContext("2d")
+            if (!ctx || nub.r <= 0)
+                return
+            ctx.reset()
+            ctx.clearRect(0, 0, nub.width, nub.height)
+            ctx.fillStyle = nub.fill
+            ctx.fillRect(0, 0, nub.width, nub.height)
+            // destination-out = QPainter's CompositionMode_DestinationOut, so
+            // the disc erases the fill instead of drawing over it. Its edge is
+            // antialiased against transparency, which is what makes the nub
+            // blend into the arc rather than staircase along it.
+            ctx.globalCompositeOperation = "destination-out"
+            ctx.beginPath()
+            ctx.arc(nub.corner === 0 || nub.corner === 3 ? nub.r : 0,
+                    nub.corner === 0 || nub.corner === 1 ? nub.r : 0,
+                    nub.r, 0, 2 * Math.PI)
+            ctx.fill()
+            ctx.globalCompositeOperation = "source-over"
         }
     }
 
@@ -322,4 +472,18 @@ Rectangle {
     // mount in AppShell.slint. Non-interactive, so it never steals the hover
     // that is keeping it open (see the file header).
     ArtPreviewOverlay { }
+
+    // The shell's ONE hover-tooltip overlay — the port of Slint's
+    // TooltipOverlay/SidebarTooltip mechanism, mounted LAST for the reason
+    // TooltipOverlay.slint's header gives: "mounted last in AppShell so no
+    // neighbour can cover it". Surfaces do not own a popup; they call
+    // showRight()/showAbove()/hide() on this instance (see QbzTooltip.qml).
+    //
+    // WIRED SO FAR: the collapsed sidebar rail (Sidebar.qml). Everything else
+    // Slint tooltips is still un-wired — the list is in the handoff notes; each
+    // one is a two-line change in its own file, not a change here.
+    QbzTooltip {
+        id: tooltipOverlay
+        anchors.fill: parent
+    }
 }

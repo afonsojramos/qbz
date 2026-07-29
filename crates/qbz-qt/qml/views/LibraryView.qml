@@ -172,6 +172,57 @@ Rectangle {
         activeTab === "all" || (tabTotals[activeTab] || 0) > 0
 
     // ------------------------- derive (JS) ------------------------------
+    // THE model, derived once and held here. Both views bind to it and both
+    // window reports read IT — never `grid.model` / `list.model` back off
+    // the view, which is a hard crash, not a style point:
+    //
+    //   QQuickItemView::model() (libQt6Quick 6.11.1, +0x145dfe..+0x145e2c)
+    //   reads THREE things off the private and guards only two of them:
+    //     0x588  the QPointer's ExternalRefCountData guard  -> null-checked,
+    //            and its strongref at +4 is checked too
+    //     0x7e0  bit 0, the "this view owns a delegate model" flag
+    //     0x590  the QPointer's raw VALUE -> handed to
+    //            QQmlDelegateModel::model() with NO test at all
+    //   So the getter is safe against a QPointer whose guard says "gone" and
+    //   unsafe against the window where the guard still says "alive" while
+    //   the value slot no longer refers to a usable object. setModel() opens
+    //   exactly that window: it tears the old QQmlDelegateModel down, and its
+    //   own repositioning emits contentYChanged from inside the teardown,
+    //   straight into onContentYChanged and straight back into the getter.
+    //   `this` arrives null (gdb: rsi=0), +8 is the first member read, SIGSEGV
+    //   at address 8 in QQmlDelegateModel::model()+5. Reproduced standalone
+    //   under qml6 6.11.1 (same fault ip, same dmesg Code bytes); it is the
+    //   same fault the app took on 2026-07-27/28/29 going Library -> Labels
+    //   with the grid scrolled — the tab switch re-derives the model AND the
+    //   clamp to the shorter list moves contentY. With contentY already 0
+    //   nothing is emitted and nothing crashes, which is why it was
+    //   intermittent rather than every switch.
+    //
+    //   PRECONDITION, precisely, because the wrong one invites the wrong fix:
+    //   the old delegate model is being DESTROYED, not momentarily unset. It
+    //   does not come back a moment later. So the repair for any site with
+    //   this shape is NOT "defer the readback one event-loop turn" (Qt.
+    //   callLater / a 0ms Timer) — by then there is still no old model and,
+    //   worse, the handler has been decoupled from the state it was meant to
+    //   report. The only repair is to not ask the view for its model.
+    //
+    //   onModelChanged is NOT the entry: it fires after the swap is complete
+    //   and the same readback there survives. Bisected, not assumed.
+    //
+    //   Only `.model` is unguarded. `count`, `contentHeight`, `currentIndex`,
+    //   `indexAt()` and `itemAtIndex()` all null-check and are safe in the
+    //   same handler — which is why the LocalLibrary tabs, which cache their
+    //   array in `entries` and only ever ask the view for indices, never had
+    //   this bug. Same shape here.
+    //
+    // Deriving once also replaces two independent passes over the feed (the
+    // grid and the list each used to call visibleItems() on every change)
+    // with one, and guarantees both views and the debounce Timer see the
+    // SAME array instance.
+    // Named `visibleRows`, not `visible` — root is a Rectangle and `visible`
+    // is taken.
+    readonly property var visibleRows: visibleItems()
+
     function visibleItems() {
         var items = []
         var i
@@ -295,19 +346,43 @@ Rectangle {
             // is not a change in QML).
             root.artMap = Object.assign({}, m)
         }
+        // Favourite state settled in the store. Patched IN PLACE, and
+        // `feedChanged()` is deliberately NOT called — that is the WHOLE fix
+        // for "clicking a heart in Library > All throws me back to the top".
+        //
+        //   feedChanged() -> `visibleRows` re-derives -> a NEW array reaches
+        //   `model:` -> QQuickItemView::setModel() -> the view resets its
+        //   scroll offset to 0 and rebuilds every delegate.
+        //
+        // Scrolled to row 40 in a 3,000-row feed, one heart click sent the
+        // user back to row 0. Nothing on screen needed the re-derive: the
+        // grid cards each listen to this same signal for their own key
+        // (cards/AlbumCard.qml, TrackCard.qml, PlaylistCard.qml,
+        // ArtistCard.qml) and the list rows do the same (FeedListRow below).
+        // The in-place mutation is for the delegates built LATER — when the
+        // user scrolls, re-filters or switches tab — and it reaches them
+        // because `visibleRows` pushes the very same row objects.
+        //
+        // Same reasoning as onPinChanged below; the two are now symmetric.
         function onLibraryFavoriteChanged(key, value) {
             var f = root.feed
             for (var i = 0; i < f.length; i++) {
                 if (f[i].artKey === key) { f[i].isFavorite = value; break }
             }
-            root.feedChanged()
         }
+        // Pin state settled in the store. The row is patched IN PLACE and the
+        // feed is deliberately NOT re-signalled: `feedChanged()` re-derives
+        // `visibleRows`, which swaps the GridView/ListView model and tears
+        // down every delegate — per pin click. The glyphs on screen do not
+        // need it, because each card listens to this same signal for its own
+        // key (cards/AlbumCard.qml); the mutation here is for the delegates
+        // built LATER, when the user scrolls or re-filters. `visibleRows`
+        // pushes the very same row objects, so both see the new value.
         function onPinChanged(key, value) {
             var f = root.feed
             for (var i = 0; i < f.length; i++) {
                 if (f[i].artKey === key) { f[i].isPinned = value; break }
             }
-            root.feedChanged()
         }
     }
 
@@ -315,7 +390,7 @@ Rectangle {
     Timer {
         id: windowDebounce
         interval: 180
-        onTriggered: root.reportWindow(root.visibleItems(), pendingFirst, pendingLast)
+        onTriggered: root.reportWindow(root.visibleRows, pendingFirst, pendingLast)
         property int pendingFirst: 0
         property int pendingLast: 0
     }
@@ -438,7 +513,10 @@ Rectangle {
     // Track context-menu model (TrackCard.slint track-menu) + dispatch —
     // shared by the LIST rows here (the grid card carries its own copy in
     // TrackCard.qml).
-    function trackMenuModel(item) {
+    // `favorite` is passed in rather than read off `item`: the row owns the
+    // live state (see FeedListRow.favorite), `item.isFavorite` is only its
+    // seed.
+    function trackMenuModel(item, favorite) {
         var m = [
             { "label": QbzSession.tr("Play", QbzSession.trRev), "icon": "play-fill", "action": "play" },
             { "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-start", "action": "next" },
@@ -447,31 +525,57 @@ Rectangle {
         ]
         if (item.artistId !== "") m.push({ "label": QbzSession.tr("Go to artist", QbzSession.trRev), "icon": "user", "action": "go-artist" })
         if (item.albumId !== "") m.push({ "label": QbzSession.tr("Go to album", QbzSession.trRev), "icon": "disc", "action": "go-album" })
-        m.push({ "label": item.isFavorite ? QbzSession.tr("Remove from Library", QbzSession.trRev) : QbzSession.tr("Add to Library", QbzSession.trRev),
-                 "icon": item.isFavorite ? "heart-filled" : "heart", "action": "favorite" })
+        m.push({ "label": favorite ? QbzSession.tr("Remove from Library", QbzSession.trRev) : QbzSession.tr("Add to Library", QbzSession.trRev),
+                 "icon": favorite ? "heart-filled" : "heart", "action": "favorite" })
         return m
     }
-    function trackAction(item, a) {
+    // Takes the ROW, not the item — "favorite" has to go through the row's
+    // own property (a write to `item.isFavorite` notifies nothing).
+    function trackAction(row, a) {
+        var item = row.item
         if (a === "play") QbzPlayer.playTrack(item.id)
         else if (a === "next") QbzPlayer.enqueueTrack(item.id, "next")
         else if (a === "later") QbzPlayer.enqueueTrack(item.id, "later")
         else if (a === "queue") QbzPlayer.enqueueTrack(item.id, "queue")
         else if (a === "go-artist") QbzArtist.openArtist(item.artistId)
         else if (a === "go-album") QbzAlbum.openAlbum(item.albumId)
-        else if (a === "favorite") {
-            item.isFavorite = !item.isFavorite
-            QbzLibrary.libraryToggleFavorite("track", item.id)
-        }
+        else if (a === "favorite") row.toggleFavorite()
     }
 
     // --- All-feed LIST row (FavoritesView inline row, homologated) --------
     component FeedListRow: Rectangle {
+        id: feedRow
         property var item: ({})
         // Viewport-relative position, for the skeleton's animated cap.
         property int rowIndex: 0
         height: 44
         radius: 6
         color: rowArea.containsMouse ? theme.surfaceHover : "transparent"
+
+        // Live heart, as a real property — `item.isFavorite = !…` notified
+        // nothing (plain JS object; see rows/TrackRow.qml for the measurement)
+        // so this row's glyph and its menu label never moved on click. The
+        // binding is re-established on every new row object, so a republished
+        // feed still wins.
+        property bool favorite: feedRow.item.isFavorite === true
+        onItemChanged: feedRow.favorite = Qt.binding(function () {
+            return feedRow.item.isFavorite === true
+        })
+        function toggleFavorite() {
+            feedRow.favorite = !feedRow.favorite
+            QbzLibrary.libraryToggleFavorite(feedRow.item.kind, feedRow.item.id)
+        }
+        // Settle + rollback + cross-surface walk. `artKey` IS
+        // `library_qt::feed_key(kind, id)`, the very key the signal carries —
+        // which is also why root's own handler can patch the backing row by
+        // comparing against it.
+        Connections {
+            target: QbzLibrary
+            function onLibraryFavoriteChanged(key, value) {
+                if ((feedRow.item.artKey || "") !== "" && key === feedRow.item.artKey)
+                    feedRow.favorite = value
+            }
+        }
 
         // Row body — click plays/opens by kind. Declared BEFORE the cells so
         // the ⋯ button and art-play win their clicks.
@@ -506,10 +610,18 @@ Rectangle {
                     visible: !lrCollage.visible
                     source: root.artMap[item.artKey] || ""
                     radius: item.kind === "artist" ? 22 : 6
-                    // A Qobuz playlist's own graphic is contain-fitted like a
-                    // label logo — cropping it cuts the wordmark.
-                    fit: (item.kind === "label" || item.playlistOwnImage === true)
-                        ? "contain" : "crop"
+                    // A label logo is contain-fitted (cropping cuts the
+                    // wordmark) on a FLAT surface — those are transparent
+                    // PNGs whose edges carry no colour to derive from.
+                    // A playlist takes "auto": its own graphic is the 800x380
+                    // `image_rectangle` and pads with an image-derived
+                    // gradient, while a square member cover still crops. The
+                    // flag is not required for that any more, but it stays
+                    // authoritative where it IS published (this feed).
+                    fit: item.kind === "label" ? "contain"
+                        : item.kind === "playlist"
+                            ? (item.playlistOwnImage === true ? "pad" : "auto")
+                            : "crop"
                 }
                 // User playlists have no graphic of their own, so they show the
                 // member-cover mosaic instead of a blank tile.
@@ -670,7 +782,7 @@ Rectangle {
             // Col — favorite / follow indicator.
             QbzIcon {
                 name: item.kind === "artist" ? "user-plus"
-                    : (item.isFavorite ? "heart-filled" : "heart")
+                    : (feedRow.favorite ? "heart-filled" : "heart")
                 width: 18
                 height: 18
                 anchors.verticalCenter: parent.verticalCenter
@@ -696,23 +808,23 @@ Rectangle {
         CardMenu {
             id: lrMenu
             menuWidth: 196
-            entries: item.kind === "track" ? root.trackMenuModel(item)
+            entries: item.kind === "track" ? root.trackMenuModel(item, feedRow.favorite)
                 : item.kind === "album" ? [
                     { "label": QbzSession.tr("Open album", QbzSession.trRev), "icon": "library-big", "action": "open" },
                     { "label": QbzSession.tr("Play", QbzSession.trRev), "icon": "play-fill", "action": "play" },
-                    { "label": item.isFavorite ? QbzSession.tr("Remove from Library", QbzSession.trRev) : QbzSession.tr("Add to Library", QbzSession.trRev),
-                      "icon": item.isFavorite ? "heart-filled" : "heart", "action": "favorite" },
+                    { "label": feedRow.favorite ? QbzSession.tr("Remove from Library", QbzSession.trRev) : QbzSession.tr("Add to Library", QbzSession.trRev),
+                      "icon": feedRow.favorite ? "heart-filled" : "heart", "action": "favorite" },
                 ]
                 : item.kind === "artist" ? [
                     { "label": QbzSession.tr("Go to artist", QbzSession.trRev), "icon": "user", "action": "go-artist" },
                 ]
                 : [
                     { "label": QbzSession.tr("Open", QbzSession.trRev), "icon": "list-music", "action": "open" },
-                    { "label": item.isFavorite ? QbzSession.tr("Remove from Library", QbzSession.trRev) : QbzSession.tr("Add to Library", QbzSession.trRev),
-                      "icon": item.isFavorite ? "heart-filled" : "heart", "action": "favorite" },
+                    { "label": feedRow.favorite ? QbzSession.tr("Remove from Library", QbzSession.trRev) : QbzSession.tr("Add to Library", QbzSession.trRev),
+                      "icon": feedRow.favorite ? "heart-filled" : "heart", "action": "favorite" },
                 ]
             onPicked: function (a) {
-                if (item.kind === "track") { root.trackAction(item, a); return }
+                if (item.kind === "track") { root.trackAction(feedRow, a); return }
                 if (a === "open") {
                     if (item.kind === "album") QbzAlbum.openAlbum(item.id)
                     // playlist/label pages: out of scope (POC-NOTE).
@@ -721,8 +833,7 @@ Rectangle {
                 } else if (a === "go-artist") {
                     QbzArtist.openArtist(item.id)
                 } else if (a === "favorite") {
-                    item.isFavorite = !item.isFavorite
-                    QbzLibrary.libraryToggleFavorite(item.kind, item.id)
+                    feedRow.toggleFavorite()
                 }
             }
         }
@@ -1169,7 +1280,7 @@ Rectangle {
                 cacheBuffer: 266 * 2
                 clip: true
                 boundsBehavior: Flickable.StopAtBounds
-                model: root.visibleItems()
+                model: root.visibleRows
 
                 onContentYChanged: root.gridWindowReport()
                 onModelChanged: root.gridWindowReport()
@@ -1195,6 +1306,13 @@ Rectangle {
                             artSource: root.artMap[modelData.artKey] || ""
                             isFavorite: modelData.isFavorite
                             isPinned: modelData.isPinned
+                            // The pin payload's display snapshot: the REMOTE
+                            // url, never `artMap` (a local file:// cache path
+                            // that means nothing after a cache wipe). Without
+                            // it every album pinned from the Library grid
+                            // landed in the Home Pinned rail as a permanent
+                            // grey placeholder, across restarts.
+                            artworkUrl: modelData.imageUrl || ""
                             source: modelData.source
                         }
                     }
@@ -1212,11 +1330,27 @@ Rectangle {
                             item: modelData
                             artSource: root.artMap[modelData.artKey] || ""
                             isPinned: modelData.isPinned === true
+                            // Snapshot url for the pin payload (see the album
+                            // card above).
+                            artworkUrl: modelData.imageUrl || ""
+                            // The Slint reference SPLITS here, and this one
+                            // component serves both of its call sites: the
+                            // ARTISTS tab grids pass follow-mode "none"
+                            // (FavoritesView.slint:1820/1854 — every artist in
+                            // that grid is followed by definition, so the chip
+                            // would be a permanent tick), while the mixed ALL
+                            // feed keeps the default and seeds `following`
+                            // from `is-favorite` (:1143-1147), which is
+                            // exactly the second spelling ArtistCard reads.
+                            followMode: root.activeTab === "artists" ? "none" : "toggle"
                         }
                     }
                     Component {
                         id: playlistCardComp
                         PlaylistCard {
+                            // artworkUrl is not passed on purpose: the card
+                            // defaults it to `item.imageUrl`, which IS this
+                            // row's remote cover (FeedItem.image_url).
                             item: modelData
                             artSource: root.artMap[modelData.artKey] || ""
                             isPinned: modelData.isPinned === true
@@ -1276,7 +1410,7 @@ Rectangle {
                 cacheBuffer: 44 * 10
                 clip: true
                 boundsBehavior: Flickable.StopAtBounds
-                model: root.visibleItems()
+                model: root.visibleRows
                 onContentYChanged: root.listWindowReport()
                 onModelChanged: root.listWindowReport()
                 Component.onCompleted: root.listWindowReport()
@@ -1326,17 +1460,21 @@ Rectangle {
         }
     }
 
+    // Both run from onContentYChanged, i.e. from INSIDE QQuickItemView::
+    // setModel() — see the visibleRows comment. Everything they touch on the
+    // view (width/height/contentY/cellWidth/cellHeight) is a plain qreal on
+    // the private; the array comes from root, never from the view.
     function gridWindowReport() {
         var cols = Math.max(1, Math.floor(grid.width / grid.cellWidth))
         var firstRow = Math.max(0, Math.floor(grid.contentY / grid.cellHeight) - 1)
         var lastRow = Math.ceil((grid.contentY + grid.height) / grid.cellHeight) + 1
-        var m = grid.model
+        var m = root.visibleRows
         queueWindowReport(firstRow * cols, Math.min(m.length - 1, lastRow * cols - 1))
     }
     function listWindowReport() {
         var first = Math.max(0, Math.floor(list.contentY / 44) - 4)
         var last = Math.ceil((list.contentY + list.height) / 44) + 4
-        queueWindowReport(first, Math.min(list.model.length - 1, last))
+        queueWindowReport(first, Math.min(root.visibleRows.length - 1, last))
     }
 
     // ============================ overlay =================================
