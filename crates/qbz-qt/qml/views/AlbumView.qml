@@ -143,6 +143,17 @@ Rectangle {
             m[key] = path
             root.coverMap = Object.assign({}, m)
         }
+        // The SETTLED heart from Rust: the flipped value when the write
+        // landed, the UNCHANGED one when it failed. The header click writes
+        // its optimistic flip into localToggles and nothing used to correct
+        // it, so a 404'd un-favorite stayed visibly un-favorited until the
+        // user navigated away — LibraryView.qml was this signal's only
+        // listener. Key shape is `library_qt::feed_key` (`{kind}:{id}`).
+        function onLibraryFavoriteChanged(key, value) {
+            var id = (header && header.id) ? header.id : ""
+            if (id !== "" && key === "album:" + id)
+                root.setToggleState("album", value)
+        }
     }
     Component.onCompleted: { syncAlbumState(); dispatchCovers() }
     onAlbumChanged: { syncAlbumState(); dispatchCovers() }
@@ -822,40 +833,31 @@ Rectangle {
                         }
                     }
 
-                    // Column header.
-                    Row {
+                    // Column header — rows/TrackListHeader.qml, i.e. the SAME
+                    // rows/TrackCols.qml geometry the TrackRows below use.
+                    //
+                    // What was here disagreed with the rows on every number:
+                    // spacing 16 vs the row's 14, Duration 80 vs 70, Quality
+                    // 80 vs 92, and a title width that counted five gaps
+                    // where the layout draws six. Those are Slint's own
+                    // header numbers (AlbumPageView.slint:811-880) and they
+                    // do NOT match primitives/TrackRow.slint — the reference
+                    // has the same defect the owner reported here, so the
+                    // port keeps the row's numbers and drops the second
+                    // hardcoded copy entirely.
+                    //
+                    // The heart / cloud glyphs stay (they are the only
+                    // labelling those two columns get) — and they still fill
+                    // the band so `centerIn` centres them, which is the fix
+                    // this block used to document at length.
+                    TrackListHeader {
                         visible: !QbzAlbum.albumLoading
                         width: parent.width
-                        height: 40
-                        leftPadding: 12
-                        rightPadding: 12
-                        spacing: 16
-                        Text { text: "#"; width: 32; color: theme.textMuted; font.pixelSize: 13; font.letterSpacing: 0.5; anchors.verticalCenter: parent.verticalCenter }
-                        Text { text: QbzSession.tr("Title", QbzSession.trRev); width: parent.width - 32 - 80 - 80 - 28 - 28 - 32 - 5 * 16 - 24; color: theme.textMuted; font.pixelSize: 13; font.letterSpacing: 0.5; anchors.verticalCenter: parent.verticalCenter; elide: Text.ElideRight }
-                        Text { text: QbzSession.tr("Duration", QbzSession.trRev); width: 80; color: theme.textMuted; font.pixelSize: 13; font.letterSpacing: 0.5; horizontalAlignment: Text.AlignHCenter; anchors.verticalCenter: parent.verticalCenter }
-                        Text { text: QbzSession.tr("Quality", QbzSession.trRev); width: 80; color: theme.textMuted; font.pixelSize: 13; font.letterSpacing: 0.5; horizontalAlignment: Text.AlignHCenter; anchors.verticalCenter: parent.verticalCenter }
-                        // Heart / offline-cache column heads. AlbumPageView
-                        // .slint:854-877 declares these as `Rectangle { width:
-                        // 28px; }` with NO height — a box-layout child with no
-                        // fixed cross-axis size is STRETCHED to the row, and
-                        // the glyph is then centred inside it (`y: (parent
-                        // .height - self.height) / 2`). The port gave them
-                        // `height: 1`, so `centerIn` centred the glyph on a
-                        // 1px item pinned at the top of the 40px band: the two
-                        // icons floated above the text labels, which do centre.
-                        // Fill the band and centre, exactly as the .slint does.
-                        Item {
-                            width: 28
-                            height: parent.height
-                            QbzIcon { name: "heart"; width: 14; height: 14; anchors.centerIn: parent; tintName: "muted" }
-                        }
-                        Item {
-                            width: 28
-                            height: parent.height
-                            QbzIcon { name: "cloud-download"; width: 14; height: 14; anchors.centerIn: parent; tintName: "muted" }
-                        }
-                        // Aligns with the per-row more-button slot (.slint:878).
-                        Item { width: 32; height: parent.height }
+                        bandHeight: 40
+                        labelSpacing: 0.5
+                        showDownload: true
+                        favoriteGlyph: true
+                        downloadGlyph: true
                     }
 
                     // Rows (with Disc / work headers).

@@ -32,6 +32,7 @@ import QtQuick.Window
 import com.blitzfc.qbz
 import "../cards"
 import "../controls"
+import "../rows"
 import "../theme"
 
 Rectangle {
@@ -289,6 +290,30 @@ Rectangle {
             root._coverInbox[key] = path
             if (!coverFlush.running) coverFlush.start()
         }
+        // The SETTLED follow/heart state from Rust: the flipped value when the
+        // write landed, the UNCHANGED one when it failed. Both the header
+        // follow and the Popular Tracks / Appears On hearts write their
+        // optimistic flip into localToggles and nothing used to correct it, so
+        // a failed write stayed visibly wrong until the user left the page.
+        // Key shape is `library_qt::feed_key` (`{kind}:{id}`) — which is
+        // already the exact key the track rows use for their override.
+        function onLibraryFavoriteChanged(key, value) {
+            var aid = (artist && artist.id) ? artist.id : ""
+            if (aid !== "" && key === "artist:" + aid)
+                root.setToggleState("artist", value)
+            else if (key.indexOf("track:") === 0)
+                root.setToggleState(key, value)
+        }
+        // Header pin, same seam: the overflow-menu row flips `artistPin`
+        // optimistically, and this settles it from the store (Slint does the
+        // same for the open detail view: `st.set_pinned(pinned)` when its id
+        // matches). The release CARDS need nothing here — each one listens to
+        // this signal itself (cards/AlbumCard.qml).
+        function onPinChanged(key, value) {
+            var aid = (artist && artist.id) ? artist.id : ""
+            if (aid !== "" && key === "artist:" + aid)
+                root.setToggleState("artistPin", value)
+        }
     }
 
     Connections {
@@ -431,10 +456,22 @@ Rectangle {
 
 
     // Popular Tracks row (TrackRow with artwork + album column).
+    //
+    // COLUMN GEOMETRY: rows/TrackCols.qml, the same object rows/TrackRow.qml
+    // and rows/TrackListHeader.qml read. This component is a FORK of the
+    // shared row (POC-NOTE, pre-existing) and it had the full column set
+    // re-typed as literals; they were numerically right, but a fork with its
+    // own copy of the numbers is precisely how a table's columns drift. The
+    // artist page draws no column header (neither does
+    // artist/ArtistPageView.slint), so nothing is misaligned today — this
+    // keeps it that way if the widths ever move.
     component PopularTrackRow: Rectangle {
+        id: popRow
         property var row: ({})
         property int rowIndex: 0
         property bool showAlbum: true
+
+        TrackCols { id: cols }
 
         readonly property bool isActive: QbzPlayer.npTrackId !== "" && QbzPlayer.npTrackId === row.id
         readonly property bool hovered: trArea.containsMouse || favArea.containsMouse || moreArea.containsMouse
@@ -456,14 +493,14 @@ Rectangle {
 
         Row {
             anchors.fill: parent
-            anchors.leftMargin: 12
-            anchors.rightMargin: 12
-            spacing: 14
+            anchors.leftMargin: cols.padH
+            anchors.rightMargin: cols.padH
+            spacing: cols.gap
 
             // Position number (artwork rows carry it separate from the cover).
             Text {
                 visible: showAlbum
-                width: 32
+                width: cols.colNumber
                 anchors.verticalCenter: parent.verticalCenter
                 text: row.number
                 color: theme.textMuted
@@ -473,8 +510,8 @@ Rectangle {
             }
             // Cover with hover play overlay.
             Rectangle {
-                width: showAlbum ? 36 : 32
-                height: showAlbum ? 36 : 28
+                width: showAlbum ? cols.colArt : cols.colNumber
+                height: showAlbum ? cols.colArt : 28
                 anchors.verticalCenter: parent.verticalCenter
                 radius: theme.radiusSm
                 color: theme.surfaceElevated
@@ -515,8 +552,20 @@ Rectangle {
                 }
             }
             // Title + artist.
+            //
+            // This was `- 6 * 14` for the gaps in BOTH arms. With the album
+            // column on there are nine visible cells, i.e. EIGHT gaps, so the
+            // stretch column ran 28px long and dragged Album / Duration /
+            // Quality / heart 28px right of where the shared TrackRow puts
+            // them — the same class of defect as the header, inside a forked
+            // row. `cols.titleWidth` counts the gaps from the arms.
+            //
+            // Arms: with the album column the leading cells are the 32px
+            // number AND the 36px cover (artwork arm); without it the single
+            // 32px cover IS the number cell.
             Column {
-                width: parent.width - (showAlbum ? 32 + 36 : 32) - albumCell.width - 70 - 92 - 28 - 28 - 32 - 6 * 14
+                width: cols.titleWidth(popRow.width, popRow.showAlbum, popRow.showAlbum,
+                                       true, true, true)
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: 2
                 Row {
@@ -558,7 +607,7 @@ Rectangle {
             Text {
                 id: albumCell
                 visible: showAlbum
-                width: showAlbum ? 220 : 0
+                width: showAlbum ? cols.colAlbum : 0
                 anchors.verticalCenter: parent.verticalCenter
                 text: row.album
                 color: row.albumId !== "" && albumLinkArea.containsMouse ? theme.textPrimary : theme.textMuted
@@ -574,7 +623,7 @@ Rectangle {
                 }
             }
             Text {
-                width: 70
+                width: cols.colDuration
                 anchors.verticalCenter: parent.verticalCenter
                 text: row.duration
                 color: theme.textMuted
@@ -582,7 +631,7 @@ Rectangle {
                 horizontalAlignment: Text.AlignHCenter
             }
             Text {
-                width: 92
+                width: cols.colQuality
                 anchors.verticalCenter: parent.verticalCenter
                 text: row.qualityTier === "hires" ? "HI-RES" : (row.qualityTier === "cd" ? "CD" : "")
                 color: theme.textMuted
@@ -594,8 +643,8 @@ Rectangle {
             // survives a document republish (see root.localToggles).
             Rectangle {
                 property bool favorite: root.toggleState("track:" + row.id, row.isFavorite)
-                width: 28
-                height: 28
+                width: cols.colFavorite
+                height: cols.colFavorite
                 radius: theme.radiusSm
                 anchors.verticalCenter: parent.verticalCenter
                 color: favArea.containsMouse ? theme.surfaceElevated : "transparent"
@@ -621,16 +670,16 @@ Rectangle {
             }
             // Offline download — INERT stub.
             Rectangle {
-                width: 28
-                height: 28
+                width: cols.colDownload
+                height: cols.colDownload
                 anchors.verticalCenter: parent.verticalCenter
                 color: "transparent"
                 QbzIcon { anchors.centerIn: parent; name: "cloud-download"; width: 16; height: 16; tintName: "muted" }
             }
             // ⋯ (play-only menu for the POC).
             Rectangle {
-                width: 32
-                height: 32
+                width: cols.colMenu
+                height: cols.colMenu
                 radius: theme.radiusSm
                 anchors.verticalCenter: parent.verticalCenter
                 color: moreArea.containsMouse ? theme.surfaceElevated : "transparent"
@@ -923,7 +972,18 @@ Rectangle {
                     year: modelData.year
                     qualityTier: modelData.qualityTier
                     artSource: root.coverMap[modelData.artUrl] || ""
-                    isFavorite: false
+                    // artist_qt `map_release` stamps the pin state on every
+                    // release row; SectionRail is the only other reader and
+                    // this page never mounts it, so the flag was published
+                    // and dropped on the floor — the glyph lied on all four
+                    // of this page's album grids. `artUrl` is the REMOTE url
+                    // (coverMap is keyed BY it), which is what the pin
+                    // payload must store.
+                    isPinned: modelData.isPinned === true
+                    artworkUrl: modelData.artUrl || ""
+                    // artist_qt::map_release stamps this the same way it
+                    // stamps the pin; false inverted the first click.
+                    isFavorite: modelData.isFavorite === true
                 }
             }
         }
@@ -1359,7 +1419,10 @@ Rectangle {
                         year: artist.lastRelease ? artist.lastRelease.year : ""
                         qualityTier: artist.lastRelease ? artist.lastRelease.qualityTier : ""
                         artSource: artist.lastRelease ? (root.coverMap[artist.lastRelease.artUrl] || "") : ""
-                        isFavorite: false
+                        // Same row shape as the release grids (map_release).
+                        isPinned: artist.lastRelease ? artist.lastRelease.isPinned === true : false
+                        artworkUrl: artist.lastRelease ? (artist.lastRelease.artUrl || "") : ""
+                        isFavorite: artist.lastRelease ? artist.lastRelease.isFavorite === true : false
                     }
                 }
 
@@ -1540,7 +1603,9 @@ Rectangle {
                                     year: modelData.year
                                     qualityTier: modelData.qualityTier
                                     artSource: root.coverMap[modelData.artUrl] || ""
-                                    isFavorite: false
+                                    isPinned: modelData.isPinned === true
+                                    artworkUrl: modelData.artUrl || ""
+                                    isFavorite: modelData.isFavorite === true
                                 }
                             }
                         }
@@ -1615,6 +1680,12 @@ Rectangle {
                             year: modelData.year
                             qualityTier: modelData.qualityTier
                             artSource: root.coverMap[modelData.imageUrl] || ""
+                            // These rows are LIBRARY feed items (FeedItem),
+                            // not release cards: the remote url is
+                            // `imageUrl`, and the pin state rides the same
+                            // row (library_qt `map_album`).
+                            isPinned: modelData.isPinned === true
+                            artworkUrl: modelData.imageUrl || ""
                             isFavorite: modelData.isFavorite
                         }
                     }

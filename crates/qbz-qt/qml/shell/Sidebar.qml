@@ -4,18 +4,21 @@
 // 1 = mini (icons only), 2 = closed 0px. Width animates 160ms ease-in-out;
 // the header's panel-left button cycles (QbzShell.cycleSidebar).
 //
-// MINI RAIL: the rail is 50px here, not Slint's 64 — a deliberate,
-// one-token owner deviation (theme.sidebarMiniWidth) so the square 34px row
-// exactly fills the 8px-padded track. Everything else in the mini state is
-// 1:1 with Slint: rows centre their lone glyph, nested playlist rows
-// collapse to zero, hovering a row names it in a bubble to the right
-// (SidebarTooltip.slint) and clicking a FOLDER opens its playlists in a
+// MINI RAIL: 64px, 1:1 with Slint (state.slint:4075), holding a 34px row
+// (Sidebar.slint:575/652) on symmetric 15px padding. It was 50px for a while —
+// an owner deviation that turned out to put the rail's centre 5px left of the
+// header control sitting directly above it; see `miniPadLeft` below and
+// QbzTheme.sidebarMiniWidth for the measurement. Everything else
+// in the mini state is 1:1 with Slint: rows centre their lone glyph, nested
+// playlist rows collapse to zero, hovering a row names it in a bubble to the
+// right (SidebarTooltip.slint) and clicking a FOLDER opens its playlists in a
 // flyout to the right (SidebarFolderPopup.slint) — in mini a folder cannot
 // expand in place, so a toggle there would be a control that does nothing.
 //
-// FILE LENGTH (>500): the two mini affordances above are shared single
-// instances declared at this root (never one Popup per row), which is what
-// keeps them cheap; they are extraction candidates into
+// FILE LENGTH (>500): the mini folder flyout is a shared single instance
+// declared at this root (never one Popup per row), which is what keeps it
+// cheap; the hover bubble is not here at all any more — it is the shell's
+// shared QbzTooltip overlay. The flyout is an extraction candidate into
 // qml/shell/SidebarFolderFlyout.qml, but a new .qml also needs a build.rs
 // entry and an unregistered type fails the WHOLE file at load, so they stay
 // here until that glue lands.
@@ -52,6 +55,34 @@ Rectangle {
     id: root
 
     property bool mini: QbzShell.sidebarState === 1
+    // The shell's ONE hover-tooltip overlay (controls/QbzTooltip.qml), fed in
+    // by AppShell. Null when this component is mounted in isolation, in which
+    // case the rail simply shows no bubble.
+    property Item tooltip: null
+
+    // ---- Collapsed-rail optical centring ---------------------------------
+    // MEASURED, not nudged (release binary, 1600x1000, xcb, pixels sampled off
+    // the framebuffer). The finding that mattered: the rail's content was
+    // ALREADY symmetric on the sidebar's own geometry — hover pill centre 25.0
+    // against a rail centre of 25.0 — and the owner still read it as off. The
+    // eye was not comparing the glyphs to the rail. It was comparing them to
+    // the header's leading control, the panel-left sidebar toggle, which sits
+    // at x = spacingMd(16) and is 28px wide (HeaderBar.qml:225 +
+    // QbzNavButton.qml:102) -> centre 30, directly above them. Five pixels
+    // apart in one vertical line is visible; symmetric padding does not help.
+    //
+    // Nor is there a visible rail edge to centre against: the sidebar is
+    // surface-card and the content frame's 8px left gutter is surface-card too
+    // (AppShell.qml:149 paints the panel; the frame around it is the shell
+    // base), so it reads as one uninterrupted band, sampled (26,26,26) from
+    // x=1 to x=57 and (15,15,15) from 58 — band centre 29.
+    //
+    // The rail is back at Slint's 64px, which dissolves the conflict instead
+    // of trading one misalignment for another: row centre 32 vs header button
+    // 30. See QbzTheme.sidebarMiniWidth for why 50 was the actual defect.
+    // Padding is symmetric and DERIVED, so the pair can never drift apart.
+    readonly property int miniPadLeft: (theme.sidebarMiniWidth - theme.sidebarMiniRow) / 2
+    readonly property int miniPadRight: root.miniPadLeft
     // Which section owns the highlight. DERIVED from the live view (in
     // NavFlyout, shared with the header), not set on click: the same rows can
     // live here or in the header, and history navigation (back/forward) must
@@ -79,6 +110,11 @@ Rectangle {
 
     // Flattened entries from the bridge + the url-keyed cover map.
     readonly property var entries: parseEntries(QbzShell.sidebarJson)
+    // A republish rebuilds the Repeater's delegates, so the row a bubble is
+    // anchored to may be gone or moved and its MouseArea will never report the
+    // leave. The overlay outlives the delegate by design (it stores numbers,
+    // never the Item), so nothing dangles — but it would linger, so drop it.
+    onEntriesChanged: if (root.tooltip) root.tooltip.hideAll()
     property var coverMap: ({})
     function parseEntries(json) {
         var e = JSON.parse(json)
@@ -117,27 +153,28 @@ Rectangle {
     //     nested rows are hidden in mini (SidebarFolderPopup.slint).
     // Both are ONE shared instance driven by the hovered/clicked row (exactly
     // like Slint's SidebarTooltipState / SidebarFolderPopupState), never one
-    // Popup per delegate: the tree can hold hundreds of rows.
-    // Both are QtQuick.Controls popups, so their content is reparented to the
-    // WINDOW overlay and this root's `clip: true` cannot cut them — the same
-    // reason NavFlyout and HeaderBar's playlists flyout are Popups.
+    // per delegate: the tree can hold hundreds of rows.
+    // Neither can live inside this root's bounds, because it clips. The FLYOUT
+    // is a QtQuick.Controls Popup, so its content is reparented to the WINDOW
+    // overlay — the same reason NavFlyout and HeaderBar's playlists flyout are
+    // Popups. The BUBBLE is not a popup at all: it is the shell-level
+    // QbzTooltip overlay (`root.tooltip`, fed in by AppShell), for the reasons
+    // spelled out where the old ToolTip used to be declared, below.
 
     // Race-safe show/hide (Slint SidebarRow.show-tooltip / hide-tooltip): the
     // leaving row only clears the bubble if it still owns it, so sliding the
-    // pointer straight from one row to the next never blanks it.
+    // pointer straight from one row to the next never blanks it. Both halves
+    // now live in the shared overlay, keyed by the entry id.
     function showMiniTip(row, entry) {
-        if (!root.mini) return
-        var p = row.mapToItem(root, row.width + 6, 0)
-        miniTip.anchorX = p.x
-        miniTip.anchorY = p.y
-        miniTip.rowH = row.height
-        miniTip.tipText = entry.kind === "folder"
+        if (!root.mini || !root.tooltip)
+            return
+        root.tooltip.showRight(row, entry.id, entry.kind === "folder"
             ? entry.name + " (" + entry.count + ")"
-            : entry.name
-        miniTip.ownerId = entry.id
+            : entry.name)
     }
     function hideMiniTip(id) {
-        if (miniTip.ownerId === id) miniTip.ownerId = ""
+        if (root.tooltip)
+            root.tooltip.hide(id)
     }
 
     // Mini folder click: the flyout, not a toggle (the nested rows are hidden,
@@ -156,6 +193,10 @@ Rectangle {
         var p = row.mapToItem(root, row.width + 6, 0)
         folderFlyout.x = p.x
         folderFlyout.y = p.y
+        // The flyout takes the same +6px slot the bubble occupies, and it is a
+        // Popup (window overlay) so it would paint straight over it. Slint drops
+        // the tooltip explicitly here too (Sidebar.slint:353).
+        if (root.tooltip) root.tooltip.hideAll()
         folderFlyout.open()
     }
 
@@ -166,49 +207,32 @@ Rectangle {
         target: QbzShell
         function onSidebarStateChanged() {
             folderFlyout.close()
-            miniTip.ownerId = ""
+            // The bubble's anchor is a rail row that is about to move or stop
+            // existing (SidebarTooltip.slint:14 gates on sidebar-mini for the
+            // same reason).
+            if (root.tooltip) root.tooltip.hideAll()
         }
     }
 
-    // Hover bubble — SidebarTooltip.slint: surface-elevated, radius sm, 1px
-    // border-muted, 10/10/5/5 padding, 12px w500 text-primary, VISUAL ONLY
-    // (a ToolTip never takes the pointer, so it cannot block the row it
-    // describes).
-    ToolTip {
-        id: miniTip
-        property string ownerId: ""
-        property string tipText: ""
-        property real anchorX: 0
-        property real anchorY: 0
-        property real rowH: 32
-
-        // Auto-hides the moment the sidebar leaves mini (SidebarTooltip
-        // .slint:14) or the folder flyout takes over the same +6px slot
-        // (Slint drops it explicitly on click, Sidebar.slint:353).
-        visible: root.mini && ownerId !== "" && !folderFlyout.visible
-        delay: 0
-        timeout: -1
-        padding: 0
-        x: anchorX
-        y: anchorY + Math.round((rowH - implicitHeight) / 2)
-        contentItem: Text {
-            text: miniTip.tipText
-            color: theme.textPrimary
-            font.pixelSize: 12
-            font.weight: theme.weightMedium
-            verticalAlignment: Text.AlignVCenter
-            leftPadding: 10
-            rightPadding: 10
-            topPadding: 5
-            bottomPadding: 5
-        }
-        background: Rectangle {
-            color: theme.surfaceElevated
-            radius: theme.radiusSm
-            border.width: 1
-            border.color: theme.borderMuted
-        }
-    }
+    // The hover bubble that names a collapsed row is NOT declared here any
+    // more: it is the shell's shared overlay (controls/QbzTooltip.qml, mounted
+    // once by AppShell), which this file drives through showMiniTip /
+    // hideMiniTip above. Two reasons, in order of severity:
+    //
+    //  1. THE OLD ONE WAS BROKEN. It was a QtQuick.Controls `ToolTip` with a
+    //     custom contentItem, and a ToolTip does not propagate a custom
+    //     content's implicit size: measured on Qt 6.11.1, an identical Text
+    //     inside a `Popup` gives implicitContentWidth 157.8 and inside a
+    //     `ToolTip` gives 1. The Basic style then sizes the popup to
+    //     `implicitContentWidth + padding`, so the bubble collapsed to ~13x25
+    //     while the Text — which a Popup never clips — kept painting its full
+    //     178px: the label floated over the content pane with no background and
+    //     a small detached box sat beside it (owner report, reproduced and
+    //     pixel-sampled before the change).
+    //  2. Slint does not put a popup per call site either. It has ONE overlay
+    //     fed by a global channel (SidebarTooltipState, state.slint:1893;
+    //     TooltipState, state.slint:4791), precisely so a clipped surface — and
+    //     this sidebar clips — can still show a bubble outside its own bounds.
 
     // Folder flyout — SidebarFolderPopup.slint: 230px, 30px header row +
     // hairline + up to four 32px rows, 4px inner padding, surface-main /
@@ -451,8 +475,11 @@ Rectangle {
 
     Column {
         anchors.fill: parent
-        anchors.leftMargin: root.mini ? 8 : theme.spacingMd
-        anchors.rightMargin: root.mini ? 8 : theme.spacingMd
+        // Mini left/right are ASYMMETRIC on purpose — see `miniPadLeft` at the
+        // top of this file for the measurement. Top stays 8 (nothing above the
+        // rail competes with it vertically).
+        anchors.leftMargin: root.mini ? root.miniPadLeft : theme.spacingMd
+        anchors.rightMargin: root.mini ? root.miniPadRight : theme.spacingMd
         anchors.topMargin: root.mini ? 8 : theme.spacingMd
         // Per-side padding so Large can zero ONLY the bottom (Sidebar.slint:719):
         // the reserved dock band then reaches the true window bottom-left and the
@@ -1031,11 +1058,22 @@ Rectangle {
             // Placed in the sidebar's right PADDING (negative margin), like
             // Slint's `x: parent.width - width + (mini ? 8 : Spacing.md)`, so
             // the gutter never overlays the rows and cannot eat their clicks.
+            //
+            // MINI CAVEAT after the optical re-centring above: the right pad is
+            // 4px now, so an 8px gutter pinned to the rail's edge shares its
+            // left 4px with the rows. That is fine to LOOK at (an 8px-wide,
+            // auto-hiding indicator whose thumb grazes the pill's rounded right
+            // edge) but not to CLICK through, so the mini instance is
+            // `enabled: false`: indicator only, no drag / click-to-position.
+            // Nothing is lost — the wheel scrolls the rail, and a 3px-of-travel
+            // drag inside a 50px rail was never a real affordance. The open
+            // sidebar keeps the full interactive bar.
             QbzScrollBar {
                 target: plFlick
+                enabled: !root.mini
                 width: root.mini ? 8 : 10
                 anchors.right: parent.right
-                anchors.rightMargin: -(root.mini ? 8 : theme.spacingMd)
+                anchors.rightMargin: -(root.mini ? root.miniPadRight : theme.spacingMd)
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
             }

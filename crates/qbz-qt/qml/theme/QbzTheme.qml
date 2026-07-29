@@ -348,19 +348,29 @@ QtObject {
     readonly property int headerHeight: 42
     // Three-state sidebar rendered widths (ShellState.sidebar-rendered-width).
     readonly property int sidebarOpenWidth: 240
-    // Mini rail — DELIBERATE deviation from state.slint:4075 (64px), owner
-    // request: the 64px rail read as a wide empty gutter around a 32px row.
-    // rail = spacingSm + row + spacingSm, so the square mini row exactly
-    // fills the 8px-padded track (Sidebar.qml root padding = Sidebar.slint:
-    // 716-718). REVERT is TWO tokens, not one: putting 64 back here also
-    // makes sidebarMiniRow 48, so the rows would grow from 34 to 48 and stop
-    // matching Slint — set sidebarMiniRow to a literal 34 at the same time.
-    // (Adversarial review caught this comment claiming a one-token revert.)
-    readonly property int sidebarMiniWidth: 50
-    // The square row inside that rail (34px). Rows are `width: parent.width`,
-    // so this is only their HEIGHT; it exists as a token so the rail and the
-    // row can never drift apart.
-    readonly property int sidebarMiniRow: sidebarMiniWidth - 2 * spacingSm
+    // Mini rail — back to Slint's 64px (state.slint:4075) by owner decision,
+    // 2026-07-29, after the 50px deviation turned out to have a cost nobody
+    // had priced.
+    //
+    // The 50px came from an earlier owner request: the 64px rail read as a
+    // wide empty gutter. But 50 made two references irreconcilable — the rail
+    // centres its 34px row at 25, while the header's own sidebar toggle sits
+    // at centre 30 (spacingMd + half of 28). Five pixels apart, one directly
+    // above the other, which is what the owner saw and reported as "not
+    // centred": symmetric padding inside the rail still looked wrong because
+    // the eye lines the glyphs up against the header control, not against the
+    // rail. Slint never had the problem — at 64 the row centres at 32, two
+    // pixels off the header button and imperceptible. Chasing it from inside
+    // the rail (12/4 padding) bought the header alignment at the price of a
+    // visibly asymmetric hover pill; the root fix is the width.
+    readonly property int sidebarMiniWidth: 64
+    // The square row inside that rail. A LITERAL 34, not derived: at 50 the
+    // `width - 2 * spacingSm` formula happened to yield 34, which is why the
+    // two tokens were coupled — but Slint pins BOTH independently (rail 64px,
+    // row 34px at Sidebar.slint:575/652), so the same formula at 64 would give
+    // 48 and silently grow every row. Deriving it was the trap the previous
+    // comment warned about; pinning it is the fix.
+    readonly property int sidebarMiniRow: 34
     // Right queue/lyrics column width (AppShell).
     readonly property int queuePanelWidth: 300
     // Small now-playing bar total height (ShellState.npb-small-height,

@@ -14,7 +14,9 @@
 // (plus playlistTrackId for the remove-from-playlist arm). `qualityDetail`
 // is the bare exact-quality string ("16-bit / 44.1 kHz"); when a producer
 // does not carry it yet the badge degrades to the tier label alone rather
-// than to a blank cell.
+// than to a blank cell. `item.isFavorite` SEEDS the row's own `favorite`
+// property and is never written back — see the heart block below for why a
+// plain-JS-object field cannot be the live state.
 //
 // Arms: showArtwork / showAlbum / showFavorite / showDownload /
 // downloadGlyph / showMenu / zebra / artistLink / clickPlays /
@@ -42,6 +44,13 @@
 // Deliberately NOT consolidated here (Slint-distinct): QueuePanel.QueueRow
 // (QueueItem data + queue-op menu + press-and-hold reorder) and
 // LibraryView.FeedListRow (mixed-kind feed row — inline in Slint too).
+//
+// --- COLUMN GEOMETRY LIVES IN rows/TrackCols.qml ------------------------
+// Not in this file. rows/TrackListHeader.qml reads the same object, so the
+// header of a list and the rows in it cannot disagree. If you change a
+// column width, change it THERE — a literal typed back into this file is
+// the exact defect the owner reported (the header laid out only the
+// labelled columns, so every label sat right of the column it named).
 
 import QtQuick
 import com.blitzfc.qbz
@@ -116,6 +125,55 @@ Rectangle {
     signal removeRequested()
     signal bodyDragStarted(int index)
 
+    // --- THE heart state (a real QML property, never `item.isFavorite`) ---
+    // The row used to flip its glyph with `root.item.isFavorite = !…`. That is
+    // a write into a plain JS object and it does nothing at all here, twice
+    // over — both halves measured under qml6 6.11.1 in this exact delegate
+    // shape (`Repeater { model: JSON.parse(...) }` + `required property var
+    // modelData` + `item: modelData`):
+    //
+    //   1. QML does not re-evaluate a binding when a plain JS object's
+    //      property is mutated — there is no notifier to fire. The glyph
+    //      binding kept its old value on the same tick AND on the next.
+    //   2. `item: modelData` does not even alias the row: assigning a `var`
+    //      property from `modelData` yields an object that compares `!==` to
+    //      both `modelData` and the source array element (Qt round-trips it
+    //      through QVariant). So the write did not reach the model either —
+    //      not the delegate's `modelData`, not the host's array.
+    //
+    // A DECLARED property has a notifier, so the optimistic flip repaints
+    // immediately. The binding below keeps the document authoritative: it is
+    // re-established whenever the host hands over a new row object, so a
+    // republished document (or a page re-open) overrides a stale local flip.
+    property bool favorite: root.item.isFavorite === true
+    onItemChanged: root.favorite = Qt.binding(function () {
+        return root.item.isFavorite === true
+    })
+
+    /// The heart click and the menu's "Add to / Remove from Library" row —
+    /// ONE implementation, because they used to diverge silently.
+    function toggleFavorite() {
+        root.favorite = !root.favorite
+        QbzLibrary.libraryToggleFavorite("track", root.item.id)
+    }
+
+    // Settle. `libraryFavoriteChanged` (key `{kind}:{id}`, emitted by
+    // main.rs::emit_library_favorite) carries the value the WRITE produced:
+    // the flipped one when it landed, the UNCHANGED one when it failed. This
+    // is the favourite twin of the pin fan-out the cards already have
+    // (cards/AlbumCard.qml) and it is what rolls a 404'd un-favorite back —
+    // and what keeps the OTHER surfaces showing this same track honest
+    // (the album page's row, the queue, a search result) without anybody
+    // republishing a document.
+    Connections {
+        target: QbzLibrary
+        function onLibraryFavoriteChanged(key, value) {
+            var tid = (root.item && root.item.id !== undefined) ? root.item.id : ""
+            if (tid !== "" && key === "track:" + tid)
+                root.favorite = value
+        }
+    }
+
     QbzTheme { id: theme }
 
     // --- Polarity-baked tokens for the play cell (#638) -------------------
@@ -155,10 +213,17 @@ Rectangle {
     readonly property bool hovered: trArea.containsMouse || favArea.containsMouse
         || moreArea.containsMouse || playArea.containsMouse
     readonly property bool isActive: QbzPlayer.npTrackId === (item.id || "")
-    readonly property int cellsRight: 70 + 92 + (showFavorite ? 28 : 0) + (showDownload ? 28 : 0) + (showMenu ? 32 : 0)
-    readonly property int cellsLeft: 32 + (showArtwork ? 36 : 0) + (showAlbum ? 220 : 0)
-    readonly property int gaps: (3 + (showArtwork ? 1 : 0) + (showAlbum ? 1 : 0)
-        + (showFavorite ? 1 : 0) + (showDownload ? 1 : 0) + (showMenu ? 1 : 0)) * 14
+
+    // --- Column geometry: rows/TrackCols.qml, NOT literals ---------------
+    // Every width, the padding and the gap come from the one file that
+    // rows/TrackListHeader.qml also reads, so the header above a list of
+    // these rows lines up with them by construction. The title column's
+    // arithmetic lives there too (`titleWidth`) — the header asks the same
+    // function the same question and gets the same answer.
+    TrackCols { id: cols }
+    readonly property int titleColWidth: cols.titleWidth(root.width,
+        root.showArtwork, root.showAlbum, root.showFavorite,
+        root.showDownload, root.showMenu)
 
     // Static now-playing mark: 3px accent pill on the left edge.
     Rectangle {
@@ -173,9 +238,9 @@ Rectangle {
 
     Row {
         anchors.fill: parent
-        anchors.leftMargin: 12
-        anchors.rightMargin: 12
-        spacing: 14
+        anchors.leftMargin: cols.padH
+        anchors.rightMargin: cols.padH
+        spacing: cols.gap
 
         // Number cell — the number-variant of primitives/TrackPlayCell.slint
         // (:172-232), the play affordance shared by every track row.
@@ -207,7 +272,7 @@ Rectangle {
         // carries the separation on its own.
         Item {
             id: playCell
-            width: 32
+            width: cols.colNumber
             height: 40
             anchors.verticalCenter: parent.verticalCenter
             // `show-overlay: row-hovered || is-active` (TrackPlayCell.slint
@@ -266,8 +331,8 @@ Rectangle {
         // 36px artwork cell (showArtwork arm).
         Rectangle {
             visible: root.showArtwork
-            width: 36
-            height: 36
+            width: cols.colArt
+            height: cols.colArt
             anchors.verticalCenter: parent.verticalCenter
             radius: 4
             color: theme.surfaceElevated
@@ -292,7 +357,7 @@ Rectangle {
         }
         // Title (+ explicit) / artist.
         Column {
-            width: parent.width - root.cellsLeft - root.cellsRight - root.gaps
+            width: root.titleColWidth
             anchors.verticalCenter: parent.verticalCenter
             spacing: 2
             Row {
@@ -342,7 +407,7 @@ Rectangle {
         // Album (link) column (showAlbum arm).
         Text {
             visible: root.showAlbum
-            width: 220
+            width: cols.colAlbum
             anchors.verticalCenter: parent.verticalCenter
             text: root.item.album || ""
             color: albumArea.containsMouse ? theme.accent : theme.textMuted
@@ -358,7 +423,7 @@ Rectangle {
         }
         // Duration.
         Text {
-            width: 70
+            width: cols.colDuration
             anchors.verticalCenter: parent.verticalCenter
             text: root.item.duration || ""
             color: theme.textMuted
@@ -385,7 +450,7 @@ Rectangle {
         // QualityBadge, which carries a ToolTip popup and a hover MouseArea
         // per row; this one is two Texts.
         Item {
-            width: 92
+            width: cols.colQuality
             height: parent.height
             clip: true
             QualityBadgeFull {
@@ -399,19 +464,19 @@ Rectangle {
         // Favorite (showFavorite arm).
         Rectangle {
             visible: root.showFavorite
-            width: 28
-            height: 28
+            width: cols.colFavorite
+            height: cols.colFavorite
             radius: theme.radiusSm
             anchors.verticalCenter: parent.verticalCenter
             color: favArea.containsMouse ? theme.surfaceElevated : "transparent"
             QbzIcon {
                 anchors.centerIn: parent
-                name: root.item.isFavorite ? "heart-filled" : "heart"
+                name: root.favorite ? "heart-filled" : "heart"
                 width: 16
                 height: 16
                 // TrackRow.slint:619 — hover raises the glyph to
                 // Theme.text-primary, NOT to white (same #638 hole).
-                tintName: root.item.isFavorite
+                tintName: root.favorite
                     ? "favorite"
                     : (favArea.containsMouse ? root.playGlyphTint : "muted")
             }
@@ -420,10 +485,7 @@ Rectangle {
                 anchors.fill: parent
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
-                onClicked: {
-                    root.item.isFavorite = !root.item.isFavorite
-                    QbzLibrary.libraryToggleFavorite("track", root.item.id)
-                }
+                onClicked: root.toggleFavorite()
             }
         }
         // Download slot (showDownload arm): inert glyph stub or reserved
@@ -431,8 +493,8 @@ Rectangle {
         // Slint reserves the slot so the grid stays aligned).
         Item {
             visible: root.showDownload
-            width: 28
-            height: 28
+            width: cols.colDownload
+            height: cols.colDownload
             anchors.verticalCenter: parent.verticalCenter
             QbzIcon {
                 visible: root.downloadGlyph
@@ -446,8 +508,8 @@ Rectangle {
         // ⋯ menu (showMenu arm).
         Rectangle {
             visible: root.showMenu
-            width: 32
-            height: 32
+            width: cols.colMenu
+            height: cols.colMenu
             radius: theme.radiusSm
             anchors.verticalCenter: parent.verticalCenter
             color: moreArea.containsMouse ? theme.surfaceElevated : "transparent"
@@ -494,8 +556,8 @@ Rectangle {
             m.push({ "label": t("Create Qobuz radio", r), "icon": "radio", "action": "radio-qobuz" })
         }
         if (root.menuShowFavorite)
-            m.push({ "label": root.item.isFavorite ? t("Remove from Library", r) : t("Add to Library", r),
-                     "icon": root.item.isFavorite ? "heart-filled" : "heart", "action": "favorite" })
+            m.push({ "label": root.favorite ? t("Remove from Library", r) : t("Add to Library", r),
+                     "icon": root.favorite ? "heart-filled" : "heart", "action": "favorite" })
         if (root.hasMixtapeSeam)
             m.push({ "label": t("Add to mixtape", r), "icon": "cassette-tape", "action": "mixtape" })
         if (root.hasPlaylistAddSeam)
@@ -525,10 +587,8 @@ Rectangle {
         else if (a === "queue") root.enqueueRequested("queue")
         else if (a === "go-artist") QbzArtist.openArtist(root.item.artistId)
         else if (a === "go-album") QbzAlbum.openAlbum(root.item.albumId)
-        else if (a === "favorite") {
-            root.item.isFavorite = !root.item.isFavorite
-            QbzLibrary.libraryToggleFavorite("track", root.item.id)
-        } else if (a === "remove") root.removeRequested()
+        else if (a === "favorite") root.toggleFavorite()
+        else if (a === "remove") root.removeRequested()
         else if (a === "share-qobuz") root.copyToClipboard(
             "https://open.qobuz.com/track/" + (root.item.id || ""))
         else if (a === "track-info") root.openTrackInfo()

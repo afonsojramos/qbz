@@ -174,14 +174,24 @@ Rectangle {
                             ribbonKind: crCell.modelData.ribbonKind || ""
                             artSource: crCell.modelData.artPath || ""
                             isPinned: crCell.modelData.isPinned === true
-                            isFavorite: false
+                            // The pin payload's display snapshot — the REMOTE
+                            // url (artPath is the local cache path). Without
+                            // it a label release pinned from here landed in
+                            // the Home Pinned rail as a grey placeholder.
+                            artworkUrl: crCell.modelData.artUrl || ""
+                            // Stamped on the row by label_qt; false made the
+                            // glyph lie and inverted the first click.
+                            isFavorite: crCell.modelData.isFavorite === true
                         }
                     }
                     Component {
                         id: crPlaylist
                         PlaylistCard {
+                            // artworkUrl defaults to `item.artUrl` (the card's
+                            // own arm), so only the pin state is handed over.
                             item: crCell.modelData
                             artSource: crCell.modelData.artPath || ""
+                            isPinned: crCell.modelData.isPinned === true
                         }
                     }
                     Component {
@@ -189,9 +199,14 @@ Rectangle {
                         ArtistCard {
                             item: crCell.modelData
                             artSource: crCell.modelData.artPath || ""
-                            // The .slint passes card-follow-mode "none" here;
-                            // ArtistCard's hasFollowSeam already gates the chip
-                            // off, so this is belt and braces.
+                            isPinned: crCell.modelData.isPinned === true
+                            artworkUrl: crCell.modelData.artUrl || ""
+                            // LabelPageView.slint:524 passes card-follow-mode
+                            // "none" here — and now that ArtistCard's follow
+                            // arm is LIVE (its `hasFollowSeam: false` was a
+                            // factual error: library_toggle_favorite routes
+                            // "artist"), this line is what actually keeps the
+                            // chip off this carousel instead of a constant.
                             followMode: "none"
                         }
                     }
