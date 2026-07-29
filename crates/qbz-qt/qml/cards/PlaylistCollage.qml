@@ -6,8 +6,15 @@
 // are — single, dual (side by side), triple (one large left + two stacked
 // right), quad (three stacked left + one large right), and a list-music
 // glyph when the playlist has none. Tiles are always crop-fitted; the
-// playlist's OWN Qobuz graphic is NOT drawn here (PlaylistCard renders that
-// one contain-fitted through RoundedImage).
+// playlist's OWN Qobuz graphic is NOT drawn here (PlaylistCard and
+// PlaylistView render that one through RoundedImage's `pad` fit).
+//
+// The crop is deliberate and stays: these tiles are member-ALBUM covers,
+// which Qobuz ships SQUARE, and from two tiles up the cells are not square
+// anyway — a mosaic cell is meant to be filled edge to edge, so letterboxing
+// one would put gaps inside the grid. The image-derived padding added for
+// the 800x380 playlist banner therefore has no case to answer here, and
+// duplicating it into this file would only fork the one implementation.
 //
 // Canvas rather than a Grid of Images for the reason theme/RoundedImage.qml
 // documents: QML `clip` is rectangular, so a Rectangle with `radius` does

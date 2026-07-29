@@ -26,6 +26,14 @@
 // Ownership tri-state (Slint): owned -> heart (library favorite);
 // foreign followed -> check; foreign -> user-plus (Qobuz follow).
 //
+// SETTLE ASYMMETRY, deliberate and not a hole this file can close: the
+// OWNED arm settles on `QbzLibrary.libraryFavoriteChanged` (rollback on a
+// failed write included). The FOREIGN follow arm has no signal at all —
+// `playlist_qt::set_follow_by_id` logs the error and only calls
+// `reload_sidebar()`, so a failed subscribe leaves the optimistic tick up
+// until the card's document is republished. Closing it needs a Rust-side
+// settle emit, not a QML change.
+//
 // --- Menu inventory vs discover/PlaylistCard.slint ---------------------
 //   Play · Play next · Play later · Add to queue ·
 //   Add to Library (is-owned) | Follow/Unfollow on Qobuz (!is-owned) ·
@@ -48,9 +56,15 @@ Rectangle {
     // carries — the playlist's own graphic, else its first member cover —
     // so a pinned playlist keeps art in the Pinned rail; hosts that resolve
     // it themselves may still override.
+    // `artUrl` is the Home / Search / Browse row field (home_qt::HomeCard),
+    // `imageUrl` the Library one — without both arms a playlist pinned from
+    // a Discover rail stored an EMPTY snapshot url and landed in the Pinned
+    // rail as a permanent placeholder.
     property string artworkUrl: (root.item && root.item.imageUrl)
         ? root.item.imageUrl
-        : (root.collageUrls.length > 0 ? root.collageUrls[0] : "")
+        : ((root.item && root.item.artUrl)
+            ? root.item.artUrl
+            : (root.collageUrls.length > 0 ? root.collageUrls[0] : ""))
 
     // Member-track covers for the mosaic arm ([] on surfaces that publish a
     // single pre-resolved cover instead).
@@ -79,6 +93,57 @@ Rectangle {
     implicitWidth: 200
     implicitHeight: 246
 
+    // --- The tri-state's two mutable halves, as REAL QML properties ------
+    // They used to be `root.item.isFavorite` / `root.item.playlistFollowing`,
+    // mutated in place on click. That is a plain JS object: no notifier, so
+    // the glyph binding never re-evaluated, and `item: modelData` is a COPY,
+    // so the write reached neither the delegate's model row nor the host's
+    // array (both measured under qml6 6.11.1 — see rows/TrackRow.qml). The
+    // card's overlay therefore never changed on click, on ANY surface.
+    // `owned` stays a plain read: nothing in the UI can change who owns a
+    // playlist.
+    readonly property bool owned: root.item.playlistOwned === true
+    property bool favorite: root.item.isFavorite === true
+    property bool following: root.item.playlistFollowing === true
+    onItemChanged: {
+        root.favorite = Qt.binding(function () { return root.item.isFavorite === true })
+        root.following = Qt.binding(function () { return root.item.playlistFollowing === true })
+    }
+
+    /// The overlay button and the menu row — ONE implementation. Owned
+    /// playlists take the library heart (a qbz-LOCAL flag, library.db); a
+    /// foreign one takes the Qobuz follow (playlist/subscribe). Different
+    /// writes, different settle signals — see the Connections below.
+    function toggleFavorite() {
+        if (root.owned) {
+            root.favorite = !root.favorite
+            QbzLibrary.libraryToggleFavorite("playlist", root.item.id)
+        } else {
+            root.following = !root.following
+            QbzBridge.playlistSetFollowById(root.item.id, root.following)
+        }
+    }
+
+    Connections {
+        target: QbzLibrary
+        // Pin fan-out — the AlbumCard contract, playlist key (see AlbumCard.qml).
+        function onPinChanged(key, value) {
+            var pid = (root.item && root.item.id !== undefined) ? root.item.id : ""
+            if (pid !== "" && key === "playlist:" + pid)
+                root.isPinned = value
+        }
+        // Heart fan-out + rollback. Only the OWNED arm settles from here:
+        // `library_qt::toggle_favorite` routes kind "playlist" to
+        // `toggle_playlist_favorite` (the library.db flag) and reports the
+        // result through the shared settle point, so the key is
+        // `playlist:{id}` exactly like every other kind.
+        function onLibraryFavoriteChanged(key, value) {
+            var pid = (root.item && root.item.id !== undefined) ? root.item.id : ""
+            if (pid !== "" && key === "playlist:" + pid)
+                root.favorite = value
+        }
+    }
+
     Column {
         spacing: 0
         Rectangle {
@@ -87,14 +152,32 @@ Rectangle {
             radius: theme.radiusSm
             color: theme.surfaceElevated
             clip: true
-            // Arm 1 — a resolved single cover. Contain for the playlist's
-            // own (landscape) Qobuz graphic, crop for everything else.
+            // Arm 1 — a resolved single cover.
+            //
+            // The playlist's own Qobuz graphic (`image_rectangle`) is a
+            // 2.11:1 banner — 800x380 on every such file in the local cache.
+            // Cropping it to this 200px square keeps the middle 380 of 800
+            // px, i.e. throws away 53% of the width; that is what the owner
+            // reported, and it is what Slint does too
+            // (discover/PlaylistCollage.slint's single tile and
+            // playlist/PlaylistView.slint:481 are both `image-fit: cover`).
+            // `pad` keeps the ratio and fills the two uncovered bands with a
+            // gradient sampled from the image's own edges — see
+            // theme/RoundedImage.qml.
+            //
+            // `auto` on the other arm because the flag is not universal:
+            // only `library_qt.rs` publishes `playlistOwnImage`, while the
+            // Home / For You / Search / Browse rails map their playlist art
+            // from `image.rectangle` all the same (`home_qt.rs::map_playlist`)
+            // with no flag at all. `auto` measures the ratio instead, so
+            // those surfaces pad too, and a genuinely square cover
+            // (`image.covers[0]`, the fallback that map picks) still crops.
             RoundedImage {
                 anchors.fill: parent
                 visible: root.artSource !== ""
                 source: root.artSource
                 radius: theme.radiusSm
-                fit: root.ownImage ? "contain" : "crop"
+                fit: root.ownImage ? "pad" : "auto"
             }
             // Arm 2 — the member-cover mosaic. A row that HAS its own
             // graphic passes no urls, so it shows the placeholder while
@@ -133,19 +216,11 @@ Rectangle {
                 shown: root.overlayOn
                 CardOverlayButton {
                     id: plFav
-                    name: root.item.playlistOwned ? "heart"
-                        : root.item.playlistFollowing ? "check" : "user-plus"
-                    active: root.item.playlistOwned === true && root.item.isFavorite === true
+                    name: root.owned ? "heart"
+                        : root.following ? "check" : "user-plus"
+                    active: root.owned && root.favorite
                     anchors.verticalCenter: parent.verticalCenter
-                    onClicked: {
-                        if (root.item.playlistOwned) {
-                            root.item.isFavorite = !root.item.isFavorite
-                            QbzLibrary.libraryToggleFavorite("playlist", root.item.id)
-                        } else {
-                            root.item.playlistFollowing = !root.item.playlistFollowing
-                            QbzBridge.playlistSetFollowById(root.item.id, root.item.playlistFollowing)
-                        }
-                    }
+                    onClicked: root.toggleFavorite()
                 }
                 CardOverlayButton {
                     id: plPlay
@@ -257,8 +332,8 @@ Rectangle {
     function menuModel() {
         var t = QbzSession.tr
         var r = QbzSession.trRev
-        var owned = root.item.playlistOwned === true
-        var following = root.item.playlistFollowing === true
+        var owned = root.owned
+        var following = root.following
         var m = [
             { "label": t("Play", r), "icon": "play-fill", "action": "play" },
             { "label": t("Play next", r), "icon": "list-start", "action": "play-next" },
@@ -267,8 +342,8 @@ Rectangle {
             { "label": t("Add to queue", r), "icon": "list-end", "action": "queue" },
         ]
         if (owned)
-            m.push({ "label": root.item.isFavorite ? t("Remove from Library", r) : t("Add to Library", r),
-                     "icon": root.item.isFavorite ? "heart-filled" : "heart", "action": "favorite" })
+            m.push({ "label": root.favorite ? t("Remove from Library", r) : t("Add to Library", r),
+                     "icon": root.favorite ? "heart-filled" : "heart", "action": "favorite" })
         else
             m.push({ "label": following ? t("Unfollow on Qobuz", r) : t("Follow on Qobuz", r),
                      "icon": following ? "check" : "user-plus", "action": "favorite" })
@@ -282,14 +357,6 @@ Rectangle {
         else if (a === "play-next") QbzPlayer.enqueuePlaylistById(root.item.id, "next")
         else if (a === "play-later") QbzPlayer.enqueuePlaylistById(root.item.id, "later")
         else if (a === "queue") QbzPlayer.enqueuePlaylistById(root.item.id, "queue")
-        else if (a === "favorite") {
-            if (root.item.playlistOwned) {
-                root.item.isFavorite = !root.item.isFavorite
-                QbzLibrary.libraryToggleFavorite("playlist", root.item.id)
-            } else {
-                root.item.playlistFollowing = !root.item.playlistFollowing
-                QbzBridge.playlistSetFollowById(root.item.id, root.item.playlistFollowing)
-            }
-        }
+        else if (a === "favorite") root.toggleFavorite()
     }
 }

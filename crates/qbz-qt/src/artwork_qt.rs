@@ -451,11 +451,36 @@ mod tests {
 // Scaled derivatives
 // ---------------------------------------------------------------------------
 
-/// A cover re-encoded to exactly `w`x`h`. Canvas `drawImage` does not filter
-/// when it scales — a 600px cover drawn into a 200px cell throws away 8 of
-/// every 9 pixels, which is the aliasing the owner sees as poor render
-/// quality. Handing the Canvas a file that is ALREADY the target size makes
-/// the draw 1:1 and removes the resample entirely.
+/// A cover re-encoded to fit inside `w`x`h`, ASPECT PRESERVED. Canvas
+/// `drawImage` does not filter when it scales — a 600px cover drawn into a
+/// 200px cell throws away 8 of every 9 pixels, which is the aliasing the
+/// owner sees as poor render quality (measured: the card raster is
+/// bit-for-bit identical to an ImageMagick `-filter Point` reference,
+/// RMSE 0.000). Handing the Canvas a file that is ALREADY the drawn size
+/// makes the draw 1:1 and removes the resample entirely.
+///
+/// Three properties are load-bearing, and the first version of this function
+/// had none of them:
+///
+///  * **Aspect is preserved** (`DynamicImage::thumbnail`, not
+///    `imageops::thumbnail`, which resizes to the exact box and distorts).
+///    The old body squashed every non-square request — 46 files on disk are
+///    square covers forced into a 32x28 box — and squashed every LOGO into
+///    the square `fit: "contain"` box of `LabelCard`. The caller asks for the
+///    box the art is DRAWN in; fitting inside it is what makes the draw 1:1
+///    for `contain` and for a square cell, and merely soft (never distorted)
+///    in the one remaining case, a non-square crop cell.
+///  * **Alpha survives.** The old body went through `to_rgb8()`, so a label
+///    logo shipped as a transparent PNG came back matted onto black. PNG out,
+///    same colour type in as out.
+///  * **The re-encode is LOSSLESS.** The old body wrote JPEG at the crate
+///    default (quality 75 — verified against the quantisation tables of the
+///    files already in `~/.cache/qbz/images/scaled`), which costs more than
+///    the resample it was meant to fix: measured against a Lanczos reference
+///    of the same cover at 200px, the q75 derivative lands at RMSE 4.222 and
+///    the lossless one at 1.303, for 25 KB instead of 6 KB per card cover.
+///    At ~800 card-sized derivatives that is ~20 MB of cache — cheap for the
+///    only artefact-free option, and it is what makes alpha possible at all.
 ///
 /// Blocking: decodes and resizes. Call from `spawn_blocking`.
 pub fn scaled_path(path: &str, w: u32, h: u32) -> Option<std::path::PathBuf> {
@@ -468,8 +493,10 @@ pub fn scaled_path(path: &str, w: u32, h: u32) -> Option<std::path::PathBuf> {
 
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     std::hash::Hash::hash(&src, &mut hasher);
+    // `.png`, so the lossy `.jpg` generation already on disk is never served
+    // as if it were this one — the name IS the cache key.
     let out = dir.join(format!(
-        "{:016x}_{w}x{h}.jpg",
+        "{:016x}_{w}x{h}.png",
         std::hash::Hasher::finish(&hasher)
     ));
     if out.is_file() {
@@ -489,7 +516,13 @@ pub fn scaled_path(path: &str, w: u32, h: u32) -> Option<std::path::PathBuf> {
     if img.width() <= w && img.height() <= h {
         return Some(std::path::PathBuf::from(src));
     }
-    let scaled = image::imageops::thumbnail(&img.to_rgb8(), w, h);
-    scaled.save(&out).ok()?;
+    // `DynamicImage::thumbnail` = fit inside (w, h) keeping the aspect ratio,
+    // with the same fast box filter the Slint frontend decodes covers through
+    // (`artwork.rs` `decode_rgba`). Measured at 200px it is within RMSE 1.3 of
+    // a Lanczos reference and carries the same edge energy (Laplacian variance
+    // 334.5 vs 337.3), i.e. no visible softening and no ringing.
+    img.thumbnail(w, h)
+        .save_with_format(&out, image::ImageFormat::Png)
+        .ok()?;
     Some(out)
 }

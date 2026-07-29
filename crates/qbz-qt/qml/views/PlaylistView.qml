@@ -66,6 +66,76 @@ Rectangle {
     readonly property bool sortAsc: doc.sortAsc === true
     readonly property string searchQuery: doc.search || ""
 
+    // --- Settled state from Rust (`libraryFavoriteChanged` / `pinChanged`) -
+    // Two jobs, and the first one is why this exists at all.
+    //
+    // TRACK ROWS. The list is a ListView with cacheBuffer 500 — it RECYCLES.
+    // A row's heart lives on the delegate (rows/TrackRow.qml), so a delegate
+    // that is destroyed and rebuilt reads its state back out of `modelData`,
+    // i.e. out of `allTracks`. Without patching that array, favouriting a
+    // track and scrolling past it and back showed the OLD glyph again — and
+    // `playlist_qt` is one of the page-lifetime documents that main.rs's
+    // `emit_library_favorite` deliberately does NOT fan out to, so nothing
+    // else was going to fix it either.
+    //
+    // The row objects are patched IN PLACE. Re-deriving `tracks` (or
+    // re-parsing `doc`) would push a NEW array into `model:`, and
+    // QQuickItemView::setModel() resets the scroll offset to 0 — the user
+    // would be thrown to the top of the playlist on every heart click. The
+    // live delegates need no array change anyway: each one settles itself
+    // from this same signal.
+    //
+    // BOUNDARY, stated so nobody hunts it twice: this patch lasts until the
+    // NEXT republish of `QbzBridge.playlistJson`, because that hands over a
+    // freshly parsed object graph. `playlist_qt` keeps its document in a Rust
+    // `PAGE` cache and re-serializes it as-is (covers landing, a sort change,
+    // an in-playlist search), so a republish restores the heart the rows were
+    // STAMPED with. Closing that needs `playlist_qt::apply_favorite_change`
+    // on the Rust side — main.rs's `emit_library_favorite` doc lists it as a
+    // known gap — not more QML.
+    //
+    // HEADER. Two one-slot overrides so the heart and the pin also answer a
+    // flip made somewhere else (a sidebar card, the Home Pinned rail) instead
+    // of waiting for a document republish that those paths do not trigger.
+    // They carry their OWN playlist id (one slot each, never a shared one —
+    // a shared id would make a pin on playlist B resurrect playlist A's stale
+    // heart), so an override expires the moment the page shows anything else.
+    property string favOverrideId: ""
+    property bool favOverrideValue: false
+    property string pinOverrideId: ""
+    property bool pinOverrideValue: false
+    readonly property bool headerFavorite: (root.favOverrideId !== ""
+        && root.favOverrideId === (doc.id || ""))
+        ? root.favOverrideValue : (doc.isFavorite === true)
+    readonly property bool headerPinned: (root.pinOverrideId !== ""
+        && root.pinOverrideId === (doc.id || ""))
+        ? root.pinOverrideValue : (doc.pinned === true)
+    Connections {
+        target: QbzLibrary
+        function onLibraryFavoriteChanged(key, value) {
+            if (key.indexOf("track:") === 0) {
+                var tid = key.substring(6)
+                var t = root.allTracks
+                for (var i = 0; i < t.length; i++) {
+                    if (String(t[i].id) === tid) { t[i].isFavorite = value; break }
+                }
+                return
+            }
+            var pid = root.doc.id || ""
+            if (pid !== "" && key === "playlist:" + pid) {
+                root.favOverrideId = pid
+                root.favOverrideValue = value
+            }
+        }
+        function onPinChanged(key, value) {
+            var pid = root.doc.id || ""
+            if (pid !== "" && key === "playlist:" + pid) {
+                root.pinOverrideId = pid
+                root.pinOverrideValue = value
+            }
+        }
+    }
+
     // Visible rows after the in-playlist search filter.
     readonly property var tracks: {
         if (searchQuery.trim() === "") return allTracks
@@ -239,12 +309,21 @@ Rectangle {
                     urls: root.hasOwnArt ? [] : (doc.covers || [])
                     radius: theme.radiusMd
                 }
+                // `pad`, not `contain`: the playlist's own graphic is the
+                // 800x380 `image_rectangle`, so a 150px square leaves two
+                // ~35px bands. Flat theme grey there made the header read as
+                // a small picture floating in a box; the bands now carry a
+                // gradient sampled from the image's own top and bottom edges
+                // (theme/RoundedImage.qml). Slint crops this same header
+                // (`playlist/PlaylistView.slint:481` is `image-fit: cover`)
+                // and loses half the banner — this is one of the few places
+                // the reference is not the target.
                 RoundedImage {
                     visible: (doc.coverPath || "") !== ""
                     anchors.fill: parent
                     source: doc.coverPath || ""
                     radius: theme.radiusMd
-                    fit: root.hasOwnArt ? "contain" : "crop"
+                    fit: root.hasOwnArt ? "pad" : "auto"
                 }
                 // Per-item: the cover shimmers until THIS playlist's cover
                 // lands, then clears on its own. settleMs bounds it — a
@@ -333,14 +412,14 @@ Rectangle {
                         onClicked: QbzBridge.playlistShuffle()
                     }
                     QbzCircleAction {
-                        name: (doc.isFavorite === true) ? "heart-filled" : "heart"
-                        active: doc.isFavorite === true
+                        name: root.headerFavorite ? "heart-filled" : "heart"
+                        active: root.headerFavorite
                         anchors.verticalCenter: parent.verticalCenter
                         onClicked: QbzBridge.playlistToggleFavorite()
                     }
                     QbzCircleAction {
-                        name: (doc.pinned === true) ? "pin-filled" : "pin"
-                        active: doc.pinned === true
+                        name: root.headerPinned ? "pin-filled" : "pin"
+                        active: root.headerPinned
                         anchors.verticalCenter: parent.verticalCenter
                         onClicked: QbzBridge.playlistTogglePin()
                     }
@@ -504,20 +583,22 @@ Rectangle {
         }
 
         // --- Column header ---------------------------------------------------
-        Row {
+        // rows/TrackListHeader.qml — the same rows/TrackCols.qml geometry the
+        // TrackRows below use. Two things were wrong when this was hand-rolled
+        // here, and both are now structural:
+        //   * `anchors.leftMargin: 12` on a Column child is a NO-OP (a
+        //     positioner owns its children's x), so the labels started 12px
+        //     left of the row cells; the header component pads itself;
+        //   * it was as wide as the page while the rows are the ListView's
+        //     width, which is inset 14px for the scrollbar gutter — 14px of
+        //     extra stretch pushed Album/Duration/Quality right. The width
+        //     below is the ROW width, which is the component's contract.
+        TrackListHeader {
             visible: root.tracks.length > 0
-            width: parent.width
-            anchors.leftMargin: 12
-            spacing: 14
-            Text { text: "#"; width: 32; color: theme.textMuted; font.pixelSize: theme.fontLegal; horizontalAlignment: Text.AlignHCenter }
-            Rectangle { width: 36; height: 1; color: "transparent" }
-            Text { text: QbzSession.tr("Title", QbzSession.trRev); width: parent.width - 32 - 36 - 220 - 70 - 92 - 28 - 28 - 32 - 8 * 14; color: theme.textMuted; font.pixelSize: theme.fontLegal }
-            Text { text: QbzSession.tr("Album", QbzSession.trRev); width: 220; color: theme.textMuted; font.pixelSize: theme.fontLegal }
-            Text { text: QbzSession.tr("Duration", QbzSession.trRev); width: 70; color: theme.textMuted; font.pixelSize: theme.fontLegal; horizontalAlignment: Text.AlignHCenter }
-            Text { text: QbzSession.tr("Quality", QbzSession.trRev); width: 92; color: theme.textMuted; font.pixelSize: theme.fontLegal; horizontalAlignment: Text.AlignHCenter }
-            Rectangle { width: 28; height: 1; color: "transparent" }
-            Rectangle { width: 28; height: 1; color: "transparent" }
-            Rectangle { width: 32; height: 1; color: "transparent" }
+            width: parent.width - 14
+            showArtwork: true
+            showAlbum: true
+            showDownload: true
         }
         Rectangle { visible: root.tracks.length > 0; width: 1; height: 3; color: "transparent" }
         Rectangle { visible: root.tracks.length > 0; width: parent.width; height: 1; color: theme.borderSubtle }
