@@ -179,7 +179,8 @@ Rectangle {
                     width: 14
                     height: 14
                     anchors.centerIn: parent
-                    tintName: root.isPinned ? "accent" : "primary"
+                    // On a #99000000/#cc000000 scrim — dark under every theme.
+                    tintName: root.isPinned ? "accent" : "white"
                 }
                 MouseArea {
                     id: pinArea

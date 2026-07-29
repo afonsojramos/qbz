@@ -189,7 +189,7 @@ Rectangle {
                 width: 18
                 height: 18
                 anchors.centerIn: parent
-                tintName: moreArea.containsMouse ? "primary" : "muted"
+                tintName: moreArea.containsMouse ? "textPrimary" : "muted"
             }
             MouseArea {
                 id: moreArea

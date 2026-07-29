@@ -73,7 +73,10 @@ QbzContextMenu {
                     width: 15
                     height: 15
                     anchors.verticalCenter: parent.verticalCenter
-                    tintName: row.hot ? "primary" : "secondary"
+                    // Host is `surfaceHover`/transparent over a theme surface,
+                    // so the glyph tracks the sibling label (textPrimary/
+                    // textSecondary below) rather than a fixed white.
+                    tintName: row.hot ? "textPrimary" : "secondary"
                 }
                 Text {
                     height: parent.height

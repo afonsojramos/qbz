@@ -32,14 +32,22 @@ Row {
 
     QbzTheme { id: theme }
 
-    // Bakes matching the LIVE tokens (see QbzIconButton's header: the icon
-    // tints are frozen SVG colours, so a hardcoded name is a dark-theme-only
-    // colour). `tintOnAccent` is the glyph sitting ON the filled play disc:
-    // the disc is Theme.accent, so its glyph is Theme.accent-text — which is
-    // near-white on some themes and near-black on others (qbz-theme picks it
-    // for worst-case contrast against the accent), never a fixed "black".
-    readonly property string tintStrong: theme.textPrimary.hslLightness > 0.5 ? "primary" : "black"
-    readonly property string tintOnAccent: theme.accentText.hslLightness > 0.5 ? "primary" : "black"
+    // Both are runtime-tinted tokens now (see QbzIconButton's header), so they
+    // are the live colours rather than a two-value approximation of them.
+    //
+    // `tintOnAccent` is the glyph sitting ON the filled play disc, whose fill
+    // is theme.accent (theme.accentHover under the cursor). It used to name
+    // `accentText` directly; it goes through the shared on-accent selector
+    // now. That is NOT a colour change on 34 of the 35 palettes — the
+    // selector's first arm IS accent-text — the point is that PLAY, the
+    // checkboxes, the genre pills and the circle actions all take one
+    // decision. They did not before: CircleAction.slint:72 hardcodes #ffffff
+    // for the same job while QbzCheckbox.slint:24 uses accent-text, and the
+    // port inherited both spellings. See theme/QbzTheme.qml, "ON AN ACCENT
+    // FILL", for why accent-text alone is not enough (rose-pine-dawn: 2.56:1)
+    // and why the hover fill does not get a property of its own.
+    readonly property string tintStrong: "textPrimary"
+    readonly property string tintOnAccent: theme.accentGlyphTint
 
     spacing: 2
     height: 44

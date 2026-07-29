@@ -106,7 +106,16 @@ Rectangle {
                         name: "check"
                         width: 12
                         height: 12
-                        tintName: "primary"
+                        // On the accent fill -> the on-accent selector, same
+                        // as the real controls/QbzCheckbox.qml this row
+                        // hand-copies (primitives/QbzCheckbox.slint:24 says
+                        // accent-text, and the selector returns accent-text
+                        // on 34 of the 35 palettes; it only overrides where
+                        // accent-text drops under 3:1 — rose-pine-dawn,
+                        // 2.56:1). The hand-copy has to track the real
+                        // control or the TOS check and the Settings checks
+                        // diverge on exactly that theme.
+                        tintName: theme.accentGlyphTint
                     }
                     MouseArea {
                         anchors.fill: parent
@@ -151,7 +160,12 @@ Rectangle {
                 Text {
                     anchors.centerIn: parent
                     text: QbzSession.tr("Sign in with your browser", QbzSession.trRev)
-                    color: theme.accentText
+                    // On the accent fill (accentHover under the cursor). NOT
+                    // a departure from primitives/QbzPrimaryButton.slint:36
+                    // (`Theme.accent-text`), which is what the twin returns on
+                    // 34 of the 35 palettes — a floor for rose-pine-dawn only
+                    // (accent-text #575279 on accent #d7827e is 2.56:1).
+                    color: theme.accentGlyphColor
                     font.pixelSize: theme.fontButton
                     font.weight: theme.weightSemibold
                 }

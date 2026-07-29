@@ -55,7 +55,17 @@ Rectangle {
             width: 14
             height: 14
             anchors.verticalCenter: parent.verticalCenter
-            tintName: root.active ? "primary" : "secondary"
+            // Both halves of this pill take the SAME decision now. They did
+            // not before: the glyph said "primary" (the legacy alias of a
+            // literal #ffffff) while the label below said accent-text, so on
+            // every pale-accent theme the pill drew a black label next to a
+            // white glyph. discover/BrowseHeaderTools.slint:123 and :132 are
+            // at least self-consistent — they are BOTH #ffffff — but that
+            // white measures 1.70:1 on high-contrast, 1.74 on ikari and
+            // 1.82 on wcag-dark, under 2.6:1 on 16 of the 35 palettes, so
+            // the port diverges from both lines at once, by measurement.
+            // See theme/QbzTheme.qml, "ON AN ACCENT FILL".
+            tintName: root.active ? theme.accentGlyphTint : "secondary"
         }
         Text {
             text: root.count === 0
@@ -63,7 +73,10 @@ Rectangle {
                 : root.count === 1
                     ? QbzSession.tr("1 genre", QbzSession.trRev)
                     : QbzSession.tr("{} genres", QbzSession.trRev).replace("{}", root.count)
-            color: root.active ? theme.accentText : theme.textSecondary
+            // The colour twin of the glyph's tint (see above) — accent-text
+            // on 34 of the 35 palettes, so this is a no-op everywhere except
+            // where accent-text itself falls under 3:1.
+            color: root.active ? theme.accentGlyphColor : theme.textSecondary
             font.pixelSize: 13
             font.weight: root.active ? theme.weightMedium : theme.weightRegular
             anchors.verticalCenter: parent.verticalCenter

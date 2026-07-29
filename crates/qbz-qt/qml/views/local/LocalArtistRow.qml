@@ -80,7 +80,13 @@ Rectangle {
             Text {
                 width: parent.width
                 text: root.item.displayName || root.item.name || ""
-                color: root.selected ? theme.accentText : theme.textPrimary
+                // Both labels sit on the selected row's `theme.accent` fill.
+                // Same story as views/local/FilterChip.qml: NOT a departure
+                // from locallibrary/LocalLibraryView.slint:653 + :660
+                // (`Theme.accent-text`), which is what the twin returns on 34
+                // of the 35 palettes — only a floor for rose-pine-dawn, where
+                // accent-text measures 2.56:1 on this accent.
+                color: root.selected ? theme.accentGlyphColor : theme.textPrimary
                 font.pixelSize: theme.fontBody
                 font.weight: root.selected ? theme.weightSemibold : theme.weightMedium
                 elide: Text.ElideRight
@@ -91,7 +97,7 @@ Rectangle {
                     + QbzSession.tr("albums", QbzSession.trRev) + " · "
                     + (root.item.trackCount || 0) + " "
                     + QbzSession.tr("tracks", QbzSession.trRev)
-                color: root.selected ? theme.accentText : theme.textMuted
+                color: root.selected ? theme.accentGlyphColor : theme.textMuted
                 font.pixelSize: theme.fontLegal
                 elide: Text.ElideRight
             }

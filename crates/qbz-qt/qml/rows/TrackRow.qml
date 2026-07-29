@@ -129,11 +129,11 @@ Rectangle {
         ? theme.alphaTier(10) : (theme.isDark ? "#1affffff" : "#1a000000")
     readonly property color playCellRing: theme.alphaTiers.length > 0
         ? theme.alphaTier(15) : (theme.isDark ? "#26ffffff" : "#26000000")
-    /// Slint's `Theme.text-primary` icon tint in baked-variant terms: the
-    /// "primary" bake is a literal #ffffff (QbzIcon.qml), so a light theme
-    /// has to take "black" or the glyph is white-on-white. Also drives the
-    /// hover tints of the row's trailing controls, which had the same hole.
-    readonly property string playGlyphTint: theme.isDark ? "primary" : "black"
+    /// Slint's `Theme.text-primary` icon tint, runtime-tinted (QbzIcon.qml /
+    /// src/icon_tint_qt.rs) so it is the live token under all 36 themes. Every
+    /// host it lands on is a THEME surface — the play cell's polarity-baked
+    /// alpha disc, and `surface-elevated` for the row's trailing controls.
+    readonly property string playGlyphTint: "textPrimary"
     /// TrackRow.slint:123-125 — the row hover is `Theme.alpha-8`, not
     /// surface-hover, and the .slint says why: "Hover uses the polarity-baked
     /// alpha ramp so the hover state is visible on light themes too". The
@@ -191,11 +191,10 @@ Rectangle {
         //
         // The port had the pre-fix shape: a hardcoded `#3dffffff` disc, no
         // ring, and the "primary" icon bake — which is a literal #ffffff, not
-        // text-primary (QbzIcon.qml bakes tints into the SVG). Both halves are
-        // now the polarity-baked ramp: theme.alphaTier() is white-based on
-        // dark themes and black-based on light (qbz-theme colors.rs:125-129,
-        // republished per theme by theme_qt.rs), and `playGlyphTint` resolves
-        // text-primary to the only baked dark variant when the theme is light.
+        // text-primary. Both halves are now theme-correct: theme.alphaTier()
+        // is white-based on dark themes and black-based on light (qbz-theme
+        // colors.rs:125-129, republished per theme by theme_qt.rs), and
+        // `playGlyphTint` is the real text-primary token, runtime-tinted.
         //
         // Numbers off the .slint: 24px disc, 1.5px ring ("a 1px stroked circle
         // aliases badly in femtovg", :215), 16px glyph.

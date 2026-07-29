@@ -532,7 +532,15 @@ Popup {
             spacing: 6
             Text {
                 text: tabRoot.label
-                color: tabRoot.selected ? theme.accentText : theme.textPrimary
+                // Selected -> this text sits ON `theme.accent`, so it takes
+                // the on-accent selector like every other accent-filled
+                // control (theme/QbzTheme.qml, "ON AN ACCENT FILL"). This was
+                // the LAST accent fill in the tree still reading raw
+                // accent-text, i.e. the one place the app contradicted its
+                // own rule. shell/CastPicker.slint:86 is a hardcoded #ffffff
+                // — 1.70:1 on high-contrast — so this diverges from upstream
+                // by measurement, same as the rest.
+                color: tabRoot.selected ? theme.accentGlyphColor : theme.textPrimary
                 font.pixelSize: theme.fontBody
                 font.weight: tabRoot.selected ? theme.weightSemibold : Font.Normal
                 anchors.verticalCenter: parent.verticalCenter
@@ -540,7 +548,24 @@ Popup {
             Text {
                 visible: tabRoot.count > 0
                 text: tabRoot.count
-                color: tabRoot.selected ? theme.accentText : theme.textMuted
+                // Same selector as the label beside it — the two halves of a
+                // tab cannot disagree. This was the worst on-accent number
+                // left anywhere: raw accent-text at 80% composites to
+                // #715c7a on rose-pine-dawn's #d7827e, i.e. 2.10:1; through
+                // the selector it composites to #2b1a19 and 5.84:1.
+                color: tabRoot.selected ? theme.accentGlyphColor : theme.textMuted
+                // The 80% is NOT ours to drop: CastPicker.slint:93 spells the
+                // count `#ffffffcc`, and that de-emphasis against the
+                // full-strength label is the tab's whole visual hierarchy.
+                // It does cost contrast, and the residue is stated rather
+                // than hidden: on breeze-light the selector returns #ffffff
+                // (its own accent-text), which at 80% over accent #1d99f3
+                // composites to #d2ebfd = 2.47:1, under the 3:1 floor. That
+                // is the ALPHA's doing, not the colour's — the same label at
+                // full strength is 3.04:1 and clears. Fixing it means either
+                // dropping upstream's alpha or giving de-emphasised
+                // on-accent text its own selector; both are owner calls, and
+                // neither is this round's approved deviation.
                 opacity: tabRoot.selected ? 0.8 : 1.0
                 font.pixelSize: theme.fontLegal
                 anchors.verticalCenter: parent.verticalCenter

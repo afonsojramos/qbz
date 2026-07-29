@@ -28,7 +28,14 @@ Rectangle {
         id: lbl
         anchors.centerIn: parent
         text: root.label
-        color: root.active ? theme.accentText : theme.textSecondary
+        // On the accent fill. NOT a departure from
+        // locallibrary/LocalLibraryView.slint:690 (`Theme.accent-text`) —
+        // `accentGlyphColor` RETURNS accent-text on 34 of the 35 palettes.
+        // It is a floor under it: rose-pine-dawn's accent-text #575279 on
+        // accent #d7827e is 2.56:1, and the twin hands back black at 7.38:1.
+        // Reading it here instead of accent-text is also what keeps this chip
+        // agreeing with the genre pills, which had to diverge outright.
+        color: root.active ? theme.accentGlyphColor : theme.textSecondary
         font.pixelSize: theme.fontLegal
         font.weight: root.active ? theme.weightSemibold : theme.weightRegular
     }

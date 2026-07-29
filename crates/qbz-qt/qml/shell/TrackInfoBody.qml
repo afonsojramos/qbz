@@ -136,9 +136,9 @@ Column {
             }
 
             // Close X — the Slint is a bare 32x32 touch area with an 18px
-            // glyph, muted -> primary, with NO hover fill; QbzIconButton
-            // always paints one and idles at `secondary`, so this one stays
-            // hand-rolled to keep the port 1:1.
+            // glyph, text-muted -> text-primary, with NO hover fill;
+            // QbzIconButton always paints one and idles at `secondary`, so
+            // this one stays hand-rolled to keep the port 1:1.
             Item {
                 width: 32
                 height: 32
@@ -149,7 +149,7 @@ Column {
                     width: 18
                     height: 18
                     anchors.centerIn: parent
-                    tintName: closeArea.containsMouse ? "primary" : "muted"
+                    tintName: closeArea.containsMouse ? "textPrimary" : "muted"
                 }
                 MouseArea {
                     id: closeArea

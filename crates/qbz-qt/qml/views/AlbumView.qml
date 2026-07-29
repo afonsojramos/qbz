@@ -242,7 +242,9 @@ Rectangle {
                     width: 13
                     height: 13
                     anchors.centerIn: parent
-                    tintName: "primary"
+                    // On the card's fixed brand gradient disc (indigo/violet
+                    // or amber), never on a theme surface.
+                    tintName: "white"
                 }
             }
             Text {

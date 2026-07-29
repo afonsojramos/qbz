@@ -1,5 +1,5 @@
 // QbzCheckbox (primitives/QbzCheckbox.slint) — 18px square, r4, accent fill
-// with a black check when on, 1.5px muted border when off. Emits toggled();
+// with an accent-text check when on, muted border when off. Emits toggled();
 // like the Slint original it never self-flips (the owner of the state does).
 //
 // Used by Settings > Local Library (folder selection) and the Plex library
@@ -27,7 +27,18 @@ Rectangle {
         anchors.centerIn: parent
         visible: root.checked
         name: "check"
-        tintName: "black"
+        // The glyph sits ON the accent fill. primitives/QbzCheckbox.slint:24
+        // says `tint: Theme.accent-text` and this was 1:1 with it; it now
+        // goes through the selector, which RETURNS accent-text on 34 of the
+        // 35 palettes — so this is not a divergence from :24 so much as a
+        // floor under it. The one row it changes is rose-pine-dawn, where
+        // accent-text #575279 on accent #d7827e is 2.56:1, under the 3:1
+        // non-text floor, and the selector hands back black at 7.38:1.
+        // Routing every on-accent glyph through one property is also what
+        // stops this control and views/local/SelectCheck.qml from drifting
+        // apart again — upstream contradicts itself between the two
+        // (SelectionCheckbox.slint:37 hardcodes #ffffff for the same job).
+        tintName: theme.accentGlyphTint
         width: 12
         height: 12
     }

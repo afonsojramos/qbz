@@ -118,7 +118,8 @@ Rectangle {
                     width: 14
                     height: 14
                     anchors.centerIn: parent
-                    tintName: root.item.source === "plex" ? "accent" : "primary"
+                    // On the #b3000000 badge — dark under every theme.
+                    tintName: root.item.source === "plex" ? "accent" : "white"
                 }
             }
             CardMenu {

@@ -294,7 +294,7 @@ Rectangle {
                     name: "ellipsis"
                     width: 16
                     height: 16
-                    tintName: menuArea.containsMouse ? "primary" : "muted"
+                    tintName: menuArea.containsMouse ? "textPrimary" : "muted"
                 }
                 MouseArea {
                     id: menuArea
@@ -516,7 +516,7 @@ Rectangle {
                     width: 15
                     height: 15
                     anchors.centerIn: parent
-                    tintName: closeArea.containsMouse ? "primary" : "secondary"
+                    tintName: closeArea.containsMouse ? "textPrimary" : "secondary"
                 }
                 MouseArea {
                     id: closeArea
@@ -631,7 +631,7 @@ Rectangle {
                                         name: root.currentRow && root.currentRow.isFavorite ? "heart-filled" : "heart"
                                         width: 17
                                         height: 17
-                                        tintName: root.currentRow && root.currentRow.isFavorite ? "favorite" : (npFavArea.containsMouse ? "primary" : "muted")
+                                        tintName: root.currentRow && root.currentRow.isFavorite ? "favorite" : (npFavArea.containsMouse ? "textPrimary" : "muted")
                                     }
                                     MouseArea {
                                         id: npFavArea

@@ -91,7 +91,7 @@ Rectangle {
             width: root.sm ? 14 : 16
             height: root.sm ? 14 : 16
             anchors.centerIn: parent
-            tintName: openArea.containsMouse ? "primary" : "muted"
+            tintName: openArea.containsMouse ? "textPrimary" : "muted"
         }
         MouseArea {
             id: openArea
@@ -199,7 +199,7 @@ Rectangle {
                         width: 12
                         height: 12
                         anchors.centerIn: parent
-                        tintName: clearArea.containsMouse ? "primary" : "muted"
+                        tintName: clearArea.containsMouse ? "textPrimary" : "muted"
                     }
                     MouseArea {
                         id: clearArea

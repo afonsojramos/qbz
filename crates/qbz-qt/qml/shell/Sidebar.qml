@@ -413,7 +413,7 @@ Rectangle {
                     width: 16
                     height: 16
                     anchors.centerIn: parent
-                    tintName: navRow.lit ? "primary" : "secondary"
+                    tintName: navRow.lit ? "textPrimary" : "secondary"
                 }
             }
             Text {
@@ -552,7 +552,7 @@ Rectangle {
                     width: 15
                     height: 15
                     anchors.centerIn: parent
-                    tintName: (searchBtnArea.containsMouse || root.searchOpen) ? "primary" : "muted"
+                    tintName: (searchBtnArea.containsMouse || root.searchOpen) ? "textPrimary" : "muted"
                 }
                 MouseArea {
                     id: searchBtnArea
@@ -583,7 +583,7 @@ Rectangle {
                     width: 16
                     height: 16
                     anchors.centerIn: parent
-                    tintName: plusArea.containsMouse ? "primary" : "muted"
+                    tintName: plusArea.containsMouse ? "textPrimary" : "muted"
                 }
                 MouseArea {
                     id: plusArea
@@ -604,7 +604,7 @@ Rectangle {
                     width: 15
                     height: 15
                     anchors.centerIn: parent
-                    tintName: sortBtnArea.containsMouse ? "primary" : "muted"
+                    tintName: sortBtnArea.containsMouse ? "textPrimary" : "muted"
                 }
                 MouseArea {
                     id: sortBtnArea
@@ -746,7 +746,7 @@ Rectangle {
                     width: 15
                     height: 15
                     anchors.centerIn: parent
-                    tintName: collapseArea.containsMouse ? "primary" : "muted"
+                    tintName: collapseArea.containsMouse ? "textPrimary" : "muted"
                 }
                 MouseArea {
                     id: collapseArea
@@ -910,7 +910,7 @@ Rectangle {
                                         height: 15
                                         x: Math.round((parent.width - width) / 2)
                                         y: Math.round((parent.height - height) / 2)
-                                        tintName: (rowArea.containsMouse || isActive) ? "primary" : "muted"
+                                        tintName: (rowArea.containsMouse || isActive) ? "textPrimary" : "muted"
                                     }
                                 }
                                 // Name (hidden in mini). A Row is a positioner
@@ -962,7 +962,7 @@ Rectangle {
                                     width: 14
                                     height: 14
                                     anchors.verticalCenter: parent.verticalCenter
-                                    tintName: rowArea.containsMouse ? "primary" : "muted"
+                                    tintName: rowArea.containsMouse ? "textPrimary" : "muted"
                                 }
                             }
                             // Active-row redundant shape cue: 3px accent bar.

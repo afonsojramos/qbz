@@ -906,7 +906,7 @@ Rectangle {
                         width: 20
                         height: 20
                         anchors.centerIn: parent
-                        tintName: gearArea.containsMouse ? "primary" : "muted"
+                        tintName: gearArea.containsMouse ? "textPrimary" : "muted"
                     }
                     MouseArea {
                         id: gearArea

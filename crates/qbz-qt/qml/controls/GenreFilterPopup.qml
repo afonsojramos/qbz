@@ -156,7 +156,7 @@ Item {
                         name: "x"
                         width: 15
                         height: 15
-                        tintName: closeArea.containsMouse ? "primary" : "muted"
+                        tintName: closeArea.containsMouse ? "textPrimary" : "muted"
                     }
                     MouseArea {
                         id: closeArea
@@ -341,7 +341,15 @@ Item {
                                                 name: "check"
                                                 width: 11
                                                 height: 11
-                                                tintName: "primary"
+                                                // DELIBERATE DIVERGENCE from
+                                                // discover/GenreFilterPopup.slint:85,
+                                                // which hardcodes `tint: #ffffff`
+                                                // on this accent box — 1.70:1 on
+                                                // high-contrast, 1.74 on ikari,
+                                                // 16 of the 35 palettes under
+                                                // 2.6:1. theme/QbzTheme.qml, "ON
+                                                // AN ACCENT FILL".
+                                                tintName: theme.accentGlyphTint
                                             }
                                         }
 
@@ -410,7 +418,16 @@ Item {
                                 width: parent.width - 24
                                 height: parent.height
                                 text: chip.modelData.name
-                                color: chip.modelData.selected ? theme.accentText : theme.textSecondary
+                                // On the accent fill -> the measured on-accent
+                                // colour. GenreFilterPopup.slint:125 hardcodes
+                                // #ffffff (same defect as :85 above); the port
+                                // had already moved to accent-text, and
+                                // `accentGlyphColor` IS accent-text on 34 of
+                                // the 35 palettes — it only differs where
+                                // accent-text itself drops under 3:1
+                                // (rose-pine-dawn, 2.56:1).
+                                color: chip.modelData.selected
+                                    ? theme.accentGlyphColor : theme.textSecondary
                                 font.pixelSize: 13
                                 font.weight: chip.modelData.selected ? theme.weightMedium : theme.weightRegular
                                 verticalAlignment: Text.AlignVCenter
@@ -421,7 +438,21 @@ Item {
                                 width: 16
                                 height: 16
                                 radius: 8
-                                color: chip.modelData.selected ? theme.accentText : "transparent"
+                                // INVERTED host: this 16px disc is the chip's
+                                // FOREGROUND punched out of the accent fill,
+                                // and the check inside it is tinted `accent`.
+                                // So the pair that has to clear the floor is
+                                // (accent glyph, this fill) — the same two
+                                // colours as everywhere else on this pill,
+                                // just swapped. Painting it with
+                                // `accentGlyphColor` rather than raw
+                                // accent-text is what keeps that true:
+                                // identical on 34 palettes, and on
+                                // rose-pine-dawn it turns a 2.56:1 check into
+                                // 7.38:1. GenreFilterPopup.slint:141 paints
+                                // this disc #ffffff.
+                                color: chip.modelData.selected
+                                    ? theme.accentGlyphColor : "transparent"
                                 border.width: chip.modelData.selected ? 0 : 2
                                 border.color: theme.borderMuted
                                 QbzIcon {

@@ -11,11 +11,11 @@
 //
 // NOT QbzToggle.qml — that one is the on/off SWITCH (checked/toggled(bool)).
 //
-// LIGHT-THEME CORRECTNESS: icon tints are PRE-BAKED SVG colours
-// (assets/icons/<tint>/), and the "primary" bake is literally #ffffff. On a
-// light theme the active glyph would paint white on a near-white fill, so the
-// bake is chosen from the LIVE token's lightness — the same rule
-// QbzIconButton.qml and QbzCircleAction.qml already carry.
+// LIGHT-THEME CORRECTNESS: the active fill is `surface-hover`, a THEME
+// surface, so the active glyph is `text-primary` — a runtime-tinted token
+// (src/icon_tint_qt.rs), not the fixed #ffffff the "primary" bake is. The
+// old lightness ternary that picked between two fixed bakes is gone; the
+// tinter reproduces the live token exactly.
 
 import QtQuick
 import com.blitzfc.qbz
@@ -33,7 +33,7 @@ Rectangle {
 
     QbzTheme { id: theme }
 
-    readonly property string tintStrong: theme.textPrimary.hslLightness > 0.5 ? "primary" : "black"
+    readonly property string tintStrong: "textPrimary"
 
     width: sm ? 30 : 34
     height: sm ? 30 : 34

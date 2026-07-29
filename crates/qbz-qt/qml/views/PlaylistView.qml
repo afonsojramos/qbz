@@ -680,7 +680,15 @@ Rectangle {
                         id: saveText
                         anchors.centerIn: parent
                         text: QbzSession.tr("Save", QbzSession.trRev)
-                        color: "#ffffff"
+                        // Was a literal #ffffff, 1:1 with
+                        // primitives/EditPlaylistModal.slint:171 — and that
+                        // white is 1.70:1 on high-contrast, 1.74 on ikari,
+                        // 1.82 on wcag-dark, under 2.6:1 on 16 of the 35
+                        // palettes, on the SAME accent fill every other
+                        // on-accent site was just fixed against. The colour
+                        // twin of the glyph selector; see
+                        // theme/QbzTheme.qml, "ON AN ACCENT FILL".
+                        color: theme.accentGlyphColor
                         font.pixelSize: 13
                         font.weight: theme.weightMedium
                     }

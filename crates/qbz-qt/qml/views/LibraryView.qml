@@ -353,7 +353,7 @@ Rectangle {
             height: 16
             anchors.centerIn: parent
             tintName: parent.active ? "accent"
-                   : ttArea.containsMouse ? "primary" : "secondary"
+                   : ttArea.containsMouse ? "textPrimary" : "secondary"
         }
         MouseArea {
             id: ttArea
@@ -385,7 +385,16 @@ Rectangle {
                 width: 13
                 height: 13
                 anchors.verticalCenter: parent.verticalCenter
-                tintName: gtb.active ? "primary" : "secondary"
+                // Same pair-of-halves fix as controls/BrowseGenreButton.qml:
+                // the glyph said "primary" (legacy alias of a literal
+                // #ffffff) next to an accent-text label, i.e. a white glyph
+                // beside a black label on the pale-accent themes.
+                // favorites/FavoritesView.slint:301 + :309 are consistently
+                // #ffffff, but that white is 1.70:1 on high-contrast, 1.74
+                // on ikari, 1.82 on wcag-dark and under 2.6:1 on 16 of the
+                // 35 palettes — deliberate divergence from both lines.
+                // theme/QbzTheme.qml, "ON AN ACCENT FILL".
+                tintName: gtb.active ? theme.accentGlyphTint : "secondary"
             }
             Text {
                 anchors.verticalCenter: parent.verticalCenter
@@ -395,7 +404,9 @@ Rectangle {
                         ? QbzSession.tr("1 genre", QbzSession.trRev)
                         : QbzSession.tr("{} genres", QbzSession.trRev)
                             .replace("{}", root.genreCount)
-                color: gtb.active ? theme.accentText : theme.textSecondary
+                // The colour twin of the glyph's tint above — accent-text on
+                // 34 of the 35 palettes.
+                color: gtb.active ? theme.accentGlyphColor : theme.textSecondary
                 font.pixelSize: 12
             }
         }
@@ -532,7 +543,8 @@ Rectangle {
                     color: "#a6000000"
                     opacity: lrPlayArea.containsMouse ? 1.0 : 0.0
                     Behavior on opacity { NumberAnimation { duration: 150 } }
-                    QbzIcon { name: "play-fill"; width: 16; height: 16; anchors.centerIn: parent; tintName: "primary" }
+                    // On the #a6000000 artwork scrim — dark under every theme.
+                    QbzIcon { name: "play-fill"; width: 16; height: 16; anchors.centerIn: parent; tintName: "white" }
                     MouseArea {
                         id: lrPlayArea
                         anchors.fill: parent
@@ -638,7 +650,10 @@ Rectangle {
                     width: 14
                     height: 14
                     anchors.verticalCenter: parent.verticalCenter
-                    tintName: item.source === "plex" ? "accent" : "primary"
+                    // Host is a transparent column over the theme row (NOT an
+                    // artwork scrim), so this matches its siblings
+                    // local/LocalAlbumRow.qml and local/LocalTrackRow.qml.
+                    tintName: item.source === "plex" ? "accent" : "muted"
                 }
             }
             // Col — quality (albums + tracks).

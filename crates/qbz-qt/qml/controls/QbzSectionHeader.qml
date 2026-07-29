@@ -73,15 +73,33 @@ Item {
                 onClicked: parent.parent.parent.viewAllClicked()
             }
         }
+        // `ambient: true` on BOTH: these two are the carousel page chevrons,
+        // and all six Slint carousels give them the third idle-fill arm —
+        // Carousel / ArtistCarousel / PlaylistCarousel / RadioCarousel /
+        // SlimCarousel / PinnedCarousel each declare a local `component
+        // NavButton` at :11-:15 with the identical three-arm `background`
+        // (verified: same `app-background-active` ->
+        // `surface-elevated.with-alpha(app-background-surface-alpha)` line in
+        // all six). Hardcoded rather than exposed as a property because every
+        // consumer of this header is one of those carousels: HomeView,
+        // SectionRail, SearchView and LabelView all render inside AppShell's
+        // frosted contentFrame (AppShell.qml:149, surface-main @0.22), and
+        // upstream HomeView.slint / SearchResultsView.slint /
+        // LabelPageView.slint import the carousel components literally. A
+        // section header on OPAQUE chrome would need the arm off — there is
+        // no such host today, and adding one means adding the property then,
+        // not carrying a dead knob now.
         QbzNavButton {
             visible: parent.parent.showChevrons
             name: "chevron-left"
+            ambient: true
             btnEnabled: parent.parent.leftEnabled
             onClicked: parent.parent.pageLeft()
         }
         QbzNavButton {
             visible: parent.parent.showChevrons
             name: "chevron-right"
+            ambient: true
             btnEnabled: parent.parent.rightEnabled
             onClicked: parent.parent.pageRight()
         }

@@ -126,7 +126,7 @@ Item {
             width: 16
             height: 16
             anchors.centerIn: parent
-            tintName: moreArea.containsMouse ? "primary" : "muted"
+            tintName: moreArea.containsMouse ? "textPrimary" : "muted"
         }
         MouseArea {
             id: moreArea

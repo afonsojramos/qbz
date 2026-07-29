@@ -111,7 +111,9 @@ Rectangle {
                         width: 56
                         height: 56
                         anchors.centerIn: parent
-                        tintName: "primary"
+                        // On the #6366f1 -> #8b5cf6 gradient disc, which is a
+                        // fixed brand colour, not a theme surface.
+                        tintName: "white"
                     }
                 }
 

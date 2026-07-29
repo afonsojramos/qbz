@@ -126,7 +126,7 @@ Rectangle {
                 width: 16
                 height: 16
                 anchors.centerIn: parent
-                tintName: root.rowHovered ? "primary" : "muted"
+                tintName: root.rowHovered ? "textPrimary" : "muted"
             }
             MouseArea {
                 id: playArea
@@ -144,7 +144,7 @@ Rectangle {
                 width: 16
                 height: 16
                 anchors.centerIn: parent
-                tintName: moreArea.containsMouse ? "primary" : "secondary"
+                tintName: moreArea.containsMouse ? "textPrimary" : "secondary"
             }
             MouseArea {
                 id: moreArea

@@ -43,10 +43,17 @@
 //   "white"          a light glyph on a host that is dark under EVERY theme:
 //                    artwork scrims (#a6000000 / #b3000000), gradient discs,
 //                    the close button's #e81123 hover
-//   "primary"        LEGACY ALIAS OF "white". It has always been a literal
-//                    #ffffff and ~14 call sites depend on that; it is NOT
-//                    Theme.text-primary. New code says "white" when it means
-//                    white and "textPrimary" when it means the theme token.
+//   "primary"        LEGACY ALIAS OF "white" — a literal #ffffff, NOT
+//                    Theme.text-primary. The app-wide migration is done: the
+//                    fixed-host call sites now say "white" and the ones that
+//                    always meant the theme token say "textPrimary". Only two
+//                    call sites still spell it "primary"
+//                    (controls/BrowseGenreButton.qml, views/LibraryView.qml —
+//                    the glyph on an accent fill, where Slint hardcodes
+//                    #ffffff but the sibling LABEL uses Theme.accent-text, so
+//                    the intent is genuinely ambiguous and is the owner's
+//                    call). The alias stays so those two keep working; do not
+//                    add new ones.
 //   "black"          a dark glyph on a host painted light under every theme
 //   "amber"          #e0b341, the audio stamp's brand accent (one icon)
 //
@@ -66,15 +73,36 @@
 // resolves LAZILY and would otherwise take every icon in the app down with
 // it). It also falls back per-icon on Image.Error, so a name that exists in
 // the qrc set but not in the runtime masters degrades to the old fixed colour
-// instead of rendering nothing.
+// instead of rendering nothing. Verified against src/icon_tint_qt.rs: every
+// one of those paths is a real `QString::default()` return (`tint_root()`
+// None, `bake()` false, empty/tokenless theme_json), plus one more that is
+// not on the list — `prune()` sweeps the OLDEST directories past
+// MAX_TINT_DIRS = 32, and a dir reused from a previous session keeps its old
+// mtime because `bake()` early-returns on the `.complete` stamp, so the
+// CURRENT theme's dir can be deleted under the running app and every Image
+// 404s into `qrcFallback`. The floor is not a formality; it is reachable.
+//
+// AND THE FLOOR HAS TO CARRY THE POLARITY. Mapping a theme-following tint to
+// a fixed dir is only harmless while the runtime bake is alive: send
+// "textPrimary" to primary/ (a literal #ffffff) and the degraded path paints
+// white-on-near-white across the 11 light themes, at ~35 call sites — the
+// exact bug the runtime tinting exists to fix. So `qrcTint` below picks its
+// dir from the LIVE token, with the same `hslLightness > 0.5` test the call
+// sites carried before they were collapsed into this vocabulary.
 //
 // THE ONE WAY A BAKE STILL SILENTLY LIES — worth keeping in mind when adding
 // an icon: NO VARIANT ON DISK -> the Image resolves to nothing and the glyph
 // is simply ABSENT, with nothing logged. The runtime sets are always complete
-// (every master, every tint), so this now only applies to the qrc fallback
-// dirs, where `favorite/` and `amber/` are deliberately partial. A new icon
-// goes into assets/icons/primary/ AND into the MASTERS table in
-// src/icon_tint_qt.rs; the qrc dirs stay whatever they are.
+// (every master, every tint); the qrc dirs were NOT, which is why the floor
+// could not be trusted: `black/` and `warning/` were missing mp3 + translate,
+// `secondary/` and `accent/` were missing mp3 (and `black/cd.svg` was a
+// #cccccc glyph — a light-grey disc in the DARK-glyph directory). All six
+// neutral/chromatic dirs are now 96 files, the same set as primary/ and as
+// MASTERS; only `favorite/` (52) and `amber/` (1) stay deliberately partial,
+// and neither is reachable from the polarity mapping. A new icon goes into
+// assets/icons/primary/, into the MASTERS table in src/icon_tint_qt.rs, AND
+// into black/ + secondary/ + muted/ if any theme-following tint can ask for
+// it.
 
 import QtQuick
 import com.blitzfc.qbz
@@ -86,22 +114,92 @@ Image {
     // One of the names in the vocabulary above.
     property string tintName: "secondary"
 
+    // The HSL lightness test for one theme token, read straight out of the
+    // live document without parsing it. `QbzShell.themeJson` is COMPACT serde
+    // output (theme_qt.rs:266 `serde_json::to_string`) and every colour goes
+    // through `argb()` (theme_qt.rs:124-126), so a token always reads exactly
+    //     "textPrimary":"#ff0f0f0f"
+    // Reading it costs one indexOf over ~2.7 KB — next to nothing beside the
+    // QbzIconTint.dirFor() round trip this file already makes per icon (which
+    // hashes that whole string). The alternatives were both per-icon and much
+    // worse: a JSON.parse here, or a `QbzTheme { }` instance inside QbzIcon —
+    // ~70 eager bindings AND a parse each, multiplied by the hundreds of
+    // icons alive at once and re-run on every theme switch. QbzIcon is the
+    // one component in this tree that cannot afford an owned QbzTheme.
+    //
+    // Missing / unparsable -> true (light), which is the same default
+    // QbzTheme.qml takes pre-publish: its baked fallback document is the DARK
+    // palette, whose text-primary IS #ffffff.
+    function tokenIsLight(key) {
+        // Also the binding dependency — property reads are captured through
+        // the call, so `qrcTint` re-resolves when the theme is republished.
+        const json = QbzShell.themeJson
+        const needle = '"' + key + '":"#'
+        const at = json.indexOf(needle)
+        if (at < 0)
+            return true
+        const end = json.indexOf('"', at + needle.length)
+        if (end < 0)
+            return true
+        const hex = json.substring(at + needle.length, end)
+        if (hex.length < 6)
+            return true
+        // Drop the alpha byte of #aarrggbb (6-digit values work unchanged).
+        const o = hex.length - 6
+        const r = parseInt(hex.substring(o, o + 2), 16)
+        const g = parseInt(hex.substring(o + 2, o + 4), 16)
+        const b = parseInt(hex.substring(o + 4, o + 6), 16)
+        if (isNaN(r) || isNaN(g) || isNaN(b))
+            return true
+        // (max + min) / 2 over 0..255 — `color.hslLightness > 0.5`, the
+        // metric the per-view ternaries used before the vocabulary landed.
+        return (Math.max(r, g, b) + Math.min(r, g, b)) / 510 > 0.5
+    }
+
     // The qrc directory this tint falls back to. Every tint name — including
     // the ones with no directory of their own ("white", "textPrimary",
     // "accentText" ...) — must land on a REAL dir, or the fallback renders
-    // nothing at all.
+    // nothing at all. And a theme-following name must land on a dir whose
+    // POLARITY matches the token it stands for (see the header): this is the
+    // floor, so it is what a light theme gets when the bake is unreachable.
     readonly property string qrcTint: {
         switch (root.tintName) {
+        // Fixed by design — a light glyph on a host that is dark under every
+        // theme (scrims, gradient discs, the #e81123 close hover). "primary"
+        // is the legacy alias of "white" and stays a literal #ffffff.
         case "white":
-        case "textPrimary":
-        case "accentText":
+        case "primary":
             return "primary"
+
+        // Theme-following. Both of these read their OWN token, never the
+        // theme polarity: accent-text is near-BLACK on plenty of DARK themes
+        // whose accent fill is bright (qbz-theme registry.rs — tokyo-night
+        // #1a1b26, catppuccin-mocha #1e1e2e, ...), so `isDark` would get it
+        // backwards in both directions.
+        case "textPrimary":
+            return root.tokenIsLight("textPrimary") ? "primary" : "black"
+        case "accentText":
+            return root.tokenIsLight("accentText") ? "primary" : "black"
+
+        // The weak text ramp: #cccccc is unreadable on a light theme's
+        // surfaces, #888888 is the mid-grey that survives both polarities.
+        case "secondary":
         case "textSecondary":
-            return "secondary"
+            return root.tokenIsLight("textSecondary") ? "secondary" : "muted"
+
+        // muted / disabled stay on muted/ under BOTH polarities on purpose.
+        // #888888 reads on white and on near-black alike, and it is the only
+        // mid-grey bake there is: routing these by lightness would send the
+        // dark themes' text-disabled (#555555, lightness 0.33) to black/ —
+        // an invisible glyph on a dark surface, the bug in mirror image.
+        case "muted":
         case "textMuted":
         case "textDisabled":
         case "disabled":
             return "muted"
+
+        // "accent", "warning", "favorite" (chromatic, legible on both), and
+        // the fixed "black" / "amber" — each already names its own dir.
         default:
             return root.tintName
         }

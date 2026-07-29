@@ -115,7 +115,7 @@ Rectangle {
                         name: "sliders-horizontal"
                         width: 16
                         height: 16
-                        tintName: dsArea.containsMouse ? "primary" : "secondary"
+                        tintName: dsArea.containsMouse ? "textPrimary" : "secondary"
                     }
                     MouseArea {
                         id: dsArea
@@ -139,7 +139,7 @@ Rectangle {
                         name: "x"
                         width: 15
                         height: 15
-                        tintName: closeArea.containsMouse ? "primary" : "secondary"
+                        tintName: closeArea.containsMouse ? "textPrimary" : "secondary"
                     }
                     MouseArea {
                         id: closeArea
@@ -285,7 +285,7 @@ Rectangle {
                     width: 20
                     height: 20
                     tintName: QbzLyrics.showTranslation
-                        ? "accent" : (trArea.containsMouse ? "primary" : "muted")
+                        ? "accent" : (trArea.containsMouse ? "textPrimary" : "muted")
                 }
                 MouseArea {
                     id: trArea

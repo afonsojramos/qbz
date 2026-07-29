@@ -146,7 +146,9 @@ Item {
                 name: root.bandOn ? "eye" : "eye-off"
                 width: 15
                 height: 15
-                tintName: "primary"
+                // On the #80000000 / #2effffff chip over the artwork —
+                // theme-independent, so a fixed white glyph is correct.
+                tintName: "white"
             }
             MouseArea {
                 id: eyeHover

@@ -369,7 +369,7 @@ Rectangle {
                                     width: 16
                                     height: 16
                                     anchors.centerIn: parent
-                                    tintName: discArea.containsMouse ? "primary" : "muted"
+                                    tintName: discArea.containsMouse ? "textPrimary" : "muted"
                                 }
                                 MouseArea {
                                     id: discArea

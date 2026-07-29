@@ -71,7 +71,7 @@ Rectangle {
                         height: 16
                         anchors.centerIn: parent
                         tintName: btn.modelData.danger ? "warning"
-                            : btnArea.containsMouse ? "primary" : "secondary"
+                            : btnArea.containsMouse ? "textPrimary" : "secondary"
                     }
                     MouseArea {
                         id: btnArea

@@ -132,13 +132,13 @@ Rectangle {
     readonly property color hdrStrong: headerLight ? "#ffffff" : theme.textPrimary
     readonly property color hdrBody: headerLight ? "#e0ffffff" : theme.textSecondary
     readonly property bool hdrOverlay: headerLight
-    /// Slint's `Theme.text-primary` as an ICON tint. Icon tints in this port
-    /// are pre-baked SVG variants (QbzIcon.qml) and the "primary" bake is a
-    /// literal `fill="#ffffff"` — it is not the theme token. Every hover that
-    /// raises a muted glyph to text-primary therefore has to pick the "black"
-    /// bake on a light theme, or the glyph disappears at the moment it is
-    /// supposed to light up. Same #638 class as the track-row play glyph.
-    readonly property string tintOnSurface: theme.isDark ? "primary" : "black"
+    /// Slint's `Theme.text-primary` as an ICON tint, for the hovers that raise
+    /// a muted glyph on a THEME surface (every consumer sits on
+    /// `surface-elevated`/transparent, never on the artwork header — that one
+    /// uses `hdrStrong` above). Runtime-tinted via src/icon_tint_qt.rs, so it
+    /// is the live token; it used to be `isDark ? "primary" : "black"`, a
+    /// two-value stand-in from when only fixed bakes existed.
+    readonly property string tintOnSurface: "textPrimary"
     /// TrackRow.slint:123-125 — the row hover uses the polarity-baked alpha
     /// ramp "so the hover state is visible on light themes too (the old
     /// #ffffff16 was invisible white-on-white there)". The zebra stripe is
@@ -504,7 +504,9 @@ Rectangle {
                     name: isActive && QbzPlayer.npPlaying ? "pause" : "play-fill"
                     width: 16
                     height: 16
-                    tintName: "primary"
+                    // On the #000000 @ 0.6 artwork scrim above — dark under
+                    // every theme.
+                    tintName: "white"
                 }
                 MouseArea {
                     anchors.fill: parent

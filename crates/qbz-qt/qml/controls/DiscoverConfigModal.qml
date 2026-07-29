@@ -115,7 +115,7 @@ Item {
                         name: "x"
                         width: 17
                         height: 17
-                        tintName: cfgCloseArea.containsMouse ? "primary" : "muted"
+                        tintName: cfgCloseArea.containsMouse ? "textPrimary" : "muted"
                     }
                     MouseArea {
                         id: cfgCloseArea

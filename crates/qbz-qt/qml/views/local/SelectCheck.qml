@@ -33,7 +33,19 @@ Rectangle {
         width: Math.round(root.diameter * 0.62)
         height: Math.round(root.diameter * 0.62)
         anchors.centerIn: parent
-        tintName: "primary"
+        // DELIBERATE DIVERGENCE from primitives/SelectionCheckbox.slint:37,
+        // which hardcodes `tint: #ffffff` on this same accent fill. That
+        // white is under 2.6:1 on 16 of the 35 palettes, worst on
+        // high-contrast at 1.70:1, then ikari 1.74 and wcag-dark 1.82 —
+        // i.e. the two ACCESSIBILITY themes bracket the top of the list.
+        // (This site used to claim ikari 1.74 was "the worst case in the
+        // app"; it is second. The 8px glyph here does make it the smallest
+        // thing painted at those ratios, which is a different argument and
+        // the one worth keeping.) Slint's own QbzCheckbox.slint:24 uses
+        // accent-text for the equivalent glyph, so upstream contradicts
+        // ITSELF here; the selector settles it by measurement instead of by
+        // picking a side. See theme/QbzTheme.qml, "ON AN ACCENT FILL".
+        tintName: theme.accentGlyphTint
     }
     MouseArea {
         id: checkArea

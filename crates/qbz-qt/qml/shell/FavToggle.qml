@@ -18,11 +18,12 @@ Rectangle {
 
     QbzTheme { id: theme }
 
-    // Bakes matching the LIVE tokens (TransportControls.slint's fav-ta:
-    // hover -> Theme.text-primary, idle -> Theme.text-secondary). Hardcoded
-    // bake names are dark-theme-only colours — see QbzIconButton's header.
-    readonly property string tintStrong: theme.textPrimary.hslLightness > 0.5 ? "primary" : "black"
-    readonly property string tintWeak: theme.textSecondary.hslLightness > 0.5 ? "secondary" : "muted"
+    // TransportControls.slint's fav-ta: hover -> Theme.text-primary, idle ->
+    // Theme.text-secondary. Both are runtime-tinted (see QbzIconButton's
+    // header), so they ARE those tokens; the fill under them is
+    // `surface-hover`/transparent, a theme surface.
+    readonly property string tintStrong: "textPrimary"
+    readonly property string tintWeak: "secondary"
 
     width: 32
     height: 32

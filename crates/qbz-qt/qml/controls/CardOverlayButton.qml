@@ -30,7 +30,11 @@ Rectangle {
         width: primary ? 18 : 16
         height: primary ? 18 : 16
         anchors.centerIn: parent
-        tintName: parent.active ? "accent" : (parent.primary ? "black" : "primary")
+        // Both non-accent arms are theme-INDEPENDENT by design: this button
+        // only ever sits on artwork. `primary` is a solid #ffffff disc (black
+        // glyph), the ghost arm is #24ffffff over the artwork itself (white
+        // glyph). "white" is the explicit spelling of what "primary" baked.
+        tintName: parent.active ? "accent" : (parent.primary ? "black" : "white")
     }
     property alias hovered: obArea.containsMouse
     MouseArea {

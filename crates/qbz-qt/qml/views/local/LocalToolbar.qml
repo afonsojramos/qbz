@@ -165,7 +165,13 @@ Row {
                 Text {
                     anchors.centerIn: parent
                     text: root.view.filterCount
-                    color: theme.accentText
+                    // 9px bold on a 15px accent dot — the smallest on-accent
+                    // text in the app, so the floor matters most here. NOT a
+                    // departure from locallibrary/LocalLibraryView.slint:887
+                    // (`Theme.accent-text`); the twin returns accent-text on
+                    // 34 of the 35 palettes and only overrides rose-pine-dawn
+                    // (2.56:1 -> 7.38:1).
+                    color: theme.accentGlyphColor
                     font.pixelSize: 9
                     font.weight: theme.weightBold
                 }

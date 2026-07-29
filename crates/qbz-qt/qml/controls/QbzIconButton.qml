@@ -6,16 +6,19 @@
 // `active` (accent glyph), `activeBackground` (HeaderBar: elevated fill
 // when active), `btnEnabled` (dims 0.3 + muted glyph, disarms).
 //
-// LIGHT-THEME CORRECTNESS: the glyph tints are PRE-BAKED SVG colours
-// (assets/icons/<tint>/) — "primary" is literally #ffffff and "secondary"
-// #cccccc, i.e. the DARK theme's text-primary / text-secondary frozen into
-// the asset. On a light theme those render near-white on a light surface and
-// the whole button set disappears, which is the reported bug. The bake is
-// therefore chosen from the LIVE token's lightness instead of being
-// hardcoded: bright token -> the light bake, dark token -> the dark bake.
-// TODO(glue): the durable home for this is a QbzTheme.tintFor(token) helper
-// (or real runtime tinting in QbzIcon) — see the report; it is duplicated in
-// FavToggle / TransportControls / SongCard until then.
+// LIGHT-THEME CORRECTNESS: this button's fills are THEME surfaces
+// (surface-hover / surface-elevated / transparent), so its glyphs must be
+// theme tokens, never fixed colours.
+//
+// This used to pick between two FIXED bakes by reading the live token's
+// lightness (`textPrimary.hslLightness > 0.5 ? "primary" : "black"`) — a
+// 2-value approximation of a token, from the era when assets/icons/<tint>/
+// was all there was and "primary" was literally #ffffff. That era is over:
+// QbzIcon now resolves theme-following tints through src/icon_tint_qt.rs,
+// which bakes the REAL hex of the live theme's token, so "textPrimary" and
+// "secondary" are exact under all 36 themes and the ternary is dead weight.
+// The old TODO asking for a QbzTheme.tintFor(token) helper is closed by the
+// same change — there is nothing left to hoist.
 
 import QtQuick
 import com.blitzfc.qbz
@@ -33,12 +36,10 @@ Rectangle {
 
     QbzTheme { id: theme }
 
-    // Bake that actually matches Theme.text-primary / text-secondary in the
-    // ACTIVE theme (BarControls.slint IconButton: hover -> text-primary,
-    // idle -> text-secondary). text-muted maps to the "muted" bake in both
-    // polarities: #888888 is mid-grey and reads on light and dark alike.
-    readonly property string tintStrong: theme.textPrimary.hslLightness > 0.5 ? "primary" : "black"
-    readonly property string tintWeak: theme.textSecondary.hslLightness > 0.5 ? "secondary" : "muted"
+    // BarControls.slint IconButton: hover -> text-primary, idle ->
+    // text-secondary. Both are runtime-tinted, so they ARE those tokens.
+    readonly property string tintStrong: "textPrimary"
+    readonly property string tintWeak: "secondary"
 
     width: btnSize
     height: btnSize
