@@ -138,7 +138,15 @@ pub fn for_cover_blocking(cover_path: &str) -> Option<String> {
         return Some(crate::artwork_qt::file_url(&out.to_string_lossy()));
     }
 
-    let img = image::open(src_path).ok()?.to_rgba8();
+    // Same trap as artwork_qt::scaled_path: the cache uses `.img`, and
+    // `image::open` guesses by extension.
+    let img = image::ImageReader::open(src_path)
+        .ok()?
+        .with_guessed_format()
+        .ok()?
+        .decode()
+        .ok()?
+        .to_rgba8();
     let atmo = atmosphere_from(&img);
     atmo.save(&out).ok()?;
     Some(crate::artwork_qt::file_url(&out.to_string_lossy()))

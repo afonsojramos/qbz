@@ -18,9 +18,15 @@
 //!   rail. Artist Spotlight likewise has no ported panel.
 //! - Qobuz Mixes renders as the four static navigation tiles (the mix DETAIL
 //!   views are out of scope — tiles inert).
-//! - The "View all" full-list pages: the rails show the link when the
-//!   section carries an endpoint (1:1 header) but the click is INERT — the
-//!   DiscoverBrowse page is out of scope.
+//! - The "View all" full-list pages are LIVE (see `browse_qt`): the generic
+//!   album carousels open DiscoverBrowse for their endpoint, and the three
+//!   local rails (Qobuz Playlists / Recently Played Albums / Most Played
+//!   Albums) open their own pages. WHICH rails carry the link is decided in
+//!   `HomeView.qml`'s `viewAllKind()` — per TAB, because the same candidate
+//!   section is cloned into all three tab lists by `assemble()` and Slint's
+//!   For You arm for `recentlyPlayedAlbums` has NO link while Home's does
+//!   (ForYouView.slint:117 vs HomeView.slint:411). Stamping it on the
+//!   candidate here would leak the link into For You.
 //! - Editor's Picks / For You: RENDERING parity (same rails as the Slint
 //!   descriptor arms, prefs-driven order); the Slint per-branch LAZY For You
 //!   load is flattened into this one pass, so the rails that need a wave-1
@@ -70,6 +76,12 @@ pub struct HomeCard {
     pub is_pinned: bool,
     /// Slim rows ("Popular albums"): the 1-based rank ("" = none).
     pub rank: String,
+    /// Local play count. NON-ZERO ONLY on the Most Played Albums page —
+    /// `discover/AlbumCard.slint:508` renders `@tr("{} plays")` when it is,
+    /// which is the whole reason that page's card is 286px and every other
+    /// surface's is 266px. Omitted from the wire when 0.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub plays: u32,
     /// Pinned rail only: the card's own kind ("album" | "artist" |
     /// "playlist") — the mixed PinnedCarousel slot dispatch.
     #[serde(rename = "itemKind", default)]
@@ -81,6 +93,10 @@ pub struct HomeCard {
     /// `file://<cached path>` when already on disk ("" = needs download).
     #[serde(rename = "artPath")]
     pub art_path: String,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 #[derive(Clone, Serialize)]
@@ -573,6 +589,25 @@ pub(crate) fn renderable_ids(tab: qbz_app::settings::discover_prefs::DiscoveryTa
     out
 }
 
+/// Fill `art_path` from the disk cache for a BARE card list and return the
+/// urls still missing. `artwork_qt::attach_cached` only speaks
+/// `[HomeSection]`, and every full-list page (`browse_qt`, `label_qt`)
+/// carries plain `Vec<HomeCard>` — wrapping here keeps ONE artwork path for
+/// the rails and the pages instead of a second copy of the cache lookup.
+pub(crate) fn attach_card_art(cards: &mut Vec<HomeCard>) -> Vec<String> {
+    let mut wrap = vec![HomeSection {
+        id: String::new(),
+        title: String::new(),
+        kind: "album".to_string(),
+        hint: String::new(),
+        endpoint: String::new(),
+        items: std::mem::take(cards),
+    }];
+    let missing = crate::artwork_qt::attach_cached(&mut wrap);
+    *cards = wrap.pop().map(|s| s.items).unwrap_or_default();
+    missing
+}
+
 /// Serialize + push the three tab documents onto the home bridge.
 pub(crate) fn publish(sections: &DiscoverSections) {
     let home_json = serde_json::to_string(&sections.home).unwrap_or_else(|_| "[]".to_string());
@@ -765,7 +800,7 @@ pub(crate) fn map_album(album: DiscoverAlbum) -> HomeCard {
 /// Map a Discover playlist into a single-cover card (1:1 home.rs
 /// `map_playlist`): landscape `rectangle` preferred, first square cover
 /// fallback; first tag -> UPPERCASE category subtag.
-fn map_playlist(p: DiscoverPlaylist) -> HomeCard {
+pub(crate) fn map_playlist(p: DiscoverPlaylist) -> HomeCard {
     let art_url = p
         .image
         .rectangle
@@ -908,7 +943,7 @@ pub(crate) fn quality_detail_from_parts(bit_depth: Option<u32>, sample_rate: Opt
 // ---------------------------------------------------------------------------
 
 /// Flat-Album card mapping (foryou.rs `map_album`).
-fn map_flat_album(album: Album) -> HomeCard {
+pub(crate) fn map_flat_album(album: Album) -> HomeCard {
     let year = album
         .release_date_original
         .as_deref()
@@ -932,6 +967,12 @@ fn map_flat_album(album: Album) -> HomeCard {
         year,
         quality_tier,
         quality_label,
+        // The list arm's QualityBadgeFull renders the bare exact-quality
+        // line; without it a list row shows the tier label over a blank.
+        quality_detail: quality_detail_from_parts(
+            album.maximum_bit_depth,
+            album.maximum_sampling_rate,
+        ),
         art_url: album.image.best().cloned().unwrap_or_default(),
         ..HomeCard::default()
     }
@@ -939,7 +980,7 @@ fn map_flat_album(album: Album) -> HomeCard {
 
 /// Map one recently-played album (local history) onto a card. The stored ISO
 /// release date is localized here exactly as the discover cards do.
-fn map_recent_album(a: crate::recently_qt::RecentAlbum) -> HomeCard {
+pub(crate) fn map_recent_album(a: crate::recently_qt::RecentAlbum) -> HomeCard {
     HomeCard {
         is_pinned: crate::sidebar_qt::is_pinned("album", &a.id),
         id: a.id,

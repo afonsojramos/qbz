@@ -380,6 +380,13 @@ impl qbz_shell::QbzShell {
         // 1:1 Slint (`ShellState.cycle-sidebar` -> persist-sidebar-state): the
         // state survives the relaunch instead of snapping back to open.
         crate::settings_qt::set_sidebar_state(next);
+        // state.slint:4094-4096 — the Large dock lives in the open sidebar, so
+        // collapsing falls back to New. LIVE only: this is the generated
+        // property setter, never npb_set_mode, which would persist the fallback
+        // and lose the user's Large preference.
+        if next != 0 && *self.npb_mode() == 3 {
+            self.as_mut().set_npb_mode(0);
+        }
     }
 
     pub fn toggle_queue(mut self: Pin<&mut Self>) {

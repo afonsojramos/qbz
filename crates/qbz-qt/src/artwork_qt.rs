@@ -476,7 +476,15 @@ pub fn scaled_path(path: &str, w: u32, h: u32) -> Option<std::path::PathBuf> {
         return Some(out);
     }
 
-    let img = image::open(src).ok()?;
+    // The artwork cache stores files as `.img` — `image::open` guesses the
+    // format from the EXTENSION and fails on it, which is why not one
+    // derivative was ever produced. Sniff the content instead.
+    let img = image::ImageReader::open(src)
+        .ok()?
+        .with_guessed_format()
+        .ok()?
+        .decode()
+        .ok()?;
     // Upscaling would only cost bytes — hand back the source instead.
     if img.width() <= w && img.height() <= h {
         return Some(std::path::PathBuf::from(src));

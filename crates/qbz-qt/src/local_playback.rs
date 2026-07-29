@@ -91,8 +91,19 @@ pub fn local_queue_track(t: &LocalTrack) -> QueueTrack {
         } else {
             None
         },
-        context_kind: Some("local".to_string()),
-        context_id: Some(t.album_group_key.clone()),
+        // NO container origin. `"local"` is a kind the Slint never emits and
+        // nothing consumes: `playback.rs`'s own `local_queue_track`
+        // (:1478-1481) leaves both fields None and lets the per-track ALBUM
+        // fallback in `refresh_now_playing_meta` (:1959-1965) land the glyph on
+        // the LocalAlbum view. Leaving it stamped also defeated the shared
+        // seam — `stamp_context`'s already-stamped test is satisfied by
+        // ("local", key), so routing these queues through `set_queue_stamped`
+        // would have preserved the invented kind instead of deriving a real
+        // one. Post-change: a single-album local queue derives ("album",
+        // group_key); a folder / Tracks-tab queue spanning albums derives
+        // nothing and falls back per track to the same key.
+        context_kind: None,
+        context_id: None,
     }
 }
 
@@ -250,7 +261,10 @@ async fn play_rows(runtime: &Runtime, tracks: Vec<LocalTrack>, start: usize, shu
         runtime.core().set_shuffle(true).await;
         crate::now_playing::set_shuffle(true);
     }
-    runtime.core().set_queue(queue, Some(start)).await;
+    // Through the SHARED seam (not `core().set_queue`) so the origin is derived
+    // from the queue: one album -> ("album", group_key), a mixed folder queue ->
+    // nothing, and the per-track album fallback lands it on the same view.
+    crate::playback_qt::set_queue_stamped(runtime, queue, Some(start), None).await;
     crate::playback_qt::publish_queue(runtime).await;
     play_audible(runtime, &first).await;
     crate::playback_qt::refresh_now_playing(runtime).await;
@@ -349,7 +363,12 @@ pub async fn enqueue(runtime: &Runtime, kind: String, id: String, mode: String) 
     if tracks.is_empty() {
         return;
     }
-    let queue: Vec<QueueTrack> = tracks.iter().map(local_queue_track).collect();
+    // Same stamping seam the Qobuz enqueue paths use, so an appended local
+    // block carries its own origin instead of inheriting whatever is playing.
+    let queue = crate::playback_qt::stamped(
+        tracks.iter().map(local_queue_track).collect(),
+        None,
+    );
     // Same core helpers the Qobuz rows use: "next" inserts at the cursor
     // (reversed so a multi-track insert keeps its order), "later" appends to
     // the block tail, anything else appends.

@@ -140,7 +140,19 @@ QtObject {
     readonly property int headerHeight: 42
     // Three-state sidebar rendered widths (ShellState.sidebar-rendered-width).
     readonly property int sidebarOpenWidth: 240
-    readonly property int sidebarMiniWidth: 64
+    // Mini rail — DELIBERATE deviation from state.slint:4075 (64px), owner
+    // request: the 64px rail read as a wide empty gutter around a 32px row.
+    // rail = spacingSm + row + spacingSm, so the square mini row exactly
+    // fills the 8px-padded track (Sidebar.qml root padding = Sidebar.slint:
+    // 716-718). REVERT is TWO tokens, not one: putting 64 back here also
+    // makes sidebarMiniRow 48, so the rows would grow from 34 to 48 and stop
+    // matching Slint — set sidebarMiniRow to a literal 34 at the same time.
+    // (Adversarial review caught this comment claiming a one-token revert.)
+    readonly property int sidebarMiniWidth: 50
+    // The square row inside that rail (34px). Rows are `width: parent.width`,
+    // so this is only their HEIGHT; it exists as a token so the rail and the
+    // row can never drift apart.
+    readonly property int sidebarMiniRow: sidebarMiniWidth - 2 * spacingSm
     // Right queue/lyrics column width (AppShell).
     readonly property int queuePanelWidth: 300
     // Small now-playing bar total height (ShellState.npb-small-height,

@@ -45,6 +45,12 @@ Rectangle {
     property bool isPinned: false
     // Source badge (Library show-local): "local" | "plex" | "" (hidden).
     property string source: ""
+    // Local play count — rendered as the muted "{} plays" line under the
+    // artist, and ONLY there (discover/AlbumCard.slint:508-513). Every
+    // surface but Most Played Albums publishes 0, which is why that page's
+    // card is 286px tall and every other one is 266px: this line IS the
+    // 20px difference.
+    property int plays: 0
 
     // --- Local Library mode (additive; default = the Qobuz behaviour) ----
     // The Local Library mounts THIS card, but its `albumId` is a group key
@@ -69,7 +75,9 @@ Rectangle {
     QbzTheme { id: theme }
 
     width: 200
-    height: 246
+    // 246 normally; +20 for the "{} plays" line (see `plays`) — the same
+    // 266 -> 286 step MostPlayedAlbumsView.slint:23 takes for its grid.
+    height: 246 + (root.plays > 0 ? 20 : 0)
     color: "transparent"
 
     readonly property bool overlayOn: artArea.containsMouse || pinArea.containsMouse
@@ -340,7 +348,7 @@ Rectangle {
         // --- Title / artist + quality badge ------------------------------
         Row {
             width: 200
-            height: 40
+            height: 40 + (root.plays > 0 ? 20 : 0)
             spacing: theme.spacingSm
             Column {
                 width: parent.width - (qBadge.visible ? qBadge.width + theme.spacingSm : 0)
@@ -389,6 +397,17 @@ Rectangle {
                         cursorShape: root.artistId !== "" ? Qt.PointingHandCursor : Qt.ArrowCursor
                         onClicked: if (root.artistId !== "") QbzArtist.openArtist(root.artistId)
                     }
+                }
+                // Play count — Most Played Albums only (see `plays`).
+                Text {
+                    visible: root.plays > 0
+                    width: parent.width
+                    height: visible ? 18 : 0
+                    text: QbzSession.tr("{} plays", QbzSession.trRev).replace("{}", root.plays)
+                    color: theme.textMuted
+                    font.pixelSize: theme.fontLegal
+                    verticalAlignment: Text.AlignVCenter
+                    elide: Text.ElideRight
                 }
             }
             // Icon-only quality badge (QualityBadge.slint).

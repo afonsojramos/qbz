@@ -161,7 +161,13 @@ Rectangle {
                 : QbzShell.currentView === "artist" ? "../views/ArtistView.qml"
                 : QbzShell.currentView === "settings" ? "../settings/SettingsView.qml"
                 : QbzShell.currentView === "search" ? "../views/SearchView.qml"
-                : QbzShell.currentView === "playlist" ? "../views/PlaylistView.qml" : ""
+                : QbzShell.currentView === "playlist" ? "../views/PlaylistView.qml"
+                : QbzShell.currentView === "discoverbrowse" ? "../views/DiscoverBrowseView.qml"
+                : QbzShell.currentView === "playlistbrowse" ? "../views/PlaylistBrowseView.qml"
+                : QbzShell.currentView === "recentalbums" ? "../views/PlayHistoryView.qml"
+                : QbzShell.currentView === "mostplayedalbums" ? "../views/PlayHistoryView.qml"
+                : QbzShell.currentView === "label" ? "../views/LabelView.qml"
+                : QbzShell.currentView === "labelreleases" ? "../views/LabelReleasesView.qml" : ""
         }
     }
 

@@ -17,12 +17,16 @@
 //    and NO ⋯ menu on a label card, so the overlay row carries exactly one
 //    disc (open) instead of the artist's follow/play/more triplet.
 //
-// The label landing page is out of scope — there is no openLabel on the Qt
-// bridge. Rather than keep an open affordance that does nothing, the card
-// DISABLES it while `hasLabelViewSeam` is false: no overlay disc, no
-// pointing-hand cursor, no hover scrim, no accent on the title. The tile
-// still renders 1:1; it just does not pretend to be clickable. Flip the
-// constant and fill `openLabel()` when the label view lands.
+// The label landing page LANDED (qml/views/LabelView.qml +
+// src/label_qt.rs), so `hasLabelViewSeam` is now true and every open path
+// on this card — body, overlay disc, title — funnels through
+// `QbzHome.openLabel(id)`. That also un-deadens the Library > Labels grid,
+// which mounts this same card (LibraryView.qml:1191).
+//
+// The constant STAYS, deliberately: it is the one switch that turns the
+// card's whole open affordance (overlay disc, pointing-hand cursor, hover
+// scrim, title accent) on and off together, so the card can never drift
+// back into looking clickable while doing nothing.
 //
 // item contract: { id, title, subtitle, imageUrl } plus the
 // host-resolved artSource string prop. The artwork is driven by
@@ -50,9 +54,8 @@ Rectangle {
 
     QbzTheme { id: theme }
 
-    // No label view on the Qt bridge — see the header. Everything that would
-    // navigate is gated on this.
-    readonly property bool hasLabelViewSeam: false
+    // Everything that navigates is gated on this — see the header.
+    readonly property bool hasLabelViewSeam: true
 
     // No logo URL -> the indigo/violet glyph arm (the Slint condition).
     readonly property bool noLogo: !root.item.imageUrl
@@ -63,7 +66,10 @@ Rectangle {
     function openLabel() {
         if (!root.hasLabelViewSeam)
             return
-        // GLUE NEEDED: QbzBridge/QbzArtist has no openLabel(labelId).
+        var id = (root.item && root.item.id) ? String(root.item.id) : ""
+        if (id === "")
+            return
+        QbzHome.openLabel(id)
     }
 
     implicitWidth: 200

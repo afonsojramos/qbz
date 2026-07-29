@@ -23,9 +23,18 @@
 //  (src/recommendations_qt.rs), LAZY-loaded the first time the tab becomes
 //  visible, and the tab itself is gated on the persisted showRecommendations
 //  pref exactly as in Slint.
-// - Card clicks / hover actions (play / favorite / more / pin) and
-//  "View all" / context menus are inert — album/artist pages, playback
-//  and per-user stores are later phases.
+// - "View all" is LIVE. WHICH rails carry the link is decided HERE, per
+//  TAB, by `viewAllKind()` — not in Rust: `home_qt::assemble()` clones ONE
+//  candidate list into all three tab documents, and Slint's For You arm for
+//  `recentlyPlayedAlbums` has NO link (ForYouView.slint:117-126) while
+//  Home's does (HomeView.slint:411). Stamping the decision on the shared
+//  candidate would leak the link onto For You. The four destinations:
+//    endpoint != ""       -> DiscoverBrowse for that /discover/<module>
+//    qobuzPlaylists       -> PlaylistBrowse   (Home + Editor's Picks only)
+//    recentlyPlayedAlbums -> Recently Played  (Home only, non-placeholder)
+//    mostPlayedAlbums     -> Most Played      (Home + For You)
+// - Card clicks / hover actions (play / favorite / more / pin) are live;
+//  context menus follow each card's own seam constants.
 // - The offline mount mirrors AppShell's ADR-010 seam: OfflineState.offline
 //  -> the OfflinePlaceholder replica (exact msgids).
 
@@ -79,19 +88,13 @@ Rectangle {
     }
 
     // --- shared genre filter, "discover" context -------------------------
-    // Read STRAIGHT off the bridge singleton, not off genrePopup: the popup
-    // is declared LAST (z-order) and a creation-time binding that
-    // dereferences a not-yet-created id registers NO dependency, so it would
-    // never re-evaluate. The popup instance is only touched from click
-    // handlers, which run long after creation.
-    readonly property var genreDoc: {
-        try {
-            return JSON.parse(QbzBridge.genreFilterJson)
-        } catch (e) {
-            return {}
-        }
-    }
-    readonly property int genreCount: (genreDoc.counts || {})["discover"] || 0
+    // The badge lives in controls/BrowseGenreButton.qml now (the browse
+    // pages draw the same control). It reads QbzBridge.genreFilterJson
+    // STRAIGHT off the bridge singleton, never off genrePopup: the popup is
+    // declared LAST (z-order) and a creation-time binding that dereferences
+    // a not-yet-created id registers NO dependency, so it would never
+    // re-evaluate. The popup instance is only touched from click handlers,
+    // which run long after creation.
 
     // --- skeleton pulse ---------------------------------------------------
     // ONE 900ms Timer drives EVERY placeholder in this view (QbzSkeleton's
@@ -142,13 +145,68 @@ Rectangle {
         onTriggered: root.skelPhase = !root.skelPhase
     }
 
+    // ============================ "View all" ==============================
+
+    /// Which full-list page a rail's "View all" opens on THIS tab, or "" for
+    /// no link. Read the header note for why the decision lives here.
+    ///   "discover"  -> DiscoverBrowse for `section.endpoint`
+    ///   "playlists" -> PlaylistBrowse
+    ///   "recent"    -> Recently Played Albums
+    ///   "mostplayed"-> Most Played Albums
+    function viewAllKind(s, tab) {
+        if (!s)
+            return ""
+        // Generic album carousels + both mostStreamed variants: the section
+        // carries the /discover endpoint the page pages through.
+        if ((s.endpoint || "") !== "")
+            return "discover"
+        // HomeView.slint:355 mounts the playlist arm on the Home AND Editor's
+        // Picks repeater; discover_prefs has no qobuzPlaylists entry for For
+        // You, so this only ever fires on the two tabs that render it.
+        if (s.id === "qobuzPlaylists" && (tab === "home" || tab === "editorPicks"))
+            return "playlists"
+        // Home only (ForYouView.slint's arm has no show-view-all), and never
+        // on the empty-history placeholder (kind "recentPlaceholder").
+        if (s.id === "recentlyPlayedAlbums" && tab === "home" && s.kind === "album")
+            return "recent"
+        // HomeView.slint:506 AND ForYouView.slint:152 — both tabs.
+        if (s.id === "mostPlayedAlbums")
+            return "mostplayed"
+        return ""
+    }
+
+    /// The page title, when it differs from the rail title. Only the slim
+    /// "Most Streamed" rail does: it is titled "Popular albums" on Home but
+    /// HomeView.slint:466 hard-codes @tr("Most Streamed") for the page.
+    function viewAllTitle(s) {
+        if (s.id === "mostStreamed")
+            return QbzSession.tr("Most Streamed", QbzSession.trRev)
+        return s.title || ""
+    }
+
+    function openViewAll(s, tab) {
+        var kind = root.viewAllKind(s, tab)
+        if (kind === "discover")
+            QbzHome.openDiscoverBrowse(s.endpoint || "", root.viewAllTitle(s))
+        else if (kind === "playlists")
+            QbzHome.openPlaylistBrowse()
+        else if (kind === "recent")
+            QbzHome.openRecentAlbums()
+        else if (kind === "mostplayed")
+            QbzHome.openMostPlayedAlbums()
+    }
+
     // ============================ shared components =======================
 
     // Circular page-control button (Carousel's NavButton).
     // Horizontal album rail (Carousel.slint): header + clipped ListView,
     // page chevrons (per-page step like the Slint paging).
     component AlbumRail: Column {
+        id: albumRail
         property var sectionData: ({})
+        /// Which Discover tab is rendering this rail — the "View all"
+        /// decision is per tab (see viewAllKind).
+        property string tabId: "home"
         width: parent ? parent.width : 0
         spacing: 12
 
@@ -159,10 +217,14 @@ Rectangle {
         QbzSectionHeader {
             title: sectionData.title
             leftEnabled: rail.contentX > 1
-            rightEnabled: rail.contentX < maxScroll - 1
-            showViewAll: (sectionData.endpoint || "") !== ""
-            onPageLeft: rail.contentX = Math.min(0, rail.contentX - step)
-            onPageRight: rail.contentX = Math.min(maxScroll, rail.contentX + step)
+            rightEnabled: rail.contentX < albumRail.maxScroll - 1
+            showViewAll: root.viewAllKind(albumRail.sectionData, albumRail.tabId) !== ""
+            onViewAllClicked: root.openViewAll(albumRail.sectionData, albumRail.tabId)
+            // Math.MIN here paged LEFT to a permanent 0 (the chevron looked
+            // enabled and did nothing once contentX passed the first step);
+            // PinnedRail:408 and SlimGrid:341 both use max.
+            onPageLeft: rail.contentX = Math.max(0, rail.contentX - albumRail.step)
+            onPageRight: rail.contentX = Math.min(albumRail.maxScroll, rail.contentX + albumRail.step)
         }
         Item {
             width: parent.width
@@ -323,6 +385,7 @@ Rectangle {
     component SlimGrid: Column {
         id: sgrid
         property var sectionData: ({})
+        property string tabId: "home"
         // true = the rows are TRACKS (click plays), false = ALBUMS (click opens).
         property bool tracks: false
         width: parent ? parent.width : 0
@@ -337,7 +400,8 @@ Rectangle {
             title: sectionData.title
             leftEnabled: grid.contentX > 1
             rightEnabled: grid.contentX < sgrid.maxScroll - 1
-            showViewAll: (sectionData.endpoint || "") !== ""
+            showViewAll: root.viewAllKind(sgrid.sectionData, sgrid.tabId) !== ""
+            onViewAllClicked: root.openViewAll(sgrid.sectionData, sgrid.tabId)
             onPageLeft: grid.contentX = Math.max(0, grid.contentX - grid.width)
             onPageRight: grid.contentX = Math.min(sgrid.maxScroll, grid.contentX + grid.width)
         }
@@ -580,7 +644,11 @@ Rectangle {
     // The section-rails renderer (one per Discover tab — the tab bodies
     // differ only in WHICH sections doc they mount).
     component SectionRails: Column {
+        id: rails
         property var sectionsModel: []
+        /// "home" | "editorPicks" | "forYou" | "recommendations" — forwarded
+        /// to every rail so its "View all" resolves per tab.
+        property string tabId: "home"
         width: parent ? parent.width : 0
         spacing: 40
 
@@ -588,6 +656,7 @@ Rectangle {
             model: sectionsModel
             delegate: Loader {
                 required property var modelData
+                property string railTab: rails.tabId
                 width: parent ? parent.width : 0
                 sourceComponent: modelData.kind === "album" ? albumRailComp
                     : modelData.kind === "playlist" ? playlistRailComp
@@ -605,28 +674,48 @@ Rectangle {
                 }
                 Component {
                     id: albumRailComp
-                    AlbumRail { sectionData: parent.sectionData }
+                    AlbumRail { sectionData: parent.sectionData; tabId: parent.railTab }
                 }
                 Component {
                     id: playlistRailComp
                     Column {
+                        id: plRail
                         property var sectionData: parent.sectionData
+                        property string tabId: parent.railTab
                         width: parent ? parent.width : 0
                         spacing: 12
-                        Text {
-                            text: sectionData.title
-                            color: theme.textPrimary
-                            font.pixelSize: theme.fontSection
-                            font.weight: theme.weightSemibold
+
+                        readonly property int perPage: Math.max(1, Math.floor((plList.width + 32) / 232))
+                        readonly property int step: perPage * 232
+                        readonly property real maxScroll: Math.max(0, plList.contentWidth - plList.width)
+
+                        // The rail used to draw a bare Text: no chevrons (so
+                        // a 40-playlist rail's tail was unreachable) and no
+                        // "View all". PlaylistCarousel.slint:109-115 has both.
+                        // POC-NOTE: the Slint arm ALSO puts a PlaylistTagFilter
+                        // on this title line (HomeView.slint:360-374) and shows
+                        // @tr("No playlists match the selected categories.")
+                        // when the tags filter everything out. Neither is
+                        // ported here — the tag filter DOES exist on the
+                        // PlaylistBrowse page this link opens.
+                        QbzSectionHeader {
+                            title: plRail.sectionData.title
+                            leftEnabled: plList.contentX > 1
+                            rightEnabled: plList.contentX < plRail.maxScroll - 1
+                            showViewAll: root.viewAllKind(plRail.sectionData, plRail.tabId) !== ""
+                            onViewAllClicked: root.openViewAll(plRail.sectionData, plRail.tabId)
+                            onPageLeft: plList.contentX = Math.max(0, plList.contentX - plRail.step)
+                            onPageRight: plList.contentX = Math.min(plRail.maxScroll, plList.contentX + plRail.step)
                         }
                         ListView {
+                            id: plList
                             width: parent.width
                             height: 246
                             orientation: ListView.Horizontal
                             spacing: 32
                             clip: true
                             boundsBehavior: Flickable.StopAtBounds
-                            model: sectionData.items
+                            model: plRail.sectionData.items
                             delegate: PlaylistCard {
                                 item: modelData
                                 artSource: modelData.artPath || ""
@@ -636,32 +725,44 @@ Rectangle {
                 }
                 Component {
                     id: slimGridComp
-                    SlimGrid { sectionData: parent.sectionData }
+                    SlimGrid { sectionData: parent.sectionData; tabId: parent.railTab }
                 }
                 Component {
                     id: trackGridComp
-                    SlimGrid { sectionData: parent.sectionData; tracks: true }
+                    SlimGrid { sectionData: parent.sectionData; tabId: parent.railTab; tracks: true }
                 }
                 Component {
                     id: artistRailComp
                     Column {
+                        id: arRail
                         property var sectionData: parent.sectionData
                         width: parent ? parent.width : 0
                         spacing: 12
-                        Text {
-                            text: sectionData.title
-                            color: theme.textPrimary
-                            font.pixelSize: theme.fontSection
-                            font.weight: theme.weightSemibold
+
+                        readonly property int perPage: Math.max(1, Math.floor((arList.width + 32) / 232))
+                        readonly property int step: perPage * 232
+                        readonly property real maxScroll: Math.max(0, arList.contentWidth - arList.width)
+
+                        // ArtistCarousel.slint:141-147 pages with chevrons; a
+                        // bare Text left the tail of an 18-artist rail
+                        // unreachable. No "View all" — the Slint artist arms
+                        // (topArtists / artistsToFollow) carry none.
+                        QbzSectionHeader {
+                            title: arRail.sectionData.title
+                            leftEnabled: arList.contentX > 1
+                            rightEnabled: arList.contentX < arRail.maxScroll - 1
+                            onPageLeft: arList.contentX = Math.max(0, arList.contentX - arRail.step)
+                            onPageRight: arList.contentX = Math.min(arRail.maxScroll, arList.contentX + arRail.step)
                         }
                         ListView {
+                            id: arList
                             width: parent.width
                             height: 246
                             orientation: ListView.Horizontal
                             spacing: 32
                             clip: true
                             boundsBehavior: Flickable.StopAtBounds
-                            model: sectionData.items
+                            model: arRail.sectionData.items
                             delegate: ArtistCard {
                                 item: modelData
                                 artSource: modelData.artPath || ""
@@ -777,49 +878,14 @@ Rectangle {
                 height: 32
                 spacing: 6
 
-                // GenreButton — accent fill + "N genres" while the shared
-                // "discover" selection is non-empty (1:1 Slint).
-                Rectangle {
-                    id: genreBtn
-                    readonly property bool active: root.genreCount > 0
-                    width: genreRow.width
-                    height: 32
-                    radius: 6
-                    color: genreBtn.active ? theme.accent
-                         : genreArea.containsMouse ? theme.surfaceHover : theme.surfaceElevated
-                    Row {
-                        id: genreRow
-                        height: parent.height
-                        leftPadding: 12
-                        rightPadding: 14
-                        spacing: 7
-                        QbzIcon {
-                            name: "list-filter"
-                            width: 14
-                            height: 14
-                            anchors.verticalCenter: parent.verticalCenter
-                            tintName: genreBtn.active ? "primary" : "secondary"
-                        }
-                        Text {
-                            text: root.genreCount === 0
-                                ? QbzSession.tr("Filter by genre", QbzSession.trRev)
-                                : root.genreCount === 1
-                                    ? QbzSession.tr("1 genre", QbzSession.trRev)
-                                    : QbzSession.tr("{} genres", QbzSession.trRev)
-                                        .replace("{}", root.genreCount)
-                            color: genreBtn.active ? theme.accentText : theme.textSecondary
-                            font.pixelSize: 13
-                            font.weight: genreBtn.active ? theme.weightMedium : theme.weightRegular
-                            anchors.verticalCenter: parent.verticalCenter
-                        }
-                    }
-                    MouseArea {
-                        id: genreArea
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: genrePopup.toggle()
-                    }
+                // GenreButton — now the SHARED controls/BrowseGenreButton
+                // (the browse pages draw the same control; this was a
+                // verbatim copy of it). HomeView.slint:85 is the 32px
+                // variant, BrowseHeaderTools.slint:108 the 34px one.
+                BrowseGenreButton {
+                    context: "discover"
+                    btnHeight: 32
+                    onClicked: genrePopup.toggle()
                 }
 
                 // GearButton — per-tab show/hide + reorder of the Discover
@@ -937,7 +1003,7 @@ Rectangle {
                     }
 
                     // Section rails.
-                    SectionRails { sectionsModel: root.sections }
+                    SectionRails { sectionsModel: root.sections; tabId: "home" }
                 }
 
                 // ===== Editor's Picks (phase 13) ========================
@@ -949,7 +1015,7 @@ Rectangle {
                         visible: QbzHome.homeLoading && root.editorSections.length === 0
                         phase: root.skelPhase
                     }
-                    SectionRails { sectionsModel: root.editorSections }
+                    SectionRails { sectionsModel: root.editorSections; tabId: "editorPicks" }
                 }
 
                 // ===== For You (phase 13) =================================
@@ -961,7 +1027,7 @@ Rectangle {
                         visible: QbzHome.homeLoading && root.forYouSections.length === 0
                         phase: root.skelPhase
                     }
-                    SectionRails { sectionsModel: root.forYouSections }
+                    SectionRails { sectionsModel: root.forYouSections; tabId: "forYou" }
                 }
 
                 // ===== Recommendations (external reco engine) =============
@@ -998,7 +1064,7 @@ Rectangle {
                     // Rails resolve progressively — a row that is still
                     // building, or whose service is not connected, is simply
                     // ABSENT from the document (never an empty frame).
-                    SectionRails { sectionsModel: root.recoSections }
+                    SectionRails { sectionsModel: root.recoSections; tabId: "recommendations" }
 
                     // Nothing built and nothing in flight: the Slint empty
                     // state, verbatim msgids.

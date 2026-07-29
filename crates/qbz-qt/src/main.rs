@@ -54,6 +54,8 @@ mod local_bulk;
 mod local_ephemeral;
 mod local_album_actions;
 mod nav_qt;
+mod browse_qt;
+mod label_qt;
 mod now_playing;
 mod output_labels;
 mod quality_state;

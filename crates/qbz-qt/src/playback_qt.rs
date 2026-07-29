@@ -95,7 +95,6 @@ impl PlayContext {
         Self::new("artist", id)
     }
 
-    #[allow(dead_code)] // used once the playlist play path routes through here
     pub fn playlist(id: &str) -> Option<Self> {
         Self::new("playlist", id)
     }
@@ -138,6 +137,13 @@ fn derive_context(tracks: &[QueueTrack]) -> Option<PlayContext> {
         }
     }
 
+    // ORDER IS DELIBERATE — album before artist. Do not flip it: a one-album
+    // queue (the common case: an album play whose producer forgot to stamp)
+    // legitimately wants the ALBUM origin, and an artist page's Popular Tracks
+    // only reach the artist arm because they span albums. Producers that know
+    // better (playlist / artist page / label) pass an EXPLICIT context and
+    // never depend on this order — this is the safety net for the next
+    // producer someone adds, not the primary mechanism.
     if one_album {
         if let Some(id) = album {
             return PlayContext::album(id);
@@ -185,15 +191,43 @@ pub(crate) async fn set_queue_stamped(
     context: Option<PlayContext>,
 ) {
     stamp_context(&mut tracks, context);
+    warn_dead_context(&tracks, "set_queue");
     runtime.core().set_queue(tracks, start).await;
 }
 
 /// Same guarantee for the ADD paths (play-next / add-to-queue): appended tracks
 /// carry their own origin, so the glyph stays right after the queue advances
 /// into them.
-fn stamped(mut tracks: Vec<QueueTrack>, context: Option<PlayContext>) -> Vec<QueueTrack> {
+///
+/// `pub(crate)` on purpose: the local/ephemeral/bulk enqueue paths live in
+/// other modules and must be able to reach the SAME stamping seam — a private
+/// helper is what forced them to hand-roll their context in the first place.
+pub(crate) fn stamped(mut tracks: Vec<QueueTrack>, context: Option<PlayContext>) -> Vec<QueueTrack> {
     stamp_context(&mut tracks, context);
+    warn_dead_context(&tracks, "enqueue");
     tracks
+}
+
+/// Tripwire: a track with NEITHER a container origin NOR an album id publishes
+/// `ctx-id == ""` (refresh_now_playing's fallback has nothing to fall back to),
+/// which renders the song-card layers glyph as a dead control. Nothing in the
+/// current producer set can hit this — the point is that the NEXT producer
+/// someone adds says so in the log instead of shipping an inert button.
+fn warn_dead_context(tracks: &[QueueTrack], site: &str) {
+    let dead = tracks
+        .iter()
+        .filter(|t| {
+            t.context_id.as_deref().unwrap_or("").is_empty()
+                && t.album_id.as_deref().unwrap_or("").is_empty()
+        })
+        .count();
+    if dead > 0 {
+        log::warn!(
+            "[qbz-qt] playback context: {dead}/{} track(s) reached {site} with no context AND no \
+             album id — their 'playing from' glyph will be inert",
+            tracks.len(),
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -391,6 +425,16 @@ pub async fn play_artist(runtime: &Arc<AppRuntime<LoggingAdapter>>, artist_id: &
     Ok(())
 }
 
+/// LOCAL/Plex album keys must NEVER reach `fetch_album_queue` — `get_album`
+/// 404s on a group key, the play returns Err and the card does nothing.
+/// Mirrors the Slint guard inside `("album","play")` (qbz/src/main.rs:11871,
+/// helper `is_local_album_key` at :2630-2632), which exists precisely because
+/// Home "Recently played" / Pinned / Most-Played rails mix local rows into a
+/// Qobuz card. Every album entry point below tests this FIRST.
+fn is_local_album(album_id: &str) -> bool {
+    crate::library_qt::is_local_album_key(album_id)
+}
+
 /// "Play next" / "Add to queue" for an album (AlbumCard ⋯ menu): resolve
 /// the album's tracks and insert them after the current track (mode
 /// "next") or append them (mode "later").
@@ -399,6 +443,17 @@ pub async fn enqueue_album(
     album_id: &str,
     mode: &str,
 ) -> Result<(), String> {
+    if is_local_album(album_id) {
+        log::info!("[qbz-qt] enqueue_album {album_id}: local/Plex group key -> local path");
+        crate::local_playback::enqueue(
+            runtime,
+            "album".to_string(),
+            album_id.to_string(),
+            mode.to_string(),
+        )
+        .await;
+        return Ok(());
+    }
     let tracks = stamped(
         fetch_album_queue(runtime, album_id).await?,
         PlayContext::album(album_id),
@@ -432,6 +487,15 @@ pub async fn play_album_from(
     album_id: &str,
     start_index: usize,
 ) -> Result<(), String> {
+    if is_local_album(album_id) {
+        // The local path owns its own queue building + audible step. The start
+        // INDEX is not expressible there (it takes a row id) — every caller
+        // that reaches here does so with 0 (`play_album`), and the row-anchored
+        // variant is `play_album_from_track` below, which does pass the id.
+        log::info!("[qbz-qt] play_album {album_id}: local/Plex group key -> local path");
+        crate::local_playback::play_album(runtime, album_id.to_string(), None, false).await;
+        return Ok(());
+    }
     log::info!("[qbz-qt] play_album: resolving {album_id} (start {start_index})");
     let tracks = fetch_album_queue(runtime, album_id).await?;
     let start = start_index.min(tracks.len() - 1);
@@ -457,6 +521,17 @@ pub async fn play_album_from_track(
     album_id: &str,
     track_id: u64,
 ) -> Result<(), String> {
+    if is_local_album(album_id) {
+        log::info!("[qbz-qt] play_album_from_track {album_id}: local/Plex group key -> local path");
+        crate::local_playback::play_album(
+            runtime,
+            album_id.to_string(),
+            Some(track_id as i64),
+            false,
+        )
+        .await;
+        return Ok(());
+    }
     let tracks = fetch_album_queue(runtime, album_id).await?;
     let start = tracks.iter().position(|t| t.id == track_id).unwrap_or(0);
     let first_id = tracks[start].id;
@@ -522,12 +597,52 @@ pub async fn enqueue_track_list(
     runtime: &Arc<AppRuntime<LoggingAdapter>>,
     tracks: Vec<QueueTrack>,
 ) -> Result<(), String> {
+    enqueue_track_list_mode(runtime, tracks, "queue").await
+}
+
+/// `enqueue_track_list` with the three insertion modes the row/card menus use,
+/// mirroring `enqueue_album`: "next" inserts at the cursor (fed REVERSED so a
+/// multi-track insert keeps its order), "later" appends to the manual block's
+/// tail, anything else appends.
+///
+/// Exists because ArtistView's ⋯ menu has BOTH "Play all next" and "Add all to
+/// queue" and the port wired them to the same append (the Slint arm for
+/// `next-all` is `enqueue_artist_top_selected(.., next: true)`, main.rs:15301).
+pub async fn enqueue_track_list_mode(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    tracks: Vec<QueueTrack>,
+    mode: &str,
+) -> Result<(), String> {
     if tracks.is_empty() {
         return Err("empty track list".to_string());
     }
-    runtime.core().add_tracks(stamped(tracks, None)).await;
+    let tracks = stamped(tracks, None);
+    match mode {
+        "next" => {
+            for track in tracks.into_iter().rev() {
+                runtime.core().add_track_next(track).await;
+            }
+        }
+        "later" => {
+            for track in tracks {
+                runtime.core().add_track_later(track).await;
+            }
+        }
+        _ => runtime.core().add_tracks(tracks).await,
+    }
     publish_queue(runtime).await;
     Ok(())
+}
+
+/// ArtistView ⋯ "Play all next" / "Add all to queue" — the whole body, so the
+/// invokable in `player_bridge.rs` can call it without a `main.rs` shim (see
+/// GLUE in the report).
+pub async fn enqueue_artist_top_mode(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    mode: &str,
+) -> Result<(), String> {
+    let (queue, _) = crate::artist_qt::top_queue(None);
+    enqueue_track_list_mode(runtime, queue, mode).await
 }
 
 /// One track from an album context into the queue ("Play next" / "Add to
@@ -538,6 +653,20 @@ pub async fn enqueue_album_track(
     track_id: u64,
     mode: &str,
 ) -> Result<(), String> {
+    if is_local_album(album_id) {
+        // One LOCAL row: the local enqueue resolves it by row id (the cached
+        // Tracks page / open detail / library.db), so the group key is only
+        // used here to decide the route.
+        log::info!("[qbz-qt] enqueue_album_track {album_id}/{track_id}: local/Plex -> local path");
+        crate::local_playback::enqueue(
+            runtime,
+            "track".to_string(),
+            track_id.to_string(),
+            mode.to_string(),
+        )
+        .await;
+        return Ok(());
+    }
     let tracks = fetch_album_queue(runtime, album_id).await?;
     let Some(track) = tracks.into_iter().find(|t| t.id == track_id) else {
         return Err(format!("track {track_id} not in album {album_id}"));
@@ -611,14 +740,94 @@ fn feed_queue_track(track_id: u64) -> Result<QueueTrack, String> {
     })
 }
 
-/// Play a single track as a one-element queue (Library track rows). The
-/// queue meta is rebuilt from the Library feed row; the audio resolves by
-/// id through the same `play_track_resolved` path.
+/// Catalog fallback for a track the Library feed does NOT hold — Search rows
+/// and the search hero, Home's "Recently played tracks" rail, anything reached
+/// by id from a view that keeps no full `Track`. This is the Qt port of the
+/// Slint's last resort, `playback.rs::play_track_now` (:3242-3283): fetch the
+/// track and build its one-row queue from the response. Context is left
+/// unstamped exactly like the Slint — a bare track play falls back to its own
+/// album in `refresh_now_playing`.
+async fn catalog_queue_track(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    track_id: u64,
+) -> Result<QueueTrack, String> {
+    let track = runtime
+        .core()
+        .get_track(track_id)
+        .await
+        .map_err(|e| format!("get_track {track_id} failed: {e}"))?;
+    let (album_id, album_title, album_artwork) = match track.album.as_ref() {
+        Some(album) => (
+            album.id.clone(),
+            album.title.clone(),
+            album.image.best().cloned().unwrap_or_default(),
+        ),
+        None => (String::new(), String::new(), String::new()),
+    };
+    let album_key = if album_id.is_empty() {
+        None
+    } else {
+        Some(album_id.clone())
+    };
+    Ok(QueueTrack {
+        id: track.id,
+        title: track.title.clone(),
+        version: track.version.clone(),
+        artist: track
+            .performer
+            .as_ref()
+            .map(|p| p.name.clone())
+            .unwrap_or_default(),
+        album: album_title,
+        album_version: None,
+        duration_secs: track.duration as u64,
+        artwork_url: if album_artwork.is_empty() {
+            None
+        } else {
+            Some(album_artwork)
+        },
+        hires: track.hires,
+        bit_depth: track.maximum_bit_depth,
+        sample_rate: track.maximum_sampling_rate,
+        is_local: false,
+        album_id: album_key.clone(),
+        artist_id: track.performer.as_ref().map(|p| p.id),
+        streamable: track.streamable,
+        source: Some("qobuz".to_string()),
+        parental_warning: track.parental_warning,
+        source_item_id_hint: album_key,
+        context_kind: None,
+        context_id: None,
+    })
+}
+
+/// One queue row for a bare track id: the Library feed first (free, already
+/// resolved), the catalog second. Before the fallback existed, every entry
+/// point outside the Library feed — search rows, the search hero, Home's
+/// Recently-Played-Tracks rail — returned Err here and rendered a control that
+/// did nothing.
+async fn queue_track_for(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    track_id: u64,
+) -> Result<QueueTrack, String> {
+    match feed_queue_track(track_id) {
+        Ok(qt) => Ok(qt),
+        Err(feed_miss) => {
+            log::debug!("[qbz-qt] {feed_miss}; resolving from the catalog");
+            catalog_queue_track(runtime, track_id).await
+        }
+    }
+}
+
+/// Play a single track as a one-element queue (Library track rows, Search
+/// rows/hero, Home's Recently-Played-Tracks rail). The queue meta comes from
+/// the Library feed row when it has one and from `get_track` otherwise; the
+/// audio resolves by id through the same `play_track_resolved` path.
 pub async fn play_single_track(
     runtime: &Arc<AppRuntime<LoggingAdapter>>,
     track_id: u64,
 ) -> Result<(), String> {
-    let qt = feed_queue_track(track_id)?;
+    let qt = queue_track_for(runtime, track_id).await?;
     // Bare single-track play: no container origin, so the derive falls to the
     // track's own album — same landing spot as the Slint fallback.
     set_queue_stamped(runtime, vec![qt], Some(0), None).await;
@@ -641,7 +850,7 @@ pub async fn enqueue_single_track(
     track_id: u64,
     mode: &str,
 ) -> Result<(), String> {
-    let qt = stamped(vec![feed_queue_track(track_id)?], None)
+    let qt = stamped(vec![queue_track_for(runtime, track_id).await?], None)
         .pop()
         .expect("one track in, one track out");
     match mode {

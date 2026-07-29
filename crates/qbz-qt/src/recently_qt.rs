@@ -214,9 +214,13 @@ pub(crate) fn record(track: RecentTrack) {
 /// recorded here shows title / artist / artwork / quality and no genre-date
 /// overlay line — never a wrong one.
 ///
-/// GLUE: call from the DE-DUPED playback track-change edge, next to
-/// `integrations_qt::on_track_change_edge` — see the handoff.
-#[allow(dead_code)]
+/// WIRED: called from the DE-DUPED playback track-change edge in
+/// `playback_qt::start_poll_loop`, next to
+/// `integrations_qt::on_track_change_edge`. Both this rail and the "Most
+/// Played Albums" rail therefore contain LOCAL and PLEX rows (the album play
+/// history stores `source` verbatim and never filters on it), which is why
+/// every album play/enqueue entry point has to route a group key to the local
+/// path instead of `get_album` — see `playback_qt::is_local_album`.
 pub(crate) fn record_queue_track(track: &qbz_models::QueueTrack) {
     let tier = crate::home_qt::quality_tier_from_depth(track.bit_depth);
     let detail = crate::home_qt::quality_detail_from_parts(track.bit_depth, track.sample_rate);

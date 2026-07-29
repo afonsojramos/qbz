@@ -253,9 +253,22 @@ fn row_to_queue(row: &PlaylistTrackRow) -> QueueTrack {
         source: Some("qobuz".to_string()),
         parental_warning: row.explicit,
         source_item_id_hint: None,
-        context_kind: Some("playlist".to_string()),
+        // A ROW does not know which playlist it belongs to. Stamping a kind
+        // here with no id was a HALF-stamp: `refresh_now_playing`'s
+        // both-or-album match (playback_qt.rs, the port of playback.rs:1959)
+        // discards a kind without an id, so every playlist play — card, rail,
+        // header, row — published the ALBUM glyph. The origin is stamped where
+        // the playlist id is in scope instead (`open_context` / `queue_for`).
+        context_kind: None,
         context_id: None,
     }
+}
+
+/// The OPEN playlist as a playback origin (header Play / Shuffle / row play).
+/// None when no playlist is open or its id is empty — an empty context must
+/// never be stamped.
+fn open_context() -> Option<crate::playback_qt::PlayContext> {
+    with_doc(|d| crate::playback_qt::PlayContext::playlist(&d.id)).flatten()
 }
 
 /// The playlist's tracks as a playable queue (play-all / shuffle / enqueue).
@@ -840,7 +853,15 @@ pub async fn play_playlist_by_id(
     playlist_id: u64,
 ) -> Result<(), String> {
     let tracks = queue_for(runtime, playlist_id).await?;
-    play_queue_at(runtime, tracks, 0).await
+    // The card path has NO open doc — the origin comes from the id it was
+    // asked to play, not from `open_context()`.
+    play_queue_at(
+        runtime,
+        tracks,
+        0,
+        crate::playback_qt::PlayContext::playlist(&playlist_id.to_string()),
+    )
+    .await
 }
 
 /// Card menu queueing: the whole playlist after the current track ("next"
@@ -851,7 +872,14 @@ pub async fn enqueue_playlist_by_id(
     playlist_id: u64,
     mode: &str,
 ) -> Result<(), String> {
-    let tracks = queue_for(runtime, playlist_id).await?;
+    // Appended rows carry their OWN origin, so the glyph stays right once the
+    // queue advances into them (the Slint leaves its enqueue paths unstamped —
+    // playback.rs:4323/:4400 — which is why an enqueued playlist there shows
+    // the album; stamping is the strict improvement, same landing page shape).
+    let tracks = crate::playback_qt::stamped(
+        queue_for(runtime, playlist_id).await?,
+        crate::playback_qt::PlayContext::playlist(&playlist_id.to_string()),
+    );
     match mode {
         "next" => {
             for track in tracks.into_iter().rev() {
@@ -920,16 +948,23 @@ pub async fn add_tracks(runtime: &Arc<AppRuntime<LoggingAdapter>>, playlist_id: 
 // Playback (play-all / shuffle / row play / row enqueue)
 // ---------------------------------------------------------------------------
 
+/// Every play in this module funnels here, and it goes through the SHARED
+/// stamping seam (`playback_qt::set_queue_stamped`) rather than
+/// `core().set_queue` — bypassing it was the second half of the lost-context
+/// bug: even a correctly stamped queue would have been fine, but an unstamped
+/// one got no derive either.
 async fn play_queue_at(
     runtime: &Arc<AppRuntime<LoggingAdapter>>,
     tracks: Vec<QueueTrack>,
     start: usize,
+    context: Option<crate::playback_qt::PlayContext>,
 ) -> Result<(), String> {
     if tracks.is_empty() {
         return Err("playlist has no playable tracks".to_string());
     }
+    let start = start.min(tracks.len() - 1);
     let first_id = tracks[start].id;
-    runtime.core().set_queue(tracks, Some(start)).await;
+    crate::playback_qt::set_queue_stamped(runtime, tracks, Some(start), context).await;
     crate::queue_qt::publish(runtime).await;
     runtime
         .core()
@@ -943,7 +978,7 @@ async fn play_queue_at(
 /// Header Play: the playlist's tracks (current sort) from the top.
 pub async fn play_all(runtime: &Arc<AppRuntime<LoggingAdapter>>) -> Result<(), String> {
     let tracks = current_queue();
-    play_queue_at(runtime, tracks, 0).await
+    play_queue_at(runtime, tracks, 0, open_context()).await
 }
 
 /// Header Shuffle: shuffle on, then play (the core queue owns the order —
@@ -958,7 +993,7 @@ pub async fn play_shuffled(runtime: &Arc<AppRuntime<LoggingAdapter>>) -> Result<
 pub async fn play_track(runtime: &Arc<AppRuntime<LoggingAdapter>>, track_id: &str) -> Result<(), String> {
     let start = with_doc(|d| d.tracks.iter().position(|t| t.id == track_id)).flatten();
     let tracks = current_queue();
-    play_queue_at(runtime, tracks, start.unwrap_or(0)).await
+    play_queue_at(runtime, tracks, start.unwrap_or(0), open_context()).await
 }
 
 /// Row ⋯ queueing: one playlist track into the EXISTING queue
@@ -971,7 +1006,9 @@ pub async fn enqueue_track(
     let row = with_doc(|d| d.tracks.iter().find(|t| t.id == track_id).cloned())
         .flatten()
         .ok_or_else(|| format!("track {track_id} not in the open playlist"))?;
-    let qt = row_to_queue(&row);
+    let qt = crate::playback_qt::stamped(vec![row_to_queue(&row)], open_context())
+        .pop()
+        .expect("one row in, one row out");
     match mode {
         "next" => runtime.core().add_track_next(qt).await,
         "later" => runtime.core().add_track_later(qt).await,

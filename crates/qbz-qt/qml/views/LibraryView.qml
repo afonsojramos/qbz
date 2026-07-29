@@ -132,6 +132,45 @@ Rectangle {
     property string albumsSort: "default" // default|title-asc|title-desc|artist-asc
     property string playlistsSubTab: "favorites"
 
+    // ONE shared per-tab query, reset on entry — that IS the reference.
+    // In Slint every entry into one of the five tabs runs
+    // navigate_favorites -> load_favorites -> apply_favorites, which assigns
+    // "" to that tab's search (favorites.rs:570/595/614/627/649) AND, because
+    // the ExpandableSearch lives inside an `if` branch, destroys and
+    // re-creates it COLLAPSED. So a tab is never re-entered with a stale
+    // filter and five independent queries would be wrong. The port has one
+    // feed and no per-tab reload, so the reset is explicit here.
+    // The All tab is deliberately NOT reset: LibraryAllState.search is never
+    // cleared anywhere in the reference, so its feed stays filtered behind a
+    // collapsed magnifier — quirk included.
+    onActiveTabChanged: {
+        tabSearch = ""
+        if (tabSearchBox) tabSearchBox.closeSearch()
+    }
+
+    // Per-tab emptiness gate. Slint gates each per-tab toolbar (search AND
+    // genre/sort/sub-tab/view toggles) on the tab's FULL loaded set
+    // (FavoritesView.slint:593/636/707/722/747) — searching down to zero
+    // results must NOT hide it, so this counts the feed and never
+    // visibleItems(). Same keep-rules as visibleItems() minus the playlists
+    // sub-tab split, which makes the playlists count the favorites-OR-
+    // following the reference gate wants (counts.playlists is favorites
+    // only, library_qt.rs:479).
+    readonly property var tabTotals: {
+        var c = { "tracks": 0, "albums": 0, "artists": 0, "playlists": 0, "labels": 0 }
+        for (var i = 0; i < feed.length; i++) {
+            var it = feed[i]
+            if (it.kind === "track") { if (it.group === "favorites") c.tracks++ }
+            else if (it.kind === "album") { if (it.group === "favorites") c.albums++ }
+            else if (it.kind === "artist") c.artists++
+            else if (it.kind === "label") c.labels++
+            else if (it.kind === "playlist") c.playlists++
+        }
+        return c
+    }
+    readonly property bool tabHasItems:
+        activeTab === "all" || (tabTotals[activeTab] || 0) > 0
+
     // ------------------------- derive (JS) ------------------------------
     function visibleItems() {
         var items = []
@@ -286,6 +325,15 @@ Rectangle {
         windowDebounce.restart()
     }
 
+    // All-tab search settle -> re-report the first window so the filtered
+    // head gets covers. Lives at ROOT scope (its callee already does) so it
+    // survives the search control it used to be parented to.
+    Timer {
+        id: allSearchDebounce
+        interval: 250
+        onTriggered: root.queueWindowReport(0, 59)
+    }
+
     // ============================ components =============================
 
     // Segmented tab (SegmentedTabBar's Segment) with count badge.
@@ -360,49 +408,9 @@ Rectangle {
         }
     }
 
-    // Toolbar search box (ExpandableSearch sm replica, fixed width).
-    component SearchBox: Rectangle {
-        property string placeholder: ""
-        property alias text: edit.text
-        signal searchEdited()
-        width: 220
-        height: 30
-        radius: 6
-        color: theme.surfaceElevated
-        border.width: 1
-        border.color: theme.borderSubtle
-        Row {
-            anchors.fill: parent
-            anchors.leftMargin: 9
-            anchors.rightMargin: 9
-            spacing: 6
-            QbzIcon {
-                name: "search"
-                width: 13
-                height: 13
-                anchors.verticalCenter: parent.verticalCenter
-                tintName: "muted"
-            }
-            TextInput {
-                id: edit
-                width: parent.width - 19
-                height: parent.height
-                color: theme.textPrimary
-                font.pixelSize: 13
-                verticalAlignment: Text.AlignVCenter
-                clip: true
-                onTextEdited: searchEdited()
-                Text {
-                    visible: edit.text === ""
-                    anchors.fill: parent
-                    text: placeholder
-                    color: theme.textMuted
-                    font.pixelSize: 13
-                    verticalAlignment: Text.AlignVCenter
-                }
-            }
-        }
-    }
+    // (The inline toolbar SearchBox is gone — both toolbars now mount the
+    // shared controls/QbzLineEdit in its expandable arm, which IS
+    // primitives/ExpandableSearch.slint 1:1.)
 
     // Card heart (live favorite toggle).
 
@@ -768,16 +776,19 @@ Rectangle {
                     visible: root.activeTab === "all"
                     spacing: 8
                     height: parent.height
-                    SearchBox {
+                    // FavoritesView.slint:801-813 — collapsed magnifier that
+                    // opens LEFT over the tab bar; the All tab is the only
+                    // one that debounces after the keystroke.
+                    QbzLineEdit {
+                        searchMode: true
+                        expandable: true
+                        sm: true
+                        elevated: false          // ExpandableSearch fill = surface-card
+                        openWidth: 196           // = max-open-width
                         placeholder: QbzSession.tr("Search your library", QbzSession.trRev)
-                        onSearchEdited: {
-                            root.search = text
+                        onEdited: function (v) {
+                            root.search = v
                             allSearchDebounce.restart()
-                        }
-                        Timer {
-                            id: allSearchDebounce
-                            interval: 250
-                            onTriggered: root.queueWindowReport(0, 59)
                         }
                     }
                     // Source switches (tooltips are the Slint copies).
@@ -892,14 +903,27 @@ Rectangle {
                 }
 
                 // ===== Other-tab toolbars =====
-                SearchBox {
-                    visible: root.activeTab !== "all"
+                // ONE instance for the five tabs: the reference clears the
+                // query on every tab entry (see onActiveTabChanged), so
+                // per-tab instances would only implement a persistence that
+                // does not exist. A Row skips `visible: false` children, so
+                // the 30px slot appears/disappears cleanly and, because the
+                // ROOT width never leaves collapsedSize while the field
+                // opens, nothing to its right ever moves.
+                QbzLineEdit {
+                    id: tabSearchBox
+                    visible: root.activeTab !== "all" && root.tabHasItems
+                    searchMode: true
+                    expandable: true
+                    sm: true
+                    elevated: false
+                    openWidth: 196
                     placeholder: QbzSession.tr("Search", QbzSession.trRev)
-                    onSearchEdited: root.tabSearch = text
+                    onEdited: function (v) { root.tabSearch = v }
                 }
                 // Albums sort popup (real, JS-side).
                 Rectangle {
-                    visible: root.activeTab === "albums"
+                    visible: root.activeTab === "albums" && root.tabHasItems
                     width: albumsSortRow.width
                     height: 30
                     radius: 6
@@ -958,7 +982,7 @@ Rectangle {
                 }
                 // Playlists sub-tab (Library / Following).
                 Rectangle {
-                    visible: root.activeTab === "playlists"
+                    visible: root.activeTab === "playlists" && root.tabHasItems
                     width: plSubRow.width
                     height: 30
                     radius: 6

@@ -1,8 +1,24 @@
 // Left navigation sidebar — QML port of crates/qbz-ui/ui/shell/Sidebar.slint.
 //
 // Three states (ShellState.sidebar-state): 0 = open 240px (icon + label),
-// 1 = mini 64px (icons only), 2 = closed 0px. Width animates 160ms
-// ease-in-out; the header's panel-left button cycles (QbzShell.cycleSidebar).
+// 1 = mini (icons only), 2 = closed 0px. Width animates 160ms ease-in-out;
+// the header's panel-left button cycles (QbzShell.cycleSidebar).
+//
+// MINI RAIL: the rail is 50px here, not Slint's 64 — a deliberate,
+// one-token owner deviation (theme.sidebarMiniWidth) so the square 34px row
+// exactly fills the 8px-padded track. Everything else in the mini state is
+// 1:1 with Slint: rows centre their lone glyph, nested playlist rows
+// collapse to zero, hovering a row names it in a bubble to the right
+// (SidebarTooltip.slint) and clicking a FOLDER opens its playlists in a
+// flyout to the right (SidebarFolderPopup.slint) — in mini a folder cannot
+// expand in place, so a toggle there would be a control that does nothing.
+//
+// FILE LENGTH (>500): the two mini affordances above are shared single
+// instances declared at this root (never one Popup per row), which is what
+// keeps them cheap; they are extraction candidates into
+// qml/shell/SidebarFolderFlyout.qml, but a new .qml also needs a build.rs
+// entry and an unregistered type fails the WHOLE file at load, so they stay
+// here until that glue lands.
 //
 // Top-level section nav rows (Discover / Library / Local Library / My QBZ)
 // replicate SidebarNavRow: 34px rows, radius 6, 16px icons, 13px/w500
@@ -93,6 +109,260 @@ Rectangle {
     // this root's `clip` nor its 240px width can cut it off.
     NavFlyout { id: navFlyout }
 
+    // ---- Collapsed (mini) affordances -----------------------------------
+    // In the mini rail a playlist row is an icon and nothing else, so the two
+    // things the open sidebar gives for free have to be restored:
+    //   - the NAME, as a hover bubble to the row's right (SidebarTooltip.slint);
+    //   - a folder's CONTENTS, as a flyout to the row's right, because the
+    //     nested rows are hidden in mini (SidebarFolderPopup.slint).
+    // Both are ONE shared instance driven by the hovered/clicked row (exactly
+    // like Slint's SidebarTooltipState / SidebarFolderPopupState), never one
+    // Popup per delegate: the tree can hold hundreds of rows.
+    // Both are QtQuick.Controls popups, so their content is reparented to the
+    // WINDOW overlay and this root's `clip: true` cannot cut them — the same
+    // reason NavFlyout and HeaderBar's playlists flyout are Popups.
+
+    // Race-safe show/hide (Slint SidebarRow.show-tooltip / hide-tooltip): the
+    // leaving row only clears the bubble if it still owns it, so sliding the
+    // pointer straight from one row to the next never blanks it.
+    function showMiniTip(row, entry) {
+        if (!root.mini) return
+        var p = row.mapToItem(root, row.width + 6, 0)
+        miniTip.anchorX = p.x
+        miniTip.anchorY = p.y
+        miniTip.rowH = row.height
+        miniTip.tipText = entry.kind === "folder"
+            ? entry.name + " (" + entry.count + ")"
+            : entry.name
+        miniTip.ownerId = entry.id
+    }
+    function hideMiniTip(id) {
+        if (miniTip.ownerId === id) miniTip.ownerId = ""
+    }
+
+    // Mini folder click: the flyout, not a toggle (the nested rows are hidden,
+    // so toggling is a control that renders and does nothing — Slint opens the
+    // popup instead, Sidebar.slint:355-377).
+    function openFolderFlyout(row, entry) {
+        folderFlyout.folderId = entry.id
+        folderFlyout.folderName = entry.name
+        folderFlyout.folderCount = entry.count
+        // The children are only present in the published entries while the
+        // folder is EXPANDED. Expand it if it is not — never toggle blindly:
+        // a folder left open before the sidebar collapsed would be CLOSED by a
+        // toggle and the flyout would list nothing (and while a search query is
+        // active every folder is force-expanded, sidebar_qt.rs:299).
+        if (!entry.expanded) QbzShell.sidebarToggleFolder(entry.id)
+        var p = row.mapToItem(root, row.width + 6, 0)
+        folderFlyout.x = p.x
+        folderFlyout.y = p.y
+        folderFlyout.open()
+    }
+
+    // Cycling the sidebar while either is open would leave it floating over a
+    // rail that no longer exists (the bubble self-hides through `root.mini`;
+    // the flyout needs telling).
+    Connections {
+        target: QbzShell
+        function onSidebarStateChanged() {
+            folderFlyout.close()
+            miniTip.ownerId = ""
+        }
+    }
+
+    // Hover bubble — SidebarTooltip.slint: surface-elevated, radius sm, 1px
+    // border-muted, 10/10/5/5 padding, 12px w500 text-primary, VISUAL ONLY
+    // (a ToolTip never takes the pointer, so it cannot block the row it
+    // describes).
+    ToolTip {
+        id: miniTip
+        property string ownerId: ""
+        property string tipText: ""
+        property real anchorX: 0
+        property real anchorY: 0
+        property real rowH: 32
+
+        // Auto-hides the moment the sidebar leaves mini (SidebarTooltip
+        // .slint:14) or the folder flyout takes over the same +6px slot
+        // (Slint drops it explicitly on click, Sidebar.slint:353).
+        visible: root.mini && ownerId !== "" && !folderFlyout.visible
+        delay: 0
+        timeout: -1
+        padding: 0
+        x: anchorX
+        y: anchorY + Math.round((rowH - implicitHeight) / 2)
+        contentItem: Text {
+            text: miniTip.tipText
+            color: theme.textPrimary
+            font.pixelSize: 12
+            font.weight: theme.weightMedium
+            verticalAlignment: Text.AlignVCenter
+            leftPadding: 10
+            rightPadding: 10
+            topPadding: 5
+            bottomPadding: 5
+        }
+        background: Rectangle {
+            color: theme.surfaceElevated
+            radius: theme.radiusSm
+            border.width: 1
+            border.color: theme.borderMuted
+        }
+    }
+
+    // Folder flyout — SidebarFolderPopup.slint: 230px, 30px header row +
+    // hairline + up to four 32px rows, 4px inner padding, surface-main /
+    // radius sm / 1px border-muted.
+    Popup {
+        id: folderFlyout
+        width: 230
+        padding: 0
+        topPadding: 4
+        bottomPadding: 4
+        // Slint's literal panel height (34 + 1 + list + 8) — 4px taller than
+        // the content, kept 1:1 rather than tightened.
+        height: 34 + 1 + folderFlyout.visibleRows * 32 + 8
+        // Replaces Slint's full-window scrim TouchArea (SidebarFolderPopup
+        // .slint:56-60); the Popup's own background swallows clicks inside,
+        // so no hand-built scrim and no click-through.
+        closePolicy: Popup.CloseOnPressOutside | Popup.CloseOnEscape
+
+        property string folderId: ""
+        property string folderName: ""
+        property int folderCount: 0
+
+        // The rows are a BINDING over the published entries, never a snapshot
+        // read inside the click handler: sidebarToggleFolder republishes
+        // sidebarJson through the cxx-qt UI queue (shell_bridge.rs::ui ->
+        // CxxQtThread::queue), so the children land a LATER event-loop turn.
+        // Reading `root.entries` at click time would open an empty panel.
+        readonly property var rows: root.entries.filter(function (e) {
+            return e.kind !== "folder" && e.folderId === folderFlyout.folderId
+        })
+        // Height off the folder's own count (known at click time) so the panel
+        // does not resize when the children land a tick later.
+        readonly property int visibleRows:
+            Math.min(Math.max(folderFlyout.folderCount, folderFlyout.rows.length), 4)
+
+        background: Rectangle {
+            color: theme.surfaceMain
+            radius: theme.radiusSm
+            border.width: 1
+            border.color: theme.borderMuted
+        }
+        contentItem: Column {
+            spacing: 0
+
+            // Header — folder name (30px, 12px side padding, 14px accent
+            // folder-open glyph, 13px/600 text-primary).
+            Item {
+                width: parent.width
+                height: 30
+                Row {
+                    anchors.fill: parent
+                    anchors.leftMargin: 12
+                    anchors.rightMargin: 12
+                    spacing: 8
+                    QbzIcon {
+                        name: "folder-open"
+                        width: 14
+                        height: 14
+                        anchors.verticalCenter: parent.verticalCenter
+                        tintName: "accent"
+                    }
+                    Text {
+                        width: parent.width - 22
+                        height: parent.height
+                        text: folderFlyout.folderName
+                        color: theme.textPrimary
+                        font.pixelSize: 13
+                        font.weight: theme.weightSemibold
+                        verticalAlignment: Text.AlignVCenter
+                        elide: Text.ElideRight
+                    }
+                }
+            }
+            Rectangle {
+                width: parent.width
+                height: 1
+                color: theme.borderSubtle
+            }
+
+            // Playlist list — four rows visible, the rest scroll (the shared
+            // QbzScrollBar mounts past four, like Slint's ListScrollbar).
+            Item {
+                width: parent.width
+                height: folderFlyout.visibleRows * 32
+
+                Flickable {
+                    id: fpFlick
+                    anchors.fill: parent
+                    clip: true
+                    contentWidth: width
+                    contentHeight: fpColumn.implicitHeight
+                    boundsBehavior: Flickable.StopAtBounds
+
+                    Column {
+                        id: fpColumn
+                        width: parent.width
+                        Repeater {
+                            model: folderFlyout.rows
+                            delegate: Rectangle {
+                                id: fpRow
+                                required property var modelData
+                                width: fpColumn.width
+                                height: 32
+                                radius: 5
+                                color: fpArea.containsMouse ? theme.surfaceHover : "transparent"
+                                Row {
+                                    anchors.fill: parent
+                                    anchors.leftMargin: 12
+                                    anchors.rightMargin: 12
+                                    spacing: 8
+                                    QbzIcon {
+                                        name: "list-music"
+                                        width: 14
+                                        height: 14
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        tintName: "muted"
+                                    }
+                                    Text {
+                                        width: parent.width - 22
+                                        height: parent.height
+                                        text: fpRow.modelData.name
+                                        color: theme.textSecondary
+                                        font.pixelSize: 13
+                                        verticalAlignment: Text.AlignVCenter
+                                        elide: Text.ElideRight
+                                    }
+                                }
+                                MouseArea {
+                                    id: fpArea
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: {
+                                        root.activePlaylistId = fpRow.modelData.id
+                                        QbzBridge.openPlaylist(fpRow.modelData.id)
+                                        folderFlyout.close()
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                QbzScrollBar {
+                    visible: folderFlyout.folderCount > 4 && fpFlick.contentHeight > fpFlick.height
+                    target: fpFlick
+                    width: 10
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                }
+            }
+        }
+    }
+
     width: QbzShell.sidebarState === 2 ? 0
          : QbzShell.sidebarState === 1 ? theme.sidebarMiniWidth
          : theme.sidebarOpenWidth
@@ -122,7 +392,9 @@ Rectangle {
         readonly property bool lit: isActive || (navArea.containsMouse && isEnabled)
 
         width: parent ? parent.width : 0
-        height: 34
+        // Mini: a SQUARE row that fills the 34px padded track (theme token,
+        // rail 50 - 2*8). Open keeps Slint's 34px (Sidebar.slint:575).
+        height: root.mini ? theme.sidebarMiniRow : 34
         radius: 6
         opacity: isEnabled ? 1.0 : 0.45
         color: lit ? theme.surfaceHover : "transparent"
@@ -521,6 +793,7 @@ Rectangle {
                     Repeater {
                         model: root.entries
                         delegate: Rectangle {
+                            id: plRow
                             required property var modelData
                             property bool isFolder: modelData.kind === "folder"
                             // Slint SidebarRow.use-collage: opt-OUT setting AND
@@ -552,7 +825,15 @@ Rectangle {
                                 function onDragActiveChanged() { recomputeDrop() }
                             }
                             width: plColumn.width
-                            height: root.mini && modelData.indent ? 0 : 32
+                            // Mini: nested rows collapse to nothing (their
+                            // folder opens the flyout instead, Sidebar.slint:
+                            // 213-215), top-level rows become the SAME square
+                            // the nav rows are — a 34px row in a 34px track.
+                            // Slint keeps 32px here; the 2px come from the
+                            // narrower rail (theme.sidebarMiniRow).
+                            height: root.mini
+                                ? (modelData.indent ? 0 : theme.sidebarMiniRow)
+                                : 32
                             visible: !(root.mini && modelData.indent)
                             radius: 6
                             // success-bg + success-border while hot (Theme
@@ -568,18 +849,32 @@ Rectangle {
                                 anchors.rightMargin: root.mini ? 0 : 6
                                 spacing: 8
 
-                                // Leading icon slot (24px fixed).
+                                // Leading icon slot: 24px fixed while open (so
+                                // every row's name starts at the same x), the
+                                // WHOLE row in mini so the lone glyph lands on
+                                // the rail's centre line — Slint gets this from
+                                // `alignment: mini ? center : stretch`
+                                // (Sidebar.slint:230), which a QML Row has no
+                                // equivalent for. Without it the slot is the
+                                // only visible child, sits at x=0, and the
+                                // playlist/folder glyphs render 12px LEFT of
+                                // the nav glyphs above them (owner screenshot).
+                                // Same idiom as NavRow's slot above.
                                 Item {
-                                    width: 24
+                                    width: root.mini ? parent.width : 24
                                     height: parent.height
-                                    // Folder icon (accent).
+                                    // Folder icon (accent). Every glyph in this
+                                    // slot is placed with rounded arithmetic
+                                    // (Sidebar.slint:245-246): `centerIn` of an
+                                    // odd 15px glyph in an even track lands on a
+                                    // half pixel and blurs it.
                                     QbzIcon {
                                         visible: isFolder
                                         name: modelData.expanded && !root.mini ? "folder-open" : "folder"
                                         width: 15
                                         height: 15
-                                        anchors.centerIn: parent
-                                        anchors.horizontalCenterOffset: root.mini ? 0 : -4.5
+                                        x: Math.round((parent.width - width) / 2)
+                                        y: Math.round((parent.height - height) / 2)
                                         tintName: "accent"
                                     }
                                     // 2x2 micro-collage (or list-music glyph).
@@ -587,8 +882,8 @@ Rectangle {
                                         visible: useCollage
                                         width: 20
                                         height: 20
-                                        anchors.centerIn: parent
-                                        anchors.horizontalCenterOffset: root.mini ? 0 : -2
+                                        x: Math.round((parent.width - width) / 2)
+                                        y: Math.round((parent.height - height) / 2)
                                         radius: 3
                                         color: theme.surfaceElevated
                                         clip: true
@@ -613,8 +908,8 @@ Rectangle {
                                         name: "list-music"
                                         width: 15
                                         height: 15
-                                        anchors.centerIn: parent
-                                        anchors.horizontalCenterOffset: root.mini ? 0 : -4.5
+                                        x: Math.round((parent.width - width) / 2)
+                                        y: Math.round((parent.height - height) / 2)
                                         tintName: (rowArea.containsMouse || isActive) ? "primary" : "muted"
                                     }
                                 }
@@ -685,9 +980,24 @@ Rectangle {
                                 anchors.fill: parent
                                 hoverEnabled: true
                                 cursorShape: Qt.PointingHandCursor
+                                // Mini: the row is an icon, so hovering names
+                                // it (Sidebar.slint:342-349). No-op while open.
+                                onContainsMouseChanged: {
+                                    if (containsMouse) root.showMiniTip(plRow, plRow.modelData)
+                                    else root.hideMiniTip(plRow.modelData.id)
+                                }
                                 onClicked: {
+                                    // Slint drops the bubble on click so it
+                                    // does not linger behind the flyout.
+                                    root.hideMiniTip(plRow.modelData.id)
                                     if (isFolder) {
-                                        QbzShell.sidebarToggleFolder(modelData.id)
+                                        // Mini: the nested rows are hidden, so
+                                        // a toggle would change NOTHING on
+                                        // screen — the contents open in a
+                                        // flyout to the right instead
+                                        // (Sidebar.slint:355-377).
+                                        if (root.mini) root.openFolderFlyout(plRow, plRow.modelData)
+                                        else QbzShell.sidebarToggleFolder(modelData.id)
                                     } else {
                                         root.activePlaylistId = modelData.id
                                         QbzBridge.openPlaylist(modelData.id)
@@ -697,7 +1007,10 @@ Rectangle {
                         }
                     }
 
-                    // Empty state.
+                    // Empty state. NOTE: Slint does NOT gate this on mini
+                    // (Sidebar.slint:1077-1082) and word-wraps the sentence
+                    // inside the 48px track; keeping the gate here is a
+                    // deliberate, owner-visible divergence.
                     Text {
                         visible: !root.mini && root.entries.length === 0 && !QbzSession.offline
                         width: plColumn.width
@@ -707,6 +1020,24 @@ Rectangle {
                         wrapMode: Text.WordWrap
                     }
                 }
+            }
+
+            // List scrollbar (Sidebar.slint:1090-1137). The shared
+            // QbzScrollBar — the port's ListScrollbar replica — rather than a
+            // third scrollbar implementation. Two accepted deviations from
+            // the sidebar's bespoke Slint one: it reveals on SCROLL (900ms
+            // auto-hide) instead of on row-hover, and its thumb is the
+            // standard 8/10px instead of the sidebar's thinner 3-6px.
+            // Placed in the sidebar's right PADDING (negative margin), like
+            // Slint's `x: parent.width - width + (mini ? 8 : Spacing.md)`, so
+            // the gutter never overlays the rows and cannot eat their clicks.
+            QbzScrollBar {
+                target: plFlick
+                width: root.mini ? 8 : 10
+                anchors.right: parent.right
+                anchors.rightMargin: -(root.mini ? 8 : theme.spacingMd)
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
             }
         }
     }

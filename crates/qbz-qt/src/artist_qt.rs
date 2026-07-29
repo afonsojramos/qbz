@@ -596,8 +596,24 @@ fn track_row_to_queue(row: &TrackRow) -> QueueTrack {
 }
 
 /// Stash the queue at publish time (called from load_artist_view).
+///
+/// The queue is born STAMPED with the PAGE's artist — playback.rs stamps
+/// ("artist", artist_id) at every artist play path (:2848 Popular, :3108
+/// shuffled, :3170 from-row) and never derives it. Deriving is wrong here in
+/// two ways: `derive_context` returns the shared ALBUM before it ever tests the
+/// artist (so an artist whose Popular Tracks come from one album lands on that
+/// album), and `TrackRow.artist_id` is the track's OWN credited performer
+/// (`map_track`), so a single featured collaboration makes the queue share no
+/// artist and lose its origin entirely. `data.id` is the page id — the thing
+/// the user actually launched.
 fn stash_top_queue(data: &ArtistViewData) {
-    let queue: Vec<QueueTrack> = data.top_tracks.iter().map(track_row_to_queue).collect();
+    let mut queue: Vec<QueueTrack> = data.top_tracks.iter().map(track_row_to_queue).collect();
+    if !data.id.is_empty() {
+        for track in queue.iter_mut() {
+            track.context_kind = Some("artist".to_string());
+            track.context_id = Some(data.id.clone());
+        }
+    }
     *TOP_QUEUE.lock().unwrap() = queue;
 }
 

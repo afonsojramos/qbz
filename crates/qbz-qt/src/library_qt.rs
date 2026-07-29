@@ -688,12 +688,21 @@ async fn fetch_purchases(
     (albums, tracks)
 }
 
-/// Label image — label.rs `extract_label_image`: the nested "square" url.
+/// Label image — 1:1 with the reference `label.rs::extract_label_image`.
+/// The value is flexible: the favorites wire ships a BARE STRING (Android
+/// DTO), `/label/page` ships an object keyed mega/extralarge/large/... .
+/// The string arm must come first — `Value::get(key)` on a string is always
+/// `None`, so without it every favourite label resolved to "" and the card
+/// fell back to the gradient placeholder. The `is_empty` guard is a port
+/// addition (the reference lacks it) and cannot regress the key order.
 fn extract_label_image(image: Option<&serde_json::Value>) -> String {
     let Some(image) = image else {
         return String::new();
     };
-    for key in ["square", "large", "medium", "small", "thumbnail"] {
+    if let Some(url) = image.as_str() {
+        return url.to_string();
+    }
+    for key in ["mega", "extralarge", "large", "thumbnail", "small"] {
         if let Some(url) = image.get(key).and_then(|v| v.as_str()) {
             if !url.is_empty() {
                 return url.to_string();
@@ -794,6 +803,17 @@ pub(crate) fn is_local_feed_id(kind: &str, id: &str) -> bool {
         "album" => id.starts_with("plex:") || id.contains('|') || id.contains('/'),
         _ => false,
     }
+}
+
+/// main.rs `is_local_album_key` (qbz/src/main.rs:2630-2632) — the PLAY / NAV
+/// guard, a SUPERSET of `is_local_feed_id("album", …)`: it also catches the
+/// unknown-album bucket. Deliberately a separate helper: `is_local_feed_id` is
+/// a byte-for-byte port of the Slint's `library_all.rs:874-880` twin and also
+/// decides local-favorites routing, so widening it there would diverge from
+/// its reference AND change which API an album literally titled
+/// `__unknown_album__` hits.
+pub(crate) fn is_local_album_key(id: &str) -> bool {
+    is_local_feed_id("album", id) || id == "__unknown_album__"
 }
 
 /// Flip the favorite flag on the stored feed row (model-of-truth for the
