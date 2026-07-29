@@ -39,6 +39,32 @@ Rectangle {
     implicitWidth: 200
     implicitHeight: 246
 
+    // --- Heart state (a real QML property, never `item.isFavorite`) ------
+    // Identical reasoning to rows/TrackRow.qml: `item` is a plain JS object
+    // copied out of `modelData`, so mutating a field on it fires no notifier
+    // (the glyph never changed) and reaches no model. The binding is
+    // re-established on every new row object so the document stays
+    // authoritative.
+    property bool favorite: root.item.isFavorite === true
+    onItemChanged: root.favorite = Qt.binding(function () {
+        return root.item.isFavorite === true
+    })
+
+    function toggleFavorite() {
+        root.favorite = !root.favorite
+        QbzLibrary.libraryToggleFavorite("track", root.item.id)
+    }
+
+    // Fan-out + rollback (the shape cards/AlbumCard.qml uses for pin).
+    Connections {
+        target: QbzLibrary
+        function onLibraryFavoriteChanged(key, value) {
+            var tid = (root.item && root.item.id !== undefined) ? root.item.id : ""
+            if (tid !== "" && key === "track:" + tid)
+                root.favorite = value
+        }
+    }
+
     Column {
         spacing: 0
         Rectangle {
@@ -82,13 +108,10 @@ Rectangle {
                 shown: root.overlayOn
                 CardOverlayButton {
                     id: favBtn
-                    name: root.item.isFavorite ? "heart-filled" : "heart"
-                    active: root.item.isFavorite
+                    name: root.favorite ? "heart-filled" : "heart"
+                    active: root.favorite
                     anchors.verticalCenter: parent.verticalCenter
-                    onClicked: {
-                        root.item.isFavorite = !root.item.isFavorite
-                        QbzLibrary.libraryToggleFavorite("track", root.item.id)
-                    }
+                    onClicked: root.toggleFavorite()
                 }
                 CardOverlayButton {
                     id: playBtn
@@ -201,8 +224,8 @@ Rectangle {
         ]
         if (root.item.artistId) m.push({ "label": t("Go to artist", r), "icon": "user", "action": "go-artist" })
         if (root.item.albumId) m.push({ "label": t("Go to album", r), "icon": "disc", "action": "go-album" })
-        m.push({ "label": root.item.isFavorite ? t("Remove from Library", r) : t("Add to Library", r),
-                 "icon": root.item.isFavorite ? "heart-filled" : "heart", "action": "favorite" })
+        m.push({ "label": root.favorite ? t("Remove from Library", r) : t("Add to Library", r),
+                 "icon": root.favorite ? "heart-filled" : "heart", "action": "favorite" })
         return m
     }
     function trackAction(a) {
@@ -212,9 +235,6 @@ Rectangle {
         else if (a === "queue") QbzPlayer.enqueueTrack(root.item.id, "queue")
         else if (a === "go-artist") QbzArtist.openArtist(root.item.artistId)
         else if (a === "go-album") QbzAlbum.openAlbum(root.item.albumId)
-        else if (a === "favorite") {
-            root.item.isFavorite = !root.item.isFavorite
-            QbzLibrary.libraryToggleFavorite("track", root.item.id)
-        }
+        else if (a === "favorite") root.toggleFavorite()
     }
 }

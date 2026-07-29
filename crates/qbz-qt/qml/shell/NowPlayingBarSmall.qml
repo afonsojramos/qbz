@@ -62,13 +62,30 @@ Rectangle {
 
     // Favorite state of the now-playing track (Slint:
     // QueueState.now-playing-favorite) — the queue document carries it on its
-    // `current` row; re-parsed only when that document changes.
+    // `current` row; re-parsed only when that document changes. The one-slot
+    // override is the same seam PlayerBar.qml documents: a heart flipped on
+    // another surface for THIS track republishes no queue document, so
+    // without it the bar kept a stale glyph until the track changed.
+    property string favOverrideId: ""
+    property bool favOverrideValue: false
     readonly property bool npFavorite: {
+        if (root.favOverrideId !== "" && root.favOverrideId === QbzPlayer.npTrackId)
+            return root.favOverrideValue
         try {
             var d = JSON.parse(QbzQueue.queueJson)
             return !!(d && d.current && d.current.isFavorite)
         } catch (e) {
             return false
+        }
+    }
+    Connections {
+        target: QbzLibrary
+        function onLibraryFavoriteChanged(key, value) {
+            var id = QbzPlayer.npTrackId
+            if (id !== "" && key === "track:" + id) {
+                root.favOverrideId = id
+                root.favOverrideValue = value
+            }
         }
     }
 

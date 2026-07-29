@@ -153,6 +153,11 @@ where
         crate::local_plex::init_for_user(&dir);
         // Phase 5: local-favorites store (Library show-local + hearts).
         crate::library_qt::init_local_favorites(&dir);
+        // Qobuz favourite-id cache (favorites_cache.db, shared with the Slint
+        // app): the disk seed is what makes album / artist / track / label
+        // hearts correct from first paint — before it, every heart read the
+        // Library feed, which is empty until the Library view is opened.
+        crate::fav_cache_qt::init_for_user(&dir);
         // Phase 7: pinned-items store (AlbumCard pin badges).
         crate::sidebar_qt::init_pinned(&dir);
         // Phase 15: intelligent-search service (cortinilla cache+ranking).
@@ -259,6 +264,8 @@ where
         // this session so the first Local Library read does not have to.
         crate::local_plex::init_for_user(&dir);
                 crate::library_qt::init_local_favorites(&dir);
+                // Qobuz favourite-id cache — see the fresh-login path.
+                crate::fav_cache_qt::init_for_user(&dir);
                 crate::sidebar_qt::init_pinned(&dir);
         // Phase 15: intelligent-search service (cortinilla cache+ranking).
         crate::search_qt::init(&dir, crate::search_qt::intelligent_search_pref());
@@ -329,6 +336,10 @@ where
         crate::local_plex::init_for_user(&dir);
         // Phase 5: local-favorites store (Library show-local + hearts).
         crate::library_qt::init_local_favorites(&dir);
+        // Qobuz favourite-id cache. The disk seed is the ONLY source offline
+        // (no warm can run), which is exactly the gap the reference closes
+        // here too — see `fav_cache::init_for_user` on the offline entry.
+        crate::fav_cache_qt::init_for_user(&dir);
         // Phase 7: pinned-items store (AlbumCard pin badges).
         crate::sidebar_qt::init_pinned(&dir);
         // Phase 15: intelligent-search service (cortinilla cache+ranking).
@@ -344,16 +355,18 @@ where
 /// the Qobuz client session, and tear down the offline-mode per-user state
 /// (which reopens the Qobuz gate so a logged-out user can sign back in).
 ///
-/// POC-NOTE: the Slint logout also tears down the skipped per-user stores
-/// (offline cache, fav_cache, reco, artist vectors, discover prefs,
-/// blacklist, pinned, local favorites, search, lyrics) — nothing to tear
-/// down here since this phase never opens them.
+/// POC-NOTE: the Slint logout also tears down the per-user stores this phase
+/// never opens (offline cache, reco, artist vectors, discover prefs,
+/// blacklist, pinned, local favorites, search, lyrics). The favourite-id
+/// cache IS open now, and it holds the previous user's hearts — dropping it
+/// is not optional, or the next account inherits them.
 pub async fn logout<A>(runtime: &Arc<AppRuntime<A>>) -> Result<(), String>
 where
     A: FrontendAdapter + Send + Sync + 'static,
 {
     let _ = qbz_credentials::clear_oauth_token();
     let _ = runtime.core().logout().await;
+    crate::fav_cache_qt::teardown();
     crate::offline_fwd::teardown();
     runtime.deactivate().await?;
     log::info!("[qbz-qt] logged out");

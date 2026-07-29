@@ -82,10 +82,15 @@ Rectangle {
             radius: 6
             color: theme.surfaceElevated
             clip: true
+            // These rows come from `home_qt::map_playlist` (browse_qt.rs:612),
+            // whose art is the playlist's own `image.rectangle` — 800x380.
+            // `auto` pads that instead of cropping to the middle 47% of it,
+            // and still crops the square `image.covers[0]` fallback.
             RoundedImage {
                 anchors.fill: parent
                 source: root.item.artPath || ""
                 radius: 6
+                fit: "auto"
             }
             QbzIcon {
                 visible: (root.item.artPath || "") === ""

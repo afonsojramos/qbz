@@ -122,7 +122,12 @@ Column {
                     ribbonKind: gcell.modelData.ribbonKind || ""
                     artSource: gcell.modelData.artPath || ""
                     isPinned: gcell.modelData.isPinned === true
-                    isFavorite: false
+                    // Snapshot url the pin payload persists (artPath is the
+                    // local cache path — see AlbumCard.artworkUrl).
+                    artworkUrl: gcell.modelData.artUrl || ""
+                    // Stamped on the row (AlbumCardData / HomeCard); false
+                    // made the glyph lie and inverted the first click.
+                    isFavorite: gcell.modelData.isFavorite === true
                 }
             }
         }
@@ -235,8 +240,9 @@ Column {
                         ribbonKind: cell.modelData.ribbonKind || ""
                         artSource: cell.modelData.artPath || ""
                         isPinned: cell.modelData.isPinned === true
+                        artworkUrl: cell.modelData.artUrl || ""
                         plays: root.showPlays ? (cell.modelData.plays || 0) : 0
-                        isFavorite: false
+                        isFavorite: cell.modelData.isFavorite === true
                     }
                 }
                 Loader {

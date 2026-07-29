@@ -5,9 +5,16 @@
 // Data: QbzHome.homeSectionsJson (one JSON document — see bridge.rs),
 // published by src/home_qt.rs; artwork file:// paths resolve through the
 // qbz-cache image cache. Section kinds: "album" | "playlist" | "slim" |
-// "slimTracks" | "artists" | "pinned" | "mixes" | "recentPlaceholder". Rail
-// ORDER + VISIBILITY follow the persisted Discover prefs (phase 11,
-// discover_prefs.db).
+// "slimTracks" | "artists" | "pinned" | "mixes" | "radio" | "spotlight" |
+// "recentPlaceholder". Rail ORDER + VISIBILITY follow the persisted Discover
+// prefs (phase 11, discover_prefs.db).
+//
+// THREE of those kinds are ORDERING SLOTS with no rows in the document —
+// "pinned", "radio", "spotlight". Their rows travel on their own bridge
+// properties (pinnedJson / radioStationsJson / spotlightJson) so a per-click
+// pin, or the Spotlight's late /artist/page landing, does not republish all
+// three tab documents and tear down every rail's delegates. See
+// src/foryou_qt.rs.
 //
 // POC-NOTEs:
 // - The genre filter (shared GenreFilterPopup, context "discover") and the
@@ -68,6 +75,40 @@ Rectangle {
     // Recommendations (the 4th tab). Lazy: the document stays "[]" until the
     // tab is first shown and src/recommendations_qt.rs publishes into it.
     readonly property var recoSections: JSON.parse(QbzHome.recoSectionsJson)
+    // The Pinned rail's ROWS, on their own property. The three documents
+    // above carry the "pinned" section as an EMPTY ordering slot only (see
+    // home_qt::publish_pinned): a pin is a per-click mutation, and folding
+    // its rows into them meant every click re-parsed all three documents and
+    // rebuilt every rail's delegates — with each rail's horizontal scroll
+    // snapped back to 0. Rebinding THIS re-creates the pinned delegates and
+    // nothing else. 1:1 with the Slint split (descriptor for the position,
+    // the PinnedState global for the rows).
+    readonly property var pinnedItems: {
+        try {
+            return JSON.parse(QbzHome.pinnedJson)
+        } catch (e) {
+            return []
+        }
+    }
+    // For You's two other out-of-document rails — same split, same reason as
+    // `pinnedItems` (src/foryou_qt.rs): the tab documents carry an EMPTY
+    // ordering slot for each and the rows arrive on their own property, so
+    // the Spotlight's late /artist/page landing does not re-create every
+    // rail's delegates on all three tabs.
+    readonly property var radioStations: {
+        try {
+            return JSON.parse(QbzHome.radioStationsJson)
+        } catch (e) {
+            return []
+        }
+    }
+    readonly property var spotlight: {
+        try {
+            return JSON.parse(QbzHome.spotlightJson)
+        } catch (e) {
+            return ({})
+        }
+    }
     property string activeTab: "home"
 
     // Slint gates the 4th tab on the persisted `show_recommendations` pref
@@ -118,15 +159,29 @@ Rectangle {
         : root.activeTab === "recommendations" ? root.recoSections
         : root.sections
     // Cheap "some card in the mounted rails has artUrl but no artPath yet"
-    // probe — recomputed only when a sections document is republished.
+    // probe — recomputed only when a sections document is republished. The
+    // pinned rows are probed too: they no longer travel inside the sections
+    // documents, and without them a freshly pinned card's placeholder would
+    // sit frozen (the pulse Timer runs only while something is pending).
     readonly property bool artPending: root.anyArtPending(root.activeSections)
+        || root.anyItemArtPending(root.pinnedItems)
+        // The two out-of-document For You rails are probed for the same
+        // reason the pinned rows are: without them a Spotlight or Radio tile
+        // waiting for its cover would sit on a FROZEN placeholder, because
+        // the pulse Timer runs only while something is pending.
+        || root.anyItemArtPending(root.radioStations)
+        || root.anyItemArtPending(root.spotlight.albums || [])
     function anyArtPending(model) {
         for (var s = 0; s < model.length; s++) {
-            var items = model[s].items || []
-            for (var i = 0; i < items.length; i++) {
-                if ((items[i].artUrl || "") !== "" && (items[i].artPath || "") === "")
-                    return true
-            }
+            if (root.anyItemArtPending(model[s].items || []))
+                return true
+        }
+        return false
+    }
+    function anyItemArtPending(items) {
+        for (var i = 0; i < items.length; i++) {
+            if ((items[i].artUrl || "") !== "" && (items[i].artPath || "") === "")
+                return true
         }
         return false
     }
@@ -255,9 +310,18 @@ Rectangle {
                         ribbonKind: modelData.ribbonKind
                         artSource: modelData.artPath
                         isPinned: modelData.isPinned
-                        // POC-NOTE: Home hearts are not seeded from fav_cache
-                        // (store not open in the POC); toggles still hit the API.
-                        isFavorite: false
+                        // Snapshot url the pin payload persists (artPath is
+                        // a local cache path — see AlbumCard.artworkUrl).
+                        artworkUrl: modelData.artUrl || ""
+                        // The POC-NOTE that used to sit here ("Home hearts
+                        // are not seeded from fav_cache") is obsolete: the
+                        // store IS open and home_qt stamps `isFavorite` on
+                        // every card row. While it was hardcoded false, a
+                        // Home rail album that IS in the library drew the
+                        // hollow heart, read "Add to Library", and the click
+                        // REMOVED it — the toggle takes its direction from
+                        // the same cache the row is stamped from.
+                        isFavorite: modelData.isFavorite === true
                     }
                     // Per-item artwork placeholder: the grey tile shimmers
                     // until THIS card's cover is ON SCREEN, then dissolves
@@ -454,10 +518,16 @@ Rectangle {
     // Pinned rail (PinnedCarousel.slint) — one 200x246 slot per item, the
     // card picked by the item's own kind: albums reuse AlbumCard, artists
     // render the ArtistGridCard circle, playlists the PlaylistCard square.
-    // Fed from the shared per-user pinned_items.db (home_qt "pinned"
-    // section; most-recent first).
+    // Fed from the shared per-user pinned_items.db (most-recent first).
+    //
+    // `sectionData` supplies ONLY the header (title + the rail's position in
+    // the tab); the rows come from root.pinnedItems — the dedicated
+    // `pinnedJson` property — so a pin/unpin touches this rail and nothing
+    // else in the view.
     component PinnedRail: Column {
+        id: pinRail
         property var sectionData: ({})
+        readonly property var items: root.pinnedItems
         width: parent ? parent.width : 0
         spacing: 12
 
@@ -482,7 +552,7 @@ Rectangle {
                 spacing: 32
                 clip: true
                 boundsBehavior: Flickable.StopAtBounds
-                model: sectionData.items
+                model: pinRail.items
                 delegate: Item {
                     required property var modelData
                     required property int index
@@ -497,23 +567,40 @@ Rectangle {
                             artist: modelData.artist
                             artSource: modelData.artPath || ""
                             isPinned: true
-                            isFavorite: false
+                            // home_qt::pinned_cards stamps the heart per row,
+                            // routed by the row's own item_kind.
+                            isFavorite: modelData.isFavorite === true
+                            // Un-pinning from this rail is fine without it,
+                            // but the glyph is a TOGGLE: re-pinning the row
+                            // the user just dropped must restore the same
+                            // snapshot url, not blank it.
+                            artworkUrl: modelData.artUrl || ""
                         }
                     }
                     Component {
                         id: pArtist
                         ArtistCard {
+                            // The pinned row carries the stored snapshot in
+                            // BOTH `artist` and `subtitle` (home_qt
+                            // `pinned_cards`) precisely so this card and the
+                            // album one can each read their own slot. While
+                            // only `artist` was published, this card drew a
+                            // blank second line — and, because it hands
+                            // `item.subtitle` back to togglePin, re-pinning
+                            // from the rail persisted that blank.
                             item: modelData
                             artSource: modelData.artPath || ""
                             isPinned: true
+                            artworkUrl: modelData.artUrl || ""
                         }
                     }
                     Component {
                         id: pPlaylist
                         PlaylistCard {
-                            // Pinned model: { id, title, artist, artPath,
-                            // isPinned } — artist maps to the subtitle line.
-                            item: Object.assign({}, modelData, { subtitle: modelData.subtitle || modelData.artist || "" })
+                            // Same story as the artist slot above; the card's
+                            // `artworkUrl` default already resolves the row's
+                            // `artUrl` snapshot.
+                            item: modelData
                             artSource: modelData.artPath || ""
                             isPinned: true
                         }
@@ -543,64 +630,30 @@ Rectangle {
         }
     }
 
-    // Qobuz Mixes rail (QobuzMixesRow.slint) — four static 220px
-    // navigation tiles (gradient art + badge + name, description below).
-    // POC-NOTE: the mix DETAIL views are out of scope — tiles are inert.
-    // (Slint's 135° linear gradients are approximated with corner
-    // RadialGradients — QML has no angled linear gradient.)
+    // Qobuz Mixes rail (QobuzMixesRow.slint) — four static 220px navigation
+    // tiles (gradient art + badge + name, description below). The gradient
+    // square itself is the shared cards/MixArtwork.qml, because the mix
+    // LANDING page draws the same four identities at 224px and the colours
+    // must not be able to drift apart (the .slint re-declares them in both
+    // files). Tiles are LIVE: `openMix` records the "mix" nav entry and
+    // fetches — 1:1 with `media-action("mix", which, "open")`.
     component MixTile: Column {
-        property string badge: ""
-        property string mixName: ""
-        property string desc: ""
-        property color c0: "#000000"
-        property color c1: "#000000"
-        property color c2: "#000000"
+        id: mixTile
+        property string kind: "daily"
         spacing: 8
         width: 220
 
-        Rectangle {
-            width: 220
-            height: 220
-            radius: 8
-            gradient: Gradient {
-                GradientStop { position: 0.0; color: c0 }
-                GradientStop { position: 0.5; color: c1 }
-                GradientStop { position: 1.0; color: c2 }
-            }
-            // Fake the 135° sweep with a corner-centered radial overlay.
-            Rectangle {
-                anchors.fill: parent
-                radius: 8
-                gradient: Gradient {
-                    GradientStop { position: 0.0; color: "#00000000" }
-                    GradientStop { position: 1.0; color: "#33000000" }
-                }
-            }
-            Text {
-                x: 12
-                y: 12
-                text: badge
-                color: "#ccffffff"
-                font.pixelSize: 10
-                font.weight: theme.weightSemibold
-                font.letterSpacing: 1
-            }
-            Text {
-                anchors.centerIn: parent
-                text: mixName
-                color: "#ffffff"
-                font.pixelSize: 22
-                font.weight: theme.weightBold
-            }
-            MouseArea {
-                anchors.fill: parent
-                cursorShape: Qt.PointingHandCursor
-                // Inert (mix detail views out of scope).
-            }
+        MixArtwork {
+            id: art
+            kind: mixTile.kind
+            size: 220
+            titleSize: 22
+            cornerRadius: 8
+            onClicked: QbzHome.openMix(mixTile.kind)
         }
         Text {
             width: 220
-            text: desc
+            text: art.tileDescription(mixTile.kind)
             color: theme.textMuted
             font.pixelSize: 12
             wrapMode: Text.WordWrap
@@ -618,25 +671,265 @@ Rectangle {
         }
         Row {
             spacing: 32
-            MixTile {
-                badge: "qobuz"; mixName: "DailyQ"
-                desc: QbzSession.tr("Elevate your day with a customized selection of music.", QbzSession.trRev)
-                c0: "#1e3a8a"; c1: "#6366f1"; c2: "#c084fc"
+            MixTile { kind: "daily" }
+            MixTile { kind: "weekly" }
+            MixTile { kind: "fav" }
+            MixTile { kind: "top" }
+        }
+    }
+
+    // Radio Stations rail (RadioCarousel.slint) — album-seeded radio tiles in
+    // a paged horizontal list with the same chevrons every other rail has.
+    // 200px card + 32px spacing = the 232px pitch the album rails use.
+    //
+    // The rows come from `QbzHome.radioStationsJson`, NOT from `sectionData`:
+    // the section in the tab document is an empty ordering slot (the `pinned`
+    // split — see src/foryou_qt.rs). `sectionData` supplies the title only.
+    component RadioRail: Column {
+        id: radioRail
+        property var sectionData: ({})
+        readonly property var items: root.radioStations
+        width: parent ? parent.width : 0
+        spacing: 12
+
+        readonly property int perPage: Math.max(1, Math.floor((rail.width + 32) / 232))
+        readonly property int step: perPage * 232
+        readonly property real maxScroll: Math.max(0, rail.contentWidth - rail.width)
+
+        QbzSectionHeader {
+            title: radioRail.sectionData.title
+            leftEnabled: rail.contentX > 1
+            rightEnabled: rail.contentX < radioRail.maxScroll - 1
+            onPageLeft: rail.contentX = Math.max(0, rail.contentX - radioRail.step)
+            onPageRight: rail.contentX = Math.min(radioRail.maxScroll, rail.contentX + radioRail.step)
+        }
+        Item {
+            width: parent.width
+            // RadioCarousel.slint:94 — 234, not the album rails' 246 (the
+            // radio card's meta block is one line shorter in the worst case).
+            height: 234
+            ListView {
+                id: rail
+                anchors.fill: parent
+                orientation: ListView.Horizontal
+                spacing: 32
+                clip: true
+                boundsBehavior: Flickable.StopAtBounds
+                model: radioRail.items
+                delegate: Item {
+                    required property var modelData
+                    required property int index
+                    width: 200
+                    height: 234
+
+                    RadioCard {
+                        seedTitle: modelData.title
+                        seedSubtitle: modelData.artist
+                        label: QbzSession.tr("RADIO", QbzSession.trRev)
+                        artSource: modelData.artPath || ""
+                        // Both the card body and the hover disc start the
+                        // album radio (the .slint wires `clicked` and `play`
+                        // to the same callback).
+                        onActivated: QbzHome.startAlbumRadio(modelData.albumId)
+                        onPlayRequested: QbzHome.startAlbumRadio(modelData.albumId)
+                    }
+                    // The card's artwork is an INSET 126px display, so the
+                    // placeholder is that square, not the whole tile.
+                    QbzSkeleton {
+                        variant: "art"
+                        width: 126
+                        height: 126
+                        x: 37
+                        y: 29
+                        blockRadius: 4
+                        pending: (modelData.artUrl || "") !== ""
+                        coverSource: modelData.artPath || ""
+                        phase: root.skelPhase
+                        cellIndex: index
+                        settleMs: 6000
+                    }
+                }
             }
-            MixTile {
-                badge: "qobuz"; mixName: "WeeklyQ"
-                desc: QbzSession.tr("Take a weekly journey with a fresh mix every Friday.", QbzSession.trRev)
-                c0: "#065f46"; c1: "#10b981"; c2: "#fbbf24"
+        }
+    }
+
+    // Spotlight (Spotlight.slint) — one favourite artist: header, a hero
+    // (140px round portrait + ARTIST + name + play / open-artist discs), and
+    // a draggable row mixing a TOP TRACKS card, a RADIO card and the
+    // artist's albums. Rows come from `QbzHome.spotlightJson`; `sectionData`
+    // is the ordering slot only.
+    component SpotlightRail: Column {
+        id: spot
+        property var sectionData: ({})
+        readonly property var doc: root.spotlight
+        readonly property var albums: root.spotlight.albums || []
+        readonly property bool hasTopTracks: root.spotlight.hasTopTracks === true
+        width: parent ? parent.width : 0
+        spacing: 12
+
+        // Header — the .slint hardcodes the pair, not sectionData.title.
+        Column {
+            spacing: 2
+            Text {
+                text: QbzSession.tr("Spotlight", QbzSession.trRev)
+                color: theme.textPrimary
+                font.pixelSize: theme.fontSection
+                font.weight: theme.weightSemibold
             }
-            MixTile {
-                badge: "qbz"; mixName: "FavQ"
-                desc: QbzSession.tr("A fresh shuffle from your personal library.", QbzSession.trRev)
-                c0: "#7f1d1d"; c1: "#ef4444"; c2: "#fb923c"
+            Text {
+                text: QbzSession.tr("Shine a light on one of your favourite artists.", QbzSession.trRev)
+                color: theme.textMuted
+                font.pixelSize: theme.fontLegal
             }
-            MixTile {
-                badge: "qbz"; mixName: "TopQ"
-                desc: QbzSession.tr("Discover new music from your most-played playlists.", QbzSession.trRev)
-                c0: "#1f2937"; c1: "#4b5563"; c2: "#fbbf24"
+        }
+
+        // Hero.
+        Row {
+            spacing: 16
+            Rectangle {
+                width: 140
+                height: 140
+                radius: 70
+                color: theme.surfaceElevated
+                clip: true
+                QbzIcon {
+                    visible: (spot.doc.artPath || "") === ""
+                    name: "user"
+                    width: 40
+                    height: 40
+                    anchors.centerIn: parent
+                    tintName: "muted"
+                }
+                RoundedImage {
+                    anchors.fill: parent
+                    source: spot.doc.artPath || ""
+                    radius: 70
+                }
+                MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: QbzArtist.openArtist(spot.doc.artistId || "")
+                }
+            }
+            Column {
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: 8
+                Text {
+                    visible: (spot.doc.category || "") !== ""
+                    text: QbzSession.tr("ARTIST", QbzSession.trRev)
+                    color: theme.textMuted
+                    font.pixelSize: 10
+                    font.weight: theme.weightSemibold
+                    font.letterSpacing: 1.5
+                }
+                Text {
+                    text: spot.doc.name || ""
+                    color: theme.textPrimary
+                    font.pixelSize: theme.fontTitle
+                    font.weight: theme.weightBold
+                }
+                // Spotlight.slint's local CircleButton is 44px for BOTH
+                // discs (not the shared primitive's 44/32) — a 32px disc next
+                // to the 140px portrait reads wrong, which is presumably why.
+                // QbzCircleAction's size is a plain binding, so a caller can
+                // override it without a new knob on the shared control.
+                Row {
+                    spacing: 10
+                    QbzCircleAction {
+                        visible: spot.hasTopTracks
+                        name: "play-fill"
+                        primary: true
+                        onClicked: QbzHome.playArtistTopTracks(spot.doc.artistId || "")
+                    }
+                    QbzCircleAction {
+                        name: "user"
+                        width: 44
+                        height: 44
+                        onClicked: QbzArtist.openArtist(spot.doc.artistId || "")
+                    }
+                }
+            }
+        }
+
+        Item { width: 1; height: 4 }
+
+        // Content row — one draggable strip, like the other carousels.
+        Item {
+            width: parent.width
+            height: 270
+            ListView {
+                id: spotRow
+                anchors.fill: parent
+                orientation: ListView.Horizontal
+                spacing: 24
+                clip: true
+                boundsBehavior: Flickable.StopAtBounds
+                // The two radio cards are prepended to the album rows, so the
+                // strip is ONE model and the drag/scroll covers all of it (the
+                // .slint puts them in the same HorizontalLayout).
+                model: {
+                    var out = []
+                    if (spot.hasTopTracks)
+                        out.push({ "slot": "top" })
+                    out.push({ "slot": "radio" })
+                    for (var i = 0; i < spot.albums.length; i++)
+                        out.push({ "slot": "album", "album": spot.albums[i] })
+                    return out
+                }
+                delegate: Item {
+                    required property var modelData
+                    required property int index
+                    width: 200
+                    height: 246
+
+                    // The PinnedRail dispatch pattern: Components declared in
+                    // the delegate scope, so `modelData` resolves.
+                    Component {
+                        id: topCard
+                        RadioCard {
+                            seedTitle: QbzSession.tr("Top tracks", QbzSession.trRev)
+                            seedSubtitle: QbzSession.tr("By {}", QbzSession.trRev)
+                                .replace("{}", spot.doc.name || "")
+                            label: QbzSession.tr("TOP TRACKS", QbzSession.trRev)
+                            artSource: spot.doc.artPath || ""
+                            onActivated: QbzHome.playArtistTopTracks(spot.doc.artistId || "")
+                            onPlayRequested: QbzHome.playArtistTopTracks(spot.doc.artistId || "")
+                        }
+                    }
+                    Component {
+                        id: radioSeedCard
+                        RadioCard {
+                            seedTitle: spot.doc.name || ""
+                            seedSubtitle: QbzSession.tr("Qobuz Radio Station", QbzSession.trRev)
+                            label: QbzSession.tr("RADIO", QbzSession.trRev)
+                            artSource: spot.doc.artPath || ""
+                            onActivated: QbzHome.startArtistRadio(spot.doc.artistId || "")
+                            onPlayRequested: QbzHome.startArtistRadio(spot.doc.artistId || "")
+                        }
+                    }
+                    Component {
+                        id: albumCardComp
+                        AlbumCard {
+                            albumId: modelData.album.id
+                            title: modelData.album.title
+                            artist: modelData.album.artist
+                            artistId: modelData.album.artistId
+                            genre: modelData.album.genre
+                            year: modelData.album.year
+                            qualityTier: modelData.album.qualityTier
+                            artSource: modelData.album.artPath || ""
+                            artworkUrl: modelData.album.artUrl || ""
+                            isPinned: modelData.album.isPinned === true
+                            isFavorite: modelData.album.isFavorite === true
+                        }
+                    }
+                    Loader {
+                        anchors.fill: parent
+                        sourceComponent: modelData.slot === "top" ? topCard
+                            : modelData.slot === "radio" ? radioSeedCard
+                            : albumCardComp
+                    }
+                }
             }
         }
     }
@@ -658,6 +951,22 @@ Rectangle {
                 required property var modelData
                 property string railTab: rails.tabId
                 width: parent ? parent.width : 0
+                // The pinned slot is always in the document (it is where the
+                // discover prefs put the rail); it renders only once the
+                // store has rows — the Slint `PinnedState.items.length > 0`
+                // gate. A Column skips invisible children entirely, spacing
+                // included, so an empty pinned rail leaves no gap.
+                // The out-of-document rails are always IN the document (that
+                // is where the discover prefs put them) and render only once
+                // their own store has rows — the Slint
+                // `PinnedState.items.length > 0` /
+                // `ForYouState.radio-stations.length > 0` /
+                // `spotlight-visible` gates. A Column skips invisible children
+                // entirely, spacing included, so an empty one leaves no gap.
+                visible: modelData.kind === "pinned" ? root.pinnedItems.length > 0
+                    : modelData.kind === "radio" ? root.radioStations.length > 0
+                    : modelData.kind === "spotlight" ? root.spotlight.visible === true
+                    : true
                 sourceComponent: modelData.kind === "album" ? albumRailComp
                     : modelData.kind === "playlist" ? playlistRailComp
                     : modelData.kind === "slim" ? slimGridComp
@@ -665,6 +974,8 @@ Rectangle {
                     : modelData.kind === "artists" ? artistRailComp
                     : modelData.kind === "pinned" ? pinnedRailComp
                     : modelData.kind === "mixes" ? mixesRailComp
+                    : modelData.kind === "radio" ? radioRailComp
+                    : modelData.kind === "spotlight" ? spotlightRailComp
                     : recentComp
                 property var sectionData: modelData
 
@@ -719,6 +1030,11 @@ Rectangle {
                             delegate: PlaylistCard {
                                 item: modelData
                                 artSource: modelData.artPath || ""
+                                // The card's own default is `false`; the
+                                // pin state travels on the row (home_qt
+                                // `map_playlist`), so it has to be handed
+                                // over or the glyph lies on every rail.
+                                isPinned: modelData.isPinned === true
                             }
                         }
                     }
@@ -766,6 +1082,11 @@ Rectangle {
                             delegate: ArtistCard {
                                 item: modelData
                                 artSource: modelData.artPath || ""
+                                // Same hand-over as the playlist rail —
+                                // home_qt `map_fav_artist` publishes the
+                                // pin state and the card defaults to false.
+                                isPinned: modelData.isPinned === true
+                                artworkUrl: modelData.artUrl || ""
                             }
                         }
                     }
@@ -773,6 +1094,14 @@ Rectangle {
                 Component {
                     id: mixesRailComp
                     MixesRail { sectionData: parent.sectionData }
+                }
+                Component {
+                    id: radioRailComp
+                    RadioRail { sectionData: parent.sectionData }
+                }
+                Component {
+                    id: spotlightRailComp
+                    SpotlightRail { sectionData: parent.sectionData }
                 }
                 Component {
                     id: recentComp

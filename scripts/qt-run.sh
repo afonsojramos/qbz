@@ -49,6 +49,66 @@ cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/.."
 QT_CRATE="crates/qbz-qt"
 AUDIT_DIR="$HOME/Personal/qbz/qbz-nix-docs/qt-frontend/tools"
 
+# --- Portability shims (this runs on the Mac mini too) -----------------------
+# Everything below that differs between GNU/Linux and BSD/macOS lives here, so
+# the body reads the same on both. On macOS the audits also live elsewhere (the
+# docs repo is not synced to the build box), so a missing AUDIT_DIR degrades to
+# a warning rather than an error — see the audit block.
+UNAME_S="$(uname -s)"
+# Available RAM in MB. macOS has no `free`; vm_stat's "free + inactive" pages
+# are the honest analogue of MemAvailable (inactive is reclaimable).
+mem_avail_mb() {
+  if command -v free >/dev/null 2>&1; then
+    free -m | awk '/^Mem:/ {print $7}'
+  elif [[ "${UNAME_S}" == "Darwin" ]]; then
+    vm_stat | awk '/page size of/ {ps=$8} /Pages free/ {f=$3} /Pages inactive/ {i=$3}
+                   END { gsub(/\./,"",f); gsub(/\./,"",i); if (ps=="") ps=16384;
+                         printf "%d", (f+i)*ps/1048576 }'
+  else
+    echo 0
+  fi
+}
+cpu_count() {
+  if command -v nproc >/dev/null 2>&1; then nproc
+  elif [[ "${UNAME_S}" == "Darwin" ]]; then sysctl -n hw.ncpu
+  else echo 4; fi
+}
+# BSD pgrep has no -c and uses -l where GNU uses -a, so count lines instead.
+# The `|| true` is load-bearing: pgrep exits 1 when it matches nothing, which is
+# the NORMAL case here, and under `set -euo pipefail` that non-zero status
+# propagates out of the command substitution and kills the script — silently,
+# before a single line of output, looking exactly like a build that did nothing.
+# (It did exactly that once. The tell was an empty log with rc=1.)
+other_builds() { { pgrep -x rustc; pgrep -x cargo; } 2>/dev/null || true; }
+# `timeout` is GNU coreutils and is simply ABSENT on macOS, where the shell
+# answers `command not found` — which, inside the smoke block, produced a
+# one-line log that then reported "0 QML complaints" and looked like a pass.
+# A smoke that never started must never read as green, so this shims it.
+run_timeout() {
+  local secs=$1; shift
+  if command -v timeout >/dev/null 2>&1; then timeout "${secs}" "$@"; return $?; fi
+  if command -v gtimeout >/dev/null 2>&1; then gtimeout "${secs}" "$@"; return $?; fi
+  "$@" & local pid=$!
+  ( sleep "${secs}"; kill "${pid}" 2>/dev/null ) & local watcher=$!
+  wait "${pid}" 2>/dev/null; local rc=$?
+  kill "${watcher}" 2>/dev/null || true
+  return "${rc}"
+}
+
+# cxx-qt-build finds Qt through qmake / CMAKE_PREFIX_PATH. Homebrew keeps it
+# off PATH by design (qt is keg-only-ish in practice), so a plain shell has no
+# qmake and the build dies in build.rs rather than in the compiler. Add it when
+# it is there; say nothing when it is not, so Linux is untouched.
+if [[ "${UNAME_S}" == "Darwin" ]]; then
+  for qtdir in /opt/homebrew/opt/qt /usr/local/opt/qt; do
+    if [[ -x "${qtdir}/bin/qmake" ]]; then
+      export PATH="${qtdir}/bin:${PATH}"
+      export CMAKE_PREFIX_PATH="${qtdir}${CMAKE_PREFIX_PATH:+:${CMAKE_PREFIX_PATH}}"
+      break
+    fi
+  done
+fi
+
 # --- Pretty helpers ----------------------------------------------------------
 if [[ -t 2 ]]; then C_DIM=$'\033[2m'; C_BOLD=$'\033[1m'; C_GRN=$'\033[32m'
   C_RED=$'\033[31m'; C_YEL=$'\033[33m'; C_RST=$'\033[0m'
@@ -70,10 +130,9 @@ BIN="crates/target/${PROFILE}/qbz-qt"
 # 30 GB box with no hibernation, and the failure mode is a swap-thrash livelock
 # that needs a power-cycle — earlyoom does not reliably fire. Cheap to check.
 if [[ "${FORCE:-0}" != 1 ]]; then
-  others=$(pgrep -c -x 'rustc|cargo' 2>/dev/null || true)
+  others=$(other_builds | wc -l | tr -d ' ')
   [[ "${others}" =~ ^[0-9]+$ ]] || others=0
   if (( others > 0 )); then
-    pgrep -a -x 'rustc|cargo' 2>/dev/null | head -5 >&2 || true
     die "another cargo/rustc is running (${others}). Builds are serialized box-wide — wait, or FORCE=1 if you know it is harmless."
   fi
 fi
@@ -103,7 +162,7 @@ if [[ -n "${JOBS:-}" ]]; then
   export CARGO_BUILD_JOBS="${JOBS}"
 else
   # Leave a couple of cores for the desktop; cargo's default is all of them.
-  ncpu=$(nproc 2>/dev/null || echo 4)
+  ncpu=$(cpu_count)
   export CARGO_BUILD_JOBS="$(( ncpu > 3 ? ncpu - 2 : 1 ))"
 fi
 
@@ -120,7 +179,7 @@ eta_secs=0
 [[ -r "${eta_file}" ]] && eta_secs=$(cat "${eta_file}" 2>/dev/null || echo 0)
 [[ "${eta_secs}" =~ ^[0-9]+$ ]] || eta_secs=0
 
-avail_mb=$(free -m | awk '/^Mem:/ {print $7}')
+avail_mb=$(mem_avail_mb)
 say "profile=${PROFILE} jobs=${CARGO_BUILD_JOBS} avail=${avail_mb}MB rustflags='${RUSTFLAGS:-}'"
 
 # --- Start banner ------------------------------------------------------------
@@ -175,9 +234,18 @@ fi
 # and prove the QML tree actually resolves. A lazily-resolved type error only
 # ever shows up here or in front of the owner.
 if [[ "${SMOKE:-0}" == 1 ]]; then
-  log="$(mktemp -t qbz-qt-smoke-XXXXXX.log)"
+  # BSD mktemp -t takes a bare prefix, GNU takes a template; give both a full
+  # template path so the two agree.
+  log="$(mktemp "${TMPDIR:-/tmp}/qbz-qt-smoke-XXXXXX")"
   say "offscreen smoke (75s max) → ${log}"
-  QT_QPA_PLATFORM=offscreen RUST_LOG=info timeout 75 "./${BIN}" > "${log}" 2>&1 || true
+  QT_QPA_PLATFORM=offscreen RUST_LOG=info run_timeout 75 "./${BIN}" > "${log}" 2>&1 || true
+  # A log this short means the process never really started (the macOS
+  # `timeout`-not-found case did exactly that). Zero complaints in an empty log
+  # is not a pass.
+  if (( $(wc -l < "${log}") < 10 )); then
+    cat "${log}" >&2
+    die "smoke produced almost no output — the app did not start; see ${log}"
+  fi
   # `propertyCache` from SettingsButton is known-benign noise — filter it out
   # rather than let it mask a real count.
   errs=$(grep -av 'propertyCache' "${log}" \

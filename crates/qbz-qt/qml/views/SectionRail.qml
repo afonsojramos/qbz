@@ -53,7 +53,16 @@ Column {
                 year: modelData.year
                 qualityTier: modelData.qualityTier
                 artSource: root.coverMap[modelData.artUrl] || ""
-                isFavorite: false
+                // The row carries the heart (home_qt / recommendations_qt
+                // stamp it from fav_cache at build time); hardcoding false
+                // made a library album draw hollow and read "Add to
+                // Library", so the first click REMOVED it.
+                isFavorite: modelData.isFavorite === true
+                // Pin glyph: the row carries the state, and the pin payload
+                // needs the REMOTE url (coverMap holds local file:// paths,
+                // which are worthless as a stored display snapshot).
+                isPinned: modelData.isPinned === true
+                artworkUrl: modelData.artUrl || ""
             }
         }
         Rectangle {

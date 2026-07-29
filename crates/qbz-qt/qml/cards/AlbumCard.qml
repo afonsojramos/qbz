@@ -41,6 +41,14 @@ Rectangle {
     property string ribbonKind: ""
     // Artwork image source (file://… or "") — the host's cache lookup.
     property string artSource: ""
+    // REMOTE cover url, for the pin payload only (the AlbumCard.slint pin
+    // TouchArea passes `album.artwork-url`). The pinned store keeps a
+    // denormalized display snapshot taken at pin time, so a host that
+    // leaves this empty pins a row the Pinned rail can only draw as a
+    // placeholder — `artSource` is NOT a substitute, it is a local
+    // file:// path that means nothing on another machine or after a
+    // cache wipe.
+    property string artworkUrl: ""
     property bool isFavorite: false
     property bool isPinned: false
     // Source badge (Library show-local): "local" | "plex" | "" (hidden).
@@ -89,7 +97,37 @@ Rectangle {
     }
     function togglePin() {
         root.isPinned = !root.isPinned
-        QbzLibrary.togglePin("album", root.albumId, root.title, root.artist, "")
+        QbzLibrary.togglePin("album", root.albumId, root.title, root.artist,
+            root.artworkUrl)
+    }
+
+    // Pin fan-out. The pinned store has no change-notify, so `pinChanged`
+    // (key `{kind}:{id}`, emitted by main.rs::toggle_pin after the write) is
+    // the ONLY signal that this album's state moved — and it moves from
+    // anywhere: another rail, another tab, the album page header. This is the
+    // port's equivalent of the Slint `set_album_row_pinned` walk over every
+    // live model, and the reason no surface has to republish its document to
+    // keep a glyph honest. Assigning breaks the host's `isPinned` binding on
+    // purpose (the optimistic flip above already does).
+    Connections {
+        target: QbzLibrary
+        function onPinChanged(key, value) {
+            if (root.albumId !== "" && key === "album:" + root.albumId)
+                root.isPinned = value
+        }
+        // Favourite fan-out — the SAME shape, one signal later. `isFavorite`
+        // was the odd one out: the optimistic flip above breaks the host's
+        // binding (by design), and nothing settled it afterwards, so a write
+        // that FAILED stayed visibly wrong until the user navigated away, and
+        // a heart flipped on another surface (the album page header, a search
+        // result, the queue) never reached this card. `libraryFavoriteChanged`
+        // carries the value the write actually produced — the flipped one on
+        // success, the UNCHANGED one on failure — so this is both the
+        // cross-surface walk and the rollback.
+        function onLibraryFavoriteChanged(key, value) {
+            if (root.albumId !== "" && key === "album:" + root.albumId)
+                root.isFavorite = value
+        }
     }
 
     // AlbumCard.slint's album-menu, in its order. localMode drops the

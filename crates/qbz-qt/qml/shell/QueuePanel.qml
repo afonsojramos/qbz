@@ -33,6 +33,46 @@ Rectangle {
     readonly property var historyRows: doc.history || []
     readonly property bool queueEmpty: currentRow === null && (doc.upcomingTotal || 0) === 0
 
+    // --- Favourite state, id-keyed (the ArtistView.localToggles idiom) ---
+    // The rows here are plain JS objects parsed out of `doc`, so the old
+    // `row.isFavorite = !row.isFavorite` notified nothing and NO glyph in
+    // this panel ever moved on click — not the Up Next menu entry, not the
+    // Now Playing heart. A map at root level is what fits: the queue
+    // document is re-parsed constantly (every position tick, every queue
+    // edit), so a per-delegate property alone would be overwritten by the
+    // next republish carrying the pre-toggle value.
+    //
+    // Both writers agree on the same map: the optimistic flip, and
+    // `libraryFavoriteChanged` — which carries what the write ACTUALLY
+    // produced, so it is also the rollback for a failed one and the way a
+    // heart set on another surface reaches this panel.
+    property var favOverrides: ({})
+    function favState(row) {
+        if (!row) return false
+        return root.favOverrides[row.id] !== undefined
+            ? root.favOverrides[row.id]
+            : row.isFavorite === true
+    }
+    function setFavState(id, value) {
+        var m = root.favOverrides
+        m[id] = value
+        // Rebind requires a NEW object reference (same-ref is not a change).
+        root.favOverrides = Object.assign({}, m)
+    }
+    function toggleFav(row) {
+        if (!row)
+            return
+        root.setFavState(row.id, !root.favState(row))
+        QbzQueue.queueToggleFavorite("track", row.id)
+    }
+    Connections {
+        target: QbzLibrary
+        function onLibraryFavoriteChanged(key, value) {
+            if (key.indexOf("track:") === 0)
+                root.setFavState(key.substring(6), value)
+        }
+    }
+
     // url-keyed cover map (shared artwork pipeline).
     property var coverMap: ({})
 
@@ -310,7 +350,7 @@ Rectangle {
                             model: [
                                 { "label": QbzSession.tr("Remove from queue", QbzSession.trRev), "icon": "trash-2", "action": "remove" },
                                 { "label": QbzSession.tr("Remove all after", QbzSession.trRev), "icon": "list-x", "action": "remove-after" },
-                                { "label": row.isFavorite ? QbzSession.tr("Remove from Library", QbzSession.trRev) : QbzSession.tr("Add to Library", QbzSession.trRev), "icon": row.isFavorite ? "heart-filled" : "heart", "action": "favorite" },
+                                { "label": root.favState(row) ? QbzSession.tr("Remove from Library", QbzSession.trRev) : QbzSession.tr("Add to Library", QbzSession.trRev), "icon": root.favState(row) ? "heart-filled" : "heart", "action": "favorite" },
                             ]
                             delegate: Rectangle {
                                 required property var modelData
@@ -343,10 +383,7 @@ Rectangle {
                                         var a = modelData.action
                                         if (a === "remove") QbzQueue.queueRemoveUpcoming(rowIndex)
                                         else if (a === "remove-after") QbzQueue.queueRemoveAllAfter(rowIndex)
-                                        else if (a === "favorite") {
-                                            row.isFavorite = !row.isFavorite
-                                            QbzQueue.queueToggleFavorite("track", row.id)
-                                        }
+                                        else if (a === "favorite") root.toggleFav(row)
                                     }
                                 }
                             }
@@ -628,22 +665,17 @@ Rectangle {
                                     color: npFavArea.containsMouse ? theme.surfaceHover : "transparent"
                                     QbzIcon {
                                         anchors.centerIn: parent
-                                        name: root.currentRow && root.currentRow.isFavorite ? "heart-filled" : "heart"
+                                        name: root.favState(root.currentRow) ? "heart-filled" : "heart"
                                         width: 17
                                         height: 17
-                                        tintName: root.currentRow && root.currentRow.isFavorite ? "favorite" : (npFavArea.containsMouse ? "textPrimary" : "muted")
+                                        tintName: root.favState(root.currentRow) ? "favorite" : (npFavArea.containsMouse ? "textPrimary" : "muted")
                                     }
                                     MouseArea {
                                         id: npFavArea
                                         anchors.fill: parent
                                         hoverEnabled: true
                                         cursorShape: Qt.PointingHandCursor
-                                        onClicked: {
-                                            if (root.currentRow) {
-                                                root.currentRow.isFavorite = !root.currentRow.isFavorite
-                                                QbzQueue.queueToggleFavorite("track", root.currentRow.id)
-                                            }
-                                        }
+                                        onClicked: root.toggleFav(root.currentRow)
                                     }
                                 }
                             }

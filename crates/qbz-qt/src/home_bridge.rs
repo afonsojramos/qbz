@@ -45,6 +45,29 @@ pub mod qbz_home {
         // HomeSection shape, ordered by each tab's discover prefs).
         #[qproperty(QString, editor_sections_json)]
         #[qproperty(QString, for_you_sections_json)]
+        // The "Pinned" rail's ROWS, on their own property (a bare HomeCard
+        // array). The three documents above carry only an EMPTY `pinned`
+        // section, as the ordering slot the discover prefs place — 1:1 with
+        // the Slint arm, where the descriptor supplies the position and the
+        // `PinnedState.items` global supplies the rows
+        // (discover/HomeView.slint:561). Pinning is a per-click mutation, and
+        // folding the rows into the tab documents made every click republish
+        // all three: every rail's delegate model torn down and rebuilt, and
+        // every horizontal scroll reset to 0.
+        #[qproperty(QString, pinned_json)]
+        // Discover > For You, the two rails whose rows do NOT travel inside
+        // the tab documents (src/foryou_qt.rs — same split, same reason as
+        // `pinned_json` above): the documents carry an EMPTY ordering slot
+        // (`kind: "radio"` / `"spotlight"`) where the prefs place the rail,
+        // and these carry the rows. The Spotlight costs one extra
+        // /artist/page round trip that lands well after the index, and
+        // folding it into the tab documents would republish — and re-create
+        // the delegates of — every rail on all three tabs when it did.
+        #[qproperty(QString, radio_stations_json)]
+        #[qproperty(QString, spotlight_json)]
+        // The Qobuz mix landing page (DailyQ / WeeklyQ / FavQ / TopQ), route
+        // "mix" — opened from the Qobuz Mixes tiles on For You.
+        #[qproperty(QString, mix_json)]
         // Recommendations tab (the 4th) — same HomeSection shape, published
         // by src/recommendations_qt.rs. LAZY: nothing is fetched until the
         // view calls `loadRecommendations()`, and a row whose service is not
@@ -142,6 +165,34 @@ pub mod qbz_home {
         #[qinvokable]
         fn label_open_releases(self: Pin<&mut QbzHome>);
 
+        // --- Discover > For You: Qobuz Mixes / Radio / Spotlight ----------
+        /// A Qobuz Mixes tile: open the mix landing page ("daily" | "weekly"
+        /// | "fav" | "top"). Slint: `media-action("mix", which, "open")`.
+        #[qinvokable]
+        fn open_mix(self: Pin<&mut QbzHome>, kind: QString);
+        #[qinvokable]
+        fn mix_play_all(self: Pin<&mut QbzHome>);
+        #[qinvokable]
+        fn mix_shuffle(self: Pin<&mut QbzHome>);
+        /// The header's refresh disc — re-fetch the mix on screen.
+        #[qinvokable]
+        fn mix_refresh(self: Pin<&mut QbzHome>);
+        /// A row click / row Play: the mix becomes the queue, anchored there.
+        #[qinvokable]
+        fn mix_play_track(self: Pin<&mut QbzHome>, track_id: QString);
+        /// A row's context menu: "next" | "later" | "queue".
+        #[qinvokable]
+        fn mix_enqueue_track(self: Pin<&mut QbzHome>, track_id: QString, mode: QString);
+        /// Radio Stations tile — Qobuz `/radio/album` off the seed album.
+        #[qinvokable]
+        fn start_album_radio(self: Pin<&mut QbzHome>, album_id: QString);
+        /// Spotlight RADIO card — the smart `qbz-radio` artist pool.
+        #[qinvokable]
+        fn start_artist_radio(self: Pin<&mut QbzHome>, artist_id: QString);
+        /// Spotlight play / TOP TRACKS card — the artist's popular tracks.
+        #[qinvokable]
+        fn play_artist_top_tracks(self: Pin<&mut QbzHome>, artist_id: QString);
+
         // --- Label releases sub-view --------------------------------------
         #[qinvokable]
         fn label_releases_load_more(self: Pin<&mut QbzHome>);
@@ -167,6 +218,10 @@ pub struct QbzHomeRust {
     home_sections_json: QString,
     editor_sections_json: QString,
     for_you_sections_json: QString,
+    pinned_json: QString,
+    radio_stations_json: QString,
+    spotlight_json: QString,
+    mix_json: QString,
     reco_sections_json: QString,
     reco_loading: bool,
     discover_browse_json: QString,
@@ -191,6 +246,12 @@ impl Default for QbzHomeRust {
             home_sections_json: QString::from("[]"),
             editor_sections_json: QString::from("[]"),
             for_you_sections_json: QString::from("[]"),
+            pinned_json: QString::from("[]"),
+            radio_stations_json: QString::from("[]"),
+            // "{}" so `JSON.parse(...).visible` is a plain `undefined` on the
+            // first frame instead of throwing (the browse-document rule).
+            spotlight_json: QString::from("{}"),
+            mix_json: QString::from("{}"),
             reco_sections_json: QString::from("[]"),
             reco_loading: false,
             // "{}" so the views' JSON.parse never throws on the first frame.
@@ -333,6 +394,44 @@ impl qbz_home::QbzHome {
 
     pub fn label_open_releases(self: Pin<&mut Self>) {
         crate::label_qt::open_releases();
+    }
+
+    // --- Discover > For You: mixes / radio / spotlight ---------------------
+
+    pub fn open_mix(self: Pin<&mut Self>, kind: QString) {
+        crate::foryou_qt::open_mix(kind.to_string());
+    }
+
+    pub fn mix_play_all(self: Pin<&mut Self>) {
+        crate::foryou_qt::mix_play_all();
+    }
+
+    pub fn mix_shuffle(self: Pin<&mut Self>) {
+        crate::foryou_qt::mix_shuffle();
+    }
+
+    pub fn mix_refresh(self: Pin<&mut Self>) {
+        crate::foryou_qt::refresh_mix();
+    }
+
+    pub fn mix_play_track(self: Pin<&mut Self>, track_id: QString) {
+        crate::foryou_qt::mix_play_track(track_id.to_string());
+    }
+
+    pub fn mix_enqueue_track(self: Pin<&mut Self>, track_id: QString, mode: QString) {
+        crate::foryou_qt::mix_enqueue_track(track_id.to_string(), mode.to_string());
+    }
+
+    pub fn start_album_radio(self: Pin<&mut Self>, album_id: QString) {
+        crate::foryou_qt::start_album_radio(album_id.to_string());
+    }
+
+    pub fn start_artist_radio(self: Pin<&mut Self>, artist_id: QString) {
+        crate::foryou_qt::start_artist_radio(artist_id.to_string());
+    }
+
+    pub fn play_artist_top_tracks(self: Pin<&mut Self>, artist_id: QString) {
+        crate::foryou_qt::spotlight_play_top_tracks(artist_id.to_string());
     }
 
     // --- Label releases ----------------------------------------------------

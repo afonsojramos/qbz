@@ -469,6 +469,13 @@ Rectangle {
                                     anchors.horizontalCenter: parent.horizontalCenter
                                     item: root.mp.artist || ({})
                                     artSource: (root.mp.artist || ({})).artPath || ""
+                                    // Same two fields the album hero below
+                                    // carries: the pin state (or the glyph
+                                    // lies and the first click UN-pins) and
+                                    // the REMOTE url the pin payload stores
+                                    // (artPath is a local cache path).
+                                    isPinned: (root.mp.artist || ({})).isPinned === true
+                                    artworkUrl: (root.mp.artist || ({})).artUrl || ""
                                 }
                                 AlbumCard {
                                     visible: root.mp.kind === "album"
@@ -481,8 +488,17 @@ Rectangle {
                                     year: (root.mp.album || ({})).year || ""
                                     qualityTier: (root.mp.album || ({})).qualityTier || ""
                                     artSource: (root.mp.album || ({})).artPath || ""
-                                    isFavorite: false
-                                    isPinned: false
+                                    // search_qt::map_album stamps the heart
+                                    // from fav_cache; false inverted the
+                                    // first click on an album already in the
+                                    // library.
+                                    isFavorite: (root.mp.album || ({})).isFavorite === true
+                                    // The row carries the pin state
+                                    // (search_qt `map_album`); hardcoding
+                                    // false made the glyph lie and turned
+                                    // the first click into an UN-pin.
+                                    isPinned: (root.mp.album || ({})).isPinned === true
+                                    artworkUrl: (root.mp.album || ({})).artUrl || ""
                                 }
                                 SearchTrackHero {
                                     visible: root.mp.kind === "track"
@@ -525,6 +541,8 @@ Rectangle {
                                 delegate: ArtistCard {
                                     item: modelData
                                     artSource: modelData.artPath || ""
+                                    isPinned: modelData.isPinned === true
+                                    artworkUrl: modelData.artUrl || ""
                                 }
                             }
                         }
@@ -552,6 +570,8 @@ Rectangle {
                             delegate: ArtistCard {
                                 item: modelData
                                 artSource: modelData.artPath || ""
+                                isPinned: modelData.isPinned === true
+                                artworkUrl: modelData.artUrl || ""
                             }
                         }
                     }
@@ -590,8 +610,12 @@ Rectangle {
                                     year: modelData.year
                                     qualityTier: modelData.qualityTier
                                     artSource: modelData.artPath || ""
-                                    isFavorite: false
-                                    isPinned: false
+                                    // search_qt::map_album stamps the heart
+                                    // from fav_cache; false made the glyph lie
+                                    // and inverted the first click.
+                                    isFavorite: modelData.isFavorite === true
+                                    isPinned: modelData.isPinned === true
+                                    artworkUrl: modelData.artUrl || ""
                                 }
                                 CardArtSkeleton {
                                     card: modelData
@@ -626,8 +650,9 @@ Rectangle {
                                 year: modelData.year
                                 qualityTier: modelData.qualityTier
                                 artSource: modelData.artPath || ""
-                                isFavorite: false
-                                isPinned: false
+                                isFavorite: modelData.isFavorite === true
+                                isPinned: modelData.isPinned === true
+                                artworkUrl: modelData.artUrl || ""
                             }
                             CardArtSkeleton {
                                 card: modelData
@@ -712,6 +737,8 @@ Rectangle {
                         delegate: ArtistCard {
                             item: modelData
                             artSource: modelData.artPath || ""
+                            isPinned: modelData.isPinned === true
+                            artworkUrl: modelData.artUrl || ""
                         }
                     }
                     // Artists: ROUND cells (ArtistGridCard's portrait), and
@@ -761,8 +788,12 @@ Rectangle {
                                 width: 200
                                 height: 246
                                 PlaylistCard {
+                                    // artworkUrl is not passed: the card
+                                    // defaults it to `item.artUrl`, which is
+                                    // this row's remote cover.
                                     item: modelData
                                     artSource: modelData.artPath || ""
+                                    isPinned: modelData.isPinned === true
                                 }
                                 CardArtSkeleton {
                                     card: modelData
@@ -790,6 +821,7 @@ Rectangle {
                             PlaylistCard {
                                 item: modelData
                                 artSource: modelData.artPath || ""
+                                isPinned: modelData.isPinned === true
                             }
                             CardArtSkeleton {
                                 card: modelData

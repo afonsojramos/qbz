@@ -16,6 +16,7 @@ import QtQuick
 import QtQuick.Window
 import com.blitzfc.qbz
 import "../controls"
+import "../rows"
 import "../theme"
 import "local"
 
@@ -278,53 +279,24 @@ Rectangle {
             }
 
             // ---- Column header ----
-            Row {
+            // rows/TrackListHeader.qml, on rows/TrackCols.qml geometry — the
+            // same object the LocalTrackRows below lay their cells out from.
+            // (LocalAlbumView.slint:501-540 hardcodes a second set here —
+            // 16px gaps, Duration 80, Quality 80 — that its own rows do not
+            // use; the port does not copy that hazard.)
+            //
+            // `trailingReserve: 72` is the slice LocalTrackRow spends OUTSIDE
+            // the shared row: it narrows the shared TrackRow by 26 (source
+            // glyph gutter) + 46 (its own re-drawn ⋯: 32 + one 14px gap), so
+            // the labelled columns end 72px short of the row's right edge.
+            // Same constant, one place: LocalTrackRow.qml:82.
+            TrackListHeader {
                 width: parent.width
-                height: 40
-                leftPadding: 12
-                rightPadding: 12
-                spacing: 16
-                Text {
-                    width: 32
-                    height: parent.height
-                    text: "#"
-                    color: theme.textMuted
-                    font.pixelSize: theme.fontLegal
-                    font.letterSpacing: 0.5
-                    verticalAlignment: Text.AlignVCenter
-                }
-                Text {
-                    width: parent.width - 24 - 32 - 80 - 80 - 28 - 32 - 5 * 16
-                    height: parent.height
-                    text: QbzSession.tr("Title", QbzSession.trRev)
-                    color: theme.textMuted
-                    font.pixelSize: theme.fontLegal
-                    font.letterSpacing: 0.5
-                    verticalAlignment: Text.AlignVCenter
-                }
-                Text {
-                    width: 80
-                    height: parent.height
-                    text: QbzSession.tr("Duration", QbzSession.trRev)
-                    color: theme.textMuted
-                    font.pixelSize: theme.fontLegal
-                    font.letterSpacing: 0.5
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
-                }
-                Text {
-                    width: 80
-                    height: parent.height
-                    text: QbzSession.tr("Quality", QbzSession.trRev)
-                    color: theme.textMuted
-                    font.pixelSize: theme.fontLegal
-                    font.letterSpacing: 0.5
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
-                }
-                // Source column + the per-row more-button slot.
-                Item { width: 28; height: parent.height }
-                Item { width: 32; height: parent.height }
+                bandHeight: 40
+                labelSpacing: 0.5
+                showFavorite: false
+                showMenu: false
+                trailingReserve: 72
             }
 
             // ---- Track list ----

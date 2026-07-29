@@ -299,6 +299,15 @@ Rectangle {
                                     // the overlay button plays it.
                                     item: plCell.modelData
                                     artSource: plCell.modelData.artPath || ""
+                                    // The row carries the pin state
+                                    // (home_qt `map_playlist`, which this page
+                                    // reuses); the card defaults to false, so
+                                    // without the hand-over the glyph read
+                                    // "unpinned" on an already-pinned playlist
+                                    // and the first click un-pinned it.
+                                    // `artworkUrl` needs no hand-over: the
+                                    // card defaults it to `item.artUrl`.
+                                    isPinned: plCell.modelData.isPinned === true
                                 }
                             }
                         }

@@ -102,12 +102,34 @@ Rectangle {
     // Favorite state of the now-playing track (Slint:
     // QueueState.now-playing-favorite). The queue document carries it on its
     // `current` row; this re-parses ONLY when that document changes.
+    //
+    // The bar's OWN heart settles fine on its own — `queue_qt::toggle_favorite`
+    // republishes the queue document straight after the write. What it could
+    // not see was a heart flipped ANYWHERE ELSE for the same track (the album
+    // page's row, a search result, a card): nothing republishes the queue for
+    // those, so the bar sat on a stale glyph for the rest of the track. The
+    // one-slot override below closes it, keyed on the track id so it expires
+    // by itself the moment playback moves on — no map to keep clean.
+    property string favOverrideId: ""
+    property bool favOverrideValue: false
     readonly property bool npFavorite: {
+        if (root.favOverrideId !== "" && root.favOverrideId === QbzPlayer.npTrackId)
+            return root.favOverrideValue
         try {
             var d = JSON.parse(QbzQueue.queueJson)
             return !!(d && d.current && d.current.isFavorite)
         } catch (e) {
             return false
+        }
+    }
+    Connections {
+        target: QbzLibrary
+        function onLibraryFavoriteChanged(key, value) {
+            var id = QbzPlayer.npTrackId
+            if (id !== "" && key === "track:" + id) {
+                root.favOverrideId = id
+                root.favOverrideValue = value
+            }
         }
     }
 

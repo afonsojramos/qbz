@@ -57,8 +57,25 @@ Item {
 
     // Scrim — declared FIRST so the panel below it in source order (and thus
     // above it in z) keeps its own presses.
+    //
+    // `radius` is load-bearing, not decoration. This Item fills the VIEW
+    // root, which fills AppShell's rounded content frame, and Qt Quick's
+    // `clip` is a rectangular scissor that does not follow `radius` — so an
+    // opaque full-bleed child paints straight into the frame's four bezel
+    // corners and the panel reads square. AppShell mounts four corner nubs
+    // that cover exactly this, but ONLY while the ambient background is off
+    // (with ambient on, the gutter must show the ambient field through the
+    // corners, so an opaque nub would be the regression there). This scrim at
+    // 75% opacity was the one remaining offender in the ambient-on case: every
+    // view root already rounds its own fill for precisely this reason
+    // (HomeView.qml:radius 12 and its comment), the header atmosphere is
+    // suppressed under ambient, and window-level overlays are supposed to
+    // cover the corners. Rounding the scrim's own fill fixes it in BOTH
+    // ambient states and needs no colour guessing — the corners keep showing
+    // whatever is genuinely behind them.
     Rectangle {
         anchors.fill: parent
+        radius: theme.radiusMd
         color: "#bf000000"
         MouseArea {
             anchors.fill: parent

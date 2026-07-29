@@ -11,21 +11,29 @@
 // overlay row at y=113 (follow? / play / more), pin badge top-right of
 // the frame, then the meta block (centered name, optional subtitle).
 //
-// item contract: { id, title, subtitle, following } plus the scalar
-// artSource / artworkUrl / isPinned props (the AlbumCard pattern).
+// item contract: { id, title, subtitle, following | isFavorite } plus the
+// scalar artSource / artworkUrl / isPinned props (the AlbumCard pattern).
+// The follow flag arrives under TWO names because the producers spell it
+// differently and both mean the same row state: `following` (search_qt
+// ArtistRow, derived from fav_cache) and `isFavorite` (home_qt HomeCard /
+// library_qt FeedItem — for an artist, "in the library" IS "followed", they
+// are the same `favorite/create?artist_ids=` write).
 //
 // Arms:
-//  - followMode: "none" (default) | "toggle" — asks for the overlay follow
-//    button + the menu Follow row. There is NO artist-follow invokable on
-//    the Qt bridge, so `hasFollowSeam` below force-collapses the arm: the
-//    button and the row cannot render inert even if a host sets "toggle".
+//  - followMode: "toggle" (default, = ArtistGridCard.slint's own default) |
+//    "none" — the overlay follow button + the menu Follow row. The Slint
+//    reference passes "none" from exactly two places: the label page's
+//    artist carousel (LabelPageView.slint:524) and the Library artist grids
+//    (FavoritesView.slint:1831/1865). Everything else shows it.
+//  - followKind: "artist" (default) | "label" — ArtistGridCard.slint's
+//    `follow-kind`, the kind the follow write is sent as.
 //  - subtitle: meta switches to 1-line name + muted subtitle (the Slint
 //    "Similar to…"/search arm); empty = wrap-2 name.
 //
 // --- Menu inventory vs discover/ArtistGridCard.slint -------------------
 //   Open artist · Play · Follow/Following (show-follow) · Not interested
-// The first two are live. The last two are gated off (`hasFollowSeam`,
-// `hasNotInterestedSeam`) — both used to render and do nothing at all.
+// The first three are live. "Not interested" is gated off
+// (`hasNotInterestedSeam`) — it used to render and do nothing at all.
 // ⋯ and a right press on the portrait or the name open the same menu.
 
 import QtQuick
@@ -44,29 +52,71 @@ Rectangle {
     // Pinned state (AlbumCard pattern: scalar prop, optimistic flip on
     // click — the model re-publish re-creates the delegate).
     property bool isPinned: false
-    property string followMode: "none"
+    property string followMode: "toggle"
+    property string followKind: "artist"
 
     // --- Seams the Qt bridge does NOT have (menu-parity round) -----------
-    //   hasFollowSeam        -> artist/label follow (no invokable; the
-    //                           .slint routes to media-action(kind, id,
-    //                           "follow"))
     //   hasNotInterestedSeam -> the reco-scoped dismissal store is not
     //                           opened by the Qt port
-    // Both entries stay out of the menu (and the follow BUTTON stays out of
-    // the overlay) until their invokable lands.
-    readonly property bool hasFollowSeam: false
+    // That entry stays out of the menu until its invokable lands.
+    //
+    // `hasFollowSeam` is GONE, and the header comment it carried ("There is
+    // NO artist-follow invokable on the Qt bridge") was simply wrong:
+    // `library_bridge.rs` declares `library_toggle_favorite(kind, id)`,
+    // `library_qt::toggle_favorite` routes "artist" (and "label") straight to
+    // `add_favorite` / `remove_favorite`, and ArtistView's own header button
+    // has been calling it all along. The constant made the follow affordance
+    // disappear from EVERY artist card in the app.
     readonly property bool hasNotInterestedSeam: false
 
     color: "transparent"
 
     QbzTheme { id: theme }
 
-    readonly property bool showFollow: followMode !== "none" && hasFollowSeam
+    // ArtistGridCard.slint:89 — `show-follow: follow-mode != "none"`.
+    readonly property bool showFollow: followMode !== "none"
     readonly property bool overlayOn: agArea.containsMouse || pinArea.containsMouse
         || agFollow.hovered || agPlay.hovered || agMore.hovered
 
     implicitWidth: 200
     implicitHeight: 246
+
+    // --- Follow state (a real QML property, never `item.following`) ------
+    // Same reason as rows/TrackRow.qml's `favorite`: `item` is a plain JS
+    // object, so mutating a field on it fires no notifier and re-evaluates no
+    // binding — and `item: modelData` is a COPY, so the write does not reach
+    // the model either (both measured under qml6 6.11.1). The seed reads both
+    // spellings the producers publish (see the header note).
+    property bool following: root.item.following === true
+        || root.item.isFavorite === true
+    onItemChanged: root.following = Qt.binding(function () {
+        return root.item.following === true || root.item.isFavorite === true
+    })
+
+    function toggleFollow() {
+        root.following = !root.following
+        QbzLibrary.libraryToggleFavorite(root.followKind, root.item.id)
+    }
+
+    Connections {
+        target: QbzLibrary
+        // Pin fan-out — the AlbumCard contract, artist key (see AlbumCard.qml:
+        // the store has no change-notify, so this signal is what keeps every
+        // OTHER card showing this artist honest without a republish).
+        function onPinChanged(key, value) {
+            var aid = (root.item && root.item.id !== undefined) ? root.item.id : ""
+            if (aid !== "" && key === "artist:" + aid)
+                root.isPinned = value
+        }
+        // Follow fan-out + rollback, the favourite twin of the above. The key
+        // is `{followKind}:{id}` so a label-follow card settles on its own
+        // key rather than on an artist one that happens to share the number.
+        function onLibraryFavoriteChanged(key, value) {
+            var aid = (root.item && root.item.id !== undefined) ? root.item.id : ""
+            if (aid !== "" && key === root.followKind + ":" + aid)
+                root.following = value
+        }
+    }
 
     Column {
         spacing: 0
@@ -134,13 +184,11 @@ Rectangle {
                     shown: root.overlayOn
                     CardOverlayButton {
                         id: agFollow
-                        // showFollow already folds in hasFollowSeam, so this
-                        // button never renders while the seam is missing.
                         visible: root.showFollow
-                        name: root.item.following ? "check" : "user-plus"
-                        active: root.item.following === true
+                        name: root.following ? "check" : "user-plus"
+                        active: root.following
                         anchors.verticalCenter: parent.verticalCenter
-                        onClicked: root.menuAction("follow")
+                        onClicked: root.toggleFollow()
                     }
                     CardOverlayButton {
                         id: agPlay
@@ -250,8 +298,8 @@ Rectangle {
             { "label": t("Play", r), "icon": "play-fill", "action": "play" },
         ]
         if (root.showFollow)
-            m.push({ "label": root.item.following ? t("Following", r) : t("Follow", r),
-                     "icon": root.item.following ? "check" : "user-plus", "action": "follow" })
+            m.push({ "label": root.following ? t("Following", r) : t("Follow", r),
+                     "icon": root.following ? "check" : "user-plus", "action": "follow" })
         // Reco-scoped dismissal (NOT the blacklist) — the artist leaves the
         // Recommendations rails only.
         if (root.hasNotInterestedSeam)
@@ -262,7 +310,8 @@ Rectangle {
     function menuAction(a) {
         if (a === "open") QbzArtist.openArtist(root.item.id)
         else if (a === "play") QbzPlayer.playArtistCard(root.item.id)
-        // "follow" / "not-interested" are unreachable while their
-        // has*Seam constant is false — the entries are not built.
+        else if (a === "follow") root.toggleFollow()
+        // "not-interested" is unreachable while hasNotInterestedSeam is
+        // false — the entry is not built.
     }
 }

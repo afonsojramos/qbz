@@ -158,7 +158,7 @@ fn mutate(tab_key: &str, f: impl FnOnce(&mut DiscoverPrefs, DiscoveryTab)) {
         log::warn!("[qbz-qt] discover config: save failed: {e}");
         return;
     }
-    crate::home_qt::republish_from_prefs();
+    crate::home_qt::republish_cached();
     publish(tab_key);
 }
 

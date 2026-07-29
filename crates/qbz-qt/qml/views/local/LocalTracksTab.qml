@@ -139,7 +139,33 @@ Item {
                 onContentYChanged: {
                     root.report()
                     // Infinite scroll: 600px of runway (Slint :1442).
-                    if (contentY + height >= contentHeight - 600
+                    //
+                    // `contentHeight > height` states the precondition the
+                    // predicate always had: a list shorter than its viewport
+                    // has no bottom to run out of, so it cannot be "600px from
+                    // the end". Nothing is lost by it — a list that short
+                    // cannot scroll (StopAtBounds), so contentY never moves
+                    // and this handler never runs for it.
+                    //
+                    // It is ALSO the guard for this handler's one re-entrant
+                    // entry: it runs from INSIDE QQuickItemView::setModel()
+                    // (the same window that makes a `.model` readback segfault
+                    // — see views/LibraryView.qml), where contentY has been
+                    // reset but the layout has not been redone.
+                    //
+                    // MEASURED, so nobody re-hunts it: that entry does NOT in
+                    // fact misfire under qml6 6.11.1. contentHeight inside the
+                    // swap is the PREVIOUS model's value, not 0 — checked over
+                    // empty->long, short->long, long->short, long->empty,
+                    // same-length republishes, both with forceLayout and on
+                    // the real async polish path. Every one of them entered
+                    // the handler with (contentY 0, contentHeight stale-LARGE)
+                    // and evaluated FALSE. So this line changes no observed
+                    // behaviour today; it is kept because it is true and free,
+                    // and because the only shape that would misfire is the one
+                    // it covers.
+                    if (contentHeight > height
+                        && contentY + height >= contentHeight - 600
                         && QbzLocal.localTracksHasMore
                         && !QbzLocal.localTracksLoadingMore
                         && !QbzLocal.localTracksLoading) {
