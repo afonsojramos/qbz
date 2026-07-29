@@ -867,6 +867,15 @@ pub async fn enqueue_single_track(
 // ---------------------------------------------------------------------------
 
 pub async fn toggle_play(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
+    // A connected renderer owns transport — the local player is stopped.
+    match crate::cast_qt::service().toggle_play_if_cast().await {
+        Ok(true) => return,
+        Ok(false) => {}
+        Err(e) => {
+            log::warn!("[qbz-qt][Cast] toggle-play failed: {e}");
+            return;
+        }
+    }
     let event = runtime.core().player().get_playback_event();
     let result = if event.is_playing {
         runtime.core().pause()
@@ -895,6 +904,13 @@ pub(crate) async fn play_queue_track_public(runtime: &Arc<AppRuntime<LoggingAdap
 }
 
 async fn play_queue_track(runtime: &Arc<AppRuntime<LoggingAdapter>>, track_id: u64) {
+    // CAST owns playback while a renderer is connected: route the new track to
+    // it instead of starting the local backend, or both would play.
+    if crate::cast_qt::play_current_if_cast(runtime).await {
+        refresh_now_playing(runtime).await;
+        publish_queue(runtime).await;
+        return;
+    }
     // Source-aware audible step: a LOCAL file plays from disk through the
     // player's play_data seam. The Qobuz tier-walk below needs a client and
     // would fail with "No Qobuz client available" on every local advance.
@@ -916,6 +932,14 @@ async fn play_queue_track(runtime: &Arc<AppRuntime<LoggingAdapter>>, track_id: u
 }
 
 pub async fn seek_frac(runtime: &Arc<AppRuntime<LoggingAdapter>>, frac: f32) {
+    match crate::cast_qt::service().seek_fraction_if_cast(frac as f64).await {
+        Ok(true) => return,
+        Ok(false) => {}
+        Err(e) => {
+            log::warn!("[qbz-qt][Cast] seek failed: {e}");
+            return;
+        }
+    }
     let event = runtime.core().player().get_playback_event();
     if event.duration == 0 {
         return;
@@ -927,6 +951,9 @@ pub async fn seek_frac(runtime: &Arc<AppRuntime<LoggingAdapter>>, frac: f32) {
 }
 
 pub async fn set_volume(runtime: &Arc<AppRuntime<LoggingAdapter>>, volume: f32) {
+    if matches!(crate::cast_qt::service().set_volume_if_cast(volume).await, Ok(true)) {
+        return;
+    }
     let _ = runtime.core().set_volume(volume.clamp(0.0, 1.0));
     MUTED.store(volume <= 0.0 && PREMUTE_VOLUME.load(Ordering::Relaxed) != 0, Ordering::Relaxed);
 }
@@ -1124,7 +1151,16 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                 log::error!("[qbz-qt] audio output error: {msg}");
             }
 
-            let event = runtime.core().player().get_playback_event();
+            // CAST: the cast service runs its own 1 s poll and the local player is
+    // stopped, so this path would push position 0 / not-playing every
+    // second and fight it.
+    if crate::cast_qt::is_casting().await {
+        last_track_id = 0;
+        was_playing = false;
+        seen_position = 0;
+        continue;
+    }
+    let event = runtime.core().player().get_playback_event();
             let track_id = event.track_id;
             let position = event.position;
             let duration = event.duration;

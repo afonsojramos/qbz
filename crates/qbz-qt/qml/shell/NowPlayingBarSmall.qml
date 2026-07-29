@@ -21,11 +21,14 @@
 // is AudioStamp.qml — the inline 2-row stamp (quality line over the backend /
 // mode LEDs) that PlayerBarSmall.slint mounts, shared with the Large bar.
 //
-// Connect / Cast / Settings / ViewMode are still inert visual replicas where
-// no Qt invokable exists (TODO comments at the call sites); Volume, Queue,
-// Shuffle, Repeat, Mute, Lyrics and the add flyout are live. Track Info (the
-// (i) button and the song-card title) opens shell/TrackInfoModal.qml — it
-// needs the QbzAlbum.openTrackInfo glue, see that file's header.
+// Connect / Settings / ViewMode are still inert visual replicas where no Qt
+// invokable exists (TODO comments at the call sites); Volume, Queue, Shuffle,
+// Repeat, Mute, Lyrics and the add flyout are live. Cast opens
+// shell/CastPicker.qml (QbzCast — discovery, connect/disconnect, the
+// per-device quality cap) and lights while a renderer is connected. Track
+// Info (the (i) button and the song-card title) opens
+// shell/TrackInfoModal.qml — it needs the QbzAlbum.openTrackInfo glue, see
+// that file's header.
 
 import QtQuick
 import com.blitzfc.qbz
@@ -87,6 +90,14 @@ Rectangle {
     }
 
     TrackInfoModal { id: trackInfo }
+
+    // --- Cast picker (shell/CastPicker.slint) ----------------------------
+    // Same mount reasoning as TrackInfoModal above: a Popup parented to
+    // Overlay.overlay, so AppShell.qml needs no mount, and the NowPlayingBar
+    // Loader guarantees exactly ONE bar (hence one instance) is alive.
+    // Visibility follows QbzCast.pickerOpen; the right-cluster cast button
+    // raises it through QbzCast.openPicker(), which also arms discovery.
+    CastPicker { }
 
     // Square compact icon button (BarControls.IconButton): disabled = dim
     // 0.3 + non-clickable; active = accent tint.
@@ -355,10 +366,15 @@ Rectangle {
                     // (Slint: NowPlayingState.qconnect-connected +
                     // qconnect-toggle()). Rendered 1:1, inert.
                     QbzIconButton { name: "monitor-speaker" }
-                    // Cast (Chromecast / DLNA).
-                    // TODO(qt-bridge): no cast picker in the Qt port
-                    // (Slint: CastState.picker-open + CastActions.open()).
-                    QbzIconButton { name: "cast" }
+                    // Cast (Chromecast / DLNA) — opens the picker modal and,
+                    // with it, device discovery (PlayerBarSmall.slint:596-611:
+                    // picker-open = true + CastActions.open()); lit while a
+                    // renderer is connected.
+                    QbzIconButton {
+                        name: "cast"
+                        active: QbzPlayer.npCastActive
+                        onClicked: QbzCast.openPicker()
+                    }
                     // Audio settings — Tauri's normalization toggle (2.0
                     // groups normalization + gapless behind this button).
                     // TODO(glue): `normalization` is settable through

@@ -30,6 +30,7 @@ mod local_bridge;
 mod library_bridge;
 mod album_bridge;
 mod artist_bridge;
+mod cast_bridge;
 mod artwork_qt;
 mod atmosphere_qt;
 mod bridge;
@@ -55,6 +56,7 @@ mod local_ephemeral;
 mod local_album_actions;
 mod nav_qt;
 mod browse_qt;
+mod cast_qt;
 mod label_qt;
 mod now_playing;
 mod output_labels;
@@ -283,6 +285,9 @@ pub(crate) fn start_offline() {
 pub(crate) fn do_logout() {
     let runtime = app();
     spawn(async move {
+        // A connected renderer keeps playing after the session ends unless it
+        // is torn down explicitly (the cast service owns its own socket).
+        cast_qt::service().shutdown().await;
         if let Err(e) = auth_qt::logout(&runtime).await {
             log::error!("[qbz-qt] logout failed: {e}");
         }
@@ -1479,5 +1484,9 @@ fn main() {
 
     if let Some(app) = app.as_mut() {
         app.exec();
+        // Same reason as logout: leaving the app must stop the renderer.
+        if let Some(rt) = TOKIO.get() {
+            rt.block_on(async { cast_qt::service().shutdown().await });
+        }
     }
 }

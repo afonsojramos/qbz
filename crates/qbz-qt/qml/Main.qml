@@ -56,6 +56,7 @@ ApplicationWindow {
         QbzAlbum.boot()
         QbzArtist.boot()
         QbzLyrics.boot()
+        QbzCast.boot()
         QbzBridge.boot()
     }
 

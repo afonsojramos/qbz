@@ -32,6 +32,9 @@ qbz-models = { path = "../qbz-models" }
 qbz-cache = { path = "../qbz-cache" }
 qbz-offline-cache = { path = "../qbz-offline-cache" }
 qbz-library = { path = "../qbz-library" }
+# Cast: Chromecast + DLNA discovery, the two device families and the local
+# media server (src/cast_qt.rs drives it — nothing is reimplemented).
+qbz-cast = { path = "../qbz-cast" }
 qbz-plex = { path = "../qbz-plex" }
 qbz-lyrics = { path = "../qbz-lyrics" }
 qbz-text-utils = { path = "../qbz-text-utils" }

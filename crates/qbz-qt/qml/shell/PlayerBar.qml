@@ -42,10 +42,12 @@
 // steppers, lyrics, queue, the Now-Playing-view flyout (npbSetMode),
 // normalization, open album/artist via the SongCard meta links, and Track
 // Info — the (i) button and the song-card title open shell/TrackInfoModal.qml
-// (needs the QbzAlbum.openTrackInfo glue; see that file's header).
-// Inert (TODO comments at the call sites): Cast, Connect (device flyouts),
-// add-to-playlist, add-to-mixtape. The volume LOCK (ALSA hw / remote) is
-// still not enforced.
+// (needs the QbzAlbum.openTrackInfo glue; see that file's header). Cast opens
+// shell/CastPicker.qml (QbzCast — discovery, connect/disconnect, the
+// per-device quality cap) and lights while a renderer is connected.
+// Inert (TODO comments at the call sites): Connect (the QConnect device
+// flyout), add-to-playlist, add-to-mixtape. The volume LOCK (ALSA hw /
+// remote) is still not enforced.
 //
 // SIZE (project rule): the inline SongCard / TransportControls / FavToggle
 // components moved out to shell/SongCard.qml, shell/TransportControls.qml and
@@ -145,6 +147,15 @@ Rectangle {
     }
 
     TrackInfoModal { id: trackInfo }
+
+    // --- Cast picker (shell/CastPicker.slint) ------------------------------
+    // Mounted here for the same reason TrackInfoModal is: it is a Popup
+    // parented to Overlay.overlay, so AppShell.qml needs no mount, and the
+    // NowPlayingBar Loader guarantees exactly ONE bar (hence one instance) is
+    // alive. Visibility follows QbzCast.pickerOpen — the cast button in the
+    // right cluster raises it through QbzCast.openPicker(), which is also
+    // what arms device discovery.
+    CastPicker { }
 
     // --- Shared bits -------------------------------------------------------
     // SongCard / TransportControls / FavToggle were inline components here
@@ -326,13 +337,14 @@ Rectangle {
                     Item { visible: root.largeActive; width: 12; height: 1 }
 
                     // Cast (Chromecast / DLNA) — Tauri's first right-cluster
-                    // button.
+                    // button. Opens the picker modal and, with it, discovery
+                    // (PlayerBar.slint:646-664: picker-open = true +
+                    // CastActions.open()); lit while a renderer is connected.
                     QbzIconButton {
                         name: "cast"
+                        active: QbzPlayer.npCastActive
                         anchors.verticalCenter: parent.verticalCenter
-                        // TODO(qt-bridge): no cast picker in the Qt port
-                        // (Slint: CastState.picker-open + CastActions.open()).
-                        // Rendered 1:1, inert.
+                        onClicked: QbzCast.openPicker()
                     }
 
                     // Qobuz Connect — inert (device flyout out of scope).
