@@ -1,0 +1,206 @@
+#!/usr/bin/env bash
+# QBZ Qt/QML — build with cargo, then run the BINARY DIRECTLY.
+#
+# The Qt-track sibling of slint-run.sh. Same shape (build, learned ETA, exec the
+# prebuilt binary so process monitors show `qbz-qt` instead of `cargo`), but the
+# constraints are almost the opposite — read the two sections below before
+# "improving" this script into a copy of slint-run.sh.
+#
+# ─── THERE IS NO MEMORY WALL HERE ───────────────────────────────────────────
+# slint-run.sh tiers threads/codegen-units/opt-level off MemAvailable and runs
+# under a cgroup cap because ONE rustc for `qbz-ui` (the ~1.6 M-line generated
+# Slint module) peaks 20-30 GB and can freeze the box.
+# `qbz-qt` does NOT depend on `qbz-ui` — verified: zero `qbz-ui` references in
+# crates/qbz-qt/Cargo.toml, so the monster compilation unit never enters this
+# graph. The UI lives in QML, which does not go through rustc at all; that is
+# the entire point of the Qt track. So: no tiering, no cap, ordinary jobs.
+# The box-wide "ONE build at a time" rule still applies (a Slint build running
+# in another worktree WILL freeze the machine) — hence the guard below.
+#
+# ─── THE CACHE RULE — WHY THIS SCRIPT SETS NO RUSTFLAGS ─────────────────────
+# RUSTFLAGS is part of every unit's fingerprint. This worktree's target dir was
+# built on STABLE with rustflags=[] (checked in the .fingerprint json). Exporting
+# anything — mold, `-Z threads`, a target-feature — invalidates the whole
+# workspace and buys a from-scratch rebuild of ~200 crates to save seconds on a
+# ~2-minute incremental. Same reason there is no `+nightly` here: nothing in
+# qbz-qt needs it, and switching toolchains is another full rebuild.
+# MOLD=1 opts in anyway (it warns first). If you use it, keep using it.
+#
+# ─── THE QML AUDITS RUN FIRST, BY DESIGN ────────────────────────────────────
+# `cargo check` sees NOTHING of the QML: a missing component or a call to a
+# bridge member that does not exist compiles clean and throws when the user
+# opens that view. The two static audits are ~1s and catch exactly that, so they
+# run BEFORE the build — failing in one second beats failing after two minutes,
+# or worse, at the owner's smoke. NO_AUDIT=1 skips them.
+#
+# Usage: ./scripts/qt-run.sh [extra app args]
+#   DEBUG=1     ./scripts/qt-run.sh   # debug profile (the binary the gate uses)
+#   NORUN=1     ./scripts/qt-run.sh   # build only, don't exec
+#   TEST=1      ./scripts/qt-run.sh   # also run `cargo test -p qbz-qt`
+#   SMOKE=1     ./scripts/qt-run.sh   # offscreen gate instead of the GUI
+#   NO_AUDIT=1  ./scripts/qt-run.sh   # skip the two QML audits
+#   JOBS=4      ./scripts/qt-run.sh   # cargo build jobs (default: auto)
+#   MOLD=1      ./scripts/qt-run.sh   # link with mold (forces a full rebuild)
+#   FORCE=1     ./scripts/qt-run.sh   # build even if another cargo/rustc is up
+#   NO_TICKER=1 ./scripts/qt-run.sh   # no live progress ticker
+set -euo pipefail
+cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/.."
+
+QT_CRATE="crates/qbz-qt"
+AUDIT_DIR="$HOME/Personal/qbz/qbz-nix-docs/qt-frontend/tools"
+
+# --- Pretty helpers ----------------------------------------------------------
+if [[ -t 2 ]]; then C_DIM=$'\033[2m'; C_BOLD=$'\033[1m'; C_GRN=$'\033[32m'
+  C_RED=$'\033[31m'; C_YEL=$'\033[33m'; C_RST=$'\033[0m'
+else C_DIM=""; C_BOLD=""; C_GRN=""; C_RED=""; C_YEL=""; C_RST=""; fi
+fmt_dur() { local s=$1; printf '%dm %02ds' $(( s / 60 )) $(( s % 60 )); }
+say()  { printf '[qt-run] %s\n' "$*"; }
+warn() { printf '%s[qt-run] %s%s\n' "${C_YEL}" "$*" "${C_RST}" >&2; }
+die()  { printf '%s[qt-run] %s%s\n' "${C_RED}" "$*" "${C_RST}" >&2; exit 1; }
+
+if [[ "${DEBUG:-0}" == 1 ]]; then
+  PROFILE=debug;   PROFILE_ARGS=()
+else
+  PROFILE=release; PROFILE_ARGS=(--release)
+fi
+BIN="crates/target/${PROFILE}/qbz-qt"
+
+# --- ONE BUILD AT A TIME, BOX-WIDE ------------------------------------------
+# Not paranoia: a Slint `qbz-ui` rustc in another worktree peaks 20-30 GB on a
+# 30 GB box with no hibernation, and the failure mode is a swap-thrash livelock
+# that needs a power-cycle — earlyoom does not reliably fire. Cheap to check.
+if [[ "${FORCE:-0}" != 1 ]]; then
+  others=$(pgrep -c -x 'rustc|cargo' 2>/dev/null || true)
+  [[ "${others}" =~ ^[0-9]+$ ]] || others=0
+  if (( others > 0 )); then
+    pgrep -a -x 'rustc|cargo' 2>/dev/null | head -5 >&2 || true
+    die "another cargo/rustc is running (${others}). Builds are serialized box-wide — wait, or FORCE=1 if you know it is harmless."
+  fi
+fi
+
+# --- The QML audits (fail fast; cargo cannot see QML) ------------------------
+if [[ "${NO_AUDIT:-0}" != 1 ]]; then
+  if [[ -d "${AUDIT_DIR}" ]] && command -v python3 >/dev/null 2>&1; then
+    audit_abs="$(pwd)/${QT_CRATE}"
+    for a in qml_resolution_audit.py qml_singleton_xref.py; do
+      [[ -r "${AUDIT_DIR}/${a}" ]] || { warn "audit ${a} not found — skipped"; continue; }
+      if ! python3 "${AUDIT_DIR}/${a}" "${audit_abs}"; then
+        die "${a} FAILED — fix it before burning a build (QML resolves lazily; this is what cargo cannot tell you)."
+      fi
+    done
+    say "QML audits OK"
+  else
+    warn "audit tools not found at ${AUDIT_DIR} — skipped"
+  fi
+fi
+
+# --- Build settings ----------------------------------------------------------
+# Deliberately NOT setting CARGO_PROFILE_RELEASE_* (opt-level / codegen-units):
+# they are fingerprint inputs too, and unlike the Slint track there is no memory
+# reason to lower them. The package's own [profile.release] (strip="symbols")
+# is the whole story.
+if [[ -n "${JOBS:-}" ]]; then
+  export CARGO_BUILD_JOBS="${JOBS}"
+else
+  # Leave a couple of cores for the desktop; cargo's default is all of them.
+  ncpu=$(nproc 2>/dev/null || echo 4)
+  export CARGO_BUILD_JOBS="$(( ncpu > 3 ? ncpu - 2 : 1 ))"
+fi
+
+if [[ "${MOLD:-0}" == 1 ]]; then
+  command -v mold >/dev/null 2>&1 || die "MOLD=1 but mold is not installed"
+  warn "MOLD=1 changes RUSTFLAGS, which is a fingerprint input → this rebuilds the WHOLE workspace once. Keep using it, or never use it."
+  export RUSTFLAGS="${RUSTFLAGS:-} -C link-arg=-fuse-ld=mold"
+fi
+
+# --- Learned ETA: last successful build duration for THIS profile ------------
+eta_dir="${XDG_CACHE_HOME:-$HOME/.cache}/qbz-qt"
+eta_file="${eta_dir}/last-build-${PROFILE}.secs"
+eta_secs=0
+[[ -r "${eta_file}" ]] && eta_secs=$(cat "${eta_file}" 2>/dev/null || echo 0)
+[[ "${eta_secs}" =~ ^[0-9]+$ ]] || eta_secs=0
+
+avail_mb=$(free -m | awk '/^Mem:/ {print $7}')
+say "profile=${PROFILE} jobs=${CARGO_BUILD_JOBS} avail=${avail_mb}MB rustflags='${RUSTFLAGS:-}'"
+
+# --- Start banner ------------------------------------------------------------
+build_start=$(date +%s)
+if (( eta_secs > 0 )); then eta_txt="~$(fmt_dur "${eta_secs}") (last ${PROFILE})"
+else eta_txt="unknown (first ${PROFILE} build)"; fi
+printf '%s[qt-run] ▶ build started %s  ·  ETA %s%s\n' \
+  "${C_BOLD}" "$(date '+%H:%M:%S')" "${eta_txt}" "${C_RST}"
+
+# --- Live ticker -------------------------------------------------------------
+# 30s, not slint-run's 15s: a warm qbz-qt build is ~2 min, so 15s would print
+# more ticker than build. A cold one (or the first after `cargo clean`) is long
+# enough that the ticker earns its place.
+tick_pid=""
+if [[ "${NO_TICKER:-0}" != 1 ]] && [[ -t 2 ]]; then
+  (
+    while true; do
+      sleep 30
+      now=$(date +%s); el=$(( now - build_start ))
+      if (( eta_secs > 0 )); then
+        pct=$(( el * 100 / eta_secs )); (( pct > 99 )) && pct=99
+        printf '%s[qt-run] ⏱  %s elapsed · ETA ~%s · ~%d%%%s\n' \
+          "${C_DIM}" "$(fmt_dur "${el}")" "$(fmt_dur "${eta_secs}")" "${pct}" "${C_RST}" >&2
+      else
+        printf '%s[qt-run] ⏱  %s elapsed%s\n' "${C_DIM}" "$(fmt_dur "${el}")" "${C_RST}" >&2
+      fi
+    done
+  ) &
+  tick_pid=$!
+  trap '[[ -n "${tick_pid}" ]] && kill "${tick_pid}" 2>/dev/null || true' EXIT
+fi
+
+# --- The build ---------------------------------------------------------------
+cargo build "${PROFILE_ARGS[@]}" --manifest-path crates/Cargo.toml -p qbz-qt
+
+# --- Stop the ticker, record the duration, print the final banner ------------
+[[ -n "${tick_pid}" ]] && { kill "${tick_pid}" 2>/dev/null || true; wait "${tick_pid}" 2>/dev/null || true; }
+trap - EXIT
+build_secs=$(( $(date +%s) - build_start ))
+mkdir -p "${eta_dir}" 2>/dev/null && printf '%s\n' "${build_secs}" > "${eta_file}" 2>/dev/null || true
+printf '%s[qt-run] ✔ build finished %s  ·  took %s  (%s)%s\n' \
+  "${C_BOLD}${C_GRN}" "$(date '+%H:%M:%S')" "$(fmt_dur "${build_secs}")" "${PROFILE}" "${C_RST}"
+
+# --- Tests (opt-in) ----------------------------------------------------------
+if [[ "${TEST:-0}" == 1 ]]; then
+  say "running cargo test -p qbz-qt"
+  cargo test --manifest-path crates/Cargo.toml -p qbz-qt
+fi
+
+# --- Offscreen smoke gate (opt-in) -------------------------------------------
+# The last step of the track's standard gate: boot the real app with no display
+# and prove the QML tree actually resolves. A lazily-resolved type error only
+# ever shows up here or in front of the owner.
+if [[ "${SMOKE:-0}" == 1 ]]; then
+  log="$(mktemp -t qbz-qt-smoke-XXXXXX.log)"
+  say "offscreen smoke (75s max) → ${log}"
+  QT_QPA_PLATFORM=offscreen RUST_LOG=info timeout 75 "./${BIN}" > "${log}" 2>&1 || true
+  # `propertyCache` from SettingsButton is known-benign noise — filter it out
+  # rather than let it mask a real count.
+  errs=$(grep -av 'propertyCache' "${log}" \
+    | grep -aciE 'is not a type|unavailable|ReferenceError|TypeError|Cannot read|Unable to assign|Cannot open|no such method|has no' || true)
+  published=$(grep -ac 'home published' "${log}" || true)
+  say "smoke: qml complaints=${errs} (want 0) · 'home published'=${published} (want >=1)"
+  if (( errs > 0 )); then
+    grep -av 'propertyCache' "${log}" \
+      | grep -aiE 'is not a type|unavailable|ReferenceError|TypeError|Cannot read|Unable to assign|Cannot open|no such method|has no' | head -20 >&2
+    die "smoke FAILED — see ${log}"
+  fi
+  (( published >= 1 )) || die "smoke FAILED: the app never reached 'home published' — see ${log}"
+  printf '%s[qt-run] ✔ smoke gate PASSED%s\n' "${C_BOLD}${C_GRN}" "${C_RST}"
+  exit 0
+fi
+
+[[ "${NORUN:-0}" == 1 ]] && { say "build done (NORUN set)."; exit 0; }
+
+# The Slint qbz holds the DAC exclusively — two players cannot open it at once.
+if pgrep -x qbz >/dev/null 2>&1; then
+  warn "the Slint 'qbz' is running — close it first or the audio device stays busy (ALSA exclusive)."
+fi
+
+# exec the binary directly — no `cargo run`, so no CARGO_* env / cargo context,
+# so process monitors show `qbz-qt` rather than `cargo`.
+exec "./${BIN}" "$@"
