@@ -132,11 +132,15 @@ Rectangle {
             leftPadding: navTab.showIcon ? 9 : 11
             rightPadding: 11
             spacing: 6
-            QbzIcon {
+            // Baked glyph, or the section's own raw image when it carries one
+            // (My QBZ branding) — see shell/NavSectionGlyph.qml.
+            NavSectionGlyph {
                 visible: navTab.showIcon
-                name: navTab.section ? navTab.section.icon : ""
+                section: navTab.section
+                size: 14
+                // Collapses to zero width under the 1140px breakpoint so the
+                // Row reclaims the space (the height stays 14 via `size`).
                 width: navTab.showIcon ? 14 : 0
-                height: 14
                 anchors.verticalCenter: parent.verticalCenter
                 // Both arms are THEME tokens (the tab sits on surface-elevated
                 // / surface-hover): "textPrimary", never the fixed-white
@@ -192,10 +196,11 @@ Rectangle {
         opacity: isEnabled ? 1.0 : 0.5
         color: isActive ? theme.surfaceElevated
             : (cnbArea.containsMouse && isEnabled) ? theme.surfaceHover : "transparent"
-        QbzIcon {
-            name: cnb.section ? cnb.section.icon : ""
-            width: 16
-            height: 16
+        // Baked glyph, or the section's own raw image when it carries one
+        // (My QBZ branding) — see shell/NavSectionGlyph.qml.
+        NavSectionGlyph {
+            section: cnb.section
+            size: 16
             anchors.centerIn: parent
             tintName: cnb.isActive ? "textPrimary" : "secondary"
         }

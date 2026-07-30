@@ -31,6 +31,16 @@ mod library_bridge;
 mod album_bridge;
 mod artist_bridge;
 mod cast_bridge;
+// MyQBZ splits across THREE singletons rather than one, because the two
+// modals are global overlays with their own lifetime: QbzMyQbz carries the
+// two grids + the detail page + the edit/mix modals + the branding,
+// QbzMyQbzAdd carries only the app-wide "Add to Mixtape/Collection" picker
+// (mounted in AppShell, reachable from any view's row menu), and QbzDisco
+// carries the Artist-Collection builder.
+mod myqbz_bridge;
+mod myqbz_add_bridge;
+mod disco_bridge;
+mod blacklist_bridge;
 mod artwork_qt;
 mod atmosphere_qt;
 mod bridge;
@@ -56,6 +66,31 @@ mod local_bridge_ops;
 mod local_bulk;
 mod local_ephemeral;
 mod local_album_actions;
+// MyQBZ domain controllers. One module per concern, all driven by the three
+// bridges above: the grids + Create modal (myqbz_qt), the per-user branding
+// and per-collection view prefs (myqbz_prefs_qt), the detail page
+// (myqbz_detail_qt) and its playback / edit / cover / DJ-mix arms, the
+// app-wide Add picker (myqbz_add_qt) and the Artist-Collection builder
+// (myqbz_builder_qt + its Qobuz/local/Plex fetchers).
+mod myqbz_qt;
+mod myqbz_prefs_qt;
+mod myqbz_detail_qt;
+mod myqbz_play_qt;
+mod myqbz_edit_qt;
+mod myqbz_cover_qt;
+mod myqbz_mix_qt;
+mod myqbz_add_qt;
+mod myqbz_builder_qt;
+mod myqbz_builder_fetch_qt;
+// Blacklist: the per-user store (artist_blacklist), the Recommendations
+// dismissal store (reco_dismiss_qt) and the manager view's controller.
+mod artist_blacklist;
+mod reco_dismiss_qt;
+mod blacklist_qt;
+// Shared in-app toast publisher (the port of qbz-slint-common's toast.rs).
+// A plain module, NOT a bridge — it publishes onto QbzShell.toastJson, and
+// `controls/QbzToast.qml` owns the auto-hide timer.
+mod toast_qt;
 mod nav_qt;
 mod browse_qt;
 mod cast_qt;
@@ -157,6 +192,15 @@ pub(crate) fn on_boot() {
         offline_fwd::start();
     });
     offline_fwd::start_ui_forwarder();
+
+    // Derivative-cache housekeeping, off the Qt thread. Once per run: the
+    // `.jpg` orphan sweep is idempotent (FIX 1 moved the scaled derivatives to
+    // `.png`, so every `.jpg` left in `images/scaled/` is dead weight from a
+    // pre-fix build) and the byte cap is cheap — one `read_dir`, then unlink
+    // the oldest until the directory is back under the ceiling.
+    spawn(async {
+        let _ = tokio::task::spawn_blocking(artwork_qt::housekeeping).await;
+    });
 
     // Splash -> silent session restore -> shell | login.
     let runtime = app();
@@ -807,6 +851,26 @@ pub(crate) fn open_playlist(playlist_id: String) {
     });
 }
 
+// ======================= MyQBZ (crate-level forwards) =====================
+//
+// W6: the ONLY crate-root forward the MyQBZ domain needs. Everything else the
+// three bridges call, they call straight at its controller module
+// (`crate::myqbz_qt::…`, `crate::myqbz_builder_qt::…`) — a thin forward per
+// invokable would be 48 dead one-liners.
+//
+// This one exists because the CONTROLLERS need it, not the bridges: both
+// `myqbz_qt::create_submit` (Create modal) and `myqbz_builder_qt::create`
+// (Artist-Collection builder) navigate to the collection they just created,
+// and neither should reach into a sibling controller to do it.
+
+/// Open a mixtape/collection detail page by id — the shared "created, now go
+/// there" hop. `myqbz_detail_qt::open` records the `"mixtapedetail"` route
+/// itself, so this deliberately does NOT call `navigate_to` (which would
+/// record a second entry and clear `LAST_DETAIL` twice).
+pub(crate) fn myqbz_open_detail(id: String) {
+    myqbz_detail_qt::open(id);
+}
+
 pub(crate) fn playlist_play_all() {
     let runtime = app();
     spawn(async move {
@@ -1107,6 +1171,21 @@ pub(crate) fn navigate_to(view: &str) {
     if view == "settings" {
         publish_settings();
     }
+    // MyQBZ: BOTH grids reload on EVERY visit — deliberately no once-flag
+    // (contrast `library` above). A create from the Add picker, a delete from
+    // the detail view or a new Artist Collection from the builder all change
+    // the set while the grid is unmounted, so a once-per-session flag would
+    // paint a stale grid. The read is one local SQLite query.
+    if view == "mixtapes" {
+        myqbz_qt::load_grid(myqbz_qt::Grid::Mixtapes);
+    }
+    if view == "collections" {
+        myqbz_qt::load_grid(myqbz_qt::Grid::Collections);
+    }
+    // "mixtapedetail", "discobuilder" and "blacklist" need no arm: each is
+    // only ever reached through a call that loads its own data first and
+    // records the route itself (myqbz_detail_qt::open, myqbz_builder_qt::open,
+    // blacklist_qt::open_manager), never through the sidebar.
 }
 
 // ============================ i18n (phase 20) ==============================
@@ -1137,6 +1216,18 @@ pub(crate) fn apply_language(code: String) {
     reload_home();
     reload_library();
     publish_settings();
+    // MyQBZ builds a handful of strings in RUST — the kind eyebrow
+    // ("MIXTAPE" / "COLLECTION" / "ARTIST"), the "{} albums" plural, every
+    // unresolved row's TYPE label, and the builder's footer count + default
+    // collection name. None of them re-translate through trRev, because they
+    // arrive as data inside a JSON document, so each owner republishes.
+    //
+    // Unconditional, unlike the album/artist republish below: `navigate_to`
+    // clears LAST_DETAIL, so routing MyQBZ through that latch would silently
+    // skip it. Each of these is a no-op on an empty document.
+    myqbz_qt::republish_all();
+    myqbz_detail_qt::republish();
+    myqbz_builder_qt::republish();
     let (view, id) = LAST_DETAIL.lock().unwrap().clone();
     if !id.is_empty() {
         match view.as_str() {

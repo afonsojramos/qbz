@@ -916,11 +916,28 @@ fn save_myqbz_label(label: &str) {
     let Some(mut doc) = read_json_object(&path) else {
         return;
     };
+    // Trimmed-empty coerces to the default, it does NOT store "".
+    // `myqbz_prefs.rs:121-128` does the same, and it matters both ways: the
+    // sidebar/nav-flyout row would otherwise render a blank label with no way
+    // to get the name back except retyping it, and the READ side
+    // (`myqbz_label()` above) already filters empty to "My QBZ" — so storing
+    // "" would leave the file and the UI disagreeing.
+    let trimmed = label.trim();
+    let stored = if trimmed.is_empty() {
+        crate::myqbz_prefs_qt::DEFAULT_LABEL
+    } else {
+        trimmed
+    };
     doc.insert(
         "label".to_string(),
-        serde_json::Value::String(label.trim().to_string()),
+        serde_json::Value::String(stored.to_string()),
     );
     write_json_object_atomic(&path, &doc);
+    // The label is not read from this document at render time — the sidebar
+    // and the nav flyout bind `QbzMyQbz.brandingJson`, which is seeded once at
+    // construction. Without this republish the row keeps the old name until
+    // the next launch.
+    crate::myqbz_prefs_qt::republish_branding();
 }
 
 pub const STREAMING_QUALITY_KEYS: &[&str] = &["mp3", "cd", "hires", "hires_plus"];

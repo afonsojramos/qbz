@@ -645,6 +645,14 @@ Rectangle {
                     onPlayRequested: QbzBridge.playlistPlayTrack(item.id)
                     onEnqueueRequested: function (m) { QbzBridge.playlistEnqueueTrack(item.id, m) }
                     onRemoveRequested: QbzBridge.playlistRemoveTrack(item.playlistTrackId)
+                    // MyQBZ "Add to mixtape" — the HOST builds the AddItem
+                    // array (TrackRow does not know itemType/source).
+                    onMixtapeRequested: QbzMyQbzAdd.open(JSON.stringify([{
+                        "itemType": "track", "source": "qobuz",
+                        "sourceItemId": item.id, "title": item.title || "",
+                        "subtitle": item.artist || "", "artworkUrl": "",
+                        "year": null, "trackCount": null
+                    }]))
                     onBodyDragStarted: function (n) {
                         // #589: report the source index BEFORE the shared drag.
                         if (root.isOwner) {

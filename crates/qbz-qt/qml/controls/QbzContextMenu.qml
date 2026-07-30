@@ -73,4 +73,14 @@ Popup {
         var g = sourceItem.mapToItem(null, sourceItem.width - width, sourceItem.height + 4)
         _place(g.x, g.y, sourceItem.Window.window)
     }
+
+    /// Button menu: below the trigger, LEFT edges aligned. The mirror of
+    /// openBelowRight, for triggers that sit at the LEFT end of their row (the
+    /// MyQBZ hero overflow and the Disco builder's per-row type override), where
+    /// a right-aligned panel would hang off the trigger to the left and, on a
+    /// narrow window, get clamped by _place into visibly the wrong place.
+    function openBelowLeft(sourceItem) {
+        var g = sourceItem.mapToItem(null, 0, sourceItem.height + 4)
+        _place(g.x, g.y, sourceItem.Window.window)
+    }
 }

@@ -106,7 +106,7 @@ Item {
         spacing: 8
         visible: !QbzLocal.localTracksLoading && root.view.tracksVisible.length > 0
 
-        LocalMultiSelectBar {
+        QbzMultiSelectBar {
             visible: root.view.tracksMultiSelect
             width: parent.width
             selectedCount: root.view.tracksSelectedCount

@@ -29,7 +29,14 @@ Rectangle {
     property string text: ""
     property string placeholder: ""
     property bool isPassword: false
+    /// Fired on focus-loss AND on Enter — the "the value settled" signal.
     signal committed(string value)
+    /// Fired on ENTER ONLY. A modal that submits on Enter must NOT listen to
+    /// `committed`: closing the modal removes focus, which fires `committed`
+    /// again and submits the same value a second time (a rename would run
+    /// twice, a create would make two collections). Emitted BEFORE `committed`
+    /// so a handler that closes the modal wins the race.
+    signal accepted(string value)
 
     // --- search arm -------------------------------------------------------
     /// Leading magnifier + live `edited` + trailing X.
@@ -56,9 +63,31 @@ Rectangle {
     height: (searchMode || expandable) ? collapsedSize : 34
     color: "transparent"
 
+    /// Set by `clearSearch()`, released the moment the CALLER publishes anything
+    /// into `text`. While it is set, the focus-loss re-seed Binding below is
+    /// suppressed.
+    ///
+    /// This is what replaces the `root.text = ""` this function used to do. That
+    /// assignment was a JS write to a property the call site normally holds a
+    /// BINDING on (`text: root.doc.search`, `text: root.query`, …), so the first
+    /// click on the × destroyed the binding PERMANENTLY: Rust could never
+    /// re-seed the field again, and the re-seed Binding below then wrote the
+    /// now-frozen "" back into the input on every later focus loss. The X in
+    /// MyQBZ's grid + detail toolbars, DiscoverBrowse and PlaylistBrowse all
+    /// rode that. Clearing is now purely local — the input goes empty and
+    /// `edited("")` tells the owner, which republishes "" through the binding
+    /// that is still intact.
+    ///
+    /// The latch is needed because the republish is not synchronous: between the
+    /// click and Rust's answer `root.text` still holds the OLD query, and a
+    /// focus loss in that window (expandable's `closeSearch()` drops focus by
+    /// design) would put it straight back.
+    property bool _cleared: false
+    onTextChanged: root._cleared = false
+
     function clearSearch() {
         input.text = ""
-        root.text = ""
+        root._cleared = true
         root.edited("")
     }
     function closeSearch() {
@@ -151,7 +180,7 @@ Rectangle {
                     selectByMouse: true
                     echoMode: root.isPassword ? TextInput.Password : TextInput.Normal
                     text: root.text
-                    onAccepted: root.committed(text)
+                    onAccepted: { root.accepted(text); root.committed(text) }
                     onActiveFocusChanged: if (!activeFocus) root.committed(text)
                     onTextEdited: root.edited(text)
                     Keys.onEscapePressed: function (event) {
@@ -163,12 +192,15 @@ Rectangle {
                         }
                     }
                     // External republish (e.g. Reset) re-seeds the field while
-                    // it is not being edited.
+                    // it is not being edited. `!_cleared` holds it off for the
+                    // frames between the × and the owner's republish, when
+                    // `root.text` is still the query the user just cleared —
+                    // see `_cleared`.
                     Binding {
                         target: input
                         property: "text"
                         value: root.text
-                        when: !input.activeFocus
+                        when: !input.activeFocus && !root._cleared
                     }
                 }
                 Text {

@@ -187,11 +187,21 @@ async fn apply(rows: Vec<LocalTrack>, action: &str) -> bool {
             enqueue_rows(rows, action).await;
             true
         }
-        // GAP (not a half-path): this port has no playlist picker modal and
-        // no mixtape store — the Slint routes these into
-        // `playlist_picker::open_multi` / `myqbz_add`, neither of which was
+        // The MyQBZ picker — 1:1 with the Slint's `myqbz_add` route. Returns
+        // FALSE (keep the selection): the picker is still open and a failed
+        // write is retried from the same modal, which is exactly what this
+        // function's doc-comment describes.
+        "add-to-mixtape" => {
+            if rows.is_empty() {
+                return false;
+            }
+            crate::myqbz_add_qt::open_items(crate::myqbz_add_qt::track_items_from_local(&rows));
+            false
+        }
+        // GAP (not a half-path): this port has no playlist picker modal — the
+        // Slint routes this into `playlist_picker::open_multi`, which was not
         // ported. Same gap the PlayerBar / NowPlayingBarSmall menus document.
-        "add-to-playlist" | "add-to-mixtape" => {
+        "add-to-playlist" => {
             log::warn!(
                 "[qbz-qt] local bulk {action}: no picker seam in this port ({} row(s) dropped)",
                 rows.len()

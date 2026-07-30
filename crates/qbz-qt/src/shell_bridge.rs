@@ -137,6 +137,31 @@ pub mod qbz_shell {
         #[qproperty(f32, ambient_surface_alpha)]
         #[qproperty(f32, ambient_bar_alpha)]
 
+        // --- Rounded-cover render arm (manual override) --------------------
+        // `RoundedImage` masks covers with a MultiEffect layer and falls back
+        // to its CPU Canvas raster automatically when `GraphicsInfo.api`
+        // reports Software/Null. This pins the Canvas arm by hand on a machine
+        // where GraphicsInfo reports a GPU and the mask still misbehaves,
+        // without a rebuild: env `QBZ_QT_ROUND_MODE=canvas`. Default false.
+        // Seeded in `impl Default`, NOT in `boot()` — QML singletons
+        // instantiate lazily and the first access is a `RoundedImage`
+        // `_useCanvas` read, which can precede `QbzShell.boot()`.
+        #[qproperty(bool, force_canvas_art)]
+
+        // --- In-app toasts (shared) ---------------------------------------
+        // ONE JSON document (toast_qt.rs ToastDoc: seq / kind / message /
+        // persistent), rendered by the single `controls/QbzToast.qml` host
+        // mounted in AppShell. Default "{}"; `seq` is monotonic and starts at
+        // 1, so the host hides itself while `seq <= 0` and re-shows even when
+        // the SAME message repeats.
+        //
+        // Lives on QbzShell rather than getting a bridge of its own for the
+        // same reason the drag ghost does: the producers are everywhere (any
+        // controller, any thread) and the consumer is one window-level
+        // overlay. Rust owns no timer — the auto-hide delay is keyed off `seq`
+        // in QML, so a toast never needs a hide round-trip.
+        #[qproperty(QString, toast_json)]
+
         // --- Drag & drop (phase 17) ----------------------------------------
         // The shared drag state (DragState in state.slint): the ghost reads
         // count/title/subtitle + the window-coord pointer; sidebar playlist
@@ -318,6 +343,8 @@ pub struct QbzShellRust {
     ambient_dim: f32,
     ambient_surface_alpha: f32,
     ambient_bar_alpha: f32,
+    force_canvas_art: bool,
+    toast_json: QString,
     drag_active: bool,
     drag_count: i32,
     drag_title: QString,
@@ -372,6 +399,13 @@ impl Default for QbzShellRust {
             ambient_dim: crate::settings_qt::ambient_dim(),
             ambient_surface_alpha: crate::settings_qt::ambient_surface_alpha(),
             ambient_bar_alpha: crate::settings_qt::ambient_bar_alpha(),
+            // Read here, not in boot(): the first QML access to this singleton
+            // is a RoundedImage `_useCanvas` read, which can happen before
+            // QbzShell.boot() runs, and a boot() seed would leave the arm
+            // decided against a stale `false`.
+            force_canvas_art: std::env::var("QBZ_QT_ROUND_MODE").as_deref() == Ok("canvas"),
+            // seq 0 = "nothing has been published"; the host stays hidden.
+            toast_json: QString::from("{}"),
             drag_active: false,
             drag_count: 0,
             drag_title: QString::default(),

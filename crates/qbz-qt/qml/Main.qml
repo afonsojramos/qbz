@@ -118,6 +118,19 @@ ApplicationWindow {
         QbzLyrics.boot()
         QbzCast.boot()
         QbzBridge.boot()
+        // MyQBZ (two grids + detail + modals), the app-wide Add picker, the
+        // Artist-Collection builder, and the Blacklist manager.
+        //
+        // boot() is what registers each singleton's CxxQtThread hop, so a
+        // missing line here is a SILENT no-op forever: the view mounts, every
+        // `ui()` publish from Rust is dropped on the floor, the document stays
+        // at its "{}" default and NOTHING is logged on either side. QbzBlacklist
+        // is the loudest case — its `blacklistLoading` defaults to true, so the
+        // manager would spin forever.
+        QbzMyQbz.boot()
+        QbzMyQbzAdd.boot()
+        QbzDisco.boot()
+        QbzBlacklist.boot()
 
         // Seed the maximized latch ONCE, imperatively — see its declaration for
         // why it must not be a binding on the bridge property.

@@ -38,9 +38,13 @@
 // behave identically wherever the nav is hosted. The rows keep the
 // SidebarDirectRow active treatment (surface-hover bg + primary text/icon)
 // for the current section and while their own menu is open.
-// Discover / Library / Local Library route into real views; My QBZ does NOT
-// (no such surface in this port) and is therefore rendered disabled, flyout
-// included (a row that clicks into nothing is a defect, not a stub).
+// All four sections route into real views, My QBZ included (its Collections /
+// Mixtapes entries reach the "collections" / "mixtapes" routes). The disabled
+// treatment the NavRow still carries — dimmed to 0.45, pointer-inert, no
+// flyout — is the mechanism for a section with no surface behind it, and
+// nothing uses it today (a row that clicks into nothing is a defect, not a
+// stub). Its leading glyph goes through shell/NavSectionGlyph.qml, because My
+// QBZ can carry a user-supplied icon (SidebarNavRow `raw-icon`).
 // The playlist/folder tree below the nav IS live (sidebar_qt.rs: load,
 // sort, search, expand/collapse, drag-drop target); folder CREATION,
 // the Playlist Manager and the importer have no seam and are disabled in
@@ -410,8 +414,9 @@ Rectangle {
         property var section: null
         readonly property bool isActive: section
             && (root.activeNav === section.id || navFlyout.openId === section.id)
-        // No surface behind this section in this port — rendered as
-        // unavailable rather than as a live row that clicks into nothing.
+        // A section with no surface behind it renders as unavailable rather
+        // than as a live row that clicks into nothing. Every section is live
+        // today; the treatment stays for the next stub.
         readonly property bool isEnabled: section && section.enabled
         readonly property bool lit: isActive || (navArea.containsMouse && isEnabled)
 
@@ -432,10 +437,11 @@ Rectangle {
             Item {
                 width: root.mini ? parent.width : 16
                 height: parent.height
-                QbzIcon {
-                    name: navRow.section ? navRow.section.icon : ""
-                    width: 16
-                    height: 16
+                // Baked glyph, or the section's own raw image when it carries
+                // one (My QBZ branding) — Sidebar.slint:601-612.
+                NavSectionGlyph {
+                    section: navRow.section
+                    size: 16
                     anchors.centerIn: parent
                     tintName: navRow.lit ? "textPrimary" : "secondary"
                 }
@@ -499,9 +505,10 @@ Rectangle {
 
             // The same four sections the header hosts, from the same catalog.
             // Qobuz-only ones are HIDDEN entirely while offline (ADR-010
-            // mount-site gating, not rendered-disabled); My QBZ carries
-            // enabled: false in the catalog (no surface behind it in this
-            // port) and so renders dimmed and inert, flyout included.
+            // mount-site gating, not rendered-disabled). My QBZ is `qobuz:
+            // false` in the catalog, i.e. it stays mounted while offline —
+            // Slint does not offline-gate its row either
+            // (Sidebar.slint:779-792, unlike the Purchases row right after it).
             Repeater {
                 model: navFlyout.sections
                 delegate: NavRow {

@@ -28,11 +28,13 @@
 // rows/TrackCols.qml for both.
 //
 // POC-NOTEs, each deliberate and each with a precedent in this port:
-// - NO multi-select bar. qml/rows/TrackRow.qml has no multi-select arm and
-//   two of the .slint bar's seven actions (add-to-playlist, add-to-mixtape)
-//   have no bridge seam at all — LabelView.qml made the same call. The
-//   .slint header's select disc renders DIMMED and inert here (the
-//   ArtistView / LabelView precedent).
+// - NO multi-select bar. qml/rows/TrackRow.qml has no multi-select arm, and
+//   one of the .slint bar's seven actions (add-to-playlist) still has no
+//   bridge seam at all — LabelView.qml made the same call. (add-to-mixtape
+//   IS live now: the per-row menu reaches QbzMyQbzAdd.open; it is only the
+//   BULK form that is missing, for want of a selection.) The .slint header's
+//   select disc renders DIMMED and inert here (the ArtistView / LabelView
+//   precedent).
 // - The "Add to playlist" disc (list-plus) is inert in the .slint too — it
 //   carries no `clicked` there (MixView.slint:182-188) — so it is inert
 //   here, dimmed the same way, rather than silently absent.
@@ -281,6 +283,15 @@ Rectangle {
                     onEnqueueRequested: function (mode) {
                         QbzHome.mixEnqueueTrack(modelData.id, mode)
                     }
+                    // MyQBZ "Add to mixtape" — the HOST builds the AddItem
+                    // array (TrackRow does not know itemType/source).
+                    onMixtapeRequested: QbzMyQbzAdd.open(JSON.stringify([{
+                        "itemType": "track", "source": "qobuz",
+                        "sourceItemId": modelData.id,
+                        "title": modelData.title || "",
+                        "subtitle": modelData.artist || "",
+                        "artworkUrl": "", "year": null, "trackCount": null
+                    }]))
                 }
             }
         }

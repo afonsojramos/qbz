@@ -158,6 +158,7 @@ Rectangle {
         clip: true
 
         Loader {
+            id: viewLoader
             anchors.fill: parent
             source: QbzShell.currentView === "home" ? "../views/HomeView.qml"
                 : QbzShell.currentView === "library" ? "../views/LibraryView.qml"
@@ -181,7 +182,44 @@ Rectangle {
                 // mix tile navigated to a view nobody mounted and the content
                 // pane simply went blank (back recovered, which is why it read
                 // as "nothing happens" rather than a crash).
-                : QbzShell.currentView === "mix" ? "../views/MixView.qml" : ""
+                : QbzShell.currentView === "mix" ? "../views/MixView.qml"
+                // MyQBZ. Mixtapes and Collections are ONE file — the two
+                // pages differ only in their filter row and their empty
+                // state, so MyQbzGridView carries a `kind` discriminator
+                // (see the Binding below, which is how it gets set).
+                : QbzShell.currentView === "mixtapes"
+                  || QbzShell.currentView === "collections" ? "../views/myqbz/MyQbzGridView.qml"
+                : QbzShell.currentView === "mixtapedetail" ? "../views/myqbz/MyQbzDetailView.qml"
+                : QbzShell.currentView === "discobuilder" ? "../views/myqbz/DiscoBuilderView.qml"
+                // Settings > Blacklist > Manage. Not reachable from the
+                // sidebar — blacklist_qt::open_manager records the route.
+                : QbzShell.currentView === "blacklist" ? "../views/BlacklistManagerView.qml" : ""
+        }
+
+        // MyQbzGridView serves BOTH the "mixtapes" and "collections" routes
+        // and needs to know which. A Loader cannot pass properties through a
+        // declarative `source:` ternary, and the view's own default is
+        // "mixtape" — so without this the Collections route would render the
+        // Mixtapes page, permanently, with nothing logged.
+        //
+        // A Binding rather than `onLoaded`/`setSource`: it applies the moment
+        // `item` exists (the Loader creates it synchronously, so still before
+        // the first render pass), it re-applies if the route flips
+        // mixtapes <-> collections while the same instance is mounted, and it
+        // keeps the whole router declarative. Same shape as the seeded-field
+        // pattern at controls/QbzLineEdit.qml:174-179.
+        //
+        // RestoreNone: the target is DESTROYED on unload, and the default
+        // RestoreBindingOrValue would try to write the old value back into a
+        // dying object.
+        Binding {
+            target: viewLoader.item
+            property: "kind"
+            value: QbzShell.currentView === "collections" ? "collection" : "mixtape"
+            when: viewLoader.item !== null
+                  && (QbzShell.currentView === "mixtapes"
+                      || QbzShell.currentView === "collections")
+            restoreMode: Binding.RestoreNone
         }
     }
 
@@ -220,13 +258,26 @@ Rectangle {
     // touches the frame.
     //
     // Mechanism: four small Canvas nubs, each filling its corner square with
-    // the shell colour and punching the quarter-disc back out. Canvas is this
-    // port's rounding primitive for exactly this reason
-    // (theme/RoundedImage.qml, cards/PlaylistCollage.qml): ShaderEffect /
-    // OpacityMask render NOTHING on the software path, and `layer.enabled` +
-    // a rounded mask would cost an FBO the size of the whole content pane
-    // every frame. Cost here is 4 x 12x12 px rastered once, repainted only
-    // when the theme colour or the radius changes.
+    // the shell colour and punching the quarter-disc back out.
+    //
+    // DOCTRINE CORRECTION (2026-07-29). This paragraph used to justify the
+    // Canvas by claiming "ShaderEffect / OpacityMask render NOTHING on the
+    // software path, and `layer.enabled` would cost an FBO every frame".
+    // Both halves are FALSE as stated: effects need shaders, and this port
+    // runs on the GPU (OpenGL RHI, measured via QSG_INFO 2026-07-29) — the
+    // "renders nothing" note came from an offscreen session, which forces the
+    // software renderer by definition. A `layer` FBO is also rendered once and
+    // CACHED for static content, not re-rendered per frame. Where a software
+    // path is genuinely possible, detect it with `GraphicsInfo.api` rather
+    // than assuming it (theme/RoundedImage.qml does exactly that and is the
+    // canonical statement of this rule — read its "HOW THE ROUNDING IS DONE"
+    // header before touching any masking code).
+    //
+    // The Canvas here is still the right call, but on its own merits, not that
+    // one: the nubs are 4 x 12x12 px rastered ONCE and repainted only when the
+    // theme colour or the radius changes, whereas masking the frame would mean
+    // an FBO the size of the whole content pane, re-rendered on every window
+    // resize and invalidated by anything animating inside the pane.
     //
     // The fill is the shell base (`root.color`) because that is literally
     // what shows through the bezel: the 8px gutter, the HeaderBar above
@@ -466,6 +517,42 @@ Rectangle {
                 font.pixelSize: 10
             }
         }
+    }
+
+    // --- MyQBZ global overlays + the shared toast host ---------------------
+    // Three window-level overlays, mounted ONCE here because each is reachable
+    // from anywhere and must outlive the view that triggered it:
+    //
+    //   AddToMixtapeModal — the "Add to Mixtape/Collection" picker, opened from
+    //     a TrackRow menu, an album/playlist page, a Local Library bulk bar or
+    //     the now-playing bar. The view that opened it is often unmounted by
+    //     the time the user picks a target.
+    //   MyQbzModals       — Create / Edit (rename · description · delete) / DJ
+    //     Mix, three sibling panels in one file (spec 01 §10/§11). Delete in
+    //     particular navigates away from the page that raised it.
+    //   QbzToast          — the ONE in-app toast host (toast_qt.rs publishes
+    //     onto QbzShell.toastJson; the auto-hide timer lives in the QML).
+    //
+    // NO `z` on any of them, and that is the point. This file's convention is
+    // DECLARATION ORDER (see the note at ArtPreviewOverlay below: "LAST child =
+    // above every surface"), and the bezel-corner note at :200-264 explains why
+    // `z` is the wrong tool out here — ADR-009 pins in-pane modals at z >= 3000
+    // with no ceiling, so any number picked here loses to the next one added.
+    // Position in the chain is byte-equivalent to Slint, where `Toast { }` sits
+    // at AppShell.slint:950: after DragGhost, before TooltipOverlay and
+    // ArtPreviewOverlay. Covering the content pane's rounded corners is CORRECT
+    // for a window-level overlay — a window-wide scrim covers them too.
+    //
+    // All three self-gate on their own document, so an unopened overlay is an
+    // invisible, non-interactive Item and costs nothing.
+    AddToMixtapeModal {
+        anchors.fill: parent
+    }
+    MyQbzModals {
+        anchors.fill: parent
+    }
+    QbzToast {
+        anchors.fill: parent
     }
 
     // LAST child = above every surface, exactly like ArtPreviewOverlay.slint's

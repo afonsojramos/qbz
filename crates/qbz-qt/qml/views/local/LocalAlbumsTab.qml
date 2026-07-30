@@ -89,7 +89,7 @@ Item {
         visible: !QbzLocal.localAlbumsLoading && QbzLocal.localAlbumsError === ""
             && root.view.albumsVisible.length > 0
 
-        LocalMultiSelectBar {
+        QbzMultiSelectBar {
             visible: root.view.albumsMultiSelect
             width: parent.width
             selectedCount: root.view.albumsSelectedCount

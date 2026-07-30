@@ -134,7 +134,7 @@ Item {
                     placeholder: QbzSession.tr("Search albums...", QbzSession.trRev)
                     onEdited: function (v) { root.view.folderDetailSearch = v }
                 }
-                LocalSegToggle {
+                QbzSegToggle {
                     anchors.verticalCenter: parent.verticalCenter
                     segments: [{ "id": "grid", "icon": "layout-grid" },
                                { "id": "list", "icon": "list" }]

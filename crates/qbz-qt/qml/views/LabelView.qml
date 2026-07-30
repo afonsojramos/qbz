@@ -14,11 +14,13 @@
 // - JUMP TO is NOT sticky. ArtistView.qml:1204 documents the same call for
 //   the .slint's sticky clamp; matching it keeps the two detail pages
 //   consistent. This is the one accepted visual delta.
-// - NO multi-select. qml/rows/TrackRow.qml has no multi-select arm, and two
-//   of the .slint MultiSelectBar's seven actions (add-to-playlist,
-//   add-to-mixtape) have no bridge seam at all (TrackRow.qml:108-112), so a
-//   full port would ship two dead entries. The select disc renders DIMMED
-//   and inert (the ArtistView "Radio" precedent) and the bar is absent.
+// - NO multi-select. qml/rows/TrackRow.qml has no multi-select arm, and one
+//   of the .slint MultiSelectBar's seven actions (add-to-playlist) has no
+//   bridge seam at all (TrackRow.qml:107-121), so a full port would ship a
+//   dead entry. (add-to-mixtape IS live now — the per-row menu reaches
+//   QbzMyQbzAdd.open; only the BULK form is missing, for want of a
+//   selection.) The select disc renders DIMMED and inert (the ArtistView
+//   "Radio" precedent) and the bar is absent.
 // - NO "In library" tab. The Qt library feed carries no label id, so
 //   `libraryCount` is always 0 and the SegmentedTabBar never mounts (see
 //   src/label_qt.rs). A toggle that switches to an empty tab is worse.
@@ -520,6 +522,16 @@ Rectangle {
                             onEnqueueRequested: function (mode) {
                                 QbzHome.labelEnqueueTrack(modelData.id, mode)
                             }
+                            // MyQBZ "Add to mixtape" — the HOST builds the
+                            // AddItem array (TrackRow does not know
+                            // itemType/source).
+                            onMixtapeRequested: QbzMyQbzAdd.open(JSON.stringify([{
+                                "itemType": "track", "source": "qobuz",
+                                "sourceItemId": modelData.id,
+                                "title": modelData.title || "",
+                                "subtitle": modelData.artist || "",
+                                "artworkUrl": "", "year": null, "trackCount": null
+                            }]))
                         }
                     }
 

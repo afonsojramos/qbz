@@ -457,10 +457,21 @@ Rectangle {
             } else if (a === "album-favorite") {
                 if (QbzPlayer.npAlbumId !== "")
                     QbzLibrary.libraryToggleFavorite("album", QbzPlayer.npAlbumId)
+            } else if (a === "mixtape") {
+                // MyQBZ AddItem, built here from the now-playing state:
+                // `npArtworkPath` is a file:// CACHE path, so it is NOT the
+                // artworkUrl — the store would keep a dead local path.
+                if (id !== "")
+                    QbzMyQbzAdd.open(JSON.stringify([{
+                        "itemType": "track", "source": "qobuz",
+                        "sourceItemId": id, "title": QbzPlayer.npTitle,
+                        "subtitle": QbzPlayer.npArtist, "artworkUrl": "",
+                        "year": null, "trackCount": null
+                    }]))
             }
-            // TODO(qt-bridge): "playlist" (add-to-playlist modal) and
-            // "mixtape" have no invokable in the Qt port yet — the rows are
-            // rendered 1:1 with the Slint flyout and do nothing for now.
+            // TODO(qt-bridge): "playlist" (add-to-playlist modal) has no
+            // invokable in the Qt port yet — the row is rendered 1:1 with the
+            // Slint flyout and does nothing for now.
         }
     }
 }

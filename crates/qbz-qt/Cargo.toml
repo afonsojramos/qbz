@@ -32,6 +32,11 @@ qbz-models = { path = "../qbz-models" }
 qbz-cache = { path = "../qbz-cache" }
 qbz-offline-cache = { path = "../qbz-offline-cache" }
 qbz-library = { path = "../qbz-library" }
+# MyQBZ: Mixtapes & Collections backend (schema + migrations, repo, shuffle,
+# enqueue). Headless and frontend-agnostic (ADR-006) — the same crate the
+# Slint app uses (crates/qbz/Cargo.toml:96), so the two frontends share
+# library.db's mixtape tables rather than each growing their own.
+qbz-mixtape = { path = "../qbz-mixtape" }
 # Cast: Chromecast + DLNA discovery, the two device families and the local
 # media server (src/cast_qt.rs drives it — nothing is reimplemented).
 qbz-cast = { path = "../qbz-cast" }
@@ -49,6 +54,18 @@ async-trait = "0.1"
 
 rusqlite = { version = "0.31", features = ["bundled"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+
+# Native file picker, used by exactly two call sites — the MyQBZ collection
+# cover upload (src/myqbz_cover_qt.rs) and the My-QBZ branding icon picker
+# (src/myqbz_prefs_qt.rs).
+#
+# The feature set is NOT negotiable and is copied verbatim from the reference
+# (crates/qbz/Cargo.toml:72): "async-std" is rfd's name for the
+# async-io/ashpd backend. NEVER enable rfd's "tokio" feature — zbus 5's
+# tokio feature unifies graph-wide and breaks the accesskit/atspi/ksni
+# threads. `default-features = false` keeps the GTK3 backend out; the
+# xdg-portal path is the Wayland-correct one and needs no extra system libs.
+rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "async-std"] }
 
 [build-dependencies]
 cxx-qt-build = "0.7"

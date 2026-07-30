@@ -10,15 +10,24 @@ import "../theme"
 Rectangle {
     property string text: ""
     property string iconName: ""
+    // Trailing chevron/glyph AFTER the label (the Slint settings rows that open
+    // a sub-view: ContentFilteringSettings.slint's Manage affordance). "" = none.
+    property string trailingIconName: ""
     property bool danger: false
     property bool busy: false
     property bool enabled: true
+    // The two metrics the MyQBZ modal footers and the Disco builder need. The
+    // Slint's SecondaryButton is 34px/min-160 in Settings and 38px/hug in a
+    // modal footer, which is one control with two call-site numbers — not two
+    // components (TRACK-RULES §5). minWidth: 0 = hug the content.
+    property int btnHeight: 34
+    property int minWidth: 160
     signal clicked()
 
     QbzTheme { id: theme }
 
-    width: Math.max(iconName !== "" && text === "" ? 34 : 160, row.implicitWidth + 24)
-    height: 34
+    width: Math.max(iconName !== "" && text === "" ? 34 : minWidth, row.implicitWidth + 24)
+    height: btnHeight
     radius: theme.radiusSm
     border.width: 1
     border.color: danger ? theme.danger : theme.borderSubtle
@@ -44,6 +53,14 @@ Rectangle {
             font.pixelSize: theme.fontBody
             font.weight: theme.weightMedium
             verticalAlignment: Text.AlignVCenter
+        }
+        QbzIcon {
+            visible: parent.parent.trailingIconName !== ""
+            name: parent.parent.trailingIconName
+            width: 15
+            height: 15
+            anchors.verticalCenter: parent.verticalCenter
+            tintName: parent.parent.danger ? "favorite" : "secondary"
         }
     }
     MouseArea {

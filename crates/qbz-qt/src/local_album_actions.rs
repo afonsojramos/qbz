@@ -18,10 +18,11 @@
 //! that. The split is cached in `LocalState` so the picker switches with NO DB
 //! round-trip (the Slint's `ALBUM_VERSIONS` static, 1:1).
 //!
-//! NOT WIRED (deliberate, reported): `album_edit_tags`, `album_add_to_playlist`
-//! and `album_add_to_mixtape` are LOGGED SEAMS. The Qt port has no tag-editor
-//! modal, no playlist picker and no Mixtape/Collection store, and a menu item
-//! must never write tags to disk with no UI in front of it.
+//! NOT WIRED (deliberate, reported): `album_edit_tags` and
+//! `album_add_to_playlist` are LOGGED SEAMS. The Qt port has no tag-editor
+//! modal and no playlist picker, and a menu item must never write tags to disk
+//! with no UI in front of it. `album_add_to_mixtape` is LIVE since the MyQBZ
+//! domain landed — it opens the Mixtape/Collection picker.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -382,15 +383,41 @@ pub fn add_to_playlist(id: String) {
     );
 }
 
-/// Album header 📼: the Slint builds a MyQBZ `AddItem` and opens the
-/// Mixtape/Collection picker. Neither the store nor the modal exists in the Qt
-/// port, so this is a logged seam.
+/// Album header 📼: ONE `album` payload (source "local", no artwork_url, no
+/// year) plus the SELECTED version's track count, then the Mixtape/Collection
+/// picker — 1:1 with `LocalAlbumActions::on_add_to_mixtape`
+/// (`qbz/src/main.rs:18714-18737`).
+///
+/// Title and artist come from `album_header`, the same function that produced
+/// the header the user is looking at, so a version switch is reflected (the
+/// Slint reads `LocalAlbumState`, which `apply_album_version` recomputes for
+/// exactly that reason).
+///
+/// Deviation, deliberate: the reference does not check the track list and lets
+/// `track_count` fall to `None`; here an empty list means no version is open at
+/// all, and `album_header` indexes `tracks[0]`, so it is refused with a log
+/// instead of panicking.
 pub fn add_to_mixtape(id: String) {
-    let n = current_version_tracks().len();
-    log::info!(
-        "[qbz-qt] local album add-to-mixtape: no Mixtape/Collection store in the Qt port yet \
-         (album '{id}', {n} tracks) — seam only"
-    );
+    if id.is_empty() {
+        return;
+    }
+    let tracks = current_version_tracks();
+    if tracks.is_empty() {
+        log::warn!("[qbz-qt] local album add-to-mixtape: no open version for '{id}', ignored");
+        return;
+    }
+    let row = album_header(&id, &tracks);
+    let item = crate::myqbz_add_qt::AddItem {
+        item_type: "album".into(),
+        source: "local".into(),
+        source_item_id: id,
+        title: row.title,
+        subtitle: (!row.artist.is_empty()).then_some(row.artist),
+        artwork_url: None,
+        year: None,
+        track_count: Some(tracks.len() as i32),
+    };
+    crate::myqbz_add_qt::open_items(vec![item]);
 }
 
 // ---------------------------------------------------------------------------

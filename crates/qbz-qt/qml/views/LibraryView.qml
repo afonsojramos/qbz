@@ -1427,6 +1427,15 @@ Rectangle {
                             number: index + 1
                             onPlayRequested: QbzPlayer.playTrack(item.id)
                             onEnqueueRequested: function (m) { QbzPlayer.enqueueTrack(item.id, m) }
+                            // MyQBZ "Add to mixtape" — the HOST builds the
+                            // AddItem array (TrackRow does not know
+                            // itemType/source).
+                            onMixtapeRequested: QbzMyQbzAdd.open(JSON.stringify([{
+                                "itemType": "track", "source": "qobuz",
+                                "sourceItemId": item.id, "title": item.title || "",
+                                "subtitle": item.artist || "", "artworkUrl": "",
+                                "year": null, "trackCount": null
+                            }]))
                         }
                     }
                     Component {

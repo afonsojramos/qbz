@@ -20,20 +20,35 @@ Rectangle {
     property int popupWidth: 0
     property bool enabled: true
     property bool searchable: false
+    // Bootstrap-style small variant (QbzSelect.slint:74-76). The default is the
+    // standard Settings size; TOOLBARS opt in with `sm: true` — 30px tall, r6,
+    // NO outline (it matches the favorites toolbar buttons), 12px label and a
+    // 14px chevron, and 40px narrower because toolbar selects were needlessly
+    // wide (QbzSelect.slint:86-88,102-105,118-119,126,147-148,299).
+    property bool sm: false
     signal selected(int index)
 
     QbzTheme { id: theme }
 
     id: selectRoot
-    width: menuWidth
-    height: 34
-    radius: theme.radiusSm
-    border.width: 1
+    width: sm ? Math.max(0, menuWidth - 40) : menuWidth
+    height: sm ? 30 : 34
+    radius: sm ? 6 : theme.radiusSm
+    border.width: sm ? 0 : 1
     border.color: theme.borderSubtle
     color: selArea.containsMouse && enabled ? theme.surfaceHover : theme.surfaceElevated
     opacity: enabled ? 1.0 : 0.4
 
-    readonly property int listWidth: Math.max(popupWidth, menuWidth)
+    // `width`, NOT `menuWidth`: QbzSelect.slint:89-91 resolves the open list as
+    // `max(popup-width, EFF-WIDTH)`, and eff-width is `menu-width - 40px` at
+    // `sm` (:88) — the same value it uses for the collapsed control. Reading the
+    // RAW menuWidth here made every toolbar dropdown's PANEL 40px wider than the
+    // reference's (MyQBZ sort 180 vs 140, kind filter 200 vs 160, detail sort
+    // 170 vs 130, and the Local Library toolbar / LabelReleases selects with it).
+    // The three `popupWidth` callers (AudioSettings 480, CastPicker 260,
+    // LyricsControlsFlyout 178) are all non-`sm`, where width === menuWidth and
+    // popupWidth wins anyway, so none of them moves.
+    readonly property int listWidth: Math.max(popupWidth, selectRoot.width)
     readonly property int rowHeight: 32
     readonly property int headerHeight: 24
     readonly property int searchHeight: searchable ? 42 : 0
@@ -58,8 +73,8 @@ Rectangle {
 
     Row {
         anchors.fill: parent
-        anchors.leftMargin: 12
-        anchors.rightMargin: 10
+        anchors.leftMargin: selectRoot.sm ? 10 : 12
+        anchors.rightMargin: selectRoot.sm ? 8 : 10
         spacing: 8
         Text {
             width: parent.width - 16 - 8 - badgeSlot.width - (badgeSlot.visible ? 8 : 0)
@@ -67,7 +82,7 @@ Rectangle {
             text: selectRoot.currentIndex >= 0 && selectRoot.currentIndex < selectRoot.options.length
                 ? selectRoot.optLabel(selectRoot.currentIndex) : ""
             color: theme.textPrimary
-            font.pixelSize: theme.fontBody
+            font.pixelSize: selectRoot.sm ? 12 : theme.fontBody
             verticalAlignment: Text.AlignVCenter
             elide: Text.ElideRight
         }
@@ -99,8 +114,8 @@ Rectangle {
         }
         QbzIcon {
             name: "chevron-down"
-            width: 16
-            height: 16
+            width: selectRoot.sm ? 14 : 16
+            height: selectRoot.sm ? 14 : 16
             anchors.verticalCenter: parent.verticalCenter
             tintName: "muted"
         }
@@ -247,7 +262,7 @@ Rectangle {
                                 text: optRow.label
                                 color: optRow.index === selectRoot.currentIndex
                                     ? theme.accent : theme.textSecondary
-                                font.pixelSize: theme.fontBody
+                                font.pixelSize: selectRoot.sm ? 12 : theme.fontBody
                                 verticalAlignment: Text.AlignVCenter
                                 elide: Text.ElideRight
                             }

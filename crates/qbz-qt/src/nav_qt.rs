@@ -4,8 +4,21 @@
 //! A simple stack (Vec + index): `record(view)` pushes a view (truncating
 //! any forward entries), `back()` / `forward()` move the cursor. Every
 //! mutation republishes `canBack` / `canForward` / `currentView` onto the
-//! bridge. Phase 2 has a single content view ("home"); the stack is wired
-//! now so phase 3's views only need to call `record`.
+//! bridge.
+//!
+//! There is NO route table here, and that is deliberate: a view id is an
+//! opaque `String`, and the only place the set of legal ids is enumerated is
+//! `qml/shell/AppShell.qml`'s content `Loader` chain. Adding a route is
+//! therefore a two-file change — the caller `record`s its id, AppShell grows
+//! an arm for it — and nothing needs registering in this file. The failure
+//! mode when the AppShell arm is forgotten is a BLANK content pane (the
+//! ternary falls through to `""`), recoverable with Back; it is not a crash,
+//! which is exactly why it is easy to miss.
+//!
+//! Ids in use: `home`, `library`, `local`, `localalbum`, `album`, `artist`,
+//! `settings`, `search`, `playlist`, `discoverbrowse`, `playlistbrowse`,
+//! `recentalbums`, `mostplayedalbums`, `label`, `labelreleases`, `mix`,
+//! `mixtapes`, `collections`, `mixtapedetail`, `discobuilder`, `blacklist`.
 
 use std::sync::Mutex;
 

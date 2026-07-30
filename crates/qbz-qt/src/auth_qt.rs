@@ -4,18 +4,23 @@
 //! redirect PATH; a mismatched/absent path nonce is dropped) that the
 //! desktop auth.rs lacks.
 //!
-//! POC-NOTE (skipped vs the Slint glue, for the effort-measurement report):
-//! the per-user store fan-out after a successful login/restore is NOT
-//! ported. Omitted: `crate::offline::activate`, `offline_cache::
-//! load_cached_ids`, `fav_cache`, `reco_dismiss`, `reco` (+train_async),
-//! `external_reco`, `qbz_reco::ArtistVectorStore`, `discover_prefs`,
-//! `artist_blacklist`, `pinned`, `local_favorites`, `search_service`,
-//! `session_persist`, `lyrics`. Reason: the POC shell has no views that
-//! read those stores; each is a mechanical `init_for_user(&dir)` call to
-//! re-add when its view lands. Also omitted: the subscription purge
-//! consumer (`spawn_subscription_purge_check`) — it needs the offline
-//! cache, which this phase does not bring up; TODO when the offline cache
-//! is wired.
+//! POC-NOTE (the per-user store fan-out, for the effort-measurement report).
+//! The three activation paths share ONE helper, `bind_per_user_stores`, plus
+//! the phase-ordered calls above it; adding a store means one line there and
+//! its matching `teardown()` in `logout`.
+//!
+//! Bound: offline mode, Plex settings, local favorites, the Qobuz
+//! favourite-id cache, pinned items, intelligent search, the playlist owner
+//! id, MyQBZ branding + view prefs, the MyQBZ grids + mixtape schema, the
+//! artist/album blacklist, and the Recommendations dismissal set.
+//!
+//! Still omitted (no view reads them yet; each is a mechanical
+//! `init_for_user(&dir)` when its view lands): `crate::offline::activate`,
+//! `offline_cache::load_cached_ids`, `reco` (+train_async), `external_reco`,
+//! `qbz_reco::ArtistVectorStore`, `discover_prefs`, `session_persist`,
+//! `lyrics`. Also omitted: the subscription purge consumer
+//! (`spawn_subscription_purge_check`) — it needs the offline cache, which
+//! this phase does not bring up; TODO when the offline cache is wired.
 //!
 //! KEPT (the offline guardrails this phase is about):
 //! `ensure_api_initialized` (scoped gate lift), `login_with_oauth_code`,
@@ -164,6 +169,7 @@ where
         crate::search_qt::init(&dir, crate::search_qt::intelligent_search_pref());
         // Phase 17: playlist is_owner math.
         crate::playlist_qt::set_user_id(user_id);
+        bind_per_user_stores(&dir, user_id);
     }
     crate::offline_fwd::subscription_mark_valid();
     crate::offline_fwd::engine().set_offline_session(false);
@@ -179,6 +185,31 @@ where
         display_name,
         subscription,
     })
+}
+
+/// Per-user stores bound on EVERY session activation — fresh login, silent
+/// restore and the offline entry alike.
+///
+/// One helper rather than three copies, because the three activation paths
+/// drifting apart is not a hypothetical: `qbz/src/artist_blacklist.rs:41-46`
+/// records that Tauri bound the blacklist on login and restore but NOT
+/// offline, so blacklisted artists leaked into every offline surface. Anything
+/// added here lands on all three by construction.
+///
+/// `myqbz_qt::init_for_user` also runs the mixtape migrations (best-effort,
+/// logs on failure, never blocks shell entry) — one entry point, so the caller
+/// cannot bind the uid and forget the schema.
+fn bind_per_user_stores(dir: &std::path::Path, user_id: u64) {
+    // MyQBZ: branding (label + icon, read by the sidebar/nav flyout on frame
+    // 1) and the grids + mixtape schema.
+    crate::myqbz_prefs_qt::init_for_user(dir);
+    crate::myqbz_qt::init_for_user(dir, user_id);
+    // Artist/album blacklist. Until this binds, every read fail-opens
+    // (`is_enabled()` → true, empty manager) and every mutation refuses with
+    // "No active session" — the feature looks broken but never panics.
+    crate::artist_blacklist::init_for_user(dir);
+    // "Not interested" dismissals on Recommendations cards.
+    crate::reco_dismiss_qt::init_for_user(dir);
 }
 
 /// Make sure the Qobuz client holds bundle tokens before a sign-in call.
@@ -259,18 +290,20 @@ where
             // skipped (see module docs).
             if let Some(dir) = crate::offline_fwd::user_data_dir(user_id) {
                 crate::offline_fwd::init_for_user(&dir);
+                // Plex settings live per-user (plex_settings.db); bind the
+                // store to this session so the first Local Library read does
+                // not have to.
                 crate::local_plex::init_for_user(&dir);
-        // Plex settings live per-user (plex_settings.db); bind the store to
-        // this session so the first Local Library read does not have to.
-        crate::local_plex::init_for_user(&dir);
                 crate::library_qt::init_local_favorites(&dir);
                 // Qobuz favourite-id cache — see the fresh-login path.
                 crate::fav_cache_qt::init_for_user(&dir);
                 crate::sidebar_qt::init_pinned(&dir);
-        // Phase 15: intelligent-search service (cortinilla cache+ranking).
-        crate::search_qt::init(&dir, crate::search_qt::intelligent_search_pref());
-        // Phase 17: playlist is_owner math.
-        crate::playlist_qt::set_user_id(user_id);
+                // Phase 15: intelligent-search service (cortinilla
+                // cache+ranking).
+                crate::search_qt::init(&dir, crate::search_qt::intelligent_search_pref());
+                // Phase 17: playlist is_owner math.
+                crate::playlist_qt::set_user_id(user_id);
+                bind_per_user_stores(&dir, user_id);
             }
             crate::offline_fwd::subscription_mark_valid();
             crate::offline_fwd::engine().set_offline_session(false);
@@ -346,6 +379,9 @@ where
         crate::search_qt::init(&dir, crate::search_qt::intelligent_search_pref());
         // Phase 17: playlist is_owner math.
         crate::playlist_qt::set_user_id(user_id);
+        // NOT optional on the offline path — see the helper's doc comment for
+        // the leak this closes.
+        bind_per_user_stores(&dir, user_id);
     }
     crate::offline_fwd::engine().set_offline_session(true);
     Ok(user_id)
@@ -355,11 +391,28 @@ where
 /// the Qobuz client session, and tear down the offline-mode per-user state
 /// (which reopens the Qobuz gate so a logged-out user can sign back in).
 ///
-/// POC-NOTE: the Slint logout also tears down the per-user stores this phase
-/// never opens (offline cache, reco, artist vectors, discover prefs,
-/// blacklist, pinned, local favorites, search, lyrics). The favourite-id
-/// cache IS open now, and it holds the previous user's hearts — dropping it
-/// is not optional, or the next account inherits them.
+/// POC-NOTE: the Slint logout also tears down per-user stores this phase never
+/// opens — offline cache (`offline::deactivate`), reco, artist vectors
+/// (`clear_artist_vectors`), discover prefs and lyrics. It does NOT still cover
+/// pinned / local favorites / search: this phase DOES open those three (see the
+/// activation paths above), which is why they moved to the asymmetry list below
+/// rather than staying here.
+///
+/// The stores that ARE open must be dropped here, and that is not cosmetic:
+/// each holds the PREVIOUS user's data in a process-global, so skipping one
+/// means the next account inherits it. The favourite-id cache holds their
+/// hearts; MyQBZ holds their mixtape grids, the open collection's items, both
+/// item caches and the selection set; the add-picker holds the pending batch
+/// plus their collection list; the blacklist holds their blocked artists and
+/// albums; reco-dismiss holds their "not interested" set.
+///
+/// STILL ASYMMETRIC (an `init_for_user` above with no teardown here, because
+/// the module exposes none — each needs its own file changed, so it is not
+/// done from this side): `local_plex`, `library_qt::init_local_favorites`,
+/// `sidebar_qt::init_pinned`, `search_qt::init`, `playlist_qt::set_user_id`.
+/// The reference DOES tear the last three down (`pinned::teardown`,
+/// `local_favorites::teardown`, `search_service::teardown` —
+/// `qbz/src/auth.rs:349-352`).
 pub async fn logout<A>(runtime: &Arc<AppRuntime<A>>) -> Result<(), String>
 where
     A: FrontendAdapter + Send + Sync + 'static,
@@ -367,6 +420,21 @@ where
     let _ = qbz_credentials::clear_oauth_token();
     let _ = runtime.core().logout().await;
     crate::fav_cache_qt::teardown();
+    // MyQBZ: grids + branding/view-prefs binding, then the detail page's
+    // caches and the two modal documents.
+    crate::myqbz_qt::teardown();
+    crate::myqbz_prefs_qt::teardown();
+    crate::myqbz_detail_qt::teardown();
+    crate::myqbz_edit_qt::teardown();
+    crate::myqbz_mix_qt::teardown();
+    // The app-wide "Add to Mixtape/Collection" picker: its row cache holds the
+    // previous account's collection ids, which a pick would write into.
+    crate::myqbz_add_qt::teardown();
+    // The Artist-Collection builder holds a whole discography plus the artist
+    // id it was opened for.
+    crate::myqbz_builder_qt::teardown();
+    crate::artist_blacklist::teardown();
+    crate::reco_dismiss_qt::teardown();
     crate::offline_fwd::teardown();
     runtime.deactivate().await?;
     log::info!("[qbz-qt] logged out");

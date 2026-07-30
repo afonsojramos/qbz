@@ -27,10 +27,19 @@
 //     row — hence the two-flag OR, HeaderMenuOverlay.slint:41);
 //   - a press outside, or Escape, closes it.
 //
-// GAP vs Slint: no drop shadow. Qt's shadow effects (Qt5Compat /
-// QtQuick.Effects MultiEffect) render NOTHING on the software path this port
-// runs on (see RoundedImage.qml / TrackInfoModal.qml) — the 1px border-muted
-// outline carries the separation instead.
+// GAP vs Slint: no drop shadow — the 1px border-muted outline carries the
+// separation instead.
+//
+// SUPERSEDED (2026-07-29), the REASON this gap used to give: "Qt's shadow
+// effects (Qt5Compat / QtQuick.Effects MultiEffect) render NOTHING on the
+// software path this port runs on". Effects need shaders. This port runs on
+// the GPU (OpenGL RHI, measured 2026-07-29); the earlier "renders nothing"
+// note came from an offscreen session, which forces the software renderer by
+// definition. Where a software path is genuinely possible, detect it with
+// `GraphicsInfo.api` rather than assuming it (theme/RoundedImage.qml does).
+// The gap itself STAYS for now: adding the shadow is a visual change that
+// needs its own parity pass against Slint's `drop-shadow-blur`, not a perf
+// fix — do not add one in a domain commit.
 
 import QtQuick
 import QtQuick.Controls
@@ -61,6 +70,40 @@ Item {
         }
     }
 
+    // MyQBZ branding — `label` (user-editable in Settings > Appearance,
+    // coerced back to "My QBZ" on the Rust side when cleared), `iconPath` +
+    // `hasCustomIcon` for a user-supplied section icon. Published on
+    // QbzMyQbz.brandingJson, seeded at construction (not at boot()) precisely
+    // because this catalog binds it on the FIRST frame.
+    //
+    // The parse is GUARDED (the parseDoc idiom, views/PlaylistView.qml:53-60):
+    // a raw in-binding JSON.parse throws on the pre-publish frame and takes
+    // the whole nav catalog down with it — both hosts included, since both
+    // read `sections` from here. The try also covers QbzMyQbz not being
+    // registered at all (an unknown type name is a plain JS global lookup, so
+    // it raises a catchable ReferenceError rather than a load error).
+    readonly property var branding: parseBranding()
+    function parseBranding() {
+        try {
+            return JSON.parse(QbzMyQbz.brandingJson)
+        } catch (e) {
+            return ({})
+        }
+    }
+
+    // Rust never publishes an empty label — it coerces a cleared one back to
+    // the English literal "My QBZ" — so the localised fallback below is
+    // defensive only, and the SHIPPED default is that English literal. That is
+    // a pre-existing i18n hole shared with the Slint app
+    // (MyQbzBrandingState.label's default is the same literal); do not "fix"
+    // it here by second-guessing the Rust value.
+    readonly property string brandingLabel: {
+        var l = nav.branding.label || ""
+        return l !== "" ? l : nav.trs("My QBZ")
+    }
+    readonly property string brandingIconPath:
+        nav.branding.hasCustomIcon === true ? (nav.branding.iconPath || "") : ""
+
     // The four top-level sections, in Slint order. `rev` is threaded through
     // buildSections purely so the binding re-runs on a language switch
     // (QbzSession.trRev is the translation revision counter every other
@@ -73,7 +116,11 @@ Item {
     //                view (shell route), tab (view-internal tab id),
     //                enabled }
     // Section shape: { id, icon, label, qobuz (hidden while offline),
-    //                  enabled, entries }
+    //                  enabled, entries,
+    //                  iconPath — OPTIONAL: absent or "" means "use the baked
+    //                  `icon`"; a non-empty path is a user-supplied image
+    //                  rendered raw by shell/NavSectionGlyph.qml. Only the
+    //                  MyQBZ section can carry one. }
     function buildSections(rev, reco) {
         // Discover — glyph-less rows (Slint has-glyph: false).
         var discover = [
@@ -122,23 +169,32 @@ Item {
                 ]
             },
             {
-                // GAP: this port has NO My QBZ surface — the shell router maps
-                // home / library / local / localalbum / album / artist /
-                // settings / search / playlist, and neither Collections nor
-                // Mixtapes has a view behind it. The whole section is disabled
-                // (dimmed, pointer-inert, no flyout) rather than opening a menu
-                // whose every row clicks into nothing. The entries are kept
-                // here so the port stays legible against Slint.
                 "id": "myqbz",
                 "icon": "qbz-symbolic",
-                // Slint: MyQbzBrandingState.label (user-editable, defaults to
-                // "My QBZ"); this port has no branding state yet.
-                "label": nav.trs("My QBZ"),
+                // Slint's HEADER hosts label this tab @tr("My QBZ")
+                // (HeaderBar.slint:938, :1048) while only the sidebar and the
+                // kiosk rail read MyQbzBrandingState.label (Sidebar.slint:787,
+                // NavRail.slint:145). ONE catalog cannot express that split,
+                // and a user who renames the section expects the rename
+                // everywhere, so both hosts get the branding label.
+                "label": nav.brandingLabel,
+                // Custom section icon, rendered raw (its own colours, no theme
+                // tint) — Slint's SidebarNavRow `raw-icon` arm.
+                "iconPath": nav.brandingIconPath,
                 "qobuz": false,
-                "enabled": false,
+                "enabled": true,
                 "entries": [
-                    { "label": nav.trs("Collections"), "icon": "library-big", "view": "", "tab": "", "enabled": false },
-                    { "label": nav.trs("Mixtapes"), "icon": "cassette-tape", "view": "", "tab": "", "enabled": false }
+                    // ORDER is the header's: Collections then Mixtapes
+                    // (HeaderBar.slint:941-942). Slint's sidebar contradicts
+                    // itself with Mixtapes first (Sidebar.slint:790-791), and
+                    // one catalog serves both hosts.
+                    // ICONS are the header's pair too: cassette-tape +
+                    // library-big are baked in all eight tint dirs, while the
+                    // sidebar's cassette + collection are not — preferring
+                    // them would manufacture two asset imports for a visually
+                    // equivalent glyph.
+                    { "label": nav.trs("Collections"), "icon": "library-big", "view": "collections", "tab": "", "enabled": true },
+                    { "label": nav.trs("Mixtapes"), "icon": "cassette-tape", "view": "mixtapes", "tab": "", "enabled": true }
                 ]
             }
         ]
@@ -147,10 +203,19 @@ Item {
     // Which section owns the highlight, derived from the LIVE view (both hosts
     // used to carry this identical binding). Slint highlights off
     // HeaderMenuState.open-index; the hosts OR that in via `openId`.
+    //
+    // Each alternative spells `QbzShell.currentView === x` out in full: the
+    // shorthand `a === x || y || z` is ALWAYS truthy (`"y"` is a non-empty
+    // string), which would light the section up on every route in the app.
+    // "discobuilder" is deliberately NOT in the MyQBZ arm — Slint's own active
+    // predicate omits the builder (NavRail.slint:146-148).
     readonly property string activeSection:
           QbzShell.currentView === "home" ? "discover"
         : QbzShell.currentView === "library" ? "library"
         : (QbzShell.currentView === "local" || QbzShell.currentView === "localalbum") ? "local"
+        : (QbzShell.currentView === "mixtapes"
+           || QbzShell.currentView === "collections"
+           || QbzShell.currentView === "mixtapedetail") ? "myqbz"
         : ""
 
     // ---------------------------------------------------------------------

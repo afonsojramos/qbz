@@ -48,8 +48,21 @@
 //!
 //! THEME-FOLLOWING (baked here): `textPrimary`, `secondary` / `textSecondary`,
 //! `muted` / `textMuted`, `disabled` / `textDisabled`, `accent`, `accentText`,
-//! `warning`, `favorite` — each named after its `ThemeColors` key
-//! (theme_qt.rs `ThemeTokens`).
+//! `warning`, `favorite`, `success`, `danger` — each named after its
+//! `ThemeColors` key (theme_qt.rs `ThemeTokens`).
+//!
+//! `success` / `danger` arrived with the shared toast (primitives/Toast.slint
+//! tints its per-kind glyph with Theme.success / Theme.danger). They are the
+//! only two theme-following tints with NO qrc bake directory of their own, so
+//! the FLOOR does not carry them: `QbzIcon.qml`'s `qrcTint` switch falls to its
+//! `default:` arm, returns the tint name unchanged, and asks for
+//! `assets/icons/success/<name>.svg` — a directory that does not exist, which
+//! means the glyph is simply ABSENT with nothing logged. Reachable exactly when
+//! the runtime bake is (no writable cache dir, a pre-publish theme document, a
+//! pruned directory). `QbzIcon.qml` needs two arms in that switch —
+//! `case "danger": return "favorite"` (#ef4444 vs #e0564f, the port-wide
+//! substitution) and `success` onto a dir whose polarity is legible (there is
+//! no green bake) — before the floor can be trusted for these two.
 //!
 //! FIXED (kept on their qrc bake): `black`, `amber` — and `primary`.
 //!
@@ -77,7 +90,7 @@
 //!
 //! # Cost
 //!
-//! One pass of 96 small string substitutions + writes (~380 KB) the first
+//! One pass of 99 small string substitutions + writes (~390 KB) the first
 //! time a colour is seen, on the Qt thread inside a binding evaluation
 //! (measured in single-digit ms on any SSD); nothing at all afterwards. The
 //! cache is pruned to `MAX_TINT_DIRS` directories, oldest first.
@@ -131,10 +144,10 @@ pub struct QbzIconTintRust {
 
 /// Every icon the app can ask for, as the `primary/` bake's source text.
 ///
-/// This IS the shipped `qml/assets/icons/primary/` directory (96 files),
+/// This IS the shipped `qml/assets/icons/primary/` directory (99 files),
 /// compiled in. Two consequences worth knowing:
 ///   - every runtime tint is COMPLETE, so the partial-directory trap the qrc
-///     bakes have (`favorite/` = 52 files, `amber/` = 1) does not exist here;
+///     bakes have (`favorite/` = 56 files, `amber/` = 4) does not exist here;
 ///   - a new icon dropped into `primary/` needs a line ADDED here, otherwise
 ///     that one glyph silently drops back to its qrc bake (visible, just not
 ///     theme-correct). `QbzIcon.qml` handles the miss; it does not go blank.
@@ -154,6 +167,8 @@ const MASTERS: &[(&str, &str)] = &[
     ("chevron-left", include_str!("../qml/assets/icons/primary/chevron-left.svg")),
     ("chevron-right", include_str!("../qml/assets/icons/primary/chevron-right.svg")),
     ("chevron-up", include_str!("../qml/assets/icons/primary/chevron-up.svg")),
+    ("circle-alert", include_str!("../qml/assets/icons/primary/circle-alert.svg")),
+    ("circle-check-big", include_str!("../qml/assets/icons/primary/circle-check-big.svg")),
     ("clock", include_str!("../qml/assets/icons/primary/clock.svg")),
     ("cloud-download", include_str!("../qml/assets/icons/primary/cloud-download.svg")),
     ("cloud-off", include_str!("../qml/assets/icons/primary/cloud-off.svg")),
@@ -173,6 +188,7 @@ const MASTERS: &[(&str, &str)] = &[
     ("heart-filled", include_str!("../qml/assets/icons/primary/heart-filled.svg")),
     ("heart", include_str!("../qml/assets/icons/primary/heart.svg")),
     ("home-gear", include_str!("../qml/assets/icons/primary/home-gear.svg")),
+    ("image", include_str!("../qml/assets/icons/primary/image.svg")),
     ("import", include_str!("../qml/assets/icons/primary/import.svg")),
     ("infinity", include_str!("../qml/assets/icons/primary/infinity.svg")),
     ("info", include_str!("../qml/assets/icons/primary/info.svg")),
@@ -231,6 +247,8 @@ const MASTERS: &[(&str, &str)] = &[
     ("translate", include_str!("../qml/assets/icons/primary/translate.svg")),
     ("trash-2", include_str!("../qml/assets/icons/primary/trash-2.svg")),
     ("trash-list", include_str!("../qml/assets/icons/primary/trash-list.svg")),
+    ("triangle-alert", include_str!("../qml/assets/icons/primary/triangle-alert.svg")),
+    ("turntable", include_str!("../qml/assets/icons/primary/turntable.svg")),
     ("user-plus", include_str!("../qml/assets/icons/primary/user-plus.svg")),
     ("user", include_str!("../qml/assets/icons/primary/user.svg")),
     ("volume-2", include_str!("../qml/assets/icons/primary/volume-2.svg")),
@@ -238,8 +256,8 @@ const MASTERS: &[(&str, &str)] = &[
     ("x", include_str!("../qml/assets/icons/primary/x.svg")),
 ];
 
-/// The only paint literal in a `primary/` master (verified over all 96 files:
-/// 105 occurrences, no `#fff` short form). The uppercase form is accepted too
+/// The only paint literal in a `primary/` master (verified over all 99 files:
+/// 109 occurrences, no `#fff` short form). The uppercase form is accepted too
 /// so a hand-added master cannot silently skip the substitution.
 const MASTER_HEX_LOWER: &str = "#ffffff";
 const MASTER_HEX_UPPER: &str = "#FFFFFF";
@@ -247,7 +265,7 @@ const MASTER_HEX_UPPER: &str = "#FFFFFF";
 /// Written last into a tint directory; its presence means "complete".
 const STAMP: &str = ".complete";
 
-/// How many tinted sets to keep on disk (~380 KB each). 36 themes x 7 tokens
+/// How many tinted sets to keep on disk (~390 KB each). 36 themes x 10 tokens
 /// is the theoretical ceiling, but the palettes share most of their text ramp,
 /// so this covers ordinary theme-hopping without unbounded growth.
 const MAX_TINT_DIRS: usize = 32;
@@ -266,6 +284,8 @@ const TOKENS: &[&str] = &[
     "accentText",
     "warning",
     "favorite",
+    "success",
+    "danger",
 ];
 
 /// The `ThemeTokens` (theme_qt.rs) key a tint follows, or `None` for the tints
@@ -283,6 +303,14 @@ fn token_for(tint: &str) -> Option<&'static str> {
         "accentText" => "accentText",
         "warning" => "warning",
         "favorite" => "favorite",
+        // The toast's per-kind glyph tints (primitives/Toast.slint:20-38 hands
+        // Theme.success / Theme.danger straight to the icon). QbzIcon exposes
+        // `tintName` only — never a raw colour — so without these two entries
+        // there is no way for a QML call site to reach either token, and both
+        // keys already exist in every theme document (theme_qt.rs:159,173;
+        // QbzTheme.qml:28,32,70,78).
+        "success" => "success",
+        "danger" => "danger",
         // Fixed on purpose (see the module header):
         //   "primary" / "white": a light glyph on a host that is dark under
         //                        every theme (scrims, gradients, accent fills)
@@ -364,7 +392,7 @@ fn tints_from_json(json: &str) -> HashMap<&'static str, String> {
 // Baking
 // ---------------------------------------------------------------------------
 
-/// Materialize `<root>/<hex>/` with all 96 glyphs. Returns false on any I/O
+/// Materialize `<root>/<hex>/` with all 99 glyphs. Returns false on any I/O
 /// failure (caller falls back to qrc).
 ///
 /// The set is built in a temp directory and RENAMED into place, so a crash or

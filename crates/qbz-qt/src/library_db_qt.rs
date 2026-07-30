@@ -37,7 +37,17 @@ fn db_path() -> Option<PathBuf> {
 /// account has no library.db until the first local flag is set), reads must
 /// NOT — an empty result is the right answer and creating the file as a side
 /// effect of a read is a surprise.
-fn with_db<F, R>(create: bool, f: F) -> Option<R>
+///
+/// `pub(crate)` because this is the port's only CREATE-CAPABLE accessor, and
+/// MyQBZ needs it twice on a fresh account: `run_mixtape_migrations` at
+/// session activation and the first `create_collection`. The other accessor,
+/// `local_state::with_db` (already `pub`), is the right one for every
+/// `local_*` read, but it returns `None` when library.db is absent
+/// (`local_state.rs:44-46`) — through it a brand-new account could never run
+/// the migrations, so it could never create a mixtape. Slint has no such
+/// split: its `library_db::open` always creates
+/// (`qbz/src/library_db.rs:54-64`).
+pub(crate) fn with_db<F, R>(create: bool, f: F) -> Option<R>
 where
     F: FnOnce(&LibraryDatabase) -> Result<R, LibraryError>,
 {

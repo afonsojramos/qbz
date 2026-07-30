@@ -25,7 +25,9 @@
 // Signals: playRequested() (per-site play: album-scoped, playlist-scoped
 // or plain), enqueueRequested(mode) ("next"|"later"|"queue"),
 // removeRequested(), bodyDragStarted(index) (fired BEFORE the shared
-// dragStart — the #589 reorder pre-hook).
+// dragStart — the #589 reorder pre-hook), mixtapeRequested() (the host
+// builds the MyQBZ AddItem payload), goToRequested(kind) (only when
+// `routeGoToExternally` is set).
 // Favorite toggling, Go-to-artist/album, Share and Track info are
 // identical on every site — handled internally. The row BODY is the drag
 // source (6px threshold, ghost + sidebar drops in main.rs) and its RIGHT
@@ -110,20 +112,40 @@ Rectangle {
     // matching `menuAction` branch when the invokable lands; the entry then
     // appears in its .slint-correct slot. Why each is missing:
     //   radio        no radio invokable on any Qt bridge object
-    //   mixtape      QbzLocal.albumAddToMixtape is LOCAL-album only
     //   playlistAdd  no picker modal, no by-id add (only the sidebar drag)
     //   songlink     needs the ISRC -> Deezer -> Odesli round-trip (backend)
     //   offlineCache no per-track cache bridge (the download cell is a stub)
     readonly property bool hasRadioSeam: false
-    readonly property bool hasMixtapeSeam: false
     readonly property bool hasPlaylistAddSeam: false
     readonly property bool hasSonglinkSeam: false
     readonly property bool hasOfflineCacheSeam: false
+    // LIVE since the MyQBZ domain landed: QbzMyQbzAdd.open() takes a JSON
+    // array of AddItem, so the row only has to ASK — it does not know its own
+    // itemType/source, which is why the payload is built by the host (see
+    // `mixtapeRequested` below). Not `readonly`: a host whose ids are not
+    // Qobuz/local mixtape-addressable can turn it back off.
+    property bool hasMixtapeSeam: true
 
     signal playRequested()
     signal enqueueRequested(string mode)
     signal removeRequested()
     signal bodyDragStarted(int index)
+    /// "Add to mixtape" — the HOST answers, because only the host knows the
+    /// row's `itemType` / `source` (a MyQBZ AddItem needs both) and building
+    /// the array here would hardcode `("track", "qobuz")` for every surface.
+    signal mixtapeRequested()
+
+    // --- Go-to routing: internal by default, host-routed on request -------
+    // The go-to actions (menu AND the artist-column link) navigate through
+    // QbzArtist.openArtist / QbzAlbum.openAlbum here, which is right on every
+    // catalog surface. It is WRONG where the row is a child of another entity
+    // whose host must resolve the target — MyQBZ's expanded detail rows, where
+    // Slint routes both paths through the SAME shared handler
+    // (`media-action("artist", id, "open")`, TrackRow.slint:530). Flipping
+    // `routeGoToExternally` hands both sites to the host as
+    // `goToRequested(kind)`; it defaults false, so no existing call site moves.
+    property bool routeGoToExternally: false
+    signal goToRequested(string kind)   // "artist" | "album"
 
     // --- THE heart state (a real QML property, never `item.isFavorite`) ---
     // The row used to flip its glyph with `root.item.isFavorite = !…`. That is
@@ -400,7 +422,13 @@ Rectangle {
                     enabled: root.artistLink && !!root.item.artistId
                     hoverEnabled: true
                     cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-                    onClicked: QbzArtist.openArtist(root.item.artistId)
+                    // Same routing as the menu's "Go to artist" — Slint drives
+                    // both through one handler, so gating only the menu would
+                    // leave the LINK navigating to the track's own artist.
+                    onClicked: {
+                        if (root.routeGoToExternally) root.goToRequested("artist")
+                        else QbzArtist.openArtist(root.item.artistId)
+                    }
                 }
             }
         }
@@ -585,9 +613,16 @@ Rectangle {
         else if (a === "next") root.enqueueRequested("next")
         else if (a === "later") root.enqueueRequested("later")
         else if (a === "queue") root.enqueueRequested("queue")
-        else if (a === "go-artist") QbzArtist.openArtist(root.item.artistId)
-        else if (a === "go-album") QbzAlbum.openAlbum(root.item.albumId)
+        else if (a === "go-artist") {
+            if (root.routeGoToExternally) root.goToRequested("artist")
+            else QbzArtist.openArtist(root.item.artistId)
+        }
+        else if (a === "go-album") {
+            if (root.routeGoToExternally) root.goToRequested("album")
+            else QbzAlbum.openAlbum(root.item.albumId)
+        }
         else if (a === "favorite") root.toggleFavorite()
+        else if (a === "mixtape") root.mixtapeRequested()
         else if (a === "remove") root.removeRequested()
         else if (a === "share-qobuz") root.copyToClipboard(
             "https://open.qobuz.com/track/" + (root.item.id || ""))

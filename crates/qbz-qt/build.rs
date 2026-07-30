@@ -43,12 +43,21 @@ fn main() {
         .qt_module("QuickControls2")
         .qml_module(QmlModule {
             uri: "com.blitzfc.qbz",
-            rust_files: &["src/bridge.rs", "src/session_bridge.rs", "src/shell_bridge.rs", "src/player_bridge.rs", "src/queue_bridge.rs", "src/home_bridge.rs", "src/viz_bridge.rs", "src/local_bridge.rs", "src/library_bridge.rs", "src/album_bridge.rs", "src/artist_bridge.rs", "src/lyrics_qt.rs", "src/icon_tint_qt.rs", "src/cast_bridge.rs"],
+            // EVERY #[cxx_qt::bridge] file. A bridge missing here does not
+            // fail the build: its QML singleton simply does not exist, and
+            // every `QbzFoo.bar()` in QML becomes a runtime ReferenceError
+            // that `cargo check` cannot see. The four MyQBZ/Blacklist
+            // singletons are the newest arrivals; the domain CONTROLLERS
+            // (myqbz_qt.rs, blacklist_qt.rs, toast_qt.rs, …) are plain
+            // modules and must NOT be listed — only files that declare a
+            // #[cxx_qt::bridge] mod belong in this array.
+            rust_files: &["src/bridge.rs", "src/session_bridge.rs", "src/shell_bridge.rs", "src/player_bridge.rs", "src/queue_bridge.rs", "src/home_bridge.rs", "src/viz_bridge.rs", "src/local_bridge.rs", "src/library_bridge.rs", "src/album_bridge.rs", "src/artist_bridge.rs", "src/lyrics_qt.rs", "src/icon_tint_qt.rs", "src/cast_bridge.rs", "src/myqbz_bridge.rs", "src/myqbz_add_bridge.rs", "src/disco_bridge.rs", "src/blacklist_bridge.rs"],
             qml_files: &[
                 "qml/LoginScreen.qml",
                 "qml/Main.qml",
                 "qml/cards/AlbumCard.qml",
                 "qml/cards/ArtistCard.qml",
+                "qml/cards/CollectionMosaic.qml",
                 "qml/cards/LabelCard.qml",
                 "qml/cards/MixArtwork.qml",
                 "qml/cards/PlaylistCard.qml",
@@ -56,22 +65,33 @@ fn main() {
                 "qml/cards/RadioCard.qml",
                 "qml/cards/SlimCard.qml",
                 "qml/cards/TrackCard.qml",
+                "qml/controls/AddToMixtapeModal.qml",
                 "qml/controls/CardMenu.qml",
                 "qml/controls/CardOverlayButton.qml",
                 "qml/controls/CardOverlayRow.qml",
                 "qml/controls/GroupHeader.qml",
+                "qml/controls/MyQbzModals.qml",
                 "qml/controls/QbzCircleAction.qml",
+                "qml/controls/QbzConfirmModal.qml",
                 "qml/controls/QbzContextMenu.qml",
                 "qml/controls/QbzEmptyState.qml",
                 "qml/controls/QbzIconButton.qml",
                 "qml/controls/QbzLineEdit.qml",
+                "qml/controls/QbzLoadingDots.qml",
+                "qml/controls/QbzMultiSelectBar.qml",
                 "qml/controls/QbzNavButton.qml",
                 "qml/controls/QbzOfflinePlaceholder.qml",
+                "qml/controls/QbzPrimaryButton.qml",
+                "qml/controls/QbzRadioOption.qml",
                 "qml/controls/QbzSectionHeader.qml",
+                "qml/controls/QbzSegToggle.qml",
                 "qml/controls/QbzSelect.qml",
                 "qml/controls/QbzSlider.qml",
                 "qml/controls/QbzTabBar.qml",
+                "qml/controls/QbzTextArea.qml",
+                "qml/controls/QbzToast.qml",
                 "qml/controls/QbzToggle.qml",
+                "qml/controls/QbzToolButton.qml",
                 "qml/controls/QbzTooltip.qml",
                 "qml/controls/QualityBadge.qml",
                 "qml/controls/QualityMini.qml",
@@ -79,6 +99,7 @@ fn main() {
                 "qml/controls/SettingsButton.qml",
                 "qml/controls/SettingsDivider.qml",
                 "qml/controls/SettingsSpacer.qml",
+                "qml/rows/BlacklistRow.qml",
                 "qml/rows/TrackCols.qml",
                 "qml/rows/TrackListHeader.qml",
                 "qml/rows/TrackRow.qml",
@@ -105,6 +126,7 @@ fn main() {
                 "qml/theme/RoundedImage.qml",
                 "qml/views/AlbumView.qml",
                 "qml/views/ArtistView.qml",
+                "qml/views/BlacklistManagerView.qml",
                 "qml/views/HomeView.qml",
                 "qml/views/LibraryView.qml",
                 "qml/views/LocalLibraryView.qml",
@@ -128,6 +150,7 @@ fn main() {
                 "qml/controls/DiscoverConfigModal.qml",
                 "qml/controls/GenreFilterPopup.qml",
                 "qml/shell/NavFlyout.qml",
+                "qml/shell/NavSectionGlyph.qml",
                 "qml/controls/HeaderGradient.qml",
                 "qml/controls/QbzJumpNavBar.qml",
                 "qml/shell/LyricsControlsFlyout.qml",
@@ -176,10 +199,8 @@ fn main() {
                 "qml/views/local/LocalFilterPopup.qml",
                 "qml/views/local/LocalFolderDetail.qml",
                 "qml/views/local/LocalFoldersTab.qml",
-                "qml/views/local/LocalMultiSelectBar.qml",
                 "qml/views/local/LocalNote.qml",
                 "qml/views/local/LocalSearchBox.qml",
-                "qml/views/local/LocalSegToggle.qml",
                 "qml/views/local/LocalToolbar.qml",
                 "qml/views/local/LocalTrackRow.qml",
                 "qml/views/local/LocalTracksTab.qml",
@@ -188,6 +209,16 @@ fn main() {
                 "qml/views/local/SourceIcon.qml",
                 "qml/views/local/TreeRow.qml",
                 "qml/views/local/VersionPicker.qml",
+                // MyQBZ (Mixtapes / Collections / Artist-Collection builder).
+                // Its own subdirectory, like views/local/, because the five
+                // files only ever mount each other.
+                "qml/views/myqbz/DiscoBuilderView.qml",
+                "qml/views/myqbz/DiscoCandidateRow.qml",
+                "qml/views/myqbz/MyQbzCard.qml",
+                "qml/views/myqbz/MyQbzDetailCard.qml",
+                "qml/views/myqbz/MyQbzDetailRow.qml",
+                "qml/views/myqbz/MyQbzDetailView.qml",
+                "qml/views/myqbz/MyQbzGridView.qml",
             ],
             qrc_files: &qrc_refs,
             ..Default::default()

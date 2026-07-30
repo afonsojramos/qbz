@@ -1,23 +1,43 @@
-// Bulk action bar (primitives/MultiSelectBar.slint, mounted by
-// LocalLibraryView.slint:1239 for Albums and :1406 for Tracks).
+// Bulk action bar — the floating "N selected" strip with one icon button per
+// bulk action (primitives/MultiSelectBar.slint).
+//
+// PROMOTED from views/local/LocalMultiSelectBar.qml, unchanged except for the
+// import depth. The Slint component it ports was already shared — Local Library
+// mounts it for Albums (LocalLibraryView.slint:1239) and Tracks (:1406), and
+// the MyQBZ detail page mounts the same primitive (:1253) — so the "Local"
+// prefix was a naming accident, not a scoping one. The old
+// views/local/LocalMultiSelectBar.qml is GONE — this file is the only copy.
+// Call sites: views/local/LocalAlbumsTab.qml, views/local/LocalTracksTab.qml,
+// views/myqbz/MyQbzDetailView.qml.
 //
 // 44px tall, radius 8, surface-elevated: "N selected" on the left, then one
 // 34x30 icon button per action — dimmed to 0.4 and disarmed while the action
 // needs a selection and there is none, red-bordered when it is a danger
 // action. ADR-008: bordered/hover buttons, not pills.
 //
+// `width` has NO default: every call site anchors or sizes it (the MyQBZ detail
+// page uses the .slint's deliberately asymmetric `x: 18` / `width: parent.width
+// - 40`). The label Text sizes itself from `parent.width - actionRow.width`, so
+// a zero width silently collapses the label rather than the buttons.
+//
 // The Slint puts the action label in the shared tooltip bubble; the Qt port
-// has no tooltip channel yet, so the label rides Qt's own ToolTip.
+// has no tooltip channel into this component, so the label rides Qt's own
+// ToolTip. (controls/QbzTooltip.qml is the shell's single hover-tooltip
+// overlay, but it is reached by calling showRight()/showAbove() on the
+// AppShell instance, which a recycled delegate deep inside a view cannot name.)
 
 import QtQuick
 import QtQuick.Controls
 import com.blitzfc.qbz
-import "../../theme"
+import "../theme"
 
 Rectangle {
     id: root
 
-    /// [{ id, label, icon, danger, needsSelection }]
+    /// [{ id, label, icon, danger, needsSelection }] — `id` is what `action`
+    /// publishes; `label` is the tooltip text and must arrive ALREADY
+    /// translated (this component calls no `tr`); `icon` must exist in the
+    /// "warning", "textPrimary" and "secondary" tint dirs.
     property var actions: []
     property int selectedCount: 0
     signal action(string id)

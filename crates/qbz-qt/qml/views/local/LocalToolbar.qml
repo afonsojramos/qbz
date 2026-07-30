@@ -177,7 +177,7 @@ Row {
                 }
             }
         }
-        LocalSegToggle {
+        QbzSegToggle {
             anchors.verticalCenter: parent.verticalCenter
             segments: [{ "id": "grid", "icon": "layout-grid" },
                        { "id": "list", "icon": "list" }]
@@ -275,7 +275,7 @@ Row {
                 currentIndex: Math.max(0, root.groupIds.indexOf(root.view.foldersGroup))
                 onSelected: function (i) { root.view.foldersGroup = root.groupIds[i] }
             }
-            LocalSegToggle {
+            QbzSegToggle {
                 anchors.verticalCenter: parent.verticalCenter
                 segments: [{ "id": "grid", "icon": "layout-grid" },
                            { "id": "list", "icon": "list" }]
@@ -287,7 +287,7 @@ Row {
         // ASSET GAP: Slint uses disc-album / folder-tree; neither glyph is
         // baked in the Qt icon set yet (see GLUE), so this uses the closest
         // shipped pair.
-        LocalSegToggle {
+        QbzSegToggle {
             anchors.verticalCenter: parent.verticalCenter
             segments: [{ "id": "flat", "icon": "disc" },
                        { "id": "tree", "icon": "folder-open" }]
