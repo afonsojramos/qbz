@@ -1480,9 +1480,10 @@ export component PurchasesView inherits Rectangle {
         //
         // Scroll-safety VERIFIED (2026-07-02, standalone repro mirroring this
         // exact structure: if-mounted view → Flickable → layout → component →
-        // if → component → for-row → nested slot): in Slint 1.16.1
-        // `absolute-position` here is exact window coordinates — own offsets
-        // counted once, viewport scroll included. The anchor captured at the
+        // if → component → for-row → nested slot, under Slint 1.16.1; 1.17's
+        // eager `for`/`if` only changes WHEN children instantiate, not the
+        // coordinate math): `absolute-position` here is exact window
+        // coordinates — own offsets counted once, viewport scroll included. The anchor captured at the
         // call site (line ~590) plus the `- root.absolute-position` conversion
         // below is correct at any scroll position. (The double-count gotcha in
         // memory `reference_slint_absolute_position_flickable` is a ListView

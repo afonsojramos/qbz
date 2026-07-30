@@ -559,7 +559,7 @@ component SidebarNavRow inherits Rectangle {
     // offline gating — offline rows are HIDDEN at the mount site (`if` per
     // ADR-010), not rendered-disabled. Kept for future use, but WITHOUT the
     // old `opacity: disabled ? 0.5 : 1.0` root binding: an opacity binding
-    // on a component ROOT makes Slint 1.16 wrap the element, and
+    // on a component ROOT makes Slint 1.17 wrap the element, and
     // `absolute-position` then double-counts the row's own layout offset
     // (measured: anchor-y = true_y + self.y, so each flyout drifted one
     // extra row-pitch per row). If a dim is ever needed again, apply the

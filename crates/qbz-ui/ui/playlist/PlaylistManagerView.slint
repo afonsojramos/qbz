@@ -113,7 +113,7 @@ component PmSearch inherits Rectangle {
 component PmMenuItem inherits Rectangle {
     in property <string> label;
     in property <bool> selected: false;
-    // Collapse property — `for x: if c: El` is disallowed in Slint 1.16, so
+    // Collapse property — `for x: if c: El` is disallowed in Slint 1.17, so
     // a hidden item collapses to zero height instead (the sidebar pattern).
     in property <bool> shown: true;
     callback activated();

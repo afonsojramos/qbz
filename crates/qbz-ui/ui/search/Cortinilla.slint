@@ -205,7 +205,8 @@ export component Cortinilla inherits Rectangle {
     // Dismiss the dropdown after ~4.5 s of inactivity: no pointer over the
     // panel and no search activity. `panel-hovered` mirrors the panel's
     // wrapper TouchArea (the panel lives in an `if` subtree; a Timer in there
-    // cannot be restart()ed — 1.16 compiler panic — so the timer lives here).
+    // could not be restart()ed — a compiler panic fixed in Slint 1.17.1,
+    // slint #12355 — the timer stays here, the layout works either way).
     property <bool> panel-hovered: false;
     // The mirror can go stale when the panel unmounts while hovered (its
     // `changed has-hover` never fires false) — reset it on every open/close.
@@ -297,8 +298,9 @@ export component Cortinilla inherits Rectangle {
 
 
         // Hover surface for the idle-close pause (see the root-level Timer —
-        // it must live OUTSIDE this `if` subtree: `Timer.restart()` on a timer
-        // inside a conditional sub-component panics the 1.16 Slint compiler).
+        // it lives OUTSIDE this `if` subtree: `Timer.restart()` on a timer
+        // inside a conditional sub-component panicked the Slint compiler up
+        // to 1.16; fixed in 1.17.1 (slint #12355), placement kept as is).
         // `hover-ta` is an ANCESTOR of every row/button TouchArea, and Slint
         // sets has-hover on ancestors too (input_event_filter_before_children),
         // so hovering any child counts. Clicks on rows/buttons are handled by

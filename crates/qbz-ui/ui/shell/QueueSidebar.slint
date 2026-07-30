@@ -469,7 +469,7 @@ export component QueueSidebar inherits Rectangle {
             // ===== Queue tab =====
             if QueueState.tab == 0: Flickable {
                 // Drag-scroll is DISABLED on purpose: a row drag-reorder lives
-                // inside this Flickable, and Slint 1.16 cannot freeze the scroll
+                // inside this Flickable, and Slint 1.17 cannot freeze the scroll
                 // for the drag without stranding the Flickable's internal
                 // `pressed_time` (it swallows the `Released` while !interactive),
                 // which then phantom-scrolls on the next slide. Keeping it always

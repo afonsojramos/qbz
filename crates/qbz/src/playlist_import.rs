@@ -3,7 +3,7 @@
 //! PlaylistImportModal.svelte driven by the headless `qbz-playlist-import`
 //! crate. Every interpolated string (log lines, status line, summary
 //! block) is formatted HERE and pushed into PlaylistImportState
-//! pre-formatted; provider detection lives here too (Slint 1.16 strings
+//! pre-formatted; provider detection lives here too (Slint 1.17 strings
 //! have no `.contains`, so every URL keystroke round-trips through
 //! `url-edited`).
 //!

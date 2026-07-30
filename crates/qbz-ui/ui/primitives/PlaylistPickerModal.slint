@@ -6,7 +6,7 @@
 // inline name field confirmed by the same footer button ("Create & Add").
 // Opened from the track context menu (PlaylistPickerState.open).
 //
-// Filter matching runs Rust-side (Slint 1.16 has no string `.contains`):
+// Filter matching runs Rust-side (Slint 1.17 has no string `.contains`):
 // every keystroke recomputes each row's `filter-rank` (match ordinal,
 // -1 = filtered out) plus `filter-matches`; ranks >= 8 hide behind the
 // "{} more playlist(s)..." overflow row.
