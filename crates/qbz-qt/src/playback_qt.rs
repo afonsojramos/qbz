@@ -5,18 +5,36 @@
 //! and the poll loop (PlaybackEvent -> UI state, track-change meta refresh,
 //! end-of-track advance).
 //!
-//! POC-NOTEs (deliberate cuts vs playback.rs, named for the effort report):
+//! OWED PORTS vs playback.rs. These are DEBT, not scope decisions: a fix that
+//! lived in the frontend is not inherited and has to be replicated (TRACK-RULES
+//! rule 8, whose title is "los fixes de backend deben llegar al Qt"). Each one
+//! is tracked in `qbz-nix-docs/qt-frontend/2026-07-30-parity-debt/PARITY-DEBT.md`
+//! — add there, not here, so a note cannot outlive its gap unnoticed. That is
+//! exactly how gapless stayed broken: this header advertised it for weeks.
+//!
+//! - Blacklist filtering of the QUEUE (PARITY-DEBT #1, AUDIBLE): the old note
+//!   here said "store not open", which is FALSE — `artist_blacklist` is bound
+//!   at `auth_qt.rs`. The Slint drops blacklisted tracks at ~18 play/enqueue
+//!   entry points (`filter_blacklisted_queue`, playback.rs:2624-2651); this
+//!   module has none, so a blocked artist still plays.
+//! - `advance_to_playable`, the bounded skip-unavailable walk
+//!   (playback.rs:455-511) (PARITY-DEBT #2, AUDIBLE): the advance here takes
+//!   the core queue's next directly and a failed play logs and returns, so one
+//!   unavailable track wedges the queue — and the early return skips the
+//!   refresh, leaving the bar on the previous track.
+//! - Volume persistence (PARITY-DEBT #3, AUDIBLE): never written or restored.
+//! - Session persist / resume-position: both prefs are persisted by settings
+//!   and read by nobody.
 //! - Streaming quality: seeded from ui_prefs ("streaming_quality") and
-//!   live-updated by Settings > Audio (settings_qt). The #638 device-cap
-//!   clamp lives in the Slint glue and is NOT ported.
-//! - Blacklist filtering of album tracks: skipped (store not open).
-//! - Offline-cache tier (offline bytes), gapless prefetch (`play_next`),
-//!   prefetch warming, stop-after, infinite refill, session persist,
-//!   QConnect/cast branches, recently-played recording: all out of scope.
-//!   Auto-advance therefore plays each successor at fetch time (audible
-//!   gap between tracks) — the engine's gapless path is NOT wired.
-//! - `advance_to_playable` (skip-unavailable walk): the POC advance takes
-//!   the core queue's next directly; a failed play logs and stops.
+//!   live-updated by Settings > Audio (settings_qt). The #638 device-cap clamp
+//!   lives in the Slint glue and is NOT ported.
+//! - Offline-cache tier (offline bytes), prefetch warming, stop-after,
+//!   infinite refill, QConnect branches, recently-played recording.
+//!
+//! DONE, previously listed here: gapless prefetch — the engine raises
+//! `gapless_ready` ~10s out and this module now answers it with `play_next`
+//! (both the streaming and the local/DSD arms), so transitions are
+//! sample-accurate again.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
