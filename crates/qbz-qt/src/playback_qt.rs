@@ -1141,6 +1141,10 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
         let mut last_track_id: u64 = 0;
         let mut was_playing = false;
         let mut seen_position: u64 = 0;
+        // Track id we have already fired a gapless prefetch for, so this poll
+        // does not re-request it on every tick while the download is in flight
+        // (playback.rs:5049-5051).
+        let mut gapless_requested_for: u64 = 0;
         let mut ticker = tokio::time::interval(std::time::Duration::from_secs(1));
         loop {
             ticker.tick().await;
@@ -1187,6 +1191,11 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                     crate::recently_qt::record_queue_track(&track);
                 }
                 last_track_id = track_id;
+                // The engine may have reached this track through a GAPLESS
+                // hand-off, in which case the arming guard still names the
+                // track that just ended. Clear it so the NEW current track can
+                // arm its own prefetch (playback.rs:5353).
+                gapless_requested_for = 0;
             }
 
             if track_id != 0 {
@@ -1208,6 +1217,121 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                 event.sample_rate.unwrap_or(0),
                 event.bit_depth.unwrap_or(0),
             );
+
+            // --- Gapless prefetch trigger (playback.rs:5362-5476) ---------
+            // The audio engine ASKS for the next track ~10s before the end of
+            // the current one ("Gapless: approaching end of track", player/
+            // mod.rs:3927) by raising `gapless_ready`. Nothing answered it in
+            // this port, so every advance went through the end-of-track edge
+            // below instead: fetch AFTER silence, ~1s of nothing plus the
+            // initial-buffer wait. The engine, the setting and the CMAF path
+            // were all working — this seam simply was not wired.
+            //
+            // Answering means handing the engine the next track's BYTES while
+            // the current one still plays, via `Player::play_next`, which
+            // appends to the same rodio sink and is what makes the transition
+            // sample-accurate.
+            // The stop-after guard is last and short-circuited. It is a NO-OP
+            // today — this port has no UI that marks a track (queue_qt.rs:10
+            // records the cut) so the core always answers None — but it is
+            // kept 1:1 because the day the marker lands, its absence is a
+            // silent bug: the engine hands off seamlessly and the marker never
+            // fires, which is exactly what playback.rs:5372-5377 warns about.
+            if event.gapless_ready
+                && event.gapless_next_track_id == 0
+                && track_id != 0
+                && gapless_requested_for != track_id
+                && runtime.core().get_stop_after().await != Some(track_id)
+            {
+                let upcoming = runtime.core().peek_upcoming(1).await;
+                if let Some(next) = upcoming.into_iter().next() {
+                    // Never queue the current track as its own successor.
+                    if next.id != track_id && !next.is_local {
+                        gapless_requested_for = track_id;
+                        let runtime = runtime.clone();
+                        let next_id = next.id;
+                        tokio::spawn(async move {
+                            // L1/L2 player cache -> network. The offline tier is
+                            // `None` here for the same reason every other play
+                            // path in this module passes `None`: this port opens
+                            // no offline-cache index.
+                            if let Some(data) = runtime
+                                .core()
+                                .fetch_for_gapless_resolved(next_id, current_quality(), None, None)
+                                .await
+                            {
+                                let player = runtime.core().player();
+                                match player.play_next(data, next_id) {
+                                    Ok(()) => log::info!(
+                                        "[qbz-qt] [GAPLESS] queued track {next_id} for gapless"
+                                    ),
+                                    Err(e) => log::warn!(
+                                        "[qbz-qt] [GAPLESS] play_next {next_id} failed: {e}"
+                                    ),
+                                }
+                            }
+                        });
+                    } else if next.id != track_id && next.is_local {
+                        // LOCAL gapless: resolve the file path and hand it to
+                        // the engine's gapless queue — DSD through
+                        // `play_next_dsd` (DoP append when a DoP stream is
+                        // live, else an in-memory converted WAV), everything
+                        // else as raw bytes. CUE virtual tracks are skipped:
+                        // they share one file and the engine would append the
+                        // whole album image.
+                        gapless_requested_for = track_id;
+                        let runtime = runtime.clone();
+                        let next_id = next.id;
+                        tokio::spawn(async move {
+                            let info = if crate::local_ephemeral::is_ephemeral_id(next_id as i64) {
+                                crate::local_ephemeral::get_track(next_id as i64)
+                                    .map(|t| (t.file_path, t.cue_start_secs))
+                            } else {
+                                tokio::task::spawn_blocking(move || {
+                                    crate::local_state::with_db(|db| db.get_track(next_id as i64))
+                                        .flatten()
+                                        .map(|t| (t.file_path, t.cue_start_secs))
+                                })
+                                .await
+                                .ok()
+                                .flatten()
+                            };
+                            let Some((path, cue)) = info else { return };
+                            if cue.is_some() {
+                                return;
+                            }
+                            let res = tokio::task::spawn_blocking(move || {
+                                let p = std::path::PathBuf::from(&path);
+                                let player = runtime.core().player();
+                                // The reference calls `qbz_dsd::is_dsd_path`,
+                                // but `qbz-dsd` is not a dependency of this
+                                // crate and `local_playback.rs:139` already
+                                // makes the same decision from the extension.
+                                // Same two extensions, no new dependency.
+                                let lower = p.to_string_lossy().to_lowercase();
+                                if lower.ends_with(".dsf") || lower.ends_with(".dff") {
+                                    player.play_next_dsd(p, next_id)
+                                } else {
+                                    let bytes = std::fs::read(&p).map_err(|e| e.to_string())?;
+                                    player.play_next(bytes, next_id)
+                                }
+                            })
+                            .await;
+                            match res {
+                                Ok(Ok(())) => log::info!(
+                                    "[qbz-qt] [GAPLESS] queued local track {next_id} for gapless"
+                                ),
+                                Ok(Err(e)) => log::info!(
+                                    "[qbz-qt] [GAPLESS] local pre-queue {next_id} skipped: {e}"
+                                ),
+                                Err(e) => {
+                                    log::warn!("[qbz-qt] [GAPLESS] local pre-queue task failed: {e}")
+                                }
+                            }
+                        });
+                    }
+                }
+            }
 
             // --- End-of-track edge (playback.rs condition, verbatim) ------
             let track_ended = was_playing
