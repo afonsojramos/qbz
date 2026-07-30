@@ -200,14 +200,88 @@ fn stamp_context(tracks: &mut [QueueTrack], explicit: Option<PlayContext>) {
     }
 }
 
+/// THE blacklist drop predicate for a built queue row (playback.rs:2624-2632
+/// `queue_track_blacklisted`). Local / Plex / no-id rows fail open — the
+/// underlying `is_track_blacklisted` returns false for any source that is not
+/// "qobuz", so a local file can never be dropped by an artist block.
+fn queue_track_blacklisted(track: &QueueTrack) -> bool {
+    let source = track.source.as_deref().unwrap_or("qobuz");
+    crate::artist_blacklist::is_track_blacklisted(
+        source,
+        track.artist_id,
+        None,
+        track.album_id.as_deref(),
+    )
+}
+
+/// Drop blacklisted entries from a freshly-built queue AND remap the start
+/// index onto the surviving track (playback.rs:2634-2641 `filter_blacklisted_queue`).
+///
+/// The Slint applies this at ~18 separate builder sites. This port funnels every
+/// play path through `set_queue_stamped`, so it needs exactly one — which is
+/// also why its absence was total rather than partial: the store was open and
+/// the manager worked, but nothing between the two ever asked.
+///
+/// The start remap is the part the Slint gets for free by filtering before it
+/// computes the index. Here the caller has already picked an index into the
+/// UNFILTERED list, so dropping rows ahead of it would silently start the wrong
+/// track. The clicked row surviving is the common case; when the clicked row is
+/// itself blocked, the walk lands on the next survivor, which is what the user
+/// asking for "play from here" means once "here" is hidden.
+fn filter_blacklisted_queue(
+    tracks: Vec<QueueTrack>,
+    start: Option<usize>,
+) -> (Vec<QueueTrack>, Option<usize>) {
+    let (kept, start) = filter_queue_with(tracks, start, queue_track_blacklisted);
+    (kept, start)
+}
+
+/// The pure half, split out so the index remap is unit-testable without a bound
+/// session (the blacklist store needs one). `drop` decides; everything else is
+/// arithmetic.
+fn filter_queue_with<T>(
+    tracks: Vec<T>,
+    start: Option<usize>,
+    drop: impl Fn(&T) -> bool,
+) -> (Vec<T>, Option<usize>) {
+    let clicked = start.unwrap_or(0);
+    let mut kept = Vec::with_capacity(tracks.len());
+    // Surviving index for the clicked row, or for the first survivor after it.
+    let mut new_start: Option<usize> = None;
+    let mut dropped = 0usize;
+    for (i, track) in tracks.into_iter().enumerate() {
+        if drop(&track) {
+            dropped += 1;
+            continue;
+        }
+        if new_start.is_none() && i >= clicked {
+            new_start = Some(kept.len());
+        }
+        kept.push(track);
+    }
+    if dropped > 0 {
+        log::info!("[qbz-qt] blacklist: dropped {dropped} track(s) from the queue");
+    }
+    // Every survivor sits BEFORE the clicked row (the whole tail was blocked):
+    // start at the last one rather than past the end.
+    let start = new_start
+        .or_else(|| kept.len().checked_sub(1))
+        .filter(|_| !kept.is_empty());
+    (kept, start)
+}
+
 /// The ONLY `core().set_queue` call in this module — every play path goes
-/// through it, so the origin can never be dropped on the floor.
+/// through it, so the origin can never be dropped on the floor, and (since
+/// PARITY-DEBT #1) neither can the blacklist.
 pub(crate) async fn set_queue_stamped(
     runtime: &Arc<AppRuntime<LoggingAdapter>>,
-    mut tracks: Vec<QueueTrack>,
+    tracks: Vec<QueueTrack>,
     start: Option<usize>,
     context: Option<PlayContext>,
 ) {
+    // Filter BEFORE stamping: a dropped row needs no origin, and the start
+    // index has to be remapped against the list the core actually receives.
+    let (mut tracks, start) = filter_blacklisted_queue(tracks, start);
     stamp_context(&mut tracks, context);
     warn_dead_context(&tracks, "set_queue");
     runtime.core().set_queue(tracks, start).await;
@@ -220,7 +294,21 @@ pub(crate) async fn set_queue_stamped(
 /// `pub(crate)` on purpose: the local/ephemeral/bulk enqueue paths live in
 /// other modules and must be able to reach the SAME stamping seam — a private
 /// helper is what forced them to hand-roll their context in the first place.
-pub(crate) fn stamped(mut tracks: Vec<QueueTrack>, context: Option<PlayContext>) -> Vec<QueueTrack> {
+pub(crate) fn stamped(tracks: Vec<QueueTrack>, context: Option<PlayContext>) -> Vec<QueueTrack> {
+    // Same blacklist drop as `set_queue_stamped` — play-next / add-to-queue /
+    // play-later must not be the back door that puts a blocked artist in the
+    // queue. No start index to remap here: these APPEND.
+    let before = tracks.len();
+    let mut tracks: Vec<QueueTrack> = tracks
+        .into_iter()
+        .filter(|t| !queue_track_blacklisted(t))
+        .collect();
+    if tracks.len() < before {
+        log::info!(
+            "[qbz-qt] blacklist: dropped {} track(s) from an enqueue",
+            before - tracks.len()
+        );
+    }
     stamp_context(&mut tracks, context);
     warn_dead_context(&tracks, "enqueue");
     tracks
@@ -943,10 +1031,99 @@ async fn play_queue_track(runtime: &Arc<AppRuntime<LoggingAdapter>>, track_id: u
         .await
     {
         log::error!("[qbz-qt] playback: play_track {track_id} failed: {e}");
+        // The bar must not keep showing the PREVIOUS track while the cursor has
+        // already moved. The old early `return` skipped both refreshes, which is
+        // how a failed advance left a stale card over a silent player.
+        refresh_now_playing(runtime).await;
+        publish_queue(runtime).await;
+        auto_skip_unavailable(runtime, e).await;
         return;
     }
+    // A track actually started: the consecutive-skip budget is spent per RUN of
+    // bad tracks, not per session (playback.rs UNAVAILABLE_SKIPS reset).
+    UNAVAILABLE_SKIPS.store(0, Ordering::SeqCst);
     refresh_now_playing(runtime).await;
     publish_queue(runtime).await;
+}
+
+/// True when a stringified play error means the track cannot play now or ever
+/// at any quality, as opposed to a transient network/server failure (those are
+/// already retried with backoff inside the client and must NOT cost the user a
+/// good track). Verbatim from playback.rs:327-332 — the `ApiError` Display texts
+/// survive the `Result<(), String>` flattening, so a substring match is the same
+/// pragmatic contract the Tauri frontend used.
+fn is_terminal_unavailable(e: &str) -> bool {
+    e.contains("no longer available") // ApiError::TrackUnavailable
+        || e.contains("not streamable") // ApiError::NonStreamable
+        || e.contains("No valid quality available") // ApiError::NoQualityAvailable
+}
+
+/// A Qobuz 403 / the client-side 403 back-off (issue #637). NOT the track's
+/// fault — every track 403s the same way — so it must not count as an
+/// "unavailable" skip. Pre-fix in the Slint this burned through five good
+/// tracks while showing a misleading "no longer available"
+/// (playback.rs:334-343).
+fn is_forbidden_backoff(e: &str) -> bool {
+    e.contains("Access forbidden by Qobuz") // ApiError::Forbidden
+        || e.contains("backing off after repeated 403s") // ApiError::ForbiddenCircuitOpen
+}
+
+/// Consecutive auto-skips over tracks whose play failed TERMINALLY (Tauri #467
+/// parity: `MAX_CONSECUTIVE_SKIPS = 5`). Reset the moment any track starts.
+static UNAVAILABLE_SKIPS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+const MAX_UNAVAILABLE_SKIPS: u32 = 5;
+
+/// One unavailable track must not wedge the whole queue (PARITY-DEBT #2 —
+/// Tauri #467, re-introduced by this port). Port of `auto_skip_unavailable`
+/// (playback.rs:766-818).
+///
+/// The signature RETURNS a boxed `dyn Future + Send` rather than being an
+/// `async fn`, for the reason the reference documents: the recursion makes the
+/// future's Send-ness self-referential and an inferred `impl Future` type sends
+/// the compiler into a query cycle. Declaring the concrete boxed type is what
+/// cuts it.
+fn auto_skip_unavailable<'a>(
+    runtime: &'a Arc<AppRuntime<LoggingAdapter>>,
+    error: String,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+    Box::pin(async move {
+        // A 403 / back-off is not this track's fault: stop cleanly and say so
+        // instead of eating five good tracks looking for one that works.
+        if is_forbidden_backoff(&error) {
+            crate::toast_qt::error(qbz_i18n::t("Access forbidden by Qobuz"));
+            crate::now_playing::set_playing(false);
+            return;
+        }
+        // Anything that is not TERMINALLY unavailable is transient — the client
+        // already retried it. Do not skip a good track over a network blip.
+        if !is_terminal_unavailable(&error) {
+            return;
+        }
+        crate::toast_qt::warning(qbz_i18n::t("This track is no longer available"));
+
+        let skips = UNAVAILABLE_SKIPS.fetch_add(1, Ordering::SeqCst) + 1;
+        if skips > MAX_UNAVAILABLE_SKIPS {
+            log::warn!(
+                "[qbz-qt] playback: {MAX_UNAVAILABLE_SKIPS} consecutive unavailable tracks — stopping the skip walk"
+            );
+            crate::toast_qt::warning(qbz_i18n::t("No available tracks to play"));
+            crate::now_playing::set_playing(false);
+            UNAVAILABLE_SKIPS.store(0, Ordering::SeqCst);
+            return;
+        }
+        let Some(track) = runtime.core().next_track().await else {
+            // Queue edge reached while skipping — stop quietly, the warning
+            // above already told the user why.
+            crate::now_playing::set_playing(false);
+            UNAVAILABLE_SKIPS.store(0, Ordering::SeqCst);
+            return;
+        };
+        log::info!(
+            "[qbz-qt] advance: skipping unavailable track, trying {} ({skips}/{MAX_UNAVAILABLE_SKIPS})",
+            track.id
+        );
+        play_queue_track(runtime, track.id).await;
+    })
 }
 
 pub async fn seek_frac(runtime: &Arc<AppRuntime<LoggingAdapter>>, frac: f32) {
@@ -1379,4 +1556,57 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
             was_playing = is_playing;
         }
     });
+}
+
+// ---------------------------------------------------------------------------
+// Tests (pure functions only — no Qt, no engine, no session)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::filter_queue_with;
+
+    /// Drop the odd numbers; `start` must follow the CLICKED item, not its old
+    /// index. Without the remap the core would start on a different track than
+    /// the one the user clicked — silently, and only when something was blocked.
+    #[test]
+    fn start_index_follows_the_clicked_track() {
+        let (kept, start) = filter_queue_with(vec![0, 1, 2, 3, 4], Some(2), |n| n % 2 == 1);
+        assert_eq!(kept, vec![0, 2, 4]);
+        assert_eq!(start, Some(1)); // the 2 moved from index 2 to index 1
+    }
+
+    /// Clicking a row that is itself blocked lands on the next survivor.
+    #[test]
+    fn a_blocked_clicked_row_falls_forward() {
+        let (kept, start) = filter_queue_with(vec![0, 1, 2, 3], Some(1), |n| n % 2 == 1);
+        assert_eq!(kept, vec![0, 2]);
+        assert_eq!(start, Some(1)); // the 1 was dropped, so start on the 2
+    }
+
+    /// The whole tail blocked: start on the LAST survivor, never past the end
+    /// (an out-of-range index is what makes the core start nothing at all).
+    #[test]
+    fn a_fully_blocked_tail_clamps_to_the_last_survivor() {
+        let (kept, start) = filter_queue_with(vec![0, 1, 3, 5], Some(2), |n| n % 2 == 1);
+        assert_eq!(kept, vec![0]);
+        assert_eq!(start, Some(0));
+    }
+
+    /// Everything blocked: an empty queue carries NO start index.
+    #[test]
+    fn everything_blocked_yields_no_start() {
+        let (kept, start) = filter_queue_with(vec![1, 3, 5], Some(1), |n| n % 2 == 1);
+        assert!(kept.is_empty());
+        assert_eq!(start, None);
+    }
+
+    /// Nothing blocked: the queue and the index are untouched — the path every
+    /// user without a blacklist takes.
+    #[test]
+    fn nothing_blocked_is_identity() {
+        let (kept, start) = filter_queue_with(vec![0, 2, 4], Some(2), |_| false);
+        assert_eq!(kept, vec![0, 2, 4]);
+        assert_eq!(start, Some(2));
+    }
 }
