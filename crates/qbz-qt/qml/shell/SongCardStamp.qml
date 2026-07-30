@@ -63,8 +63,14 @@ Column {
     // bottomPadding of 10 (5px bubble padding + the 5px caret zone).
     //
     // Slint also drop-shadows the bubble (blur 10, #00000099); that needs a
-    // shader layer effect, which renders nothing on the software path, so it
-    // is deliberately dropped.
+    // shader layer effect and is deliberately dropped.
+    // SUPERSEDED (2026-07-29): the reason used to be "renders nothing on the
+    // software path". Effects need shaders, and this port runs on the GPU
+    // (OpenGL RHI, measured); that note came from an offscreen session, which
+    // forces the software renderer by definition — theme/RoundedImage.qml now
+    // detects the software path with `GraphicsInfo.api` instead of assuming it.
+    // Adding the shadow is a visual change owing its own parity pass, so the
+    // bubble stays flat here.
     component TipBubble: Item {
         Rectangle {
             anchors.fill: parent

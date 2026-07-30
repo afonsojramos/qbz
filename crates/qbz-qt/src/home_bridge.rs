@@ -192,6 +192,20 @@ pub mod qbz_home {
         /// Spotlight play / TOP TRACKS card — the artist's popular tracks.
         #[qinvokable]
         fn play_artist_top_tracks(self: Pin<&mut QbzHome>, artist_id: QString);
+        /// HomeView MOUNTED: re-hand it every For You cover already resolved.
+        ///
+        /// `AppShell.qml` binds `viewLoader.source` to `QbzShell.currentView`,
+        /// so HomeView is DESTROYED on every navigation and the per-url cover
+        /// map it keeps (`forYouArt`) dies with it — while the two rails'
+        /// documents are published ONCE per session and deliberately never
+        /// republished for artwork (see `foryouArtReady`). Without this the
+        /// Radio rail and the Spotlight hero + tiles are blank for the rest of
+        /// the session after the first navigation away, and the view's
+        /// "something is still pending" probe never goes false, which pins its
+        /// 900 ms skeleton pulse Timer on. Idempotent, emits nothing when the
+        /// stores hold no resolved path yet (`foryou_qt::resolved_art_patch`).
+        #[qinvokable]
+        fn refresh_foryou_art(self: Pin<&mut QbzHome>);
 
         // --- Label releases sub-view --------------------------------------
         #[qinvokable]
@@ -204,6 +218,28 @@ pub mod qbz_home {
         fn label_releases_set_group(self: Pin<&mut QbzHome>, on: bool);
         #[qinvokable]
         fn label_releases_search(self: Pin<&mut QbzHome>, query: QString);
+
+        /// A batch of For You covers landed: a JSON `{ "<artUrl>": "<file://
+        /// path>" }` patch. Per-URL, so the rails patch the TILES instead of
+        /// taking a new `radioStationsJson` / `spotlightJson` document — a
+        /// republished document hands `model:` a new JS array and
+        /// `QQuickItemView::setModel()` resets the rail's scroll offset AND
+        /// tears down the QQmlDelegateModel, which is this build's only crash
+        /// signature (a null read at libQt6QmlModels[420c5], reproduced live).
+        /// Deliberately NOT `QbzLibrary.libraryArtworkReady`: six views listen
+        /// to that one and each rebuilds its whole cover map per emit.
+        ///
+        /// ONE emit per batch, not one per url: the receiving map is a QML
+        /// `var`, so it only notifies on a NEW object reference — an emit per
+        /// url copied the growing map and invalidated every cover binding in
+        /// both rails once per cover (quadratic in the ~38 a cold load
+        /// resolves) for no earlier paint, since the whole batch settles inside
+        /// one `download_missing().await`. See `foryou_qt::emit_foryou_art`.
+        ///
+        /// `#[auto_cxx_name]` on this block makes the QML spelling
+        /// `foryouArtReady`, i.e. the handler is `onForyouArtReady(patchJson)`.
+        #[qsignal]
+        fn foryou_art_ready(self: Pin<&mut QbzHome>, patch_json: QString);
     }
 
     impl cxx_qt::Threading for QbzHome {}
@@ -432,6 +468,19 @@ impl qbz_home::QbzHome {
 
     pub fn play_artist_top_tracks(self: Pin<&mut Self>, artist_id: QString) {
         crate::foryou_qt::spotlight_play_top_tracks(artist_id.to_string());
+    }
+
+    /// Emitted SYNCHRONOUSLY here rather than through `home_bridge::ui`: this
+    /// runs on the Qt thread already (HomeView's `Component.onCompleted`), and
+    /// the `ui()` hop silently no-ops until `boot()` has registered the thread,
+    /// which is exactly the failure mode this fix exists to remove.
+    pub fn refresh_foryou_art(mut self: Pin<&mut Self>) {
+        let patch = crate::foryou_qt::resolved_art_patch();
+        if patch.is_empty() {
+            return;
+        }
+        self.as_mut()
+            .foryou_art_ready(QString::from(patch.as_str()));
     }
 
     // --- Label releases ----------------------------------------------------

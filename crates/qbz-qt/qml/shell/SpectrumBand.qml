@@ -20,6 +20,16 @@
 //     one stream the visible mode consumes.
 //  6. Capture itself is gated by the dock's vizShouldRun — a hidden band costs
 //     zero: the producer parks and the drain thread sleeps.
+//  7. ONE JS binding per bar, not two. `y` used to be a DERIVED binding on
+//     `height`, so every height change evaluated two bindings per bar; a static
+//     anchor (bottom / verticalCenter) does the same arithmetic in C++ and
+//     evaluates nothing. Combined with note 8 and VizSettle's 16 ms tick, bars
+//     mode went from 180 Hz x 56 binding evaluations/s to 62 Hz x 28.
+//  8. `at()` indexes a PLAIN JS ARRAY: VizSettle materialises each published
+//     QList_f32 frame once per publish (30/s) instead of letting every `at(i)`
+//     cross into the sequence wrapper twice per bar per tick. The waveform arm
+//     already builds a plain Array in its own `target` binding, so it is not
+//     copied twice (VizSettle branches on Array.isArray).
 
 import QtQuick
 import com.blitzfc.qbz
@@ -83,7 +93,14 @@ Rectangle {
                     x: index * barsMode.slot + 1
                     width: barsMode.slot - 2
                     height: Math.max(2, barsSettle.at(bin) * band.height)
-                    y: band.height - height
+                    // `y: band.height - height` was a SECOND JS binding that
+                    // re-evaluated on every height change. An anchor does the
+                    // same arithmetic in C++ and evaluates no JS at all.
+                    // Geometry is identical (Slint's VBar does
+                    // `y: root.area-h - self.height`). Only the VERTICAL axis
+                    // is anchored — `x`/`width` stay positional, which QML
+                    // allows and which keeps the slot arithmetic untouched.
+                    anchors.bottom: parent.bottom
                     radius: 1
                     gradient: barGradient
                 }
@@ -124,7 +141,9 @@ Rectangle {
                     x: index * waveMode.slot + 1
                     width: waveMode.slot - 2
                     height: Math.max(2, waveSettle.at(index) * band.height)
-                    y: (band.height - height) / 2
+                    // Was `y: (band.height - height) / 2` — a second JS binding
+                    // per column (48 of them). Same geometry, no JS.
+                    anchors.verticalCenter: parent.verticalCenter
                     radius: 1
                     color: band.topColor
                 }
@@ -153,7 +172,8 @@ Rectangle {
                     x: index * energyMode.slot + 3
                     width: energyMode.slot - 6
                     height: Math.max(2, energySettle.at(index) * band.height)
-                    y: band.height - height
+                    // Was `y: band.height - height` — see the bars delegate.
+                    anchors.bottom: parent.bottom
                     radius: 1
                     gradient: barGradient
                 }

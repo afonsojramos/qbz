@@ -84,8 +84,14 @@ Item {
 
     // ---- Album cover -------------------------------------------------------
     // Drop-shadow approximation of the Slint dock's 24px blur (two offset
-    // rects — QtQuick.Effects renders nothing on the software path, see
-    // RoundedImage.qml).
+    // rects).
+    // SUPERSEDED (2026-07-29): this used to say "QtQuick.Effects renders
+    // nothing on the software path". Effects need shaders, and this port runs
+    // on the GPU (OpenGL RHI, measured); that note came from an offscreen
+    // session, which forces the software renderer by definition — see
+    // theme/RoundedImage.qml, which now DETECTS the software path with
+    // `GraphicsInfo.api`. A real blurred shadow is possible; it is a visual
+    // change needing its own parity pass, so the approximation stays for now.
     Rectangle {
         x: 0
         y: root.artY + 4

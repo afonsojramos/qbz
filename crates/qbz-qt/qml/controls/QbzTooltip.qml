@@ -48,11 +48,17 @@
 //   - MAX WIDTH + ELISION. Neither Slint bubble caps its width; a 200-character
 //     playlist name would run off the window. `maxWidth` (320 default) caps it
 //     and the label elides. Set maxWidth: 0 for the uncapped Slint behaviour.
-//   - SHADOW. Slint draws `drop-shadow-blur: 16px` / `10px`. Qt Quick has no
-//     shadow primitive on the software path (QtQuick.Effects renders NOTHING —
-//     see theme/RoundedImage.qml), so the port's usual approximation is used:
-//     one offset rectangle behind the bubble, exactly like
-//     SidebarNowPlayingDock.qml does for the cover.
+//   - SHADOW. Slint draws `drop-shadow-blur: 16px` / `10px`. The port's usual
+//     approximation is used instead: one offset rectangle behind the bubble,
+//     exactly like SidebarNowPlayingDock.qml does for the cover.
+//     SUPERSEDED (2026-07-29): the justification here used to be "QtQuick.
+//     Effects renders NOTHING". Effects need shaders, and this port runs on the
+//     GPU (OpenGL RHI, measured); that note came from an offscreen session,
+//     which forces the software renderer by definition — see
+//     theme/RoundedImage.qml, which now detects the software path with
+//     `GraphicsInfo.api` instead of assuming it. A real MultiEffect shadow is
+//     therefore possible; it is a VISUAL change needing its own parity pass
+//     against Slint's `drop-shadow-blur`, so it is deliberately NOT done here.
 
 import QtQuick
 import "../theme"

@@ -25,13 +25,22 @@
 // shared. Interpolating is the correct fix for a step artefact.
 //
 // COST CONTRACT.
-//  - Zero allocation per rendered frame: `from`/`to` are REFERENCE SWAPS of the
-//    arrays the bridge already marshals once per publish. Only `progress`
-//    changes per frame.
+//  - Zero allocation per rendered frame: `from` is a REFERENCE SWAP and only
+//    `progress` changes per tick. `to` is materialised into a plain JS array
+//    ONCE per publish (30/s) so `at()` does not cross into the QList_f32
+//    sequence wrapper twice per bar per tick — see `onTargetChanged`.
+//  - The DRIVER IS A 16 ms Timer, not a FrameAnimation. The producer publishes
+//    at 30/s; a per-frame trigger fired 180x/s on Linux (100x/s on macOS) for
+//    it. ~62 Hz keeps two interpolated steps per published frame, which is all
+//    the motion there is to buy.
 //  - SELF-PARKING, exactly like the Rust drain: the driver starts on a publish
-//    and stops itself the moment `progress` reaches 1. A paused player, a hidden
-//    band or a disabled tap publishes nothing, so the driver never runs and the
-//    render loop goes back to sleep. No idle wakeups.
+//    and stops itself the moment `progress` reaches 1 (within one 33 ms period
+//    of the last publish). A paused player, a hidden band or a disabled tap
+//    publishes nothing, so nothing restarts it. A Timer does NOT stop itself
+//    when the window renders nothing the way a FrameAnimation did, so the
+//    `onLiveChanged` gate below — fed by the dock's `vizShouldRun`, which drops
+//    when the window deactivates — is what keeps an occluded window at zero
+//    wakeups. Do not weaken it.
 //  - Delegates bind ONE call, `at(i)`, which reads `from`, `to` and `progress`
 //    unconditionally on every path — QML captures those three as dependencies,
 //    so a `progress` change re-evaluates the bar heights and instantiates
@@ -93,9 +102,34 @@ Item {
         // 5..125 fps, everything a sane producer can emit.
         if (dt > 8 && dt < 200)
             settle.periodMs = settle.periodMs * 0.8 + dt * 0.2;
-        // Reference swap — no copy, no allocation.
+        // Plain-JS copy, ONCE per publish (30/s), so `at()` indexes a JS array
+        // instead of crossing into the QList_f32 sequence wrapper 2x per bar
+        // per tick (56 crossings for bars). `from = to` stays a reference
+        // swap — no copy, no allocation per rendered frame (the COST CONTRACT
+        // above).
+        //
+        // The waveform arm ALREADY hands over a plain Array (it folds |sample|
+        // in its own binding, SpectrumBand.qml:108-117), so skip the copy
+        // there instead of paying a second 48-element pass per publish.
+        // `t ? … : 0` is not defensive padding: the pre-fix body was a bare
+        // `settle.to = settle.target` and never dereferenced `target`, so the
+        // copy below is the FIRST deref in this file. All three producers
+        // (QbzViz.bars / .energy sequences, the waveform arm's own Array)
+        // always hand over a value, but a future fourth arm that publishes
+        // undefined would now throw inside a 30/s handler instead of degrading
+        // to a hold — which is the contract stated in the header.
+        var t = settle.target;
+        var arr;
+        if (Array.isArray(t)) {
+            arr = t;
+        } else {
+            var n = t ? t.length : 0;
+            arr = new Array(n);
+            for (var i = 0; i < n; ++i)
+                arr[i] = t[i];
+        }
         settle.from = settle.to;
-        settle.to = settle.target;
+        settle.to = arr;
         settle.lastTickMs = now;
         settle.progress = 0.0;
         if (!driver.running)
@@ -109,11 +143,28 @@ Item {
         }
     }
 
-    // Wall clock, not the driver's elapsedTime: elapsedTime only advances on a
-    // rendered frame, so using it would quantise the segment start to vsync and
-    // re-introduce the beat we are removing.
-    FrameAnimation {
+    // Wall clock, not a frame-driven elapsedTime: the time source must not
+    // quantise the segment start to vsync (that is the beat this object
+    // removes). The TRIGGER, however, must not run at the frame rate either —
+    // the producer publishes at TARGET_FPS = 30 (qbz-audio visualizer/mod.rs:32)
+    // and FrameAnimation fired 180x/s on Linux and 100x/s on macOS for it,
+    // i.e. 3-6x the frames the data justifies. 16 ms = ~62 Hz gives two
+    // interpolated steps per published frame, which is what buys the motion
+    // (Slint's equivalent is `animate bar-h { duration: 90ms; easing: ease; }`,
+    // SidebarNowPlayingDock.slint:45).
+    //
+    // `repeat: true` is MANDATORY — Timer defaults to false, and without it the
+    // driver fires once per publish and `progress` freezes at ~0.5.
+    // `triggeredOnStart` stays default false: `running` is only set from
+    // `onTargetChanged`, which has just written `progress = 0.0`, so an
+    // immediate tick would recompute p≈0 and do nothing.
+    // Coarse timer resolution is irrelevant: `progress` is derived from
+    // Date.now(), so a late tick lands a correspondingly larger `p` and a
+    // missed tick degrades to a hold, never a jump.
+    Timer {
         id: driver
+        interval: 16
+        repeat: true
         running: false
         onTriggered: {
             var p = (Date.now() - settle.lastTickMs) / settle.periodMs;

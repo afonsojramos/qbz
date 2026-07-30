@@ -15,8 +15,14 @@
 //   metadata col = (card width - 48 - 2 * 24) / 3  (three equal columns)
 //   scrollbar    = 14px, inset 4px from the card's right edge
 // The Slint card carries drop-shadow-blur 32px; QML shadows need an effect
-// (Qt5Compat / MultiEffect) and effects render NOTHING on the software path in
-// this port, so the shadow is dropped rather than faked.
+// (Qt5Compat / MultiEffect) and it is dropped here rather than faked.
+// SUPERSEDED (2026-07-29): the reason used to be "effects render NOTHING on the
+// software path in this port". Effects need shaders, and this port runs on the
+// GPU (OpenGL RHI, measured); that note came from an offscreen session, which
+// forces the software renderer by definition — theme/RoundedImage.qml now
+// detects the software path with `GraphicsInfo.api` rather than assuming it.
+// The shadow is still not added: it is a visual change owing its own parity
+// pass against Slint's blur, not a perf fix.
 //
 // DATA — see the report's GLUE NEEDED; the Qt port has no track-info bridge
 // yet. Contract: QbzAlbum.openTrackInfo(trackId) fetches and publishes

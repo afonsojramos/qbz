@@ -29,8 +29,15 @@ Rectangle {
     QbzTheme { id: theme }
 
     // Faked drop shadow (blur 32, offset-y 8, #00000066): a translucent
-    // black rounded rect behind the card. Qt5Compat DropShadow is not
-    // assumed to be installed on the target.
+    // black rounded rect behind the card.
+    // SUPERSEDED (2026-07-29): the justification was "Qt5Compat DropShadow is
+    // not assumed to be installed on the target", of a piece with the retired
+    // "effects render nothing" doctrine. Both effect modules ARE installed here
+    // and this port runs on the GPU (OpenGL RHI, measured); the old note came
+    // from an offscreen session, which forces the software renderer by
+    // definition — theme/RoundedImage.qml now DETECTS the software path with
+    // `GraphicsInfo.api`. A real blurred shadow is a visual change owing its
+    // own parity pass, so the fake stays for now.
     Rectangle {
         anchors.horizontalCenter: card.horizontalCenter
         y: card.y + 8

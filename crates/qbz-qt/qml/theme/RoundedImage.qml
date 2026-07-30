@@ -3,40 +3,69 @@
 // Why this exists: QML's `clip` is rectangular — a Rectangle with
 // `radius` + `clip: true` does NOT clip children to the rounded shape
 // (proven with an isolated scene on this Qt build: the child paints
-// square over the rounded fill). Shader masks (Qt5Compat OpacityMask,
-// QtQuick.Effects MultiEffect) render NOTHING on the software/offscreen
-// path (the phase-2 icon-tinting probe), and the Pi kiosk can run the
-// software path — so rounding is done with a Canvas raster clip
-// (QPainter, antialiased, renderTarget Image = CPU).
+// square over the rounded fill). So the curve has to come from a mask.
 //
-// Usage mirrors the old pattern: `RoundedImage { anchors.fill: parent;
-// source: artPath; radius: theme.radiusSm }` inside the same rounded
-// placeholder Rectangle (the placeholder's OWN fill rounds fine — only
-// children needed the workaround).
+// ── HOW THE ROUNDING IS DONE (and the doctrine this file used to carry) ────
+// Effects need shaders. This port runs on the GPU (OpenGL RHI, measured
+// 2026-07-29 with QSG_INFO=1 in a real windowed session); the earlier
+// "renders nothing" note in this header came from an offscreen session, which
+// forces the software renderer by definition. Where a software path is
+// genuinely possible, detect it with `GraphicsInfo.api` rather than assuming
+// it.
+//
+// So there are two arms, chosen per item, at runtime:
+//
+//   FAST ARM (default)  one `Image` + ONE `layer.enabled` whose `layer.effect`
+//                       is a `MultiEffect` masked by a rounded `Rectangle`.
+//                       The layer FBO and the mask FBO are pure functions of
+//                       (width, height, radius) — they are rendered once and
+//                       cached, so a static cover costs ZERO CPU raster and
+//                       ZERO texture upload per frame. `radius <= 0` takes
+//                       neither the layer nor the mask, i.e. a plain Image.
+//   CANVAS ARM          the previous CPU raster (QPainter into a QImage,
+//                       `renderTarget: Canvas.Image`), kept verbatim for the
+//                       two cases that genuinely need it:
+//                         * `fit: "pad"` — its band colours come from
+//                           `Context2D.getImageData` on the pixels the canvas
+//                           just drew, and there is no non-Canvas way to read
+//                           those back;
+//                         * a software / Null renderer (offscreen, and any
+//                           platform `qt-diag.sh` shows on the software path)
+//                           — no shaders, so no mask.
+//                       `QbzShell.forceCanvasArt` (env `QBZ_QT_ROUND_MODE=
+//                       canvas`, default OFF) pins this arm by hand.
+//
+// Usage is unchanged: `RoundedImage { anchors.fill: parent; source: artPath;
+// radius: theme.radiusSm }` inside the same rounded placeholder Rectangle
+// (the placeholder's OWN fill rounds fine — only children needed a mask).
 //
 // ── READINESS CONTRACT (`ready`) ───────────────────────────────────────────
 // A host that draws a loading placeholder over this item MUST gate it on
 // `ready`, never on "the path is non-empty".
 //
-// The path landing means NOTHING here. This is a Canvas: once `source` is
-// assigned the probe still has to load the file through QQuickPixmap and then
-// a paint pass has to rasterize it. A placeholder gated on the path therefore
-// vanishes the instant the path arrives and leaves an EMPTY tile on screen
-// until the canvas paints — the reported bug ("the skeleton disappears before
-// the art is rendered").
+// The path landing means NOTHING here: once `source` is assigned the file
+// still has to be decoded (and, on the canvas arm, rasterized). A placeholder
+// gated on the path therefore vanishes the instant the path arrives and leaves
+// an EMPTY tile on screen until the pixels exist — the reported bug ("the
+// skeleton disappears before the art is rendered").
 //
-// `ready` is true only when BOTH have happened for the CURRENT source:
-//   1. the dimension probe reached Image.Ready (the pixmap is decoded), and
-//   2. `onPaint` has run a pass that actually drew THAT source.
-// It is derived from `_paintedSource`, so re-assigning `source` drops it back
-// to false with no bookkeeping — a recycled list delegate cannot inherit the
-// previous row's readiness.
+// `ready` is true only when the CURRENT source is on screen:
+//   fast arm    `Image.Ready` — the pixmap is decoded and its texture uploads
+//               on the next render pass; QbzSkeleton's 180ms fade covers that
+//               one frame (QbzSkeleton.qml:51-61 documents the same thing for
+//               its own probe arm, implemented `handedOver` :184 -> `retired`
+//               :214 -> `Behavior on opacity` :216).
+//   canvas arm  `_paintedSource` — a paint pass actually drew THAT source.
+// Both are MONOTONE WITHIN ONE SOURCE and cleared only by `onSourceChanged`,
+// so a recycled list delegate cannot inherit the previous row's readiness and
+// a mid-life derivative swap cannot un-retire a placeholder that has already
+// handed over.
 //
 // Hosts that cannot reach this item (the image lives inside AlbumCard,
 // PlaylistCard, …) use the equivalent self-probing arm of the placeholder
 // itself: `QbzSkeleton { coverSource: <path> }` — see QbzSkeleton.qml.
 //
-// ── THE RASTER IS IN DEVICE PIXELS ─────────────────────────────────────────
+// ── THE CANVAS ARM RASTERS IN DEVICE PIXELS ────────────────────────────────
 // `onPaint` lays everything out in DEVICE pixels and pre-divides the context
 // by the device pixel ratio, instead of drawing in the item's logical pixels.
 //
@@ -75,8 +104,9 @@
 //   card drawing the derivative             RMSE 1.303
 //   ArtPreviewOverlay's plain Image         RMSE 2.832
 //
-// so the fix below (`_effectiveSource` everywhere in `onPaint`) puts the card
-// AHEAD of the preview that was reported as the good one.
+// The derivative is kept on BOTH arms: the fast arm's `Image` filters, but a
+// file already at the drawn size is still one decode of 200x200 instead of
+// 600x600, and it is what makes `pad` 1:1.
 //
 // ── NON-SQUARE SOURCES: `fit: "pad"` / `fit: "auto"` ───────────────────────
 // Qobuz playlist artwork (`image_rectangle`) is 800x380 — a 2.11:1 banner,
@@ -103,15 +133,12 @@
 // visible join, and the picture dissolves into the frame instead of ending at
 // a hard rectangle.
 //
-// Two implementation constraints decided this shape:
-//   * ShaderEffect / ColorOverlay / MultiEffect render NOTHING on the
-//     software path, and `layer.enabled` would put a per-frame FBO on a card
-//     that appears dozens of times in a rail. A Canvas `createLinearGradient`
-//     is neither — it is the same CPU raster this file already runs.
-//   * The colours come from `Context2D.getImageData` on the pixels THIS
-//     canvas just drew, so no second decode, no extra cache dir and no Rust
-//     round-trip. Measured against a PIL average of the same source strip:
-//     (11,18,27) read back vs (9,17,25) — faithful.
+// The colours come from `Context2D.getImageData` on the pixels THIS canvas
+// just drew, so no second decode, no extra cache dir and no Rust round-trip.
+// Measured against a PIL average of the same source strip: (11,18,27) read
+// back vs (9,17,25) — faithful. That read-back is the reason `pad` keeps the
+// Canvas: it is not a renderer limitation, it is that nothing else can hand
+// back the pixels it just drew.
 //
 // `getImageData` here addresses the DEVICE-pixel backing store and IGNORES
 // the active transform — the same space `onPaint` already lays everything out
@@ -138,9 +165,10 @@
 
 import QtQuick
 import QtQuick.Window
+import QtQuick.Effects
 import com.blitzfc.qbz
 
-Canvas {
+Item {
     id: root
     property string source: ""
     property real radius: 8
@@ -178,13 +206,64 @@ Canvas {
     /// must agree on this or the scaled file comes back the wrong shape.
     readonly property bool _contains: root._fit === "contain" || root._fit === "pad"
 
+    /// ── ARM SELECTION — detected, not configured ───────────────────────────
+    /// Shaders are unavailable on the software/Null renderer (and that is the
+    /// ONLY case the retired "effects render nothing" doctrine was ever true
+    /// for: it was observed under QT_QPA_PLATFORM=offscreen, which forces
+    /// software by definition). GraphicsInfo.api answers it exactly, per
+    /// window, at runtime — so the offscreen gate keeps drawing covers the way
+    /// it does today and macOS gets the mask the moment it reports Metal.
+    ///
+    /// `api` carries `notify: "apiChanged"`, so this IS a live binding: before
+    /// the item has a window the value is `Unknown` (fast arm) and it
+    /// re-evaluates when the window arrives. Under the RHI an OpenGL backend
+    /// reports `GraphicsInfo.OpenGL` and the `*Rhi` values are Qt5-era
+    /// aliases, so testing Software/Null NEGATIVELY is the correct test — do
+    /// not test for OpenGL positively.
+    readonly property bool _noShaders: GraphicsInfo.api === GraphicsInfo.Software
+        || GraphicsInfo.api === GraphicsInfo.Null
+    /// `pad` samples the pixels it just drew (Context2D.getImageData); there
+    /// is no non-Canvas way to read them back, so that mode keeps the raster.
+    /// It is confined to Qobuz playlist banners (fit "pad" / a resolved
+    /// "auto"), i.e. 179 covers in the local cache, not every album cover.
+    ///
+    /// `typeof QbzShell !== "undefined"` mirrors the guard `_requestScaled`
+    /// already uses for QbzSession: a registered singleton is always defined
+    /// in the built binary, but the guard keeps this file loadable in an
+    /// isolated qml6 scene, which is how the "clip does not round" finding in
+    /// the header was obtained.
+    readonly property bool _useCanvas: root._fit === "pad" || root._noShaders
+        || (typeof QbzShell !== "undefined" && QbzShell.forceCanvasArt)
+
+    /// PreserveAspectCrop overflows the item. A layer confines it (the layer
+    /// texture IS the item rect); with no layer and a crop fit, nothing does —
+    /// and a cropped tile would paint over its neighbour (PlaylistCollage's
+    /// mosaic, whose Canvas clipped per tile). Cheapest correct rule: scissor
+    /// exactly in the one case that has neither. NOT `clip: true`
+    /// unconditionally — that would put a scissor under every layered cover
+    /// for nothing.
+    clip: !root._useCanvas && root.radius <= 0 && !root._contains
+
     /// THE handover signal — see the READINESS CONTRACT above. True only once
     /// the current `source` is on screen, not merely known.
-    readonly property bool ready: root._paintedSource !== ""
-        && root._paintedSource === root.source
-    /// The source of the last paint that actually drew pixels. Internal; it
-    /// exists as a property (not a bool flag) so that `ready` invalidates
-    /// itself on every source change.
+    ///
+    /// MONOTONE WITHIN A SOURCE, and that is not cosmetic: `QbzSkeleton`'s
+    /// `retired` is a live binding, so anything that drops `ready` back to
+    /// false brings the placeholder back over drawn art. Five hosts bind this
+    /// directly — FolderSubcard.qml:62, LocalAlbumRow.qml:115,
+    /// LocalAlbumHeader.qml:63, LocalEphemeralPane.qml:168,
+    /// LocalArtistRow.qml:70 — and every `coverSource` host observes the same
+    /// shape through its own probe.
+    readonly property bool ready: root.source !== ""
+        && (root._useCanvas ? (root._paintedSource === root.source)
+                            : root._imgReady)
+    /// Fast-arm latch: set true on `Image.Ready`, cleared ONLY by
+    /// `onSourceChanged`. See the display Image's `onStatusChanged` for why
+    /// this must not mirror `status`.
+    property bool _imgReady: false
+    /// Canvas-arm equivalent: the source of the last paint that actually drew
+    /// pixels. Internal; it exists as a property (not a bool flag) so that
+    /// `ready` invalidates itself on every source change.
     property string _paintedSource: ""
 
     /// ── THE SCALED SOURCE ──────────────────────────────────────────────────
@@ -242,7 +321,7 @@ Canvas {
         var w = Math.ceil(root.width * root._dpr)
         var h = Math.ceil(root.height * root._dpr)
         if (w <= 0 || h <= 0) return
-        // The SAME geometry `onPaint` uses, so the answer is the drawn size.
+        // The SAME geometry the draw uses, so the answer is the drawn size.
         // `_contains`, not `fit === "contain"`: "pad" and a resolved "auto"
         // fit INSIDE the cell, and asking for the crop (max) scale there
         // would hand back a file wider than the band the art occupies —
@@ -274,32 +353,187 @@ Canvas {
         }
     }
 
-    renderTarget: Canvas.Image
-    // GUI-thread raster. Cooperative/Threaded rasterize on the SCENE GRAPH
-    // RENDER THREAD, and this item is created and destroyed by list recycling
-    // while async artwork callbacks schedule repaints — the render thread can
-    // be mid-draw on a pixmap whose Canvas is already gone. Immediate keeps
-    // paint and destruction on one thread. renderTarget: Image already meant
-    // CPU raster, so this costs no visual change.
-    renderStrategy: Canvas.Immediate
-
-    // Dimension probe: Canvas can't query the loaded image's intrinsic
-    // size, and PreserveAspectCrop needs it. A hidden Image doubles as
-    // the async loader notification.
+    // Dimension probe: the ORIGINAL's intrinsic size is what `_requestScaled`
+    // and `fit: "auto"` need, and neither a Canvas nor a cropping Image can be
+    // asked for it. A hidden Image doubles as the async loader notification.
+    //
+    // It follows `_effectiveSource`, not `source`: once the derivative lands
+    // both this probe and the display Image reference the SAME file, so the
+    // original drops to refcount 0 and becomes evictable — which is the other
+    // half of the "RoundedImage keeps both the original and the derivative
+    // loaded" report. (Releasing the probe outright by binding
+    // `source: _srcW > 0 ? "" : source` is possible but requires reordering
+    // `_captureSrc` to read into locals first, because assigning `_srcW`
+    // would zero `sourceSize` mid-function. Deliberately NOT done here.)
     Image {
         id: probe
         source: root._effectiveSource
         visible: false
         asynchronous: true
         cache: true
+        // NO sourceSize: it is part of the QQuickPixmapCache key, so a
+        // decode-size request here would fork a SECOND decode of the file the
+        // derivative pipeline already sized (QbzSkeleton.qml:178-180 documents
+        // the same trap for its own probe).
         onStatusChanged: {
             // While `_scaled` is "" this IS the original, so this is where its
             // intrinsic size becomes knowable — and the derivative cannot be
             // requested before it (see `_srcW`).
             root._captureSrc()
-            if (status === Image.Ready || status === Image.Error) root.requestPaint()
+            if (status === Image.Ready || status === Image.Error) root._repaint()
         }
         onSourceSizeChanged: root._captureSrc()
+    }
+
+    /// The rounded shape, rendered to its own FBO ONCE (it changes only with
+    /// width/height/radius, never per frame). `visible: false` + layered is
+    /// the documented MultiEffect mask idiom — the layer renders regardless of
+    /// visibility, which is the whole point.
+    Item {
+        id: maskSrc
+        anchors.fill: parent
+        visible: false
+        layer.enabled: root.radius > 0 && !root._useCanvas
+        layer.smooth: true
+        Rectangle {
+            anchors.fill: parent
+            radius: root.radius        // Rectangle clamps internally, exactly
+            color: "#ffffff"           // as onPaint's Math.min(r, w/2, h/2) did
+        }
+    }
+
+    // ── The two arms ────────────────────────────────────────────────────────
+    // One Loader swap at startup (when GraphicsInfo.api resolves), not per
+    // frame. `active` is a live binding on `_useCanvas`, which also follows
+    // `_fit` — a `fit: "auto"` cell that resolves to "pad" moves to the canvas
+    // arm on the same pass that resolves it.
+    Loader {
+        id: fastArm
+        anchors.fill: parent
+        active: !root._useCanvas
+        sourceComponent: imageComp
+    }
+    Loader {
+        id: canvasArm
+        anchors.fill: parent
+        active: root._useCanvas
+        sourceComponent: canvasComp
+        // A newly created Canvas has loaded no image yet (the root-level
+        // handlers already fired), so prime it here as well as there.
+        onLoaded: root._repaint()
+    }
+
+    Component {
+        id: imageComp
+        Image {
+            anchors.fill: parent
+            source: root._effectiveSource
+            // "crop" = PreserveAspectCrop; "contain"/"pad" fit INSIDE. Same
+            // predicate the derivative request uses, so the file that comes
+            // back is the size this fillMode draws (see _requestScaled).
+            fillMode: root._contains ? Image.PreserveAspectFit
+                                     : Image.PreserveAspectCrop
+            asynchronous: true
+            cache: true
+            // NO sourceSize: it is part of the QQuickPixmapCache key, so a
+            // decode-size request here would fork a SECOND decode of the file
+            // the derivative pipeline already sized.
+            smooth: true
+            mipmap: false
+            // The derivative swaps `source` mid-life. Without this the item
+            // blanks for the frames the new file takes to decode — the Canvas
+            // never did (it kept the previous raster), so this is what keeps
+            // the swap invisible. Qt >= 6.8.
+            retainWhileLoading: true
+            // Called from onStatusChanged AND from Component.onCompleted: an
+            // already-cached pixmap can reach Image.Ready DURING the evaluation
+            // of the `source` binding, i.e. possibly before the handler is
+            // connected, and a missed latch would leave `ready` false forever —
+            // a QbzSkeleton shimmering on top of drawn art at five direct
+            // hosts. Same self-healing discipline as `_captureSrc`.
+            function _sync() {
+                // LATCH, do not mirror. `status` goes back to Image.Loading
+                // when the derivative swaps `_effectiveSource` mid-life
+                // (retainWhileLoading keeps the PIXELS, not the status), and a
+                // mirrored `_imgReady` would drop `ready` to false for those
+                // frames. `ready` false un-retires QbzSkeleton (`handedOver`
+                // :184 -> `retired` :214 -> opacity 1.0), i.e. the placeholder
+                // FADES BACK IN over art that is already on screen. The Canvas
+                // never did that: `_paintedSource` is monotone within one
+                // source. So: set true on Ready, and clear ONLY from
+                // onSourceChanged.
+                if (status === Image.Ready)
+                    root._imgReady = true
+                // FALLBACK TO THE ORIGINAL, which the Canvas has (`onPaint`
+                // picks `source` when `_effectiveSource` is not loadable) and
+                // this arm would otherwise lose. Reachable in production
+                // because of the derivative-cache eviction:
+                // `artwork_qt::evict_scaled` can unlink a derivative a live or
+                // later-recycled delegate still names in `_scaled`, and
+                // `_reqKey` would block the re-request, leaving the cover
+                // permanently blank. Dropping both re-arms the pipeline.
+                if (status === Image.Error && root._scaled !== "") {
+                    root._scaled = ""
+                    root._reqKey = ""
+                }
+            }
+            onStatusChanged: _sync()
+            Component.onCompleted: _sync()
+            // Rounding: ONE layer + ONE mask, both static for this item's
+            // life. radius 0 (LabelCard, LabelView, LabelReleasesView) takes
+            // neither — those three used to pay a full CPU raster to round
+            // nothing.
+            layer.enabled: root.radius > 0
+            layer.smooth: true
+            layer.effect: MultiEffect {
+                maskEnabled: true
+                maskSource: maskSrc
+                // ── 0.5 / 1.0, and BOTH numbers were MEASURED, not reasoned.
+                // Do not "restore the defaults" here.
+                //
+                // Qt's mask maths is a smoothstep CENTRED on
+                // `maskThresholdMin` whose width is `maskSpreadAtMin`, i.e.
+                // roughly smoothstep(min - spread/2, min + spread/2, maskAlpha).
+                // So (0.5, 1.0) is the only pair that maps the mask's alpha
+                // 0..1 monotonically onto 0..1 — the straight alpha multiply
+                // `ctx.clip()` gave. Grabbed a 200x200 cover under a
+                // radius-40 mask on this Qt build (6.11.1, OpenGL RHI) and
+                // counted the ANTIALIASED pixels (0 < alpha < 255):
+                //
+                //   Canvas arm (the baseline this replaces)   292 fringe px
+                //   maskThresholdMin 0.0 / maskSpreadAtMin 0.0     0 fringe px
+                //   maskThresholdMin 0.5 / maskSpreadAtMin 1.0   308 fringe px
+                //   Qt5Compat OpacityMask (the sanctioned fallback) 308
+                //
+                // and on a FULL CIRCLE (radius 100 on 200px — ArtistCard 95,
+                // ArtistView 100, HomeView's Spotlight hero 70):
+                //
+                //   Canvas 752 fringe px | 0.0/0.0 -> 0 | 0.5/1.0 -> 740
+                //
+                // (0.0, 0.0) collapses the smoothstep to `step(0, alpha)`:
+                // every mask pixel with any alpha at all snaps to fully
+                // opaque, so the arc comes back HARD and half a pixel fat —
+                // a visibly stair-stepped circle at the six circle sites.
+                // (0.0, anything > 0) is worse still: the low edge goes
+                // negative, every pixel clamps to 1 and the mask is disabled
+                // outright (measured: 40000/40000 px opaque, square corners).
+                maskThresholdMin: 0.5
+                maskSpreadAtMin: 1.0
+            }
+        }
+    }
+
+    // ── Root-level source/geometry handlers ─────────────────────────────────
+    // The canvas arm needs an explicit loadImage + requestPaint from each of
+    // these; the fast arm needs neither (its `Image` re-binds itself), so they
+    // funnel through one guarded helper.
+
+    /// No-op on the fast arm, by construction: `canvasArm.item` is null there.
+    function _repaint() {
+        if (canvasArm.item) {
+            canvasArm.item.loadImage(root._effectiveSource)
+            canvasArm.item.requestPaint()
+        }
     }
 
     // requestPaint() as well as loadImage(): a delegate recycled onto a row
@@ -315,95 +549,121 @@ Canvas {
         root._srcW = 0
         root._srcH = 0
         root._reqKey = ""
-        loadImage(root._effectiveSource)
-        requestPaint()
+        // THE ONLY place the fast-arm latch is cleared — see `_imgReady`.
+        root._imgReady = false
+        root._repaint()
     }
-    on_EffectiveSourceChanged: { loadImage(root._effectiveSource); requestPaint() }
-    Component.onCompleted: loadImage(root._effectiveSource)
-    onImageLoaded: { _captureSrc(); requestPaint() }
-    onWidthChanged: { requestPaint(); _requestScaled() }
-    onHeightChanged: { requestPaint(); _requestScaled() }
+    on_EffectiveSourceChanged: root._repaint()
+    Component.onCompleted: root._repaint()
+    onWidthChanged: { root._repaint(); root._requestScaled() }
+    onHeightChanged: { root._repaint(); root._requestScaled() }
 
     /// Device pixels per logical pixel for the screen this item is on. Held as
     /// a property so moving the window between screens of different scales
     /// re-rasterizes (see the DEVICE PIXELS note above).
     readonly property real _dpr: Screen.devicePixelRatio > 0 ? Screen.devicePixelRatio : 1
-    on_DprChanged: { requestPaint(); _requestScaled() }
+    on_DprChanged: { root._repaint(); root._requestScaled() }
 
-    onPaint: {
-        // Last of the self-healing capture hooks (see `_captureSrc`): a paint
-        // means the cell is on screen, so if the size is knowable at all it is
-        // knowable now. One integer compare once the latch is set.
-        _captureSrc()
-        var ctx = getContext("2d")
-        ctx.reset()
-        // Everything below is in DEVICE pixels; the context is pre-divided so
-        // the item still occupies `width` x `height` logical pixels.
-        var dpr = root._dpr
-        var w = Math.round(width * dpr)
-        var h = Math.round(height * dpr)
-        if (w <= 0 || h <= 0) return
-        if (dpr !== 1) ctx.scale(1 / dpr, 1 / dpr)
-        var r = Math.max(0, Math.min(radius * dpr, w / 2, h / 2))
-        if (r > 0) {
-            ctx.beginPath()
-            ctx.moveTo(r, 0)
-            ctx.lineTo(w - r, 0)
-            ctx.arcTo(w, 0, w, r, r)
-            ctx.lineTo(w, h - r)
-            ctx.arcTo(w, h, w - r, h, r)
-            ctx.lineTo(r, h)
-            ctx.arcTo(0, h, 0, h - r, r)
-            ctx.lineTo(0, r)
-            ctx.arcTo(0, 0, r, 0, r)
-            ctx.closePath()
-            ctx.clip()
-        }
-        // Geometry comes from the ORIGINAL's intrinsic size, not from the
-        // probe. The derivative preserves the aspect ratio, so `dw`/`dh` are
-        // identical either way (they depend only on the cell and the ratio) —
-        // but `_srcW`/`_srcH` do not go stale for the frame in which the probe
-        // is re-loading after `_scaled` lands, which would otherwise blank
-        // every card once, mid-rail, the moment its derivative arrived.
-        var iw = root._srcW > 0 ? root._srcW : probe.sourceSize.width
-        var ih = root._srcH > 0 ? root._srcH : probe.sourceSize.height
-        // Prefer the derivative; fall back to the original while it resolves
-        // (or if it never does) so a cell is never empty for want of it.
-        var drawSrc = isImageLoaded(root._effectiveSource) ? root._effectiveSource
-                    : (isImageLoaded(root.source) ? root.source : "")
-        if (iw > 0 && ih > 0 && drawSrc !== "") {
-            // "crop" = uniform scale covering the rect; "contain"/"pad" =
-            // fitting inside it. All centered. Once the derivative is in play
-            // it is already `dw` x `dh`, so the blit is 1:1 — which is the
-            // entire point of it, since drawImage does not filter when it
-            // scales.
-            var scale = root._contains ? Math.min(w / iw, h / ih) : Math.max(w / iw, h / ih)
-            var dw = iw * scale
-            var dh = ih * scale
-            var ox = (w - dw) / 2
-            var oy = (h - dh) / 2
-            // `drawSrc`, NOT `source`: drawing the original here is what made
-            // the derivative dead weight and every card a nearest-neighbour
-            // downscale.
-            ctx.drawImage(drawSrc, ox, oy, dw, dh)
-            // The uncovered area, filled from the image itself. AFTER the
-            // draw on purpose: the sampler reads the pixels that were just
-            // laid down, so it needs no second decode and cannot disagree
-            // with what is on screen.
-            if (root._fit === "pad")
-                root._paintPad(ctx, dpr, w, h, ox, oy, dw, dh)
-            // ONLY here: pixels for `source` are now on the canvas. Anything
-            // earlier (the path arriving, the probe going Ready) would hand
-            // the cell over to an empty tile. Assigning the same string twice
-            // is a no-op in QML, so repeated paints cost no notifications.
-            root._paintedSource = source
+    Component {
+        id: canvasComp
+        Canvas {
+            id: canvas
+            anchors.fill: parent
+            renderTarget: Canvas.Image
+            // GUI-thread raster. Cooperative/Threaded rasterize on the SCENE
+            // GRAPH RENDER THREAD, and this item is created and destroyed by
+            // list recycling while async artwork callbacks schedule repaints —
+            // the render thread can be mid-draw on a pixmap whose Canvas is
+            // already gone. Immediate keeps paint and destruction on one
+            // thread. renderTarget: Image already meant CPU raster, so this
+            // costs no visual change.
+            renderStrategy: Canvas.Immediate
+
+            onImageLoaded: { root._captureSrc(); canvas.requestPaint() }
+
+            onPaint: {
+                // Last of the self-healing capture hooks (see `_captureSrc`):
+                // a paint means the cell is on screen, so if the size is
+                // knowable at all it is knowable now. One integer compare once
+                // the latch is set.
+                root._captureSrc()
+                var ctx = canvas.getContext("2d")
+                ctx.reset()
+                // Everything below is in DEVICE pixels; the context is
+                // pre-divided so the item still occupies `width` x `height`
+                // logical pixels.
+                var dpr = root._dpr
+                var w = Math.round(canvas.width * dpr)
+                var h = Math.round(canvas.height * dpr)
+                if (w <= 0 || h <= 0) return
+                if (dpr !== 1) ctx.scale(1 / dpr, 1 / dpr)
+                var r = Math.max(0, Math.min(root.radius * dpr, w / 2, h / 2))
+                if (r > 0) {
+                    ctx.beginPath()
+                    ctx.moveTo(r, 0)
+                    ctx.lineTo(w - r, 0)
+                    ctx.arcTo(w, 0, w, r, r)
+                    ctx.lineTo(w, h - r)
+                    ctx.arcTo(w, h, w - r, h, r)
+                    ctx.lineTo(r, h)
+                    ctx.arcTo(0, h, 0, h - r, r)
+                    ctx.lineTo(0, r)
+                    ctx.arcTo(0, 0, r, 0, r)
+                    ctx.closePath()
+                    ctx.clip()
+                }
+                // Geometry comes from the ORIGINAL's intrinsic size, not from
+                // the probe. The derivative preserves the aspect ratio, so
+                // `dw`/`dh` are identical either way (they depend only on the
+                // cell and the ratio) — but `_srcW`/`_srcH` do not go stale
+                // for the frame in which the probe is re-loading after
+                // `_scaled` lands, which would otherwise blank every card
+                // once, mid-rail, the moment its derivative arrived.
+                var iw = root._srcW > 0 ? root._srcW : probe.sourceSize.width
+                var ih = root._srcH > 0 ? root._srcH : probe.sourceSize.height
+                // Prefer the derivative; fall back to the original while it
+                // resolves (or if it never does) so a cell is never empty for
+                // want of it.
+                var drawSrc = canvas.isImageLoaded(root._effectiveSource) ? root._effectiveSource
+                            : (canvas.isImageLoaded(root.source) ? root.source : "")
+                if (iw > 0 && ih > 0 && drawSrc !== "") {
+                    // "crop" = uniform scale covering the rect;
+                    // "contain"/"pad" = fitting inside it. All centered. Once
+                    // the derivative is in play it is already `dw` x `dh`, so
+                    // the blit is 1:1 — which is the entire point of it, since
+                    // drawImage does not filter when it scales.
+                    var scale = root._contains ? Math.min(w / iw, h / ih) : Math.max(w / iw, h / ih)
+                    var dw = iw * scale
+                    var dh = ih * scale
+                    var ox = (w - dw) / 2
+                    var oy = (h - dh) / 2
+                    // `drawSrc`, NOT `source`: drawing the original here is
+                    // what made the derivative dead weight and every card a
+                    // nearest-neighbour downscale.
+                    ctx.drawImage(drawSrc, ox, oy, dw, dh)
+                    // The uncovered area, filled from the image itself. AFTER
+                    // the draw on purpose: the sampler reads the pixels that
+                    // were just laid down, so it needs no second decode and
+                    // cannot disagree with what is on screen.
+                    if (root._fit === "pad")
+                        root._paintPad(ctx, dpr, w, h, ox, oy, dw, dh)
+                    // ONLY here: pixels for `source` are now on the canvas.
+                    // Anything earlier (the path arriving, the probe going
+                    // Ready) would hand the cell over to an empty tile.
+                    // Assigning the same string twice is a no-op in QML, so
+                    // repeated paints cost no notifications.
+                    root._paintedSource = root.source
+                }
+            }
         }
     }
 
     // ── The image-derived padding ─────────────────────────────────────────
     // Everything below runs in DEVICE pixels, like the rest of `onPaint` —
     // `getImageData` included (see the header note; this was measured, not
-    // assumed, and the HTML-spec answer is the wrong one here).
+    // assumed, and the HTML-spec answer is the wrong one here). It stays on
+    // ROOT rather than inside the canvas component: the context is passed in,
+    // and keeping it here is what makes the moved body a pure relocation.
 
     /// Average the strip of drawn art next to a seam into `K` buckets along
     /// its long axis, so the band can carry the image's colour VARIATION and

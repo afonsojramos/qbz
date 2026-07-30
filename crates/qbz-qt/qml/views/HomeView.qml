@@ -109,6 +109,73 @@ Rectangle {
             return ({})
         }
     }
+    // Per-URL cover patches for the two out-of-document For You rails. The
+    // documents are NOT republished for artwork (src/foryou_qt.rs), because a
+    // republish hands `model:` a new JS array and `QQuickItemView::setModel()`
+    // resets the rail's scroll offset AND tears down the QQmlDelegateModel —
+    // the "a cover batch landing mid-drag snaps the rail back" report, and this
+    // build's only crash signature. So this map is what fills the tiles in: the
+    // `coverMap` pattern AlbumView / ArtistView / QueuePanel already use, on a
+    // signal only this view listens to.
+    //
+    // The map is VIEW-LOCAL and this view is NOT durable: AppShell binds
+    // `viewLoader.source` to QbzShell.currentView, so opening an album destroys
+    // HomeView and the map with it, while the rails' documents are published
+    // once per session. That is what `refreshForyouArt()` below is for — on
+    // every mount Rust re-hands whatever it has already resolved. Without it the
+    // Radio rail and the Spotlight came back blank for the rest of the session
+    // and `anyForYouArtPending` never went false again, pinning the pulse Timer.
+    property var forYouArt: ({})
+    Connections {
+        target: QbzHome
+        // ONE emit carries the WHOLE landed batch as a `{artUrl: path}` object
+        // (src/foryou_qt.rs): merge it, then rebind ONCE. `forYouArt` is a
+        // `var`, so only a new object REFERENCE notifies its dependents — an
+        // emit per url paid a copy of the growing map plus a sweep over every
+        // forYouArtOf(...) binding in both rails, per cover.
+        function onForyouArtReady(patchJson) {
+            var patch
+            try {
+                patch = JSON.parse(patchJson)
+            } catch (e) {
+                return
+            }
+            var m = root.forYouArt
+            var changed = false
+            for (var url in patch) {
+                if (m[url] !== patch[url]) {
+                    m[url] = patch[url]
+                    changed = true
+                }
+            }
+            if (changed)
+                root.forYouArt = Object.assign({}, m)   // rebind needs a NEW ref
+        }
+    }
+    // Re-hand the resolved covers to this (possibly brand-new) instance. Cheap
+    // and idempotent: it re-reads the memoized cache paths off the Rust stores,
+    // never downloads, never republishes a document, and emits nothing at all
+    // when nothing is resolved yet — so the first, cold mount is a no-op and the
+    // in-flight download's own emit still fills the map.
+    Component.onCompleted: QbzHome.refreshForyouArt()
+    /// The patch map first, then whatever the document happened to carry (a
+    /// full Home reload publishes the paths it already has).
+    function forYouArtOf(item) {
+        return (item && item.artUrl && root.forYouArt[item.artUrl])
+            || (item ? (item.artPath || "") : "")
+    }
+    /// Same predicate as anyItemArtPending, plus the patch map — the rails no
+    /// longer get their `artPath` back through a republish, so "artUrl set and
+    /// artPath empty" is now true forever and would pin the pulse Timer on.
+    function anyForYouArtPending(items) {
+        for (var i = 0; i < items.length; i++) {
+            var it = items[i]
+            if ((it.artUrl || "") !== "" && root.forYouArtOf(it) === "")
+                return true
+        }
+        return false
+    }
+
     property string activeTab: "home"
 
     // Slint gates the 4th tab on the persisted `show_recommendations` pref
@@ -169,8 +236,15 @@ Rectangle {
         // reason the pinned rows are: without them a Spotlight or Radio tile
         // waiting for its cover would sit on a FROZEN placeholder, because
         // the pulse Timer runs only while something is pending.
-        || root.anyItemArtPending(root.radioStations)
-        || root.anyItemArtPending(root.spotlight.albums || [])
+        //
+        // They use `anyForYouArtPending`, which consults the per-URL patch map
+        // as well: their `artPath` never comes back through a republish any
+        // more, so the plain `artPath === ""` probe would be true forever and
+        // would pin the pulse Timer on. The third term is NEW coverage — the
+        // Spotlight DOCUMENT itself (the 140px hero portrait) was never probed.
+        || root.anyForYouArtPending(root.radioStations)
+        || root.anyForYouArtPending(root.spotlight.albums || [])
+        || root.anyForYouArtPending(root.spotlight.visible === true ? [root.spotlight] : [])
     function anyArtPending(model) {
         for (var s = 0; s < model.length; s++) {
             if (root.anyItemArtPending(model[s].items || []))
@@ -726,7 +800,9 @@ Rectangle {
                         seedTitle: modelData.title
                         seedSubtitle: modelData.artist
                         label: QbzSession.tr("RADIO", QbzSession.trRev)
-                        artSource: modelData.artPath || ""
+                        // The patch map, not `artPath`: the rail's document is
+                        // published ONCE and covers arrive per-URL.
+                        artSource: root.forYouArtOf(modelData)
                         // Both the card body and the hover disc start the
                         // album radio (the .slint wires `clicked` and `play`
                         // to the same callback).
@@ -743,7 +819,7 @@ Rectangle {
                         y: 29
                         blockRadius: 4
                         pending: (modelData.artUrl || "") !== ""
-                        coverSource: modelData.artPath || ""
+                        coverSource: root.forYouArtOf(modelData)
                         phase: root.skelPhase
                         cellIndex: index
                         settleMs: 6000
@@ -793,7 +869,15 @@ Rectangle {
                 color: theme.surfaceElevated
                 clip: true
                 QbzIcon {
-                    visible: (spot.doc.artPath || "") === ""
+                    // The REMOTE url, not the local path — 1:1 with
+                    // Spotlight.slint:91-98 (`spotlight-image-url == ""`).
+                    // Gating on artPath flashed this glyph on every cold
+                    // cache, because the path is empty until the download
+                    // lands; the artist HAS a portrait, it just is not here
+                    // yet, and the placeholder for that is the surface fill
+                    // (Slint's hero is an unconditional Image over the
+                    // surface-elevated box, so it simply draws nothing).
+                    visible: (spot.doc.artUrl || "") === ""
                     name: "user"
                     width: 40
                     height: 40
@@ -802,7 +886,7 @@ Rectangle {
                 }
                 RoundedImage {
                     anchors.fill: parent
-                    source: spot.doc.artPath || ""
+                    source: root.forYouArtOf(spot.doc)
                     radius: 70
                 }
                 MouseArea {
@@ -891,7 +975,7 @@ Rectangle {
                             seedSubtitle: QbzSession.tr("By {}", QbzSession.trRev)
                                 .replace("{}", spot.doc.name || "")
                             label: QbzSession.tr("TOP TRACKS", QbzSession.trRev)
-                            artSource: spot.doc.artPath || ""
+                            artSource: root.forYouArtOf(spot.doc)
                             onActivated: QbzHome.playArtistTopTracks(spot.doc.artistId || "")
                             onPlayRequested: QbzHome.playArtistTopTracks(spot.doc.artistId || "")
                         }
@@ -902,7 +986,7 @@ Rectangle {
                             seedTitle: spot.doc.name || ""
                             seedSubtitle: QbzSession.tr("Qobuz Radio Station", QbzSession.trRev)
                             label: QbzSession.tr("RADIO", QbzSession.trRev)
-                            artSource: spot.doc.artPath || ""
+                            artSource: root.forYouArtOf(spot.doc)
                             onActivated: QbzHome.startArtistRadio(spot.doc.artistId || "")
                             onPlayRequested: QbzHome.startArtistRadio(spot.doc.artistId || "")
                         }
@@ -917,7 +1001,7 @@ Rectangle {
                             genre: modelData.album.genre
                             year: modelData.album.year
                             qualityTier: modelData.album.qualityTier
-                            artSource: modelData.album.artPath || ""
+                            artSource: root.forYouArtOf(modelData.album)
                             artworkUrl: modelData.album.artUrl || ""
                             isPinned: modelData.album.isPinned === true
                             isFavorite: modelData.album.isFavorite === true

@@ -5,11 +5,20 @@
 //
 // Slint's QbzIcon is `Image { colorize: <live Theme token> }`: the renderer
 // recolours the glyph every frame, so an icon always matches the current
-// theme, all 36 of them, custom accent included. Qt has no equivalent on the
-// path this port runs on — ColorOverlay / MultiEffect / shaders draw NOTHING
-// on the software renderer (verified with a probe during the POC), which is
-// why this file used to point straight at PRE-BAKED variants,
+// theme, all 36 of them, custom accent included. Qt has no *free* equivalent,
+// which is why this file used to point straight at PRE-BAKED variants,
 // assets/icons/<tint>/<name>.svg, each with a fixed hex burned in.
+//
+// SUPERSEDED (2026-07-29): the reason recorded here used to be "ColorOverlay /
+// MultiEffect / shaders draw NOTHING", from a POC probe. Effects need shaders,
+// and this port runs on the GPU (OpenGL RHI, measured with QSG_INFO=1 in a real
+// windowed session); the probe was taken under QT_QPA_PLATFORM=offscreen, which
+// forces the software renderer by definition. Where a software path is
+// genuinely possible, detect it with `GraphicsInfo.api` rather than assuming it
+// — theme/RoundedImage.qml does exactly that.
+// This does NOT re-open the design below. The runtime tint generator is cached,
+// costs zero per frame, and serves all 36 themes; a per-glyph shader pass would
+// be a rewrite, not a fix. Annotation only.
 //
 // Fixed hexes cannot serve 36 themes: the bakes were cut against the dark
 // palette, so `secondary` (#cccccc) and `muted` (#888888) were near-white

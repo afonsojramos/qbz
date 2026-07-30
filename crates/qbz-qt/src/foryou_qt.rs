@@ -56,7 +56,7 @@
 //!   / LabelView precedent), and "Add to playlist" (`list-plus`) is likewise
 //!   inert, exactly as in the Slint header where it carries no `clicked`.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use cxx_qt_lib::QString;
@@ -130,8 +130,103 @@ pub(crate) fn build_radio(
     out
 }
 
-/// Store + publish the radio rail, then fetch the covers it is missing and
-/// republish (the `label_qt` two-pass artwork shape).
+/// The landed covers of ONE batch as a `{artUrl: file://path}` patch, instead
+/// of a second full document publish.
+///
+/// Two separate decisions live here.
+///
+/// (a) PER URL, NOT PER DOCUMENT. The two-pass `label_qt` shape republished the
+/// whole JSON when the covers arrived, which hands QML's `model:` a NEW JS
+/// array; `QQuickItemView::setModel()` then resets `contentX` to 0 and tears
+/// down the QQmlDelegateModel (this build's only crash signature — `main.rs`
+/// documents it for the Library feed, and `LibraryView.qml` documents the cure:
+/// patch in place, never re-emit the document).
+///
+/// (b) ONE EMIT PER BATCH, NOT ONE PER URL. `HomeView.qml`'s `forYouArt` is a
+/// `var` property, so only a NEW object reference notifies its dependents: an
+/// emit per url paid one copy of the (growing) map AND one invalidation sweep
+/// over every `forYouArtOf(...)` binding in both rails plus the `artPending`
+/// probe — quadratic in the ~38 covers a cold For You load resolves, for 38 Qt
+/// thread hops. Nothing is shown any later for it: `download_missing().await`
+/// settles the WHOLE batch before the first path can be read back.
+///
+/// The emit shape is the port's existing signal helper (`emit_library_favorite`
+/// in main.rs): a cxx-qt signal is emitted by calling the declared Rust method
+/// on `Pin<&mut T>`.
+fn emit_foryou_art(patch: BTreeMap<String, String>) {
+    if patch.is_empty() {
+        return;
+    }
+    let json = patch_json(&patch);
+    crate::home_bridge::ui(move |mut b| {
+        b.as_mut().foryou_art_ready(QString::from(json.as_str()));
+    });
+}
+
+fn patch_json(patch: &BTreeMap<String, String>) -> String {
+    serde_json::to_string(patch).unwrap_or_else(|_| "{}".to_string())
+}
+
+/// Collect one resolved cover into the patch (blanks are not patches).
+fn collect_resolved(patch: &mut BTreeMap<String, String>, url: &str, path: &str) {
+    if !url.is_empty() && !path.is_empty() {
+        patch.insert(url.to_string(), path.to_string());
+    }
+}
+
+/// Every For You cover the stores have ALREADY resolved, as the same
+/// `{artUrl: file://path}` patch [`emit_foryou_art`] sends — or "" when there
+/// is nothing to hand over yet.
+///
+/// WHY THIS EXISTS. `AppShell.qml` binds `viewLoader.source` to
+/// `QbzShell.currentView`, so HomeView is DESTROYED on every navigation and its
+/// per-url `forYouArt` map dies with it, while the rails' documents are
+/// deliberately never republished for artwork (see [`emit_foryou_art`]) and
+/// `publish_radio` / `publish_spotlight` run ONCE per session (`home_qt::
+/// load_home` <- `reload_home` <- the boot chain in main.rs; otherwise only the
+/// error-retry button and a language change). Without a re-hand on mount the
+/// Radio rail and the Spotlight hero + album tiles come back BLANK for the rest
+/// of the session — and `anyForYouArtPending` stays true forever, which pins
+/// HomeView's 900 ms skeleton pulse Timer permanently ON, i.e. it also defeats
+/// the perf fix this transport exists for.
+///
+/// It re-resolves the cache paths into the stores first, so a cover that landed
+/// while Home was unmounted (that emit reached nobody) — or that some other
+/// view downloaded — is picked up. `cached_path` is memoized, so the second and
+/// later calls touch neither SQLite nor the disk.
+///
+/// It NEVER downloads and NEVER republishes a document, and it returns "" when
+/// nothing is resolved, so the FIRST (cold) mount emits nothing at all and
+/// cannot clear a map the in-flight download is about to fill.
+pub(crate) fn resolved_art_patch() -> String {
+    let mut patch: BTreeMap<String, String> = BTreeMap::new();
+    if let Ok(mut store) = RADIO.lock() {
+        let _ = attach_radio_art(&mut store);
+        for row in store.iter() {
+            collect_resolved(&mut patch, &row.art_url, &row.art_path);
+        }
+    }
+    if let Ok(mut store) = SPOTLIGHT.lock() {
+        if let Some(doc) = store.as_mut() {
+            let _ = attach_spotlight_art(doc);
+            collect_resolved(&mut patch, &doc.art_url, &doc.art_path);
+            for card in doc.albums.iter() {
+                collect_resolved(&mut patch, &card.art_url, &card.art_path);
+            }
+        }
+    }
+    if patch.is_empty() {
+        return String::new();
+    }
+    log::debug!(
+        "[qbz-qt] for-you art re-handed to a fresh HomeView: {} covers",
+        patch.len()
+    );
+    patch_json(&patch)
+}
+
+/// Store + publish the radio rail ONCE, then fetch the covers it is missing
+/// and hand them to the rail as a url-keyed patch (see [`emit_foryou_art`]).
 pub(crate) fn publish_radio(rows: Vec<RadioSeedRow>) {
     let missing = {
         let Ok(mut store) = RADIO.lock() else {
@@ -145,11 +240,22 @@ pub(crate) fn publish_radio(rows: Vec<RadioSeedRow>) {
         return;
     }
     crate::spawn(async move {
-        crate::artwork_qt::download_missing(missing).await;
+        crate::artwork_qt::download_missing(missing.clone()).await;
+        // In place: the rows keep the art they already have and the landed
+        // covers reach the rail as one url-keyed patch. The store is still
+        // updated so a LATER full publish (a new Home load) carries the
+        // paths — and so `resolved_art_patch` can re-hand them to a HomeView
+        // that was destroyed and re-created meanwhile — but nothing
+        // republishes for artwork alone.
         if let Ok(mut store) = RADIO.lock() {
             let _ = attach_radio_art(&mut store);
         }
-        push_radio();
+        let mut patch: BTreeMap<String, String> = BTreeMap::new();
+        for url in missing {
+            let path = crate::artwork_qt::cached_path(&url);
+            collect_resolved(&mut patch, &url, &path);
+        }
+        emit_foryou_art(patch);
     });
 }
 
@@ -321,13 +427,21 @@ fn publish_spotlight(doc: Option<SpotlightDoc>) {
         return;
     }
     crate::spawn(async move {
-        crate::artwork_qt::download_missing(missing).await;
+        crate::artwork_qt::download_missing(missing.clone()).await;
+        // Same in-place patch as the radio rail: the hero portrait and every
+        // album tile arrive inside ONE `foryouArtReady`, so the Spotlight
+        // document is never republished for artwork alone.
         if let Ok(mut store) = SPOTLIGHT.lock() {
             if let Some(doc) = store.as_mut() {
                 let _ = attach_spotlight_art(doc);
             }
         }
-        push_spotlight();
+        let mut patch: BTreeMap<String, String> = BTreeMap::new();
+        for url in missing {
+            let path = crate::artwork_qt::cached_path(&url);
+            collect_resolved(&mut patch, &url, &path);
+        }
+        emit_foryou_art(patch);
     });
 }
 

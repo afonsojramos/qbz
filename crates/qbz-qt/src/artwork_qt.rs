@@ -44,8 +44,16 @@
 //! POC-NOTE: on download completion the WHOLE section list is republished
 //! (a `homeSectionsJson` swap) — per-row QAbstractListModel updates are
 //! the documented follow-up. No RGBA decode in Rust: QML `Image` decodes
-//! `file://` asynchronously and natively. Cache eviction (`evict`, 200 MB cap
-//! in the Slint app) is still not wired here — POC scale.
+//! `file://` asynchronously and natively.
+//!
+//! ## Cache eviction — scaled derivatives only
+//!
+//! [`housekeeping`] bounds `~/.cache/qbz/images/scaled` (this module's OWN
+//! derivative directory) at [`MAX_SCALED_BYTES`], LRU by mtime, and does the
+//! one-time `.jpg` orphan sweep the `.png` key change left behind. The PARENT
+//! `~/.cache/qbz/images` is the SHARED cache and keeps its own policy
+//! (`qbz_cache::ImageCacheService`, SQLite `last_accessed` + the Slint app's
+//! 200 MB `evict`) — do NOT add a second one for it from here.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -500,6 +508,15 @@ pub fn scaled_path(path: &str, w: u32, h: u32) -> Option<std::path::PathBuf> {
         std::hash::Hasher::finish(&hasher)
     ));
     if out.is_file() {
+        // Mark it used so `evict_scaled`'s mtime order is access order, not
+        // creation order. Best-effort: a failure only degrades eviction to
+        // FIFO, which costs one regeneration. (`File::set_modified` is stable
+        // since Rust 1.75; if `cargo check` disagrees, that is the ONE thing
+        // to re-check here.)
+        let _ = std::fs::File::options()
+            .write(true)
+            .open(&out)
+            .and_then(|f| f.set_modified(std::time::SystemTime::now()));
         return Some(out);
     }
 
@@ -525,4 +542,108 @@ pub fn scaled_path(path: &str, w: u32, h: u32) -> Option<std::path::PathBuf> {
         .save_with_format(&out, image::ImageFormat::Png)
         .ok()?;
     Some(out)
+}
+
+/// Byte ceiling for the scaled-derivative cache. Measured 2026-07-29: a warm
+/// cache is 261 files / 13.7 MB at 52.6 KB average, and a fully browsed
+/// session projects to ~45 MB. 64 MB leaves headroom for ~1200 derivatives
+/// (every card size of ~400 distinct covers) while keeping the directory an
+/// order of magnitude under the 260 MB the parent image cache already holds.
+const MAX_SCALED_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Keep `scaled/` bounded: drop the oldest derivatives past
+/// [`MAX_SCALED_BYTES`]. Mtime order, oldest first — the same shape as
+/// `icon_tint_qt::prune`, with one deliberate difference: `prune` caps on a
+/// directory COUNT, this caps on BYTES, because a derivative's size varies 20x
+/// with the drawn cell size and a file count says nothing about the footprint.
+///
+/// Eviction is free of consequence: a re-request regenerates the file, so a
+/// wrong victim costs one `thumbnail()` call and never a wrong pixel. The one
+/// case that is NOT free is a live `RoundedImage` whose `_scaled` still names
+/// a file this just unlinked — that is handled where it can be, on the QML
+/// side, by RoundedImage's `Image.Error` -> clear `_scaled` + `_reqKey` arm.
+/// Do not land this without that arm.
+///
+/// Returns (files removed, bytes reclaimed) for the log line the verification
+/// counts.
+fn evict_scaled(dir: &Path) -> (usize, u64) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return (0, 0);
+    };
+    let mut files: Vec<(std::time::SystemTime, u64, PathBuf)> = entries
+        .flatten()
+        .filter_map(|e| {
+            let meta = e.metadata().ok()?;
+            if !meta.is_file() {
+                return None;
+            }
+            Some((meta.modified().ok()?, meta.len(), e.path()))
+        })
+        .collect();
+    let total: u64 = files.iter().map(|(_, len, _)| *len).sum();
+    if total <= MAX_SCALED_BYTES {
+        return (0, 0);
+    }
+    files.sort_by_key(|(t, _, _)| *t);
+    let mut over = total - MAX_SCALED_BYTES;
+    let (mut n, mut freed) = (0usize, 0u64);
+    for (_, len, path) in files {
+        if over == 0 {
+            break;
+        }
+        if std::fs::remove_file(&path).is_ok() {
+            over = over.saturating_sub(len);
+            freed += len;
+            n += 1;
+        }
+    }
+    (n, freed)
+}
+
+/// ONE-TIME orphan sweep. `scaled_path` wrote `.jpg` before the lossless
+/// change to this module's `{hash}_{w}x{h}.png` key; the extension IS the
+/// cache key, so every `.jpg` here is unreachable by construction — 1259
+/// files / 10.05 MB measured 2026-07-29. Nothing can regenerate them and
+/// nothing can serve them, so this is a delete, not an eviction policy.
+fn sweep_orphan_scaled(dir: &Path) -> (usize, u64) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return (0, 0);
+    };
+    let (mut n, mut freed) = (0usize, 0u64);
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("jpg") {
+            continue;
+        }
+        let len = entry.metadata().map(|m| m.len()).unwrap_or(0);
+        if std::fs::remove_file(&path).is_ok() {
+            n += 1;
+            freed += len;
+        }
+    }
+    (n, freed)
+}
+
+/// Boot-time housekeeping for the derivative cache: the one-time `.jpg`
+/// orphan sweep, then the byte cap. Blocking (`read_dir` + unlinks) — call
+/// from `spawn_blocking`.
+///
+/// SCOPE: `images/scaled` ONLY. The parent `~/.cache/qbz/images` (260 MB) is
+/// the SHARED cache owned by `qbz_cache::ImageCacheService` (SQLite
+/// `last_accessed` + the Slint app's 200 MB `evict`); two processes evicting
+/// the same directory on different policies is exactly what the memo at the
+/// top of this file had to be written about.
+pub fn housekeeping() {
+    let Some(dir) = dirs::cache_dir().map(|d| d.join("qbz").join("images").join("scaled")) else {
+        return;
+    };
+    if !dir.is_dir() {
+        return;
+    }
+    let (orphans, o_bytes) = sweep_orphan_scaled(&dir);
+    let (evicted, e_bytes) = evict_scaled(&dir);
+    log::info!(
+        "[qbz-qt][perf] scaled cache housekeeping: {orphans} orphans ({o_bytes} B), \
+         {evicted} evicted ({e_bytes} B)"
+    );
 }
