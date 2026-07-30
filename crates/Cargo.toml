@@ -104,16 +104,19 @@ strsim = "0.11"
 strip = "symbols"
 
 [patch.crates-io]
-# Slint 1.16's femtovg-wgpu renderer leaves the wgpu surface alpha mode at
-# `Auto`, which resolves as an opaque compositor surface on KWin/Wayland and
-# makes borderless transparent windows show a black rectangular backing. The
-# patch keeps Slint pinned but chooses a supported non-opaque composite alpha
-# mode when the surface advertises one, so the miniplayer card can have real
-# transparent rounded corners. The non-opaque mode is PER-WINDOW opt-in
-# (`wgpu::set_surface_prefers_transparent`, flipped from qbz's winit
-# window-attributes hook): only the miniplayer pays the compositor-blend cost,
-# the main window keeps an Opaque swapchain.
-i-slint-renderer-femtovg = { path = "vendor/i-slint-renderer-femtovg-1.16.1" }
+# QBZ patches on the femtovg-wgpu renderer (the old swapchain-alpha patch is
+# gone: Slint 1.17 honors winit's per-window `transparent` attribute upstream):
+#   * #540/#558 — surface-acquire backoff: a wgpu Timeout (Hyprland VFR parks
+#     the compositor) or a persistent Outdated (UI-scale/resize race at
+#     startup) skips frames with an exponential cooldown instead of blocking
+#     the UI thread on every redraw request.
+#   * #617 — env-gated partial rendering (SLINT_FEMTOVG_PARTIAL_RENDERING):
+#     persistent scene texture + dirty-region repaint + swapchain blit, plus
+#     the transform scaffold the core PartialRenderer proxy needs.
+#   * cache hygiene on canvas re-creation (Wayland hide/show): clear the
+#     graphics/layer/texture caches in reset_canvas so cached layers don't
+#     blit dangling image ids on the new canvas.
+i-slint-renderer-femtovg = { path = "vendor/i-slint-renderer-femtovg-1.17.1" }
 # On modern macOS, fontique's CoreText per-script fallback can fail to resolve
 # a Han-script family (the suggested PingFang is not always in the scanned
 # family map), so Japanese kanji rendered blank while kana worked. The patch
@@ -121,24 +124,27 @@ i-slint-renderer-femtovg = { path = "vendor/i-slint-renderer-femtovg-1.16.1" }
 # Gothic Neo/Arial Unicode MS, Japanese-biased default) in the fallback map at
 # collection creation, which takes priority over the CoreText query. macOS-only
 # (#[cfg]); Linux keeps its working fontconfig fallback.
-i-slint-common = { path = "vendor/i-slint-common-1.16.1" }
-# With `overflow: elide`, sharedparley culled EVERY line whose bottom edge
-# exceeded max_height — including the FIRST one, eliding the text to nothing.
-# CJK fallback fonts (Hiragino on macOS) report line metrics taller than
-# snug fixed-height boxes (TrackRow's 20px title line at 14px), so every
-# CJK track title rendered blank on macOS while Latin fit (#543; verified
-# with a headless repro matrix on the Mac Mini). The patch always draws the
-# first line — it still gets the ellipsis treatment as the last visible one.
-i-slint-core = { path = "vendor/i-slint-core-1.16.1" }
-# Slint compiles femtovg with the swash raster path. Swash fails to scale
-# some variable fonts at a non-default variation instance (the CFF2-based
-# CJK system fonts on modern macOS), and femtovg cached those glyphs as
-# permanently missing — so CJK text at any non-regular weight rendered
-# blank (#543; regular weight = empty coords = renders fine). The patch
-# retries the glyph at the font's DEFAULT instance before giving up: worst
-# case the glyph draws at regular weight instead of not at all. No effect
-# on fonts/instances that already render.
-femtovg = { path = "vendor/femtovg-0.23.2" }
+i-slint-common = { path = "vendor/i-slint-common-1.17.1" }
+# QBZ patch (issue #588): trackpad scrolling is far too slow on Wayland — the
+# Flickable applies pixel-precise wheel deltas 1:1 with no gain, so scroll
+# speed lags every other app. The patch boosts pixel-precise (trackpad)
+# deltas 2.75x in scroll_delta; discrete wheel line deltas pass unchanged.
+# (The old sharedparley elide-first-line patch (#543) is fixed upstream in
+# 1.17: the elision rewrite always keeps the first line, slint #12197.)
+i-slint-core = { path = "vendor/i-slint-core-1.17.1" }
+# Two QBZ patches:
+#   * Slint compiles femtovg with the swash raster path. Swash fails to scale
+#     some variable fonts at a non-default variation instance (the CFF2-based
+#     CJK system fonts on modern macOS), and femtovg cached those glyphs as
+#     permanently missing — so CJK text at any non-regular weight rendered
+#     blank (#543; regular weight = empty coords = renders fine). The patch
+#     retries the glyph at the font's DEFAULT instance before giving up: worst
+#     case the glyph draws at regular weight instead of not at all. No effect
+#     on fonts/instances that already render.
+#   * #617 — keep `current_render_target` in sync with the SetRenderTarget
+#     command set_size() queues, so a caller re-asserting an offscreen target
+#     right after set_size isn't swallowed by the stale field.
+femtovg = { path = "vendor/femtovg-0.25.1" }
 # macOS Skia renderer: skia bug 310510989 makes new_from_data fail for TTC
 # faces at index > 0, and for some system collections (AppleSDGothicNeo.ttc,
 # where EVERY weight sits at index > 0) the upstream read/write-fonts rebuild
@@ -146,4 +152,4 @@ femtovg = { path = "vendor/femtovg-0.23.2" }
 # nothing. The patch adds a second-chance workaround: resolve the same face
 # through CoreText by family name + OS/2 weight, guarded by cmap glyph-id
 # spot checks so a wrong match is rejected instead of drawing wrong glyphs.
-i-slint-renderer-skia = { path = "vendor/i-slint-renderer-skia-1.16.1" }
+i-slint-renderer-skia = { path = "vendor/i-slint-renderer-skia-1.17.1" }
