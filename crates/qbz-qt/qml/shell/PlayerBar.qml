@@ -134,21 +134,20 @@ Rectangle {
         }
     }
 
-    // Audio settings / normalization (Tauri's normalization button; Slint's
-    // "Audio settings" flyout). `normalization` IS settable through
-    // QbzBridge.settingsBool but is NOT published in settingsJson yet, so the
-    // toggle keeps its own value once the user touches it and falls back to
-    // the (currently absent) published field before that.
-    // TODO(glue): publish `normalization` in SettingsDoc — see the report.
-    property bool normTouched: false
-    property bool normLocal: false
-    readonly property bool normalizationOn: normTouched ? normLocal
-        : (settingsDoc.normalization === true)
-    function toggleNormalization() {
-        normLocal = !normalizationOn
-        normTouched = true
-        QbzBridge.settingsBool("normalization", normLocal)
-    }
+    // Audio settings — the button OPENS A FLYOUT (Normalization + Gapless),
+    // it is not itself a toggle: `PlayerBar.slint:666-706`. Its `active`
+    // colour does mirror normalization here (`:677
+    // active: SettingsState.normalization`) — the Small bar deliberately does
+    // NOT, see its own note.
+    //
+    // The state is read from the PUBLISHED document. It used to be shadowed
+    // locally (`normTouched` / `normLocal`) because settingsJson did not carry
+    // it, and that is what made normalization impossible to turn off: on a
+    // fresh launch the fallback read `undefined`, the button drew OFF while
+    // the backend was ON, and the first click SET IT ON. The document is now
+    // seeded at shell entry (main.rs enter_shell) and republished after every
+    // apply (settings_qt::apply_audio), so there is nothing left to shadow.
+    readonly property bool normalizationOn: settingsDoc.normalization === true
 
     function fmt(secs) {
         var m = Math.floor(secs / 60)
@@ -402,16 +401,14 @@ Rectangle {
                         onClicked: viewMenu.openBelowRight(viewBtn)
                     }
 
-                    // Audio settings — Tauri's normalization toggle (2.0
-                    // groups normalization + gapless behind this button).
-                    // TODO(qt-bridge): the Slint two-toggle flyout is not
-                    // ported; the click toggles normalization directly, which
-                    // is exactly what the Tauri button did.
+                    // Audio settings — opens the Normalization + Gapless
+                    // flyout (PlayerBar.slint:666-706). NOT a toggle.
                     QbzIconButton {
+                        id: audioBtn
                         name: "settings-2"
                         active: root.normalizationOn
                         anchors.verticalCenter: parent.verticalCenter
-                        onClicked: root.toggleNormalization()
+                        onClicked: audioMenu.openBelowRight(audioBtn)
                     }
 
                     Item { width: 6; height: 1 }
@@ -472,6 +469,11 @@ Rectangle {
 
     // The Now-Playing-view mode menu (shared with the Small bar).
     ViewModeMenu { id: viewMenu }
+
+    // Audio settings flyout — Normalization + Gapless (PlayerBar.slint's
+    // `audio-menu` PopupWindow). Fed the already-parsed document so it does
+    // not re-parse settingsJson on every open.
+    AudioSettingsMenu { id: audioMenu; doc: root.settingsDoc }
 
     // "Add to…" flyout behind the transport "+" (TransportControls.slint's
     // add-menu), on the shared CardMenu surface. Same seven entries, same

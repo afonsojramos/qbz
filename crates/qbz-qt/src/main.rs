@@ -258,6 +258,15 @@ fn enter_shell(session: auth_qt::SessionInfo) {
         b.as_mut().set_login_phase(0);
         b.as_mut().set_screen(QString::from("shell"));
     });
+    // Seed the settings document ONCE at shell entry. It used to be published
+    // only by `navigate_to("settings")` and by a language change, so until the
+    // user opened Settings the shell read an EMPTY doc — and the now-playing
+    // bars' "Audio settings" flyout reads `normalization` / `gapless` from it.
+    // That is what made normalization impossible to turn off: the bars saw
+    // `undefined`, drew the control OFF while the backend had it ON, and the
+    // first interaction wrote the WRONG value back. Slint has no equivalent
+    // hole because `SettingsState` is a global seeded at startup.
+    publish_settings();
 }
 
 /// Login screen primary button / recovery banner: the system-browser OAuth

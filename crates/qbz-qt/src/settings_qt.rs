@@ -1631,6 +1631,12 @@ fn apply_audio(runtime: &Arc<AppRuntime<LoggingAdapter>>, apply: Apply) {
         }
     }
     log::info!("[qbz-qt] audio settings applied to player (reinit={reinit})");
+    // Republish the document. Without this a change made from the now-playing
+    // bars' audio flyout persisted and took effect but NEVER reached the QML,
+    // so the flyout's own switch snapped back to the stale value the next time
+    // it opened — which is why both bars had grown local shadow state instead.
+    // Cheap: one serialize + one Qt hop, and only on an actual audio apply.
+    crate::publish_settings();
 }
 
 // ---------------------------------------------------------------------------

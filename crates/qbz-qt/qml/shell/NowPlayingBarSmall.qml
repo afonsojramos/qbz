@@ -352,22 +352,23 @@ Rectangle {
                         active: QbzPlayer.npCastActive
                         onClicked: QbzCast.openPicker()
                     }
-                    // Audio settings — Tauri's normalization toggle (2.0
-                    // groups normalization + gapless behind this button).
-                    // TODO(glue): `normalization` is settable through
-                    // settingsBool but NOT published in settingsJson, so the
-                    // state can only be tracked locally; TODO(qt-bridge): the
-                    // Slint two-toggle flyout is not ported — the click
-                    // toggles normalization, exactly like the Tauri button.
+                    // Audio settings — opens the Normalization + Gapless
+                    // flyout (PlayerBarSmall.slint:620-712). NOT a toggle, and
+                    // `active` is NEUTRAL here on purpose: the .slint says so
+                    // out loud at :628-630 — "this button opens a flyout, so
+                    // its colour should NOT reflect a toggle (normalization)".
+                    // The full bar DOES mirror it; that asymmetry is the
+                    // reference's, not a slip.
+                    //
+                    // It previously carried `property bool normOn: false` —
+                    // local state that started at false regardless of what was
+                    // persisted, so the first click on this button always sent
+                    // `true` and SWITCHED NORMALIZATION ON.
                     QbzIconButton {
-                        id: smallNormBtn
-                        property bool normOn: false
+                        id: smallAudioBtn
                         name: "settings-2"
-                        active: normOn
-                        onClicked: {
-                            normOn = !normOn
-                            QbzBridge.settingsBool("normalization", normOn)
-                        }
+                        active: false
+                        onClicked: smallAudioMenu.openBelowRight(smallAudioBtn)
                     }
                     QbzIconButton {
                         id: smallViewBtn
@@ -418,6 +419,20 @@ Rectangle {
 
     // The Now-Playing-view mode menu (phase 18 — shared with PlayerBar).
     ViewModeMenu { id: smallViewMenu }
+
+    // Audio settings flyout — Normalization + Gapless (PlayerBarSmall.slint's
+    // `audio-menu` PopupWindow). Guarded parse, the PlaylistView.qml:55-61
+    // idiom: a raw JSON.parse in a binding throws on the pre-publish frame and
+    // takes the whole bar down with it.
+    readonly property var settingsDoc: parseSettings()
+    function parseSettings() {
+        try {
+            return JSON.parse(QbzBridge.settingsJson)
+        } catch (e) {
+            return ({})
+        }
+    }
+    AudioSettingsMenu { id: smallAudioMenu; doc: root.settingsDoc }
 
     // "Add to…" flyout behind the transport "+" (TransportControls.slint's
     // add-menu) — same seven entries, order and icons as the full bar.

@@ -118,6 +118,7 @@ fn main() {
                 "qml/shell/QueuePanel.qml",
                 "qml/shell/Sidebar.qml",
                 "qml/shell/SidebarNowPlayingDock.qml",
+                "qml/shell/AudioSettingsMenu.qml",
                 "qml/shell/ViewModeMenu.qml",
                 "qml/theme/QbzIcon.qml",
                 "qml/theme/QbzScrollBar.qml",
