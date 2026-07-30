@@ -1466,8 +1466,28 @@ Rectangle {
                             // MyQBZ "Add to mixtape" — the HOST builds the
                             // AddItem array (TrackRow does not know
                             // itemType/source).
+                            //
+                            // The source comes off the ROW: every feed row
+                            // carries its own word (library_qt.rs:54 —
+                            // "qobuz" | "local" | "plex"), so a Plex or local
+                            // row can never be stored as a Qobuz id again.
+                            // "plex" is folded into "local" because the store
+                            // has no Plex source: `AddItem.source` is
+                            // "qobuz" | "local" and `source_from_str`
+                            // (myqbz_add_qt.rs:85-90) maps everything that is
+                            // not "local" to Qobuz — passing "plex" verbatim
+                            // would silently become "qobuz" again.
+                            //
+                            // Today this list only ever holds Qobuz rows (the
+                            // Tracks tab keeps `kind === "track" && group ===
+                            // "favorites"` and the local layer lands in group
+                            // "local"), so this is a no-op until that filter
+                            // changes — which is the point: it stays right
+                            // when it does.
                             onMixtapeRequested: QbzMyQbzAdd.open(JSON.stringify([{
-                                "itemType": "track", "source": "qobuz",
+                                "itemType": "track",
+                                "source": item.source === "local" || item.source === "plex"
+                                    ? "local" : "qobuz",
                                 "sourceItemId": item.id, "title": item.title || "",
                                 "subtitle": item.artist || "", "artworkUrl": "",
                                 "year": null, "trackCount": null

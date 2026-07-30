@@ -6638,6 +6638,7 @@ dependencies = [
  "qbz-offline-cache",
  "qbz-plex",
  "qbz-qobuz",
+ "qbz-source",
  "qbz-text-utils",
  "qbz-theme",
  "rand 0.10.1",

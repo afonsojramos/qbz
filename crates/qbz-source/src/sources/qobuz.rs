@@ -3,9 +3,16 @@
 //! Track/meta resolution REUSES `qbz-mixtape`'s existing async free fns
 //! (`resolve_qobuz_album` / `_track` / `_playlist`, enqueue.rs:218-327) rather
 //! than re-deriving the mappers; that crate is not modified and stays a leaf.
+//!
+//! This source holds **no client**. It holds a [`ClientLens`] — a read-through
+//! handle it asks again on every call — because `qbz-core` replaces its client
+//! wholesale (`core.rs:346` and `:384`, the only two writers) at points that
+//! run BEFORE the session is set. See [`ClientLens`] for the full argument.
 
 use std::collections::HashMap;
-use std::sync::{Mutex, RwLock};
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex, RwLock};
 
 use qbz_models::QueueTrack;
 
@@ -19,20 +26,73 @@ use crate::source::Source;
 /// Memo ceiling, mirroring `artwork_qt::MEMO_CAP` (artwork_qt.rs:82).
 const MEMO_CAP: usize = 8192;
 
+/// The future a [`ClientLens`] hands back: a FRESH clone of whatever client the
+/// process holds *right now*.
+///
+/// `Pin<Box<dyn Future + Send>>` rather than a `futures` alias — this crate
+/// depends on neither `tokio` nor `futures` (design §8), and `async-trait`
+/// generates exactly this shape anyway.
+pub type ClientFuture = Pin<Box<dyn Future<Output = Option<qbz_qobuz::QobuzClient>> + Send>>;
+
+/// A READ-THROUGH handle to the process's live Qobuz client.
+///
+/// It is supplied ONCE, at construction ([`QobuzSource::new`], normally through
+/// [`crate::init_registry`]), and it is read at CALL time — every `tracks` /
+/// `meta` invocation asks it again.
+///
+/// # Why this is not an `Option<QobuzClient>` field
+///
+/// `qbz-core` REPLACES its whole client, twice over: `QbzCore::init`
+/// (`qbz-core/src/core.rs:346`) and `QbzCore::try_init_api` (`:384`) both write
+/// a freshly constructed `QobuzClient` into the shared slot, and
+/// `try_init_api` runs BEFORE `set_session` on both the login
+/// (`auth_qt.rs:83`) and the silent-restore (`:277`) paths. Those are the only
+/// two writers in the process — so a source that CACHED a clone would go stale
+/// and then fail **silently**, and the "re-inject it after every replacement"
+/// setter that used to live here was a discipline every future call site had to
+/// remember, not an invariant. Reading through removes the failure mode instead
+/// of documenting it.
+///
+/// A second property comes free: there is no per-user client held here at all,
+/// so the "previous account's authenticated client survives logout in a
+/// `'static` registry" leak (design §12.1 defect 4) is unreachable for the
+/// client. Only the artwork memo is per-user, and [`Source::teardown`] clears
+/// it.
+///
+/// # The load-bearing contract for the lens body
+///
+/// The lens MUST return an owned clone and MUST NOT hold a lock guard past its
+/// own future. That is the property `myqbz_play_qt.rs:117-130` documents:
+/// holding `QbzCore::client()`'s `RwLockReadGuard` across the catalog awaits
+/// DEADLOCKS against the playback path. The frontend's lens is therefore
+/// exactly today's `qobuz_client()` body:
+///
+/// ```ignore
+/// let lens: ClientLens = Arc::new(|| {
+///     Box::pin(async {
+///         let lock = runtime().core().client();      // Arc<tokio RwLock<Option<..>>>
+///         let guard = lock.read().await;             // guard lives INSIDE this future
+///         guard.as_ref().cloned()                    // …and is dropped when it ends
+///     })
+/// });
+/// ```
+pub type ClientLens = Arc<dyn Fn() -> ClientFuture + Send + Sync>;
+
 /// The Qobuz source.
 pub struct QobuzSource {
-    /// `std::sync::RwLock`, NOT tokio's — this crate has no tokio dep (§8).
-    /// Its guard is `!Send`, so `#[async_trait]`'s `Send` future bound makes
-    /// "hold the guard across an await" a COMPILE ERROR rather than a rule.
-    /// Every accessor clones the client inside a block and drops the guard
-    /// before the first `.await`: `myqbz_play_qt.rs:117-130` records that
-    /// holding the guard instead DEADLOCKS against the playback path.
-    client: RwLock<Option<qbz_qobuz::QobuzClient>>,
-    /// The uid the client belongs to. A `bind_user` with a different uid clears
-    /// the client even if nobody remembered to call `teardown` — the leak class
+    /// Read-through access to the live client. Immutable after construction —
+    /// there is deliberately no setter, so there is no ordering rule a caller
+    /// can break (see [`ClientLens`]).
+    lens: Option<ClientLens>,
+    /// The uid the artwork memo belongs to. A `bind_user` with a different uid
+    /// clears it even if nobody remembered to call `teardown` — the leak class
     /// this port already shipped once (auth_qt.rs:193-197).
     owner: Mutex<Option<u64>>,
     /// MediaRef id → its CDN cover url, filled by `tracks`/`meta`.
+    ///
+    /// `std::sync::RwLock`, NOT tokio's — this crate has no tokio dep (§8).
+    /// Its guard is `!Send`, so `#[async_trait]`'s `Send` future bound makes
+    /// "hold the guard across an await" a COMPILE ERROR rather than a rule.
     ///
     /// `artwork` is the CHEAP phase and must not hit the network, and a Qobuz
     /// id carries no cover on its own — so a cold id answers
@@ -41,36 +101,41 @@ pub struct QobuzSource {
 }
 
 impl QobuzSource {
-    /// A source with no client published yet.
-    pub fn new() -> Self {
+    /// A source that reads the live client through `lens` on every call.
+    pub fn new(lens: ClientLens) -> Self {
         Self {
-            client: RwLock::new(None),
+            lens: Some(lens),
             owner: Mutex::new(None),
             art: RwLock::new(HashMap::new()),
         }
     }
 
-    /// Publish the shared Qobuz client. `None` clears it.
+    /// A source with NO way to reach a client: every catalog call answers
+    /// [`SourceError::NotConfigured`].
     ///
-    /// MUST be called AFTER `core.set_session` (auth_qt.rs:145, :284 and the
-    /// offline entry), never after `try_init_api`: `qbz-core` replaces its own
-    /// client inside `try_init_api` (`qbz-core/src/core.rs:384`), which
-    /// `ensure_api_initialized` calls at auth_qt.rs:83 and :277 — i.e. BEFORE
-    /// `set_session` on both the login and the silent-restore paths. A
-    /// `QobuzSource` holding a client `qbz-core` has since replaced fails
-    /// SILENTLY.
-    pub fn set_client(&self, c: Option<qbz_qobuz::QobuzClient>) {
-        if let Ok(mut slot) = self.client.write() {
-            *slot = c;
+    /// This is what [`crate::SourceRegistry::with_defaults`] builds, and it is
+    /// an honest dead end rather than a stale one — the process wires the real
+    /// lens with [`crate::init_registry`].
+    pub fn detached() -> Self {
+        Self {
+            lens: None,
+            owner: Mutex::new(None),
+            art: RwLock::new(HashMap::new()),
         }
     }
 
-    /// A CLONE of the client — one clone per call site, replacing the one clone
-    /// per call the frontend does today. The guard is dropped before the
-    /// caller's first `.await`.
-    fn client(&self) -> Result<qbz_qobuz::QobuzClient, SourceError> {
-        let c = { self.client.read().ok().and_then(|g| g.clone()) };
-        c.ok_or(SourceError::NotConfigured {
+    /// A CLONE of the client as it is AT THIS MOMENT, obtained through the
+    /// lens. No guard of ours is alive when this returns, and nothing is
+    /// cached between calls.
+    async fn client(&self) -> Result<qbz_qobuz::QobuzClient, SourceError> {
+        let Some(lens) = self.lens.as_ref() else {
+            return Err(SourceError::NotConfigured {
+                by: SourceId::QOBUZ,
+                why: "no client lens installed (the registry was built before qbz_source::init_registry ran)",
+            });
+        };
+        let fut = (**lens)();
+        fut.await.ok_or(SourceError::NotConfigured {
             by: SourceId::QOBUZ,
             why: "no client",
         })
@@ -134,7 +199,7 @@ impl QobuzSource {
 
 impl Default for QobuzSource {
     fn default() -> Self {
-        Self::new()
+        Self::detached()
     }
 }
 
@@ -196,7 +261,7 @@ impl Source for QobuzSource {
     }
 
     async fn tracks(&self, item: &MediaRef) -> Result<Vec<QueueTrack>, SourceError> {
-        let client = self.client()?;
+        let client = self.client().await?;
         // The mappers stay in `qbz-mixtape`; this is the routing only. Their
         // "album X has 0 tracks" case comes back as an Err STRING, so it lands
         // in `Backend` rather than `NotFound` — converting it would mean
@@ -231,7 +296,7 @@ impl Source for QobuzSource {
     }
 
     async fn meta(&self, item: &MediaRef) -> Result<ItemMeta, SourceError> {
-        let client = self.client()?;
+        let client = self.client().await?;
         let meta = match item.kind() {
             ItemKind::Album => {
                 let a = client
@@ -361,10 +426,10 @@ impl Source for QobuzSource {
     fn bind_user(&self, uid: u64, _dir: &std::path::Path) {
         let previous = self.owner.lock().ok().and_then(|mut o| o.replace(uid));
         if previous.is_some() && previous != Some(uid) {
-            // A rebind to a DIFFERENT uid clears the client even if nobody
-            // remembered to tear down; the new one arrives separately, after
-            // `set_session`.
-            self.set_client(None);
+            // A rebind to a DIFFERENT uid drops the previous account's covers
+            // even if nobody remembered to tear down. There is no client to
+            // drop: it is read through the lens, so the account swap that
+            // `qbz-core` performs IS the swap this source sees.
             if let Ok(mut m) = self.art.write() {
                 m.clear();
             }
@@ -372,11 +437,10 @@ impl Source for QobuzSource {
     }
 
     fn teardown(&self) {
-        // MANDATORY override: the trait default is a no-op, and inheriting it
-        // here would leave the PREVIOUS ACCOUNT's authenticated `QobuzClient`
-        // alive in a `'static` registry across a logout, serving the next
-        // account's requests.
-        self.set_client(None);
+        // MANDATORY override: the trait default is a no-op, and this source
+        // holds a per-user artwork memo. The PREVIOUS ACCOUNT's authenticated
+        // client cannot leak here — nothing caches it (see `ClientLens`) — so
+        // the memo and the owner are all there is to drop.
         if let Ok(mut o) = self.owner.lock() {
             *o = None;
         }
@@ -403,10 +467,34 @@ fn with_art(
 mod tests {
     use super::*;
 
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     fn claimed(raw: &RawRef) -> Result<MediaRef, SourceError> {
-        QobuzSource::new()
+        QobuzSource::detached()
             .claim(raw)
             .expect("QobuzSource should claim this reference")
+    }
+
+    /// Poll a future that is READY on its first poll, with no executor.
+    ///
+    /// This crate depends on neither `tokio` nor `futures` (design §8), and the
+    /// paths exercised below all return before their first suspension point.
+    fn block_on<F: std::future::Future>(fut: F) -> F::Output {
+        use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
+
+        unsafe fn nop(_: *const ()) {}
+        unsafe fn clone_raw(p: *const ()) -> RawWaker {
+            RawWaker::new(p, &VTABLE)
+        }
+        static VTABLE: RawWakerVTable = RawWakerVTable::new(clone_raw, nop, nop, nop);
+
+        let waker = unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) };
+        let mut cx = Context::from_waker(&waker);
+        let mut fut = Box::pin(fut);
+        match fut.as_mut().poll(&mut cx) {
+            Poll::Ready(v) => v,
+            Poll::Pending => panic!("this path must not suspend"),
+        }
     }
 
     #[test]
@@ -443,7 +531,7 @@ mod tests {
 
     #[test]
     fn never_claims_by_elimination() {
-        let q = QobuzSource::new();
+        let q = QobuzSource::detached();
         // survey IC-4/IC-6: a bare numeric with no source word is NOT Qobuz's.
         assert!(q
             .claim(&RawRef {
@@ -499,11 +587,48 @@ mod tests {
 
     #[test]
     fn artwork_is_unavailable_not_none_before_a_resolve() {
-        let q = QobuzSource::new();
+        let q = QobuzSource::detached();
         let item = MediaRef::new(SourceId::QOBUZ, ItemKind::Album, "0060254702523");
         assert!(matches!(
             Source::artwork(&q, &item, ArtSize::Row),
             ArtRef::Unavailable(_)
         ));
+    }
+
+    #[test]
+    fn a_detached_source_says_not_configured_instead_of_serving_a_stale_client() {
+        let q = QobuzSource::detached();
+        let item = MediaRef::new(SourceId::QOBUZ, ItemKind::Album, "0060254702523");
+        let err = block_on(q.tracks(&item)).unwrap_err();
+        assert!(matches!(
+            err,
+            SourceError::NotConfigured {
+                by: SourceId::QOBUZ,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn the_lens_is_read_on_every_call_never_cached() {
+        // THE property that replaces `set_client`: `qbz-core` swaps its whole
+        // client at core.rs:346 / :384, so a clone cached here would go stale
+        // and fail silently. Two calls ⇒ two reads.
+        let calls = Arc::new(AtomicUsize::new(0));
+        let seen = calls.clone();
+        let lens: ClientLens = Arc::new(move || {
+            let seen = seen.clone();
+            Box::pin(async move {
+                seen.fetch_add(1, Ordering::SeqCst);
+                None
+            })
+        });
+        let q = QobuzSource::new(lens);
+        let album = MediaRef::new(SourceId::QOBUZ, ItemKind::Album, "0060254702523");
+        let track = MediaRef::new(SourceId::QOBUZ, ItemKind::Track, "139578884");
+
+        assert!(block_on(q.tracks(&album)).is_err());
+        assert!(block_on(q.meta(&track)).is_err());
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 }

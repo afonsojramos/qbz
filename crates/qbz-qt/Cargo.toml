@@ -37,6 +37,7 @@ qbz-library = { path = "../qbz-library" }
 # Slint app uses (crates/qbz/Cargo.toml:96), so the two frontends share
 # library.db's mixtape tables rather than each growing their own.
 qbz-mixtape = { path = "../qbz-mixtape" }
+qbz-source = { path = "../qbz-source" }
 # Cast: Chromecast + DLNA discovery, the two device families and the local
 # media server (src/cast_qt.rs drives it — nothing is reimplemented).
 qbz-cast = { path = "../qbz-cast" }

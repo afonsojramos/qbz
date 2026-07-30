@@ -5,9 +5,16 @@
 //! of [`AddItem`]s (from QML as a JSON array through `QbzMyQbzAdd.open`, or
 //! directly from a Rust seam such as the Local Library bulk bar). The batch is
 //! held in a process-global PENDING store; the picker list is loaded
-//! kind-restricted + recency-sorted + `item_exists`-resolved, and on pick /
+//! R1-filtered + recency-sorted + `item_exists`-resolved, and on pick /
 //! create-and-add the items are written into the chosen collection through the
 //! shared `qbz_mixtape::repo`.
+//!
+//! WHAT MAY GO WHERE is decided ONCE, by [`payload_accepts`] (the R1 rule
+//! below). The picker never renders a container that cannot accept the payload,
+//! never offers a create chip or a create radio for one, and refuses to open at
+//! all when NOTHING can accept it. Every refusal is a `log::warn!` and nothing
+//! else: an impossible combination must not be reachable, so the user never
+//! sees a block — the block only exists as a safety net behind the UI (R2).
 //!
 //! Dedup is the backend's job: `add_item_with(allow_duplicate = false)` returns
 //! `Ok(false)` for an exact `(collection_id, source, source_item_id)` duplicate
@@ -90,6 +97,170 @@ fn source_from_str(s: &str) -> AlbumSource {
 }
 
 // ---------------------------------------------------------------------------
+// R1 — which container accepts which item. THE ONE PLACE.
+// ---------------------------------------------------------------------------
+//
+// >>> TEMPORARY HOME. This rule MUST move to `qbz-source` <<<
+//
+// It is a property of the ITEM (its kind and its source), not of the MyQBZ
+// picker, and the picker is only its first caller: the per-row flyouts
+// (TrackRow, PlayerBar, NowPlayingBarSmall, the Local Library bulk bars) have
+// to ask the same question to decide whether to render "Add to mixtape" at all.
+// The moment a second call site re-derives it by hand, the rule has been
+// scattered and the class of bug this replaces is back. When `qbz-source`
+// grows the predicate, delete `Accepts` / `accepts_item` / `payload_accepts`
+// here and forward to it; NOTHING else in this file reads the rule directly.
+
+/// The set of container kinds that may accept a payload.
+///
+/// Read it as three independent yes/no answers rather than a "restriction
+/// level": the old `restrict_to_mixtape` boolean could only express "mixtapes
+/// only" vs "everything", which cannot say that a LOCAL album belongs in a
+/// Collection while a LOCAL playlist belongs nowhere.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Accepts {
+    pub mixtape: bool,
+    pub collection: bool,
+    /// A built discography. It is a Collection in every way that matters here
+    /// (it holds whole albums), it is just not creatable from this picker —
+    /// hence a third flag rather than reusing `collection`.
+    pub artist_collection: bool,
+}
+
+impl Accepts {
+    const NONE: Accepts = Accepts {
+        mixtape: false,
+        collection: false,
+        artist_collection: false,
+    };
+    const ALL: Accepts = Accepts {
+        mixtape: true,
+        collection: true,
+        artist_collection: true,
+    };
+    const MIXTAPE_ONLY: Accepts = Accepts {
+        mixtape: true,
+        collection: false,
+        artist_collection: false,
+    };
+
+    /// Anything at all can take this payload.
+    fn any(self) -> bool {
+        self.mixtape || self.collection || self.artist_collection
+    }
+
+    /// A batch is offerable to a container only if EVERY item is.
+    fn intersect(self, other: Accepts) -> Accepts {
+        Accepts {
+            mixtape: self.mixtape && other.mixtape,
+            collection: self.collection && other.collection,
+            artist_collection: self.artist_collection && other.artist_collection,
+        }
+    }
+
+    /// The picker's row filter.
+    fn allows(self, kind: CollectionKind) -> bool {
+        match kind {
+            CollectionKind::Mixtape => self.mixtape,
+            CollectionKind::Collection => self.collection,
+            CollectionKind::ArtistCollection => self.artist_collection,
+        }
+    }
+
+    /// The create sub-panel's filter. `"collection"` maps to `Collection`,
+    /// anything else to `Mixtape` — the same mapping [`create_collection`]
+    /// applies, so the gate and the write can never disagree.
+    fn allows_create(self, kind: &str) -> bool {
+        if kind == "collection" {
+            self.collection
+        } else {
+            self.mixtape
+        }
+    }
+
+    /// The kind the create panel should open on when `wanted` is not offered:
+    /// the one that IS. `None` = nothing is creatable for this payload.
+    fn create_fallback(self) -> Option<&'static str> {
+        if self.mixtape {
+            Some("mixtape")
+        } else if self.collection {
+            Some("collection")
+        } else {
+            None
+        }
+    }
+}
+
+/// R3 — an ephemeral row leaves NO trace: it can be played and queued, never
+/// stored. Ephemeral ids are synthetic and high (`>= 2^48`,
+/// `local_ephemeral::EPHEMERAL_ID_FLOOR`), and neither a `local_tracks` row id
+/// (`< 2^40`, below even `local_plex::PLEX_TRACK_ID_FLOOR`) nor a Qobuz track
+/// id ever reaches that floor.
+///
+/// The test is on the ID ALONE, deliberately — NOT on `it.source`. Several
+/// call sites stamp a literal `"source": "qobuz"` onto whatever is playing
+/// (PlayerBar.qml:559, NowPlayingBarSmall.qml:508), so a source-gated check
+/// would wave an ephemeral now-playing track straight through.
+fn is_ephemeral_item(it: &AddItem) -> bool {
+    it.source_item_id
+        .trim()
+        .parse::<i64>()
+        .is_ok_and(crate::local_ephemeral::is_ephemeral_id)
+}
+
+/// R1 for ONE item.
+///
+/// - **Collection** (and artist collection): albums, singles and EPs — which
+///   in this payload vocabulary are all one thing, `itemType == "album"`; there
+///   is no release-type field and R1 draws no line between them. From ANY
+///   source: `"local"` covers folders, Plex and Qobuz downloads alike
+///   (`qbz-models/src/mixtape.rs` — `AlbumSource::Local` is an umbrella), so
+///   the source is NOT consulted for an album.
+/// - **Mixtape**: albums, playlists and tracks.
+/// - **A LOCAL playlist belongs nowhere.** `qbz_mixtape::enqueue::
+///   resolve_local_item` (`enqueue.rs:404,417-422`) answers `(Playlist, Local)`
+///   with the hard error `"local playlists not supported in this release"` —
+///   there is no local-only playlist id to resolve against. That error is THE
+///   unsupported combination R2 talks about; it stays where it is, as the
+///   safety net, and this arm is what makes it unreachable from the UI.
+/// - **Ephemeral: nothing** (R3).
+///
+/// Kind and source are read through `item_type_from_str` / `source_from_str`,
+/// the same two functions [`add_items`] writes with, so the gate can never
+/// classify an item differently from the row that would be inserted.
+fn accepts_item(it: &AddItem) -> Accepts {
+    if is_ephemeral_item(it) {
+        return Accepts::NONE;
+    }
+    match item_type_from_str(&it.item_type) {
+        ItemType::Album => Accepts::ALL,
+        ItemType::Track => Accepts::MIXTAPE_ONLY,
+        ItemType::Playlist => match source_from_str(&it.source) {
+            AlbumSource::Qobuz => Accepts::MIXTAPE_ONLY,
+            AlbumSource::Local => Accepts::NONE,
+        },
+    }
+}
+
+/// R1 for a BATCH: a container is offered only when it accepts every item.
+/// An empty payload accepts nothing (the picker has nothing to add).
+pub(crate) fn payload_accepts(items: &[AddItem]) -> Accepts {
+    if items.is_empty() {
+        return Accepts::NONE;
+    }
+    items
+        .iter()
+        .fold(Accepts::ALL, |acc, it| acc.intersect(accepts_item(it)))
+}
+
+/// The rule applied to whatever is currently pending. Used by the mutating
+/// handlers so they re-derive from the payload rather than trusting a document
+/// flag a stale QML frame could still be holding.
+fn pending_accepts() -> Accepts {
+    payload_accepts(&pending_snapshot())
+}
+
+// ---------------------------------------------------------------------------
 // Document (spec 02 §5.3)
 // ---------------------------------------------------------------------------
 
@@ -121,10 +292,16 @@ struct AddDoc {
     header_subtitle: String,
     #[serde(rename = "bulkMode")]
     bulk_mode: bool,
-    /// True when ANY pending item is not an album (collections hold whole
-    /// albums only, so the list narrows to mixtapes).
-    #[serde(rename = "restrictToMixtape")]
-    restrict_to_mixtape: bool,
+    /// R1, projected for the create surfaces: whether a NEW mixtape / a NEW
+    /// collection may be created for this payload. They are the create chips'
+    /// and the create radios' visibility, and they are NOT a "restriction
+    /// level" — both can be true, both can be false (in which case the picker
+    /// never opened at all). The ROW list is filtered in Rust, so QML has no
+    /// second copy of the rule to keep in sync.
+    #[serde(rename = "allowMixtape")]
+    allow_mixtape: bool,
+    #[serde(rename = "allowCollection")]
+    allow_collection: bool,
     search: String,
     /// The collection currently being written to ("" = idle).
     #[serde(rename = "busyId")]
@@ -146,7 +323,10 @@ impl Default for AddDoc {
             header_title: String::new(),
             header_subtitle: String::new(),
             bulk_mode: false,
-            restrict_to_mixtape: false,
+            // A closed document offers nothing; `open_items` seeds the real
+            // answer before `open` ever becomes true.
+            allow_mixtape: false,
+            allow_collection: false,
             search: String::new(),
             busy_id: String::new(),
             creating: false,
@@ -187,18 +367,18 @@ pub struct LoadedRow {
     pub already_has: bool,
 }
 
-/// Load the collections offered as targets, kind-restricted + recency-sorted +
+/// Load the collections offered as targets, R1-filtered + recency-sorted +
 /// `item_exists`-resolved. BLOCKING (DB) — call from `spawn_blocking`.
 ///
-/// - `restrict_to_mixtape` keeps `kind == mixtape` only (which also excludes
-///   artist_collections);
-/// - otherwise there is NO kind restriction at all: an album may be added to a
-///   Collection AND to an artist_collection, so the user can augment a built
-///   discography (`myqbz_add.rs:159-167`);
+/// - `accepts` is [`payload_accepts`] for this batch and is the ONLY row
+///   filter. A container the payload cannot go into is dropped here, in Rust,
+///   so it never reaches the model and cannot be clicked (R2). An album batch
+///   still sees artist_collections, so a built discography can be augmented
+///   (`myqbz_add.rs:159-167`);
 /// - sort = `last_played_at ?? updated_at` DESC;
 /// - `already_has` = every pending item's `(source, source_item_id)` is already
 ///   in that collection.
-pub(crate) fn load_rows(restrict_to_mixtape: bool, items: &[AddItem]) -> Vec<LoadedRow> {
+pub(crate) fn load_rows(accepts: Accepts, items: &[AddItem]) -> Vec<LoadedRow> {
     crate::library_db_qt::with_db(false, |db| {
         Ok(db.with_connection(|conn| {
             let mut cols: Vec<MixtapeCollection> =
@@ -207,9 +387,7 @@ pub(crate) fn load_rows(restrict_to_mixtape: bool, items: &[AddItem]) -> Vec<Loa
                     Vec::new()
                 });
 
-            if restrict_to_mixtape {
-                cols.retain(|c| c.kind == CollectionKind::Mixtape);
-            }
+            cols.retain(|c| accepts.allows(c.kind));
 
             cols.sort_by(|a, b| {
                 let ra = a.last_played_at.unwrap_or(a.updated_at);
@@ -296,15 +474,32 @@ pub(crate) fn open(items_json: &str) {
 
 /// Open the picker for one or more items. Empty input is a no-op (1:1 with
 /// `openAddToMixtape([])`). Stores the payload, computes the header strings and
-/// the kind restriction, marks loading, then loads the rows on a worker.
+/// the R1 answer, marks loading, then loads the rows on a worker.
+///
+/// **It does not always open.** When [`payload_accepts`] answers "nothing"
+/// — an ephemeral row (R3), a local playlist — the picker stays shut and the
+/// refusal goes to the log only (R2): an empty picker is a visible block, and
+/// a visible block is the thing being removed. The right fix for a caller that
+/// trips this is upstream — do not offer the action for that row.
 pub(crate) fn open_items(items: Vec<AddItem>) {
     if items.is_empty() {
         return;
     }
 
     let bulk = items.len() > 1;
-    // Restrict to mixtapes when ANY pending item is a track/playlist.
-    let restrict = items.iter().any(|it| it.item_type != "album");
+    let accepts = payload_accepts(&items);
+    if !accepts.any() {
+        log::warn!(
+            "[qbz-qt] myqbz_add: no container accepts this payload, picker not opened \
+             ({} item(s), first = {}/{} id {}) — the caller should not be offering \
+             \"Add to Mixtape/Collection\" for it",
+            items.len(),
+            items[0].item_type,
+            items[0].source,
+            items[0].source_item_id
+        );
+        return;
+    }
 
     let first_title = items[0].title.clone();
     let first_subtitle = items[0].subtitle.clone().unwrap_or_default();
@@ -333,11 +528,14 @@ pub(crate) fn open_items(items: Vec<AddItem>) {
         doc.header_title = header_title;
         doc.header_subtitle = header_subtitle;
         doc.bulk_mode = bulk;
-        doc.restrict_to_mixtape = restrict;
+        doc.allow_mixtape = accepts.mixtape;
+        doc.allow_collection = accepts.collection;
         doc.search = String::new();
         doc.busy_id = String::new();
         doc.creating = false;
-        doc.create_kind = "mixtape".to_string();
+        // Never preset the panel to a kind this payload cannot create;
+        // `accepts.any()` above guarantees the fallback exists.
+        doc.create_kind = accepts.create_fallback().unwrap_or("mixtape").to_string();
         doc.create_busy = false;
         doc.loading = true;
         doc.open = true;
@@ -346,7 +544,7 @@ pub(crate) fn open_items(items: Vec<AddItem>) {
 
     let items = pending_snapshot();
     crate::spawn(async move {
-        let rows = tokio::task::spawn_blocking(move || load_rows(restrict, &items))
+        let rows = tokio::task::spawn_blocking(move || load_rows(accepts, &items))
             .await
             .unwrap_or_default();
         *ROWS_CACHE.lock().unwrap_or_else(|e| e.into_inner()) = rows;
@@ -396,13 +594,32 @@ pub(crate) fn search(query: &str) {
 }
 
 /// Open the create sub-panel preset to a kind ("mixtape" | "collection").
+///
+/// R1-clamped: a kind the pending payload cannot go into is replaced by one it
+/// can, and if it can go nowhere the panel does not open. The chip that would
+/// ask for a forbidden kind is not rendered in the first place — this is the
+/// safety net behind it, and like every other one here it is log-only.
 pub(crate) fn show_create(kind: &str) {
+    let accepts = pending_accepts();
+    let wanted = if kind == "collection" {
+        "collection"
+    } else {
+        "mixtape"
+    };
+    let resolved = if accepts.allows_create(wanted) {
+        Some(wanted)
+    } else {
+        accepts.create_fallback()
+    };
+    let Some(resolved) = resolved else {
+        log::warn!("[qbz-qt] myqbz_add: create '{kind}' refused — nothing is creatable for this payload");
+        return;
+    };
+    if resolved != wanted {
+        log::warn!("[qbz-qt] myqbz_add: create '{wanted}' is not offered for this payload, using '{resolved}'");
+    }
     with_doc(|doc| {
-        doc.create_kind = if kind == "collection" {
-            "collection".to_string()
-        } else {
-            "mixtape".to_string()
-        };
+        doc.create_kind = resolved.to_string();
         doc.create_busy = false;
         doc.creating = true;
     });
@@ -485,20 +702,33 @@ fn toast_outcome(name: &str, outcome: &AddOutcome) {
     crate::toast_qt::success(msg);
 }
 
-/// The chosen collection's display name, for the toast.
-fn row_name(collection_id: &str) -> String {
+/// The chosen collection's display name, for the toast. `None` when the id is
+/// not one of the rows this picker loaded.
+fn row_name(collection_id: &str) -> Option<String> {
     ROWS_CACHE
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .iter()
         .find(|r| r.id == collection_id)
         .map(|r| r.name.clone())
-        .unwrap_or_default()
 }
 
 /// Pick a target: add every pending item, toast the outcome, close.
 /// Re-entrant clicks while a write is in flight are ignored.
+///
+/// The id MUST be one of the loaded rows, and those are already R1-filtered by
+/// [`load_rows`] — so this one lookup is also the R2 net on the write path: an
+/// invokable called with any other collection id (a stale QML frame, a row that
+/// was filtered out) writes nothing. Log-only, per R2.
 pub(crate) fn pick(collection_id: &str) {
+    let Some(name) = row_name(collection_id) else {
+        log::warn!(
+            "[qbz-qt] myqbz_add: pick('{collection_id}') is not an offered row for this \
+             payload, ignored"
+        );
+        return;
+    };
+
     let accepted = with_doc(|doc| {
         if !doc.busy_id.is_empty() {
             return false;
@@ -511,7 +741,6 @@ pub(crate) fn pick(collection_id: &str) {
     }
     publish();
 
-    let name = row_name(collection_id);
     let items = pending_snapshot();
     let cid = collection_id.to_string();
     crate::spawn(async move {
@@ -548,6 +777,19 @@ pub(crate) fn create_collection(kind: &str, name: &str) -> Option<(String, Strin
 /// raw English literal the reference uses (`main.rs:6009`, absent from all
 /// eight catalogs, kept 1:1).
 pub(crate) fn create_and_add(kind: &str, name: &str) {
+    // R1 net on the create path: the radio for a forbidden kind is not
+    // rendered, so reaching here means a stale frame or a direct invokable
+    // call. Log-only (R2) — never a toast.
+    if !pending_accepts().allows_create(kind) {
+        log::warn!(
+            "[qbz-qt] myqbz_add: createAndAdd('{kind}') refused — this payload cannot go \
+             into a {kind}"
+        );
+        with_doc(|doc| doc.create_busy = false);
+        publish();
+        return;
+    }
+
     let trimmed = name.trim().to_string();
     let accepted = with_doc(|doc| {
         if trimmed.is_empty() || doc.create_busy {
@@ -660,6 +902,132 @@ mod tests {
         assert_eq!(source_from_str("anything"), AlbumSource::Qobuz);
         assert_eq!(item_type_from_str("nonsense"), ItemType::Album);
         assert_eq!(item_type_from_str("playlist"), ItemType::Playlist);
+    }
+
+    fn add(item_type: &str, source: &str, id: &str) -> AddItem {
+        AddItem {
+            item_type: item_type.into(),
+            source: source.into(),
+            source_item_id: id.into(),
+            title: "t".into(),
+            subtitle: None,
+            artwork_url: None,
+            year: None,
+            track_count: None,
+        }
+    }
+
+    #[test]
+    fn r1_albums_go_everywhere_from_every_source() {
+        // "Collection: albums, singles, EPs. From ANY source — qobuz, local
+        // (folders AND Plex AND anything added later)."
+        for source in ["qobuz", "local"] {
+            let a = payload_accepts(&[add("album", source, "12345")]);
+            assert_eq!(a, Accepts::ALL, "album/{source} must reach every container");
+        }
+        // A Plex album key is a `local` album — the id shape changes nothing.
+        assert_eq!(
+            payload_accepts(&[add("album", "local", "plex:5677211365378243606")]),
+            Accepts::ALL
+        );
+    }
+
+    #[test]
+    fn r1_tracks_are_mixtape_only() {
+        for source in ["qobuz", "local"] {
+            assert_eq!(
+                payload_accepts(&[add("track", source, "42")]),
+                Accepts::MIXTAPE_ONLY
+            );
+        }
+    }
+
+    #[test]
+    fn r1_qobuz_playlists_are_mixtape_only_and_local_playlists_go_nowhere() {
+        assert_eq!(
+            payload_accepts(&[add("playlist", "qobuz", "998877")]),
+            Accepts::MIXTAPE_ONLY
+        );
+        // R2: `qbz_mixtape::enqueue::resolve_local_item` hard-errors on
+        // (Playlist, Local). Offering ANY container for it is what makes that
+        // error reachable, so nothing is offered and the picker never opens.
+        let local_playlist = payload_accepts(&[add("playlist", "local", "whatever")]);
+        assert_eq!(local_playlist, Accepts::NONE);
+        assert!(!local_playlist.any());
+    }
+
+    #[test]
+    fn r3_ephemeral_items_are_accepted_by_nothing() {
+        let eph = (1i64 << 48) + 7;
+        let a = payload_accepts(&[add("track", "local", &eph.to_string())]);
+        assert_eq!(a, Accepts::NONE, "an ephemeral row leaves no trace");
+        // And a caller that stamps a literal "qobuz" source onto whatever is
+        // playing (PlayerBar.qml:559) must not slip past — the ID decides.
+        assert_eq!(
+            payload_accepts(&[add("track", "qobuz", &eph.to_string())]),
+            Accepts::NONE
+        );
+        // An ephemeral ALBUM is still ephemeral, despite being album-shaped.
+        assert_eq!(
+            payload_accepts(&[add("album", "local", &eph.to_string())]),
+            Accepts::NONE
+        );
+    }
+
+    #[test]
+    fn ids_below_the_ephemeral_floor_are_untouched() {
+        // A Plex track id is namespaced at 2^40 — well under 2^48, so it stays
+        // a normal local track.
+        let plex = (1i64 << 40) | 4444;
+        assert_eq!(
+            payload_accepts(&[add("track", "local", &plex.to_string())]),
+            Accepts::MIXTAPE_ONLY
+        );
+        // A non-numeric id is not an ephemeral id.
+        assert_eq!(
+            payload_accepts(&[add("album", "qobuz", "e94no900otyrz")]),
+            Accepts::ALL
+        );
+    }
+
+    #[test]
+    fn a_batch_is_offered_only_what_every_item_accepts() {
+        // Album + track -> mixtape only (the album's Collection slot loses).
+        assert_eq!(
+            payload_accepts(&[add("album", "qobuz", "1"), add("track", "qobuz", "2")]),
+            Accepts::MIXTAPE_ONLY
+        );
+        // One local playlist poisons the batch — exactly the item that would
+        // hard-error at resolve time.
+        assert_eq!(
+            payload_accepts(&[add("album", "qobuz", "1"), add("playlist", "local", "p")]),
+            Accepts::NONE
+        );
+        // Empty is nothing, not everything.
+        assert_eq!(payload_accepts(&[]), Accepts::NONE);
+    }
+
+    #[test]
+    fn accepts_drives_rows_and_create_consistently() {
+        let tracks = Accepts::MIXTAPE_ONLY;
+        assert!(tracks.allows(CollectionKind::Mixtape));
+        assert!(!tracks.allows(CollectionKind::Collection));
+        assert!(
+            !tracks.allows(CollectionKind::ArtistCollection),
+            "an artist collection is a discography — albums only"
+        );
+        assert!(tracks.allows_create("mixtape"));
+        assert!(!tracks.allows_create("collection"));
+        assert_eq!(tracks.create_fallback(), Some("mixtape"));
+
+        let albums = Accepts::ALL;
+        assert!(albums.allows(CollectionKind::ArtistCollection));
+        assert!(albums.allows_create("collection"));
+
+        assert_eq!(Accepts::NONE.create_fallback(), None);
+        // `allows_create` uses create_collection's own mapping: unknown = mixtape.
+        assert!(albums.allows_create("nonsense"));
+        assert!(!Accepts::NONE.allows_create("nonsense"));
     }
 
     #[test]

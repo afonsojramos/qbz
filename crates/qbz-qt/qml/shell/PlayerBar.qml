@@ -134,6 +134,40 @@ Rectangle {
         }
     }
 
+    // SOURCE of the now-playing track — the word the MyQBZ AddItem payload
+    // needs ("qobuz" | "local"), NEVER a literal.
+    //
+    // This bar's "row" is the queue document's `current` row, the same row the
+    // heart above reads. `QbzPlayer` publishes no source word at all
+    // (player_bridge.rs:31-114 — there is no `np_source`), so the only
+    // published fact about the current track's provenance is that row's
+    // `isLocal` (queue_qt.rs:46-50, straight off `QueueTrack::is_local`).
+    //
+    // `isLocal === false` is unambiguous: the queue id IS a Qobuz catalog id.
+    // `isLocal === true` is NOT one thing — it covers a `library.db` row id, a
+    // `PLEX_TRACK_ID_FLOOR`-namespaced id, an `EPHEMERAL_ID_FLOOR` id, and the
+    // offline cache, whose queue id is a QOBUZ id (local_playback.rs:53-58).
+    // Those four need four different payloads and this bar cannot tell them
+    // apart without sniffing the id shape, which is exactly the scattered
+    // knowledge the source seam exists to end. So it answers "" = UNKNOWN, and
+    // the menu below drops "Add to mixtape" instead of stamping a guess: an
+    // action that cannot work must not be offered, and an ephemeral track must
+    // leave no trace outside the queue.
+    //
+    // The id guard is not paranoia-for-free: it is what keeps a stale queue
+    // document from lending the PREVIOUS track's provenance to this one. Every
+    // track edge republishes both (playback_qt.rs:1119-1120 and siblings), so
+    // it holds in steady state.
+    readonly property string npSource: {
+        try {
+            var d = JSON.parse(QbzQueue.queueJson)
+            if (d && d.current && d.current.id === QbzPlayer.npTrackId)
+                return d.current.isLocal === true ? "" : "qobuz"
+        } catch (e) {
+        }
+        return ""
+    }
+
     // Audio settings — the button OPENS A FLYOUT (Normalization + Gapless),
     // it is not itself a toggle: `PlayerBar.slint:666-706`. Its `active`
     // colour does mirror normalization here (`:677
@@ -531,8 +565,16 @@ Rectangle {
                 { "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "action": "queue" },
                 { "label": QbzSession.tr("Play later", QbzSession.trRev), "icon": "list-plus", "action": "later" },
                 { "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-start", "action": "next" },
-                { "label": QbzSession.tr("Add to mixtape", QbzSession.trRev), "icon": "cassette-tape", "action": "mixtape" },
             ]
+            // Only when the track's source is KNOWN (see `npSource`): a row we
+            // cannot address is not offered.
+            if (root.npSource !== "") {
+                m.push({
+                    "label": QbzSession.tr("Add to mixtape", QbzSession.trRev),
+                    "icon": "cassette-tape",
+                    "action": "mixtape"
+                })
+            }
             if (QbzPlayer.npAlbumId !== "") {
                 m.push({
                     "label": QbzSession.tr("Add album to collection", QbzSession.trRev),
@@ -555,9 +597,12 @@ Rectangle {
                 // MyQBZ AddItem, built here from the now-playing state:
                 // `npArtworkPath` is a file:// CACHE path, so it is NOT the
                 // artworkUrl — the store would keep a dead local path.
-                if (id !== "")
+                // The source comes from the queue's current ROW (`npSource`),
+                // never from a literal; the entry is not even in the menu when
+                // that row cannot answer.
+                if (id !== "" && root.npSource !== "")
                     QbzMyQbzAdd.open(JSON.stringify([{
-                        "itemType": "track", "source": "qobuz",
+                        "itemType": "track", "source": root.npSource,
                         "sourceItemId": id, "title": QbzPlayer.npTitle,
                         "subtitle": QbzPlayer.npArtist, "artworkUrl": "",
                         "year": null, "trackCount": null

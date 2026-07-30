@@ -11,7 +11,7 @@ use crate::id::{MediaRef, RawRef, SourceId};
 use crate::meta::ItemMeta;
 use crate::playback::PlaybackTicket;
 use crate::source::Source;
-use crate::sources::{LocalSource, PlexSource, QobuzSource};
+use crate::sources::{ClientLens, LocalSource, PlexSource, QobuzSource};
 
 /// Every source in the process.
 pub struct SourceRegistry {
@@ -32,8 +32,23 @@ impl SourceRegistry {
     /// Order is NOT load-bearing: [`SourceRegistry::claim`] asks everyone (see
     /// its docs), which removes an invariant a future author could break by
     /// inserting a source in the wrong slot.
+    ///
+    /// The Qobuz source is DETACHED — it has no way to reach a client and every
+    /// catalog call answers `NotConfigured`. The process wires the live one
+    /// with [`init_registry`]; see [`crate::ClientLens`] for why the client is
+    /// read through rather than published into the source.
     pub fn with_defaults() -> Self {
-        let qobuz = Arc::new(QobuzSource::new());
+        Self::build(QobuzSource::detached())
+    }
+
+    /// The registry the process actually runs: Qobuz reads its client through
+    /// `lens` at CALL time.
+    pub fn with_client_lens(lens: ClientLens) -> Self {
+        Self::build(QobuzSource::new(lens))
+    }
+
+    fn build(qobuz: QobuzSource) -> Self {
+        let qobuz = Arc::new(qobuz);
         let plex = Arc::new(PlexSource::new());
         let local = Arc::new(LocalSource::new());
         Self {
@@ -53,7 +68,12 @@ impl SourceRegistry {
         self.sources.iter().find(|s| s.id() == id)
     }
 
-    /// The Qobuz source, for `set_client` from the auth path.
+    /// The Qobuz source.
+    ///
+    /// It takes NO configuration from the auth path any more: its client is
+    /// read through the lens installed at construction ([`init_registry`]), so
+    /// there is nothing to publish into it and nothing to re-publish when
+    /// `qbz-core` replaces its client.
     pub fn qobuz(&self) -> &QobuzSource {
         &self.qobuz
     }
@@ -217,6 +237,30 @@ static REGISTRY: OnceLock<SourceRegistry> = OnceLock::new();
 /// borrows a stack-local client clone, cannot do.
 pub fn registry() -> &'static SourceRegistry {
     REGISTRY.get_or_init(SourceRegistry::with_defaults)
+}
+
+/// Build the process-wide registry with a live Qobuz [`ClientLens`].
+///
+/// Call it ONCE, as early as the process can name its core — before anything
+/// else touches [`registry()`], and in particular before
+/// `auth_qt::bind_per_user_stores`. It is idempotent and cheap to call again;
+/// what it cannot do is re-attach a lens to a registry that was already built
+/// without one, so a late call logs an error and leaves Qobuz detached (every
+/// catalog call then answers `NotConfigured` — loudly, and never with a stale
+/// client).
+pub fn init_registry(lens: ClientLens) -> &'static SourceRegistry {
+    let mut installed = false;
+    let reg = REGISTRY.get_or_init(|| {
+        installed = true;
+        SourceRegistry::with_client_lens(lens)
+    });
+    if !installed {
+        log::error!(
+            "[qbz-source] init_registry ran after the registry was already built; \
+             the Qobuz source stays detached and every catalog call will answer NotConfigured"
+        );
+    }
+    reg
 }
 
 #[cfg(test)]

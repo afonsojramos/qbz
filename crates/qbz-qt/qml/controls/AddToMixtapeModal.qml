@@ -23,6 +23,17 @@
 // title+subtitle; bulk -> "{count} items" + "{first} + N more"), so this file
 // never inspects the pending items.
 //
+// WHAT MAY GO WHERE (R1) IS ALSO RUST'S ANSWER, not a rule this file re-derives
+// — see myqbz_add_qt.rs `payload_accepts`. The picker LIST arrives already
+// filtered (a container that cannot take the payload is never a row), and the
+// two creatable kinds arrive as `allowMixtape` / `allowCollection`, which gate
+// the footer chips AND the create-panel radios. That second half matters: with
+// the old single `restrictToMixtape` flag the chips narrowed to one but the
+// create panel still showed BOTH radios, so a track payload could still be
+// flipped to "Collections" and written into one. Nothing here ever renders an
+// action the payload cannot perform, which is the whole point — the backend
+// block is a safety net that must stay invisible.
+//
 // The name typed into the create panel is QML-LOCAL: the bridge takes it as an
 // argument (`createAndAdd(kind, name)`) and has no name property. Same for the
 // create KIND, which the two radios flip locally over the doc's value — there
@@ -53,7 +64,11 @@ Item {
     readonly property bool loading: root.doc.loading === true
     readonly property bool creating: root.doc.creating === true
     readonly property bool createBusy: root.doc.createBusy === true
-    readonly property bool restrictToMixtape: root.doc.restrictToMixtape === true
+    // R1, as Rust computed it for the pending payload. Both may be true, one
+    // may be true; both false cannot reach a visible modal (Rust refuses to
+    // open the picker when nothing accepts the payload).
+    readonly property bool allowMixtape: root.doc.allowMixtape === true
+    readonly property bool allowCollection: root.doc.allowCollection === true
     readonly property string busyId: root.doc.busyId || ""
     readonly property string search: root.doc.search || ""
     readonly property var rows: root.doc.rows || []
@@ -65,8 +80,14 @@ Item {
     readonly property string createKind: root.createKindOverride !== ""
         ? root.createKindOverride : root.docCreateKind
     readonly property bool createMixtape: root.createKind === "mixtape"
+    // R1 for the kind the panel is currently on. The forbidden radio is not
+    // rendered, so this can only go false on a stale frame — but Create & Add
+    // must not be pressable in that frame either.
+    readonly property bool createKindAllowed: root.createKind === "collection"
+        ? root.allowCollection : root.allowMixtape
     // :207 — the raw non-empty check, exactly as Slint gates it (Rust trims).
     readonly property bool canCreate: root.createName !== "" && !root.createBusy
+        && root.createKindAllowed
 
     // A fresh panel starts empty and follows the kind Rust was asked for; a
     // closed modal must not keep a half-typed name for the next caller.
@@ -266,21 +287,29 @@ Item {
                     anchors.margins: 12
                     spacing: 8
                     // Both chips carry `horizontal-stretch: 1`, so one fills
-                    // the row and two split it.
-                    readonly property int chips: root.restrictToMixtape ? 1 : 2
-                    readonly property real chipW: (width - (chips - 1) * 8) / chips
+                    // the row and two split it. R1 decides how many there are:
+                    // one chip per CREATABLE container, never zero (a payload
+                    // nothing accepts never opened this modal). The guard on
+                    // `chips > 0` is only so a pre-publish frame cannot divide
+                    // by zero.
+                    readonly property int chips:
+                        (root.allowMixtape ? 1 : 0) + (root.allowCollection ? 1 : 0)
+                    readonly property real chipW:
+                        chips > 0 ? (width - (chips - 1) * 8) / chips : 0
 
                     FooterIconButton {
                         anchors.verticalCenter: parent.verticalCenter
-                        width: parent.chipW
+                        visible: root.allowMixtape
+                        width: visible ? parent.chipW : 0
                         label: root.t("Mixtapes")
                         onClicked: QbzMyQbzAdd.showCreate("mixtape")
                     }
                     FooterIconButton {
-                        // Hidden for track/playlist payloads: collections hold
-                        // whole albums only (:423).
+                        // Offered only when a Collection can take the payload:
+                        // albums / singles / EPs, from any source. Tracks and
+                        // playlists have no Collection slot (R1).
                         anchors.verticalCenter: parent.verticalCenter
-                        visible: !root.restrictToMixtape
+                        visible: root.allowCollection
                         width: visible ? parent.chipW : 0
                         label: root.t("Collections")
                         onClicked: QbzMyQbzAdd.showCreate("collection")
@@ -426,14 +455,21 @@ Item {
                         font.weight: theme.weightSemibold
                         font.letterSpacing: 1.5
                     }
+                    // R1 again, and this is the half the old flag missed: a
+                    // radio for a kind the payload cannot go into is NOT
+                    // rendered. A Row skips invisible children, so the single
+                    // remaining (and already selected) radio simply reads as
+                    // the kind being created.
                     Row {
                         spacing: 16
                         QbzRadioOption {
+                            visible: root.allowMixtape
                             label: root.t("Mixtapes")
                             selected: root.createMixtape
                             onClicked: if (!root.createBusy) root.createKindOverride = "mixtape"
                         }
                         QbzRadioOption {
+                            visible: root.allowCollection
                             label: root.t("Collections")
                             selected: !root.createMixtape
                             onClicked: if (!root.createBusy) root.createKindOverride = "collection"

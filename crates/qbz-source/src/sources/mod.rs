@@ -10,4 +10,4 @@ pub mod qobuz;
 
 pub use local::{local_queue_track, EphemeralTracks, LocalSource};
 pub use plex::{is_thumb_path, PlexCreds, PlexSource, PLEX_TRACK_ID_FLOOR};
-pub use qobuz::QobuzSource;
+pub use qobuz::{ClientFuture, ClientLens, QobuzSource};

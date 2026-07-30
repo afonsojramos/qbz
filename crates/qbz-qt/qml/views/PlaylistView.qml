@@ -647,6 +647,16 @@ Rectangle {
                     onRemoveRequested: QbzBridge.playlistRemoveTrack(item.playlistTrackId)
                     // MyQBZ "Add to mixtape" — the HOST builds the AddItem
                     // array (TrackRow does not know itemType/source).
+                    //
+                    // SOURCE: `PlaylistTrackRow` (playlist_qt.rs:47-78) has no
+                    // source field because this whole view has one source —
+                    // LOCAL playlists are out of scope everywhere in it
+                    // (playlist_qt.rs:23-25), the document is mapped from
+                    // Qobuz `Track` values, and `playlistTrackId` is the
+                    // Qobuz membership row id. `item.id` is a Qobuz catalog
+                    // id by construction of the view, not by assumption here.
+                    // If local playlists are ever ported, the row must start
+                    // carrying its source and this must read it.
                     onMixtapeRequested: QbzMyQbzAdd.open(JSON.stringify([{
                         "itemType": "track", "source": "qobuz",
                         "sourceItemId": item.id, "title": item.title || "",

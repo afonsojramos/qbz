@@ -185,6 +185,28 @@ pub(crate) fn ui(f: impl FnOnce(Pin<&mut QbzBridge>) + Send + 'static) {
 /// Component.onCompleted — the Qt-thread handle is registered first, so
 /// every `ui()` hop below lands).
 pub(crate) fn on_boot() {
+    // The source registry, FIRST of all — before anything can call
+    // `qbz_source::registry()`. It is a OnceLock, so whoever touches it first
+    // BUILDS it, and a registry built without the client lens leaves the Qobuz
+    // source permanently detached: every catalog call then answers
+    // `NotConfigured`, loudly but uselessly. Measured exactly that way on the
+    // first wiring pass — the local and Plex rows resolved while all 26 Qobuz
+    // albums came back "no client lens installed".
+    //
+    // A LENS, not a cached clone: `qbz-core` REPLACES its client (core.rs:346
+    // and :384, both from paths that run before `set_session`), so anything
+    // holding a clone goes stale and fails silently. Reading through on every
+    // call is what makes that unrepresentable. The read guard lives inside the
+    // returned future and is dropped with it, which is the same discipline
+    // `myqbz_play_qt` documents for its own clone-then-drop.
+    qbz_source::init_registry(std::sync::Arc::new(|| {
+        Box::pin(async {
+            let lock = app().core().client();
+            let guard = lock.read().await;
+            guard.as_ref().cloned()
+        })
+    }));
+
     // Offline guardrails FIRST (before the login screen can show): engine +
     // connectivity actor, then the live status forwarder. Both need the
     // tokio runtime context for their spawns.

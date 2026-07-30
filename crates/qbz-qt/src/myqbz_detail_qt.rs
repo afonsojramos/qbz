@@ -83,7 +83,11 @@ pub struct InlineTrackRow {
     /// Always "" — the rows are mounted with `showArtwork: false`.
     #[serde(rename = "artPath")]
     pub art_path: String,
-    /// "qobuz" | "local" | "plex" — the delegate's `draggable` gate.
+    /// "qobuz" | "local" | "offline" | "plex" — the delegate's `draggable`
+    /// gate, and a `SourceIcon.qml` kind. `"offline"` is the badge of a Qobuz
+    /// download/purchase, which is a local FILE with a cloud glyph; it appears
+    /// here because the resolved rows now carry the source's real word instead
+    /// of a flattened `"local"` (see `source_kind_of`).
     pub source: String,
 }
 
@@ -107,8 +111,11 @@ pub struct DetailRow {
     /// local/Plex items, whose tracks carry none).
     #[serde(rename = "artistId")]
     pub artist_id: String,
-    /// RESOLVED source ("qobuz" | "plex" | "local") — this is how a Plex item
-    /// stored as `AlbumSource::Local` finally reads "plex".
+    /// RESOLVED source ("qobuz" | "plex" | "local" | "offline") — this is how a
+    /// Plex item stored as `AlbumSource::Local` finally reads "plex", and a
+    /// Qobuz download stored the same way reads "offline". Both come from the
+    /// registry's claim on the resolved row (`source_kind_of`), never from a
+    /// literal.
     #[serde(rename = "sourceKind")]
     pub source_kind: String,
     #[serde(rename = "typeLabel")]
@@ -575,6 +582,35 @@ fn build_rows(items: &[MixtapeCollectionItem]) -> Vec<DetailRow> {
         .collect()
 }
 
+/// The source word a RESOLVED track renders as — the glyph kind in
+/// `SourceIcon.qml` and the `sourceKind` field of a detail row.
+///
+/// It comes from the ROW, never from a literal. What it replaces (twice) was
+///
+/// ```ignore
+/// track.source.clone().unwrap_or_else(|| if track.is_local { "local" } else { "qobuz" })
+/// ```
+///
+/// — a hand-written fallback that guessed a source out of one boolean, and
+/// which drops every word that is not exactly `"local"` or `"qobuz"`.
+/// `SourceRegistry::claim` applies the ONE source-word table
+/// (`qbz_source::SourceId::from_word`) to all six words that really occur, and
+/// for a LOCAL row the BADGE keeps the distinction the glyph needs: a Qobuz
+/// download is a local FILE (source `local`) but must draw the cloud glyph
+/// (badge `offline`), which the source id alone collapses.
+///
+/// A row nothing claims (`Unclaimed` / `Ambiguous`) falls back to its badge,
+/// which is `"local"` for an unknown word — never `"qobuz"`, because guessing
+/// Qobuz from "not otherwise recognised" is exactly the mis-attribution the
+/// seam deletes.
+fn source_kind_of(track: &QueueTrack) -> &'static str {
+    let raw = qbz_source::RawRef::from_queue_track(track);
+    match qbz_source::registry().claim(&raw).map(|m| m.source()) {
+        Ok(id) if id != qbz_source::SourceId::LOCAL => id.as_str(),
+        _ => raw.badge.as_str(),
+    }
+}
+
 /// One inline track row from a resolved `QueueTrack` (spec 02 §5.2).
 fn track_to_item(track: &QueueTrack) -> InlineTrackRow {
     let quality_tier = match track.bit_depth {
@@ -588,13 +624,7 @@ fn track_to_item(track: &QueueTrack) -> InlineTrackRow {
     } else {
         crate::home_qt::quality_detail_from_parts(track.bit_depth, track.sample_rate)
     };
-    let source = track.source.clone().unwrap_or_else(|| {
-        if track.is_local {
-            "local".to_string()
-        } else {
-            "qobuz".to_string()
-        }
-    });
+    let source = source_kind_of(track).to_string();
 
     InlineTrackRow {
         id: track.id.to_string(),
@@ -1012,14 +1042,10 @@ fn resolve_from_tracks(item: &MixtapeCollectionItem, tracks: &[QueueTrack]) -> R
     let stored = source_str(item.source);
     let first = tracks.first();
 
+    // The RESOLVED source, from the row itself (`source_kind_of`). An item that
+    // resolved to nothing keeps its STORED source — there is no row to ask.
     let source_kind = match first {
-        Some(t) => t.source.clone().unwrap_or_else(|| {
-            if t.is_local {
-                "local".to_string()
-            } else {
-                "qobuz".to_string()
-            }
-        }),
+        Some(t) => source_kind_of(t).to_string(),
         None => stored.to_string(),
     };
 
@@ -1122,6 +1148,15 @@ fn apply_resolved(item: &MixtapeCollectionItem, resolved: ResolvedItem, collecti
 
 /// Resolve every not-yet-cached item's tracks and hydrate its row.
 /// Fire-and-forget: a failure leaves the stored-source defaults in place.
+///
+/// Since the `qbz-source` wiring, this pass NO LONGER NEEDS A QOBUZ CLIENT:
+/// `fetch_item_tracks` used to return early with an empty vec when there was
+/// none, so a local or Plex row rendered a grey square, an empty quality
+/// skeleton and no inline tracks for the whole session whenever it was offline
+/// or logged out. Each item now resolves against its own source, and only the
+/// Qobuz ones fail when the catalog is unreachable. `runtime` survives as the
+/// per-task handle the resolve tasks are spawned with; the resolver itself is
+/// the process-wide registry.
 fn resolve_items(runtime: Arc<AppRuntime<LoggingAdapter>>) {
     let pending: Vec<MixtapeCollectionItem> = {
         let items = FULL_ITEMS.lock().unwrap();

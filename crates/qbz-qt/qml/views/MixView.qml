@@ -285,6 +285,17 @@ Rectangle {
                     }
                     // MyQBZ "Add to mixtape" — the HOST builds the AddItem
                     // array (TrackRow does not know itemType/source).
+                    //
+                    // SOURCE: these rows carry no source field, and they do
+                    // not need one — every one of the four mixes is built
+                    // from `qbz_models::Track` values that came back from the
+                    // Qobuz API (foryou_qt.rs:855-873: dynamic/suggest for
+                    // daily+weekly, `get_favorites("tracks")` for fav,
+                    // `get_playlist` for top), and the DailyQ/WeeklyQ seed
+                    // explicitly drops local / Plex / ephemeral recents
+                    // (foryou_qt.rs:774-776). `modelData.id` is therefore a
+                    // Qobuz catalog id by construction of the document, not
+                    // by assumption at this call site.
                     onMixtapeRequested: QbzMyQbzAdd.open(JSON.stringify([{
                         "itemType": "track", "source": "qobuz",
                         "sourceItemId": modelData.id,

@@ -38,10 +38,30 @@
 //!    is on the trait, so a hybrid list makes ONE call per row regardless of
 //!    source and cannot wire fewer pipelines than it has sources.
 //!
+//! # The owner's rules, and where they live
+//!
+//! [`acceptance`] is the ONE home of **R1** (a Collection takes albums, singles
+//! and EPs from any source; a Mixtape takes albums, playlists and tracks) and
+//! **R3** (an ephemeral item may only be played and queued — never stored in a
+//! playlist, a mixtape or a collection). Ask it with [`Container::accepts`].
+//!
+//! **R2** — an unsupported combination must never be VISIBLE — is why the rule
+//! belongs here rather than in a view: the resolver errors
+//! (`"local playlists not supported in this release"`, [`SourceError`]) stay
+//! exactly where they are as the safety net that only reaches the log, and the
+//! UI simply does not offer what cannot work. **R4** — a row's source comes
+//! from the ROW, never a literal — is enforced by shape: [`ItemFacts`] is built
+//! from a [`RawRef`] / [`MediaRef`], and the rule contains no source literal to
+//! get wrong.
+//!
 //! # Shape rules
 //!
 //! - **Additive.** Nothing in `qbz/src` (Slint) or `qbz-mixtape` changes; this
 //!   crate implements `qbz_mixtape::ItemResolver`, it does not absorb it.
+//! - **Nothing long-lived is cached that another crate owns.** The Qobuz client
+//!   is READ THROUGH a [`ClientLens`] on every call, because `qbz-core`
+//!   replaces its client wholesale (`core.rs:346`, `:384`) and a cached clone
+//!   fails silently. Install it once with [`init_registry`].
 //! - **The PROTECTED audio backend is not linked.** `qbz-audio` and
 //!   `qbz-player` are not dependencies, so sample rate, resampling and device
 //!   selection are unreachable from here. [`PlaybackTicket`] is data; the
@@ -57,10 +77,12 @@
 //! `sources/jellyfin.rs` (one impl), one `pub mod` + `pub use` in
 //! [`sources`], one [`SourceId`] constant, one word in
 //! [`SourceId::from_word`], one [`SourceBadge`] variant, and one line in
-//! [`SourceRegistry::with_defaults`]. **Zero** changes in any view, any
+//! [`SourceRegistry`]'s `build`. **Zero** changes in any view, any
 //! playback path, any artwork path — because all four concerns hang off the one
-//! trait.
+//! trait. And zero changes in [`acceptance`]: R1 says a Collection takes
+//! releases "from ANY source", so the rule has no per-source arm to extend.
 
+pub mod acceptance;
 pub mod art;
 pub mod error;
 pub mod id;
@@ -71,14 +93,18 @@ pub mod registry;
 pub mod source;
 pub mod sources;
 
+pub use acceptance::{
+    is_ephemeral_id, is_release_word, Accepted, Container, ItemFacts, Refusal, RELEASE_TYPES,
+};
 pub use art::{ArtRef, ArtSize, PLEX_THUMB_PX};
 pub use error::SourceError;
 pub use id::{ItemKind, MediaRef, RawRef, SourceId};
 pub use meta::{ItemMeta, QualityHint, SourceBadge};
 pub use mixtape_adapter::RegistryResolver;
 pub use playback::PlaybackTicket;
-pub use registry::{registry, SourceRegistry};
+pub use registry::{init_registry, registry, SourceRegistry};
 pub use source::Source;
 pub use sources::{
-    local_queue_track, EphemeralTracks, LocalSource, PlexCreds, PlexSource, QobuzSource,
+    local_queue_track, ClientFuture, ClientLens, EphemeralTracks, LocalSource, PlexCreds,
+    PlexSource, QobuzSource,
 };

@@ -525,6 +525,14 @@ Rectangle {
                             // MyQBZ "Add to mixtape" — the HOST builds the
                             // AddItem array (TrackRow does not know
                             // itemType/source).
+                            //
+                            // SOURCE: a label page is a Qobuz catalog surface.
+                            // These rows are the `/label/page` response's
+                            // `top_tracks` mapped to track rows
+                            // (label_qt.rs:280-287) — there is no local label
+                            // library and no non-Qobuz row can reach this
+                            // Repeater, so `modelData.id` is a Qobuz catalog
+                            // id by construction of the document.
                             onMixtapeRequested: QbzMyQbzAdd.open(JSON.stringify([{
                                 "itemType": "track", "source": "qobuz",
                                 "sourceItemId": modelData.id,

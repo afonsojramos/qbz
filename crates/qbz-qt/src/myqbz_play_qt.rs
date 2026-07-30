@@ -7,6 +7,31 @@
 //! `qbz-mixtape` enqueue resolver, then drives the queue through this port's
 //! stamping seam (`playback_qt::set_queue_stamped` / `stamped`).
 //!
+//! RESOLUTION GOES THROUGH `qbz-source` (design 02 §9 stage 2). Every path
+//! here builds ONE `qbz_source::RegistryResolver` over the process-wide
+//! registry instead of a per-call `ProdItemResolver { qobuz client, local
+//! closure }`. Three things follow, and all three are the point:
+//! - the hand-rolled `resolve_local` closure is GONE, and with it the
+//!   `library_db_qt::with_db` open it performed once per item (23-34 opens for
+//!   one collection); `LocalSource` owns one pooled handle.
+//! - NO path is gated on a Qobuz client any more. A collection's local / Plex
+//!   items RESOLVE — quality, artwork, tracks, and into the queue — offline,
+//!   logged out or during an API hiccup, which they did not before.
+//! - a Qobuz item with no client now fails PER ITEM (logged + skipped by
+//!   `resolve_collection_tracks`) instead of emptying the whole resolve.
+//!
+//! No source is branched on by hand here: `SourceRegistry::claim` is the one
+//! normalisation point, and the source of a row always comes from the ROW.
+//!
+//! STILL OPEN, and NOT this stage's job: every `Play` arm below starts the
+//! first track with `core().play_track_resolved`, which is the Qobuz-only
+//! entry (`qbz-core/src/core.rs:730-736` errors "No Qobuz client available").
+//! A local or Plex first track therefore still fails AT THE PLAYER even though
+//! it now resolves. That router is design 02 §9 stage 3
+//! (`SourceRegistry::playback` → `PlaybackTicket`), which owns both copies of
+//! `play_audible` as well; nothing here should grow a source branch to
+//! anticipate it.
+//!
 //! Contract, all load-bearing and 1:1 with the reference:
 //! - "Resolve all" uses the collection's persisted `play_mode`; the hero
 //!   Shuffle forces `AlbumShuffle`.
@@ -35,9 +60,10 @@ use std::sync::Arc;
 
 use qbz_app::shell::AppRuntime;
 use qbz_core::LoggingAdapter;
-use qbz_mixtape::enqueue::{resolve_collection_tracks, ItemResolver, ProdItemResolver};
+use qbz_mixtape::enqueue::{resolve_collection_tracks, ItemResolver};
 use qbz_models::mixtape::{CollectionPlayMode, MixtapeCollection, MixtapeCollectionItem};
 use qbz_models::QueueTrack;
+use qbz_source::{RawRef, RegistryResolver, SourceId};
 
 type Runtime = Arc<AppRuntime<LoggingAdapter>>;
 
@@ -100,40 +126,37 @@ impl InlineTrackMode {
 // Resolver construction
 // ---------------------------------------------------------------------------
 
-/// The SYNCHRONOUS local-item resolver handed to `ProdItemResolver`.
+/// THE resolver for every path in this file.
 ///
-/// A plain `fn` item, which satisfies the resolver's `Send + Sync` bound.
-/// `with_db` is synchronous, so `&LibraryDatabase` never crosses an `.await`
-/// (T1 — this is exactly why `qbz-mixtape` split the local resolver into a sync
-/// free fn). A DB-open failure becomes its own `Err` so the item is SKIPPED, not
-/// treated as an empty success.
-fn resolve_local(item: &MixtapeCollectionItem) -> Result<Vec<QueueTrack>, String> {
-    crate::library_db_qt::with_db(false, |db| {
-        Ok(qbz_mixtape::enqueue::resolve_local_item(db, item))
-    })
-    .unwrap_or_else(|| Err("library database unavailable".to_string()))
-}
-
-/// Snapshot the shared Qobuz client. The CLONE is what keeps the `&` handed to
-/// `ProdItemResolver` alive across every Qobuz `.await`; holding the
-/// `RwLockReadGuard` instead deadlocks against the playback path (T3).
-async fn qobuz_client(runtime: &Runtime, site: &str) -> Option<qbz_qobuz::QobuzClient> {
-    let client_lock = runtime.core().client();
-    let client = {
-        let guard = client_lock.read().await;
-        guard.as_ref().cloned()
-    };
-    if client.is_none() {
-        log::warn!("[qbz-qt] myqbz_play: no Qobuz client; cannot {site}");
-    }
-    client
+/// It replaces `ProdItemResolver::new(&client, resolve_local)` at all five
+/// former construction sites. Two functions died with them:
+///
+/// - `resolve_local` — the synchronous local closure, whose body was
+///   `library_db_qt::with_db(false, |db| resolve_local_item(db, item))`. It ran
+///   ONCE PER ITEM, and `with_db` was `LibraryDatabase::open` per call: 23-34
+///   opens for one collection, 200 for a 200-item one. `LocalSource` pools the
+///   handle, so the same sequential resolve loop (`enqueue.rs:50-68`) now
+///   reuses ONE.
+/// - `qobuz_client` — the per-call client snapshot, and the four `let-else`
+///   guards it fed. `RegistryResolver` needs no client: `QobuzSource` holds the
+///   shared one (published by the auth path) and only the QOBUZ arm needs it.
+///
+/// `&LibraryDatabase` still never crosses an `.await` — `LocalSource::tracks`
+/// has no await in its body and the pool hands out no guard, so the T1
+/// constraint is now enforced by the type system instead of by convention.
+fn registry_resolver() -> RegistryResolver {
+    RegistryResolver::new(qbz_source::registry())
 }
 
 /// Resolve a whole collection's items into a flat queue. `force_shuffle`
 /// overrides the persisted mode with `AlbumShuffle` (the hero Shuffle CTA).
-/// No client ⇒ empty (the caller toasts).
+///
+/// Items that fail are logged and SKIPPED by `resolve_collection_tracks`, so a
+/// collection whose Qobuz items cannot resolve (offline, logged out) still
+/// plays its local and Plex ones. `_runtime` is kept in the signature because
+/// `myqbz_mix_qt::…` calls this and the registry is process-wide.
 pub(crate) async fn resolve_collection(
-    runtime: &Runtime,
+    _runtime: &Runtime,
     collection: &MixtapeCollection,
     force_shuffle: bool,
 ) -> Vec<QueueTrack> {
@@ -142,21 +165,15 @@ pub(crate) async fn resolve_collection(
     } else {
         collection.play_mode
     };
-    let Some(client) = qobuz_client(runtime, "resolve collection").await else {
-        return Vec::new();
-    };
-    let resolver = ProdItemResolver::new(&client, resolve_local);
+    let resolver = registry_resolver();
     resolve_collection_tracks(collection.items.clone(), play_mode, &resolver).await
 }
 
 /// Resolve a SINGLE item (per-row actions). This path bypasses
 /// `resolve_collection_tracks`, so it must stamp `source_item_id_hint` INLINE —
 /// missing it silently breaks item-boundary detection.
-async fn resolve_single_item(runtime: &Runtime, item: &MixtapeCollectionItem) -> Vec<QueueTrack> {
-    let Some(client) = qobuz_client(runtime, "resolve item").await else {
-        return Vec::new();
-    };
-    let resolver = ProdItemResolver::new(&client, resolve_local);
+async fn resolve_single_item(item: &MixtapeCollectionItem) -> Vec<QueueTrack> {
+    let resolver = registry_resolver();
     match resolver.resolve(item).await {
         Ok(mut tracks) => {
             let hint = item.source_item_id.clone();
@@ -183,14 +200,18 @@ async fn resolve_single_item(runtime: &Runtime, item: &MixtapeCollectionItem) ->
 /// The offline check does NOT short-circuit anything: the resolve is attempted
 /// and the check only picks the LOG LEVEL of the failure, because the offline
 /// gate refuses the Qobuz arm by design (spec 02 §1.1).
+///
+/// THE CLIENT GATE IS GONE, and that is a behaviour change, not a cleanup. This
+/// function used to return early with an empty vec when there was no Qobuz
+/// client, so every LOCAL and PLEX row of a collection showed no quality, no
+/// artwork and no tracks — and refused to play — whenever the session was
+/// offline, pre-login or mid-hiccup. The local arm never needed that client;
+/// only `QobuzSource` does, and it now reports its own absence per item.
 pub(crate) async fn fetch_item_tracks(
-    runtime: &Runtime,
+    _runtime: &Runtime,
     item: &MixtapeCollectionItem,
 ) -> Vec<QueueTrack> {
-    let Some(client) = qobuz_client(runtime, "fetch item tracks").await else {
-        return Vec::new();
-    };
-    let resolver = ProdItemResolver::new(&client, resolve_local);
+    let resolver = registry_resolver();
     match resolver.resolve(item).await {
         Ok(tracks) => tracks,
         Err(e) => {
@@ -226,21 +247,27 @@ pub(crate) async fn fetch_item_tracks(
 /// verbatim so wiring the picker is a one-line call, not a re-port.
 #[allow(dead_code)]
 pub(crate) async fn resolve_bulk_qobuz_track_ids(
-    runtime: &Runtime,
+    _runtime: &Runtime,
     items: &[MixtapeCollectionItem],
 ) -> Vec<String> {
-    let Some(client) = qobuz_client(runtime, "resolve bulk ids").await else {
-        return Vec::new();
-    };
-    let resolver = ProdItemResolver::new(&client, resolve_local);
+    let resolver = registry_resolver();
+    let registry = qbz_source::registry();
 
     let mut ids: Vec<String> = Vec::new();
     for item in items {
         match resolver.resolve(item).await {
             Ok(tracks) => {
                 for t in tracks {
-                    let is_qobuz = t.source.as_deref() == Some("qobuz")
-                        || (t.source.is_none() && !t.is_local);
+                    // The row decides. This was a hand-written
+                    // `source == "qobuz" || (source.is_none() && !is_local)`
+                    // — the one correct rule for an unlabelled queue row, and
+                    // now the rule `QobuzSource::claim` applies, in ONE place,
+                    // for every source word (`qobuz_download` and `offline`
+                    // are local FILES and are correctly excluded here).
+                    let is_qobuz = registry
+                        .claim(&RawRef::from_queue_track(&t))
+                        .map(|m| m.source() == SourceId::QOBUZ)
+                        .unwrap_or(false);
                     if is_qobuz {
                         ids.push(t.id.to_string());
                     }
@@ -436,7 +463,7 @@ pub(crate) fn item_action(source_item_id: String, action: String) {
             return;
         };
 
-        let tracks = resolve_single_item(&runtime, &item).await;
+        let tracks = resolve_single_item(&item).await;
         if tracks.is_empty() {
             crate::toast_qt::error(qbz_i18n::t("This item resolved to 0 playable tracks"));
             return;
@@ -526,11 +553,10 @@ fn bulk_enqueue_inner(items: Vec<MixtapeCollectionItem>, mode: BulkEnqueueMode) 
     }
     let runtime = crate::app();
     crate::spawn(async move {
-        let Some(client) = qobuz_client(&runtime, "bulk-enqueue").await else {
-            crate::toast_qt::error(qbz_i18n::t("These items resolved to 0 playable tracks"));
-            return;
-        };
-        let resolver = ProdItemResolver::new(&client, resolve_local);
+        // No client gate: a selection of local / Plex items enqueues with no
+        // Qobuz session at all, and a Qobuz item that cannot resolve is skipped
+        // per item (below) instead of failing the whole batch.
+        let resolver = registry_resolver();
 
         let mut tracks: Vec<QueueTrack> = Vec::new();
         for item in &items {

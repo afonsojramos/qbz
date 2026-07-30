@@ -962,6 +962,16 @@ Rectangle {
                                 // MyQBZ "Add to mixtape" — the HOST builds the
                                 // AddItem array (TrackRow does not know
                                 // itemType/source).
+                                //
+                                // SOURCE: this view never shows a local album.
+                                // `open_album` (main.rs:538-548) routes any id
+                                // that `is_local_feed_id("album", …)` accepts
+                                // — a Plex `plex:` key, a group key, a path —
+                                // to the LocalAlbum view instead, so what
+                                // reaches `album_qt::TrackRow` here is always
+                                // a `/album/get` response. `item.id` is a
+                                // Qobuz catalog id by construction of the
+                                // route, not by assumption at this call site.
                                 onMixtapeRequested: QbzMyQbzAdd.open(JSON.stringify([{
                                     "itemType": "track", "source": "qobuz",
                                     "sourceItemId": item.id, "title": item.title || "",

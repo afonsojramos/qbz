@@ -89,6 +89,25 @@ Rectangle {
         }
     }
 
+    // SOURCE of the now-playing track for the MyQBZ AddItem payload
+    // ("qobuz" | "local"), read off the queue document's `current` row — the
+    // same row the heart above reads — and never written as a literal. The
+    // full bar carries the long-form rationale (PlayerBar.qml `npSource`); the
+    // short version: `QbzPlayer` publishes no source word, `isLocal === false`
+    // proves a Qobuz catalog id, and `isLocal === true` conflates four id
+    // namespaces (local row / Plex / ephemeral / offline-cached Qobuz) that
+    // this bar cannot separate without sniffing the id. "" = unknown, and the
+    // menu then does not offer "Add to mixtape" at all.
+    readonly property string npSource: {
+        try {
+            var d = JSON.parse(QbzQueue.queueJson)
+            if (d && d.current && d.current.id === QbzPlayer.npTrackId)
+                return d.current.isLocal === true ? "" : "qobuz"
+        } catch (e) {
+        }
+        return ""
+    }
+
     function fmt(secs) {
         var m = Math.floor(secs / 60)
         var s = Math.floor(secs % 60)
@@ -480,8 +499,15 @@ Rectangle {
                 { "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "action": "queue" },
                 { "label": QbzSession.tr("Play later", QbzSession.trRev), "icon": "list-plus", "action": "later" },
                 { "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-start", "action": "next" },
-                { "label": QbzSession.tr("Add to mixtape", QbzSession.trRev), "icon": "cassette-tape", "action": "mixtape" },
             ]
+            // Only when the track's source is KNOWN (see `npSource`).
+            if (root.npSource !== "") {
+                m.push({
+                    "label": QbzSession.tr("Add to mixtape", QbzSession.trRev),
+                    "icon": "cassette-tape",
+                    "action": "mixtape"
+                })
+            }
             if (QbzPlayer.npAlbumId !== "") {
                 m.push({
                     "label": QbzSession.tr("Add album to collection", QbzSession.trRev),
@@ -504,9 +530,11 @@ Rectangle {
                 // MyQBZ AddItem, built here from the now-playing state:
                 // `npArtworkPath` is a file:// CACHE path, so it is NOT the
                 // artworkUrl — the store would keep a dead local path.
-                if (id !== "")
+                // Source from the queue's current ROW (`npSource`), not a
+                // literal; the entry is absent when that row cannot answer.
+                if (id !== "" && root.npSource !== "")
                     QbzMyQbzAdd.open(JSON.stringify([{
-                        "itemType": "track", "source": "qobuz",
+                        "itemType": "track", "source": root.npSource,
                         "sourceItemId": id, "title": QbzPlayer.npTitle,
                         "subtitle": QbzPlayer.npArtist, "artworkUrl": "",
                         "year": null, "trackCount": null
