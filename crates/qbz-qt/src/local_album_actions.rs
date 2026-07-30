@@ -35,7 +35,7 @@ use qbz_models::QueueTrack;
 use serde::Serialize;
 
 use crate::local_bridge::ui;
-use crate::local_playback::{local_queue_track, play_local_file, play_plex_track};
+use crate::local_playback::{local_queue_track, play_local_file, play_plex_track, plex_rating_key};
 use crate::local_rows::{
     album_key, badge_source, map_track, tier_of, to_json, total_duration, AlbumRow, TrackRow,
 };
@@ -438,16 +438,13 @@ fn publish_doc(doc: Option<AlbumDetailDoc>) {
 /// the PROTECTED audio path is entered, never modified.
 async fn play_audible(runtime: &Runtime, track: &QueueTrack) -> bool {
     match track.source.as_deref() {
-        Some("plex") => match track.source_item_id_hint.clone() {
-            Some(rating_key) => play_plex_track(runtime, rating_key, track.id).await,
-            None => {
-                log::error!(
-                    "[qbz-qt] plex play: queue track {} has no rating key",
-                    track.id
-                );
-                false
-            }
-        },
+        // PARITY-DEBT #4: the hint is NOT always a rating key — a `plex:<hash>`
+        // hint is the MyQBZ album-boundary key and 404s the resolve. The guard
+        // lives with the other one, in `local_playback` (`playback.rs:666-680`).
+        Some("plex") => {
+            let rating_key = plex_rating_key(track.source_item_id_hint.as_deref(), track.id);
+            play_plex_track(runtime, rating_key, track.id).await
+        }
         _ => play_local_file(runtime, track.id).await,
     }
 }

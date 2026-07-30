@@ -155,6 +155,29 @@ Rectangle {
         return m + ":" + (s < 10 ? "0" : "") + s
     }
 
+    // --- Seek clamp (closes PARITY-DEBT #15, QML half) ---------------------
+    // SeekBar.slint:24-26 / 93-98: while a track is still downloading the seek
+    // target is LOCKED to the furthest fraction that has arrived, and the
+    // cursor turns not-allowed over the region that has not. The source is
+    // NowPlayingState.seekable-max (state.slint:4402), fed by
+    // playback.rs:5304 `buffer_progress.clamp(0,1)` and published here as
+    // QbzPlayer.npSeekableMax.
+    //
+    // A fully-available track (local, cached, or a finished download) reports
+    // 1.0, so Math.min() is a no-op and seeking stays completely free — the
+    // clamp can never fight a local track.
+    function clamp01(v) {
+        return Math.min(Math.max(v, 0), 1)
+    }
+    // SeekBar.slint:98 — Math.min(clamp01(mouse-x / width), seekable-max).
+    function seekTarget(fraction) {
+        return Math.min(root.clamp01(fraction), QbzPlayer.npSeekableMax)
+    }
+    // SeekBar.slint:93 — clamp01(mouse-x / width) > seekable-max.
+    function beyondSeekable(fraction) {
+        return root.clamp01(fraction) > QbzPlayer.npSeekableMax
+    }
+
     // --- Track Info (album/TrackInfoModal.slint) ---------------------------
     // The (i) button and the song-card title open the MODAL (scrim + centered
     // card), which is what the .slint does: the bars fire
@@ -263,9 +286,21 @@ Rectangle {
                 anchors.right: seekTrack.right
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
-                cursorShape: QbzPlayer.npHasTrack ? Qt.PointingHandCursor : Qt.ArrowCursor
-                onPressed: if (QbzPlayer.npHasTrack) QbzPlayer.seek(Math.min(Math.max(mouseX / width, 0), 1))
-                onPositionChanged: if (pressed && QbzPlayer.npHasTrack) QbzPlayer.seek(Math.min(Math.max(mouseX / width, 0), 1))
+                // Hover is what keeps mouseX live for the cursor binding
+                // below (PlayerBar.slint:180 -> SeekBar.slint's TouchArea
+                // always tracks mouse-x).
+                hoverEnabled: true
+                // No-drop cursor over the not-yet-downloaded region
+                // (SeekBar.slint:93-95). The npHasTrack arm is the Qt bar's
+                // own idle guard and stays first.
+                cursorShape: !QbzPlayer.npHasTrack
+                    ? Qt.ArrowCursor
+                    : (root.beyondSeekable(mouseX / width) ? Qt.ForbiddenCursor
+                                                           : Qt.PointingHandCursor)
+                // Lock the seek target to what has downloaded while streaming
+                // (SeekBar.slint:96-99).
+                onPressed: if (QbzPlayer.npHasTrack) QbzPlayer.seek(root.seekTarget(mouseX / width))
+                onPositionChanged: if (pressed && QbzPlayer.npHasTrack) QbzPlayer.seek(root.seekTarget(mouseX / width))
             }
         }
 

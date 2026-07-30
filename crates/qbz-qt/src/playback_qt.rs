@@ -12,17 +12,6 @@
 //! — add there, not here, so a note cannot outlive its gap unnoticed. That is
 //! exactly how gapless stayed broken: this header advertised it for weeks.
 //!
-//! - Blacklist filtering of the QUEUE (PARITY-DEBT #1, AUDIBLE): the old note
-//!   here said "store not open", which is FALSE — `artist_blacklist` is bound
-//!   at `auth_qt.rs`. The Slint drops blacklisted tracks at ~18 play/enqueue
-//!   entry points (`filter_blacklisted_queue`, playback.rs:2624-2651); this
-//!   module has none, so a blocked artist still plays.
-//! - `advance_to_playable`, the bounded skip-unavailable walk
-//!   (playback.rs:455-511) (PARITY-DEBT #2, AUDIBLE): the advance here takes
-//!   the core queue's next directly and a failed play logs and returns, so one
-//!   unavailable track wedges the queue — and the early return skips the
-//!   refresh, leaving the bar on the previous track.
-//! - Volume persistence (PARITY-DEBT #3, AUDIBLE): never written or restored.
 //! - Session persist / resume-position: both prefs are persisted by settings
 //!   and read by nobody.
 //! - Streaming quality: seeded from ui_prefs ("streaming_quality") and
@@ -31,10 +20,22 @@
 //! - Offline-cache tier (offline bytes), prefetch warming, stop-after,
 //!   infinite refill, QConnect branches, recently-played recording.
 //!
-//! DONE, previously listed here: gapless prefetch — the engine raises
-//! `gapless_ready` ~10s out and this module now answers it with `play_next`
-//! (both the streaming and the local/DSD arms), so transitions are
-//! sample-accurate again.
+//! DONE, previously listed here — kept as one line each so the list above
+//! only ever names REAL gaps:
+//! - Gapless prefetch: the engine raises `gapless_ready` ~10s out and this
+//!   module now answers it with `play_next` (both the streaming and the
+//!   local/DSD arms), so transitions are sample-accurate again.
+//! - Blacklist filtering of the QUEUE (#1) — `filter_blacklisted_queue` +
+//!   `set_queue_stamped` / `stamped`, the two seams every play/enqueue path
+//!   already went through.
+//! - The bounded skip-unavailable walk (#2) — `auto_skip_unavailable`.
+//! - Volume persistence (#3) — persisted on drag-end, restored at shell entry.
+//! - The stream-failure toast with the Flatpak/Snap ALSA rewrite (#7) —
+//!   `stream_error_text`, drained in the poll loop.
+//! - The streaming seek lock (#15) — `seekable_max` from `buffer_progress`,
+//!   published as `np_seekable_max`.
+//! - Shuffle-play reorders the queue instead of latching the global shuffle
+//!   MODE (#17) — `xorshift_shuffle` in `play_track_list_in`.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
@@ -115,6 +116,15 @@ impl PlayContext {
 
     pub fn playlist(id: &str) -> Option<Self> {
         Self::new("playlist", id)
+    }
+
+    /// A label page's Popular Tracks. The reference stamps this on BOTH label
+    /// play paths — the header Shuffle (`playback.rs:3149`) and a row click
+    /// (`:3541`) — and it cannot be derived: a label's popular tracks share
+    /// neither an album nor an artist, so `derive_context` returns None and
+    /// the queue would ship contextless (PARITY-DEBT #17's reference path).
+    pub fn label(id: &str) -> Option<Self> {
+        Self::new("label", id)
     }
 }
 
@@ -652,6 +662,49 @@ pub async fn play_album_from_track(
     Ok(())
 }
 
+/// The reference's shuffle: a Fisher–Yates pass driven by an xorshift64 PRNG
+/// seeded from the wall clock (`playback.rs:3131-3144`, byte-for-byte the same
+/// mix as `play_album_shuffled` / `play_artist_top_shuffled`). Split from the
+/// seed so the permutation is unit-testable — the seedless wrapper is what the
+/// play paths call.
+fn xorshift_shuffle_seeded<T>(items: &mut [T], seed: u64) {
+    // The reference ORs the seed with 1 at construction: xorshift64 is stuck
+    // on zero forever, and a nanosecond clock can land there.
+    let mut seed = seed | 1;
+    for i in (1..items.len()).rev() {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        let j = (seed % (i as u64 + 1)) as usize;
+        items.swap(i, j);
+    }
+}
+
+/// `xorshift_shuffle_seeded` with the reference's wall-clock seed.
+fn xorshift_shuffle<T>(items: &mut [T]) {
+    let seed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(1);
+    xorshift_shuffle_seeded(items, seed);
+}
+
+/// The toast text for a failed audio stream (`playback.rs:5102-5113`).
+/// `sandboxed` is the caller's `detect_sandbox() != Sandbox::None`: inside a
+/// Flatpak/Snap sandbox direct `hw:` access is blocked by design, so an
+/// ALSA-shaped failure is rewritten into the actionable sentence instead of
+/// the raw engine error. Pure, so the rewrite rule is unit-tested.
+fn stream_error_text(msg: &str, sandboxed: bool) -> String {
+    let lower = msg.to_lowercase();
+    if sandboxed && (lower.contains("alsa") || lower.contains("hw:")) {
+        qbz_i18n::t(
+            "Direct ALSA device access is blocked inside Flatpak/Snap — switch the audio backend to PipeWire or System Default",
+        )
+    } else {
+        format!("{}: {}", qbz_i18n::t("Audio output error"), msg)
+    }
+}
+
 /// Play a pre-built queue starting at `start` (ArtistView Popular Tracks:
 /// the visible list becomes the queue, anchored at the clicked track).
 ///
@@ -659,6 +712,9 @@ pub async fn play_album_from_track(
 /// `stamp_context`), so this path can never publish a contextless track — the
 /// artist page's Popular Tracks span many albums but one artist and resolve to
 /// ("artist", artist_id) without the caller lifting a finger.
+///
+/// `shuffle` REORDERS THIS QUEUE — it does not switch the player's shuffle
+/// mode. See `play_track_list_in`.
 pub async fn play_track_list(
     runtime: &Arc<AppRuntime<LoggingAdapter>>,
     tracks: Vec<QueueTrack>,
@@ -671,6 +727,18 @@ pub async fn play_track_list(
 /// `play_track_list` with an EXPLICIT origin — preferred whenever the caller
 /// knows it (artist page, playlist, label), because it survives a queue whose
 /// tracks share nothing derivable.
+///
+/// PARITY-DEBT #17. `shuffle` means "play THIS list in a random order", which
+/// in the reference is a one-shot reorder of the Vec followed by a play from
+/// index 0 — the global shuffle MODE is never touched
+/// (`playback.rs:3120-3145 play_label_top_shuffled`, and the identical body in
+/// `play_artist_top_shuffled`:3083-3111 / `play_album_shuffled`:3945-3957).
+/// This port used to answer the flag with `core().set_shuffle(true)` +
+/// `now_playing::set_shuffle(true)`, so pressing Shuffle on a label or artist
+/// page silently latched the bar's shuffle toggle ON for everything played
+/// afterwards, AND still started on the list's #1 track. Both callers that
+/// pass `true` (`label_qt::play_top`, `main::play_artist_top`) mirror a Slint
+/// entry point that reorders in place, so the flag is reordering here too.
 pub async fn play_track_list_in(
     runtime: &Arc<AppRuntime<LoggingAdapter>>,
     tracks: Vec<QueueTrack>,
@@ -681,10 +749,16 @@ pub async fn play_track_list_in(
     if tracks.is_empty() {
         return Err("empty track list".to_string());
     }
-    if shuffle {
-        runtime.core().set_shuffle(true).await;
-        crate::now_playing::set_shuffle(true);
-    }
+    // Shuffle-play starts at the top of the SHUFFLED order (`tracks[0]` after
+    // the mix, exactly as the reference does), so the caller's anchor index is
+    // meaningless on this path and is dropped rather than carried.
+    let (tracks, start) = if shuffle {
+        let mut tracks = tracks;
+        xorshift_shuffle(&mut tracks);
+        (tracks, 0)
+    } else {
+        (tracks, start)
+    };
     let start = start.min(tracks.len() - 1);
     let first_id = tracks[start].id;
     set_queue_stamped(runtime, tracks, Some(start), context).await;
@@ -1344,10 +1418,22 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
         loop {
             ticker.tick().await;
 
-            // Surface audio-stream failures once (playback.rs drains the same
-            // slot for its toast).
+            // --- Stream-failure toast (PARITY-DEBT #7) -------------------
+            // Surface audio-stream failures as a toast, 1:1 with
+            // `playback.rs:5093-5115` (#508/#534/#500). The player records a
+            // user-readable message when a stream fails to open; this port
+            // drained the slot and only logged it, so an ALSA Direct /
+            // exclusive-mode failure left the bar frozen at 0:00 with no
+            // explanation — the support issue the Slint fix was written for.
+            // take_stream_error_message() drains exactly once per recorded
+            // error, so each failed attempt toasts once.
             if let Some(msg) = runtime.core().player().state.take_stream_error_message() {
                 log::error!("[qbz-qt] audio output error: {msg}");
+                let sandboxed = !matches!(
+                    qbz_audio::health::detect_sandbox(),
+                    qbz_audio::health::Sandbox::None
+                );
+                crate::toast_qt::error(stream_error_text(&msg, sandboxed));
             }
 
             // CAST: the cast service runs its own 1 s poll and the local player is
@@ -1357,6 +1443,11 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
         last_track_id = 0;
         was_playing = false;
         seen_position = 0;
+        // A cast target owns playback and there is no local download to
+        // outrun: seek is unlocked while casting, the way the Slint cast
+        // publish forces it (`cast_service.rs:1118`). Without this the last
+        // local stream's fraction would stay latched on the bar.
+        crate::now_playing::set_seekable_max(1.0);
         continue;
     }
     let event = runtime.core().player().get_playback_event();
@@ -1365,6 +1456,12 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
             let duration = event.duration;
             let is_playing = event.is_playing;
             let cache = event.buffer_progress.unwrap_or(0.0);
+            // Seek lock (PARITY-DEBT #15, playback.rs:5304): while streaming
+            // (`buffer_progress` is Some) the user can only seek up to what
+            // has downloaded; a fully-available track (None) seeks freely.
+            // `cache` above is the DECORATIVE overlay of the same fill — this
+            // is the value the seek bars must enforce.
+            let seekable_max = event.buffer_progress.map(|p| p.clamp(0.0, 1.0)).unwrap_or(1.0);
 
             // --- Track-change edge (new current track surfaced) ----------
             if track_id != 0 && track_id != last_track_id {
@@ -1398,6 +1495,10 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
             }
 
             // --- Position / state push ------------------------------------
+            // Seek lock first, so the bar never renders a position push whose
+            // limit still belongs to the previous tick (the setter dedupes,
+            // so a fully-available track costs no extra hop).
+            crate::now_playing::set_seekable_max(seekable_max);
             crate::now_playing::set_position(
                 position as i32,
                 duration as i32,
@@ -1537,8 +1638,11 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                 && seen_position + 2 >= duration;
             if track_ended {
                 last_track_id = 0;
-                // POC-NOTE: no stop-after / infinite-refill / skip-unavailable
-                // walk — the core queue's own next (repeat/shuffle aware).
+                // POC-NOTE: no stop-after / infinite-refill — the core queue's
+                // own next (repeat/shuffle aware). The skip-unavailable walk
+                // this note also used to claim is missing IS ported: a failed
+                // play inside `play_queue_track` hands off to
+                // `auto_skip_unavailable` (PARITY-DEBT #2).
                 if let Some(track) = runtime.core().next_track().await {
                     let next_id = track.id;
                     log::info!("[qbz-qt] poll: advancing to {next_id}");
@@ -1564,7 +1668,102 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
 
 #[cfg(test)]
 mod tests {
-    use super::filter_queue_with;
+    use super::{filter_queue_with, stream_error_text, xorshift_shuffle_seeded};
+
+    // --- PARITY-DEBT #17: the shuffle flag reorders, it does not switch mode
+    //
+    // The permutation itself is part of the contract being ported: the
+    // reference walks Fisher–Yates DOWNWARD (`for i in (1..len).rev()`) over
+    // an xorshift64 stream seeded once. A different loop direction or a
+    // different mix order is still "random" and still passes a smoke test, so
+    // it is pinned here against an independently-computed expectation.
+
+    /// Reference permutation for seed 0x2545F4914F6CDD1D over 0..8, computed
+    /// from the algorithm at `playback.rs:3131-3144`.
+    #[test]
+    fn xorshift_shuffle_matches_the_reference_permutation() {
+        let mut items: Vec<u32> = (0..8).collect();
+        xorshift_shuffle_seeded(&mut items, 0x2545_F491_4F6C_DD1D);
+        assert_eq!(items, vec![1, 0, 3, 2, 6, 5, 4, 7]);
+    }
+
+    /// A second seed, so the test pins the PRNG and not one lucky constant.
+    #[test]
+    fn xorshift_shuffle_is_seed_driven() {
+        let mut items: Vec<u32> = (0..5).collect();
+        xorshift_shuffle_seeded(&mut items, 12345);
+        assert_eq!(items, vec![3, 0, 2, 1, 4]);
+    }
+
+    /// The reference's loop never runs for 0 or 1 elements — a one-track label
+    /// Shuffle must not panic on the `1..len` range.
+    #[test]
+    fn xorshift_shuffle_is_a_no_op_below_two_elements() {
+        let mut one = vec![7u32];
+        xorshift_shuffle_seeded(&mut one, 42);
+        assert_eq!(one, vec![7]);
+        let mut none: Vec<u32> = vec![];
+        xorshift_shuffle_seeded(&mut none, 42);
+        assert!(none.is_empty());
+    }
+
+    /// The seed is OR-ed with 1 the way the reference does, so a zero clock
+    /// reading cannot park xorshift64 on its fixed point (which would leave
+    /// the list in its original order — a "shuffle" that never shuffles).
+    #[test]
+    fn a_zero_seed_still_shuffles() {
+        let mut items: Vec<u32> = (0..8).collect();
+        xorshift_shuffle_seeded(&mut items, 0);
+        assert_ne!(items, (0..8).collect::<Vec<u32>>());
+    }
+
+    /// Whatever the seed, shuffling is a permutation: nothing is lost and
+    /// nothing is duplicated (the queue the user gets is the queue they asked
+    /// for, reordered).
+    #[test]
+    fn xorshift_shuffle_is_a_permutation() {
+        for seed in [1u64, 2, 3, 999, u64::MAX] {
+            let mut items: Vec<u32> = (0..64).collect();
+            xorshift_shuffle_seeded(&mut items, seed);
+            items.sort_unstable();
+            assert_eq!(items, (0..64).collect::<Vec<u32>>());
+        }
+    }
+
+    // --- PARITY-DEBT #7: the stream-error toast text ----------------------
+    //
+    // Tests run with the default (English) catalog, so `qbz_i18n::t` returns
+    // the msgid — which is exactly the string the reference builds.
+
+    /// Outside a sandbox the raw engine error is shown, prefixed.
+    #[test]
+    fn stream_error_outside_a_sandbox_keeps_the_raw_message() {
+        assert_eq!(
+            stream_error_text("ALSA: device or resource busy", false),
+            "Audio output error: ALSA: device or resource busy"
+        );
+    }
+
+    /// Inside a sandbox an ALSA-shaped failure is rewritten into the
+    /// actionable sentence (`playback.rs:5105-5111`).
+    #[test]
+    fn stream_error_inside_a_sandbox_rewrites_alsa_failures() {
+        let expected = "Direct ALSA device access is blocked inside Flatpak/Snap — switch the audio backend to PipeWire or System Default";
+        assert_eq!(stream_error_text("ALSA open failed", true), expected);
+        // The match is case-insensitive and also fires on the device string.
+        assert_eq!(stream_error_text("cannot open hw:1,0", true), expected);
+        assert_eq!(stream_error_text("alsa: no such device", true), expected);
+    }
+
+    /// A sandboxed failure that is NOT ALSA-shaped keeps the raw message —
+    /// the rewrite must not swallow an unrelated cause.
+    #[test]
+    fn stream_error_inside_a_sandbox_keeps_non_alsa_failures() {
+        assert_eq!(
+            stream_error_text("HTTP 403 from the CDN", true),
+            "Audio output error: HTTP 403 from the CDN"
+        );
+    }
 
     /// Drop the odd numbers; `start` must follow the CLICKED item, not its old
     /// index. Without the remap the core would start on a different track than

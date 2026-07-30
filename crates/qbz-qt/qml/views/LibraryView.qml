@@ -510,6 +510,42 @@ Rectangle {
     // shared qml/ files (TrackCard/AlbumCard/ArtistCard/PlaylistCard/
     // LabelCard.qml). The old one-size FeedGridCard is gone.
 
+    // ------------------- per-row play (PARITY-DEBT #5) -------------------
+    // Every track row in this view queues the list the user is LOOKING AT,
+    // anchored on the clicked row — it does NOT play one track and stop.
+    //
+    // Slint: playback.rs:3518-3524
+    //   order_by_visible(FavoritesState.tracks-visible,   // rendered order
+    //                    favorites::play_tracks(),        // FAV_CURRENT
+    //                    clicked_id) -> play_tracks(tracks, idx)
+    // and, when order_by_visible returns None (the clicked row does not
+    // resolve inside the visible list), the single-track fallback at :3620.
+    //
+    // The visible ORDER is the whole point: it carries the tab, the search,
+    // the sort and the genre/source filters. In this port that order exists
+    // only here (the feed is derived in JS), so it goes down as a JSON id
+    // array and `library_qt::order_by_visible` resolves it against the feed.
+    // `visibleRows` is THE derived model both views bind to — never read
+    // `grid.model` / `list.model` back off a view (see the note on it).
+    function visibleTrackIds() {
+        var rows = root.visibleRows
+        var ids = []
+        for (var i = 0; i < rows.length; i++)
+            if (rows[i].kind === "track") ids.push(rows[i].id)
+        return ids
+    }
+    function playTrackInContext(trackId) {
+        // Feature-detect the seam so the view degrades to the old one-track
+        // play instead of throwing if the invokable is not there yet.
+        if (typeof QbzLibrary.libraryPlayVisible === "function") {
+            QbzLibrary.libraryPlayVisible(JSON.stringify(visibleTrackIds()), trackId)
+            return
+        }
+        console.warn("[qbz-qt] LibraryView: QbzLibrary.libraryPlayVisible is missing;"
+                     + " falling back to a one-track queue (PARITY-DEBT #5)")
+        QbzPlayer.playTrack(trackId)
+    }
+
     // Track context-menu model (TrackCard.slint track-menu) + dispatch —
     // shared by the LIST rows here (the grid card carries its own copy in
     // TrackCard.qml).
@@ -533,7 +569,7 @@ Rectangle {
     // own property (a write to `item.isFavorite` notifies nothing).
     function trackAction(row, a) {
         var item = row.item
-        if (a === "play") QbzPlayer.playTrack(item.id)
+        if (a === "play") root.playTrackInContext(item.id)
         else if (a === "next") QbzPlayer.enqueueTrack(item.id, "next")
         else if (a === "later") QbzPlayer.enqueueTrack(item.id, "later")
         else if (a === "queue") QbzPlayer.enqueueTrack(item.id, "queue")
@@ -585,7 +621,7 @@ Rectangle {
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
             onClicked: {
-                if (item.kind === "track") QbzPlayer.playTrack(item.id)
+                if (item.kind === "track") root.playTrackInContext(item.id)
                 else if (item.kind === "album") QbzAlbum.openAlbum(item.id)
                 else if (item.kind === "artist") QbzArtist.openArtist(item.id)
                 // playlist/label pages: out of scope (POC-NOTE).
@@ -663,7 +699,7 @@ Rectangle {
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
                         onClicked: {
-                            if (item.kind === "track") QbzPlayer.playTrack(item.id)
+                            if (item.kind === "track") root.playTrackInContext(item.id)
                             else if (item.kind === "album") QbzPlayer.playAlbum(item.id)
                             // playlist play: out of scope (POC-NOTE).
                         }
@@ -691,7 +727,7 @@ Rectangle {
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
                         onClicked: {
-                            if (item.kind === "track") QbzPlayer.playTrack(item.id)
+                            if (item.kind === "track") root.playTrackInContext(item.id)
                             else if (item.kind === "album") QbzAlbum.openAlbum(item.id)
                             else if (item.kind === "artist") QbzArtist.openArtist(item.id)
                         }
@@ -1425,7 +1461,7 @@ Rectangle {
                         TrackRow {
                             item: modelData
                             number: index + 1
-                            onPlayRequested: QbzPlayer.playTrack(item.id)
+                            onPlayRequested: root.playTrackInContext(item.id)
                             onEnqueueRequested: function (m) { QbzPlayer.enqueueTrack(item.id, m) }
                             // MyQBZ "Add to mixtape" — the HOST builds the
                             // AddItem array (TrackRow does not know

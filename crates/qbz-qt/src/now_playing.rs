@@ -50,6 +50,12 @@ pub struct NowPlayingModel {
     pub loading: bool,
     /// Streaming buffer fill 0..1 (seekbar cache overlay); 0 = not streaming.
     pub cache: f32,
+    /// SEEK LOCK 0..1 — the furthest fraction of the track the user may seek
+    /// to (PARITY-DEBT #15, Slint `NowPlayingState.seekable-max`). While a
+    /// stream is downloading this is `buffer_progress` clamped to 0..1; a
+    /// fully-available track is 1.0. Distinct from `cache`, which is the
+    /// decorative overlay of the same fill: this one is enforced.
+    pub seekable_max: f32,
     pub volume: f32,
     pub muted: bool,
     pub shuffle: bool,
@@ -75,10 +81,12 @@ pub struct NowPlayingModel {
     pub cast_protocol: String,
 }
 
-/// The idle bar: no track, full volume, no badge.
+/// The idle bar: no track, full volume, no badge, seek unlocked (the Slint
+/// `NowPlayingState` defaults — `seekable-max: 1.0`, state.slint:4402).
 fn idle() -> NowPlayingModel {
     NowPlayingModel {
         volume: 1.0,
+        seekable_max: 1.0,
         ..NowPlayingModel::default()
     }
 }
@@ -129,6 +137,7 @@ fn publish(m: &NowPlayingModel) {
         b.as_mut().set_np_duration_secs(m.duration_secs);
         b.as_mut().set_np_progress(progress);
         b.as_mut().set_np_cache_progress(m.cache);
+        b.as_mut().set_np_seekable_max(m.seekable_max);
         b.as_mut().set_np_playing(m.playing);
         b.as_mut().set_np_loading(m.loading);
         b.as_mut().set_np_volume(m.volume);
@@ -326,6 +335,10 @@ pub fn clear_track() {
         let kept = NowPlayingModel {
             volume: m.volume,
             muted: m.muted,
+            // The seek lock belongs to the STREAM that just ended — an idle
+            // bar seeks nothing, but leaving the last stream's fraction here
+            // would carry a 0.3 lock into the next track's first tick.
+            seekable_max: 1.0,
             is_remote: m.is_remote,
             cast_target: m.cast_target.clone(),
             cast_active: m.cast_active,
@@ -408,4 +421,27 @@ pub fn set_position(
         // stored raw for the seekbar's buffer overlay.
         m.cache = cache;
     });
+}
+
+/// The seek lock (PARITY-DEBT #15) — `buffer_progress.clamp(0,1)` while a
+/// stream is downloading, 1.0 for a fully-available track
+/// (`playback.rs:5304`). Kept OUT of `set_position` because the cast path
+/// (`cast_qt.rs`) calls that one too and must stay on 1.0 the way the Slint
+/// cast publish does (`cast_service.rs:1118`); a signature change there would
+/// have silently locked casting to the local stream's fill.
+///
+/// Deduped: a fully-available track holds 1.0 forever and costs no Qt-thread
+/// hop (same pattern as `set_effective_stream`).
+pub fn set_seekable_max(seekable_max: f32) {
+    let seekable_max = seekable_max.clamp(0.0, 1.0);
+    let (changed, snapshot) = with_model(|m| {
+        if m.seekable_max == seekable_max {
+            return false;
+        }
+        m.seekable_max = seekable_max;
+        true
+    });
+    if changed {
+        publish(&snapshot);
+    }
 }

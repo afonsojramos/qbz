@@ -21,9 +21,13 @@
 //!   (`add-to-playlist`, `add-to-mixtape`) have no bridge seam at all. The
 //!   select disc renders DIMMED and inert; the `MultiSelectBar` is not
 //!   ported. See the view's header note.
-//! - **Blacklist**: `crate::artist_blacklist` does not exist in this port
-//!   (the phase-1 skip documented in `home_qt.rs`), so the `releases` /
-//!   `critics` drop the Slint applies is inherited as a no-op.
+//! - **Blacklist**: the premise of this note ("`crate::artist_blacklist` does
+//!   not exist in this port") is DEAD — the module is bound at `auth_qt.rs`
+//!   and the QUEUE is filtered since PARITY-DEBT #1. What is still missing is
+//!   the LISTING drop: the Slint filters the releases / critics rails through
+//!   `album_blacklisted` (label.rs:92, :133, :537, :567) and stamps the row
+//!   flag (:900); `derive_releases` here does neither, so a blocked artist's
+//!   album still RENDERS on a label page (playing it is already blocked).
 //! - **Share** is QML-side (a clipboard write through the `TrackRow.qml`
 //!   Loader/TextEdit pattern) — there is no Rust clipboard bridge and no
 //!   toast seam, so no invokable exists for it here.
@@ -542,12 +546,21 @@ pub fn toggle_follow() {
 }
 
 /// Popular Tracks Play (`shuffle == false`) / header Shuffle (`true`).
+///
+/// PARITY-DEBT #17. `shuffle` is a ONE-SHOT reorder of this queue, played from
+/// index 0 — `play_label_top_shuffled` (playback.rs:3120-3150) xorshift-mixes
+/// the Vec and hands it to `play_tracks_ctx`; it never touches the player's
+/// shuffle MODE, which is why the bar's toggle must stay exactly where the
+/// user left it after pressing Shuffle here. The reorder itself lives in
+/// `playback_qt::play_track_list_in` (one implementation for every caller of
+/// the flag). The label context is EXPLICIT because a label's popular tracks
+/// share neither album nor artist and nothing could derive it.
 pub fn play_top(shuffle: bool) {
-    let queue = {
+    let (queue, label_id) = {
         let Ok(s) = LABEL.lock() else {
             return;
         };
-        s.play_queue.clone()
+        (s.play_queue.clone(), s.id.clone())
     };
     if queue.is_empty() {
         log::info!("[qbz-qt] label play-top: no playable tracks");
@@ -555,7 +568,10 @@ pub fn play_top(shuffle: bool) {
     }
     let runtime = crate::app();
     crate::spawn(async move {
-        if let Err(e) = crate::playback_qt::play_track_list(&runtime, queue, 0, shuffle).await {
+        let ctx = crate::playback_qt::PlayContext::label(&label_id);
+        if let Err(e) =
+            crate::playback_qt::play_track_list_in(&runtime, queue, 0, shuffle, ctx).await
+        {
             log::error!("[qbz-qt] label play-top failed: {e}");
         }
     });
@@ -567,7 +583,7 @@ pub fn play_track(track_id: String) {
     let Ok(wanted) = track_id.parse::<u64>() else {
         return;
     };
-    let (queue, start) = {
+    let (queue, start, label_id) = {
         let Ok(s) = LABEL.lock() else {
             return;
         };
@@ -576,14 +592,20 @@ pub fn play_track(track_id: String) {
             .iter()
             .position(|t| t.id == wanted)
             .unwrap_or(0);
-        (s.play_queue.clone(), start)
+        (s.play_queue.clone(), start, s.id.clone())
     };
     if queue.is_empty() {
         return;
     }
     let runtime = crate::app();
     crate::spawn(async move {
-        if let Err(e) = crate::playback_qt::play_track_list(&runtime, queue, start, false).await {
+        // Same explicit label origin as the header play (the ContentView::Label
+        // arm of `play_track_in_context`, playback.rs:3527-3543):
+        // a row click on a label page is still "playing from" the label.
+        let ctx = crate::playback_qt::PlayContext::label(&label_id);
+        if let Err(e) =
+            crate::playback_qt::play_track_list_in(&runtime, queue, start, false, ctx).await
+        {
             log::error!("[qbz-qt] label row play failed: {e}");
         }
     });

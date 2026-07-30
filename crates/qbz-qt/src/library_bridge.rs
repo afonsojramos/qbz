@@ -63,6 +63,19 @@ pub mod qbz_library_bridge {
         #[qinvokable]
         fn library_toggle_favorite(self: Pin<&mut QbzLibrary>, kind: QString, id: QString);
 
+        /// LibraryView row play (PARITY-DEBT #5). `visible_ids_json` is the
+        /// JSON array of the track ids the view is CURRENTLY rendering, in
+        /// render order; `clicked_id` is the row that was hit. The Slint
+        /// queues the whole VISIBLE list from the clicked row
+        /// (playback.rs:3518-3524 `order_by_visible`) — this port used to play
+        /// exactly one track and then stop dead.
+        #[qinvokable]
+        fn library_play_visible(
+            self: Pin<&mut QbzLibrary>,
+            visible_ids_json: QString,
+            clicked_id: QString,
+        );
+
         /// Emitted when a dispatched cover lands on disk (id-keyed —
         /// `{kind}:{id}`); QML updates its artwork map.
         #[qsignal]
@@ -135,6 +148,14 @@ impl qbz_library_bridge::QbzLibrary {
 
     pub fn library_toggle_favorite(self: Pin<&mut Self>, kind: QString, id: QString) {
         crate::library_toggle_favorite(kind.to_string(), id.to_string());
+    }
+
+    pub fn library_play_visible(
+        self: Pin<&mut Self>,
+        visible_ids_json: QString,
+        clicked_id: QString,
+    ) {
+        crate::library_qt::play_from_visible(visible_ids_json.to_string(), clicked_id.to_string());
     }
 
     pub fn toggle_pin(self: Pin<&mut Self>, kind: QString, id: QString, title: QString, subtitle: QString, artwork_url: QString) {

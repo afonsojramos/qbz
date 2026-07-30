@@ -211,14 +211,33 @@ pub async fn play_plex_track(runtime: &Runtime, rating_key: String, play_id: u64
     }
 }
 
+/// Resolve the Plex track rating key for a queue row (PARITY-DEBT #4, ports
+/// `playback.rs:666-680`, commit `b5c1a76e`).
+///
+/// The string rating_key rides in `source_item_id_hint` on the LocalLibrary
+/// path (`local_queue_track` above stamps `file_path`, which for a Plex row IS
+/// the raw key). The MyQBZ collections path stamps the per-item ALBUM key there
+/// instead (`plex:<hash>` from `qbz_plex::plex_album_key`, for shuffle boundary
+/// detection) — that is NOT a track rating key, so ignore any `plex:`-prefixed
+/// hint and fall back to the numeric queue id (= rating_key for the common
+/// numeric-key case). Using it verbatim made
+/// `GET /library/metadata/plex:<hash>` 404: the Plex track never started and
+/// the previous track kept playing under the new card.
+///
+/// A MISSING hint falls back the same way — the reference's `_` arm covers both
+/// `None` and the prefixed case, so this no longer refuses the row.
+pub(crate) fn plex_rating_key(hint: Option<&str>, track_id: u64) -> String {
+    match hint {
+        Some(hint) if !hint.starts_with("plex:") => hint.to_string(),
+        _ => track_id.to_string(),
+    }
+}
+
 /// Route ONE queue track to its audible step.
 async fn play_audible(runtime: &Runtime, track: &QueueTrack) -> bool {
     match track.source.as_deref() {
         Some("plex") => {
-            let Some(rating_key) = track.source_item_id_hint.clone() else {
-                log::error!("[qbz-qt] plex play: queue track {} has no rating key", track.id);
-                return false;
-            };
+            let rating_key = plex_rating_key(track.source_item_id_hint.as_deref(), track.id);
             play_plex_track(runtime, rating_key, track.id).await
         }
         _ => play_local_file(runtime, track.id).await,
@@ -386,4 +405,40 @@ pub async fn enqueue(runtime: &Runtime, kind: String, id: String, mode: String) 
         _ => runtime.core().add_tracks(queue).await,
     }
     crate::playback_qt::publish_queue(runtime).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::plex_rating_key;
+
+    /// LocalLibrary path: the hint IS the raw rating key (`local_queue_track`
+    /// stamps `file_path`, which for a Plex row is the server key). Unchanged
+    /// by the guard — `playback.rs:673-676` first arm.
+    #[test]
+    fn raw_hint_is_used_verbatim() {
+        assert_eq!(plex_rating_key(Some("12345"), 999), "12345");
+        // Non-numeric server keys are legal and must survive untouched.
+        assert_eq!(
+            plex_rating_key(Some("/library/metadata/771"), 999),
+            "/library/metadata/771"
+        );
+    }
+
+    /// PARITY-DEBT #4: the MyQBZ collections path stamps the ALBUM boundary key
+    /// (`qbz_plex::plex_album_key` -> `plex:<hash>`). It is not a rating key, so
+    /// it is ignored in favour of the numeric queue id — the `b5c1a76e` fix.
+    #[test]
+    fn plex_prefixed_hint_falls_back_to_queue_id() {
+        assert_eq!(plex_rating_key(Some("plex:deadbeef"), 771), "771");
+        // Prefix test is on the LEADING bytes only, exactly like `starts_with`.
+        assert_eq!(plex_rating_key(Some("plex:"), 42), "42");
+        assert_eq!(plex_rating_key(Some("77plex:1"), 42), "77plex:1");
+    }
+
+    /// The reference's `_` arm also covers a missing hint: fall back rather than
+    /// refuse the row.
+    #[test]
+    fn missing_hint_falls_back_to_queue_id() {
+        assert_eq!(plex_rating_key(None, 771), "771");
+    }
 }

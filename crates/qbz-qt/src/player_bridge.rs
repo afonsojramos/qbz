@@ -36,6 +36,14 @@ pub mod qbz_player {
         #[qproperty(i32, np_duration_secs)]
         #[qproperty(f32, np_progress)]
         #[qproperty(f32, np_cache_progress)]
+        // SEEK LOCK (PARITY-DEBT #15, Slint `NowPlayingState.seekable-max`,
+        // playback.rs:5304). The fraction of the track the user may seek to:
+        // while a stream is still downloading it is `buffer_progress` clamped
+        // to 0..1, and a fully-available track (local/offline/complete) is
+        // 1.0. The seek bars must clamp the drag/click position to it —
+        // `np_cache_progress` is the DECORATIVE overlay of the same fill and
+        // must not be used as the limit.
+        #[qproperty(f32, np_seekable_max)]
         #[qproperty(bool, np_playing)]
         #[qproperty(bool, np_loading)]
         #[qproperty(f32, np_volume)]
@@ -198,6 +206,7 @@ pub struct QbzPlayerRust {
     np_duration_secs: i32,
     np_progress: f32,
     np_cache_progress: f32,
+    np_seekable_max: f32,
     np_playing: bool,
     np_loading: bool,
     np_volume: f32,
@@ -243,6 +252,10 @@ impl Default for QbzPlayerRust {
             np_duration_secs: 0,
             np_progress: 0.0,
             np_cache_progress: 0.0,
+            // Seek freely until a stream says otherwise — the Slint default
+            // (`NowPlayingState.seekable-max: 1.0`). Zero here would lock the
+            // bar shut before the first track ever opens.
+            np_seekable_max: 1.0,
             np_playing: false,
             np_loading: false,
             np_muted: false,

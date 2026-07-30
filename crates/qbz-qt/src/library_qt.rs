@@ -37,7 +37,7 @@ use qbz_app::settings::local_favorites::{LocalFavoritesService, DB_FILE_NAME};
 use qbz_app::shell::AppRuntime;
 use qbz_app::user_data::UserDataPaths;
 use qbz_core::LoggingAdapter;
-use qbz_models::{Album, Artist, Playlist, Track};
+use qbz_models::{Album, Artist, Playlist, QueueTrack, Track};
 use serde::Serialize;
 
 use crate::home_qt;
@@ -1084,4 +1084,263 @@ pub(crate) fn apply_pin_change(kind: &str, id: &str, pinned: bool) {
             item.is_pinned = pinned;
         }
     });
+}
+
+// ---------------------------------------------------------------------------
+// Per-row play: the VISIBLE list becomes the queue (PARITY-DEBT #5)
+// ---------------------------------------------------------------------------
+//
+// Reference: `playback.rs::play_track_in_context` (:3459) — the ONE entry point
+// every Slint tracklist row goes through. Its Favorites arm is
+//
+//     ContentView::Favorites => {
+//         if let Some((tracks, idx)) = order_by_visible(
+//             &FavoritesState.tracks_visible,     // what the list RENDERS
+//             crate::favorites::play_tracks(),    // FAV_CURRENT, the authority
+//             clicked_id,
+//         ) { play_tracks(runtime, weak, handle, tracks, idx); return; }
+//     }
+//     // …no resolvable list context: play just the track.
+//     if let Ok(tid) = clicked_id.parse::<u64>() { play_track_now(…) }
+//
+// and `order_by_visible` (playback.rs:3408-3428) is: take the ids in VISIBLE
+// order, resolve each against the authoritative cache (unresolvable rows are
+// dropped), then locate the clicked id INSIDE that ordered list — `None` when
+// it is not there, so the caller plays the single track instead of starting
+// the queue at the wrong row.
+//
+// Port shape: the port has ONE merged feed (`LibraryData.feed`) and derives the
+// rendered list in QML, so the visible ORDER can only come from QML — it
+// carries the tab, the search, the sort and the genre/source filters the user
+// is actually looking at, which is the whole point of ordering by the visible
+// model rather than by the cache. QML passes that order down as a JSON id
+// array; the feed plays the part of `FAV_CURRENT`.
+//
+// One deliberate widening, called out because it is a deviation: the Slint
+// always orders by the TRACKS-tab model, so a click in its mixed All feed
+// queues the Tracks tab (and plays a lone track when that tab was never
+// opened and its model is still empty). Here the visible list IS the list
+// under the pointer — identical on the Tracks tab, and in the All feed it
+// queues the mixed feed's track rows in the order shown instead of nothing.
+
+/// `playback_qt::feed_queue_track` for a feed row already in hand.
+///
+/// Mirrors that function field-for-field (it looks the same row up by id and
+/// is private to `playback_qt`); the follow-up is to make ONE of them
+/// `pub(crate)` and delete the other.
+///
+/// `None` for a non-Qobuz row: local / Plex favourites carry a path or a group
+/// key as their id, not a numeric one, and must not be resolved through the
+/// Qobuz track resolver. The Slint cannot hit this at all — `FAV_CURRENT` is
+/// Qobuz-only — so dropping them is the same queue it would have built.
+fn feed_track_to_queue(item: &FeedItem) -> Option<QueueTrack> {
+    let id = item.id.parse::<u64>().ok()?;
+    Some(QueueTrack {
+        id,
+        title: item.title.clone(),
+        version: None,
+        artist: item.artist.clone(),
+        album: item.album.clone(),
+        album_version: None,
+        duration_secs: duration_secs(&item.duration),
+        artwork_url: if item.image_url.is_empty() {
+            None
+        } else {
+            Some(item.image_url.clone())
+        },
+        hires: item.quality_tier == "hires",
+        bit_depth: None,
+        sample_rate: None,
+        is_local: false,
+        album_id: if item.album_id.is_empty() {
+            None
+        } else {
+            Some(item.album_id.clone())
+        },
+        artist_id: item.artist_id.parse::<u64>().ok(),
+        streamable: true,
+        source: Some("qobuz".to_string()),
+        parental_warning: item.explicit,
+        source_item_id_hint: None,
+        context_kind: None,
+        context_id: None,
+    })
+}
+
+/// Inverse of `mmss` — the feed carries the duration as the rendered `M:SS`
+/// string, so the queue row has to read it back. Anything unparseable is 0,
+/// which is what `playback_qt::feed_queue_track` does too (the engine
+/// re-reports the real duration once the track resolves).
+fn duration_secs(mmss: &str) -> u64 {
+    let mut parts = mmss.split(':');
+    parts.next().and_then(|m| m.parse::<u64>().ok()).unwrap_or(0) * 60
+        + parts.next().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0)
+}
+
+/// `playback.rs::order_by_visible` (:3408-3428), ported: build the queue in
+/// VISIBLE order out of the authoritative feed and anchor it on `clicked_id`.
+///
+/// `None` — and the caller then plays the single track — when the clicked id
+/// does not resolve inside the ordered list: an orphan row, a cache miss, or a
+/// local row that carries no numeric id. Same guard, same reason: better one
+/// track than a queue that starts on the wrong one.
+fn order_by_visible(
+    feed: &[FeedItem],
+    visible_ids: &[String],
+    clicked_id: &str,
+) -> Option<(Vec<QueueTrack>, usize)> {
+    let by_id: std::collections::HashMap<&str, &FeedItem> = feed
+        .iter()
+        .filter(|i| i.kind == "track")
+        .map(|i| (i.id.as_str(), i))
+        .collect();
+    let ordered: Vec<QueueTrack> = visible_ids
+        .iter()
+        .filter_map(|id| by_id.get(id.as_str()).copied())
+        .filter_map(feed_track_to_queue)
+        .collect();
+    let idx = ordered.iter().position(|t| t.id.to_string() == clicked_id)?;
+    Some((ordered, idx))
+}
+
+/// LibraryView row play. `visible_ids_json` is the JSON string array of the
+/// track ids the view is CURRENTLY rendering, in render order (the
+/// `libraryArtworkWindow` convention); `clicked_id` is the row that was hit.
+///
+/// Fire-and-forget like every other `*_qt` play entry point (`label_qt::
+/// play_track`): the queue is built synchronously off the feed, the play is
+/// spawned. Blacklisted rows are dropped and the start index remapped inside
+/// `playback_qt::set_queue_stamped`, so nothing to do here.
+pub fn play_from_visible(visible_ids_json: String, clicked_id: String) {
+    let visible_ids: Vec<String> = serde_json::from_str(&visible_ids_json).unwrap_or_default();
+    let queued = with_library(|d| order_by_visible(&d.feed, &visible_ids, &clicked_id)).flatten();
+    let Some((queue, start)) = queued else {
+        // order_by_visible == None: the Slint's fallback is the single track
+        // (playback.rs:3620-3623).
+        log::info!(
+            "[qbz-qt] library play: {clicked_id} does not resolve in the visible list \
+             ({} rows) -> single track",
+            visible_ids.len()
+        );
+        if let Ok(id) = clicked_id.parse::<u64>() {
+            crate::play_track(id);
+        }
+        return;
+    };
+    log::info!(
+        "[qbz-qt] library play: queueing {} visible track(s) from index {start}",
+        queue.len()
+    );
+    let runtime = crate::app();
+    crate::spawn(async move {
+        if let Err(e) = crate::playback_qt::play_track_list(&runtime, queue, start, false).await {
+            log::error!("[qbz-qt] library play_from_visible failed: {e}");
+        }
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn track(id: &str, title: &str) -> FeedItem {
+        FeedItem {
+            kind: "track".into(),
+            id: id.into(),
+            title: title.into(),
+            duration: "3:07".into(),
+            ..Default::default()
+        }
+    }
+
+    fn album(id: &str) -> FeedItem {
+        FeedItem {
+            kind: "album".into(),
+            id: id.into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn duration_secs_reads_back_mmss() {
+        // `mmss` never emits hours — 75 minutes renders as "75:04".
+        assert_eq!(duration_secs("3:07"), 187);
+        assert_eq!(duration_secs("0:59"), 59);
+        assert_eq!(duration_secs("75:04"), 4504);
+        assert_eq!(duration_secs(""), 0);
+        assert_eq!(duration_secs("x:y"), 0);
+    }
+
+    #[test]
+    fn queue_follows_the_visible_order_not_the_feed_order() {
+        let feed = vec![track("1", "a"), track("2", "b"), track("3", "c")];
+        // What the user is looking at: sorted by title descending.
+        let visible = vec!["3".to_string(), "2".to_string(), "1".to_string()];
+        let (queue, start) = order_by_visible(&feed, &visible, "2").expect("clicked row resolves");
+        assert_eq!(
+            queue.iter().map(|t| t.id).collect::<Vec<_>>(),
+            vec![3, 2, 1]
+        );
+        assert_eq!(start, 1);
+    }
+
+    #[test]
+    fn non_track_and_unresolvable_rows_drop_out() {
+        let feed = vec![track("1", "a"), album("2"), track("9", "z")];
+        // The All feed's visible order: a track, an album row, a local track
+        // (path id), a track that is not in the feed at all.
+        let visible = vec![
+            "1".to_string(),
+            "2".to_string(),
+            "/home/u/x.flac".to_string(),
+            "404".to_string(),
+            "9".to_string(),
+        ];
+        let (queue, start) = order_by_visible(&feed, &visible, "9").expect("clicked row resolves");
+        assert_eq!(queue.iter().map(|t| t.id).collect::<Vec<_>>(), vec![1, 9]);
+        assert_eq!(start, 1);
+    }
+
+    #[test]
+    fn clicked_row_outside_the_visible_list_is_none() {
+        let feed = vec![track("1", "a"), track("2", "b")];
+        let visible = vec!["1".to_string()];
+        // Reference: the caller then plays the single track rather than
+        // starting the queue at the wrong row.
+        assert!(order_by_visible(&feed, &visible, "2").is_none());
+        // A local row is unresolvable even when it IS visible.
+        assert!(order_by_visible(&feed, &["/home/u/x.flac".to_string()], "/home/u/x.flac").is_none());
+        // Nothing visible at all.
+        assert!(order_by_visible(&feed, &[], "1").is_none());
+    }
+
+    #[test]
+    fn queue_row_carries_the_feed_metadata() {
+        let mut item = track("42", "Title");
+        item.artist = "Artist".into();
+        item.artist_id = "7".into();
+        item.album = "Album".into();
+        item.album_id = "abc".into();
+        item.image_url = "https://x/1.jpg".into();
+        item.quality_tier = "hires".into();
+        item.explicit = true;
+        let qt = feed_track_to_queue(&item).expect("numeric id");
+        assert_eq!(qt.id, 42);
+        assert_eq!(qt.title, "Title");
+        assert_eq!(qt.artist_id, Some(7));
+        assert_eq!(qt.album_id.as_deref(), Some("abc"));
+        assert_eq!(qt.artwork_url.as_deref(), Some("https://x/1.jpg"));
+        assert_eq!(qt.duration_secs, 187);
+        assert!(qt.hires);
+        assert!(qt.parental_warning);
+        assert_eq!(qt.source.as_deref(), Some("qobuz"));
+        // Empty strings become None, never Some("") — the now-playing card
+        // tests `is_some()`.
+        let bare = track("43", "T");
+        let qt = feed_track_to_queue(&bare).expect("numeric id");
+        assert!(qt.artwork_url.is_none());
+        assert!(qt.album_id.is_none());
+        assert!(qt.artist_id.is_none());
+        assert!(!qt.hires);
+    }
 }

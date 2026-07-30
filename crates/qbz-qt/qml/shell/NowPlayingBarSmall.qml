@@ -95,6 +95,27 @@ Rectangle {
         return m + ":" + (s < 10 ? "0" : "") + s
     }
 
+    // --- Seek clamp (closes PARITY-DEBT #15, QML half) -------------------
+    // Same SeekBar the full bar mounts (PlayerBarSmall.slint:186 passes
+    // seekable-max: NowPlayingState.seekable-max into SeekBar.slint), so the
+    // behaviour is identical here: while a track is still downloading the
+    // seek target is LOCKED to the furthest fraction that has arrived and the
+    // cursor turns not-allowed past it. Source: state.slint:4402, fed by
+    // playback.rs:5304 `buffer_progress.clamp(0,1)`, published as
+    // QbzPlayer.npSeekableMax. A fully-available track reports 1.0, so the
+    // Math.min() is a no-op and local/cached seeking stays free.
+    function clamp01(v) {
+        return Math.min(Math.max(v, 0), 1)
+    }
+    // SeekBar.slint:98 — Math.min(clamp01(mouse-x / width), seekable-max).
+    function seekTarget(fraction) {
+        return Math.min(root.clamp01(fraction), QbzPlayer.npSeekableMax)
+    }
+    // SeekBar.slint:93 — clamp01(mouse-x / width) > seekable-max.
+    function beyondSeekable(fraction) {
+        return root.clamp01(fraction) > QbzPlayer.npSeekableMax
+    }
+
     // --- Track Info (album/TrackInfoModal.slint) -------------------------
     // The (i) button and the song-card title open the MODAL (scrim + centered
     // card) — PlayerBarSmall.slint fires media-action("track", id,
@@ -191,9 +212,14 @@ Rectangle {
                 height: 18
                 anchors.verticalCenter: seekTrack.verticalCenter
                 hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
+                // No-drop cursor over the not-yet-downloaded region
+                // (SeekBar.slint:93-95).
+                cursorShape: root.beyondSeekable(mouseX / width) ? Qt.ForbiddenCursor
+                                                                 : Qt.PointingHandCursor
                 enabled: QbzPlayer.npHasTrack
-                onClicked: QbzPlayer.seek(Math.min(Math.max(mouseX / width, 0), 1))
+                // Lock the seek target to what has downloaded while streaming
+                // (SeekBar.slint:96-99).
+                onClicked: QbzPlayer.seek(root.seekTarget(mouseX / width))
             }
         }
 
