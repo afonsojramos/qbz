@@ -40,6 +40,10 @@ members = [
     "qbz-log",
     "qbzd",
     "qbz-qt",
+    # The source-agnostic seam (one trait + one registry over Qobuz / local /
+    # Plex). Purely additive: nothing in `qbz` or `qbz-mixtape` changes, and it
+    # deliberately does NOT depend on qbz-audio / qbz-player.
+    "qbz-source",
 ]
 
 # Qt-frontend POC worktree: plain `cargo build`/`cargo check` in this workspace

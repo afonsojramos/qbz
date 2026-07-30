@@ -1,0 +1,28 @@
+[package]
+name = "qbz-source"
+description = "The source-agnostic seam: one trait + one registry over Qobuz, local files and Plex"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+# QueueTrack, mixtape::*, plex_thumb_url. No internal deps of its own.
+qbz-models = { path = "../qbz-models" }
+# QobuzClient (Clone) — the catalog arm.
+qbz-qobuz = { path = "../qbz-qobuz" }
+# LibraryDatabase / LocalTrack / thumbnails — the local arm.
+qbz-library = { path = "../qbz-library" }
+# Plex cache reads + plex_resolve_track_media — the Plex arm.
+qbz-plex = { path = "../qbz-plex" }
+# `ItemResolver` — this crate IMPLEMENTS it (mixtape_adapter.rs). qbz-mixtape is
+# NOT modified and NOT absorbed; the dependency is one-directional so the `qbz`
+# (Slint) crate keeps compiling untouched.
+qbz-mixtape = { path = "../qbz-mixtape" }
+
+async-trait = { workspace = true }
+log = { workspace = true }
+thiserror = { workspace = true }
+
+# ABSENT ON PURPOSE (design §8): qbz-audio, qbz-player (the PROTECTED backend is
+# not linked, so it cannot be reached even by accident), qbz-core, qbz-app,
+# tokio (this crate never spawns), reqwest, qbz-i18n, qbz-cache, rusqlite.

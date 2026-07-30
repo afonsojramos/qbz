@@ -6701,6 +6701,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "qbz-source"
+version = "2.0.2"
+dependencies = [
+ "async-trait",
+ "log",
+ "qbz-library",
+ "qbz-mixtape",
+ "qbz-models",
+ "qbz-plex",
+ "qbz-qobuz",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "qbz-text-utils"
 version = "2.0.2"
 dependencies = [
