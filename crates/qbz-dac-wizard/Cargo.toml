@@ -15,4 +15,4 @@ qbz-ui = { path = "../qbz-ui" }
 qbz-audio = { path = "../qbz-audio" }
 qbz-models = { path = "../qbz-models" }
 qbz-i18n = { path = "../qbz-i18n" }
-slint = { version = "=1.16.1", default-features = false, features = ["std", "compat-1-2"] }
+slint = { version = "=1.17.1", default-features = false, features = ["std", "compat-1-2"] }

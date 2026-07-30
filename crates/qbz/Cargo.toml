@@ -12,7 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 # WGPU UNDERLAY SPIKE (feature/wgpu-underlay-spike): we render WGSL fragment
-# shaders into a wgpu texture composited under ImmersiveView (`unstable-wgpu-28`
+# shaders into a wgpu texture composited under ImmersiveView (`unstable-wgpu-29`
 # + the BackendSelector in main.rs). The RENDERER is chosen PER-PLATFORM in the
 # target tables below — NOT here — because femtovg-wgpu has a high per-frame CPU
 # cost on macOS/Metal (slint #8693) that pegs CPU on any continuously-animating
@@ -21,18 +21,18 @@ path = "src/main.rs"
 # and does not have this cost. So: Linux/Windows keep femtovg-wgpu (cheap there +
 # the femtovg text fixes #5177/#11335); macOS (BOTH Intel and Apple Silicon —
 # `cfg(target_os="macos")` covers both, CICD x86_64-apple-darwin included) uses
-# Skia. Both keep `unstable-wgpu-28`, and skia-wgpu shares the same wgpu device
+# Skia. Both keep `unstable-wgpu-29`, and skia-wgpu shares the same wgpu device
 # as femtovg-wgpu, so the shader underlay works unchanged on both renderers.
-# Pinned =1.16.1 because the wgpu_28 / GraphicsAPI::WGPU28 / require_wgpu_28 API
+# Pinned =1.17.1 because the wgpu_29 / GraphicsAPI::WGPU29 / require_wgpu_29 API
 # is behind an `unstable-*` flag that may change on a minor bump.
 # A/B vs the GL build: `git checkout slint-mvp`.
-slint = { version = "=1.16.1", default-features = false, features = [
+slint = { version = "=1.17.1", default-features = false, features = [
     "std",
     "backend-winit",
     "renderer-software",
     "accessibility",
     "compat-1-2",
-    "unstable-wgpu-28",
+    "unstable-wgpu-29",
     # Borderless-at-creation for the miniplayer window via
     # BackendSelector::with_winit_window_attributes_hook (decorations can't be
     # reliably dropped post-creation on Wayland/KDE).
@@ -41,9 +41,9 @@ slint = { version = "=1.16.1", default-features = false, features = [
 # Direct access to the winit backend for the system tray: WinitWindowAccessor
 # (hide/show the OS window without quitting the event loop) and, later, the
 # CustomApplicationHandler (tray event pump + close-to-tray intercept). MUST be
-# pinned to the exact version Slint resolves (1.16.1) — i-slint-backend-winit
+# pinned to the exact version Slint resolves (1.17.1) — i-slint-backend-winit
 # does not follow semver, and a mismatch makes with_winit_window() return None.
-i-slint-backend-winit = "=1.16.1"
+i-slint-backend-winit = "=1.17.1"
 qbz-music-link = { path = "../qbz-music-link" }
 qbz-ui = { path = "../qbz-ui" }
 qbz-dac-wizard = { path = "../qbz-dac-wizard" }
@@ -106,22 +106,18 @@ qbz-credentials = { path = "../qbz-credentials" }
 # PER-PLATFORM RENDERER (see the slint comment in [dependencies]). Linux/Windows:
 # femtovg-wgpu (cheap per-frame + the femtovg text fixes). macOS: Skia (femtovg-
 # wgpu pegs CPU on Metal for animated views). Both resolve to a *-wgpu renderer
-# (require_wgpu_28 in main.rs), so the shader underlay works on both. Features
+# (require_wgpu_29 in main.rs), so the shader underlay works on both. Features
 # merge with the base `slint` dep above for the matching target.
 # `renderer-femtovg` (GL) is the MIDDLE tier for weak GPUs (Raspberry Pi-class:
 # v3dv/panfrost/lima report a real Vulkan adapter but crawl under wgpu, while
 # Mesa's GLES path is mature and fast) — selected via renderer_name("femtovg")
 # in select_slint_backend (main.rs); no wgpu, so no shader underlay on that tier.
+# (The old direct i-slint-renderer-femtovg dep is gone: since Slint 1.17 the
+# per-window swapchain alpha comes from winit's `transparent` attribute, set in
+# the window-attributes hook, instead of the vendored
+# `set_surface_prefers_transparent` global.)
 [target.'cfg(not(target_os = "macos"))'.dependencies]
-slint = { version = "=1.16.1", features = ["renderer-femtovg-wgpu", "renderer-femtovg"] }
-# Direct access to our VENDORED femtovg renderer (see [patch.crates-io] in the
-# workspace Cargo.toml) for the per-window swapchain-alpha opt-in:
-# `wgpu::set_surface_prefers_transparent` is flipped from the winit
-# window-attributes hook so only the miniplayer gets a transparent (blended)
-# swapchain and the main window stays Opaque. Pinned exact like
-# i-slint-backend-winit above; `wgpu` matches the feature slint already
-# enables via renderer-femtovg-wgpu (pure unification, no extra code).
-i-slint-renderer-femtovg = { version = "=1.16.1", features = ["wgpu"] }
+slint = { version = "=1.17.1", features = ["renderer-femtovg-wgpu", "renderer-femtovg"] }
 
 # Linux system tray via StatusNotifierItem. Same crate + rationale as the
 # Tauri build (src-tauri/Cargo.toml): libayatana-appindicator never dispatches
@@ -150,8 +146,8 @@ zbus = { version = "5", default-features = false, features = ["async-io", "block
 [target.'cfg(target_os = "macos")'.dependencies]
 # macOS renderer: Skia (femtovg-wgpu pegs CPU on Metal — see [dependencies]).
 # Covers BOTH Apple Silicon and Intel (x86_64-apple-darwin / CICD). skia-wgpu
-# still serves the shader underlay via require_wgpu_28.
-slint = { version = "=1.16.1", features = ["renderer-skia", "raw-window-handle-06"] }
+# still serves the shader underlay via require_wgpu_29.
+slint = { version = "=1.17.1", features = ["renderer-skia", "raw-window-handle-06"] }
 # Direct raw-window-handle 0.6 (same version slint's raw-window-handle-06
 # feature pulls) so macos_chrome can name the traits and read the AppKit
 # NSWindow handle off slint::Window::window_handle().

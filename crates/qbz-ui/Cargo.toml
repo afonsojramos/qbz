@@ -11,7 +11,7 @@ name = "qbz_ui"
 path = "src/lib.rs"
 
 [dependencies]
-slint = { version = "=1.16.1", default-features = false, features = [
+slint = { version = "=1.17.1", default-features = false, features = [
     "std",
     "compat-1-2",
     "renderer-software",
@@ -19,4 +19,4 @@ slint = { version = "=1.16.1", default-features = false, features = [
 ] }
 
 [build-dependencies]
-slint-build = "1.16"
+slint-build = "1.17"

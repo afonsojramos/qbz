@@ -8,4 +8,4 @@ description = "Shared Slint-coupled frontend helpers for the qbz app (toast; art
 
 [dependencies]
 qbz-ui = { path = "../qbz-ui" }
-slint = { version = "=1.16.1", default-features = false, features = ["std", "compat-1-2"] }
+slint = { version = "=1.17.1", default-features = false, features = ["std", "compat-1-2"] }
