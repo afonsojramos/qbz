@@ -267,6 +267,15 @@ fn enter_shell(session: auth_qt::SessionInfo) {
     // first interaction wrote the WRONG value back. Slint has no equivalent
     // hole because `SettingsState` is a global seeded at startup.
     publish_settings();
+
+    // Restore the persisted player volume so audio starts at the SAVED level
+    // (1:1 with qbz/src/main.rs:220-227). Without it every launch started at
+    // 100% — on an exclusive-mode DAC that is not a cosmetic default. The poll
+    // loop mirrors it onto the bar's slider from the engine, so nothing else
+    // has to publish it.
+    let restored = crate::settings_qt::read_pref_f32("volume").unwrap_or(1.0).clamp(0.0, 1.0);
+    let rt = app();
+    spawn(async move { playback_qt::set_volume(&rt, restored).await });
 }
 
 /// Login screen primary button / recovery banner: the system-browser OAuth

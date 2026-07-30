@@ -402,6 +402,8 @@ Rectangle {
                         maximum: 1000
                         value: Math.round(QbzPlayer.npVolume * 1000)
                         onChanged: function (v) { QbzPlayer.setVolume(v / 1000.0) }
+                        // Persist only the settled value, like the full bar.
+                        onReleased: function (v) { QbzPlayer.persistVolume(v / 1000.0) }
                     }
 
                     Item { width: 4; height: 1 }

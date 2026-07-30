@@ -871,6 +871,17 @@ pub fn pref_str(key: &str, default: &str) -> String {
 /// Additive single-key patch of ui_prefs.json — THE writer every other pref
 /// setter in this file funnels through, so they all inherit `update_prefs`'
 /// atomic rename and its refusal to rebuild an unparsable document.
+/// Read one ui_prefs key as an f32. The crate had no public reader — theme_qt
+/// kept a private one — so the volume restore would otherwise have grown a
+/// third private copy of the same read (the exact duplication the write
+/// discipline above exists to prevent).
+pub(crate) fn read_pref_f32(key: &str) -> Option<f32> {
+    let path = prefs_path()?;
+    let text = std::fs::read_to_string(path).ok()?;
+    let doc: serde_json::Value = serde_json::from_str(&text).ok()?;
+    doc.get(key)?.as_f64().map(|v| v as f32)
+}
+
 pub fn save_pref(key: &str, value: serde_json::Value) {
     update_prefs(|doc| {
         doc.insert(key.to_string(), value);

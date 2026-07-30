@@ -124,6 +124,12 @@ pub mod qbz_player {
         fn seek(self: Pin<&mut QbzPlayer>, frac: f32);
         #[qinvokable]
         fn set_volume(self: Pin<&mut QbzPlayer>, volume: f32);
+        /// Persist the SETTLED volume (drag-end only — see QbzSlider.released).
+        /// `set_volume` drives the engine on every drag tick; this writes the
+        /// shared ui_prefs.json once, 1:1 with NowPlayingState.persist-volume
+        /// (qbz/src/main.rs:14413-14417).
+        #[qinvokable]
+        fn persist_volume(self: Pin<&mut QbzPlayer>, fraction: f32);
         #[qinvokable]
         fn toggle_mute(self: Pin<&mut QbzPlayer>);
         #[qinvokable]
@@ -311,6 +317,10 @@ impl qbz_player::QbzPlayer {
 
     pub fn seek(self: Pin<&mut Self>, frac: f32) {
         crate::transport_seek(frac);
+    }
+
+    pub fn persist_volume(self: Pin<&mut Self>, fraction: f32) {
+        crate::settings_qt::save_pref("volume", serde_json::json!(fraction.clamp(0.0, 1.0)));
     }
 
     pub fn set_volume(self: Pin<&mut Self>, volume: f32) {

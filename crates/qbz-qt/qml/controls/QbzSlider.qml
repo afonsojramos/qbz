@@ -12,6 +12,13 @@ Item {
     property int maximum: 10
     property int value: 0
     signal changed(int newValue)
+    /// Fired ONCE on drag-end with the settled value. `changed` fires on every
+    /// drag tick, so anything that PERSISTS must listen here instead — the
+    /// volume slider writes ui_prefs.json, a document shared with the running
+    /// Slint app through a whole-file read-modify-write, and a write per pixel
+    /// of drag is exactly what `PlayerBar.slint:864-866` avoids ("Persist only
+    /// the final value on drag-end").
+    signal released(int newValue)
 
     QbzTheme { id: theme }
 
@@ -73,6 +80,9 @@ Item {
                 parent.commit(parent.dragFraction)
             }
         }
-        onReleased: parent.dragging = false
+        onReleased: {
+            parent.dragging = false
+            parent.released(parent.value)
+        }
     }
 }
