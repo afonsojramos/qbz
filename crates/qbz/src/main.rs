@@ -7178,10 +7178,10 @@ static WGPU_ALT_ADAPTER: std::sync::atomic::AtomicBool =
 /// Minimal adapter probe for the paths that skip `detect_hardware_gpu`
 /// (QBZ_RENDERER / Settings forcing the wgpu tier).
 fn probe_gpu_topology() -> GpuTopology {
-    use slint::wgpu_28::wgpu;
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+    use slint::wgpu_29::wgpu;
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: wgpu::Backends::all(),
-        ..Default::default()
+        ..wgpu::InstanceDescriptor::new_without_display_handle()
     });
     let adapters =
         poll_ready(instance.enumerate_adapters(wgpu::Backends::all())).unwrap_or_default();
@@ -7209,10 +7209,10 @@ static GPU_ADAPTERS: std::sync::OnceLock<Vec<GpuAdapterInfo>> = std::sync::OnceL
 /// up under Vulkan AND GL). Cached — the wgpu instance is created once.
 fn gpu_adapters() -> &'static Vec<GpuAdapterInfo> {
     GPU_ADAPTERS.get_or_init(|| {
-        use slint::wgpu_28::wgpu;
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        use slint::wgpu_29::wgpu;
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
-            ..Default::default()
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
         });
         let adapters =
             poll_ready(instance.enumerate_adapters(wgpu::Backends::all())).unwrap_or_default();
@@ -7316,8 +7316,8 @@ fn linux_has_system_battery() -> bool {
 /// iGPU cannot present the window surface — wgpu still picks it under LowPower
 /// and `Surface::configure` panics with "Invalid surface" (#542). So a hybrid
 /// machine WITHOUT a system battery (= desktop) defaults to HighPerformance.
-fn default_wgpu_power_preference() -> slint::wgpu_28::wgpu::PowerPreference {
-    use slint::wgpu_28::wgpu::PowerPreference;
+fn default_wgpu_power_preference() -> slint::wgpu_29::wgpu::PowerPreference {
+    use slint::wgpu_29::wgpu::PowerPreference;
     if cfg!(target_os = "macos") {
         return PowerPreference::LowPower;
     }
@@ -7338,8 +7338,8 @@ fn default_wgpu_power_preference() -> slint::wgpu_28::wgpu::PowerPreference {
 /// WGPU_POWER_PREF env still wins over this (it is checked first in the caller).
 /// On a hybrid laptop "discrete" (HighPerformance) moves the render off the
 /// integrated GPU — the fix for the iGPU running hot under the shader background.
-fn gpu_power_from_prefs() -> Option<slint::wgpu_28::wgpu::PowerPreference> {
-    use slint::wgpu_28::wgpu::PowerPreference;
+fn gpu_power_from_prefs() -> Option<slint::wgpu_29::wgpu::PowerPreference> {
+    use slint::wgpu_29::wgpu::PowerPreference;
     let pref = crate::ui_prefs::load().gpu_power;
     match pref.as_str() {
         "" | "auto" => None,
@@ -7389,8 +7389,8 @@ fn block_on_wgpu<F: std::future::Future>(future: F) -> F::Output {
 
 /// Create the wgpu instance/adapter/device/queue ONCE at startup so they can be
 /// handed to Slint as `WGPUConfiguration::Manual` and REUSED across every
-/// window re-creation. Mirrors Slint's own Automatic init (vendored
-/// i-slint-core `graphics/wgpu_28.rs`) minus the surface — none exists yet at
+/// window re-creation. Mirrors Slint's own Automatic init (i-slint-core
+/// `graphics/wgpu_29.rs`) minus the surface — none exists yet at
 /// this point, and Vulkan-Wayland adapters are not surface-specific.
 ///
 /// Why: on Wayland `hide()` destroys the winit window and every `show()`
@@ -7405,22 +7405,25 @@ fn block_on_wgpu<F: std::future::Future>(future: F) -> F::Output {
 ///
 /// Returns `None` on any failure so the caller can fall back to `Automatic`.
 fn create_shared_wgpu_stack(
-    settings: &slint::wgpu_28::WGPUSettings,
+    settings: &slint::wgpu_29::WGPUSettings,
 ) -> Option<(
-    slint::wgpu_28::wgpu::Instance,
-    slint::wgpu_28::wgpu::Adapter,
-    slint::wgpu_28::wgpu::Device,
-    slint::wgpu_28::wgpu::Queue,
+    slint::wgpu_29::wgpu::Instance,
+    slint::wgpu_29::wgpu::Adapter,
+    slint::wgpu_29::wgpu::Device,
+    slint::wgpu_29::wgpu::Queue,
 )> {
-    use slint::wgpu_28::wgpu;
+    use slint::wgpu_29::wgpu;
     // Same backend mask as the femtovg-wgpu renderer (GL excluded for its
     // rendering artifacts); the rest follows WGPUSettings/env as before.
+    // `display: None` matches Slint's own Automatic path; GL — the only
+    // backend that cares about the display handle — is masked out here.
     let instance = block_on_wgpu(wgpu::util::new_instance_with_webgpu_detection(
-        &wgpu::InstanceDescriptor {
+        wgpu::InstanceDescriptor {
             backends: settings.backends & !wgpu::Backends::GL,
             flags: settings.instance_flags,
             backend_options: settings.backend_options.clone(),
             memory_budget_thresholds: settings.instance_memory_budget_thresholds,
+            display: None,
         },
     ));
     let adapter = match block_on_wgpu(wgpu::util::initialize_adapter_from_env(&instance, None)) {
@@ -7455,7 +7458,7 @@ fn create_shared_wgpu_stack(
 
 /// Decide + activate the Slint backend, returning whether the GPU (wgpu) renderer was
 /// selected. `false` => femtovg-GL or the pure software renderer is active and the caller
-/// must skip the wgpu shader underlay (neither exposes a WGPU28 GraphicsAPI). See the big
+/// must skip the wgpu shader underlay (neither exposes a WGPU29 GraphicsAPI). See the big
 /// comment at the call site for the full rationale.
 fn select_slint_backend() -> Result<bool, slint::PlatformError> {
     let (mut tier, mut source) = requested_renderer_tier();
@@ -7494,16 +7497,17 @@ fn select_slint_backend() -> Result<bool, slint::PlatformError> {
             );
             WindowAttributesExtX11::with_name(attributes, "com.blitzfc.qbz", "com.blitzfc.qbz")
         };
-        // Per-window swapchain alpha (vendored femtovg-wgpu patch): this hook runs
-        // on the event loop thread right before the window ADAPTER — and therefore
-        // its renderer backend — is created, and the backend CAPTURES the flag at
-        // construction (surface (re)creation happens later and repeats on every
-        // Wayland re-show, so a live read there would leak this latched value
-        // across windows). Net effect: only the miniplayer gets a transparent
-        // (blended) swapchain, for its whole lifetime; the main window keeps an
-        // Opaque one, sparing the compositor a full-window alpha blend every frame.
+        // Per-window swapchain alpha: since Slint 1.17 the femtovg-wgpu renderer
+        // honors winit's `transparent` window attribute by selecting a non-opaque
+        // composite alpha mode for that window's swapchain (this replaces the old
+        // vendored `set_surface_prefers_transparent` global). The attribute is
+        // per-window and survives every Wayland re-realization. Net effect: only
+        // the miniplayer gets a transparent (blended) swapchain, for its whole
+        // lifetime; the main window keeps an Opaque one, sparing the compositor a
+        // full-window alpha blend every frame.
         #[cfg(not(target_os = "macos"))]
-        i_slint_renderer_femtovg::wgpu::set_surface_prefers_transparent(creating_mini);
+        let attributes =
+            if creating_mini { attributes.with_transparent(true) } else { attributes };
         // macOS custom chrome (owner decision 2026-07-03, default ON there):
         // keep the native decorations but make the title bar transparent and
         // extend the content underneath — the native traffic lights float over
@@ -7535,17 +7539,17 @@ fn select_slint_backend() -> Result<bool, slint::PlatformError> {
             // where the iGPU can't present the surface (#542, see
             // default_wgpu_power_preference). WGPU_POWER_PREF still wins if
             // set (same as WGPUSettings::default()).
-            let mut wgpu_settings = slint::wgpu_28::WGPUSettings::default();
+            let mut wgpu_settings = slint::wgpu_29::WGPUSettings::default();
             // Resolution order: WGPU_POWER_PREF env (debug) > persisted
             // "Preferred GPU" setting (Settings > Renderer) > auto default.
-            wgpu_settings.power_preference = slint::wgpu_28::wgpu::PowerPreference::from_env()
+            wgpu_settings.power_preference = slint::wgpu_29::wgpu::PowerPreference::from_env()
                 .or_else(gpu_power_from_prefs)
                 .unwrap_or_else(default_wgpu_power_preference);
             // Alternate-adapter rung: the previous start died on the adapter
             // this preference picks, so flip it (even over WGPU_POWER_PREF —
             // anyone setting that env is debugging and reads the log line).
             if WGPU_ALT_ADAPTER.load(std::sync::atomic::Ordering::Relaxed) {
-                use slint::wgpu_28::wgpu::PowerPreference;
+                use slint::wgpu_29::wgpu::PowerPreference;
                 wgpu_settings.power_preference = match wgpu_settings.power_preference {
                     PowerPreference::HighPerformance => PowerPreference::LowPower,
                     _ => PowerPreference::HighPerformance,
@@ -7579,7 +7583,7 @@ fn select_slint_backend() -> Result<bool, slint::PlatformError> {
             match shared_stack {
                 Some((instance, adapter, device, queue)) => {
                     slint::BackendSelector::new()
-                        .require_wgpu_28(slint::wgpu_28::WGPUConfiguration::Manual {
+                        .require_wgpu_29(slint::wgpu_29::WGPUConfiguration::Manual {
                             instance,
                             adapter,
                             device,
@@ -7590,7 +7594,7 @@ fn select_slint_backend() -> Result<bool, slint::PlatformError> {
                 }
                 None => {
                     slint::BackendSelector::new()
-                        .require_wgpu_28(slint::wgpu_28::WGPUConfiguration::Automatic(
+                        .require_wgpu_29(slint::wgpu_29::WGPUConfiguration::Automatic(
                             wgpu_settings,
                         ))
                         .with_winit_window_attributes_hook(attributes_hook)
@@ -7861,10 +7865,10 @@ fn renderer_tier_from_prefs() -> (RendererTier, String) {
 /// (vendored wgpu.rs passes it as `backends_to_avoid`), so the wgpu tier could
 /// never bind them — they only prove the femtovg-GL tier works.
 fn detect_hardware_gpu() -> RendererTier {
-    use slint::wgpu_28::wgpu;
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+    use slint::wgpu_29::wgpu;
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: wgpu::Backends::all(),
-        ..Default::default()
+        ..wgpu::InstanceDescriptor::new_without_display_handle()
     });
     // wgpu's native `enumerate_adapters` resolves immediately; poll it once.
     let adapters = match poll_ready(instance.enumerate_adapters(wgpu::Backends::all())) {
@@ -8147,7 +8151,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // renderer BEFORE the first window is created. All three use the winit backend,
     // so the tray/miniplayer WinitWindowAccessor stays valid either way.
     //
-    // Why this is not an unconditional `require_wgpu_28` anymore: on a host with a
+    // Why this is not an unconditional `require_wgpu_29` anymore: on a host with a
     // real GPU (dev boxes, Apple Silicon) wgpu flies. But on a host WITHOUT one — a
     // VM with no GPU passthrough — wgpu happily binds a *software* Vulkan/GL adapter
     // (llvmpipe / lavapipe) and then CPU-rasterizes the entire UI every frame at
@@ -8663,7 +8667,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // just stays dark and the rest of the UI is unaffected.
     //
     // Only registered when the GPU (wgpu) renderer was actually selected. In software
-    // mode there is no WGPU28 GraphicsAPI to hook, so registering it would be a no-op
+    // mode there is no WGPU29 GraphicsAPI to hook, so registering it would be a no-op
     // at best — skip it so software mode carries zero wgpu machinery.
     if use_gpu_renderer {
         if let Err(e) = window
@@ -8671,7 +8675,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .set_rendering_notifier(move |state, graphics_api| {
                 match state {
                     slint::RenderingState::RenderingSetup => {
-                        if let slint::GraphicsAPI::WGPU28 { device, queue, .. } = graphics_api {
+                        if let slint::GraphicsAPI::WGPU29 { device, queue, .. } = graphics_api {
                             crate::shader_underlay::setup(device.clone(), queue.clone());
                         }
                     }
@@ -17204,7 +17208,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Case-insensitive substring test backing the searchable QbzSelect
-    // (Slint 1.16 has no `contains` builtin). Pure + stateless, so a single
+    // (Slint 1.17 has no `contains` builtin). Pure + stateless, so a single
     // registration at setup serves every searchable list.
     window
         .global::<TextUtil>()
@@ -19879,7 +19883,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Picker client-side filter — recompute each row's `filter-rank`
-    // (case-insensitive substring; Slint 1.16 has no string `.contains`, so
+    // (case-insensitive substring; Slint 1.17 has no string `.contains`, so
     // the match runs here). Rank = match ordinal among the filtered rows,
     // -1 = filtered out; the total lands in `filter-matches`. Pure frontend,
     // no backend call.
@@ -21280,7 +21284,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
     {
-        // Provider detection per keystroke (Slint 1.16 has no `.contains`).
+        // Provider detection per keystroke (Slint 1.17 has no `.contains`).
         let weak = window.as_weak();
         window
             .global::<PlaylistImportActions>()

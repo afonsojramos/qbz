@@ -26,7 +26,7 @@
 
 use std::cell::RefCell;
 
-use slint::wgpu_28::wgpu;
+use slint::wgpu_29::wgpu;
 use slint::Image;
 
 /// Offscreen render target CEILING. The actual target tracks the window's
@@ -484,8 +484,8 @@ fn build_shared(device: &wgpu::Device, queue: &wgpu::Queue, w: u32, h: u32) -> G
 
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("qbz-shader-pl"),
-        bind_group_layouts: &[&bgl],
-        // wgpu 28.x: replaces `push_constant_ranges`. We use none.
+        bind_group_layouts: &[Some(&bgl)],
+        // wgpu 29: layouts are optional entries; we have one, no immediates.
         immediate_size: 0,
     });
 
@@ -611,7 +611,7 @@ fn build_sized(
     });
 
     // The rotating offscreen pool. Image::try_from REQUIRES Rgba8Unorm/Srgb +
-    // TEXTURE_BINDING | RENDER_ATTACHMENT (Slint graphics/wgpu_28.rs); COPY_SRC
+    // TEXTURE_BINDING | RENDER_ATTACHMENT (Slint graphics/wgpu_29.rs); COPY_SRC
     // feeds the plasma history copy.
     let make_target = || {
         device.create_texture(&wgpu::TextureDescriptor {
@@ -986,7 +986,7 @@ pub fn render_frame(mode: i32, a: &FrameAudio, win_w: u32, win_h: u32) -> Option
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
-                // wgpu 28.x render passes also carry the multiview layer mask;
+                // wgpu 29 render passes also carry the multiview layer mask;
                 // we don't use multiview (single 2D target), so None.
                 multiview_mask: None,
             });
