@@ -568,18 +568,47 @@ Rectangle {
                             width: itemList.width
                             spacing: 0
 
+                            /// THE LIVE ROW, and the reason every read below goes
+                            /// through it instead of `modelData`.
+                            ///
+                            /// `model: root.rows` is a JavaScript array, and
+                            /// QQmlDelegateModel SNAPSHOTS such a model — the
+                            /// delegate's `modelData` is the engine's own copy of
+                            /// the element, not the object in `root.rows`. So
+                            /// `syncRows`' in-place `Object.assign` patch (the
+                            /// whole point of which is to update a row WITHOUT
+                            /// reassigning the array and throwing the user's
+                            /// scroll position to the top) mutated objects the
+                            /// delegates could never see. Bumping `patchRev` then
+                            /// dutifully re-evaluated every binding — against the
+                            /// stale copy.
+                            ///
+                            /// Measured: 34 items resolved Rust-side with correct
+                            /// tiers and 34 publishes, 71 QML refreshes, and the
+                            /// Quality column stayed on its skeleton forever.
+                            /// Expanded mode rendered nothing for the same reason
+                            /// (`inlineTracks` is patched in exactly this way).
+                            ///
+                            /// Indexing the live array closes it: `patchRev` is
+                            /// the dependency, `root.rows[index]` is the object
+                            /// Rust actually patched. `modelData` stays the
+                            /// fallback for the frame where the array and the
+                            /// delegate model are momentarily out of step.
+                            readonly property var live: root.patchRev >= 0
+                                ? (root.rows[index] || modelData) : modelData
+
                             readonly property bool expanded: root.viewMode === "expanded"
-                                && (root.patchRev >= 0 && modelData.canExpand === true)
+                                && (root.patchRev >= 0 && rowCell.live.canExpand === true)
                             readonly property var inlineTracks: (root.patchRev >= 0)
-                                ? (modelData.inlineTracks || []) : []
+                                ? (rowCell.live.inlineTracks || []) : []
                             readonly property bool expandLoading: root.patchRev >= 0
-                                && modelData.expandLoading === true
+                                && rowCell.live.expandLoading === true
                             readonly property bool tracksLoaded: root.patchRev >= 0
-                                && modelData.tracksLoaded === true
+                                && rowCell.live.tracksLoaded === true
 
                             MyQbzDetailRow {
                                 width: parent.width
-                                item: rowCell.modelData
+                                item: rowCell.live
                                 ordinal: rowCell.index + 1
                                 selectMode: root.selectMode
                                 dotPhase: root.dotPhase
@@ -722,7 +751,10 @@ Rectangle {
 
                     delegate: MyQbzDetailCard {
                         required property var modelData
-                        item: modelData
+                        required property int index
+                        // Live row, not the delegate model's snapshot — see the
+                        // list delegate's `live` note.
+                        item: root.patchRev >= 0 ? (root.rows[index] || modelData) : modelData
                         cardW: gridHost.cardW
                         selectMode: root.selectMode
                         rev: root.patchRev
