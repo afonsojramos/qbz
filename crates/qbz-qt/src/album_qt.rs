@@ -142,6 +142,14 @@ pub struct AlbumHeader {
     pub is_favorite: bool,
     #[serde(rename = "isPinned")]
     pub is_pinned: bool,
+    /// Blocked state at build time, seeded from the per-user album blacklist
+    /// (1:1 with `qbz/src/album.rs:683`, which seeds it right after the heart).
+    /// `AlbumView.qml`'s header menu folds this through `toggleState("blocked",
+    /// ...)`, so without it an ALREADY-BLOCKED album offers "Block this album"
+    /// and the first click UN-blocks — the same lie the pin glyph told before
+    /// `isPinned` existed.
+    #[serde(rename = "isAlbumBlocked")]
+    pub is_album_blocked: bool,
     /// EXTERNAL LINKS sidebar block — deep links into the three music
     /// databases, built from artist + title. These are plain URLs handed to
     /// the system browser on click: nothing is fetched, no account is needed
@@ -556,6 +564,7 @@ pub async fn load_album(runtime: &Arc<AppRuntime<LoggingAdapter>>, album_id: &st
         // and the toggle then read the same false and re-added it.
         is_favorite: crate::library_qt::is_favorite("album", &album.id),
         is_pinned: crate::sidebar_qt::is_pinned("album", &album.id),
+        is_album_blocked: crate::artist_blacklist::is_album_blacklisted(&album.id),
         id: album.id,
         title,
         artist,

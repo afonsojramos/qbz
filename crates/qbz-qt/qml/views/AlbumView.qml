@@ -155,6 +155,21 @@ Rectangle {
                 root.setToggleState("album", value)
         }
     }
+    // Album-blacklist settle / rollback. `blacklistChanged` carries the state
+    // the write actually produced — flipped on success, UNCHANGED on failure
+    // (blacklist_qt.rs `album_toggle`), so this is both the cross-surface walk
+    // (the manager's row `x`, a card's "Block this album") and the rollback for
+    // the header menu's optimistic flip below. Same two-arg `{kind}:{id}` shape
+    // as pinChanged / libraryFavoriteChanged above; a separate Connections
+    // block only because the signal lives on a different singleton.
+    Connections {
+        target: QbzBlacklist
+        function onBlacklistChanged(key, value) {
+            var id = (header && header.id) ? header.id : ""
+            if (id !== "" && key === "album:" + id)
+                root.setToggleState("blocked", value)
+        }
+    }
     Component.onCompleted: { syncAlbumState(); dispatchCovers() }
     onAlbumChanged: { syncAlbumState(); dispatchCovers() }
     // The derived binding settles AFTER onAlbumChanged fires (stale race) —
@@ -944,6 +959,15 @@ Rectangle {
                                 onEnqueueRequested: function (m) {
                                     QbzPlayer.enqueueAlbumTrack(header.id, item.id, m === "next" ? "next" : "later")
                                 }
+                                // MyQBZ "Add to mixtape" — the HOST builds the
+                                // AddItem array (TrackRow does not know
+                                // itemType/source).
+                                onMixtapeRequested: QbzMyQbzAdd.open(JSON.stringify([{
+                                    "itemType": "track", "source": "qobuz",
+                                    "sourceItemId": item.id, "title": item.title || "",
+                                    "subtitle": item.artist || "", "artworkUrl": "",
+                                    "year": null, "trackCount": null
+                                }]))
                             }
                         }
                     }
@@ -1085,7 +1109,9 @@ Rectangle {
         target: pageFlick
     }
 
-    // Album ⋯ menu (AlbumContextMenu subset — card menu + pin).
+    // Album ⋯ menu (AlbumContextMenu subset — card menu + pin + the block
+    // toggle; the .slint's playlist/mixtape/share/offline rows are the parts
+    // still out of scope).
     QbzContextMenu {
         id: albumMenu
         menuWidth: 196
@@ -1137,6 +1163,63 @@ Rectangle {
                                 QbzLibrary.togglePin("album", header.id, header.title, header.artist, header.artUrl)
                             }
                         }
+                    }
+                }
+            }
+
+            // AlbumContextMenu.slint:153 — a 1px border-subtle separator, then
+            // the album-blacklist toggle (:157-172). The .slint writes it as two
+            // `if` arms (Block / Unblock) whose row count is constant; one row
+            // with a flipping label is the same single row, and it is the shape
+            // ArtistPageView.slint:561-572 uses for the identical toggle. Own
+            // Rectangle rather than a sixth Repeater entry because the inline
+            // delegate above has no separator arm — `{sep:true}` is CardMenu's
+            // vocabulary, not this hand-rolled menu's (ArtistView.qml's
+            // overflow menu draws its blacklist row exactly this way).
+            Rectangle { width: parent.width; height: 1; color: theme.borderSubtle }
+            Rectangle {
+                id: ablkRow
+                width: parent.width
+                height: 33
+                radius: 5
+                // Seeded from the header document, which does NOT carry the
+                // field yet (album_qt.rs still has to port album.rs:683's
+                // `set_is_album_blocked` seed — spec 03 F13). Read defensively:
+                // `undefined` folds to false through toggleState's
+                // `fallback === true`, so the row is correct the moment the
+                // seed lands and never throws before then.
+                readonly property bool blocked: root.toggleState("blocked", header.isAlbumBlocked)
+                color: ablkArea.containsMouse ? theme.surfaceHover : "transparent"
+                Row {
+                    anchors.fill: parent
+                    anchors.leftMargin: 8
+                    spacing: 8
+                    QbzIcon { name: "blind-eye"; width: 15; height: 15; anchors.verticalCenter: parent.verticalCenter; tintName: "secondary" }
+                    Text {
+                        height: parent.height
+                        width: parent.width - 23
+                        text: ablkRow.blocked
+                            ? QbzSession.tr("Unblock album", QbzSession.trRev)
+                            : QbzSession.tr("Block this album", QbzSession.trRev)
+                        color: theme.textSecondary
+                        font.pixelSize: 13
+                        verticalAlignment: Text.AlignVCenter
+                        elide: Text.ElideRight
+                    }
+                }
+                MouseArea {
+                    id: ablkArea
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                        albumMenu.close()
+                        // Optimistic flip (main.rs:12835), then the mutation;
+                        // `blacklistChanged` above settles it — or rolls it
+                        // back on a write failure (main.rs:12859).
+                        root.setToggleState("blocked", !ablkRow.blocked)
+                        QbzBlacklist.albumToggle(header.id, header.title,
+                            header.artist, header.artUrl)
                     }
                 }
             }

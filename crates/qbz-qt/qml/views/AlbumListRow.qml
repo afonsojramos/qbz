@@ -9,12 +9,15 @@
 // (Open album / Play / Play next / Play later / Add to queue). Right-clicking
 // the row opens the same menu at the pointer, like every other ⋯ site.
 //
-// "Block this album" is absent for the same reason AlbumCard.qml gates it
-// off: the Qt bridge exposes the blacklist COUNTERS but no block-album
-// invokable, and a row that renders and does nothing is a defect.
+// "Block this album" is the sixth entry, live since QbzBlacklist landed
+// (primitives/AlbumListRow.slint:434-441). It is pushed conditionally rather
+// than sitting in the literal because the .slint gates it on a non-local /
+// non-plex source — see the `entries` block.
 //
 // item contract: home_qt::HomeCard — { id, title, artist, artistId, year,
-// qualityTier, qualityDetail, artPath }.
+// qualityTier, qualityDetail, artUrl, artPath }. `artUrl` is the REMOTE cover
+// url and `artPath` the local file:// cache path; only the former may be
+// persisted (src/home_qt.rs:117-121).
 
 import QtQuick
 import com.blitzfc.qbz
@@ -65,18 +68,39 @@ Rectangle {
     CardMenu {
         id: rowMenu
         menuWidth: 196
-        entries: [
-            { "label": QbzSession.tr("Open album", QbzSession.trRev), "icon": "library-big", "action": "open" },
-            { "label": QbzSession.tr("Play", QbzSession.trRev), "icon": "play-fill", "action": "play" },
-            { "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-start", "action": "next" },
-            { "label": QbzSession.tr("Play later", QbzSession.trRev), "icon": "list-plus", "action": "later" },
-            { "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "action": "queue" },
-        ]
+        // A JS expression, not a literal: the block row is CONDITIONAL. The
+        // function form also re-evaluates on `trRev`, which the literal
+        // already did through each `tr(…, trRev)` call.
+        entries: {
+            var t = QbzSession.tr
+            var r = QbzSession.trRev
+            var m = [
+                { "label": t("Open album", r), "icon": "library-big", "action": "open" },
+                { "label": t("Play", r), "icon": "play-fill", "action": "play" },
+                { "label": t("Play next", r), "icon": "list-start", "action": "next" },
+                { "label": t("Play later", r), "icon": "list-plus", "action": "later" },
+                { "label": t("Add to queue", r), "icon": "list-end", "action": "queue" },
+            ]
+            // AlbumListRow.slint:434-441 gates the row on a non-local/plex
+            // source. `home_qt::HomeCard` carries NO `source` field, so this
+            // reads "" and the row shows — correct for these two catalog-only
+            // surfaces (Discover Browse, Label Releases). Written defensively
+            // so a producer that starts emitting `source` is honoured without
+            // a second edit here.
+            var src = root.item.source || ""
+            if (src !== "local" && src !== "plex")
+                m.push({ "label": t("Block this album", r), "icon": "blind-eye", "action": "block" })
+            return m
+        }
         onPicked: function (a) {
             var id = root.item.id || ""
             if (id === "") return
             if (a === "open") QbzAlbum.openAlbum(id)
             else if (a === "play") QbzPlayer.playAlbum(id)
+            // `artUrl`, never `artPath`: the store keeps a denormalized cover
+            // url and a file:// cache path is dead on any other machine.
+            else if (a === "block") QbzBlacklist.blockAlbum(id, root.item.title || "",
+                root.item.artist || "", root.item.artUrl || "")
             else QbzPlayer.enqueueAlbum(id, a)
         }
     }

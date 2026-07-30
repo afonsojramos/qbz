@@ -10,30 +10,41 @@ import com.blitzfc.qbz
 import "../theme"
 
 Column {
+    id: emptyRoot
     property string iconName: ""
     property string title: ""
     property string body: ""
     property string actionLabel: ""
+    // Per-surface metrics. The consolidated default is the phase-22 one (40px
+    // glyph, full opacity, primary semibold title); the Blacklist manager's
+    // three empty branches are a 48px glyph at 0.3 with a MUTED regular title
+    // (BlacklistManagerView.slint:702-732, :801-831, :898-928), which is a
+    // call-site number, not a second component.
+    property int iconSize: 40
+    property real iconOpacity: 1.0
+    property bool titleMuted: false
+    property int titleWeight: theme.weightSemibold
     signal actionClicked()
 
     QbzTheme { id: theme }
 
     spacing: 0
     QbzIcon {
-        visible: iconName !== ""
-        name: iconName
-        width: 40
-        height: 40
+        visible: emptyRoot.iconName !== ""
+        name: emptyRoot.iconName
+        width: emptyRoot.iconSize
+        height: emptyRoot.iconSize
+        opacity: emptyRoot.iconOpacity
         anchors.horizontalCenter: parent.horizontalCenter
         tintName: "muted"
     }
     Item { visible: iconName !== ""; width: 1; height: 14 }
     Text {
         anchors.horizontalCenter: parent.horizontalCenter
-        text: title
-        color: theme.textPrimary
+        text: emptyRoot.title
+        color: emptyRoot.titleMuted ? theme.textMuted : theme.textPrimary
         font.pixelSize: theme.fontSection
-        font.weight: theme.weightSemibold
+        font.weight: emptyRoot.titleWeight
     }
     Item { visible: body !== ""; width: 1; height: 6 }
     Text {

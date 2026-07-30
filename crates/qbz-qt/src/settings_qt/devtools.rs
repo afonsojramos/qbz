@@ -3,7 +3,9 @@
 //! ADR-006 again: the log file is `qbz_log::install::log_file_path()` (the
 //! sink `main.rs` installs), the export bundle is the shared
 //! `qbz_app::settings::bundle` engine (the same one `qbzd` uses), and the
-//! blacklist counters come from the shared `BlacklistService` store.
+//! blacklist counters come from the per-user `artist_blacklist` singleton —
+//! the same store the Blacklist Manager view mutates, so the row cannot go
+//! stale behind it.
 //!
 //! Deltas vs the Slint (reported, not hidden):
 //! - Developer > "Connect diagnostics" is not shipped: the port has no live
@@ -13,9 +15,6 @@
 //! - Developer > export writes the bundle straight to disk with auth
 //!   EXCLUDED. The Slint's `SettingsExportModal` (the include-auth gate,
 //!   default OFF) is not ported, so the safe default is the only behaviour.
-//! - Blacklist > "Manage" is not shipped: there is no Blacklist Manager view
-//!   in this port, so the chevron would open nothing. The status line is the
-//!   real store's counters.
 
 use qbz_app::settings::bundle::{self, ExportOptions, ExportSource};
 use serde::Serialize;
@@ -53,28 +52,21 @@ fn install_method() -> String {
     String::new()
 }
 
-/// Blacklist counters, read-only. The store file is NOT created when it does
-/// not exist yet — an empty blacklist reads as zeros.
+/// Blacklist counters, read-only, straight off the per-user singleton bound at
+/// session activation (`auth_qt::bind_per_user_stores`).
+///
+/// This used to open a throwaway `BlacklistService` on every settings publish.
+/// It no longer can: the manager view mutates the SAME store, so a second
+/// handle would serve stale counts the moment the user removed an artist.
+///
+/// Fail-open is unchanged. `artist_blacklist`'s accessors return
+/// `(true, 0, 0)` for exactly the three cases the deleted early-returns
+/// covered — no session bound, no store file, store open failed — so the
+/// no-session and fresh-account behaviours do not move. The counts
+/// deliberately ignore the enabled flag: the row reports what is stored, and
+/// the flag is rendered separately.
 fn blacklist_counts() -> (bool, i32, i32) {
-    let Some(path) = crate::sidebar_qt::user_dir()
-        .map(|d| d.join(qbz_app::settings::artist_blacklist::DB_FILE_NAME))
-    else {
-        return (true, 0, 0);
-    };
-    if !path.exists() {
-        return (true, 0, 0);
-    }
-    match qbz_app::settings::artist_blacklist::BlacklistService::new(&path) {
-        Ok(service) => (
-            service.is_enabled(),
-            service.count() as i32,
-            service.album_count() as i32,
-        ),
-        Err(e) => {
-            log::warn!("[qbz-qt] blacklist store open failed: {e}");
-            (true, 0, 0)
-        }
-    }
+    crate::blacklist_qt::counts()
 }
 
 pub fn snapshot() -> Snapshot {

@@ -32,8 +32,8 @@
 //
 // --- Menu inventory vs discover/ArtistGridCard.slint -------------------
 //   Open artist · Play · Follow/Following (show-follow) · Not interested
-// The first three are live. "Not interested" is gated off
-// (`hasNotInterestedSeam`) — it used to render and do nothing at all.
+// All four are live; "Not interested" rides `hasNotInterestedSeam` (default
+// on) and writes the reco-dismissal store through QbzBlacklist.
 // ⋯ and a right press on the portrait or the name open the same menu.
 
 import QtQuick
@@ -55,10 +55,13 @@ Rectangle {
     property string followMode: "toggle"
     property string followKind: "artist"
 
-    // --- Seams the Qt bridge does NOT have (menu-parity round) -----------
-    //   hasNotInterestedSeam -> the reco-scoped dismissal store is not
-    //                           opened by the Qt port
-    // That entry stays out of the menu until its invokable lands.
+    // --- "Not interested" (the reco-scoped dismissal) --------------------
+    // LIVE since QbzBlacklist landed: `dismissArtist(id, name, imageUrl)`
+    // writes the reco-dismissal store (NOT the artist blacklist). Kept as a
+    // property, not inlined, so a host whose `item.id` is not a Qobuz artist
+    // id can turn it off. Live BACKFILL is out of scope — the card leaves the
+    // rails on the next publish, not on the click (src/recommendations_qt.rs
+    // documents the retained-overflow drop).
     //
     // `hasFollowSeam` is GONE, and the header comment it carried ("There is
     // NO artist-follow invokable on the Qt bridge") was simply wrong:
@@ -67,7 +70,7 @@ Rectangle {
     // `add_favorite` / `remove_favorite`, and ArtistView's own header button
     // has been calling it all along. The constant made the follow affordance
     // disappear from EVERY artist card in the app.
-    readonly property bool hasNotInterestedSeam: false
+    property bool hasNotInterestedSeam: true
 
     color: "transparent"
 
@@ -311,7 +314,15 @@ Rectangle {
         if (a === "open") QbzArtist.openArtist(root.item.id)
         else if (a === "play") QbzPlayer.playArtistCard(root.item.id)
         else if (a === "follow") root.toggleFollow()
-        // "not-interested" is unreachable while hasNotInterestedSeam is
-        // false — the entry is not built.
+        // THREE args: the store persists (id, name, image_url) and only
+        // backfills a field that is EMPTY, so a blank first write can never be
+        // repaired later. `artworkUrl` first because that is the host-
+        // normalized REMOTE url (some producers spell the key `imageUrl`, e.g.
+        // LibraryView) — `item.artUrl` is the HomeCard fallback, and never
+        // `artSource`, which is a local file:// cache path.
+        else if (a === "not-interested")
+            QbzBlacklist.dismissArtist(root.item.id,
+                root.item.name || root.item.title || "",
+                root.artworkUrl !== "" ? root.artworkUrl : (root.item.artUrl || ""))
     }
 }

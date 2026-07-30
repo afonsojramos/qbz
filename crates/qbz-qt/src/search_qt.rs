@@ -29,9 +29,15 @@
 //! - Artist "following" flags are resolved from `fav_cache_qt` (the ported
 //!   favourite-id cache) — they used to be hard-`false`, which made a search
 //!   hit on a followed artist draw "Follow" and un-follow them on click.
-//! - The album/artist blacklist filter is passed empty (the blacklist
-//!   store is not open in this POC, same as earlier phases).
+//!
+//! Blacklist filtering is live on every one of this module's four fetch paths
+//! (spec 03 §9.2 F8): `live` and `submit` hand the snapshot pair INTO
+//! `core.search_all` (`search.rs:1045-1059`, `:1095-1115`), and `load_more` /
+//! `filter_changed` post-filter their pages because the paged
+//! `search_albums` / `search_tracks` / `search_artists` pass-throughs take no
+//! snapshot (`search.rs:1616-1666`).
 
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -424,6 +430,30 @@ fn map_playlist(playlist: &Playlist) -> PlaylistRow {
 }
 
 // ---------------------------------------------------------------------------
+// Blacklist snapshots (spec 03 §9.2 F8)
+// ---------------------------------------------------------------------------
+
+/// The `(artists, albums)` blacklist snapshot pair every fetch path in this
+/// module needs, in the reference's exact shape: **one** shared `is_enabled()`
+/// gate for both axes, empty sets when the feature is off so the `qbz_core`
+/// predicates short-circuit on `bl.is_empty() && album_bl.is_empty()`
+/// (`search.rs:1045-1055` / `:1618-1626`, `qbz-core/src/core.rs:128`).
+///
+/// Snapshotted per fetch, not cached: the store is mutated from the manager,
+/// the artist page and the album page with no change-notify, so a stale
+/// snapshot is exactly the leak this closes.
+fn blacklist_snapshots() -> (HashSet<u64>, HashSet<String>) {
+    if crate::artist_blacklist::is_enabled() {
+        (
+            crate::artist_blacklist::ids_snapshot(),
+            crate::artist_blacklist::album_ids_snapshot(),
+        )
+    } else {
+        Default::default()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Artwork (the reload_home pattern: disk hits inline, one background
 // download + republish)
 // ---------------------------------------------------------------------------
@@ -701,10 +731,9 @@ pub async fn live(runtime: &Arc<AppRuntime<LoggingAdapter>>, query: &str) {
     });
 
     let t = std::time::Instant::now();
-    let results = runtime
-        .core()
-        .search_all(&q, &Default::default(), &Default::default())
-        .await;
+    // Blacklist filtering happens INSIDE search_all (`search.rs:1112-1115`).
+    let (bl, abl) = blacklist_snapshots();
+    let results = runtime.core().search_all(&q, &bl, &abl).await;
     let results = match results {
         Ok(r) => r,
         Err(e) => {
@@ -1117,10 +1146,9 @@ pub async fn submit(runtime: &Arc<AppRuntime<LoggingAdapter>>, query: &str, tab:
     }
 
     let t = std::time::Instant::now();
-    let results = runtime
-        .core()
-        .search_all(&q, &Default::default(), &Default::default())
-        .await;
+    // Blacklist filtering happens INSIDE search_all (`search.rs:1056-1059`).
+    let (bl, abl) = blacklist_snapshots();
+    let results = runtime.core().search_all(&q, &bl, &abl).await;
     if !is_current_page_version(version) {
         return;
     }
@@ -1291,11 +1319,22 @@ pub async fn load_more(runtime: &Arc<AppRuntime<LoggingAdapter>>, tab: i32) {
     };
     let search_type = search_type_for_filter(filter);
     let version = next_page_version();
+    // Page-2+ is NOT filtered by the API: `search_albums`/`search_tracks`/
+    // `search_artists` take no snapshot, so the drop happens here, exactly as
+    // the reference does it (`search.rs:1616-1666`). `offset` stays the VISIBLE
+    // row count (`main.rs:9795-9800` reads `row_count()`), so a filtered page
+    // shortens the batch rather than shifting the cursor — reference-identical.
+    let (bl, abl) = blacklist_snapshots();
 
     match tab {
         1 => match runtime.core().search_albums(&query, PAGE_SIZE, offset, search_type.as_deref()).await {
             Ok(page) => {
-                let mut rows: Vec<CardRow> = page.items.iter().map(map_album).collect();
+                let mut rows: Vec<CardRow> = page
+                    .items
+                    .iter()
+                    .filter(|a| !qbz_core::core::album_blacklisted(a, &bl, &abl))
+                    .map(map_album)
+                    .collect();
                 let missing = attach_urls(rows.iter_mut().map(|r| (r.art_url.clone(), &mut r.art_path)).collect());
                 let total = page.total as i32;
                 let mut guard = PAGE.lock().unwrap();
@@ -1314,7 +1353,12 @@ pub async fn load_more(runtime: &Arc<AppRuntime<LoggingAdapter>>, tab: i32) {
         },
         2 => match runtime.core().search_tracks(&query, PAGE_SIZE, offset, search_type.as_deref()).await {
             Ok(page) => {
-                let mut rows: Vec<TrackRow> = page.items.iter().map(map_track).collect();
+                let mut rows: Vec<TrackRow> = page
+                    .items
+                    .iter()
+                    .filter(|t| !qbz_core::core::track_blacklisted(t, &bl, &abl))
+                    .map(map_track)
+                    .collect();
                 let missing = attach_urls(rows.iter_mut().map(|r| (r.art_url.clone(), &mut r.art_path)).collect());
                 let total = page.total as i32;
                 let mut guard = PAGE.lock().unwrap();
@@ -1333,7 +1377,14 @@ pub async fn load_more(runtime: &Arc<AppRuntime<LoggingAdapter>>, tab: i32) {
         },
         3 => match runtime.core().search_artists(&query, PAGE_SIZE, offset, search_type.as_deref()).await {
             Ok(page) => {
-                let mut rows: Vec<ArtistRow> = page.items.iter().map(map_artist).collect();
+                // Artist axis ONLY — the reference filters this category on
+                // `bl` alone (`search.rs:1655`); an artist has no album id.
+                let mut rows: Vec<ArtistRow> = page
+                    .items
+                    .iter()
+                    .filter(|a| !bl.contains(&a.id))
+                    .map(map_artist)
+                    .collect();
                 let missing = attach_urls(rows.iter_mut().map(|r| (r.art_url.clone(), &mut r.art_path)).collect());
                 let total = page.total as i32;
                 let mut guard = PAGE.lock().unwrap();
@@ -1389,10 +1440,19 @@ pub async fn filter_changed(runtime: &Arc<AppRuntime<LoggingAdapter>>, index: i3
     }
     let search_type = search_type_for_filter(index);
     let version = next_page_version();
+    // The reference implements the filter radios by calling `load_more(.., 0)`
+    // per category and `replace_category` (`main.rs:9843-9856`), so these three
+    // re-queries carry the SAME post-filter as `load_more` above.
+    let (bl, abl) = blacklist_snapshots();
 
     // Albums.
     if let Ok(page) = runtime.core().search_albums(&query, PAGE_SIZE, 0, search_type.as_deref()).await {
-        let mut rows: Vec<CardRow> = page.items.iter().map(map_album).collect();
+        let mut rows: Vec<CardRow> = page
+            .items
+            .iter()
+            .filter(|a| !qbz_core::core::album_blacklisted(a, &bl, &abl))
+            .map(map_album)
+            .collect();
         let _ = attach_urls(rows.iter_mut().map(|r| (r.art_url.clone(), &mut r.art_path)).collect());
         let total = page.total as i32;
         let mut guard = PAGE.lock().unwrap();
@@ -1408,7 +1468,12 @@ pub async fn filter_changed(runtime: &Arc<AppRuntime<LoggingAdapter>>, index: i3
     }
     // Tracks.
     if let Ok(page) = runtime.core().search_tracks(&query, PAGE_SIZE, 0, search_type.as_deref()).await {
-        let mut rows: Vec<TrackRow> = page.items.iter().map(map_track).collect();
+        let mut rows: Vec<TrackRow> = page
+            .items
+            .iter()
+            .filter(|t| !qbz_core::core::track_blacklisted(t, &bl, &abl))
+            .map(map_track)
+            .collect();
         let _ = attach_urls(rows.iter_mut().map(|r| (r.art_url.clone(), &mut r.art_path)).collect());
         let total = page.total as i32;
         let mut guard = PAGE.lock().unwrap();
@@ -1424,7 +1489,12 @@ pub async fn filter_changed(runtime: &Arc<AppRuntime<LoggingAdapter>>, index: i3
     }
     // Artists (the API takes the search_type too, 1:1 the Slint filter).
     if let Ok(page) = runtime.core().search_artists(&query, PAGE_SIZE, 0, search_type.as_deref()).await {
-        let mut rows: Vec<ArtistRow> = page.items.iter().map(map_artist).collect();
+        let mut rows: Vec<ArtistRow> = page
+            .items
+            .iter()
+            .filter(|a| !bl.contains(&a.id))
+            .map(map_artist)
+            .collect();
         let _ = attach_urls(rows.iter_mut().map(|r| (r.art_url.clone(), &mut r.art_path)).collect());
         let total = page.total as i32;
         let mut guard = PAGE.lock().unwrap();

@@ -36,7 +36,19 @@ Item {
     // The parsed settingsJson document ({} until the first publish lands).
     property var doc: ({})
     // Active sub-section (display order — see the header comment).
-    property int section: 0
+    //
+    // A BINDING onto bridge state, never local truth. The content Loader
+    // unmounts this whole view when the user navigates away, so a plain
+    // `property int section: 0` was lost on every round trip — the Blacklist
+    // panel's "Manage" chevron opens the manager VIEW, and coming Back landed
+    // on Audio. See `bridge.rs`'s note on `settings_section`.
+    //
+    // Consequently every sub-nav row calls `QbzBridge.settingsSetSection(n)`
+    // and NOTHING assigns `root.section` directly: in QML an imperative
+    // assignment destroys the binding it lands on, so a single surviving
+    // `root.section = n` would work once and then re-introduce the bug one
+    // navigation later, in a way that looks fixed under casual testing.
+    readonly property int section: QbzBridge.settingsSection
 
     readonly property bool sandboxed: {
         const m = (doc.dev || ({})).installMethod || ""
@@ -145,49 +157,49 @@ Item {
                         name: "volume-2"
                         label: QbzSession.tr("Audio", QbzSession.trRev)
                         active: root.section === 0
-                        onClicked: root.section = 0
+                        onClicked: QbzBridge.settingsSetSection(0)
                     }
                     SubNavItem {
                         name: "play-fill"
                         label: QbzSession.tr("Playback", QbzSession.trRev)
                         active: root.section === 1
-                        onClicked: root.section = 1
+                        onClicked: QbzBridge.settingsSetSection(1)
                     }
                     SubNavItem {
                         name: "layers"
                         label: QbzSession.tr("Appearance", QbzSession.trRev)
                         active: root.section === 2
-                        onClicked: root.section = 2
+                        onClicked: QbzBridge.settingsSetSection(2)
                     }
                     SubNavItem {
                         name: "cloud-download"
                         label: QbzSession.tr("Offline", QbzSession.trRev)
                         active: root.section === 3
-                        onClicked: root.section = 3
+                        onClicked: QbzBridge.settingsSetSection(3)
                     }
                     SubNavItem {
                         name: "hard-drive"
                         label: QbzSession.tr("Local Library", QbzSession.trRev)
                         active: root.section === 4
-                        onClicked: root.section = 4
+                        onClicked: QbzBridge.settingsSetSection(4)
                     }
                     SubNavItem {
                         name: "blind-eye"
                         label: QbzSession.tr("Blacklist", QbzSession.trRev)
                         active: root.section === 5
-                        onClicked: root.section = 5
+                        onClicked: QbzBridge.settingsSetSection(5)
                     }
                     SubNavItem {
                         name: "refresh-cw"
                         label: QbzSession.tr("Integrations", QbzSession.trRev)
                         active: root.section === 6
-                        onClicked: root.section = 6
+                        onClicked: QbzBridge.settingsSetSection(6)
                     }
                     SubNavItem {
                         name: "bug"
                         label: QbzSession.tr("Developer", QbzSession.trRev)
                         active: root.section === 7
-                        onClicked: root.section = 7
+                        onClicked: QbzBridge.settingsSetSection(7)
                     }
                     // Sandboxed installs only (Flatpak / Snap permissions).
                     SubNavItem {
@@ -197,7 +209,7 @@ Item {
                             ? QbzSession.tr("Snap", QbzSession.trRev)
                             : QbzSession.tr("Flatpak", QbzSession.trRev)
                         active: root.section === 8
-                        onClicked: root.section = 8
+                        onClicked: QbzBridge.settingsSetSection(8)
                     }
                 }
 

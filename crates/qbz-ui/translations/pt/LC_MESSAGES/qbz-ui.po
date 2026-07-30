@@ -4867,3 +4867,25 @@ msgstr "{} faixas removidas dos favoritos"
 
 msgid "Removing {} tracks from favorites…"
 msgstr "Removendo {} faixas dos favoritos…"
+
+# Blacklist album-axis toasts (msgids from crates/qbz/src/blacklist_manager.rs:287-330)
+
+msgid "Album \"{}\" blocked"
+msgstr "Álbum \"{}\" bloqueado"
+
+msgid "Album \"{}\" unblocked"
+msgstr "Álbum \"{}\" desbloqueado"
+
+msgid "Failed to block album"
+msgstr "Falha ao bloquear o álbum"
+
+msgid "Failed to unblock album"
+msgstr "Falha ao desbloquear o álbum"
+
+msgid "Failed to clear album blacklist"
+msgstr "Falha ao limpar a lista negra de álbuns"
+
+msgid "Removed {} album from blacklist"
+msgid_plural "Removed {} albums from blacklist"
+msgstr[0] "{} álbum removido da lista negra"
+msgstr[1] "{} álbuns removidos da lista negra"

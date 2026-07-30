@@ -70,11 +70,13 @@ Rectangle {
     // so the two surfaces stay pixel-identical.
     property bool localMode: false
 
-    // Album blacklist ("Block this album"): no write seam on the Qt bridge —
-    // the entry stays out of the menu until one lands, rather than shipping
-    // a row that silently no-ops. Flip this and fill the "block" branch in
-    // `menuAction` together.
-    readonly property bool hasBlacklistSeam: false
+    // Album blacklist ("Block this album") — LIVE since QbzBlacklist landed
+    // (`blockAlbum(id, title, artist, coverUrl)`). Kept as a property, not
+    // inlined, because a host whose `albumId` is not a Qobuz catalog id must
+    // be able to turn it off; `localMode` already covers the two shipped
+    // cases. One-way, exactly like the .slint: the card drops on the grid's
+    // next reload, there is no live removal.
+    property bool hasBlacklistSeam: true
 
     signal openRequested()
     signal playRequested()
@@ -169,6 +171,11 @@ Rectangle {
         else if (a === "later") QbzPlayer.enqueueAlbum(root.albumId, "later")
         else if (a === "queue") QbzPlayer.enqueueAlbum(root.albumId, "queue")
         else if (a === "favorite") root.toggleFavorite()
+        // `artworkUrl` (the REMOTE url), never `artSource` — the store keeps a
+        // denormalized snapshot and a file:// cache path is dead on any other
+        // machine, the same reason the pin payload uses it.
+        else if (a === "block") QbzBlacklist.blockAlbum(root.albumId, root.title,
+            root.artist, root.artworkUrl)
     }
 
     Column {

@@ -4855,3 +4855,24 @@ msgstr "{} トラックをお気に入りから削除しました"
 
 msgid "Removing {} tracks from favorites…"
 msgstr "{} トラックをお気に入りから削除中…"
+
+# Blacklist album-axis toasts (msgids from crates/qbz/src/blacklist_manager.rs:287-330)
+
+msgid "Album \"{}\" blocked"
+msgstr "アルバム「{}」をブロックしました"
+
+msgid "Album \"{}\" unblocked"
+msgstr "アルバム「{}」のブロックを解除しました"
+
+msgid "Failed to block album"
+msgstr "アルバムのブロックに失敗しました"
+
+msgid "Failed to unblock album"
+msgstr "アルバムのブロック解除に失敗しました"
+
+msgid "Failed to clear album blacklist"
+msgstr "アルバムのブラックリストのクリアに失敗しました"
+
+msgid "Removed {} album from blacklist"
+msgid_plural "Removed {} albums from blacklist"
+msgstr[0] "ブラックリストから{}枚のアルバムを削除しました"

@@ -34,6 +34,17 @@ pub mod qbz_bridge {
         // One JSON document (settings_qt.rs SettingsDoc: audio + playback
         // row states, select option lists, output-device groups).
         #[qproperty(QString, settings_json)]
+        // The ACTIVE Settings sub-section (0 Audio … 8 Flatpak/Snap — the
+        // display order is documented in settings/SettingsView.qml's header).
+        //
+        // Bridge state rather than QML state, and that is load-bearing: the
+        // content Loader UNMOUNTS SettingsView when the user navigates away,
+        // which destroys a local `property int section` along with it. The
+        // Blacklist panel's "Manage" chevron does exactly that — it opens the
+        // manager view — so on Back the user landed on Audio instead of
+        // Blacklist. This is Slint's `SettingsState.section`, which is a global
+        // for the same reason (SettingsView.slint:121-200).
+        #[qproperty(i32, settings_section)]
 
         // --- Search (phase 15) ---------------------------------------------
         // Cortinilla (live dropdown): open/loading flags, ONE JSON payload
@@ -91,6 +102,15 @@ pub mod qbz_bridge {
         /// Free-text rows (Qobuz Connect device name).
         #[qinvokable]
         fn settings_string(self: Pin<&mut QbzBridge>, key: QString, value: QString);
+        /// Settings sub-navigation: switch the active section.
+        ///
+        /// The rows MUST call this rather than assigning `section` in QML.
+        /// `section` is a BINDING onto `settingsSection`, and in QML an
+        /// imperative assignment silently destroys the binding it lands on — so
+        /// one stray `root.section = n` would work for exactly one click and
+        /// then strand the view on stale local state.
+        #[qinvokable]
+        fn settings_set_section(self: Pin<&mut QbzBridge>, index: i32);
         /// "Reset to defaults" (audio + playback stores, quality pref).
         #[qinvokable]
         fn settings_reset(self: Pin<&mut QbzBridge>);
@@ -239,6 +259,7 @@ use cxx_qt_lib::QString;
 /// storage (as required by cxx-qt's Default-constructed qobjects).
 pub struct QbzBridgeRust {
     settings_json: QString,
+    settings_section: i32,
     cortinilla_open: bool,
     cortinilla_loading: bool,
     cortinilla_json: QString,
@@ -255,6 +276,8 @@ impl Default for QbzBridgeRust {
     fn default() -> Self {
         Self {
             settings_json: QString::from("{}"),
+            // 0 = Audio, the section Settings opens on.
+            settings_section: 0,
             cortinilla_open: false,
             cortinilla_loading: false,
             cortinilla_json: QString::from("{}"),
@@ -300,6 +323,13 @@ impl qbz_bridge::QbzBridge {
 
     pub fn settings_string(self: Pin<&mut Self>, key: QString, value: QString) {
         crate::settings_string(key.to_string(), value.to_string());
+    }
+
+    /// Purely bridge-local state — no crate handler, nothing to persist. The
+    /// Slint global is not persisted either: Settings always opens on Audio,
+    /// the section only has to survive a Loader unmount WITHIN a session.
+    pub fn settings_set_section(mut self: Pin<&mut Self>, index: i32) {
+        self.as_mut().set_settings_section(index);
     }
 
     pub fn settings_reset(self: Pin<&mut Self>) {

@@ -200,6 +200,28 @@ Rectangle {
         localToggles = Object.assign({}, m)
     }
 
+    // --- Artist blacklist -------------------------------------------------
+    // ONE source for the two surfaces the .slint drives off the same
+    // ArtistState.is-blacklisted: the overflow-menu row label
+    // (ArtistPageView.slint:565-567) and the hidden-artist banner (:595, :600).
+    // artist_qt.rs does not seed the field yet (spec 03 C5 — main.rs:2653-2659
+    // does it in the reference), so `artist.isBlacklisted` reads `undefined`
+    // today and toggleState's `fallback === true` folds that to false; the
+    // optimistic flip + the `blacklistChanged` settle below make the page
+    // correct within a visit, and it becomes correct on ENTRY the moment the
+    // seed lands, with no QML change.
+    readonly property bool artistBlacklisted: toggleState("artistBlacklist", artist.isBlacklisted)
+    function toggleBlacklist() {
+        var aid = artist.id || ""
+        if (aid === "")
+            return
+        // Optimistic flip first (main.rs:12777 `st.set_is_blacklisted(!was)`),
+        // then the mutation; `blacklistChanged` settles it — or rolls it back
+        // on a failed write (blacklist_qt.rs `artist_toggle`).
+        setToggleState("artistBlacklist", !artistBlacklisted)
+        QbzBlacklist.artistToggle(aid, artist.name || "")
+    }
+
     readonly property var discoveryRows: {
         var out = []
         var rows = network.discovery || []
@@ -313,6 +335,22 @@ Rectangle {
             var aid = (artist && artist.id) ? artist.id : ""
             if (aid !== "" && key === "artist:" + aid)
                 root.setToggleState("artistPin", value)
+        }
+    }
+    // Blacklist settle / rollback. `blacklistChanged` carries the state the
+    // write actually produced — flipped on success, UNCHANGED on failure
+    // (blacklist_qt.rs `artist_toggle`), which is exactly what main.rs:12799
+    // does with its rollback branch. Also the cross-surface walk: unblocking
+    // the same artist from the manager view while this page is mounted moves
+    // the menu label and drops the banner. Same two-arg `{kind}:{id}` shape as
+    // the two signals above; its own Connections block only because the signal
+    // lives on a different singleton.
+    Connections {
+        target: QbzBlacklist
+        function onBlacklistChanged(key, value) {
+            var aid = (artist && artist.id) ? artist.id : ""
+            if (aid !== "" && key === "artist:" + aid)
+                root.setToggleState("artistBlacklist", value)
         }
     }
 
@@ -1253,6 +1291,95 @@ Rectangle {
                 }
             }
 
+            // --- Hidden-artist banner (ArtistPageView.slint:595-660) ------
+            // Only when the CURRENTLY displayed artist is blacklisted. The page
+            // stays fully navigable — a direct fetch-by-id is never blocked
+            // (.slint:595-599) — so this is an unblock affordance, not a lock.
+            // Sits between the header and the body row, exactly where the
+            // .slint puts it (after the header block at :594, before the body
+            // row), with the .slint's own 16px spacer (:600).
+            // Built inline rather than through controls/WarningBanner.qml: that
+            // control has no action slot, and this banner's whole point is the
+            // right-hand "Show artist" button.
+            Item { visible: root.artistBlacklisted; width: 1; height: 16 }
+            Rectangle {
+                id: hiddenBanner
+                visible: root.artistBlacklisted
+                width: parent.width - 64
+                // .slint `height: banner-row.preferred-height` where the row is
+                // a HorizontalLayout with padding 12 (:602) — so 24 plus the
+                // tallest child: the 16px glyph, the wrapped copy, or the 28px
+                // button (:604, :620, :639).
+                height: visible ? 24 + Math.max(16, bannerCopy.implicitHeight, 28) : 0
+                radius: 8
+                // LITERALS, not theme tokens: the .slint hardcodes both
+                // (:596-599). theme.warningBg / warningBorder are a different
+                // amber (#fbbf24-based) and would not match the reference.
+                color: "#eab3081a"
+                border.width: 1
+                border.color: "#eab3084d"
+
+                // 16x16 blind-eye (:606-611). The .slint tints it with the
+                // literal #eab308; QbzIcon.tintName is a CLOSED vocabulary of
+                // names with no #eab308 bake, so "warning" (theme.warning
+                // #fbbf24) is the nearest available and the only theme-following
+                // amber — spec 03 C6's default decision.
+                QbzIcon {
+                    id: bannerGlyph
+                    name: "blind-eye"
+                    width: 16
+                    height: 16
+                    tintName: "warning"
+                    anchors.left: parent.left
+                    anchors.leftMargin: 12
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                // "Show artist" button (:634-659): width = label + 20, height
+                // 28, radius 6, hover fill surface-elevated else transparent,
+                // label accent -> accentHover on hover, 13 / semibold.
+                Rectangle {
+                    id: bannerBtn
+                    width: bannerBtnLabel.implicitWidth + 20
+                    height: 28
+                    radius: 6
+                    color: bannerBtnArea.containsMouse ? theme.surfaceElevated : "transparent"
+                    anchors.right: parent.right
+                    anchors.rightMargin: 12
+                    anchors.verticalCenter: parent.verticalCenter
+                    Text {
+                        id: bannerBtnLabel
+                        anchors.centerIn: parent
+                        text: QbzSession.tr("Show artist", QbzSession.trRev)
+                        color: bannerBtnArea.containsMouse ? theme.accentHover : theme.accent
+                        font.pixelSize: 13
+                        font.weight: theme.weightSemibold
+                    }
+                    MouseArea {
+                        id: bannerBtnArea
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        // Same seam as the menu row (:654-657) — one toggle.
+                        onClicked: root.toggleBlacklist()
+                    }
+                }
+                // Copy (:619-627): text-secondary, Typography.legal = 13,
+                // word-wrap. The 10px gaps on both sides are the .slint's
+                // HorizontalLayout spacing (:603).
+                Text {
+                    id: bannerCopy
+                    anchors.left: bannerGlyph.right
+                    anchors.leftMargin: 10
+                    anchors.right: bannerBtn.left
+                    anchors.rightMargin: 10
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: QbzSession.tr("This artist is hidden from discovery", QbzSession.trRev)
+                    color: theme.textSecondary
+                    font.pixelSize: 13
+                    wrapMode: Text.WordWrap
+                }
+            }
+
             Item { width: 1; height: 20 }
 
             // --- JUMP TO bar ---------------------------------------------
@@ -1632,13 +1759,13 @@ Rectangle {
                 readonly property var libTracks: libItems.filter(function (x) { return x.kind === "track" })
 
                 Text {
-                    visible: libTracks.length > 0
+                    visible: libraryTab.libTracks.length > 0
                     text: QbzSession.tr("Tracks", QbzSession.trRev)
                     color: theme.textPrimary
                     font.pixelSize: theme.fontHeading
                     font.weight: theme.weightSemibold
                 }
-                Item { visible: libTracks.length > 0; width: 1; height: 10 }
+                Item { visible: libraryTab.libTracks.length > 0; width: 1; height: 10 }
                 Repeater {
                     model: libraryTab.libTracks
                     delegate: PopularTrackRow {
@@ -2168,7 +2295,7 @@ Rectangle {
                 // ArtistPageView.slint:523) — dimmed, no hover, no click,
                 // and the menu keeps its shape.
                 model: [
-                    { "label": QbzSession.tr("Create Artist Collection", QbzSession.trRev), "icon": "library-big", "action": "stub", "live": false },
+                    { "label": QbzSession.tr("Create Artist Collection", QbzSession.trRev), "icon": "library-big", "action": "disco", "live": true },
                     { "label": QbzSession.tr("Artist Scene", QbzSession.trRev), "icon": "map-pin", "action": "stub", "live": false },
                     { "label": QbzSession.tr("Share", QbzSession.trRev), "icon": "link", "action": "stub", "live": false },
                     { "label": root.toggleState("artistPin", artist.isPinned) ? QbzSession.tr("Unpin", QbzSession.trRev) : QbzSession.tr("Pin", QbzSession.trRev), "icon": root.toggleState("artistPin", artist.isPinned) ? "pin-filled" : "pin", "action": "pin", "live": true },
@@ -2206,22 +2333,28 @@ Rectangle {
                             if (modelData.action === "pin") {
                                 root.setToggleState("artistPin", !root.toggleState("artistPin", artist.isPinned))
                                 QbzLibrary.togglePin("artist", artist.id, artist.name, "", artist.artUrl)
+                            } else if (modelData.action === "disco") {
+                                // Discography Builder — ArtistPageView.slint
+                                // :505-511 `media-action("artist", id,
+                                // "build-collection")`. This is the ONLY route
+                                // to it; the nav flyout has no builder entry.
+                                QbzDisco.open(artist.id)
                             }
                         }
                     }
                 }
             }
             Rectangle { width: parent.width; height: 1; color: theme.borderSubtle }
-            // Blacklist: the Qt bridge exposes the blacklist COUNTERS but no
-            // artist-block invokable (same gap AlbumCard.qml documents for
-            // "Block this album"), so the row is dimmed and inert rather than
-            // closing the menu and doing nothing.
+            // ArtistPageView.slint:557-572 — the 1px border-subtle separator
+            // above, then the LAST item, whose label flips
+            // "Show artist" / "Blacklist artist" on ArtistState.is-blacklisted.
+            // LIVE since QbzBlacklist landed (`artistToggle(id, name)`); it was
+            // dimmed-and-inert only while the bridge had no invokable.
             Rectangle {
                 width: parent.width
                 height: 33
                 radius: 5
-                opacity: 0.4
-                color: "transparent"
+                color: blkArea.containsMouse ? theme.surfaceHover : "transparent"
                 Row {
                     anchors.fill: parent
                     anchors.leftMargin: 8
@@ -2229,10 +2362,24 @@ Rectangle {
                     QbzIcon { name: "blind-eye"; width: 15; height: 15; anchors.verticalCenter: parent.verticalCenter; tintName: "secondary" }
                     Text {
                         height: parent.height
-                        text: QbzSession.tr("Blacklist artist", QbzSession.trRev)
+                        width: parent.width - 23
+                        text: root.artistBlacklisted
+                            ? QbzSession.tr("Show artist", QbzSession.trRev)
+                            : QbzSession.tr("Blacklist artist", QbzSession.trRev)
                         color: theme.textSecondary
                         font.pixelSize: 13
                         verticalAlignment: Text.AlignVCenter
+                        elide: Text.ElideRight
+                    }
+                }
+                MouseArea {
+                    id: blkArea
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                        overflowMenu.close()
+                        root.toggleBlacklist()
                     }
                 }
             }

@@ -195,6 +195,14 @@ pub struct ArtistViewData {
     pub is_following: bool,
     #[serde(rename = "isPinned")]
     pub is_pinned: bool,
+    /// Blacklisted state at build time, seeded from the per-user artist
+    /// blacklist (1:1 with `qbz/src/main.rs:2653-2659`, which seeds it beside
+    /// the pin state before the view flips). `ArtistView.qml` folds it through
+    /// `toggleState("artistBlacklist", ...)` to choose between "Blacklist
+    /// artist" and "Show artist" and to show the hidden banner. Reads false
+    /// when the feature is disabled — the reference accepts that here too.
+    #[serde(rename = "isBlacklisted")]
+    pub is_blacklisted: bool,
     #[serde(rename = "libraryCount")]
     pub library_count: i64,
     #[serde(rename = "topTracks")]
@@ -541,6 +549,7 @@ fn map_artist(page: PageArtistResponse) -> ArtistViewData {
         artwork_url,
         is_following,
         is_pinned: crate::sidebar_qt::is_pinned("artist", &page.id.to_string()),
+        is_blacklisted: crate::artist_blacklist::is_blacklisted(page.id),
         library_count,
         top_tracks,
         appears_on,
