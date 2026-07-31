@@ -1940,7 +1940,21 @@ pub async fn settings_select(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &st
             if backend != AudioBackendType::Alsa {
                 let _ = with_audio(|s| s.set_exclusive_mode(false));
             }
-            let _ = with_audio(|s| s.set_gapless_enabled(false));
+            // Gapless off ONLY when moving TO Alsa — `settings.rs:1232-1237`,
+            // which in turn matches Tauri's `SettingsView.svelte:3409-3416`
+            // ("not compatible with ALSA Direct"; in the engine's own
+            // vocabulary `using_alsa_direct` IS `backend_type == Alsa`,
+            // player/mod.rs:725-729).
+            //
+            // This guard was MISSING, so every backend change killed gapless —
+            // including switching TO PipeWire, where it works perfectly. That
+            // is the bug behind "gapless works on pipewire, not on alsa": the
+            // setting was silently turned off by the switch itself, and a user
+            // who did not notice the toggle flip read it as "alsa breaks
+            // gapless".
+            if backend == AudioBackendType::Alsa {
+                let _ = with_audio(|s| s.set_gapless_enabled(false));
+            }
             let _ = with_audio(|s| s.set_output_device(None));
             apply_audio(runtime, Apply::Reinit);
         }
