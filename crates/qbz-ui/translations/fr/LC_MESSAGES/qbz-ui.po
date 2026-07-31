@@ -4682,8 +4682,8 @@ msgstr "QBZ s'exécute dans un sandbox Snap. Certaines interfaces audio doivent 
 msgid "Exclusive DAC access (bit-perfect)"
 msgstr "Accès exclusif au DAC (bit-perfect)"
 
-msgid "Recommended for exclusive mode: lets QBZ ask PipeWire to hand over the DAC cleanly (D-Bus device reservation)."
-msgstr "Recommandé pour le mode exclusif : permet à QBZ de demander à PipeWire de céder le DAC proprement (réservation de périphérique D-Bus)."
+msgid "Recommended for exclusive mode: lets QBZ ask PipeWire to hand over the DAC cleanly (D-Bus device reservation). Without it, PipeWire keeps holding the DAC and other apps keep mixing through it even with ALSA + hw + Exclusive selected."
+msgstr "Recommandé pour le mode exclusif : permet à QBZ de demander à PipeWire de céder le DAC proprement (réservation de périphérique D-Bus). Sans cela, PipeWire conserve le DAC et d'autres applications continuent de mixer dessus même avec ALSA + hw + Exclusif sélectionné."
 
 msgid "Music on NAS or external drives"
 msgstr "Musique sur NAS ou disques externes"
@@ -4778,3 +4778,38 @@ msgstr "Albums les plus écoutés"
 # Most Played Albums View-all — per-card play count
 msgid "{} plays"
 msgstr "{} lectures"
+
+# Lyrics translation (Qobuz API v10) — floating-toggle tooltips, flyout row, error toast
+msgid "Show lyrics translation"
+msgstr "Afficher la traduction des paroles"
+
+msgid "Hide lyrics translation"
+msgstr "Masquer la traduction des paroles"
+
+msgid "Translation language"
+msgstr "Langue de traduction"
+
+msgid "Auto (account language)"
+msgstr "Automatique (langue du compte)"
+
+msgid "Translation is not available right now. Please try again later."
+msgstr "La traduction n'est pas disponible pour le moment. Veuillez réessayer plus tard."
+# Discover Recommendations — reco-scoped dismissals (Not interested management)
+
+msgid "Dismissed artists only leave your Recommendations — they still appear in search and everywhere else."
+msgstr "Les artistes écartés disparaissent uniquement de vos Recommandations — ils restent visibles dans la recherche et partout ailleurs."
+
+msgid "No dismissed artists"
+msgstr "Aucun artiste écarté"
+
+msgid "To stop seeing an artist in Recommendations, open its card menu and choose Not interested."
+msgstr "Pour ne plus voir un artiste dans Recommandations, ouvrez le menu de sa carte et choisissez Pas intéressé."
+
+msgid "{} won't appear in Recommendations anymore"
+msgstr "{} n'apparaîtra plus dans Recommandations"
+
+msgid "Artist dismissed from Recommendations"
+msgstr "Artiste écarté des Recommandations"
+
+msgid "{} restored to Recommendations"
+msgstr "{} rétabli dans Recommandations"

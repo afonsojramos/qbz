@@ -146,6 +146,19 @@ pub fn parse_login_response(response: &serde_json::Value) -> Result<UserSession>
         .and_then(|c| c.get("parameters"))
         .and_then(parse_subscription_valid_until);
 
+    // Account territory + language (snake_case wire names, verbatim in
+    // Qobuz's own embedded /user/login fixture — see qbz-nix-docs
+    // offline-mode/tauri-review-2026-06-09/10-subscription-trial-offline-
+    // gating.md §1.2). Absent on older captures -> None (feature stays off).
+    let country_code = user
+        .get("country_code")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let language_code = user
+        .get("language_code")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+
     // Check if user has valid subscription
     let has_subscription = credential
         .and_then(|c| c.get("parameters"))
@@ -163,6 +176,8 @@ pub fn parse_login_response(response: &serde_json::Value) -> Result<UserSession>
         display_name,
         subscription_label,
         subscription_valid_until,
+        country_code,
+        language_code,
     })
 }
 
@@ -200,5 +215,42 @@ mod tests {
     fn test_sign_get_file_url() {
         let sig = sign_get_file_url(123456, 27, 1234567890, "testsecret");
         assert_eq!(sig.len(), 32);
+    }
+
+    fn login_response(user_extra: serde_json::Value) -> serde_json::Value {
+        let mut user = serde_json::json!({
+            "id": 1705826,
+            "email": "a@b.c",
+            "display_name": "Tester",
+            "credential": {"parameters": {"short_label": "Studio"}}
+        });
+        user.as_object_mut()
+            .unwrap()
+            .extend(user_extra.as_object().unwrap().clone());
+        serde_json::json!({
+            "user_auth_token": "token",
+            "user": user,
+        })
+    }
+
+    #[test]
+    fn parse_login_response_captures_country_and_language() {
+        let response = login_response(serde_json::json!({
+            "country_code": "FR",
+            "language_code": "fr",
+        }));
+        let session = parse_login_response(&response).expect("valid login response");
+        assert_eq!(session.country_code.as_deref(), Some("FR"));
+        assert_eq!(session.language_code.as_deref(), Some("fr"));
+    }
+
+    #[test]
+    fn parse_login_response_tolerates_missing_country_and_language() {
+        // Older captures / partial payloads: both stay None (feature off),
+        // the rest of the session parses as before.
+        let response = login_response(serde_json::json!({}));
+        let session = parse_login_response(&response).expect("valid login response");
+        assert_eq!(session.country_code, None);
+        assert_eq!(session.language_code, None);
     }
 }

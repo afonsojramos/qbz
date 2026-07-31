@@ -10,3 +10,20 @@ pub mod session_store;
 pub mod shell;
 pub mod settings;
 pub mod user_data;
+
+/// Install the rustls process-level `CryptoProvider` (aws-lc-rs) exactly once.
+///
+/// Idempotent (a second call is a no-op); harmless if some other component
+/// already installed a default (`install_default` then returns Err, ignored).
+pub fn ensure_crypto_provider() {
+    use std::sync::Once;
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        if rustls::crypto::aws_lc_rs::default_provider()
+            .install_default()
+            .is_err()
+        {
+            log::debug!("[app] rustls CryptoProvider already installed");
+        }
+    });
+}

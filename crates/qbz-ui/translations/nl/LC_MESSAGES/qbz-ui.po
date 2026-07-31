@@ -4694,8 +4694,8 @@ msgstr "QBZ draait in een Snap-sandbox. Sommige audio-interfaces moeten eenmalig
 msgid "Exclusive DAC access (bit-perfect)"
 msgstr "Exclusieve DAC-toegang (bit-perfect)"
 
-msgid "Recommended for exclusive mode: lets QBZ ask PipeWire to hand over the DAC cleanly (D-Bus device reservation)."
-msgstr "Aanbevolen voor de exclusieve modus: laat QBZ PipeWire vragen de DAC netjes vrij te geven (D-Bus-apparaatreservering)."
+msgid "Recommended for exclusive mode: lets QBZ ask PipeWire to hand over the DAC cleanly (D-Bus device reservation). Without it, PipeWire keeps holding the DAC and other apps keep mixing through it even with ALSA + hw + Exclusive selected."
+msgstr "Aanbevolen voor exclusieve modus: laat QBZ PipeWire vragen de DAC netjes over te dragen (D-Bus-apparaatreservering). Zonder dit houdt PipeWire de DAC vast en mixen andere apps er nog steeds doorheen, zelfs met ALSA + hw + Exclusief geselecteerd."
 
 msgid "Music on NAS or external drives"
 msgstr "Muziek op NAS of externe schijven"
@@ -4790,3 +4790,38 @@ msgstr "Meest afgespeelde albums"
 # Most Played Albums View-all — per-card play count
 msgid "{} plays"
 msgstr "{} keer afgespeeld"
+
+# Lyrics translation (Qobuz API v10) — floating-toggle tooltips, flyout row, error toast
+msgid "Show lyrics translation"
+msgstr "Songtekstvertaling tonen"
+
+msgid "Hide lyrics translation"
+msgstr "Songtekstvertaling verbergen"
+
+msgid "Translation language"
+msgstr "Vertaaltaal"
+
+msgid "Auto (account language)"
+msgstr "Automatisch (accounttaal)"
+
+msgid "Translation is not available right now. Please try again later."
+msgstr "Vertaling is nu niet beschikbaar. Probeer het later opnieuw."
+# Discover Recommendations — reco-scoped dismissals (Not interested management)
+
+msgid "Dismissed artists only leave your Recommendations — they still appear in search and everywhere else."
+msgstr "Afgewezen artiesten verdwijnen alleen uit je Aanbevelingen — ze blijven zichtbaar in zoekresultaten en overal elders."
+
+msgid "No dismissed artists"
+msgstr "Geen afgewezen artiesten"
+
+msgid "To stop seeing an artist in Recommendations, open its card menu and choose Not interested."
+msgstr "Om een artiest niet meer in Aanbevelingen te zien, open je het kaartmenu en kies je Niet geïnteresseerd."
+
+msgid "{} won't appear in Recommendations anymore"
+msgstr "{} verschijnt niet meer in Aanbevelingen"
+
+msgid "Artist dismissed from Recommendations"
+msgstr "Artiest afgewezen voor Aanbevelingen"
+
+msgid "{} restored to Recommendations"
+msgstr "{} hersteld in Aanbevelingen"

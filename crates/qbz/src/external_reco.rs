@@ -9,6 +9,7 @@
 //! Weekly Exploration/Jams (ListenBrainz), Deep-cut albums, and a Qobuz editorial
 //! cold-start fallback.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -18,9 +19,9 @@ use qbz_app::shell::AppRuntime;
 use qbz_external_reco::{
     build_deep_cut_albums, build_editorial, build_fresh_releases, build_rec_albums,
     build_rec_artists_common, build_rec_artists_recent, build_similar_albums_seeded,
-    build_weekly_exploration, build_weekly_jams, gather_history, is_cold_start, AlbumReco,
-    ArtistReco, ExternalCarousels, LastFmHandle, ListenBrainzHandle, LocalHistory, RecoCache,
-    RecoCatalog, RecoInputs, TrackReco,
+    build_weekly_exploration, build_weekly_jams, compose_artist_rails, gather_history,
+    is_cold_start, AlbumReco, ArtistReco, ExternalCarousels, LastFmHandle, ListenBrainzHandle,
+    LocalHistory, RecoCache, RecoCatalog, RecoInputs, TrackReco, ARTIST_DISPLAY_CAP,
 };
 use qbz_integrations::{LastFmClient, ListenBrainzClient, MusicBrainzClient};
 use qbz_models::{Album, Artist, Track};
@@ -31,6 +32,15 @@ use crate::artwork::{ArtworkJob, ArtworkTarget, ImageCache};
 use crate::{AlbumCardItem, AppWindow, DiscoverSection, ExternalRecoState, SlimItem};
 
 static CACHE_DIR: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+/// Retained per-rail overflow (validated candidates past the visible cap) for
+/// the two Recommended-Artist rails — (common, recent). Kept for live
+/// backfill after a "not interested" dismissal, so a replacement card needs
+/// no extra network. Rewritten on every rail paint (fresh build AND cached
+/// blob paint; old blobs carry no overflow, so they simply don't backfill
+/// until they expire).
+static ARTIST_OVERFLOW: Mutex<(Vec<ArtistReco>, Vec<ArtistReco>)> =
+    Mutex::new((Vec::new(), Vec::new()));
 
 pub fn init_for_user(base_dir: &Path) {
     if let Ok(mut g) = CACHE_DIR.lock() {
@@ -390,19 +400,21 @@ fn spawn(
             let history = gather_history(&inputs).await;
             let col = &collector;
             // Progressive: each branch paints its row AND collects it for the cache.
-            let b_common = async {
-                let r = build_rec_artists_common(&inputs, &history).await;
+            // The two artist rails build in parallel but paint TOGETHER through
+            // apply_artist_rails (the shared filter/dedup/backfill choke point —
+            // cross-rail dedup needs both pools). The collector stores the FULL
+            // validated pools (visible + overflow), so the results blob carries
+            // the backfill candidates too.
+            let b_artists = async {
+                let (common_pool, recent_pool) = tokio::join!(
+                    build_rec_artists_common(&inputs, &history),
+                    build_rec_artists_recent(&inputs, &history),
+                );
                 if let Ok(mut g) = col.lock() {
-                    g.rec_artists_common = r.clone();
+                    g.rec_artists_common = common_pool.clone();
+                    g.rec_artists_recent = recent_pool.clone();
                 }
-                apply_artists(&weak, &image_cache, r, ArtistRow::RecArtistsCommon);
-            };
-            let b_recent = async {
-                let r = build_rec_artists_recent(&inputs, &history).await;
-                if let Ok(mut g) = col.lock() {
-                    g.rec_artists_recent = r.clone();
-                }
-                apply_artists(&weak, &image_cache, r, ArtistRow::RecArtistsRecent);
+                apply_artist_rails(&weak, &image_cache, common_pool, recent_pool);
             };
             let b_albums = async {
                 let r = build_rec_albums(&inputs, &history).await;
@@ -439,7 +451,7 @@ fn spawn(
                 }
                 apply_albums(&weak, &image_cache, r, AlbumRow::DeepCuts);
             };
-            tokio::join!(b_common, b_recent, b_albums, b_fresh, b_explore, b_jams, b_deep);
+            tokio::join!(b_artists, b_albums, b_fresh, b_explore, b_jams, b_deep);
         }
 
         // 3. Store the built result for instant future opens (48h TTL). GUARD
@@ -522,13 +534,156 @@ fn clear_all_pending(w: &AppWindow) {
 /// their own per-week cache by `build_and_apply_weeklies`, so the blob can never
 /// pin a stale/empty weekly for the 48h window.
 fn apply_all(weak: &slint::Weak<AppWindow>, cache: &ImageCache, r: ExternalCarousels) {
-    apply_artists(weak, cache, r.rec_artists_common, ArtistRow::RecArtistsCommon);
-    apply_artists(weak, cache, r.rec_artists_recent, ArtistRow::RecArtistsRecent);
+    apply_artist_rails(weak, cache, r.rec_artists_common, r.rec_artists_recent);
     apply_albums(weak, cache, r.rec_albums, AlbumRow::RecAlbums);
     apply_albums(weak, cache, r.fresh_releases, AlbumRow::FreshReleases);
     apply_albums(weak, cache, r.deep_cut_albums, AlbumRow::DeepCuts);
     apply_albums(weak, cache, r.top_albums, AlbumRow::TopAlbums);
     apply_artists(weak, cache, r.top_artists, ArtistRow::TopArtists);
+}
+
+/// Fold the three per-user exclusion sources — followed artists, the app-wide
+/// blacklist, and the reco-scoped "not interested" dismissals — into one id
+/// set for the rail composition. Every source is independently fail-open (an
+/// unbound/unreadable store simply contributes nothing).
+fn artist_exclusions() -> HashSet<u64> {
+    let mut ids = crate::fav_cache::all_artists();
+    ids.extend(crate::artist_blacklist::ids_snapshot());
+    ids.extend(crate::reco_dismiss::ids_snapshot());
+    ids
+}
+
+/// THE paint choke point for the two Recommended-Artist rails — the fresh
+/// build AND the cached-blob paint both funnel through here. Composes the
+/// visible rows from the validated pools AFTER exclusion filtering +
+/// cross-rail dedup (common wins), takes the first ARTIST_DISPLAY_CAP
+/// survivors per rail, and retains the rest as backfill overflow for the
+/// "not interested" live replacement (compose_artist_rails does the split;
+/// the full pools ride the results blob, so a cached paint backfills too).
+fn apply_artist_rails(
+    weak: &slint::Weak<AppWindow>,
+    cache: &ImageCache,
+    common_pool: Vec<ArtistReco>,
+    recent_pool: Vec<ArtistReco>,
+) {
+    let excluded = artist_exclusions();
+    let (common, recent) =
+        compose_artist_rails(common_pool, recent_pool, &excluded, ARTIST_DISPLAY_CAP);
+    if let Ok(mut g) = ARTIST_OVERFLOW.lock() {
+        g.0 = common.overflow;
+        g.1 = recent.overflow;
+    }
+    apply_artists(weak, cache, common.visible, ArtistRow::RecArtistsCommon);
+    apply_artists(weak, cache, recent.visible, ArtistRow::RecArtistsRecent);
+}
+
+/// Pop the first retained-overflow candidate for `which` rail that still
+/// passes the LIVE exclusions (a follow/blacklist may have landed since the
+/// paint) and is not already visible in either rail. Non-passing entries stay
+/// pooled (they may become eligible again, e.g. after an un-follow).
+fn pop_backfill(
+    which: ArtistRow,
+    visible: &HashSet<String>,
+    excluded: &HashSet<u64>,
+) -> Option<ArtistReco> {
+    let mut g = ARTIST_OVERFLOW.lock().ok()?;
+    let pool = match which {
+        ArtistRow::RecArtistsCommon => &mut g.0,
+        ArtistRow::RecArtistsRecent => &mut g.1,
+        ArtistRow::TopArtists => return None,
+    };
+    let idx = pool.iter().position(|r| {
+        !excluded.contains(&r.qobuz_artist_id)
+            && !visible.contains(&r.qobuz_artist_id.to_string())
+    })?;
+    Some(pool.remove(idx))
+}
+
+/// Live "Not interested": drop the artist card from the Recommended-Artist
+/// rail that carries it and backfill the freed slot from that rail's retained
+/// overflow — already Qobuz-validated, so no network. Runs on the Slint event
+/// loop. Returns the (name, image_url) snapshot of the dismissed card (for the
+/// dismissal store + toast), or None when the artist is not currently in a
+/// reco rail (e.g. dismissed from a search/home card).
+pub fn apply_artist_dismissal(
+    w: &AppWindow,
+    cache: &ImageCache,
+    artist_id: &str,
+) -> Option<(String, String)> {
+    let s = w.global::<ExternalRecoState>();
+    let common_model = s.get_rec_artists_common();
+    let recent_model = s.get_rec_artists_recent();
+    let common_rows: Vec<SlimItem> = (0..common_model.row_count())
+        .filter_map(|i| common_model.row_data(i))
+        .collect();
+    let recent_rows: Vec<SlimItem> = (0..recent_model.row_count())
+        .filter_map(|i| recent_model.row_data(i))
+        .collect();
+    let in_common = common_rows.iter().any(|it| it.id.as_str() == artist_id);
+    let in_recent = recent_rows.iter().any(|it| it.id.as_str() == artist_id);
+    if !in_common && !in_recent {
+        return None;
+    }
+    let snapshot = common_rows
+        .iter()
+        .chain(recent_rows.iter())
+        .find(|it| it.id.as_str() == artist_id)
+        .map(|it| (it.title.to_string(), it.artwork_url.to_string()));
+
+    let excluded = artist_exclusions();
+    // Rebuild the affected models from the kept rows — their already-decoded
+    // `artwork` images ride along, so only the backfilled row needs a job.
+    let mut common_new: Vec<SlimItem> = common_rows
+        .into_iter()
+        .filter(|it| it.id.as_str() != artist_id)
+        .collect();
+    let mut recent_new: Vec<SlimItem> = recent_rows
+        .into_iter()
+        .filter(|it| it.id.as_str() != artist_id)
+        .collect();
+    // Visible ids across BOTH rails (post-removal): the backfill candidate
+    // must not duplicate the other rail.
+    let mut visible: HashSet<String> = common_new
+        .iter()
+        .chain(recent_new.iter())
+        .map(|it| it.id.to_string())
+        .collect();
+
+    let mut jobs: Vec<ArtworkJob> = Vec::new();
+    if in_common {
+        if let Some(reco) = pop_backfill(ArtistRow::RecArtistsCommon, &visible, &excluded) {
+            visible.insert(reco.qobuz_artist_id.to_string());
+            if !reco.image_url.is_empty() {
+                jobs.push(ArtworkJob {
+                    url: reco.image_url.clone(),
+                    target: ArtworkTarget::ExtRecoRecArtistCommon {
+                        index: common_new.len(),
+                    },
+                });
+            }
+            common_new.push(slim_from_artist(&reco));
+        }
+        s.set_rec_artists_common(ModelRc::new(VecModel::from(common_new)));
+    }
+    if in_recent {
+        if let Some(reco) = pop_backfill(ArtistRow::RecArtistsRecent, &visible, &excluded) {
+            visible.insert(reco.qobuz_artist_id.to_string());
+            if !reco.image_url.is_empty() {
+                jobs.push(ArtworkJob {
+                    url: reco.image_url.clone(),
+                    target: ArtworkTarget::ExtRecoRecArtistRecent {
+                        index: recent_new.len(),
+                    },
+                });
+            }
+            recent_new.push(slim_from_artist(&reco));
+        }
+        s.set_rec_artists_recent(ModelRc::new(VecModel::from(recent_new)));
+    }
+    if !jobs.is_empty() {
+        crate::artwork::spawn_loads(jobs, w.as_weak(), cache.clone());
+    }
+    snapshot
 }
 
 /// Build + paint the two Weekly rows from their own per-week cache (cheap on a
@@ -601,7 +756,11 @@ fn slim_from_artist(a: &ArtistReco) -> SlimItem {
         rank: "".into(),
         artwork_url: a.image_url.clone().into(),
         artwork: slint::Image::default(),
-        following: false,
+        // Live follow state from the login-seeded fav cache (the
+        // pinned_section precedent) — a hardcoded `false` mislabeled
+        // already-followed artists. Kept live afterwards by
+        // search::mark_artist_followed on every toggle.
+        following: crate::fav_cache::is_artist_favorite(a.qobuz_artist_id),
     }
 }
 fn slim_from_track(t: &TrackReco) -> SlimItem {

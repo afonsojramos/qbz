@@ -38,9 +38,11 @@ use tokio::sync::Mutex;
 use qbz_qobuz::{QobuzClient, QobuzLyricsContent, QobuzLyricsDocument};
 
 use crate::cache::{CachedLyrics, LyricsCacheDb, LyricsCacheStats};
-use crate::model::{build_cache_key, LyricsDoc, LyricsPayload, LyricsProvider};
+use crate::model::{
+    build_cache_key, derive_has_translation, LyricsDoc, LyricsPayload, LyricsProvider,
+};
 use crate::providers::{fetch_lrclib, fetch_lyrics_ovh, LyricsData};
-use crate::wsync::QobuzWsync;
+use crate::wsync::{translated_from_content, QobuzWsync};
 
 /// What kind of source the playing track comes from. The Qobuz primary step
 /// only applies to Qobuz catalog tracks with a real track_id; local-library /
@@ -63,6 +65,12 @@ pub struct LyricsRequest {
     pub album: Option<String>,
     pub duration_secs: Option<u64>,
     pub offline: bool,
+    /// Active translation target (ISO 639-1, Qobuz API v10). `None` = the
+    /// default original-only fetch; `Some(lang)` asks the Qobuz primary for
+    /// a translation and drives the client-derived `has_translation` on the
+    /// served document. Only the Qobuz provider is affected — the external
+    /// fallback chain never sees it.
+    pub language: Option<String>,
 }
 
 /// Served lyrics: the wire-compatible payload plus the parsed document
@@ -96,10 +104,15 @@ pub struct LyricsResponse {
 /// fakes and the chain logic stays headless-testable.
 #[async_trait]
 pub trait LyricsProviders: Send + Sync {
-    /// Qobuz primary (two-step: signed lyricsUrl + CDN doc).
-    /// `Ok(None)` = typed miss; `Err` = transport/auth/offline failure —
-    /// both degrade silently to the fallback chain.
-    async fn qobuz(&self, track_id: u64) -> Result<Option<QobuzLyricsDocument>, String>;
+    /// Qobuz primary (two-step: signed lyricsUrl + CDN doc). `language` is the
+    /// optional translation target (ISO 639-1, v10); `None` fetches
+    /// original-only. `Ok(None)` = typed miss; `Err` = transport/auth/offline
+    /// failure — both degrade silently to the fallback chain.
+    async fn qobuz(
+        &self,
+        track_id: u64,
+        language: Option<&str>,
+    ) -> Result<Option<QobuzLyricsDocument>, String>;
 
     /// LRCLIB. `Ok(None)` = no match; `Err` = transport error (the chain
     /// retries exactly once).
@@ -128,9 +141,13 @@ impl HttpLyricsProviders {
 
 #[async_trait]
 impl LyricsProviders for HttpLyricsProviders {
-    async fn qobuz(&self, track_id: u64) -> Result<Option<QobuzLyricsDocument>, String> {
+    async fn qobuz(
+        &self,
+        track_id: u64,
+        language: Option<&str>,
+    ) -> Result<Option<QobuzLyricsDocument>, String> {
         self.client
-            .get_lyrics(track_id)
+            .get_lyrics(track_id, language)
             .await
             .map_err(|e| e.to_string())
     }
@@ -263,11 +280,40 @@ fn dedupe_key(request: &LyricsRequest) -> String {
             )
         ),
     };
-    format!("{}|offline:{}", identity, request.offline)
+    // The translation target is part of the identity: a refetch WITH a
+    // language must never join an in-flight original-only resolution.
+    format!(
+        "{}|offline:{}|lang:{}",
+        identity,
+        request.offline,
+        request.language.as_deref().unwrap_or("")
+    )
 }
 
-fn cached_result(cached: CachedLyrics) -> LyricsResult {
-    let doc = LyricsDoc::from_cached(&cached.payload, cached.qobuz_wsync_json.as_deref());
+/// A cached entry satisfies a language request only when its stored native
+/// wsync document carries a translation FOR THAT language (the content's own
+/// `lang` records it, spec §A.5); anything else falls through to a refetch.
+/// Original-only requests (`None`) are served by any synced hit, as before.
+fn cached_serves_language(cached: &CachedLyrics, language: Option<&str>) -> bool {
+    match language {
+        None => true,
+        Some(lang) => cached
+            .qobuz_wsync_json
+            .as_deref()
+            .and_then(|json| serde_json::from_str::<QobuzWsync>(json).ok())
+            .and_then(|wsync| wsync.translation)
+            .and_then(|content| content.lang().map(str::to_owned))
+            .map(|cached_lang| cached_lang == lang)
+            .unwrap_or(false),
+    }
+}
+
+fn cached_result(cached: CachedLyrics, requested_lang: Option<&str>) -> LyricsResult {
+    let doc = LyricsDoc::from_cached(
+        &cached.payload,
+        cached.qobuz_wsync_json.as_deref(),
+        requested_lang,
+    );
     LyricsResult {
         payload: cached.payload,
         doc,
@@ -306,7 +352,10 @@ async fn run_chain(
         .or_else(|| db.get_by_cache_key(&cache_key).ok().flatten());
 
         return Ok(match cached {
-            Some(cached) => respond(LyricsOutcome::Found(cached_result(cached))),
+            Some(cached) => respond(LyricsOutcome::Found(cached_result(
+                cached,
+                request.language.as_deref(),
+            ))),
             None => respond(LyricsOutcome::NotAvailableOffline),
         });
     }
@@ -330,10 +379,14 @@ async fn run_chain(
                 .as_ref()
                 .map(|s| !s.trim().is_empty())
                 .unwrap_or(false);
-            if has_synced {
-                return Ok(respond(LyricsOutcome::Found(cached_result(cached))));
+            if has_synced && cached_serves_language(&cached, request.language.as_deref()) {
+                return Ok(respond(LyricsOutcome::Found(cached_result(
+                    cached,
+                    request.language.as_deref(),
+                ))));
             }
-            // plain-only cache: fall through to re-fetch for synced
+            // plain-only cache — or a synced entry without a translation for
+            // the requested language: fall through to re-fetch (spec §A.5).
         }
     } // lock released before any network round-trip
 
@@ -360,7 +413,11 @@ async fn run_chain(
     let qobuz_fut = async {
         if request.source == LyricsSourceKind::Qobuz {
             if let Some(track_id) = request.track_id {
-                match inner.providers.qobuz(track_id).await {
+                match inner
+                    .providers
+                    .qobuz(track_id, request.language.as_deref())
+                    .await
+                {
                     Ok(Some(document)) => return Some(document),
                     Ok(None) => log::debug!("[Lyrics] Qobuz miss for track {}", track_id),
                     Err(e) => {
@@ -397,7 +454,7 @@ async fn run_chain(
     let mut qobuz_plain_candidate: Option<LyricsResult> = None;
     if let Some(document) = qobuz_doc {
         if let Some(wsync) = QobuzWsync::from_document(&document) {
-            let doc = wsync.to_doc();
+            let doc = wsync.to_doc(request.language.as_deref());
             if !doc.lines.is_empty() {
                 let mut payload = base_payload(LyricsProvider::Qobuz);
                 payload.plain = Some(doc.plain_text());
@@ -421,6 +478,14 @@ async fn run_chain(
                 let mut doc = LyricsDoc::from_plain_text(&blob, LyricsProvider::Qobuz);
                 doc.translation_langs = document.translation_langs.clone();
                 doc.writers = document.writers.clone();
+                doc.translation = document
+                    .translation
+                    .as_ref()
+                    .map(|content| Box::new(translated_from_content(content)));
+                doc.has_translation = derive_has_translation(
+                    &document.translation_langs,
+                    request.language.as_deref(),
+                );
                 let mut payload = base_payload(LyricsProvider::Qobuz);
                 payload.plain = Some(blob.trim().to_string());
                 qobuz_plain_candidate = Some(LyricsResult { payload, doc });
@@ -493,13 +558,23 @@ mod tests {
         qobuz_calls: AtomicUsize,
         lrclib_calls: AtomicUsize,
         ovh_calls: AtomicUsize,
+        /// Language argument observed on each qobuz call (threading proof).
+        qobuz_languages: StdMutex<Vec<Option<String>>>,
         delay_ms: Option<u64>,
     }
 
     #[async_trait]
     impl LyricsProviders for FakeProviders {
-        async fn qobuz(&self, _track_id: u64) -> Result<Option<QobuzLyricsDocument>, String> {
+        async fn qobuz(
+            &self,
+            _track_id: u64,
+            language: Option<&str>,
+        ) -> Result<Option<QobuzLyricsDocument>, String> {
             self.qobuz_calls.fetch_add(1, Ordering::SeqCst);
+            self.qobuz_languages
+                .lock()
+                .unwrap()
+                .push(language.map(str::to_owned));
             if let Some(ms) = self.delay_ms {
                 tokio::time::sleep(Duration::from_millis(ms)).await;
             }
@@ -543,6 +618,32 @@ mod tests {
                 {"line": "second line", "start": 9000, "end": 11000,
                  "words": [{"word": "second", "start": 9000, "end": 9900},
                            {"word": "line", "start": 9900, "end": 11000}]}
+            ]}
+        }"#,
+        )
+        .unwrap()
+    }
+
+    fn wsync_document_with_translation() -> QobuzLyricsDocument {
+        serde_json::from_str(
+            r#"{
+            "track_id": 100, "album_id": "alb",
+            "translation_langs": ["es", "fr"], "writers": "W. Riter",
+            "original": {"type": "wsync", "lang": "en", "lines": [
+                {"line": "first line", "start": 1000, "end": 3000,
+                 "words": [{"word": "first", "start": 1000, "end": 1800},
+                           {"word": "line", "start": 1800, "end": 3000}]},
+                {"line": "second line", "start": 9000, "end": 11000,
+                 "words": [{"word": "second", "start": 9000, "end": 9900},
+                           {"word": "line", "start": 9900, "end": 11000}]}
+            ]},
+            "translation": {"type": "wsync", "lang": "es", "lines": [
+                {"line": "primera linea", "start": 1000, "end": 3000,
+                 "words": [{"word": "primera", "start": 1000, "end": 1800},
+                           {"word": "linea", "start": 1800, "end": 3000}]},
+                {"line": "segunda linea", "start": 9000, "end": 11000,
+                 "words": [{"word": "segunda", "start": 9000, "end": 9900},
+                           {"word": "linea", "start": 9900, "end": 11000}]}
             ]}
         }"#,
         )
@@ -593,6 +694,7 @@ mod tests {
             album: Some("Album".into()),
             duration_secs: Some(200),
             offline: false,
+            language: None,
         }
     }
 
@@ -795,6 +897,160 @@ mod tests {
         let response = service.get(request()).await.unwrap();
         assert_eq!(found(&response).payload.provider, LyricsProvider::Ovh);
         assert_eq!(providers.lrclib_calls.load(Ordering::SeqCst), 2);
+    }
+
+    // ---------- translation (v10) ----------
+
+    #[tokio::test]
+    async fn language_threads_to_qobuz_and_translation_is_mapped() {
+        let providers = Arc::new(FakeProviders::default());
+        providers
+            .qobuz_queue
+            .lock()
+            .unwrap()
+            .push_back(Ok(Some(wsync_document_with_translation())));
+        let (service, _dir) = service_with(providers.clone()).await;
+
+        let mut translated = request();
+        translated.language = Some("es".into());
+        let response = service.get(translated).await.unwrap();
+        let result = found(&response);
+
+        // The language reached the provider; the doc carries the mapped
+        // translation (wsync -> WordSynced, native word stamps, same timings).
+        assert_eq!(
+            providers.qobuz_languages.lock().unwrap().as_slice(),
+            &[Some("es".to_string())]
+        );
+        assert!(result.doc.has_translation);
+        let translation = result.doc.translation.as_ref().expect("translation mapped");
+        assert_eq!(translation.kind, crate::LyricsKind::WordSynced);
+        assert_eq!(translation.lang.as_deref(), Some("es"));
+        assert_eq!(translation.lines.len(), 2);
+        assert_eq!(translation.lines[0].text, "primera linea");
+        assert_eq!(translation.lines[0].time_ms, Some(1000));
+        let words = translation.lines[0].words.as_ref().expect("words survive");
+        assert_eq!(words[0].text, "primera");
+        // Sync stays keyed on the ORIGINAL lines/timings.
+        assert_eq!(result.doc.lines[0].text, "first line");
+    }
+
+    #[tokio::test]
+    async fn translation_survives_the_cache_for_the_same_language() {
+        let providers = Arc::new(FakeProviders::default());
+        providers
+            .qobuz_queue
+            .lock()
+            .unwrap()
+            .push_back(Ok(Some(wsync_document_with_translation())));
+        let (service, _dir) = service_with(providers.clone()).await;
+
+        let mut translated = request();
+        translated.language = Some("es".into());
+        service.get(translated.clone()).await.unwrap();
+
+        // Same language again -> synced cache hit WITH the stored
+        // translation; no second provider call.
+        let response = service.get(translated).await.unwrap();
+        let result = found(&response);
+        assert!(result.payload.cached);
+        assert!(result.doc.has_translation);
+        let translation = result.doc.translation.as_ref().expect("cached translation");
+        assert_eq!(translation.lang.as_deref(), Some("es"));
+        assert!(translation.lines[0].words.is_some());
+        assert_eq!(providers.qobuz_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn different_language_refetches_original_only_uses_the_cache() {
+        let providers = Arc::new(FakeProviders::default());
+        {
+            let mut q = providers.qobuz_queue.lock().unwrap();
+            q.push_back(Ok(Some(wsync_document_with_translation())));
+            q.push_back(Ok(Some(wsync_document_with_translation())));
+        }
+        let (service, _dir) = service_with(providers.clone()).await;
+
+        // Seed the cache with the es translation.
+        let mut es = request();
+        es.language = Some("es".into());
+        service.get(es).await.unwrap();
+
+        // A request for a DIFFERENT language misses the stored translation
+        // and refetches (spec §A.5: the stored translation records its lang).
+        let mut fr = request();
+        fr.language = Some("fr".into());
+        let response = service.get(fr).await.unwrap();
+        assert!(!found(&response).payload.cached);
+        assert_eq!(providers.qobuz_calls.load(Ordering::SeqCst), 2);
+
+        // Original-only requests are still served by the synced cache hit.
+        let response = service.get(request()).await.unwrap();
+        let result = found(&response);
+        assert!(result.payload.cached);
+        assert!(!result.doc.has_translation);
+        assert_eq!(providers.qobuz_calls.load(Ordering::SeqCst), 2);
+        // The default fetch sent NO language.
+        assert_eq!(
+            providers.qobuz_languages.lock().unwrap().as_slice(),
+            &[Some("es".to_string()), Some("fr".to_string())]
+        );
+    }
+
+    #[tokio::test]
+    async fn default_fetch_maps_original_only_even_when_langs_are_listed() {
+        let providers = Arc::new(FakeProviders::default());
+        providers
+            .qobuz_queue
+            .lock()
+            .unwrap()
+            .push_back(Ok(Some(wsync_document())));
+        let (service, _dir) = service_with(providers.clone()).await;
+
+        let response = service.get(request()).await.unwrap();
+        let result = found(&response);
+        // translation_langs passthrough present, but nothing was requested:
+        // no translation, has_translation false.
+        assert_eq!(result.doc.translation_langs, vec!["es"]);
+        assert!(result.doc.translation.is_none());
+        assert!(!result.doc.has_translation);
+        assert_eq!(
+            providers.qobuz_languages.lock().unwrap().as_slice(),
+            &[None]
+        );
+    }
+
+    #[tokio::test]
+    async fn plain_original_with_plain_translation_is_mapped() {
+        let providers = Arc::new(FakeProviders::default());
+        providers
+            .qobuz_queue
+            .lock()
+            .unwrap()
+            .push_back(Ok(Some(serde_json::from_str(
+                r#"{
+                "track_id": 100, "album_id": "alb",
+                "translation_langs": ["de"],
+                "original": {"type": "plain", "lang": "en",
+                    "lines": [{"line": "plain one"}, {"line": "plain two"}]},
+                "translation": {"type": "plain", "lang": "de",
+                    "lines": [{"line": "einfach eins"}, {"line": "einfach zwei"}]}
+            }"#,
+            )
+            .unwrap())));
+        let (service, _dir) = service_with(providers.clone()).await;
+
+        let mut translated = request();
+        translated.language = Some("de".into());
+        let response = service.get(translated).await.unwrap();
+        let result = found(&response);
+        assert_eq!(result.payload.provider, LyricsProvider::Qobuz);
+        assert!(!result.doc.synced);
+        assert!(result.doc.has_translation);
+        let translation = result.doc.translation.as_ref().expect("translation mapped");
+        assert_eq!(translation.kind, crate::LyricsKind::Plain);
+        assert_eq!(translation.lines.len(), 2);
+        assert_eq!(translation.lines[0].text, "einfach eins");
     }
 
     // ---------- cache policy ----------

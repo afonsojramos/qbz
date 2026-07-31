@@ -272,6 +272,12 @@ pub fn is_artist_favorite(artist_id: u64) -> bool {
         .unwrap_or(false)
 }
 
+/// Snapshot of the full followed-artist id set — the reco paint filter's
+/// "already following" exclusion input (mirrors `all()` for tracks).
+pub fn all_artists() -> HashSet<u64> {
+    FAV_ARTISTS.read().map(|g| g.clone()).unwrap_or_default()
+}
+
 /// Replace the followed-artist set with a freshly-fetched id list and mirror
 /// it to the per-user store (full replace — same lifecycle as the album set).
 /// Blocking disk write; call off the UI thread.

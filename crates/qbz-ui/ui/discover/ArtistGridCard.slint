@@ -203,7 +203,7 @@ export component ArtistGridCard inherits Rectangle {
                     x: 21px;
                     y: 143px;
                     width: 196px;
-                    height: 3 * 33px + 10px;
+                    height: 4 * 33px + 10px;
                     ContextMenu {
                         ContextMenuItem {
                             icon: @image-url("../assets/icons/user.svg");
@@ -226,6 +226,15 @@ export component ArtistGridCard inherits Rectangle {
                             label: root.artist.following ? @tr("Following") : @tr("Follow");
                             clicked => {
                                 root.media-action(root.follow-kind, root.artist.id, "follow");
+                            }
+                        }
+                        // Reco-scoped dismissal (NOT the blacklist): the artist
+                        // leaves the Recommendations rails only.
+                        ContextMenuItem {
+                            icon: @image-url("../assets/icons/thumbs-down.svg");
+                            label: @tr("Not interested");
+                            clicked => {
+                                root.media-action("artist", root.artist.id, "not-interested");
                             }
                         }
                     }

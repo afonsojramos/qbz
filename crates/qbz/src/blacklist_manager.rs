@@ -3,7 +3,9 @@
 //! `BlacklistState`, applies search-as-you-type filtering controller-side, and
 //! runs the toggle / remove / clear mutations against the
 //! `crate::artist_blacklist` wrapper (the same fail-open singleton the artist
-//! toggle in T9 mutates).
+//! toggle in T9 mutates). A third "Recommendations" tab (active-tab 2) lists
+//! the reco-SCOPED "Not interested" dismissals from `crate::reco_dismiss` —
+//! NOT the blacklist — with a per-row undo.
 //!
 //! Mirrors `crate::offline_manager`'s shape: a `load` entry point invoked on
 //! navigation + an action set wired in `main.rs`. There is no change-notify on
@@ -29,7 +31,7 @@ use chrono::{DateTime, Utc};
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
 use crate::artwork::{ArtworkJob, ArtworkTarget, ImageCache};
-use crate::{AppWindow, BlacklistState, BlacklistedAlbumItem, BlacklistedArtistItem};
+use crate::{AppWindow, BlacklistState, BlacklistedAlbumItem, BlacklistedArtistItem, DismissedArtistItem};
 
 /// Shared image cache for resolving blocked-album cover thumbnails (the artist
 /// tab has no covers; the album tab does). Set once during startup wiring.
@@ -137,16 +139,41 @@ fn build_album_items() -> (Vec<BlacklistedAlbumItem>, i32, Vec<ArtworkJob>) {
     (items, count, jobs)
 }
 
-/// Push the filtered items + full count + enabled flag + query into Slint (both
-/// axes). Album covers resolve asynchronously via the shared image cache.
+/// Build the visible (filtered) dismissed-artist items — the "Not interested"
+/// reco-scoped list — from the store snapshot, applying the current query
+/// (name match, same rule as the artist axis). `count` carries the FULL list
+/// length for the tab badge + empty/no-results split.
+fn build_dismissed_items() -> (Vec<DismissedArtistItem>, i32) {
+    let all = crate::reco_dismiss::list();
+    let count = all.len() as i32;
+    let needle = current_query().trim().to_lowercase();
+
+    let items: Vec<DismissedArtistItem> = all
+        .into_iter()
+        .filter(|a| needle.is_empty() || a.name.to_lowercase().contains(&needle))
+        .map(|a| DismissedArtistItem {
+            // Same int pass-through as the blacklist artist id.
+            artist_id: a.artist_id as i32,
+            artist_name: a.name.into(),
+        })
+        .collect();
+
+    (items, count)
+}
+
+/// Push the filtered items + full count + enabled flag + query into Slint (all
+/// three axes). Album covers resolve asynchronously via the shared image cache.
 fn push(w: &AppWindow) {
     let (items, count) = build_items();
     let (album_items, album_count, jobs) = build_album_items();
+    let (dismissed_items, dismissed_count) = build_dismissed_items();
     let st = w.global::<BlacklistState>();
     st.set_items(ModelRc::new(VecModel::from(items)));
     st.set_count(count);
     st.set_album_items(ModelRc::new(VecModel::from(album_items)));
     st.set_album_count(album_count);
+    st.set_dismissed_items(ModelRc::new(VecModel::from(dismissed_items)));
+    st.set_dismissed_count(dismissed_count);
     st.set_enabled(crate::artist_blacklist::is_enabled());
     st.set_search_query(SharedString::from(current_query()));
     // Kick off cover loads (best-effort; needs the cache + a weak handle).
@@ -236,7 +263,7 @@ pub fn clear_all(w: &AppWindow) {
 
 // --- Album axis actions -------------------------------------------------
 
-/// Switch the manager's active tab (0 = Artists, 1 = Albums).
+/// Switch the manager's active tab (0 = Artists, 1 = Albums, 2 = Recommendations).
 pub fn set_tab(w: &AppWindow, tab: i32) {
     w.global::<BlacklistState>().set_active_tab(tab);
 }
@@ -302,4 +329,24 @@ pub fn clear_all_albums(w: &AppWindow) {
             crate::toast::error(w, qbz_i18n::t("Failed to clear album blacklist"));
         }
     }
+}
+
+
+// --- Reco-dismissal axis actions -----------------------------------------
+
+/// Undo one "Not interested" dismissal (optimistic — the re-push drops the row
+/// immediately) + toast. The artist becomes eligible for the Recommendations
+/// rails again on their next paint (the §B filter reads the store).
+pub fn remove_dismissed(w: &AppWindow, artist_id: i32) {
+    // Capture the name before removing, for the toast (falls back to the
+    // generic "Artist" for rows persisted without a resolved name).
+    let name = crate::reco_dismiss::list()
+        .into_iter()
+        .find(|a| a.artist_id == artist_id as u64)
+        .map(|a| a.name)
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| qbz_i18n::t("Artist"));
+    crate::reco_dismiss::remove(artist_id as u64);
+    push(w);
+    crate::toast::success(w, qbz_i18n::t_args("{} restored to Recommendations", &[&name]));
 }
