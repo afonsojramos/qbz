@@ -354,6 +354,10 @@ Rectangle {
                 x: 0
                 anchors.verticalCenter: parent.verticalCenter
                 kind: root.sourceKind
+                // Row glyph, so SourceGlyph.slint's numbers (15px, muted),
+                // not the version picker's defaults.
+                glyphSize: 15
+                localTint: "muted"
             }
         }
 

@@ -430,6 +430,9 @@ Rectangle {
                 SourceIcon {
                     anchors.centerIn: parent
                     kind: root.candidate.source || ""
+                    // Row glyph — SourceGlyph.slint:29-30.
+                    glyphSize: 15
+                    localTint: "muted"
                 }
             }
         }
