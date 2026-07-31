@@ -1940,21 +1940,34 @@ pub async fn settings_select(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &st
             if backend != AudioBackendType::Alsa {
                 let _ = with_audio(|s| s.set_exclusive_mode(false));
             }
-            // Gapless off ONLY when moving TO Alsa — `settings.rs:1232-1237`,
-            // which in turn matches Tauri's `SettingsView.svelte:3409-3416`
-            // ("not compatible with ALSA Direct"; in the engine's own
-            // vocabulary `using_alsa_direct` IS `backend_type == Alsa`,
-            // player/mod.rs:725-729).
+            // GAPLESS IS DELIBERATELY NOT CASCADED — owner decision, 2026-07-31:
+            // "hay que mantener el status activo, sin importar el cambio en el
+            // backend". It keeps whatever the user set, across every backend
+            // change, ALSA included.
             //
-            // This guard was MISSING, so every backend change killed gapless —
-            // including switching TO PipeWire, where it works perfectly. That
-            // is the bug behind "gapless works on pipewire, not on alsa": the
-            // setting was silently turned off by the switch itself, and a user
-            // who did not notice the toggle flip read it as "alsa breaks
-            // gapless".
-            if backend == AudioBackendType::Alsa {
-                let _ = with_audio(|s| s.set_gapless_enabled(false));
-            }
+            // This diverges from BOTH references on purpose. Tauri forced it off
+            // when moving to ALSA (`SettingsView.svelte:3409-3416`, "not
+            // compatible with ALSA Direct") and Slint copied that
+            // (`settings.rs:1232-1237`); in the engine's own vocabulary
+            // `using_alsa_direct` IS `backend_type == Alsa`
+            // (qbz-player/src/player/mod.rs:725-729), so the two agree.
+            //
+            // The exclusion looks broader than the hardware demands: the
+            // engine's `PlayNext` handler is backend-AGNOSTIC — it appends to
+            // the live engine and refuses only on a missing engine, a
+            // sample-rate/channel mismatch, or an active streaming source
+            // (mod.rs:3553-3586) — and ALSA Direct does have an engine with its
+            // own writer thread. Within one album at a constant rate there is no
+            // mechanism here that should break.
+            //
+            // What this port had was WORSE than either reference: the guard was
+            // missing entirely, so EVERY backend change killed gapless,
+            // including switching to PipeWire where it works perfectly. That is
+            // what read as "alsa breaks gapless" — the switch turned it off.
+            //
+            // The failure mode to watch, if it ever does misbehave on ALSA, is a
+            // transition that renegotiates the stream mid-album (a rate change);
+            // the format-match guard above should already refuse those.
             let _ = with_audio(|s| s.set_output_device(None));
             apply_audio(runtime, Apply::Reinit);
         }
