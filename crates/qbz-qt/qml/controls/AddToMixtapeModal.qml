@@ -346,11 +346,18 @@ Item {
                 ListView {
                     id: pickList
                     visible: !root.loading && root.rows.length > 0
+                    // The .slint's `padding: 8` on the list layout, on all
+                    // FOUR sides. The horizontal half is an ANCHOR margin on
+                    // the view, never an `x` on the delegate: a vertical
+                    // ListView writes its delegates' `x`, so a literal `x: 8`
+                    // there is silently clobbered to 0 and the rows sat flush
+                    // against the card's left border with a 16px gap opening
+                    // on the right (the hover fill and the zebra band touched
+                    // the border on one side only). The vertical half stays a
+                    // Flickable content margin.
                     anchors.fill: parent
-                    // The .slint's `padding: 8` on the list layout. The
-                    // horizontal half is on the DELEGATE, not as a Flickable
-                    // margin: a vertical ListView's leftMargin moves the
-                    // content origin, it does not inset the rows.
+                    anchors.leftMargin: 8
+                    anchors.rightMargin: 8
                     topMargin: 8
                     bottomMargin: 8
                     spacing: 2
@@ -363,8 +370,7 @@ Item {
                     delegate: AddPickRow {
                         required property var modelData
                         required property int index
-                        x: 8
-                        width: Math.max(0, pickList.width - 16)
+                        width: pickList.width
                         rowData: modelData
                         rowIndex: index
                     }
@@ -417,6 +423,25 @@ Item {
                             verticalAlignment: Text.AlignVCenter
                             clip: true
                             selectByMouse: true
+                            // LOAD-BEARING, and the exact shape `searchInput`
+                            // above uses (:242 + its Binding). With ONLY the
+                            // focus-gated Binding below, a re-entered create
+                            // panel kept the previously typed name on screen
+                            // while `createName` had already been reset to ""
+                            // — the field never re-seeds because it keeps
+                            // activeFocus across the hide/show (the panel is
+                            // only `visible: false` for a frame, focus comes
+                            // straight back), so the `when:` guard never
+                            // fires. `canCreate` was then false with a name
+                            // visibly in the box: "Create & Add" sat at 50 %
+                            // with a dead MouseArea and Enter did nothing.
+                            // Repros: chip -> type -> Back -> chip; and
+                            // type -> close -> reopen into the create panel.
+                            // A declarative `text:` survives user editing (the
+                            // edit does not break the binding), and
+                            // `onTextEdited` writes the same value straight
+                            // back, so typing is unaffected.
+                            text: root.createName
                             onTextEdited: root.createName = text
                             onAccepted: {
                                 if (root.canCreate)

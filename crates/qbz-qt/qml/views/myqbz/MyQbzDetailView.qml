@@ -22,6 +22,18 @@
 // paddings, the 32px hero→body gap and the 10px toolbar tail are all kept;
 // the toolbar simply became literally sticky, which is what §7.2 calls it.
 //
+// --- PER-ROW COLLAPSIBLE ROWS (owner-authorised divergence) -------------
+// Every album / playlist row carries a chevron that opens ITS OWN inline track
+// list (`MyQbzDetailRow.qml`, col 0). NEITHER the .slint NOR the Tauri build
+// had this — both render inline tracks only as a whole-list view MODE,
+// explicitly "no chevron". The owner asked for the accordion anyway
+// (2026-07-30); do not "restore" it toward either reference.
+// It is ADDITIVE on machinery that already existed: Rust already published
+// per-row `canExpand` / `inlineTracks` / `expandLoading` / `tracksLoaded`, so
+// the accordion added exactly one thing — `rowOpen`, THE single notion of open.
+// The `expanded` segment writes the same state and now means "open all"; there
+// is deliberately no second, QML-side definition of "is this row open".
+//
 // --- THE MODEL IS PATCHED, NEVER REPLACED, AND PARSED ONCE --------------
 // `QbzMyQbz` carries no signals: every Rust-side change arrives as a whole new
 // `detailJson`. `refresh()` is the single entry point: ONE `JSON.parse` per
@@ -215,13 +227,66 @@ Rectangle {
         root.doc = d
         root.syncRows(d)
     }
+    /// Merge a PARTIAL row batch from `QbzMyQbz.detailRowsPatched`.
+    ///
+    /// Rust no longer republishes the whole document for a one-row change
+    /// (resolved quality, an inline track list landing, a chevron toggle) — it
+    /// sends `{ id, rows: [ { position, sourceItemId, ...changed } ] }`. The
+    /// document in Rust stays authoritative; this is purely the cheap path to
+    /// the SAME live row objects `syncRows` patches, so `patchRev` is bumped
+    /// ONCE for the batch and every delegate binding re-evaluates exactly like
+    /// after a republish.
+    ///
+    /// `position` is the join column because it is the stable persisted key
+    /// (spec 02 §5.2) and it survives a re-derive; the array INDEX does not.
+    /// A batch addressed at another collection, or at rows the current
+    /// derivation filtered out, is silently dropped — the same guard Rust
+    /// makes before building it.
+    ///
+    /// Being a signal, it is a DELTA: an instance mounted after it was emitted
+    /// never saw it. That is what `QbzMyQbz.detailResync()` below is for.
+    function applyRowPatch(patchJson) {
+        var p
+        try {
+            p = JSON.parse(patchJson)
+        } catch (e) {
+            return
+        }
+        if (!p || !p.rows || p.rows.length === 0) return
+        if ((p.id || "") !== (root.doc.id || "")) return
+        var byPosition = ({})
+        for (var i = 0; i < root.rows.length; i++)
+            byPosition[root.rows[i].position] = root.rows[i]
+        var touched = false
+        for (var j = 0; j < p.rows.length; j++) {
+            var patch = p.rows[j]
+            var target = byPosition[patch.position]
+            if (target === undefined) continue
+            Object.assign(target, patch)
+            touched = true
+        }
+        if (touched) root.patchRev = root.patchRev + 1
+    }
+
     Connections {
         target: QbzMyQbz
         function onDetailJsonChanged() { root.refresh() }
+        function onDetailRowsPatched(patchJson) { root.applyRowPatch(patchJson) }
     }
     // `doc`'s initial binding has already parsed at this point — reuse it
     // instead of parsing a third time.
-    Component.onCompleted: root.syncRows(root.doc)
+    //
+    // Then ask Rust to re-hand the document. This view is a `Loader` child
+    // (`shell/AppShell.qml:192`), so nav-away DESTROYS it and nav-back builds a
+    // NEW instance whose `detailJson` is whatever was last fully published —
+    // every row patch since (resolved quality badges, loaded inline tracks,
+    // which rows are open) went to the dead instance. One full publish per
+    // mount closes that, and it is the only full publish the patch channel
+    // still costs.
+    Component.onCompleted: {
+        root.syncRows(root.doc)
+        QbzMyQbz.detailResync()
+    }
 
     // --- ONE loading-dots clock for the whole view (spec 01 §7.5 / §15.5) --
     // Slint animates each row's LoadingDots off `animation-tick`; a windowed
@@ -506,7 +571,15 @@ Rectangle {
             anchors.bottom: parent.bottom
             anchors.leftMargin: 32
             anchors.rightMargin: 32
-            anchors.bottomMargin: 100
+            // NOT `bottomMargin: 100`. The .slint's 100px is `padding-bottom`
+            // INSIDE the Flickable (:657) — scroll RUNWAY past the last row,
+            // clearing the player bar. As an anchor margin here it shrank the
+            // ListView/GridView VIEWPORT instead: the last row was clipped
+            // mid-height and ~85px of dead band sat under it, unusable and
+            // unscrollable, on every collection. The runway now lives on the
+            // flickables themselves (`bottomMargin: 100` below), which is what
+            // the sibling `MyQbzGridView.qml:336,358` already does right.
+            anchors.bottomMargin: 0
 
             // ================= BODY: LIST / EXPANDED =================
             Column {
@@ -527,9 +600,17 @@ Rectangle {
                         anchors.leftMargin: 12
                         anchors.rightMargin: 12
                         spacing: 12
+                        // The accordion chevron's leading cell (see
+                        // MyQbzDetailRow.qml). Unlabelled — a header for a
+                        // disclosure control would be noise — but it MUST be
+                        // here, at exactly the row's 24px, or the eight
+                        // reference columns below drift 36px out of the header.
+                        Item { width: 24; height: 1 }
                         ColHead { width: 40; text: "#"; horizontalAlignment: Text.AlignHCenter }
                         ColHead {
-                            width: Math.max(0, listHost.width - 700)
+                            // Paired with MyQbzDetailRow's `titleColWidth`:
+                            // 24 padding + 616 fixed cells + 96 gaps.
+                            width: Math.max(0, listHost.width - 736)
                             text: root.trs("Item")
                         }
                         ColHead { width: 140; text: root.trs("Type") }
@@ -554,13 +635,21 @@ Rectangle {
                         boundsBehavior: Flickable.StopAtBounds
                         cacheBuffer: 500
                         reuseItems: true
+                        // The .slint's 100px page bottom padding, as scroll
+                        // runway past the last row (clears the player bar).
+                        bottomMargin: 100
                         model: root.rows
 
                         // EXPANDED mode is this SAME recycled list with the
                         // inline block unhidden — a nested ListView inside a
                         // recycled delegate cannot size itself (spec 02 §9.1),
                         // and switching the delegate per mode would reset
-                        // contentY.
+                        // contentY. The per-row ACCORDION rides the identical
+                        // machinery: the outer list stays recycled and windowed
+                        // whatever is open, and an open row's tracks stay a
+                        // bounded `Repeater` inside a `Column` delegate, which
+                        // is content-sized and therefore safe. Do not "upgrade"
+                        // that Repeater to a nested ListView.
                         delegate: Column {
                             id: rowCell
                             required property var modelData
@@ -597,8 +686,24 @@ Rectangle {
                             readonly property var live: root.patchRev >= 0
                                 ? (root.rows[index] || modelData) : modelData
 
-                            readonly property bool expanded: root.viewMode === "expanded"
-                                && (root.patchRev >= 0 && rowCell.live.canExpand === true)
+                            /// ONE notion of open, and it is Rust's `rowOpen`.
+                            ///
+                            /// It used to be `viewMode === "expanded" &&
+                            /// canExpand`, i.e. a second, QML-side definition
+                            /// of the same thing. With the accordion there are
+                            /// two writers (the chevron and the segment) and
+                            /// two definitions would disagree the first time a
+                            /// row was closed inside expanded mode — so the
+                            /// view mode is not read here at all. Rust sets
+                            /// `rowOpen` on every expandable row while the mode
+                            /// is `expanded` (open all) and clears it on the
+                            /// way out; `canExpand` is implied, because a
+                            /// non-expandable row is never marked open.
+                            ///
+                            /// Through `live`, like every other row read — see
+                            /// the note above.
+                            readonly property bool expanded: root.patchRev >= 0
+                                && rowCell.live.rowOpen === true
                             readonly property var inlineTracks: (root.patchRev >= 0)
                                 ? (rowCell.live.inlineTracks || []) : []
                             readonly property bool expandLoading: root.patchRev >= 0
@@ -617,15 +722,24 @@ Rectangle {
 
                             // Inline tracks (.slint :1151-1218): padding
                             // 52 / 12 / 4 / 8, spacing 0.
+                            //
+                            // 88, not 52: the reference's 52 is `12 padding +
+                            // 40 ordinal cell`, i.e. exactly where the row's
+                            // artwork column starts. The chevron cell added
+                            // `24 + 12` in front of the ordinal, so the same
+                            // alignment is 88 and the right inset stays 12
+                            // (width - 88 - 12). Keep it tied to the row's
+                            // template or the inline block stops hanging under
+                            // the title it belongs to.
                             Item {
                                 visible: rowCell.expanded
                                 width: parent.width
                                 height: visible ? inlineCol.height + 12 : 0
                                 Column {
                                     id: inlineCol
-                                    x: 52
+                                    x: 88
                                     y: 4
-                                    width: Math.max(0, parent.width - 64)
+                                    width: Math.max(0, parent.width - 100)
                                     spacing: 0
 
                                     Item {
@@ -683,14 +797,14 @@ Rectangle {
                                             // spec 01 §7.5 / OQ#9.
                                             routeGoToExternally: true
                                             onPlayRequested: QbzMyQbz.inlineTrackAction(
-                                                rowCell.modelData.sourceItemId || "",
+                                                rowCell.live.sourceItemId || "",
                                                 modelData.id || "", "play")
                                             // `next|later|queue` -> the wire's
                                             // `play-next|play-later|queue`.
                                             // Unmapped is a SILENT no-op.
                                             onEnqueueRequested: function (mode) {
                                                 QbzMyQbz.inlineTrackAction(
-                                                    rowCell.modelData.sourceItemId || "",
+                                                    rowCell.live.sourceItemId || "",
                                                     modelData.id || "",
                                                     mode === "next" ? "play-next"
                                                         : mode === "later" ? "play-later" : "queue")
@@ -698,12 +812,12 @@ Rectangle {
                                             onGoToRequested: function (goKind) {
                                                 if (goKind === "artist")
                                                     QbzMyQbz.openArtist(
-                                                        rowCell.modelData.source || "",
+                                                        rowCell.live.source || "",
                                                         modelData.artist || "",
                                                         modelData.artistId || "")
                                                 else
                                                     QbzMyQbz.inlineTrackAction(
-                                                        rowCell.modelData.sourceItemId || "",
+                                                        rowCell.live.sourceItemId || "",
                                                         modelData.id || "", "go-to-album")
                                             }
                                         }
@@ -747,6 +861,8 @@ Rectangle {
                     cacheBuffer: 500
                     reuseItems: true
                     boundsBehavior: Flickable.StopAtBounds
+                    // Same runway as the list arm — see `body`'s note.
+                    bottomMargin: 100
                     model: root.rows
 
                     delegate: MyQbzDetailCard {
@@ -787,8 +903,10 @@ Rectangle {
     }
 
     // ========================= BULK ACTION BAR ==========================
-    // A SIBLING of the scroller, floating over the body's 100px bottom
-    // gutter. `parent.width - 18 - 22` is asymmetric on purpose (.slint :1253).
+    // A SIBLING of the scroller, floating over the last 100px of scroll runway
+    // (which is now inside the flickables, not carved out of the viewport —
+    // see `body`). `parent.width - 18 - 22` is asymmetric on purpose
+    // (.slint :1253).
     QbzMultiSelectBar {
         visible: root.selectMode && root.selectedCount > 0
         x: 18

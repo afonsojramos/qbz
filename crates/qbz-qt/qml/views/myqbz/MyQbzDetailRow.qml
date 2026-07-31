@@ -5,6 +5,11 @@
 // spacing 12, cells 40 / 1fr / 140 / 80 / 160 / 72 / 60 / 40. Row height 56,
 // bottom hairline `Theme.alpha-4`, hover/selected fill `surface-hover`.
 //
+// Plus a NINTH, leading 24px cell that no reference has: the accordion
+// chevron (owner-authorised divergence, see its own comment below). It shifts
+// the eight reference columns 36px right; `titleColWidth` and the host's
+// `ColHead` row are retuned together.
+//
 // --- TWO THINGS THAT ARE LOAD-BEARING -----------------------------------
 //
 // 1. Z-ORDER. `MixtapeDetailView.slint:203-217` documents the bug: the
@@ -78,6 +83,13 @@ Rectangle {
     readonly property string yearText: root.rev >= 0 ? (root.item.yearText || "") : ""
     readonly property string artPath: root.rev >= 0 ? (root.item.artPath || "") : ""
     readonly property bool selected: root.rev >= 0 && root.item.selected === true
+    /// Albums and playlists have an inline track list; a single track has
+    /// nothing to show, so it gets no chevron (Rust decides — `canExpand`).
+    readonly property bool canExpand: root.rev >= 0 && root.item.canExpand === true
+    /// THE accordion state, and the ONLY one: Rust derives it from the shared
+    /// `OPEN_ROWS` set that the `expanded` view-mode segment also writes, so
+    /// this row never needs to know what the view mode is.
+    readonly property bool rowOpen: root.rev >= 0 && root.item.rowOpen === true
 
     /// track → music, playlist → list-music, else disc (.slint :263-267).
     readonly property string typeGlyph: root.itemType === "track" ? "music"
@@ -88,13 +100,20 @@ Rectangle {
     // same reason `rows/TrackRow.qml:213-214` OR's its four.
     readonly property bool hovered: rowArea.containsMouse || artArea.containsMouse
         || titleArea.containsMouse || subArea.containsMouse || menuArea.containsMouse
+        || chevArea.containsMouse
 
     width: parent ? parent.width : 0
     height: 56
     color: (root.hovered || root.selected) ? theme.surfaceHover : "transparent"
 
-    /// Title column = rowWidth − padding(24) − fixed cells(592) − gaps(84).
-    readonly property int titleColWidth: Math.max(0, root.width - 700)
+    /// Title column = rowWidth − padding(24) − fixed cells(616) − gaps(96).
+    ///
+    /// 736, not the reference's 700: the accordion chevron added a NINTH cell
+    /// (24px) and a ninth 12px gap in front of the ordinal, shifting the
+    /// 8-column template 36px right. `MyQbzDetailView.qml`'s `ColHead` row
+    /// carries the identical 24px leader and the identical `- 736`, and the two
+    /// must be changed together or the header stops lining up with the rows.
+    readonly property int titleColWidth: Math.max(0, root.width - 736)
 
     // Bottom hairline — `#ffffff0a` in the .slint (:200) == `alpha-4`, taken
     // from the polarity-baked ramp so it is visible on light themes too. The
@@ -134,6 +153,49 @@ Rectangle {
         anchors.leftMargin: 12
         anchors.rightMargin: 12
         spacing: 12
+
+        // --- Col 0 (24) — THE ACCORDION CHEVRON --------------------------
+        //
+        // ADDITIVE, and a deliberate divergence from BOTH references
+        // (owner-authorised 2026-07-30): neither `MixtapeDetailView.slint` nor
+        // the Tauri build ever had a per-row accordion — both render inline
+        // tracks only as a whole-list VIEW MODE, explicitly "no chevron". The
+        // owner asked for the accordion anyway. The view mode survives
+        // untouched and now means "open all", through the same per-row state.
+        //
+        // The MouseArea is INVISIBLE on a non-expandable row, and an invisible
+        // item is not hit-tested — so a track row's chevron cell falls through
+        // to `rowArea` behind it and clicking there still opens the item, which
+        // is the gesture the owner asked to keep. On an expandable row this
+        // area sits at the default z, above `rowArea`'s `z: -1`, and swallows
+        // the click: the chevron toggles ONLY this row, it never navigates.
+        Item {
+            width: 24
+            height: parent.height
+            QbzIcon {
+                visible: root.canExpand
+                anchors.centerIn: parent
+                name: "chevron-right"
+                width: 14
+                height: 14
+                tintName: (root.rowOpen || chevArea.containsMouse) ? "textPrimary" : "muted"
+                // Points right when closed, down when open. `rotation` is a
+                // plain QQuickItem property and QbzIcon is an Image, so this
+                // costs no effect pass and no extra glyph.
+                rotation: root.rowOpen ? 90 : 0
+                Behavior on rotation {
+                    NumberAnimation { duration: 140; easing.type: Easing.OutCubic }
+                }
+            }
+            MouseArea {
+                id: chevArea
+                visible: root.canExpand
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: QbzMyQbz.detailToggleRowExpand(root.sourceItemId)
+            }
+        }
 
         // --- Col 1 (40) — ordinal / selection checkbox ------------------
         Item {

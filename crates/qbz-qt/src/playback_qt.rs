@@ -18,7 +18,7 @@
 //!   live-updated by Settings > Audio (settings_qt). The #638 device-cap clamp
 //!   lives in the Slint glue and is NOT ported.
 //! - Offline-cache tier (offline bytes), prefetch warming, stop-after,
-//!   infinite refill, QConnect branches, recently-played recording.
+//!   infinite refill, QConnect branches.
 //!
 //! DONE, previously listed here — kept as one line each so the list above
 //! only ever names REAL gaps:
@@ -36,6 +36,10 @@
 //!   published as `np_seekable_max`.
 //! - Shuffle-play reorders the queue instead of latching the global shuffle
 //!   MODE (#17) — `xorshift_shuffle` in `play_track_list_in`.
+//! - Recently-played / Most-played recording — `recently_qt::record_queue_track`
+//!   on the de-duped track edge, EPHEMERAL-EXEMPT: an ephemeral folder plays
+//!   and leaves no row behind (owner rule, 2026-07-30). The Slint reference
+//!   does NOT have that exemption; do not "restore parity" by removing it.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
@@ -1479,8 +1483,20 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                 // same file the other frontends write; without this the Qt build
                 // shows their history and never adds to it. Same de-duped edge
                 // as the scrobblers, never from refresh_now_playing.
-                if let Some(track) = runtime.core().get_queue_state().await.current_track {
-                    crate::recently_qt::record_queue_track(&track);
+                //
+                // EPHEMERAL (owner rule): an ephemeral folder "solo se reproduce
+                // y ya" and "no deja rastros en las bibliotecas" — it may be
+                // added to the queue and to nothing else, so a play of it must
+                // NOT land in Recently Played / Most Played. The player carries
+                // the synthetic id verbatim (`local_ephemeral::play_file` hands
+                // `row_id` to the engine), so the poll's own `track_id` is the
+                // cheapest place to decide, before the queue-state fetch.
+                // `record_queue_track` re-checks the same predicate, so the rule
+                // holds even if another call site appears.
+                if !crate::local_ephemeral::is_ephemeral_id(track_id as i64) {
+                    if let Some(track) = runtime.core().get_queue_state().await.current_track {
+                        crate::recently_qt::record_queue_track(&track);
+                    }
                 }
                 last_track_id = track_id;
                 // The engine may have reached this track through a GAPLESS

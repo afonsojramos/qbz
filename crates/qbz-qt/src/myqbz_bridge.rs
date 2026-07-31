@@ -20,10 +20,13 @@
 //! post-boot push — the same reason `theme_json` / `window_width` are seeded at
 //! construction (shell_bridge.rs "Seeded at CONSTRUCTION").
 //!
-//! No `#[qsignal]`: every user-visible outcome goes through `QbzShell.toastJson`
-//! (toast_qt.rs) and every state change is a property republish, so the
-//! auto-generated `<prop>Changed` signals are the only `Connections` targets QML
-//! needs.
+//! ONE `#[qsignal]`, `detail_rows_patched`: every user-visible outcome goes
+//! through `QbzShell.toastJson` (toast_qt.rs) and every state change is a
+//! property republish, so the auto-generated `<prop>Changed` signals are
+//! normally the only `Connections` targets QML needs. The exception is the
+//! detail list's per-row DELTA channel, where republishing the whole document
+//! per row was measured quadratic — the reasoning is at the signal's own
+//! declaration, and `QbzHome.foryouArtReady` is the precedent.
 //!
 //! Invokable bodies are one-line forwards into the domain controllers, exactly
 //! as album_bridge.rs forwards. Nothing here holds state or does work.
@@ -120,9 +123,26 @@ pub mod qbz_myqbz_bridge {
         fn detail_toggle_source_filter(self: Pin<&mut QbzMyQbz>, kind: QString);
         /// `mode` ∈ list | grid | expanded; `expanded` also fires
         /// `ensure_expanded`. No re-derive — caches, selection and scroll
-        /// position all survive (myqbz_detail.rs:558-562).
+        /// position all survive (myqbz_detail.rs:558-562). Since the accordion
+        /// landed, `expanded` = OPEN ALL and leaving it = close all, through
+        /// the same per-row state `detail_toggle_row_expand` writes.
         #[qinvokable]
         fn detail_set_view_mode(self: Pin<&mut QbzMyQbz>, mode: QString);
+        /// THE CHEVRON: toggle ONE row's inline block open/closed, by its
+        /// `sourceItemId`. A first open fetches only that row's tracks; a
+        /// second is instant off `INLINE_CACHE`. Non-expandable rows (tracks)
+        /// are a no-op. Owner-authorised divergence from both references,
+        /// which have no per-row accordion at all.
+        #[qinvokable]
+        fn detail_toggle_row_expand(self: Pin<&mut QbzMyQbz>, source_item_id: QString);
+        /// Re-publish the open detail document unchanged, for a FRESH view
+        /// instance. `AppShell.qml:192` mounts this view through a `Loader`, so
+        /// nav-away destroys it; the `detail_rows_patched` deltas below were
+        /// delivered to the dead instance and the new one would come back with
+        /// stale quality badges, no inline tracks and every row collapsed.
+        /// Called from `Component.onCompleted` — once per mount.
+        #[qinvokable]
+        fn detail_resync(self: Pin<&mut QbzMyQbz>);
         /// Leaving select mode clears the selection.
         #[qinvokable]
         fn detail_toggle_select_mode(self: Pin<&mut QbzMyQbz>);
@@ -258,6 +278,33 @@ pub mod qbz_myqbz_bridge {
         /// Clears the stored path (does NOT store a default path).
         #[qinvokable]
         fn branding_reset_icon(self: Pin<&mut QbzMyQbz>);
+
+        // --- Detail: the row-patch channel ----------------------------------
+
+        /// PARTIAL row updates for the detail list, as
+        /// `{ "id": <collectionId>, "rows": [ { "position", "sourceItemId",
+        /// ...only the changed fields } ] }`. The QML host `Object.assign`s
+        /// each entry onto the live row object it finds by `position` and bumps
+        /// its `patchRev` once for the whole batch.
+        ///
+        /// This is the ONE `#[qsignal]` in this bridge and the module header's
+        /// "every state change is a property republish" has a stated exception
+        /// here, for the same reason `QbzHome.foryouArtReady` exists: a
+        /// per-item republish of a whole document is quadratic. `apply_resolved`
+        /// used to clone + serialise the ENTIRE `DetailDoc` per resolved item
+        /// (200 serialize -> parse -> patch cycles on the GUI thread for a big
+        /// artist_collection) and `patch_expanded` did it while the document
+        /// carried every loaded row's `inlineTracks`.
+        ///
+        /// A SIGNAL rather than an eighth `#[qproperty]`: a property setter
+        /// compares before emitting, so two identical consecutive deltas would
+        /// drop the second. And because a signal is a delta, a view mounted
+        /// after it has missed it — `detail_resync` closes that hole.
+        ///
+        /// `#[auto_cxx_name]` makes the QML spelling `detailRowsPatched`, i.e.
+        /// the handler is `onDetailRowsPatched(patchJson)`.
+        #[qsignal]
+        fn detail_rows_patched(self: Pin<&mut QbzMyQbz>, patch_json: QString);
     }
 
     impl cxx_qt::Threading for QbzMyQbz {}
@@ -383,6 +430,14 @@ impl qbz_myqbz_bridge::QbzMyQbz {
 
     pub fn detail_set_view_mode(self: Pin<&mut Self>, mode: QString) {
         crate::myqbz_detail_qt::set_view_mode(&mode.to_string());
+    }
+
+    pub fn detail_toggle_row_expand(self: Pin<&mut Self>, source_item_id: QString) {
+        crate::myqbz_detail_qt::toggle_row_expand(&source_item_id.to_string());
+    }
+
+    pub fn detail_resync(self: Pin<&mut Self>) {
+        crate::myqbz_detail_qt::resync();
     }
 
     pub fn detail_toggle_select_mode(self: Pin<&mut Self>) {

@@ -315,7 +315,14 @@ Item {
                 QbzTextArea {
                     visible: editPanel.isDescription
                     width: parent.width
-                    height: visible ? 96 : 0
+                    // A FLAT 96, never `visible ? 96 : 0`: a Column does not
+                    // position invisible children, so the hidden arm already
+                    // costs no layout height, while a 0-height text area
+                    // hands its inner Flickable height = 0 - 8 - 8 = -16 —
+                    // the silent negative-size trap QbzLineEdit.qml:166-167
+                    // documents. The sibling QbzLineEdit is single-line and
+                    // lands at a clean 0, so it keeps its ternary.
+                    height: 96
                     wrapMode: TextEdit.WordWrap
                     text: editPanel.draftDescription
                     onEdited: function (v) { editPanel.draftDescription = v }

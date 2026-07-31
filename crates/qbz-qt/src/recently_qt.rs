@@ -119,6 +119,17 @@ fn derive_albums(tracks: &[RecentTrack]) -> Vec<RecentAlbum> {
     albums
 }
 
+/// True when a stored track id names an EPHEMERAL (in-memory, session-only)
+/// track and therefore must never be persisted here.
+///
+/// Ephemeral ids are synthetic and `>= EPHEMERAL_ID_FLOOR` (2^48). Qobuz ids
+/// and `local_tracks` row ids parse far below the floor; Plex rating_keys and
+/// the empty id do not parse as `i64` at all — all of those keep recording.
+fn is_ephemeral_track_id(id: &str) -> bool {
+    id.parse::<i64>()
+        .is_ok_and(crate::local_ephemeral::is_ephemeral_id)
+}
+
 /// Read the whole store. Missing / unreadable -> empty (the rails then render
 /// their placeholders, never an error).
 fn read_store() -> RecentStore {
@@ -170,13 +181,20 @@ pub(crate) fn load_albums() -> Vec<RecentAlbum> {
 /// id, capped at [`MAX_RECENT`]) and its album at the front of the album
 /// history (dedup by album id, capped at [`MAX_RECENT_ALBUMS`]).
 ///
-/// GLUE: this is the write half; nothing in the Qt port calls it yet, so the
-/// rails currently render whatever the Slint/Tauri builds recorded. The call
-/// site is the playback track-start edge in `playback_qt.rs` — see the "GLUE
-/// NEEDED" note in the handoff.
+/// WIRED: the only caller is [`record_queue_track`], from the de-duped
+/// playback track-start edge in `playback_qt.rs`. Ephemeral ids are rejected
+/// here as well as there — see [`is_ephemeral_track_id`].
 #[allow(dead_code)]
 pub(crate) fn record(track: RecentTrack) {
     if track.id.is_empty() {
+        return;
+    }
+    // EPHEMERAL — store invariant, not just a call-site courtesy. An ephemeral
+    // id must never reach this JSON, whoever calls. Real ids parse well below
+    // `EPHEMERAL_ID_FLOOR` (2^48) and Plex rating_keys do not parse as i64 at
+    // all, so this rejects exactly the synthetic ids and nothing else. See the
+    // long note on `record_queue_track` for the why.
+    if is_ephemeral_track_id(&track.id) {
         return;
     }
     let mut store = read_store();
@@ -222,6 +240,29 @@ pub(crate) fn record(track: RecentTrack) {
 /// every album play/enqueue entry point has to route a group key to the local
 /// path instead of `get_album` — see `playback_qt::is_local_album`.
 pub(crate) fn record_queue_track(track: &qbz_models::QueueTrack) {
+    // EPHEMERAL — owner rule: "ephemeral solo se reproduce y ya […] honramos el
+    // nombre ephemeral: no deja rastros en las bibliotecas, ni now playing ni
+    // nada." An ephemeral folder lives in memory for one session and may be
+    // added to the QUEUE and to nothing else. Recording it here would write it
+    // into TWO app-wide persistent stores that outlive the process —
+    // `recently_played.json` (Recently Played Albums / Tracks) and
+    // `album_play_history.db` (Most Played Albums) — naming a folder that is
+    // not in the library, under synthetic ids that are meaningless after
+    // restart. Neither store can express "temporary", so the only correct move
+    // is to never write. Guarded HERE, above both writes, so any future caller
+    // inherits the rule; the poll-loop call site skips it earlier too, purely
+    // to save the queue-state fetch.
+    //
+    // NOTE: the Slint reference (`qbz/src/playback.rs::record_recent`) has no
+    // such guard — this is the rule being implemented for the first time, not
+    // a Qt-only regression being patched.
+    if crate::local_ephemeral::is_ephemeral_id(track.id as i64) {
+        log::debug!(
+            "[qbz-qt] ephemeral track {} not recorded in play history (no library traces)",
+            track.id
+        );
+        return;
+    }
     let tier = crate::home_qt::quality_tier_from_depth(track.bit_depth);
     let detail = crate::home_qt::quality_detail_from_parts(track.bit_depth, track.sample_rate);
     let quality_label = if tier.is_empty() {
@@ -298,6 +339,25 @@ mod tests {
         assert_eq!(derived[0].id, "a");
         assert_eq!(derived[0].title, "A");
         assert_eq!(derived[1].id, "b");
+    }
+
+    /// The owner's ephemeral rule: a session-only folder leaves no trace in the
+    /// play history. Pure predicate test — it never touches the real store.
+    #[test]
+    fn ephemeral_ids_are_rejected_by_the_history_store() {
+        let floor = qbz_library::ephemeral::EPHEMERAL_ID_FLOOR;
+        assert!(is_ephemeral_track_id(&floor.to_string()));
+        assert!(is_ephemeral_track_id(&(floor + 42).to_string()));
+    }
+
+    #[test]
+    fn real_ids_still_record() {
+        // Qobuz track id, local_tracks row id, a Plex rating_key and the empty
+        // id: none of them may be mistaken for ephemeral.
+        assert!(!is_ephemeral_track_id("139578884"));
+        assert!(!is_ephemeral_track_id("2954"));
+        assert!(!is_ephemeral_track_id("plex-12345"));
+        assert!(!is_ephemeral_track_id(""));
     }
 
     #[test]

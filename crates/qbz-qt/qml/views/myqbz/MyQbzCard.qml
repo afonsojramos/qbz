@@ -49,7 +49,14 @@ Rectangle {
     border.width: root.compact ? 0 : 1
     border.color: cardArea.containsMouse ? theme.surfaceHover : theme.surfaceElevated
 
-    readonly property string subtitle: (root.item.label || "") + " · " + (root.item.meta || "")
+    // `label · meta`, but never a bare " · ": a default/half-built `item` (a
+    // standalone instance, or a pre-publish frame) has neither half and would
+    // otherwise render the separator on its own.
+    readonly property string subtitle: {
+        var l = root.item.label || ""
+        var m = root.item.meta || ""
+        return (l !== "" && m !== "") ? (l + " · " + m) : (l + m)
+    }
 
     Loader {
         anchors.fill: parent

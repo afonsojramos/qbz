@@ -52,7 +52,13 @@
 //    rather than reinvented as a MyQBZ-only mechanism.
 // 5. Slint reads `MyQbzState.loading` in neither grid; the cardGrid skeleton
 //    below is the same deliberate improvement LibraryView.qml:1163-1225
-//    documents. The empty state stays gated on `!loading`.
+//    documents. The empty state stays gated on `!loading`, and the skeleton is
+//    ARMED after 250ms so a fresh (empty) account does not flash a page of
+//    fake cards on its way to "No mixtapes yet" — see `skelArmed`.
+// 6. One live instance serves BOTH routes, so per-route UI state is reset by
+//    hand on `kind` change (`onKindChanged`), and the two body views take a
+//    QML-side model (`activeItems`) so a republish does not reset the viewport
+//    and the inactive view builds no delegates.
 
 import QtQuick
 import QtQuick.Window
@@ -95,6 +101,73 @@ Rectangle {
         }
     }
     readonly property var items: root.doc.cards || []
+    // The model the two body views actually consume. NOT `root.items`
+    // directly, for two reasons that both showed up as "the grid fights me":
+    //
+    //  1. SCROLL RESET. `items` is a FRESH JS array out of `JSON.parse` on
+    //     every publish, and assigning a new array to a view's `model` is a
+    //     full model reset — the view drops to `contentY 0`. Rust publishes
+    //     three times per visit (`set_loading(true)` -> `apply` ->
+    //     `artwork_pass`, the last one behind a NETWORK round trip), again on
+    //     every `reload_grids()` / `republish_all()`, and again on every
+    //     keystroke in the search box. So the user scrolled, and a beat later
+    //     the artwork pass yanked them back to the top. `applyItems()` carries
+    //     the viewport across the reset, which is what Slint gets for free by
+    //     diffing its VecModel (MixtapesView.slint:36-50 even restores it).
+    //  2. DOUBLE DELEGATES. `visible: false` does NOT stop delegate creation,
+    //     so the inactive view used to build the whole card set too: 12 cards
+    //     meant 24 `MyQbzCard`s, 24 mosaics and TWO artwork dispatches per
+    //     card. The ternaries below hand the model to the ACTIVE view only,
+    //     which is Slint's `if …mix-view == "grid"` / `== "list"`
+    //     (MixtapesView.slint:186,202) — exactly one subtree alive.
+    property var activeItems: []
+    property real keepGridY: 0
+    property real keepListY: 0
+    // Set while a route flip is in flight: the viewport must NOT be carried
+    // from Mixtapes into Collections (finding 5 — one instance serves both).
+    property bool suppressKeep: false
+
+    function applyItems() {
+        if (!root.suppressKeep) {
+            root.keepGridY = grid.contentY
+            root.keepListY = list.contentY
+        }
+        root.activeItems = root.items
+        // `forceLayout()` flushes the pending re-layout synchronously, so
+        // `contentHeight` below is the NEW one and the clamp is honest.
+        if (grid.visible) {
+            grid.forceLayout()
+            grid.contentY = root.clampY(grid, root.keepGridY)
+        }
+        if (list.visible) {
+            list.forceLayout()
+            list.contentY = root.clampY(list, root.keepListY)
+        }
+    }
+    function clampY(view, y) {
+        var max = Math.max(0, view.contentHeight + view.bottomMargin - view.height)
+        return Math.max(0, Math.min(y, max))
+    }
+    function releaseKeep() { root.suppressKeep = false }
+
+    onItemsChanged: root.applyItems()
+    Component.onCompleted: root.applyItems()
+
+    // Mixtapes and Collections are ONE live component (AppShell.qml:199-223
+    // only flips `kind`), so every scrap of per-route UI state has to be reset
+    // by hand or it bleeds across the flip: the expandable search stayed OPEN
+    // showing the other route's query, and the viewport carried over.
+    // `suppressKeep` covers both possible orderings of this handler and the
+    // `items` re-parse that the same `kind` change triggers.
+    onKindChanged: {
+        root.suppressKeep = true
+        root.keepGridY = 0
+        root.keepListY = 0
+        grid.contentY = 0
+        list.contentY = 0
+        searchBox.open = false
+        Qt.callLater(root.releaseKeep)
+    }
     readonly property bool loading: root.doc.loading === true
     readonly property string search: root.doc.search || ""
     readonly property string sortField: root.doc.sort || "position"
@@ -134,7 +207,24 @@ Rectangle {
         ? (root.Window.window.visibility !== Window.Minimized
            && root.Window.window.visibility !== Window.Hidden)
         : true
-    readonly property bool gridPending: root.loading && root.items.length === 0
+    // The skeleton is ARMED, not immediate. A first load with nothing to show
+    // yet is indistinguishable from an account that simply has no mixtapes, so
+    // the old immediate `loading && items.length === 0` flashed a full page of
+    // fake cards at every empty account before "No mixtapes yet" resolved. The
+    // grid docs come out of local SQLite in a few ms, so a 250ms arming delay
+    // removes the flash entirely while a genuinely slow load still gets its
+    // skeleton. (Slint has no skeleton at all here — divergence 5.)
+    readonly property bool gridLoadingEmpty: root.loading && root.items.length === 0
+    property bool skelArmed: false
+    onGridLoadingEmptyChanged: if (!root.gridLoadingEmpty) root.skelArmed = false
+    Timer {
+        interval: 250
+        repeat: false
+        running: root.gridLoadingEmpty && !root.skelArmed
+            && root.visible && root.windowShowing
+        onTriggered: root.skelArmed = true
+    }
+    readonly property bool gridPending: root.gridLoadingEmpty && root.skelArmed
     Timer {
         interval: 900
         repeat: true
@@ -153,7 +243,12 @@ Rectangle {
         Text {
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
-            width: Math.max(0, parent.width - 28 - 16)
+            // The 28px button + its 16px gap are reserved ONLY when the button
+            // is there. Slint's `HorizontalLayout` with the `if`-gated button
+            // gives the title the whole row when it is absent
+            // (MixtapesView.slint:65-87); reserving it unconditionally elided
+            // an empty grid's title 44px early.
+            width: Math.max(0, parent.width - (root.populated ? 28 + 16 : 0))
             text: root.isMix ? root.t("Mixtapes") : root.t("Collections")
             color: theme.textPrimary
             font.pixelSize: theme.fontSection
@@ -182,6 +277,8 @@ Rectangle {
         layoutDirection: Qt.LeftToRight
 
         QbzLineEdit {
+            // Named so the route flip can collapse it — see onKindChanged.
+            id: searchBox
             anchors.verticalCenter: parent.verticalCenter
             searchMode: true
             expandable: true
@@ -336,7 +433,8 @@ Rectangle {
             bottomMargin: 100
             clip: true
             boundsBehavior: Flickable.StopAtBounds
-            model: root.items
+            // Only the ACTIVE view carries a model — see `activeItems`.
+            model: root.viewMode === "grid" ? root.activeItems : []
 
             delegate: MyQbzCard {
                 required property var modelData
@@ -358,7 +456,7 @@ Rectangle {
             bottomMargin: 100
             clip: true
             boundsBehavior: Flickable.StopAtBounds
-            model: root.items
+            model: root.viewMode === "list" ? root.activeItems : []
 
             delegate: MyQbzCard {
                 required property var modelData
@@ -373,23 +471,29 @@ Rectangle {
 
     // Thin auto-hiding scrollbars (the ListScrollbar replica), one per body
     // view — LibraryView.qml:1443-1459's shape. Children of the ROOT, not of
-    // `body`: the .slint pins the bar at `parent.width - width - 4` of the VIEW
-    // and spans its FULL height (MixtapesView.slint:213-221), i.e. outside the
-    // 32px content padding, and the 32px right pad exists precisely so the grid
-    // never rides under it.
+    // `body`, so they sit OUTSIDE the 32px content padding (the .slint pins the
+    // bar at `parent.width - width - 4`, MixtapesView.slint:213-221, and the
+    // 32px right pad exists precisely so the grid never rides under it).
+    //
+    // VERTICALLY they track `body`, not the root. In Slint the bar and the
+    // flickable are the same box, so the mapping is exact; here the body starts
+    // 118px down. Spanning the full root height over-sized the thumb by ~18%
+    // and mapped the track's top 118px — visually the header/toolbar band — to
+    // content that is not there, so a click in the gutter beside the TOOLBAR
+    // scrolled the grid.
     QbzScrollBar {
         anchors.right: parent.right
         anchors.rightMargin: 4
-        anchors.top: parent.top
-        anchors.bottom: parent.bottom
+        anchors.top: body.top
+        anchors.bottom: body.bottom
         target: grid
         visible: grid.visible && grid.contentHeight > grid.height
     }
     QbzScrollBar {
         anchors.right: parent.right
         anchors.rightMargin: 4
-        anchors.top: parent.top
-        anchors.bottom: parent.bottom
+        anchors.top: body.top
+        anchors.bottom: body.bottom
         target: list
         visible: list.visible && list.contentHeight > list.height
     }

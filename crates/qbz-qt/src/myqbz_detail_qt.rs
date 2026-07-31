@@ -146,12 +146,90 @@ pub struct DetailRow {
     pub selected: bool,
     #[serde(rename = "canExpand")]
     pub can_expand: bool,
+    /// THE per-row accordion state — is this row's inline block open?
+    ///
+    /// ADDITIVE, and a deliberate divergence from BOTH references
+    /// (owner-authorised 2026-07-30): neither `MixtapeDetailView.slint` nor the
+    /// Tauri build had a per-row accordion, they render inline tracks only as a
+    /// whole-list VIEW MODE ("no chevron"). The owner asked for the accordion
+    /// anyway; the view mode SURVIVES and now simply means "open all".
+    ///
+    /// It is ONE notion of open, not two: the chevron and the `expanded`
+    /// segment both write `OPEN_ROWS`, and this flag is derived from that set
+    /// in `to_item`. Do not add a second `viewMode === "expanded"` test in QML.
+    #[serde(rename = "rowOpen")]
+    pub row_open: bool,
     #[serde(rename = "tracksLoaded")]
     pub tracks_loaded: bool,
     #[serde(rename = "expandLoading")]
     pub expand_loading: bool,
     #[serde(rename = "inlineTracks")]
     pub inline_tracks: Vec<InlineTrackRow>,
+}
+
+/// A PARTIAL row update for the `detailRowsPatched` channel — only the fields
+/// that actually changed travel. QML `Object.assign`s each entry onto the live
+/// row object it finds by `position` and bumps `patchRev` once for the batch.
+///
+/// This is the shape fix for the republish storm the audit measured
+/// (`2026-07-30-myqbz-audit/detail.md` #7/#8): `apply_resolved` cloned and
+/// `serde_json::to_string`'d the ENTIRE `DetailDoc` once per resolved item —
+/// 34 full serialize -> parse -> patch cycles for one collection, 200 for a big
+/// one, all on the GUI thread — and `patch_expanded` did the same while the
+/// document carried every already-loaded row's `inlineTracks`, i.e. O(n²).
+/// The QML side already patches row objects IN PLACE, so the document never
+/// needed to travel whole for a one-row change.
+///
+/// `position` is the stable persisted key and the only join column QML needs;
+/// `sourceItemId` rides along for logging and for a QML-side sanity check.
+/// A patch is a DELTA — a freshly mounted view has missed every delta already
+/// sent, which is why `detail_resync` exists.
+#[derive(Clone, Default, Serialize)]
+struct RowPatch {
+    position: i32,
+    #[serde(rename = "sourceItemId")]
+    source_item_id: String,
+    #[serde(rename = "sourceKind", skip_serializing_if = "Option::is_none")]
+    source_kind: Option<String>,
+    #[serde(rename = "qualityTier", skip_serializing_if = "Option::is_none")]
+    quality_tier: Option<String>,
+    #[serde(rename = "qualityDetail", skip_serializing_if = "Option::is_none")]
+    quality_detail: Option<String>,
+    #[serde(rename = "typeLabel", skip_serializing_if = "Option::is_none")]
+    type_label: Option<String>,
+    #[serde(rename = "artistId", skip_serializing_if = "Option::is_none")]
+    artist_id: Option<String>,
+    #[serde(rename = "qualityResolving", skip_serializing_if = "Option::is_none")]
+    quality_resolving: Option<bool>,
+    #[serde(rename = "artUrl", skip_serializing_if = "Option::is_none")]
+    art_url: Option<String>,
+    #[serde(rename = "artPath", skip_serializing_if = "Option::is_none")]
+    art_path: Option<String>,
+    /// The alias twin of `artUrl` — `publish` fills both in one place, so a row
+    /// patch that moves one MUST move the other or the two go out of step.
+    #[serde(rename = "artworkUrl", skip_serializing_if = "Option::is_none")]
+    artwork_url: Option<String>,
+    #[serde(rename = "artworkPath", skip_serializing_if = "Option::is_none")]
+    artwork_path: Option<String>,
+    #[serde(rename = "rowOpen", skip_serializing_if = "Option::is_none")]
+    row_open: Option<bool>,
+    #[serde(rename = "tracksLoaded", skip_serializing_if = "Option::is_none")]
+    tracks_loaded: Option<bool>,
+    #[serde(rename = "expandLoading", skip_serializing_if = "Option::is_none")]
+    expand_loading: Option<bool>,
+    #[serde(rename = "inlineTracks", skip_serializing_if = "Option::is_none")]
+    inline_tracks: Option<Vec<InlineTrackRow>>,
+}
+
+impl RowPatch {
+    /// An empty patch addressed at `row`. Fill only what changed.
+    fn of(row: &DetailRow) -> Self {
+        Self {
+            position: row.position,
+            source_item_id: row.source_item_id.clone(),
+            ..Self::default()
+        }
+    }
 }
 
 /// The published detail document (spec 02 §5.2 `DetailDoc`).
@@ -281,6 +359,16 @@ static FULL_ITEMS: Mutex<Vec<MixtapeCollectionItem>> = Mutex::new(Vec::new());
 static INLINE_CACHE: LazyLock<Mutex<HashMap<String, Vec<InlineTrackRow>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+/// THE per-row accordion OPEN set, same key as `INLINE_CACHE`.
+///
+/// ONE notion of "is this row open", written by BOTH mechanisms: the chevron
+/// (`toggle_row_expand`, one key) and the `expanded` view-mode segment
+/// (`set_view_mode` / `rebuild`, every expandable key = "open all"). Two
+/// parallel states would disagree the first time a user closed a row inside
+/// expanded mode. Surviving a re-derive is deliberate: a sort or a search must
+/// not fold the rows the user opened.
+static OPEN_ROWS: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
+
 /// resolveItems results, same key. A MISS is what flags a row
 /// `qualityResolving` (the skeleton).
 static RESOLVE_CACHE: LazyLock<Mutex<HashMap<String, ResolvedItem>>> =
@@ -336,6 +424,46 @@ fn publish(doc: &DetailDoc) {
 fn publish_current() {
     let doc = with_doc(|d| d.clone());
     publish(&doc);
+}
+
+/// Send a batch of PARTIAL row updates over `QbzMyQbz.detailRowsPatched`
+/// instead of republishing the whole document (see `RowPatch`).
+///
+/// A SIGNAL, not a property: cxx-qt property setters compare before emitting,
+/// so two identical consecutive patches would silently drop the second, and a
+/// delta must never be deduplicated. The `id` is the collection the patch was
+/// computed against — QML drops a batch addressed at another document, which is
+/// the same guard `apply_resolved` makes on the Rust side.
+fn publish_rows(collection_id: &str, patches: Vec<RowPatch>) {
+    if patches.is_empty() {
+        return;
+    }
+    #[derive(Serialize)]
+    struct Envelope<'a> {
+        id: &'a str,
+        rows: &'a [RowPatch],
+    }
+    let json = serde_json::to_string(&Envelope {
+        id: collection_id,
+        rows: &patches,
+    })
+    .unwrap_or_else(|_| "{}".into());
+    crate::myqbz_bridge::ui(move |mut b| {
+        b.as_mut()
+            .detail_rows_patched(QString::from(json.as_str()));
+    });
+}
+
+/// Re-hand the current document to a FRESH view instance.
+///
+/// `AppShell.qml:192` mounts this view through a `Loader { source: ... }`, so
+/// nav-away DESTROYS it and nav-back builds a new one whose only input is the
+/// last published `detailJson`. Every `RowPatch` since that publish is a delta
+/// the new instance never saw — resolved quality badges, loaded inline tracks
+/// and open rows would all come back missing. One full publish per mount is the
+/// price of the patch channel, and it is paid exactly once.
+pub(crate) fn resync() {
+    publish_current();
 }
 
 // ---------------------------------------------------------------------------
@@ -489,6 +617,7 @@ fn to_item(
     resolved_cache: &HashMap<String, ResolvedItem>,
     inline_cache: &HashMap<String, Vec<InlineTrackRow>>,
     selected: &HashSet<i32>,
+    open_rows: &HashSet<String>,
 ) -> DetailRow {
     let source = source_str(item.source);
     // `small_qobuz_url` only rewrites Qobuz CDN `_<size>.jpg` urls; running it
@@ -539,6 +668,10 @@ fn to_item(
         None => (Vec::new(), false),
     };
 
+    // A track has nothing to show, so it never carries an open state — the
+    // chevron cell stays empty for it and its row body keeps the whole gesture.
+    let can_expand = matches!(item.item_type, ItemType::Album | ItemType::Playlist);
+
     DetailRow {
         position: item.position,
         item_type: item_type_str(item.item_type).to_string(),
@@ -565,7 +698,11 @@ fn to_item(
         artwork_url: String::new(),
         artwork_path: String::new(),
         selected: selected.contains(&item.position),
-        can_expand: matches!(item.item_type, ItemType::Album | ItemType::Playlist),
+        can_expand,
+        // Re-derives (sort / search / filter) rebuild every row, so the open
+        // state has to be re-read off the set here or the accordion would snap
+        // shut on the first keystroke.
+        row_open: can_expand && open_rows.contains(&key),
         tracks_loaded,
         expand_loading: false,
         inline_tracks,
@@ -576,10 +713,37 @@ fn build_rows(items: &[MixtapeCollectionItem]) -> Vec<DetailRow> {
     let resolved = RESOLVE_CACHE.lock().unwrap();
     let inline = INLINE_CACHE.lock().unwrap();
     let selected = SELECTED.lock().unwrap();
+    let open_rows = OPEN_ROWS.lock().unwrap();
     items
         .iter()
-        .map(|it| to_item(it, &resolved, &inline, &selected))
+        .map(|it| to_item(it, &resolved, &inline, &selected, &open_rows))
         .collect()
+}
+
+/// Force every expandable row OPEN, in the document AND in the shared set — the
+/// `expanded` view-mode's whole meaning. Returns the rows it changed as
+/// patches, so a caller that is not already republishing can send just those.
+///
+/// Called from `rebuild` as well as `set_view_mode` because a re-derive can
+/// REVEAL a row (a filter cleared, a search narrowed then widened) that has
+/// never been opened: without this it would render collapsed among its open
+/// neighbours and the segment would be lying.
+fn open_all_expandable(d: &mut DetailDoc) -> Vec<RowPatch> {
+    let mut open = OPEN_ROWS.lock().unwrap();
+    let mut patches = Vec::new();
+    for row in d.items.iter_mut() {
+        if !row.can_expand {
+            continue;
+        }
+        open.insert(cache_key(&row.source, &row.source_item_id));
+        if !row.row_open {
+            row.row_open = true;
+            let mut patch = RowPatch::of(row);
+            patch.row_open = Some(true);
+            patches.push(patch);
+        }
+    }
+    patches
 }
 
 /// The source word a RESOLVED track renders as — the glyph kind in
@@ -739,6 +903,14 @@ fn rebuild(d: &mut DetailDoc) {
 
     let view = filtered_sorted(d);
     d.items = build_rows(&view);
+    // `expanded` means OPEN ALL. The rows were just rebuilt off `OPEN_ROWS`,
+    // so this only ever adds the ones the re-derive revealed. (A row closed by
+    // its chevron WHILE in expanded mode therefore re-opens on the next
+    // re-derive — the price of one shared state, and the honest reading of a
+    // segment whose meaning is "all of them".)
+    if d.view_mode == "expanded" {
+        open_all_expandable(d);
+    }
     d.selected_count = SELECTED.lock().unwrap().len() as i32;
 
     let source_count = i32::from(d.src_qobuz) + i32::from(d.src_plex) + i32::from(d.src_local);
@@ -774,9 +946,12 @@ pub(crate) fn refresh_view() {
     let missing = attach_artwork();
     publish_current();
     dispatch_downloads(missing);
-    if with_doc(|d| d.view_mode == "expanded") {
-        ensure_expanded();
-    }
+    // Unconditional now that `ensure_expanded` keys off the per-row OPEN state
+    // rather than the view mode: with nothing open it is one pass over the
+    // rows and no fetch, and it covers the accordion in LIST mode too (a row
+    // the user opened, then filtered out and back in, has lost its in-flight
+    // spinner and must be re-fetched).
+    ensure_expanded();
 }
 
 // ---------------------------------------------------------------------------
@@ -968,6 +1143,7 @@ fn reset() {
     FULL_ITEMS.lock().unwrap().clear();
     INLINE_CACHE.lock().unwrap().clear();
     RESOLVE_CACHE.lock().unwrap().clear();
+    OPEN_ROWS.lock().unwrap().clear();
     SELECTED.lock().unwrap().clear();
     *LAST_FILTER_KEY.lock().unwrap() = None;
     // Close the persist gate until `apply` restores this collection's prefs.
@@ -1096,6 +1272,12 @@ fn resolve_from_tracks(item: &MixtapeCollectionItem, tracks: &[QueueTrack]) -> R
 /// array replacement would reset `ListView.contentY` and throw the user to the
 /// top (spec 02 §9.1) — and this is not a re-derive, so it must not clear the
 /// selection either.
+///
+/// The patch now travels as a `RowPatch` over `detailRowsPatched` instead of a
+/// clone + full serialisation of the document per resolved item (audit #7): the
+/// document stays authoritative in `DOC`, only the changed fields cross the
+/// hop. Rows are matched with `filter`, not `find`, so a collection holding the
+/// same album twice hydrates both copies rather than only the first.
 fn apply_resolved(item: &MixtapeCollectionItem, resolved: ResolvedItem, collection_id: &str) {
     let key = cache_key(source_str(item.source), &item.source_item_id);
     RESOLVE_CACHE
@@ -1109,15 +1291,16 @@ fn apply_resolved(item: &MixtapeCollectionItem, resolved: ResolvedItem, collecti
         .map(|u| u.is_empty())
         .unwrap_or(true);
 
-    let (doc, backfill) = with_doc(|d| {
+    let (patches, backfill) = with_doc(|d| {
+        let mut patches: Vec<RowPatch> = Vec::new();
         if d.id != collection_id {
-            return (None, None);
+            return (patches, None);
         }
         let mut backfill: Option<String> = None;
-        if let Some(row) = d
+        for row in d
             .items
             .iter_mut()
-            .find(|r| r.source_item_id == item.source_item_id)
+            .filter(|r| r.source_item_id == item.source_item_id)
         {
             row.source_kind = resolved.source_kind.clone();
             row.quality_tier = resolved.quality_tier.clone();
@@ -1125,19 +1308,32 @@ fn apply_resolved(item: &MixtapeCollectionItem, resolved: ResolvedItem, collecti
             row.type_label = resolved.type_label.clone();
             row.artist_id = resolved.artist_id.clone();
             row.quality_resolving = false;
+
+            let mut patch = RowPatch::of(row);
+            patch.source_kind = Some(row.source_kind.clone());
+            patch.quality_tier = Some(row.quality_tier.clone());
+            patch.quality_detail = Some(row.quality_detail.clone());
+            patch.type_label = Some(row.type_label.clone());
+            patch.artist_id = Some(row.artist_id.clone());
+            patch.quality_resolving = Some(false);
+
             if row.art_url.is_empty() && !resolved.artwork_url.is_empty() {
                 row.art_url = resolved.artwork_url.clone();
                 row.art_path = crate::artwork_qt::cached_path(&row.art_url);
-                if row.art_path.is_empty() && stored_art_empty {
+                if row.art_path.is_empty() && stored_art_empty && backfill.is_none() {
                     backfill = Some(row.art_url.clone());
                 }
+                // Both spellings, exactly as `publish` fills them.
+                patch.art_url = Some(row.art_url.clone());
+                patch.art_path = Some(row.art_path.clone());
+                patch.artwork_url = Some(row.art_url.clone());
+                patch.artwork_path = Some(row.art_path.clone());
             }
+            patches.push(patch);
         }
-        (Some(d.clone()), backfill)
+        (patches, backfill)
     });
-    if let Some(doc) = doc {
-        publish(&doc);
-    }
+    publish_rows(collection_id, patches);
     if let Some(url) = backfill {
         crate::spawn(async move {
             crate::artwork_qt::download_missing(vec![url]).await;
@@ -1212,29 +1408,41 @@ fn full_item_by_source_id(source_item_id: &str) -> Option<MixtapeCollectionItem>
         .cloned()
 }
 
-/// Ensure every expandable row's inline tracks are loaded. Marks the pending
-/// rows loading in ONE pass, publishes, then resolves each. Idempotent —
-/// already-cached rows are skipped, so re-entering expanded mode is instant.
+/// Ensure every OPEN row's inline tracks are loaded. Marks the pending rows
+/// loading in ONE pass, sends that as a row patch, then resolves each.
+/// Idempotent — already-cached rows are skipped, so re-entering expanded mode
+/// is instant.
+///
+/// The gate is `row_open`, not `can_expand`: with the accordion, "expandable"
+/// is no longer "will be shown". In expanded mode every expandable row IS open
+/// (`rebuild` / `set_view_mode`), so the old behaviour is unchanged; in list
+/// mode this fetches only what the user actually opened, which is what makes
+/// the chevron lazy. `toggle_row_expand` fetches its own single row directly
+/// rather than routing through here, so one chevron never sweeps the list.
 ///
 /// DEVIATION (reported): the fan-out is capped at `MAX_RESOLVE_CONCURRENCY`,
 /// the same cap T18 mandates for `resolve_items`. The reference is uncapped and
 /// an expanded 200-item artist_collection would open 200 sockets; the visible
 /// behaviour (rows filling in progressively) is identical.
 pub(crate) fn ensure_expanded() {
-    let (collection_id, pending) = with_doc(|d| {
+    let (collection_id, pending, patches) = with_doc(|d| {
         let mut pending: Vec<String> = Vec::new();
+        let mut patches: Vec<RowPatch> = Vec::new();
         for row in d.items.iter_mut() {
-            if row.can_expand && !row.tracks_loaded && !row.expand_loading {
+            if row.row_open && !row.tracks_loaded && !row.expand_loading {
                 row.expand_loading = true;
+                let mut patch = RowPatch::of(row);
+                patch.expand_loading = Some(true);
+                patches.push(patch);
                 pending.push(row.source_item_id.clone());
             }
         }
-        (d.id.clone(), pending)
+        (d.id.clone(), pending, patches)
     });
     if pending.is_empty() {
         return;
     }
-    publish_current();
+    publish_rows(&collection_id, patches);
 
     let runtime = crate::app();
     crate::spawn(async move {
@@ -1246,19 +1454,7 @@ pub(crate) fn ensure_expanded() {
             let collection_id = collection_id.clone();
             handles.push(tokio::spawn(async move {
                 let _permit = sem.acquire().await.expect("semaphore open");
-                if current_id() != collection_id {
-                    return;
-                }
-                let Some(item) = full_item_by_source_id(&source_item_id) else {
-                    // No backing item (should not happen) — clear the spinner.
-                    patch_expanded(&source_item_id, &collection_id, None);
-                    return;
-                };
-                let tracks = crate::myqbz_play_qt::fetch_item_tracks(&runtime, &item).await;
-                let rows: Vec<InlineTrackRow> = tracks.iter().map(track_to_item).collect();
-                let key = cache_key(source_str(item.source), &item.source_item_id);
-                INLINE_CACHE.lock().unwrap().insert(key, rows.clone());
-                patch_expanded(&source_item_id, &collection_id, Some(rows));
+                fetch_row_tracks(&runtime, source_item_id, collection_id).await;
             }));
         }
         for handle in handles {
@@ -1267,30 +1463,124 @@ pub(crate) fn ensure_expanded() {
     });
 }
 
-/// Patch ONE row's expansion state in place (never a re-derive).
-fn patch_expanded(
-    source_item_id: &str,
-    collection_id: &str,
-    rows: Option<Vec<InlineTrackRow>>,
+/// Fetch ONE row's tracks, cache them, and patch that row. The single body
+/// behind both entry points — `ensure_expanded`'s capped fan-out and the
+/// chevron's `toggle_row_expand` — so the two can never drift.
+///
+/// Re-checks the open collection first: the user may have navigated away while
+/// this task queued behind the concurrency cap, and the result is then dead
+/// weight (`patch_expanded` drops it a second time on the same test).
+async fn fetch_row_tracks(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    source_item_id: String,
+    collection_id: String,
 ) {
-    let doc = with_doc(|d| {
+    if current_id() != collection_id {
+        return;
+    }
+    let Some(item) = full_item_by_source_id(&source_item_id) else {
+        // No backing item (should not happen) — clear the spinner.
+        patch_expanded(&source_item_id, &collection_id, None);
+        return;
+    };
+    let tracks = crate::myqbz_play_qt::fetch_item_tracks(runtime, &item).await;
+    let rows: Vec<InlineTrackRow> = tracks.iter().map(track_to_item).collect();
+    let key = cache_key(source_str(item.source), &item.source_item_id);
+    INLINE_CACHE.lock().unwrap().insert(key, rows.clone());
+    patch_expanded(&source_item_id, &collection_id, Some(rows));
+}
+
+/// Patch ONE row's expansion state in place (never a re-derive).
+///
+/// Sends a `RowPatch`, not the document (audit #8): the document carries EVERY
+/// loaded row's `inlineTracks`, so republishing it per expanded item made
+/// entering expanded mode on a 200-item collection quadratic — item 200's
+/// publish serialised ~3000 track objects that QML then re-parsed.
+fn patch_expanded(source_item_id: &str, collection_id: &str, rows: Option<Vec<InlineTrackRow>>) {
+    let patches = with_doc(|d| {
+        let mut patches: Vec<RowPatch> = Vec::new();
         if d.id != collection_id {
-            return None;
+            return patches;
         }
-        let row = d
+        for row in d
             .items
             .iter_mut()
-            .find(|r| r.source_item_id == source_item_id)?;
-        row.expand_loading = false;
-        if let Some(rows) = rows {
-            row.tracks_loaded = true;
-            row.inline_tracks = rows;
+            .filter(|r| r.source_item_id == source_item_id)
+        {
+            row.expand_loading = false;
+            let mut patch = RowPatch::of(row);
+            patch.expand_loading = Some(false);
+            if let Some(ref rows) = rows {
+                row.tracks_loaded = true;
+                row.inline_tracks = rows.clone();
+                patch.tracks_loaded = Some(true);
+                patch.inline_tracks = Some(rows.clone());
+            }
+            patches.push(patch);
         }
-        Some(d.clone())
+        patches
     });
-    if let Some(doc) = doc {
-        publish(&doc);
+    publish_rows(collection_id, patches);
+}
+
+/// THE CHEVRON — toggle ONE row's inline block (the feature the owner asked
+/// for: "una fila colapsable con el contenido dentro").
+///
+/// Opening fetches only THIS row's tracks, and only the first time: a second
+/// open is a pure state flip because `INLINE_CACHE` survives, `to_item`
+/// re-hydrates `inlineTracks` from it, and `tracks_loaded` short-circuits the
+/// fetch. Closing never drops the cache.
+///
+/// It writes the SAME `OPEN_ROWS` set the `expanded` view-mode segment writes,
+/// which is what keeps "open all" and "open this one" from disagreeing. The
+/// view mode itself is NOT touched — a chevron in list mode does not flip the
+/// segment, and closing every row by hand does not leave the segment stranded.
+pub(crate) fn toggle_row_expand(source_item_id: &str) {
+    let mut fetch = false;
+    let (collection_id, patches) = with_doc(|d| {
+        let mut patches: Vec<RowPatch> = Vec::new();
+        let id = d.id.clone();
+        let Some(row) = d
+            .items
+            .iter_mut()
+            .find(|r| r.source_item_id == source_item_id)
+        else {
+            return (id, patches);
+        };
+        if !row.can_expand {
+            return (id, patches);
+        }
+        let now_open = !row.row_open;
+        {
+            let key = cache_key(&row.source, &row.source_item_id);
+            let mut open = OPEN_ROWS.lock().unwrap();
+            if now_open {
+                open.insert(key);
+            } else {
+                open.remove(&key);
+            }
+        }
+        row.row_open = now_open;
+
+        let mut patch = RowPatch::of(row);
+        patch.row_open = Some(now_open);
+        if now_open && !row.tracks_loaded && !row.expand_loading {
+            row.expand_loading = true;
+            patch.expand_loading = Some(true);
+            fetch = true;
+        }
+        patches.push(patch);
+        (id, patches)
+    });
+    publish_rows(&collection_id, patches);
+    if !fetch || collection_id.is_empty() {
+        return;
     }
+    let source_item_id = source_item_id.to_string();
+    let runtime = crate::app();
+    crate::spawn(async move {
+        fetch_row_tracks(&runtime, source_item_id, collection_id).await;
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -1354,9 +1644,26 @@ pub(crate) fn reset_filters() {
 /// `list` | `grid` | `expanded`. The reference does NOT re-derive here (the
 /// item list is unchanged, only the layout switches), so neither do we: mutate,
 /// persist, PUBLISH. The caches, the selection and the scroll position survive.
-/// `expanded` additionally fires `ensure_expanded`.
+///
+/// The segment now drives the SAME per-row open state the chevron does:
+/// `expanded` = open all, and leaving it = close all. Without the close-all arm
+/// the list would keep every inline block rendered after switching back and the
+/// segment would appear to do nothing. Toggling list <-> grid leaves the set
+/// alone, so a row opened in list mode is still open when you come back from
+/// the grid.
 pub(crate) fn set_view_mode(mode: &str) {
-    with_doc(|d| d.view_mode = mode.to_string());
+    let was_expanded = with_doc(|d| d.view_mode == "expanded");
+    with_doc(|d| {
+        d.view_mode = mode.to_string();
+        if mode == "expanded" {
+            open_all_expandable(d);
+        } else if was_expanded {
+            OPEN_ROWS.lock().unwrap().clear();
+            for row in d.items.iter_mut() {
+                row.row_open = false;
+            }
+        }
+    });
     persist_prefs();
     publish_current();
     if mode == "expanded" {
@@ -1560,6 +1867,7 @@ pub(crate) fn teardown() {
     FULL_ITEMS.lock().unwrap().clear();
     INLINE_CACHE.lock().unwrap().clear();
     RESOLVE_CACHE.lock().unwrap().clear();
+    OPEN_ROWS.lock().unwrap().clear();
     SELECTED.lock().unwrap().clear();
     *LAST_FILTER_KEY.lock().unwrap() = None;
     PREFS_HYDRATED.store(false, Ordering::SeqCst);
@@ -1713,6 +2021,55 @@ mod tests {
     #[test]
     fn cache_key_never_collides_across_sources() {
         assert_ne!(cache_key("qobuz", "1"), cache_key("local", "1"));
+    }
+
+    /// The accordion's ONE state: `rowOpen` is derived from the shared set on
+    /// every rebuild (so a sort or a keystroke cannot fold an open row), and a
+    /// TRACK never carries it — it has nothing to show, and its row body must
+    /// keep the whole click gesture.
+    #[test]
+    fn row_open_is_derived_from_the_shared_open_set() {
+        let resolved = HashMap::new();
+        let inline = HashMap::new();
+        let selected = HashSet::new();
+        let album = item(0, "A", ItemType::Album, AlbumSource::Qobuz);
+        let track = item(1, "B", ItemType::Track, AlbumSource::Qobuz);
+
+        let mut open = HashSet::new();
+        open.insert(cache_key("qobuz", &album.source_item_id));
+        open.insert(cache_key("qobuz", &track.source_item_id));
+
+        let album_row = to_item(&album, &resolved, &inline, &selected, &open);
+        assert!(album_row.can_expand);
+        assert!(album_row.row_open);
+
+        let track_row = to_item(&track, &resolved, &inline, &selected, &open);
+        assert!(!track_row.can_expand);
+        assert!(!track_row.row_open);
+
+        let closed: HashSet<String> = HashSet::new();
+        assert!(!to_item(&album, &resolved, &inline, &selected, &closed).row_open);
+    }
+
+    /// A patch carries the join key plus ONLY what changed — the point of the
+    /// channel. An untouched field must be absent, not `null`, so QML's
+    /// `Object.assign` cannot blank a value it was not told about.
+    #[test]
+    fn row_patch_serialises_only_the_changed_fields() {
+        let mut row = DetailRow {
+            position: 7,
+            source_item_id: "abc".into(),
+            ..DetailRow::default()
+        };
+        row.row_open = true;
+        let mut patch = RowPatch::of(&row);
+        patch.row_open = Some(true);
+        let json = serde_json::to_string(&patch).unwrap();
+        assert!(json.contains("\"position\":7"));
+        assert!(json.contains("\"sourceItemId\":\"abc\""));
+        assert!(json.contains("\"rowOpen\":true"));
+        assert!(!json.contains("qualityTier"));
+        assert!(!json.contains("inlineTracks"));
     }
 
     #[test]
