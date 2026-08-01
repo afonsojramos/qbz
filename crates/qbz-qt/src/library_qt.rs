@@ -1062,7 +1062,7 @@ pub(crate) fn is_local_album_key(id: &str) -> bool {
 /// `find` updated only one of them, and since `is_favorite` answers with
 /// `any(...)`, an un-favourite that left the second row lit kept reading
 /// "favourite" and the next click re-added it.
-fn set_feed_favorite(kind: &str, id: &str, value: bool) {
+pub(crate) fn set_feed_favorite(kind: &str, id: &str, value: bool) {
     with_library_mut(|d| {
         for item in d.feed.iter_mut().filter(|i| i.kind == kind && i.id == id) {
             item.is_favorite = value;
@@ -1133,7 +1133,7 @@ pub(crate) fn apply_pin_change(kind: &str, id: &str, pinned: bool) {
 /// key as their id, not a numeric one, and must not be resolved through the
 /// Qobuz track resolver. The Slint cannot hit this at all — `FAV_CURRENT` is
 /// Qobuz-only — so dropping them is the same queue it would have built.
-fn feed_track_to_queue(item: &FeedItem) -> Option<QueueTrack> {
+pub(crate) fn feed_track_to_queue(item: &FeedItem) -> Option<QueueTrack> {
     let id = item.id.parse::<u64>().ok()?;
     Some(QueueTrack {
         id,
@@ -1211,6 +1211,36 @@ fn order_by_visible(
 /// play_track`): the queue is built synchronously off the feed, the play is
 /// spawned. Blacklisted rows are dropped and the start index remapped inside
 /// `playback_qt::set_queue_stamped`, so nothing to do here.
+/// Library header "Play all tracks" / "Shuffle all tracks" — the visible set
+/// as the queue, from the top (`FavoritesActions.play_all_tracks` /
+/// `shuffle_tracks`).
+///
+/// `shuffle` REORDERS this queue; it does not switch the player's shuffle mode
+/// (PARITY-DEBT #17 — the reference's `favorites::shuffled_tracks()` mixes the
+/// Vec and plays index 0, and latching the global toggle here would change
+/// everything played afterwards).
+pub fn play_visible_all(visible_ids_json: String, shuffle: bool) {
+    let visible_ids: Vec<String> = serde_json::from_str(&visible_ids_json).unwrap_or_default();
+    let Some(first) = visible_ids.first().cloned() else {
+        return;
+    };
+    let queued = with_library(|d| order_by_visible(&d.feed, &visible_ids, &first)).flatten();
+    let Some((queue, _)) = queued else {
+        log::info!("[qbz-qt] library play-all: the visible list resolved to nothing");
+        return;
+    };
+    log::info!(
+        "[qbz-qt] library play-all: queueing {} visible track(s) (shuffle={shuffle})",
+        queue.len()
+    );
+    let runtime = crate::app();
+    crate::spawn(async move {
+        if let Err(e) = crate::playback_qt::play_track_list(&runtime, queue, 0, shuffle).await {
+            log::error!("[qbz-qt] library play-all failed: {e}");
+        }
+    });
+}
+
 pub fn play_from_visible(visible_ids_json: String, clicked_id: String) {
     let visible_ids: Vec<String> = serde_json::from_str(&visible_ids_json).unwrap_or_default();
     let queued = with_library(|d| order_by_visible(&d.feed, &visible_ids, &clicked_id)).flatten();

@@ -3880,6 +3880,16 @@ msgstr "Échec de la copie de la playlist"
 msgid "Playlist has no tracks to copy"
 msgstr "La playlist n'a aucun titre à copier"
 
+msgid "Added {} track"
+msgid_plural "Added {} tracks"
+msgstr[0] "{} titre ajouté"
+msgstr[1] "{} titres ajoutés"
+
+msgid "Added {} track to {}"
+msgid_plural "Added {} tracks to {}"
+msgstr[0] "{} titre ajouté à {}"
+msgstr[1] "{} titres ajoutés à {}"
+
 msgid "Added {} track to queue"
 msgid_plural "Added {} tracks to queue"
 msgstr[0] "{} titre ajouté à la file d'attente"
@@ -4889,3 +4899,44 @@ msgid "Removed {} album from blacklist"
 msgid_plural "Removed {} albums from blacklist"
 msgstr[0] "{} album retiré de la liste noire"
 msgstr[1] "{} albums retirés de la liste noire"
+
+msgid "Playlist imported"
+msgstr "Playlist importée"
+
+msgid "Playlist import failed"
+msgstr "Échec de l'importation de la playlist"
+
+msgid "Not logged in to Qobuz"
+msgstr "Vous n'êtes pas connecté à Qobuz"
+
+# Qt playlist manager — folder modals (contract block 2)
+
+msgid "Delete folder"
+msgstr "Supprimer le dossier"
+
+msgid "Delete the folder “{}”? Its playlists move back to the root."
+msgstr "Supprimer le dossier « {} » ? Ses playlists retournent à la racine."
+
+msgid "Choose a folder image"
+msgstr "Choisissez une image de dossier"
+
+msgid "Images"
+msgstr "Images"
+
+msgid "Failed to create folder"
+msgstr "Échec de la création du dossier"
+
+msgid "Failed to save folder"
+msgstr "Échec de l’enregistrement du dossier"
+
+msgid "Failed to delete folder"
+msgstr "Échec de la suppression du dossier"
+
+msgid "Failed to rename playlist"
+msgstr "Échec du renommage de la playlist"
+
+msgid "Failed to delete playlist"
+msgstr "Échec de la suppression de la playlist"
+
+msgid "Couldn't create the playlist"
+msgstr "Impossible de créer la playlist"

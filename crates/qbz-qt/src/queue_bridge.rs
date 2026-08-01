@@ -38,6 +38,16 @@ pub mod qbz_queue {
         // + pagination + #442 section markers). Supersedes `queueModel`.
         #[qproperty(QString, queue_json)]
 
+        // --- Sleep timer (queue footer) ------------------------------------
+        // Kept OUT of `queue_json`: the countdown reformats every second and
+        // the document is re-parsed by three QML files on every change, so
+        // folding it in would re-parse the whole queue once a second for a
+        // string nothing else reads. Two scalar properties instead — the same
+        // split the reference makes with its own `SleepTimerState` global.
+        // `sleep_remaining` is pre-formatted in Rust (single source of truth).
+        #[qproperty(bool, sleep_active)]
+        #[qproperty(QString, sleep_remaining)]
+
         type QbzQueue = super::QbzQueueRust;
 
         /// Registers this object's Qt-thread hop (Main.qml boots EVERY
@@ -63,9 +73,32 @@ pub mod qbz_queue {
         fn queue_play_history(self: Pin<&mut QbzQueue>, index: i32);
         #[qinvokable]
         fn queue_toggle_favorite(self: Pin<&mut QbzQueue>, kind: QString, id: QString);
+        /// Row menu: "Stop after this" / "Cancel stop after this" (idempotent).
+        #[qinvokable]
+        fn queue_toggle_stop_after(self: Pin<&mut QbzQueue>, id: QString);
+        /// Row menu: seed the Add-to-Playlist picker with this one row.
+        #[qinvokable]
+        fn queue_add_to_playlist(self: Pin<&mut QbzQueue>, index: i32);
         /// Footer: Clear queue.
         #[qinvokable]
         fn queue_clear(self: Pin<&mut QbzQueue>);
+        /// Footer: save the whole queue as a playlist (seeds the picker).
+        #[qinvokable]
+        fn queue_save_as_playlist(self: Pin<&mut QbzQueue>);
+        /// Footer: toggle infinite play (InfiniteRadio autoplay).
+        #[qinvokable]
+        fn queue_toggle_infinite_play(self: Pin<&mut QbzQueue>);
+        /// The panel became visible — pull a fresh snapshot. The queue can
+        /// change while the panel is closed (a session restore, a play from
+        /// any view), and the publish dedup means the panel would otherwise
+        /// mount against whatever document happened to be last posted.
+        #[qinvokable]
+        fn queue_panel_opened(self: Pin<&mut QbzQueue>);
+        /// Footer sleep timer: arm for `minutes` / cancel.
+        #[qinvokable]
+        fn sleep_timer_set(self: Pin<&mut QbzQueue>, minutes: i32);
+        #[qinvokable]
+        fn sleep_timer_cancel(self: Pin<&mut QbzQueue>);
     }
 
     impl cxx_qt::Threading for QbzQueue {}
@@ -80,6 +113,8 @@ type QListQVariant = QList<QVariant>;
 pub struct QbzQueueRust {
     queue_model: QListQVariant,
     queue_json: QString,
+    sleep_active: bool,
+    sleep_remaining: QString,
 }
 
 impl Default for QbzQueueRust {
@@ -87,6 +122,8 @@ impl Default for QbzQueueRust {
         Self {
             queue_model: QListQVariant::default(),
             queue_json: QString::from("{}"),
+            sleep_active: false,
+            sleep_remaining: QString::default(),
         }
     }
 }
@@ -144,7 +181,35 @@ impl qbz_queue::QbzQueue {
         crate::queue_toggle_favorite(kind.to_string(), id.to_string());
     }
 
+    pub fn queue_toggle_stop_after(self: Pin<&mut Self>, id: QString) {
+        crate::queue_toggle_stop_after(id.to_string());
+    }
+
+    pub fn queue_add_to_playlist(self: Pin<&mut Self>, index: i32) {
+        crate::queue_add_to_playlist(index);
+    }
+
     pub fn queue_clear(self: Pin<&mut Self>) {
         crate::queue_clear();
+    }
+
+    pub fn queue_save_as_playlist(self: Pin<&mut Self>) {
+        crate::queue_save_as_playlist();
+    }
+
+    pub fn queue_toggle_infinite_play(self: Pin<&mut Self>) {
+        crate::queue_toggle_infinite_play();
+    }
+
+    pub fn queue_panel_opened(self: Pin<&mut Self>) {
+        crate::queue_panel_opened();
+    }
+
+    pub fn sleep_timer_set(self: Pin<&mut Self>, minutes: i32) {
+        crate::sleep_timer_qt::set(crate::app(), minutes);
+    }
+
+    pub fn sleep_timer_cancel(self: Pin<&mut Self>) {
+        crate::sleep_timer_qt::cancel();
     }
 }

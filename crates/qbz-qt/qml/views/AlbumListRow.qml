@@ -32,6 +32,17 @@ Rectangle {
     /// NOT named `index`: a Repeater injects one into the delegate context
     /// and a same-named property here would shadow it.
     property int rowIndex: 0
+    /// Cover override for hosts whose rows carry no `artPath` of their own.
+    /// The Library feed is id-keyed (`artKey` -> a decoded file:// path in
+    /// LibraryView's artMap), so its rows never gain the key AlbumCollection's
+    /// producers bake in; everything else keeps working unchanged because ""
+    /// falls straight back to `item.artPath`.
+    property string artSource: ""
+    /// Multi-select arm (FavoritesView.slint:514 — Library > Albums in LIST
+    /// mode only). Default off, so the two catalog call sites are untouched.
+    property bool selectMode: false
+    property bool checked: false
+    signal toggleSelect()
 
     QbzTheme { id: theme }
 
@@ -58,10 +69,16 @@ Rectangle {
         acceptedButtons: Qt.LeftButton | Qt.RightButton
         cursorShape: Qt.PointingHandCursor
         onClicked: function (mouse) {
-            if (mouse.button === Qt.RightButton)
-                rowMenu.openAtCursor(rowArea, mouse.x, mouse.y)
-            else
-                QbzAlbum.openAlbum(root.item.id || "")
+            if (mouse.button === Qt.RightButton) {
+                // In select mode the row is a selection target, not a menu
+                // host (Tauri/Slint parity: a right-click toggles nothing
+                // there either).
+                if (!root.selectMode)
+                    rowMenu.openAtCursor(rowArea, mouse.x, mouse.y)
+                return
+            }
+            if (root.selectMode) root.toggleSelect()
+            else QbzAlbum.openAlbum(root.item.id || "")
         }
     }
 
@@ -111,6 +128,20 @@ Rectangle {
         anchors.rightMargin: 12
         spacing: root.colGap
 
+        // Selection checkbox — takes the leading slot in select mode
+        // (MultiSelectBar's companion; the art cell keeps its own width so
+        // the columns below the header never shift).
+        Item {
+            visible: root.selectMode
+            width: visible ? 18 : 0
+            height: parent.height
+            QbzCheckbox {
+                anchors.centerIn: parent
+                checked: root.checked
+                onToggled: root.toggleSelect()
+            }
+        }
+
         // Art cell (52px column, 44px thumb centred).
         Item {
             width: root.colArt
@@ -124,7 +155,7 @@ Rectangle {
                 clip: true
                 RoundedImage {
                     anchors.fill: parent
-                    source: root.item.artPath || ""
+                    source: root.artSource !== "" ? root.artSource : (root.item.artPath || "")
                     radius: 4
                 }
             }
@@ -132,8 +163,12 @@ Rectangle {
 
         // ITEM — title over artist (the artist line links to the artist).
         Column {
+            // The select checkbox adds a leading 18px cell AND a gap; without
+            // subtracting both, the row overflows its width by 30px the moment
+            // multi-select is switched on.
             width: parent.width - root.colArt - root.colQuality - root.colYear
                 - root.colOverflow - 4 * root.colGap
+                - (root.selectMode ? 18 + root.colGap : 0)
             anchors.verticalCenter: parent.verticalCenter
             spacing: 2
             Text {

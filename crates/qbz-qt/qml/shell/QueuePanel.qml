@@ -2,16 +2,19 @@
 // crates/qbz-ui/ui/shell/QueueSidebar.slint.
 //
 // Tabs (Queue / History), NOW PLAYING card (live heart), UP NEXT with the
-// #442 "Next in queue" / "Next up" section markers, 40-row pagination,
-// live search filter, row actions (play / remove / remove-all-after /
+// #442 "Next in queue" / "Next up" section markers and the "stop after this
+// song" marker, 40-row pagination, live search filter, row actions (play /
+// remove / remove-all-after / stop-after / add-to-playlist / track info /
 // heart), drag reorder (6px press-drag, drop indicator + floating ghost),
-// footer (count line + Clear / stubs + search field), History tab
-// (thumbnail rows, click replays as a fresh single-track queue), exact
-// empty states. Data: QbzQueue.queueJson (queue_qt.rs QueueDoc).
+// footer (count line + Clear / save-as-playlist / infinite play / sleep
+// timer + search field), History tab (thumbnail rows, click replays as a
+// fresh single-track queue), exact empty and no-results states.
+// Data: QbzQueue.queueJson (queue_qt.rs QueueDoc) + the two scalar sleep
+// properties on the same singleton.
 //
-// POC-NOTEs: save-as-playlist (opens a picker modal upstream — inert),
-// infinite-play + sleep timer engines, stop-after marker, row menu's
-// "Add to playlist" / "Track info" entries, ephemeral rows.
+// EPHEMERAL rows drop every PERSISTENCE affordance (heart, Add to playlist,
+// Track info) exactly as QueueSidebar.slint gates on `item.is-ephemeral`:
+// an ephemeral play must leave nothing behind inside QBZ.
 
 import QtQuick
 import QtQuick.Controls
@@ -32,6 +35,34 @@ Rectangle {
     readonly property var upcoming: doc.upcoming || []
     readonly property var historyRows: doc.history || []
     readonly property bool queueEmpty: currentRow === null && (doc.upcomingTotal || 0) === 0
+    // "Stop after this song": the decimal id of the marked track, "" for none.
+    readonly property string stopAfterId: doc.stopAfterId || ""
+    // A search is active but nothing matched — a different state from an empty
+    // queue, and the reason the reference echoes the query back.
+    readonly property bool noSearchResults: !queueEmpty
+        && (doc.searchQuery || "") !== "" && (doc.upcomingTotal || 0) === 0
+    // The now-playing track is ephemeral -> the queue cannot be persisted, so
+    // the footer's save-as-playlist disappears (QueueSidebar.slint:850).
+    readonly property bool currentEphemeral: currentRow !== null && currentRow.isEphemeral === true
+
+    // The panel is `visible`-gated rather than conditionally mounted, so this
+    // is the equivalent of the reference's `init => QueueState.panel-opened()`:
+    // pull a fresh snapshot each time it comes back on screen, because the
+    // queue can change while it is hidden (a session restore, a play from any
+    // view). Cheap — an unchanged document never reaches Qt.
+    onVisibleChanged: {
+        if (!visible)
+            return
+        QbzQueue.queuePanelOpened()
+        // AND re-dispatch the covers. `onDocChanged` alone is not enough: the
+        // panel is `visible`-gated rather than mounted on demand, and a queue
+        // that was published while it was hidden leaves the covers never
+        // requested — measured live, a local track's now-playing thumbnail
+        // stayed blank with NO artwork dispatch after the publish. The
+        // publish dedup means `queuePanelOpened` above often changes nothing,
+        // so it cannot be relied on to trigger the doc change either.
+        dispatchCovers()
+    }
 
     // --- Favourite state, id-keyed (the ArtistView.localToggles idiom) ---
     // The rows here are plain JS objects parsed out of `doc`, so the old
@@ -240,15 +271,33 @@ Rectangle {
             anchors.bottomMargin: 4
             spacing: 9
 
-            // Leading: track number (UP NEXT) or thumbnail (History).
-            Text {
+            // Leading: track number (UP NEXT) or thumbnail (History). On the
+            // row carrying the "stop after this song" marker the number is
+            // REPLACED by the accent CircleStop — same slot, so the list never
+            // reflows when a marker is placed or cleared.
+            Item {
                 visible: showNumber
                 width: 22
-                anchors.verticalCenter: parent.verticalCenter
-                text: rowIndex + 1 + (doc.page || 0) * 40
-                color: theme.textMuted
-                font.pixelSize: 12
-                horizontalAlignment: Text.AlignHCenter
+                height: parent.height
+                readonly property bool marked: qrRoot.inQueue
+                    && root.stopAfterId !== "" && row.id === root.stopAfterId
+                Text {
+                    visible: !parent.marked
+                    anchors.centerIn: parent
+                    width: parent.width
+                    text: rowIndex + 1 + (doc.page || 0) * 40
+                    color: theme.textMuted
+                    font.pixelSize: 12
+                    horizontalAlignment: Text.AlignHCenter
+                }
+                QbzIcon {
+                    visible: parent.marked
+                    anchors.centerIn: parent
+                    name: "circle-stop"
+                    width: 13
+                    height: 13
+                    tintName: "accent"
+                }
             }
             Rectangle {
                 visible: !showNumber
@@ -346,12 +395,40 @@ Rectangle {
                 QbzContextMenu {
                     id: rowMenu
                     menuWidth: 196
+                        // QueueSidebar.slint's track menu, in its order. The
+                        // last entry is this port's own addition (the reference
+                        // has no heart in the queue row menu) and is kept
+                        // BELOW the ported set so the 1:1 block reads intact.
+                        // EPHEMERAL rows drop the two persistence entries, the
+                        // same gate the .slint applies (and the reason its menu
+                        // is 105px tall instead of 175px on those rows).
                         Repeater {
-                            model: [
-                                { "label": QbzSession.tr("Remove from queue", QbzSession.trRev), "icon": "trash-2", "action": "remove" },
-                                { "label": QbzSession.tr("Remove all after", QbzSession.trRev), "icon": "list-x", "action": "remove-after" },
-                                { "label": root.favState(row) ? QbzSession.tr("Remove from Library", QbzSession.trRev) : QbzSession.tr("Add to Library", QbzSession.trRev), "icon": root.favState(row) ? "heart-filled" : "heart", "action": "favorite" },
-                            ]
+                            model: {
+                                var items = [
+                                    { "label": QbzSession.tr("Remove from queue", QbzSession.trRev), "icon": "trash-2", "action": "remove" },
+                                    { "label": row.id === root.stopAfterId
+                                        ? QbzSession.tr("Cancel stop after this", QbzSession.trRev)
+                                        : QbzSession.tr("Stop after this", QbzSession.trRev), "icon": "circle-stop", "action": "stop-after" },
+                                    { "label": QbzSession.tr("Remove all after", QbzSession.trRev), "icon": "list-x", "action": "remove-after" },
+                                ]
+                                if (row.isEphemeral !== true) {
+                                    // LOCAL/Plex rows drop it too: the queue's
+                                    // `add_to_playlist` refuses them
+                                    // (queue_qt.rs — a queue row's id is a
+                                    // library.db / Plex synthetic id and this
+                                    // panel has no source-aware resolver to
+                                    // turn it into a local-mode ref), so the
+                                    // entry would render and no-op. Absent
+                                    // beats dead; the LOCAL surfaces that DO
+                                    // have the resolver offer it instead
+                                    // (local/LocalTrackRow.qml).
+                                    if (row.isLocal !== true)
+                                        items.push({ "label": QbzSession.tr("Add to playlist", QbzSession.trRev), "icon": "list-plus", "action": "add-to-playlist" })
+                                    items.push({ "label": QbzSession.tr("Track info", QbzSession.trRev), "icon": "info", "action": "track-info" })
+                                    items.push({ "label": root.favState(row) ? QbzSession.tr("Remove from Library", QbzSession.trRev) : QbzSession.tr("Add to Library", QbzSession.trRev), "icon": root.favState(row) ? "heart-filled" : "heart", "action": "favorite" })
+                                }
+                                return items
+                            }
                             delegate: Rectangle {
                                 required property var modelData
                                 width: parent ? parent.width : 0
@@ -382,7 +459,10 @@ Rectangle {
                                         rowMenu.close()
                                         var a = modelData.action
                                         if (a === "remove") QbzQueue.queueRemoveUpcoming(rowIndex)
+                                        else if (a === "stop-after") QbzQueue.queueToggleStopAfter(row.id)
                                         else if (a === "remove-after") QbzQueue.queueRemoveAllAfter(rowIndex)
+                                        else if (a === "add-to-playlist") QbzQueue.queueAddToPlaylist(rowIndex)
+                                        else if (a === "track-info") qrRoot.openTrackInfo()
                                         else if (a === "favorite") root.toggleFav(row)
                                     }
                                 }
@@ -500,6 +580,27 @@ Rectangle {
             height: 2
             radius: 1
             color: theme.accent
+        }
+
+        // --- Track info (rows/TrackRow.qml's lazy-Loader idiom) -------------
+        // A full Popup tree per delegate would cost 40 of them on a full page,
+        // so it is activated on demand and torn down on close (Qt.callLater so
+        // the Popup is not destroyed inside its own signal).
+        Loader {
+            id: trackInfoLoader
+            active: false
+            sourceComponent: TrackInfoModal { }
+        }
+        Connections {
+            target: trackInfoLoader.item
+            ignoreUnknownSignals: true
+            function onClosed() { Qt.callLater(function () { trackInfoLoader.active = false }) }
+        }
+        function openTrackInfo() {
+            if (!qrRoot.row || !qrRoot.row.id)
+                return
+            trackInfoLoader.active = true
+            trackInfoLoader.item.openFor(qrRoot.row.id)
         }
     }
 
@@ -637,7 +738,11 @@ Rectangle {
                                     }
                                 }
                                 Column {
-                                    width: parent.width - 34 - 28 - 2 * 9
+                                    // A Row SKIPS invisible children, so the
+                                    // heart's 28px + its 9px gap come back to
+                                    // the text when it is hidden.
+                                    width: parent.width - 34 - 9
+                                        - (root.currentEphemeral ? 0 : 28 + 9)
                                     anchors.verticalCenter: parent.verticalCenter
                                     spacing: 2
                                     Text {
@@ -656,8 +761,12 @@ Rectangle {
                                         elide: Text.ElideRight
                                     }
                                 }
-                                // Favorite toggle (wired).
+                                // Favorite toggle. HIDDEN on an ephemeral
+                                // track: there is no DB row to favourite, and
+                                // an ephemeral play must leave nothing behind
+                                // (QueueSidebar.slint:563-565).
                                 Rectangle {
+                                    visible: !root.currentEphemeral
                                     width: 28
                                     height: 28
                                     radius: theme.radiusSm
@@ -797,6 +906,20 @@ Rectangle {
                             wrapMode: Text.WordWrap
                         }
                     }
+
+                    // No-results state — a search is active but nothing
+                    // matched. Distinct from the empty queue above: the queue
+                    // still has tracks, they are just filtered out, so telling
+                    // the user to "play an album to get started" would be a lie.
+                    Text {
+                        visible: root.noSearchResults
+                        width: parent.width - 20
+                        topPadding: 32 - 10
+                        text: QbzSession.tr("No tracks match your search", QbzSession.trRev)
+                        color: theme.textMuted
+                        font.pixelSize: 12
+                        horizontalAlignment: Text.AlignHCenter
+                    }
                 }
             }
 
@@ -880,24 +1003,248 @@ Rectangle {
                 readonly property int contentWidth:
                     width - leftPadding - rightPadding
 
-                // Action 1 — Clear queue (wired).
+                // Action 1 — Clear queue.
                 QbzIconButton { btnSize: 30
                     name: "trash-list"
                     onClicked: QbzQueue.queueClear()
                 }
-                // Action 2 — Save as playlist (INERT: opens a picker modal
-                // upstream — POC-NOTE).
-                QbzIconButton { btnSize: 30; name: "add-to-list" }
-                // Action 3 — infinite play (INERT engine — POC-NOTE).
-                QbzIconButton { btnSize: 30; name: "infinity" }
-                // Action 4 — sleep timer (INERT engine — POC-NOTE).
-                QbzIconButton { btnSize: 30; name: "clock" }
+                // Action 2 — Save the queue as a playlist: seeds the shared
+                // Add-to-Playlist picker with the whole queue, whose inline
+                // "Create new playlist" row is what names it. HIDDEN while an
+                // ephemeral track plays — an ephemeral queue cannot be
+                // persisted (QueueSidebar.slint:848-858).
+                QbzIconButton { btnSize: 30
+                    name: "add-to-list"
+                    visible: !root.currentEphemeral
+                    onClicked: QbzQueue.queueSaveAsPlaylist()
+                }
+                // Action 3 — infinite play (accent while armed).
+                QbzIconButton { btnSize: 30
+                    name: "infinity"
+                    active: doc.infinitePlay === true
+                    onClicked: QbzQueue.queueToggleInfinitePlay()
+                }
+                // Action 4 — sleep timer. Accent while armed; the popover
+                // opens ABOVE the footer with the preset picker / countdown.
+                QbzIconButton {
+                    id: sleepBtn
+                    btnSize: 30
+                    name: "clock"
+                    active: QbzQueue.sleepActive
+                    onClicked: sleepMenu.opened ? sleepMenu.close() : sleepMenu.open()
+
+                    Popup {
+                        id: sleepMenu
+                        // Anchored to the button's top-left and pushed up by
+                        // its own height, so it grows upward out of the footer
+                        // (the .slint hard-codes x:-188 y:-214 for the same
+                        // effect; here the height is not a magic number).
+                        x: -188
+                        y: -height - 6
+                        width: 220
+                        padding: 0
+                        // A click INSIDE must not dismiss it, or a preset
+                        // could never be picked before Set is pressed — the
+                        // same reason the .slint sets close-on-click-outside.
+                        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutsideParent
+                        background: Rectangle {
+                            radius: theme.radiusMd
+                            color: theme.surfaceCard
+                            border.width: 1
+                            border.color: theme.borderSubtle
+                        }
+                        // Local until Set is pressed: the preset choice is a
+                        // draft, and the reference keeps it in UI state too.
+                        property int selectedIndex: 0
+                        property string customMinutes: "60"
+
+                        contentItem: Column {
+                            padding: 12
+                            spacing: 10
+
+                            // Armed: countdown + Cancel.
+                            Column {
+                                visible: QbzQueue.sleepActive
+                                width: 196
+                                spacing: 8
+                                Text {
+                                    text: QbzSession.tr("Stops in", QbzSession.trRev)
+                                    color: theme.textMuted
+                                    font.pixelSize: 11
+                                }
+                                Text {
+                                    text: QbzQueue.sleepRemaining
+                                    color: theme.accent
+                                    font.pixelSize: 16
+                                    font.weight: theme.weightSemibold
+                                }
+                                Rectangle {
+                                    width: parent.width
+                                    height: 32
+                                    radius: theme.radiusSm
+                                    border.width: 1
+                                    border.color: theme.borderSubtle
+                                    color: cancelArea.containsMouse ? theme.surfaceHover : theme.surfaceElevated
+                                    Text {
+                                        anchors.fill: parent
+                                        text: QbzSession.tr("Cancel Timer", QbzSession.trRev)
+                                        color: theme.textSecondary
+                                        font.pixelSize: 12
+                                        horizontalAlignment: Text.AlignHCenter
+                                        verticalAlignment: Text.AlignVCenter
+                                    }
+                                    MouseArea {
+                                        id: cancelArea
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: {
+                                            QbzQueue.sleepTimerCancel()
+                                            sleepMenu.close()
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Idle: preset picker (+ custom minutes) + Set.
+                            Column {
+                                visible: !QbzQueue.sleepActive
+                                width: 196
+                                spacing: 10
+                                Text {
+                                    text: QbzSession.tr("Stop playback after:", QbzSession.trRev)
+                                    color: theme.textMuted
+                                    font.pixelSize: 11
+                                }
+                                Column {
+                                    width: parent.width
+                                    spacing: 2
+                                    Repeater {
+                                        model: [
+                                            QbzSession.tr("30 min", QbzSession.trRev),
+                                            QbzSession.tr("1 hr", QbzSession.trRev),
+                                            QbzSession.tr("2 hr", QbzSession.trRev),
+                                            QbzSession.tr("3 hr", QbzSession.trRev),
+                                            QbzSession.tr("5 hr", QbzSession.trRev),
+                                            QbzSession.tr("Custom…", QbzSession.trRev)
+                                        ]
+                                        delegate: Rectangle {
+                                            required property var modelData
+                                            required property int index
+                                            width: parent ? parent.width : 0
+                                            height: 30
+                                            radius: theme.radiusSm
+                                            color: sleepMenu.selectedIndex === index
+                                                ? theme.accent
+                                                : (presetArea.containsMouse ? theme.surfaceHover : "transparent")
+                                            Text {
+                                                x: 10
+                                                width: parent.width - 20
+                                                height: parent.height
+                                                text: modelData
+                                                color: sleepMenu.selectedIndex === index
+                                                    ? theme.accentText : theme.textPrimary
+                                                font.pixelSize: 12
+                                                verticalAlignment: Text.AlignVCenter
+                                                elide: Text.ElideRight
+                                            }
+                                            MouseArea {
+                                                id: presetArea
+                                                anchors.fill: parent
+                                                hoverEnabled: true
+                                                cursorShape: Qt.PointingHandCursor
+                                                onClicked: sleepMenu.selectedIndex = index
+                                            }
+                                        }
+                                    }
+                                }
+                                // Custom minutes — revealed by the last preset.
+                                // A bare TextInput in a styled Rectangle, the
+                                // AddToMixtapeModal convention (and what the
+                                // .slint does): QbzLineEdit has no numeric arm.
+                                Rectangle {
+                                    width: parent.width
+                                    height: 32
+                                    visible: sleepMenu.selectedIndex === 5
+                                    radius: theme.radiusSm
+                                    border.width: 1
+                                    border.color: customInput.activeFocus ? theme.accent : theme.borderSubtle
+                                    color: theme.surfaceElevated
+                                    TextInput {
+                                        id: customInput
+                                        anchors.fill: parent
+                                        anchors.leftMargin: 9
+                                        anchors.rightMargin: 34
+                                        color: theme.textPrimary
+                                        font.pixelSize: 12
+                                        verticalAlignment: Text.AlignVCenter
+                                        clip: true
+                                        selectByMouse: true
+                                        // Digits only, so "Set" can never be
+                                        // handed something `parseInt` reads as
+                                        // NaN (the Rust side clamps to
+                                        // [1, 1440] on top of this).
+                                        validator: IntValidator { bottom: 1; top: 1440 }
+                                        inputMethodHints: Qt.ImhDigitsOnly
+                                        text: sleepMenu.customMinutes
+                                        onTextEdited: sleepMenu.customMinutes = text
+                                        Binding {
+                                            target: customInput
+                                            property: "text"
+                                            value: sleepMenu.customMinutes
+                                            when: !customInput.activeFocus
+                                        }
+                                    }
+                                    Text {
+                                        anchors.right: parent.right
+                                        anchors.rightMargin: 9
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        text: QbzSession.tr("min", QbzSession.trRev)
+                                        color: theme.textMuted
+                                        font.pixelSize: 11
+                                    }
+                                }
+                                Rectangle {
+                                    width: parent.width
+                                    height: 34
+                                    radius: theme.radiusSm
+                                    color: setArea.containsMouse ? theme.accentHover : theme.accent
+                                    Text {
+                                        anchors.fill: parent
+                                        text: QbzSession.tr("Set Timer", QbzSession.trRev)
+                                        color: theme.accentText
+                                        font.pixelSize: 12
+                                        font.weight: theme.weightMedium
+                                        horizontalAlignment: Text.AlignHCenter
+                                        verticalAlignment: Text.AlignVCenter
+                                    }
+                                    MouseArea {
+                                        id: setArea
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: {
+                                            var mins = [30, 60, 120, 180, 300][sleepMenu.selectedIndex]
+                                            if (mins === undefined)
+                                                mins = parseInt(sleepMenu.customMinutes, 10)
+                                            if (!isNaN(mins) && mins > 0)
+                                                QbzQueue.sleepTimerSet(mins)
+                                            sleepMenu.close()
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
 
                 // Filler so the collapsed magnifier sits at the right edge;
-                // the field opens LEFT across it (5 gaps of spacingXs).
+                // the field opens LEFT across it. One gap per visible control
+                // (save-as-playlist disappears on an ephemeral queue).
                 Item {
-                    width: Math.max(0, footerRow.contentWidth - 4 * 30 - 30
-                                       - 5 * theme.spacingXs)
+                    width: Math.max(0, footerRow.contentWidth
+                                       - (root.currentEphemeral ? 3 : 4) * 30 - 30
+                                       - (root.currentEphemeral ? 4 : 5) * theme.spacingXs)
                     height: 1
                 }
                 // Inline queue search (wired) — the shared expandable control.

@@ -3721,6 +3721,14 @@ msgstr "プレイリストのコピーに失敗しました"
 msgid "Playlist has no tracks to copy"
 msgstr "プレイリストにコピーするトラックがありません"
 
+msgid "Added {} track"
+msgid_plural "Added {} tracks"
+msgstr[0] "{}トラックを追加しました"
+
+msgid "Added {} track to {}"
+msgid_plural "Added {} tracks to {}"
+msgstr[0] "{}トラックを{}に追加しました"
+
 msgid "Added {} track to queue"
 msgid_plural "Added {} tracks to queue"
 msgstr[0] "{}トラックをキューに追加しました"
@@ -4876,3 +4884,44 @@ msgstr "アルバムのブラックリストのクリアに失敗しました"
 msgid "Removed {} album from blacklist"
 msgid_plural "Removed {} albums from blacklist"
 msgstr[0] "ブラックリストから{}枚のアルバムを削除しました"
+
+msgid "Playlist imported"
+msgstr "プレイリストをインポートしました"
+
+msgid "Playlist import failed"
+msgstr "プレイリストのインポートに失敗しました"
+
+msgid "Not logged in to Qobuz"
+msgstr "Qobuzにログインしていません"
+
+# Qt playlist manager — folder modals (contract block 2)
+
+msgid "Delete folder"
+msgstr "フォルダを削除"
+
+msgid "Delete the folder “{}”? Its playlists move back to the root."
+msgstr "フォルダ「{}」を削除しますか？プレイリストはルートに戻ります。"
+
+msgid "Choose a folder image"
+msgstr "フォルダ画像を選択"
+
+msgid "Images"
+msgstr "画像"
+
+msgid "Failed to create folder"
+msgstr "フォルダの作成に失敗しました"
+
+msgid "Failed to save folder"
+msgstr "フォルダの保存に失敗しました"
+
+msgid "Failed to delete folder"
+msgstr "フォルダの削除に失敗しました"
+
+msgid "Failed to rename playlist"
+msgstr "プレイリストの名前変更に失敗しました"
+
+msgid "Failed to delete playlist"
+msgstr "プレイリストの削除に失敗しました"
+
+msgid "Couldn't create the playlist"
+msgstr "プレイリストを作成できませんでした"

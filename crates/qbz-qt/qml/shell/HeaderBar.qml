@@ -26,6 +26,22 @@
 // POC-NOTE: the custom window-chrome parts (drag surface, drawn
 // min/max/close WindowControls) are skipped — the POC keeps NATIVE window
 // decorations.
+//
+// FILE LENGTH (>500): this is ONE bar with one placement state machine —
+// `navInSidebar` x `navHeaderCompact` x the three sidebar widths decide which
+// of the header's forms is mounted, and every block below reads that same
+// state. The parts that are self-contained have already been extracted and are
+// SHARED with the sidebar rather than duplicated: the section dropdown
+// (shell/NavFlyout.qml), its leading glyph (shell/NavSectionGlyph.qml), the
+// nav buttons (controls/QbzNavButton.qml) and the hover bubble
+// (controls/QbzTooltip.qml, mounted once by AppShell). What remains is the
+// bar's own layout — left controls, the absolutely-centred search, the status
+// badge, the window controls and the app menu — each a positional slot of this
+// single row, so splitting them would hand every half the same placement
+// properties to keep in sync while none of them is reusable anywhere else.
+// The closed-sidebar playlists flyout is the one candidate left: it is
+// self-contained, but it reads `plBtn` for its anchor and the sidebar's shared
+// search query, so it moves the day a second surface needs it.
 
 import QtQuick
 import QtQuick.Controls
@@ -331,10 +347,16 @@ Rectangle {
                 // 248px wide, a search header over the SAME Rust-side filter
                 // the sidebar uses, then the flat entries (folders toggle in
                 // place, playlists open and close the flyout). Six rows
-                // visible, the rest scroll.
-                // GAP: Slint's footer (Import / Manage playlists) is omitted —
-                // this port has neither seam, and the sidebar "..." menu marks
-                // the same two as unavailable rather than faking them.
+                // visible, the rest scroll, then Slint's two footer rows —
+                // Import and Manage playlists.
+                //
+                // Those two call the IDENTICAL invokables the sidebar "..."
+                // menu's rows do, and both surfaces close themselves and clear
+                // the SHARED search query before acting (this popup's onClosed
+                // already does the clearing). Wiring only one of them would
+                // re-create the gap this comment used to describe: the flyout
+                // is the only playlists surface a user with a closed sidebar
+                // has, so an entry point missing here is missing outright.
                 Popup {
                     id: plPopup
                     y: plBtn.height + 6
@@ -477,6 +499,105 @@ Rectangle {
                                     color: theme.textMuted
                                     font.pixelSize: 12
                                     verticalAlignment: Text.AlignVCenter
+                                }
+                            }
+                        }
+
+                        // ---- Footer (SidebarPlaylistsPopup.slint:189-269) ---
+                        Rectangle {
+                            width: parent.width
+                            height: 1
+                            color: theme.borderSubtle
+                        }
+                        // Import — offline-gated exactly like the sidebar's
+                        // "..." row. The importer modal carries its own offline
+                        // banner as the second layer; the row alone is not the
+                        // gate.
+                        Rectangle {
+                            id: plImportRow
+                            readonly property bool rowEnabled: !QbzSession.offline
+                            width: parent.width
+                            height: 40
+                            radius: 5
+                            color: (plImportRow.rowEnabled && plImportArea.containsMouse)
+                                ? theme.surfaceHover : "transparent"
+                            Row {
+                                anchors.fill: parent
+                                anchors.leftMargin: 12
+                                anchors.rightMargin: 12
+                                spacing: 8
+                                QbzIcon {
+                                    name: "import"
+                                    width: 15
+                                    height: 15
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    tintName: plImportRow.rowEnabled ? "secondary" : "muted"
+                                }
+                                Text {
+                                    width: parent.width - 23
+                                    height: parent.height
+                                    text: QbzSession.tr("Import", QbzSession.trRev)
+                                    color: plImportRow.rowEnabled ? theme.textSecondary : theme.textMuted
+                                    font.pixelSize: 13
+                                    verticalAlignment: Text.AlignVCenter
+                                    elide: Text.ElideRight
+                                }
+                            }
+                            MouseArea {
+                                id: plImportArea
+                                anchors.fill: parent
+                                enabled: plImportRow.rowEnabled
+                                hoverEnabled: plImportRow.rowEnabled
+                                cursorShape: plImportRow.rowEnabled
+                                    ? Qt.PointingHandCursor : Qt.ArrowCursor
+                                onClicked: {
+                                    QbzPlaylistImport.open()
+                                    // Closing clears the shared search query
+                                    // (plPopup.onClosed) so it does not silently
+                                    // scope the expanded sidebar's list later.
+                                    plPopup.close()
+                                }
+                            }
+                        }
+                        // Manage playlists — always available; the manager is a
+                        // local-store surface and the only place a hidden
+                        // playlist can be un-hidden.
+                        Rectangle {
+                            id: plManageRow
+                            width: parent.width
+                            height: 40
+                            radius: 5
+                            color: plManageArea.containsMouse ? theme.surfaceHover : "transparent"
+                            Row {
+                                anchors.fill: parent
+                                anchors.leftMargin: 12
+                                anchors.rightMargin: 12
+                                spacing: 8
+                                QbzIcon {
+                                    name: "library-big"
+                                    width: 15
+                                    height: 15
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    tintName: "secondary"
+                                }
+                                Text {
+                                    width: parent.width - 23
+                                    height: parent.height
+                                    text: QbzSession.tr("Manage playlists", QbzSession.trRev)
+                                    color: theme.textSecondary
+                                    font.pixelSize: 13
+                                    verticalAlignment: Text.AlignVCenter
+                                    elide: Text.ElideRight
+                                }
+                            }
+                            MouseArea {
+                                id: plManageArea
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    QbzPlaylistManager.navigate()
+                                    plPopup.close()
                                 }
                             }
                         }

@@ -18,11 +18,22 @@
 // is: Play now, Play next, Play later, Add to queue, Add to mixtape, Add to
 // playlist, Go to album, Go to artist.
 //
-// Add to mixtape and Add to playlist are OMITTED here, not disabled: this
-// port has no Mixtape/Collection store and no playlist picker (the Rust side
-// says so itself — `local_album_actions.rs` keeps them as LOGGED SEAMS), and
-// a menu row that silently does nothing is worse than an absent one. Every
-// row that IS shown is wired.
+// Add to playlist is LIVE (QbzPlaylistPicker). It goes through
+// `QbzLocal.bulkAction("track", [id], "add-to-playlist")` — the LOCAL-mode
+// arm — and not through the picker singleton directly, because only
+// `local_bulk::resolve_blocking` can turn a Tracks-table row id into the
+// `LocalTrack` that `local_picker_ref_for_track` needs; a Plex row's ref is
+// "plex:<rating key>" and its numeric display id means a different track the
+// moment anything reads it as a catalog id. The bulk entry point takes a JSON
+// id array, so a single row is a one-element array — same code path, no
+// second resolver.
+//
+// Add to mixtape rides the SAME entry point for the same reason
+// (`local_bulk.rs::apply` "add-to-mixtape" -> `myqbz_add_qt::open_items(
+// track_items_from_local(rows))`), which restores the .slint's order:
+// Play now · Play next · Play later · Add to queue · Add to mixtape ·
+// Add to playlist · Go to album · Go to artist. Every row that IS shown is
+// wired; nothing here renders and no-ops.
 //
 // The shared row's own ⋯ is turned OFF (`showMenu: false`) because its
 // entries are the Qobuz set: its Go-to-album/artist call QbzAlbum.openAlbum /
@@ -91,24 +102,24 @@ Item {
         // the sidebar drop handler forwards it as a Qobuz catalog id.
         draggable: false
         qualityStyle: "icon"
+        // Multi-select is the SHARED row's arm now (rows/TrackRow.qml:116,
+        // the port of TrackRow.slint:58 `multi-select-mode`). This file used
+        // to overlay its own SelectCheck on the number cell because the
+        // shared row had no such arm — it does now, and the overlay was
+        // strictly worse: it drew a checkbox but left `sharedRow.selectMode`
+        // false, so the row BODY kept its normal gestures and a single click
+        // anywhere off the 14px disc PLAYED the track instead of selecting
+        // it. TrackRow.slint:174 is explicit that in select mode "the WHOLE
+        // row body is a selection target", and LocalAlbumRow.qml:55 already
+        // does that for the albums tab. Forwarding the three members gets the
+        // reference behaviour for free: body-click toggles, double-click no
+        // longer plays, the number/play cell stands down, and the checkbox is
+        // the 14px accent disc the .slint actually specifies.
+        selectMode: root.selectMode
+        checked: root.checked
+        onToggleSelect: root.toggleSelect()
         onPlayRequested: root.playRequested()
         onEnqueueRequested: function (m) { root.enqueueRequested(m) }
-    }
-
-    // Multi-select checkbox over the number cell (x 12..44 in TrackRow).
-    Rectangle {
-        visible: root.selectMode
-        x: 12
-        width: 32
-        height: 40
-        anchors.verticalCenter: parent.verticalCenter
-        color: theme.surfaceMain
-        radius: 4
-        SelectCheck {
-            anchors.centerIn: parent
-            on: root.checked
-            onToggled: root.toggleSelect()
-        }
     }
 
     // ⋯ menu button — the shared row's own gutter, re-drawn with the local
@@ -153,9 +164,16 @@ Item {
     // (TrackRow.slint's `open-track-menu(..., at-pointer: true)`). Declared
     // last so it sits on top, and RIGHT-only so every left click still falls
     // through to the row body / checkbox / ⋯ underneath.
+    //
+    // Suppressed in select mode — TrackRow.slint:201 gates the same gesture on
+    // `!root.multi-select-mode` ("a right-click toggles nothing there"), and
+    // the shared row's own trArea already does it (rows/TrackRow.qml:926).
+    // Disabled rather than hidden so the press falls through to the row body
+    // instead of landing on nothing.
     MouseArea {
         id: rcArea
         anchors.fill: parent
+        enabled: !root.selectMode
         acceptedButtons: Qt.RightButton
         onClicked: function (mouse) { rowMenu.openAtCursor(rcArea, mouse.x, mouse.y) }
     }
@@ -169,6 +187,8 @@ Item {
                 { "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-start", "action": "next" },
                 { "label": QbzSession.tr("Play later", QbzSession.trRev), "icon": "list-plus", "action": "later" },
                 { "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "action": "queue" },
+                { "label": QbzSession.tr("Add to mixtape", QbzSession.trRev), "icon": "cassette-tape", "action": "add-to-mixtape" },
+                { "label": QbzSession.tr("Add to playlist", QbzSession.trRev), "icon": "list-music", "action": "add-to-playlist" },
             ]
             if (root.canGoAlbum) m.push({ "label": QbzSession.tr("Go to album", QbzSession.trRev), "icon": "disc-3", "action": "go-album" })
             if (root.canGoArtist) m.push({ "label": QbzSession.tr("Go to artist", QbzSession.trRev), "icon": "user", "action": "go-artist" })
@@ -176,6 +196,12 @@ Item {
         }
         onPicked: function (a) {
             if (a === "play") root.playRequested()
+            // LOCAL-mode adds: one-element selection through the bulk entry
+            // point, which owns the only source-aware row -> ref resolver
+            // (see the file header).
+            else if (a === "add-to-playlist" || a === "add-to-mixtape") {
+                QbzLocal.bulkAction("track", JSON.stringify([String(root.item.id)]), a)
+            }
             else if (a === "go-album") {
                 QbzLocal.openAlbum(root.item.albumId)
                 QbzShell.navigateTo("localalbum")

@@ -82,6 +82,31 @@ pub fn audio_settings() -> qbz_audio::settings::AudioSettings {
     with_audio(|s| s.get_settings()).unwrap_or_default()
 }
 
+/// Whether `InfiniteRadio` autoplay is on — the queue footer's ∞ state and the
+/// gate on the end-of-track refill engine. Exposed here (rather than reopening
+/// the store from `queue_qt`) so both readers see the SAME process-wide handle:
+/// two stores over one SQLite file would have the footer and the engine
+/// disagreeing after a toggle until one of them re-read.
+pub fn is_infinite_play() -> bool {
+    with_playback(|s| s.get_preferences())
+        .map(|p| p.autoplay_mode == AutoplayMode::InfiniteRadio)
+        .unwrap_or(false)
+}
+
+/// Turn infinite play on/off. Off lands on `ContinueWithinSource` — the
+/// reference's `toggle_infinite_play`, and the reason Settings' "Continue
+/// playback" switch reads ON after infinite play is turned off here.
+pub fn set_infinite_play(enabled: bool) {
+    let mode = if enabled {
+        AutoplayMode::InfiniteRadio
+    } else {
+        AutoplayMode::ContinueWithinSource
+    };
+    if let Err(e) = with_playback(|s| s.set_autoplay_mode(mode)) {
+        log::error!("[qbz-qt] queue: set autoplay mode failed: {e}");
+    }
+}
+
 fn with_playback<T>(
     f: impl FnOnce(&PlaybackPreferencesStore) -> Result<T, String>,
 ) -> Result<T, String> {

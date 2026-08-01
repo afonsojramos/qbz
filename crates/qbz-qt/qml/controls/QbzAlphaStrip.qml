@@ -1,11 +1,21 @@
-// Vertical A-Z jump strip (LocalLibraryView.slint:577 AlphaStrip, itself a
-// 1:1 lift of FavoritesView's). 18px gutter, 15px rows, 9px semibold muted
-// letters that go accent on hover. Emits jump(ordinal, index); the host
-// scrolls its own view proportionally — exactly like the Slint (:1298).
+// Vertical A-Z jump strip (favorites/FavoritesView.slint:398 `AlphaStrip`;
+// LocalLibraryView.slint:577 is a 1:1 lift of the same component). 18px
+// gutter, 15px rows, 9px semibold muted letters that go accent on hover.
+// Emits jump(ordinal, index); the host scrolls its own view — exactly like
+// the Slint, which scrolls proportionally on the grouped grids (:1996) and by
+// row index on the uniform track list (:1687).
+//
+// PROMOTED from views/local/AlphaStrip.qml, unchanged except for the import
+// depth — same move QbzMultiSelectBar made and for the same reason: the Slint
+// component was always shared (Local Library albums/artists/tracks AND the
+// Library favorites tabs), so the "local" folder was a naming accident. The
+// old views/local/AlphaStrip.qml is GONE; this file is the only copy.
+// Call sites: views/local/{LocalAlbumsTab,LocalArtistsTab,LocalTracksTab}.qml,
+// views/library/{LibraryAlbumsList}.qml and views/LibraryView.qml.
 
 import QtQuick
 import com.blitzfc.qbz
-import "../../theme"
+import "../theme"
 
 Item {
     id: root

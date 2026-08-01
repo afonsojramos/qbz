@@ -9,32 +9,45 @@
 // libraryArtworkWindow, and artMap entries far outside the viewport are
 // pruned (the Slint eviction policy, QML-side).
 //
-// POC-NOTEs:
-// - Multi-select, group modes, alpha jumps, play-all / shuffle bulk
-//  actions, playlists-random, artists sidepanel, albums LIST mode, per-tab
-//  persist of view/sort state: out of scope (stubs or omitted; the All
-//  grid+list is the measured 1:1 focus).
-// - Filter by genre IS wired, on the All toolbar only — that is the single
-//  place the Slint FavoritesView draws it (FavoritesView.slint:864,
-//  `context: "library-all"`). It filters CLIENT-side over the feed, exactly
-//  like library_all.rs::derive: an item shows when its (lowercased) genre
-//  contains one of the selected genre names (+ their sub-genres), so rows
-//  with no genre at all (artist / label / playlist) drop out while a genre
-//  is selected. The selection lives in the shared per-context store and
-//  persists to genre_filter.json.
+// THIS FILE IS THE STATE + ORCHESTRATION HALF. The bodies live next door
+// (track rule 2 — it used to be 1,881 lines):
+//   library/LibraryToolbar.qml      the whole 56px chrome band
+//   library/FeedListRow.qml         the All feed's mixed LIST row
+//   library/LibraryAlbumsList.qml   Albums in LIST mode + its bulk bar
+//   library/LibraryArtistsPanel.qml Artists in SIDEPANEL mode
+// Each takes `view: root`, the seam views/local/*.qml already uses.
+//
+// Still out of scope, and named rather than implied:
 // - Offline: the generic OfflinePlaceholder replica mounts (the Slint
-//  offline RAIL of playable cached favorites needs the offline cache —
-//  not wired).
-// - Sort/search/source state is session-local (no ui_prefs persistence).
+//   offline RAIL of playable cached favorites needs the offline cache —
+//   not wired; PARITY-DEBT #17).
+// - The Library "All" local SCOPE ("favorites" vs the whole local library)
+//   is PARITY-DEBT #6: the pref is read and PRESERVED on disk by
+//   library_prefs.rs, but neither the Settings row nor the `all` branch of
+//   the feed exists here yet.
+//
+// Filter by genre IS wired, on the All / Tracks / Albums toolbars — the three
+// places the Slint FavoritesView draws it (FavoritesView.slint:609, :652,
+// :864, `context: "library-all"`). It filters CLIENT-side over the feed,
+// exactly like library_all.rs::derive: an item shows when its (lowercased)
+// genre contains one of the selected genre names (+ their sub-genres), so rows
+// with no genre at all (artist / label / playlist) drop out while a genre is
+// selected. The selection lives in the shared per-context store and persists
+// to genre_filter.json.
+//
+// Toolbar choices PERSIST (favorites_prefs.rs parity): albums view/sort/group,
+// tracks group, playlists view, artists group/view and the All hard-drive
+// toggle all go through `setPref` into the same favorites_ui.json the shipping
+// Slint build writes. Search queries stay transient — deliberately, there too.
 
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Window
 import com.blitzfc.qbz
-import "../cards"
 import "../controls"
 import "../rows"
 import "../theme"
+import "library"
 
 Rectangle {
     id: root
@@ -42,7 +55,7 @@ Rectangle {
     // HomeView.slint:163: the frosted content panel shows through).
     color: ambientOn ? "transparent" : theme.surfaceMain
     readonly property bool ambientOn: QbzShell.ambientMode > 0 && QbzPlayer.npHasTrack
-       
+
     // Round to the AppShell content-frame bezel (Radius.md): QML clips
     // are rectangular, so the frame's own rounding never reaches the
     // view — the view's own fill must round instead.
@@ -93,13 +106,77 @@ Rectangle {
 
     // All-tab derive state (LibraryAllState semantics).
     property string search: ""
+    // Group modes (favorites.rs derive_tracks / derive_albums / artists).
+    // Grouping REORDERS rows; for the tracks list it also injects separator
+    // rows — see visibleItems / withGroupHeaders.
+    property string tracksGroup: "off"   // "off" | "album" | "artist" | "name"
+    property string albumsGroup: "off"   // "off" | "alpha" | "artist"
+    property string artistsGroup: "off"  // "off" | "alpha"
     property string sortBy: "date"      // "date" | "title" | "artist"
     property bool sortAsc: false        // date: false = newest first
     property bool showPurchases: true
     property bool showFavorites: true
     property bool showFollowing: true
     property bool showLocal: true
-    property string viewMode: "grid"    // "grid" | "list"
+    property string viewMode: "grid"    // All tab: "grid" | "list"
+    property string albumsView: "grid"    // "grid" | "list"
+    property string playlistsView: "grid" // "grid" | "list"
+    property string artistsView: "grid"   // "grid" | "sidepanel"
+
+    // --- persisted toolbar choices (library_prefs.rs) --------------------
+    // Seeded from the bridge document rather than BOUND to it: these are
+    // user-editable properties, and a binding would fight every click. The
+    // Rust setter never republishes the document, so there is no loop.
+    function applyPrefs() {
+        var p
+        try {
+            p = JSON.parse(QbzLibrary.libraryPrefsJson)
+        } catch (e) {
+            return
+        }
+        // The default "{}" reaches here before `boot` seeds the real one.
+        if (!p || p.albumsView === undefined) return
+        root.albumsView = p.albumsView
+        root.albumsSort = p.albumsSort
+        root.albumsGroup = p.albumsGroup
+        root.tracksGroup = p.tracksGroup
+        root.playlistsView = p.playlistsView
+        root.artistsGroup = p.artistsGroup
+        root.artistsView = p.artistsView
+        root.showLocal = p.allShowLocal === true
+    }
+    Component.onCompleted: root.applyPrefs()
+    Connections {
+        target: QbzLibrary
+        function onLibraryPrefsJsonChanged() { root.applyPrefs() }
+    }
+
+    /// Write one toolbar choice AND persist it. The toolbar calls this instead
+    /// of assigning the property, so the two can never drift apart.
+    function setPref(key, value) {
+        if (key === "albumsView") {
+            root.albumsView = value
+            // Multi-select is LIST-only (FavoritesView.slint:514); leaving
+            // list mode with a live selection would strand the bulk bar.
+            if (value !== "list") root.setAlbumsMultiSelect(false)
+        } else if (key === "albumsSort") root.albumsSort = value
+        else if (key === "albumsGroup") root.albumsGroup = value
+        else if (key === "tracksGroup") root.tracksGroup = value
+        else if (key === "playlistsView") root.playlistsView = value
+        else if (key === "artistsGroup") root.artistsGroup = value
+        else if (key === "artistsView") root.artistsView = value
+        else {
+            console.warn("[qbz-qt] LibraryView.setPref: unknown key " + key)
+            return
+        }
+        QbzLibrary.setLibraryPref(key, String(value))
+    }
+    /// The one SOURCE switch the reference persists (favorites_prefs.rs
+    /// `all_show_local`); the other three are session-local there too.
+    function setShowLocal(on) {
+        root.showLocal = on
+        QbzLibrary.setLibraryPref("allShowLocal", on ? "true" : "false")
+    }
 
     // --- shared genre filter, "library-all" context ----------------------
     // Read STRAIGHT off the bridge singleton, not off libGenrePopup: the
@@ -126,11 +203,21 @@ Rectangle {
             out.push(String(src[i]).toLowerCase())
         return out
     }
+    /// The toolbar's genre buttons reach the popup through here — it is
+    /// declared LAST in this file and cannot be named from a child component.
+    function toggleGenrePopup() { libGenrePopup.toggle() }
 
     // Other-tab state.
     property string tabSearch: ""
     property string albumsSort: "default" // default|title-asc|title-desc|artist-asc
     property string playlistsSubTab: "favorites"
+
+    /// The All tab's search field debounces; the toolbar routes through here
+    /// so the timer stays next to the window report it feeds.
+    function setAllSearch(v) {
+        root.search = v
+        allSearchDebounce.restart()
+    }
 
     // ONE shared per-tab query, reset on entry — that IS the reference.
     // In Slint every entry into one of the five tabs runs
@@ -145,7 +232,11 @@ Rectangle {
     // collapsed magnifier — quirk included.
     onActiveTabChanged: {
         tabSearch = ""
-        if (tabSearchBox) tabSearchBox.closeSearch()
+        if (toolbar) toolbar.closeTabSearch()
+        // A selection cannot survive leaving its own tab: the bulk bar would
+        // still be armed over rows that are no longer on screen.
+        setTracksMultiSelect(false)
+        setAlbumsMultiSelect(false)
     }
 
     // Per-tab emptiness gate. Slint gates each per-tab toolbar (search AND
@@ -223,6 +314,50 @@ Rectangle {
     // is taken.
     readonly property var visibleRows: visibleItems()
 
+    /// A-Z bucket for a title: its first letter uppercased, "#" for anything
+    /// that is not a letter (a leading digit, "*", punctuation). Matches the
+    /// jump strip's own buckets, so a letter in the strip always has a
+    /// separator to land on.
+    function alphaKey(title) {
+        var t = (title || "").trim()
+        if (t.length === 0) return "#"
+        var c = t.charAt(0).toUpperCase()
+        return (c >= "A" && c <= "Z") ? c : "#"
+    }
+
+    /// Inject a `group-header` pseudo-row before each run of rows sharing a
+    /// group key. The rows are ALREADY ordered by that key (see the `by(...)`
+    /// sorts above), so this is one linear pass.
+    ///
+    /// Album and artist grouping match the reference's separators. NAME
+    /// grouping gets them too — the reference draws only the A-Z jump strip
+    /// there and no separators, which the owner asked to close (2026-07-31):
+    /// a strip that jumps to a letter with nothing labelling it leaves the
+    /// user guessing where a bucket starts.
+    function withGroupHeaders(rows, mode) {
+        var out = []
+        var last = null
+        var n = 1
+        for (var i = 0; i < rows.length; i++) {
+            var r = rows[i]
+            var key = mode === "album" ? (r.album || "")
+                : mode === "artist" ? (r.artist || "")
+                : alphaKey(r.title)
+            if (key !== last) {
+                out.push({ "kind": "group-header", "title": key, "id": "hdr:" + mode + ":" + key })
+                last = key
+            }
+            // The visible track NUMBER keeps running across groups (the
+            // reference numbers 1,2,3… straight through its separators), so it
+            // cannot be the model index once headers share the model. Carried
+            // on a shallow COPY — the feed's row objects are shared with the
+            // grid and the artwork map and must not be mutated.
+            out.push(Object.assign({}, r, { "_no": n }))
+            n++
+        }
+        return out
+    }
+
     function visibleItems() {
         var items = []
         var i
@@ -279,6 +414,8 @@ Rectangle {
                 || it.title.toLowerCase().indexOf(tabNeedle) >= 0
                 || it.artist.toLowerCase().indexOf(tabNeedle) >= 0
         }
+        var tabGenres = (activeTab === "tracks" || activeTab === "albums")
+            ? root.genreNames : []
         for (i = 0; i < feed.length; i++) {
             var x = feed[i]
             var keep = false
@@ -288,6 +425,13 @@ Rectangle {
             else if (activeTab === "labels") keep = x.kind === "label"
             else if (activeTab === "playlists") keep = x.kind === "playlist"
                 && (playlistsSubTab === "following" ? x.group === "following" : x.group === "favorites")
+            if (keep && tabGenres.length > 0) {
+                var tg = (x.genre || "").toLowerCase()
+                keep = false
+                for (var tgi = 0; tgi < tabGenres.length; tgi++) {
+                    if (tg !== "" && tg.indexOf(tabGenres[tgi]) >= 0) { keep = true; break }
+                }
+            }
             if (keep && hit(x)) items.push(x)
         }
         if (activeTab === "albums" && albumsSort !== "default") {
@@ -299,7 +443,163 @@ Rectangle {
             })
             if (albumsSort.slice(-4) === "desc") items.reverse()
         }
+        // --- Group-by (favorites.rs::derive_tracks / derive_albums) ------
+        // Grouping REORDERS the rows so a group's entries sit together. The
+        // TRACKS list also gets separator rows (see withGroupHeaders); the
+        // albums and artists GRIDS do not — a uniform-cell GridView has no
+        // room for a full-width header, which is exactly why the reference
+        // scrolls those two PROPORTIONALLY from the A-Z strip instead of
+        // landing on a separator (FavoritesView.slint:1996, :2008).
+        var lc = function (s) { return (s || "").toLowerCase() }
+        var by = function (keys) {
+            items.sort(function (a, b) {
+                for (var k = 0; k < keys.length; k++) {
+                    var av = lc(a[keys[k]]), bv = lc(b[keys[k]])
+                    if (av !== bv) return av < bv ? -1 : 1
+                }
+                return 0
+            })
+        }
+        if (activeTab === "tracks" && tracksGroup !== "off") {
+            if (tracksGroup === "album") by(["album", "title"])
+            else if (tracksGroup === "artist") by(["artist", "album", "title"])
+            else if (tracksGroup === "name") by(["title"])
+            items = withGroupHeaders(items, tracksGroup)
+        } else if (activeTab === "albums" && albumsGroup !== "off") {
+            // "alpha" is the album title's initial, which title-order gives
+            // for free; "artist" groups by artist then title.
+            if (albumsGroup === "alpha") by(["title"])
+            else if (albumsGroup === "artist") by(["artist", "title"])
+        } else if (activeTab === "artists" && artistsGroup === "alpha") {
+            by(["title"])
+        }
         return items
+    }
+
+    // ------------------------ A-Z jump strip -----------------------------
+    // FavoritesView.slint:1680-1691 (tracks, name grouping — index-accurate
+    // because the rows are uniform), :1988-1999 (albums, alpha grouping) and
+    // :2000-2011 (artists, alpha grouping).
+    //
+    // ONE deliberate improvement over the reference on the two GRIDS: it
+    // scrolls proportionally (`ord / (jumps-1) * maxScroll`) because a Slint
+    // Flickable cannot address a cell; a QML GridView can, so the strip lands
+    // on the letter's FIRST card instead of near it. Same strip, same
+    // buckets, an exact landing.
+    readonly property bool alphaActive:
+        (activeTab === "tracks" && tracksGroup === "name")
+        || (activeTab === "albums" && albumsGroup === "alpha")
+        || (activeTab === "artists" && artistsGroup === "alpha" && artistsView === "grid")
+    readonly property var alphaJumps: {
+        if (!root.alphaActive) return []
+        var rows = root.visibleRows
+        var out = []
+        var last = null
+        for (var i = 0; i < rows.length; i++) {
+            // The tracks list already carries a separator per bucket; jumping
+            // to the SEPARATOR (not the first track) is what puts the letter
+            // itself at the top of the viewport.
+            if (activeTab === "tracks") {
+                if (rows[i].kind !== "group-header") continue
+                out.push({ "letter": rows[i].title, "index": i })
+                continue
+            }
+            var key = root.alphaKey(rows[i].title)
+            if (key !== last) {
+                out.push({ "letter": key, "index": i })
+                last = key
+            }
+        }
+        return out
+    }
+    readonly property bool alphaVisible: root.alphaActive && root.alphaJumps.length > 0
+    function alphaJumpTo(index) {
+        if (activeTab === "tracks") list.positionViewAtIndex(index, ListView.Beginning)
+        else if (activeTab === "albums" && albumsView === "list") albumsList.positionAt(index)
+        else grid.positionViewAtIndex(index, GridView.Beginning)
+    }
+
+    // ------------------------ multi-select -------------------------------
+    // FavoritesView.slint:465-523 (the two toggles) + :1570 / :1734 (the two
+    // bars). The SELECTION lives here, in QML, exactly like the Local Library
+    // grid/table bars: "select-all" and "clear" never reach Rust, everything
+    // else goes down as a JSON id array (src/library_bulk.rs).
+    property bool tracksMultiSelect: false
+    property var tracksSelected: ({})
+    readonly property int tracksSelectedCount: Object.keys(root.tracksSelected).length
+    property bool albumsMultiSelect: false
+    property var albumsSelected: ({})
+    readonly property int albumsSelectedCount: Object.keys(root.albumsSelected).length
+
+    function setTracksMultiSelect(on) {
+        root.tracksMultiSelect = on
+        if (!on) root.tracksSelected = ({})
+    }
+    function setAlbumsMultiSelect(on) {
+        root.albumsMultiSelect = on
+        if (!on) root.albumsSelected = ({})
+    }
+    // A rebind needs a NEW object reference — mutating the map in place
+    // notifies nothing (the same rule artMap and every row's `favorite`
+    // property follow).
+    function toggleTrackSelected(id) {
+        var m = root.tracksSelected
+        if (m[id] === true) delete m[id]
+        else m[id] = true
+        root.tracksSelected = Object.assign({}, m)
+    }
+    function toggleAlbumSelected(id) {
+        var m = root.albumsSelected
+        if (m[id] === true) delete m[id]
+        else m[id] = true
+        root.albumsSelected = Object.assign({}, m)
+    }
+
+    /// Selected ids in VISIBLE order — never `Object.keys(map)`. Qobuz ids are
+    /// numeric strings, and a JS object iterates integer-like keys in ASCENDING
+    /// NUMERIC order, so the keys of the map are not the order the user sees
+    /// and "play next" would insert a re-sorted block.
+    function selectedIdsInOrder(kind, map) {
+        var rows = root.visibleRows
+        var out = []
+        for (var i = 0; i < rows.length; i++)
+            if (rows[i].kind === kind && map[rows[i].id] === true) out.push(rows[i].id)
+        return out
+    }
+
+    function tracksBulkAction(action) {
+        if (action === "select-all") {
+            var m = {}
+            var rows = root.visibleRows
+            for (var i = 0; i < rows.length; i++)
+                if (rows[i].kind === "track") m[rows[i].id] = true
+            root.tracksSelected = m
+            return
+        }
+        if (action === "clear") { root.tracksSelected = ({}); return }
+        var ids = root.selectedIdsInOrder("track", root.tracksSelected)
+        if (ids.length === 0) return
+        QbzLibrary.libraryBulkAction("track", JSON.stringify(ids), action)
+        // The Slint clears after an enqueue and after remove-selected, and
+        // KEEPS the selection while a picker is still open (a failed write is
+        // retried from the same modal) — local_bulk.rs::apply says the same.
+        if (action !== "add-to-playlist" && action !== "add-to-mixtape")
+            root.tracksSelected = ({})
+    }
+    function albumsBulkAction(action) {
+        if (action === "select-all") {
+            var m = {}
+            var rows = root.visibleRows
+            for (var i = 0; i < rows.length; i++)
+                if (rows[i].kind === "album") m[rows[i].id] = true
+            root.albumsSelected = m
+            return
+        }
+        if (action === "clear") { root.albumsSelected = ({}); return }
+        var ids = root.selectedIdsInOrder("album", root.albumsSelected)
+        if (ids.length === 0) return
+        QbzLibrary.libraryBulkAction("album", JSON.stringify(ids), action)
+        root.albumsSelected = ({})
     }
 
     // --------------------- windowed artwork -----------------------------
@@ -313,10 +613,14 @@ Rectangle {
         var span = last - first + 1
         var keepLo = Math.max(0, first - span)
         var keepHi = Math.min(visibleArray.length - 1, last + span)
-        for (var i = keepLo; i <= keepHi; i++) keep[visibleArray[i].artKey] = true
+        // A group-header pseudo-row has no artwork of its own; skipping it here
+        // keeps `undefined` out of the keep-set and the pending count.
+        for (var i = keepLo; i <= keepHi; i++)
+            if (visibleArray[i].kind !== "group-header") keep[visibleArray[i].artKey] = true
         var m = artMap
         var pending = 0
         for (i = first; i <= last; i++) {
+            if (visibleArray[i].kind === "group-header") continue
             var k = visibleArray[i].artKey
             if (visibleArray[i].imageUrl !== "") {
                 keys.push(k)
@@ -358,7 +662,8 @@ Rectangle {
         // user back to row 0. Nothing on screen needed the re-derive: the
         // grid cards each listen to this same signal for their own key
         // (cards/AlbumCard.qml, TrackCard.qml, PlaylistCard.qml,
-        // ArtistCard.qml) and the list rows do the same (FeedListRow below).
+        // ArtistCard.qml) and the list rows do the same
+        // (library/FeedListRow.qml).
         // The in-place mutation is for the delegates built LATER — when the
         // user scrolls, re-filters or switches tab — and it reaches them
         // because `visibleRows` pushes the very same row objects.
@@ -409,107 +714,6 @@ Rectangle {
         onTriggered: root.queueWindowReport(0, 59)
     }
 
-    // ============================ components =============================
-
-    // Segmented tab (SegmentedTabBar's Segment) with count badge.
-    // Small toolbar toggle button (ToggleButton sm): 30px, active = accent.
-    component ToolToggle: Rectangle {
-        property string name: ""
-        property bool active: false
-        signal clicked()
-        width: 30
-        height: 30
-        radius: 6
-        color: active ? theme.surfaceElevated
-             : ttArea.containsMouse ? theme.surfaceHover : "transparent"
-        QbzIcon {
-            name: parent.name
-            width: 16
-            height: 16
-            anchors.centerIn: parent
-            tintName: parent.active ? "accent"
-                   : ttArea.containsMouse ? "textPrimary" : "secondary"
-        }
-        MouseArea {
-            id: ttArea
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onClicked: parent.clicked()
-        }
-    }
-
-    // Filter-by-genre trigger (FavoritesView.slint's FavGenreButton, sm):
-    // accent fill + "N genres" while the "library-all" selection is active.
-    component GenreToolButton: Rectangle {
-        id: gtb
-        readonly property bool active: root.genreCount > 0
-        width: gtbRow.width
-        height: 30
-        radius: 6
-        color: gtb.active ? theme.accent
-             : gtbArea.containsMouse ? theme.surfaceHover : theme.surfaceElevated
-        Row {
-            id: gtbRow
-            height: parent.height
-            leftPadding: 10
-            rightPadding: 12
-            spacing: 7
-            QbzIcon {
-                name: "list-filter"
-                width: 13
-                height: 13
-                anchors.verticalCenter: parent.verticalCenter
-                // Same pair-of-halves fix as controls/BrowseGenreButton.qml:
-                // the glyph said "primary" (legacy alias of a literal
-                // #ffffff) next to an accent-text label, i.e. a white glyph
-                // beside a black label on the pale-accent themes.
-                // favorites/FavoritesView.slint:301 + :309 are consistently
-                // #ffffff, but that white is 1.70:1 on high-contrast, 1.74
-                // on ikari, 1.82 on wcag-dark and under 2.6:1 on 16 of the
-                // 35 palettes — deliberate divergence from both lines.
-                // theme/QbzTheme.qml, "ON AN ACCENT FILL".
-                tintName: gtb.active ? theme.accentGlyphTint : "secondary"
-            }
-            Text {
-                anchors.verticalCenter: parent.verticalCenter
-                text: root.genreCount === 0
-                    ? QbzSession.tr("Filter by genre", QbzSession.trRev)
-                    : root.genreCount === 1
-                        ? QbzSession.tr("1 genre", QbzSession.trRev)
-                        : QbzSession.tr("{} genres", QbzSession.trRev)
-                            .replace("{}", root.genreCount)
-                // The colour twin of the glyph's tint above — accent-text on
-                // 34 of the 35 palettes.
-                color: gtb.active ? theme.accentGlyphColor : theme.textSecondary
-                font.pixelSize: 12
-            }
-        }
-        MouseArea {
-            id: gtbArea
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onClicked: libGenrePopup.toggle()
-        }
-    }
-
-    // (The inline toolbar SearchBox is gone — both toolbars now mount the
-    // shared controls/QbzLineEdit in its expandable arm, which IS
-    // primitives/ExpandableSearch.slint 1:1.)
-
-    // Card heart (live favorite toggle).
-
-
-    // Quality mini-badge (hi-res image / cd box).
-    // ===================== card families (Slint homologation) =============
-    // Phase 13/21: every Library surface mounts the SAME card family the
-    // Slint mounts (FavoritesView.slint): track -> discover/TrackCard,
-    // album -> discover/AlbumCard, artist -> discover/ArtistGridCard,
-    // playlist -> discover/PlaylistCard, label -> discover/LabelCard — the
-    // shared qml/ files (TrackCard/AlbumCard/ArtistCard/PlaylistCard/
-    // LabelCard.qml). The old one-size FeedGridCard is gone.
-
     // ------------------- per-row play (PARITY-DEBT #5) -------------------
     // Every track row in this view queues the list the user is LOOKING AT,
     // anchored on the clicked row — it does NOT play one track and stop.
@@ -535,15 +739,7 @@ Rectangle {
         return ids
     }
     function playTrackInContext(trackId) {
-        // Feature-detect the seam so the view degrades to the old one-track
-        // play instead of throwing if the invokable is not there yet.
-        if (typeof QbzLibrary.libraryPlayVisible === "function") {
-            QbzLibrary.libraryPlayVisible(JSON.stringify(visibleTrackIds()), trackId)
-            return
-        }
-        console.warn("[qbz-qt] LibraryView: QbzLibrary.libraryPlayVisible is missing;"
-                     + " falling back to a one-track queue (PARITY-DEBT #5)")
-        QbzPlayer.playTrack(trackId)
+        QbzLibrary.libraryPlayVisible(JSON.stringify(visibleTrackIds()), trackId)
     }
 
     // Track context-menu model (TrackCard.slint track-menu) + dispatch —
@@ -578,304 +774,6 @@ Rectangle {
         else if (a === "favorite") row.toggleFavorite()
     }
 
-    // --- All-feed LIST row (FavoritesView inline row, homologated) --------
-    component FeedListRow: Rectangle {
-        id: feedRow
-        property var item: ({})
-        // Viewport-relative position, for the skeleton's animated cap.
-        property int rowIndex: 0
-        height: 44
-        radius: 6
-        color: rowArea.containsMouse ? theme.surfaceHover : "transparent"
-
-        // Live heart, as a real property — `item.isFavorite = !…` notified
-        // nothing (plain JS object; see rows/TrackRow.qml for the measurement)
-        // so this row's glyph and its menu label never moved on click. The
-        // binding is re-established on every new row object, so a republished
-        // feed still wins.
-        property bool favorite: feedRow.item.isFavorite === true
-        onItemChanged: feedRow.favorite = Qt.binding(function () {
-            return feedRow.item.isFavorite === true
-        })
-        function toggleFavorite() {
-            feedRow.favorite = !feedRow.favorite
-            QbzLibrary.libraryToggleFavorite(feedRow.item.kind, feedRow.item.id)
-        }
-        // Settle + rollback + cross-surface walk. `artKey` IS
-        // `library_qt::feed_key(kind, id)`, the very key the signal carries —
-        // which is also why root's own handler can patch the backing row by
-        // comparing against it.
-        Connections {
-            target: QbzLibrary
-            function onLibraryFavoriteChanged(key, value) {
-                if ((feedRow.item.artKey || "") !== "" && key === feedRow.item.artKey)
-                    feedRow.favorite = value
-            }
-        }
-
-        // Row body — click plays/opens by kind. Declared BEFORE the cells so
-        // the ⋯ button and art-play win their clicks.
-        MouseArea {
-            id: rowArea
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onClicked: {
-                if (item.kind === "track") root.playTrackInContext(item.id)
-                else if (item.kind === "album") QbzAlbum.openAlbum(item.id)
-                else if (item.kind === "artist") QbzArtist.openArtist(item.id)
-                // playlist/label pages: out of scope (POC-NOTE).
-            }
-        }
-
-        Row {
-            anchors.fill: parent
-            anchors.leftMargin: 12
-            anchors.rightMargin: 12
-            spacing: 12
-            // Col — artwork (round for artists) + hover play.
-            Rectangle {
-                width: 44
-                height: 44
-                anchors.verticalCenter: parent.verticalCenter
-                radius: item.kind === "artist" ? 22 : 6
-                color: theme.surfaceElevated
-                clip: true
-                RoundedImage {
-                    anchors.fill: parent
-                    visible: !lrCollage.visible
-                    source: root.artMap[item.artKey] || ""
-                    radius: item.kind === "artist" ? 22 : 6
-                    // A label logo is contain-fitted (cropping cuts the
-                    // wordmark) on a FLAT surface — those are transparent
-                    // PNGs whose edges carry no colour to derive from.
-                    // A playlist takes "auto": its own graphic is the 800x380
-                    // `image_rectangle` and pads with an image-derived
-                    // gradient, while a square member cover still crops. The
-                    // flag is not required for that any more, but it stays
-                    // authoritative where it IS published (this feed).
-                    fit: item.kind === "label" ? "contain"
-                        : item.kind === "playlist"
-                            ? (item.playlistOwnImage === true ? "pad" : "auto")
-                            : "crop"
-                }
-                // User playlists have no graphic of their own, so they show the
-                // member-cover mosaic instead of a blank tile.
-                PlaylistCollage {
-                    id: lrCollage
-                    anchors.fill: parent
-                    visible: item.kind === "playlist"
-                        && item.playlistOwnImage !== true
-                        && (root.artMap[item.artKey] || "") === ""
-                    urls: item.covers || []
-                    radius: 6
-                }
-                // Per-row cover placeholder — same progressive rule as the
-                // grid: it clears when THIS row's cover lands. Skipped for
-                // the collage arm (a playlist mosaic is real content) and
-                // for artists/labels (round designed placeholders).
-                QbzSkeleton {
-                    variant: "art"
-                    anchors.fill: parent
-                    blockRadius: 6
-                    visible: (item.kind === "track" || item.kind === "album")
-                        && item.imageUrl !== ""
-                        && (root.artMap[item.artKey] || "") === ""
-                    phase: root.skelPhase
-                    cellIndex: rowIndex
-                }
-                Rectangle {
-                    visible: item.kind === "track" || item.kind === "album" || item.kind === "playlist"
-                    anchors.fill: parent
-                    radius: item.kind === "artist" ? 22 : 6
-                    color: "#a6000000"
-                    opacity: lrPlayArea.containsMouse ? 1.0 : 0.0
-                    Behavior on opacity { NumberAnimation { duration: 150 } }
-                    // On the #a6000000 artwork scrim — dark under every theme.
-                    QbzIcon { name: "play-fill"; width: 16; height: 16; anchors.centerIn: parent; tintName: "white" }
-                    MouseArea {
-                        id: lrPlayArea
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: {
-                            if (item.kind === "track") root.playTrackInContext(item.id)
-                            else if (item.kind === "album") QbzPlayer.playAlbum(item.id)
-                            // playlist play: out of scope (POC-NOTE).
-                        }
-                    }
-                }
-            }
-            // Col — title + subtitle (artist link for track/album).
-            Column {
-                width: parent.width - 44 - 116 - (srcCol.visible ? 44 : 0)
-                    - 150 - 18 - 30 - 6 * 12
-                anchors.verticalCenter: parent.verticalCenter
-                spacing: 2
-                Text {
-                    width: parent.width
-                    height: 18
-                    text: item.title
-                    color: lrTitleArea.containsMouse ? theme.accent : theme.textPrimary
-                    font.pixelSize: 14
-                    font.weight: theme.weightMedium
-                    verticalAlignment: Text.AlignVCenter
-                    elide: Text.ElideRight
-                    MouseArea {
-                        id: lrTitleArea
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: {
-                            if (item.kind === "track") root.playTrackInContext(item.id)
-                            else if (item.kind === "album") QbzAlbum.openAlbum(item.id)
-                            else if (item.kind === "artist") QbzArtist.openArtist(item.id)
-                        }
-                    }
-                }
-                Text {
-                    visible: item.subtitle !== ""
-                    width: parent.width
-                    height: 16
-                    text: item.subtitle
-                    color: (item.artistId !== "" && (item.kind === "track" || item.kind === "album")
-                            && lrSubArea.containsMouse) ? theme.accent : theme.textMuted
-                    font.pixelSize: 12
-                    verticalAlignment: Text.AlignVCenter
-                    elide: Text.ElideRight
-                    MouseArea {
-                        id: lrSubArea
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: (item.artistId !== "" && (item.kind === "track" || item.kind === "album"))
-                            ? Qt.PointingHandCursor : Qt.ArrowCursor
-                        onClicked: if (item.artistId !== "") QbzArtist.openArtist(item.artistId)
-                    }
-                }
-            }
-            // Col — type (icon + caps label).
-            Rectangle {
-                width: 116
-                height: parent.height
-                color: "transparent"
-                Row {
-                    spacing: 6
-                    anchors.verticalCenter: parent.verticalCenter
-                    QbzIcon {
-                        name: item.kind === "track" ? "music"
-                            : item.kind === "playlist" ? "list-music"
-                            : item.kind === "artist" ? "user"
-                            : item.kind === "label" ? "disc-3" : "disc"
-                        width: 13
-                        height: 13
-                        anchors.verticalCenter: parent.verticalCenter
-                        tintName: "muted"
-                    }
-                    Text {
-                        text: item.kind === "track" ? QbzSession.tr("Track", QbzSession.trRev)
-                            : item.kind === "album" ? QbzSession.tr("Album", QbzSession.trRev)
-                            : item.kind === "artist" ? QbzSession.tr("Artist", QbzSession.trRev)
-                            : item.kind === "playlist" ? QbzSession.tr("Playlist", QbzSession.trRev)
-                            : QbzSession.tr("Label", QbzSession.trRev)
-                        color: theme.textMuted
-                        font.pixelSize: 10
-                        font.weight: theme.weightSemibold
-                        font.letterSpacing: 1.2
-                        verticalAlignment: Text.AlignVCenter
-                    }
-                }
-            }
-            // Col — source glyph (only when local/Plex can appear).
-            Rectangle {
-                id: srcCol
-                visible: root.showLocal
-                width: 44
-                height: parent.height
-                color: "transparent"
-                QbzIcon {
-                    visible: item.source === "local" || item.source === "plex"
-                    name: "hard-drive"
-                    width: 14
-                    height: 14
-                    anchors.verticalCenter: parent.verticalCenter
-                    // Host is a transparent column over the theme row (NOT an
-                    // artwork scrim), so this matches its siblings
-                    // local/LocalAlbumRow.qml and local/LocalTrackRow.qml.
-                    tintName: item.source === "plex" ? "accent" : "muted"
-                }
-            }
-            // Col — quality (albums + tracks).
-            Rectangle {
-                width: 150
-                height: parent.height
-                color: "transparent"
-                QualityMini {
-                    visible: (item.kind === "album" || item.kind === "track") && item.qualityTier !== ""
-                    tier: item.qualityTier
-                    anchors.verticalCenter: parent.verticalCenter
-                }
-            }
-            // Col — favorite / follow indicator.
-            QbzIcon {
-                name: item.kind === "artist" ? "user-plus"
-                    : (feedRow.favorite ? "heart-filled" : "heart")
-                width: 18
-                height: 18
-                anchors.verticalCenter: parent.verticalCenter
-                tintName: "accent"
-            }
-            // Col — context-menu button.
-            Rectangle {
-                width: 30
-                height: 30
-                radius: 6
-                anchors.verticalCenter: parent.verticalCenter
-                color: lrMenuArea.containsMouse ? theme.surfaceElevated : "transparent"
-                QbzIcon { name: "ellipsis"; width: 16; height: 16; anchors.centerIn: parent; tintName: "secondary" }
-                MouseArea {
-                    id: lrMenuArea
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: function (mouse) { lrMenu.openAtCursor(lrMenuArea, mouse.x, mouse.y) }
-                }
-            }
-        }
-        CardMenu {
-            id: lrMenu
-            menuWidth: 196
-            entries: item.kind === "track" ? root.trackMenuModel(item, feedRow.favorite)
-                : item.kind === "album" ? [
-                    { "label": QbzSession.tr("Open album", QbzSession.trRev), "icon": "library-big", "action": "open" },
-                    { "label": QbzSession.tr("Play", QbzSession.trRev), "icon": "play-fill", "action": "play" },
-                    { "label": feedRow.favorite ? QbzSession.tr("Remove from Library", QbzSession.trRev) : QbzSession.tr("Add to Library", QbzSession.trRev),
-                      "icon": feedRow.favorite ? "heart-filled" : "heart", "action": "favorite" },
-                ]
-                : item.kind === "artist" ? [
-                    { "label": QbzSession.tr("Go to artist", QbzSession.trRev), "icon": "user", "action": "go-artist" },
-                ]
-                : [
-                    { "label": QbzSession.tr("Open", QbzSession.trRev), "icon": "list-music", "action": "open" },
-                    { "label": feedRow.favorite ? QbzSession.tr("Remove from Library", QbzSession.trRev) : QbzSession.tr("Add to Library", QbzSession.trRev),
-                      "icon": feedRow.favorite ? "heart-filled" : "heart", "action": "favorite" },
-                ]
-            onPicked: function (a) {
-                if (item.kind === "track") { root.trackAction(feedRow, a); return }
-                if (a === "open") {
-                    if (item.kind === "album") QbzAlbum.openAlbum(item.id)
-                    // playlist/label pages: out of scope (POC-NOTE).
-                } else if (a === "play") {
-                    if (item.kind === "album") QbzPlayer.playAlbum(item.id)
-                } else if (a === "go-artist") {
-                    QbzArtist.openArtist(item.id)
-                } else if (a === "favorite") {
-                    feedRow.toggleFavorite()
-                }
-            }
-        }
-    }
-
-    // --- Tracks-tab row (primitives/TrackRow.slint, 50px) -----------------
     // ============================ view ===================================
 
     // Offline gate (OfflinePlaceholder replica; the Slint offline RAIL is
@@ -892,297 +790,10 @@ Rectangle {
         spacing: 0
         visible: !QbzSession.offline
 
-        // --- Toolbar: tab menu (left) + per-tab controls (right) ---------
-        Item {
+        LibraryToolbar {
+            id: toolbar
             width: parent.width
-            height: 56
-
-            // FavTabMenu (SegmentedTabBar with count badges).
-            Rectangle {
-                x: 32
-                y: 25 - height / 2
-                width: tabRow.width
-                height: tabRow.height
-                color: theme.surfaceElevated
-                radius: 6
-                Row {
-                    id: tabRow
-                    padding: 3
-                    spacing: 4
-                    QbzTabBar {
-                        counts: true
-                        underline: true
-                        activeId: root.activeTab
-                        tabs: [
-                            { "id": "all", "label": QbzSession.tr("All", QbzSession.trRev), "count": counts.all || 0 },
-                            { "id": "tracks", "label": QbzSession.tr("Tracks", QbzSession.trRev), "count": counts.tracks || 0 },
-                            { "id": "albums", "label": QbzSession.tr("Albums", QbzSession.trRev), "count": counts.albums || 0 },
-                            { "id": "artists", "label": QbzSession.tr("Artists", QbzSession.trRev), "count": counts.artists || 0 },
-                            { "id": "playlists", "label": QbzSession.tr("Playlists", QbzSession.trRev), "count": counts.playlists || 0 },
-                            { "id": "labels", "label": QbzSession.tr("Labels", QbzSession.trRev), "count": counts.labels || 0 },
-                        ]
-                        onSelected: function (id) { root.activeTab = id }
-                    }
-                }
-            }
-
-            // Per-tab controls.
-            Row {
-                x: parent.width - width - 32
-                y: 25 - height / 2
-                height: 30
-                spacing: 8
-
-                // ===== All toolbar =====
-                Row {
-                    visible: root.activeTab === "all"
-                    spacing: 8
-                    height: parent.height
-                    // FavoritesView.slint:801-813 — collapsed magnifier that
-                    // opens LEFT over the tab bar; the All tab is the only
-                    // one that debounces after the keystroke.
-                    QbzLineEdit {
-                        searchMode: true
-                        expandable: true
-                        sm: true
-                        elevated: false          // ExpandableSearch fill = surface-card
-                        openWidth: 196           // = max-open-width
-                        placeholder: QbzSession.tr("Search your library", QbzSession.trRev)
-                        onEdited: function (v) {
-                            root.search = v
-                            allSearchDebounce.restart()
-                        }
-                    }
-                    // Source switches (tooltips are the Slint copies).
-                    ToolToggle { name: "shopping-bag"; active: root.showPurchases; onClicked: root.showPurchases = !root.showPurchases }
-                    ToolToggle { name: "heart"; active: root.showFavorites; onClicked: root.showFavorites = !root.showFavorites }
-                    ToolToggle { name: "user-plus"; active: root.showFollowing; onClicked: root.showFollowing = !root.showFollowing }
-                    ToolToggle { name: "hard-drive"; active: root.showLocal; onClicked: root.showLocal = !root.showLocal }
-                    // Filter by genre — shared popup, own "library-all"
-                    // context (FavoritesView.slint:864).
-                    GenreToolButton { }
-                    // Grid / list toggle.
-                    ToolToggle {
-                        name: root.viewMode === "list" ? "layout-grid" : "list"
-                        active: false
-                        onClicked: root.viewMode = root.viewMode === "list" ? "grid" : "list"
-                    }
-                    // Sort menu (PlaylistView-style: field + direction caret).
-                    Rectangle {
-                        width: allSortRow.width
-                        height: 30
-                        radius: 6
-                        color: allSortArea.containsMouse ? theme.surfaceHover : theme.surfaceElevated
-                        Row {
-                            id: allSortRow
-                            height: parent.height
-                            leftPadding: 10
-                            rightPadding: 10
-                            spacing: 6
-                            Text {
-                                anchors.verticalCenter: parent.verticalCenter
-                                text: QbzSession.tr("Sort", QbzSession.trRev) + ": " + (
-                                    root.sortBy === "title" ? QbzSession.tr("Title", QbzSession.trRev)
-                                    : root.sortBy === "artist" ? QbzSession.tr("Artist", QbzSession.trRev)
-                                    : QbzSession.tr("Date added", QbzSession.trRev))
-                                color: theme.textSecondary
-                                font.pixelSize: 12
-                            }
-                            QbzIcon {
-                                name: root.sortAsc ? "chevron-up" : "chevron-down"
-                                width: 12
-                                height: 12
-                                anchors.verticalCenter: parent.verticalCenter
-                                tintName: "secondary"
-                            }
-                        }
-                        MouseArea {
-                            id: allSortArea
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: allSortMenu.openBelowRight(allSortArea)
-                        }
-                        QbzContextMenu {
-                            id: allSortMenu
-                            menuWidth: 172
-                                Repeater {
-                                    model: [
-                                        { "field": "date", "label": QbzSession.tr("Date added", QbzSession.trRev) },
-                                        { "field": "title", "label": QbzSession.tr("Title", QbzSession.trRev) },
-                                        { "field": "artist", "label": QbzSession.tr("Artist", QbzSession.trRev) },
-                                    ]
-                                    delegate: Rectangle {
-                                        required property var modelData
-                                        width: parent ? parent.width : 0
-                                        height: 33
-                                        radius: 5
-                                        color: sortOptArea.containsMouse ? theme.surfaceHover : "transparent"
-                                        Row {
-                                            anchors.fill: parent
-                                            anchors.leftMargin: 8
-                                            spacing: 6
-                                            Text {
-                                                width: parent.width - 26
-                                                height: parent.height
-                                                text: modelData.label
-                                                color: theme.textSecondary
-                                                font.pixelSize: 13
-                                                font.weight: root.sortBy === modelData.field ? theme.weightSemibold : theme.weightRegular
-                                                verticalAlignment: Text.AlignVCenter
-                                            }
-                                            QbzIcon {
-                                                visible: root.sortBy === modelData.field
-                                                name: root.sortAsc ? "chevron-up" : "chevron-down"
-                                                width: 12
-                                                height: 12
-                                                anchors.verticalCenter: parent.verticalCenter
-                                                tintName: "accent"
-                                            }
-                                        }
-                                        MouseArea {
-                                            id: sortOptArea
-                                            anchors.fill: parent
-                                            hoverEnabled: true
-                                            cursorShape: Qt.PointingHandCursor
-                                            onClicked: {
-                                                // Re-pick flips direction; a
-                                                // new field resets to its
-                                                // natural default.
-                                                if (root.sortBy === modelData.field) {
-                                                    root.sortAsc = !root.sortAsc
-                                                } else {
-                                                    root.sortBy = modelData.field
-                                                    root.sortAsc = modelData.field !== "date"
-                                                }
-                                                allSortMenu.close()
-                                            }
-                                        }
-                                    }
-                                }
-                        }
-                    }
-                }
-
-                // ===== Other-tab toolbars =====
-                // ONE instance for the five tabs: the reference clears the
-                // query on every tab entry (see onActiveTabChanged), so
-                // per-tab instances would only implement a persistence that
-                // does not exist. A Row skips `visible: false` children, so
-                // the 30px slot appears/disappears cleanly and, because the
-                // ROOT width never leaves collapsedSize while the field
-                // opens, nothing to its right ever moves.
-                QbzLineEdit {
-                    id: tabSearchBox
-                    visible: root.activeTab !== "all" && root.tabHasItems
-                    searchMode: true
-                    expandable: true
-                    sm: true
-                    elevated: false
-                    openWidth: 196
-                    placeholder: QbzSession.tr("Search", QbzSession.trRev)
-                    onEdited: function (v) { root.tabSearch = v }
-                }
-                // Albums sort popup (real, JS-side).
-                Rectangle {
-                    visible: root.activeTab === "albums" && root.tabHasItems
-                    width: albumsSortRow.width
-                    height: 30
-                    radius: 6
-                    color: albumsSortArea.containsMouse ? theme.surfaceHover : theme.surfaceElevated
-                    Row {
-                        id: albumsSortRow
-                        height: parent.height
-                        leftPadding: 10
-                        rightPadding: 10
-                        spacing: 6
-                        Text {
-                            anchors.verticalCenter: parent.verticalCenter
-                            text: QbzSession.tr("Sort", QbzSession.trRev) + ": " + root.albumsSort
-                            color: theme.textSecondary
-                            font.pixelSize: 12
-                        }
-                        QbzIcon { name: "chevron-down"; width: 12; height: 12; anchors.verticalCenter: parent.verticalCenter; tintName: "secondary" }
-                    }
-                    MouseArea {
-                        id: albumsSortArea
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: albumsSortMenu.openBelowRight(albumsSortArea)
-                    }
-                    QbzContextMenu {
-                        id: albumsSortMenu
-                        menuWidth: 172
-                            Repeater {
-                                model: ["default", "title-asc", "title-desc", "artist-asc"]
-                                delegate: Rectangle {
-                                    required property string modelData
-                                    width: parent ? parent.width : 0
-                                    height: 33
-                                    radius: 5
-                                    color: abSortOptArea.containsMouse ? theme.surfaceHover : "transparent"
-                                    Text {
-                                        anchors.fill: parent
-                                        anchors.leftMargin: 8
-                                        text: modelData
-                                        color: theme.textSecondary
-                                        font.pixelSize: 13
-                                        font.weight: root.albumsSort === modelData ? theme.weightSemibold : theme.weightRegular
-                                        verticalAlignment: Text.AlignVCenter
-                                    }
-                                    MouseArea {
-                                        id: abSortOptArea
-                                        anchors.fill: parent
-                                        hoverEnabled: true
-                                        cursorShape: Qt.PointingHandCursor
-                                        onClicked: { root.albumsSort = modelData; albumsSortMenu.close() }
-                                    }
-                                }
-                            }
-                    }
-                }
-                // Playlists sub-tab (Library / Following).
-                Rectangle {
-                    visible: root.activeTab === "playlists" && root.tabHasItems
-                    width: plSubRow.width
-                    height: 30
-                    radius: 6
-                    color: theme.surfaceElevated
-                    Row {
-                        id: plSubRow
-                        padding: 3
-                        spacing: 4
-                        Repeater {
-                            model: [
-                                { "id": "favorites", "label": QbzSession.tr("Library", QbzSession.trRev) },
-                                { "id": "following", "label": QbzSession.tr("Following", QbzSession.trRev) },
-                            ]
-                            delegate: Rectangle {
-                                required property var modelData
-                                property bool active: root.playlistsSubTab === modelData.id
-                                width: plSubText.implicitWidth + 20
-                                height: 24
-                                radius: 4
-                                color: active ? theme.surfaceMain : "transparent"
-                                Text {
-                                    id: plSubText
-                                    anchors.centerIn: parent
-                                    text: modelData.label
-                                    color: parent.active ? theme.textPrimary : theme.textMuted
-                                    font.pixelSize: 12
-                                    font.weight: theme.weightMedium
-                                }
-                                MouseArea {
-                                    anchors.fill: parent
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: root.playlistsSubTab = modelData.id
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            view: root
         }
         Rectangle {
             width: parent.width
@@ -1192,9 +803,15 @@ Rectangle {
 
         // ===================== SCROLLING CONTENT =========================
         Item {
+            id: content
             width: parent.width
             height: parent.height - 57
             clip: true
+
+            // The tracks bulk bar is pinned above the list (the Slint scrolls
+            // it away with the page; here the list IS the scrolling view).
+            readonly property int barInset:
+                (root.activeTab === "tracks" && root.tracksMultiSelect) ? 52 : 0
 
             // Loading skeleton — a deliberate ADDITION: the Slint mounts a
             // bare centred 36px LoadingSpinner here (FavoritesView.slint:
@@ -1219,9 +836,13 @@ Rectangle {
                 readonly property bool listShape:
                     (root.activeTab === "all" && root.viewMode === "list")
                     || root.activeTab === "tracks"
+                    || (root.activeTab === "albums" && root.albumsView === "list")
+                    || (root.activeTab === "playlists" && root.playlistsView === "list")
                 readonly property int cols: Math.max(1, Math.floor(width / 220))
                 readonly property int rows: Math.max(1, Math.ceil(height / 266))
-                readonly property int rowHeight: root.activeTab === "tracks" ? 50 : 44
+                readonly property int rowHeight: root.activeTab === "tracks" ? 50
+                    : root.activeTab === "albums" ? 64
+                    : root.activeTab === "playlists" ? 60 : 44
 
                 Grid {
                     columns: skelLayer.cols
@@ -1301,16 +922,31 @@ Rectangle {
                 }
             }
 
+            readonly property bool ready:
+                !QbzLibrary.libraryLoading && QbzLibrary.libraryError === ""
+            // Which surface owns the tab right now — one predicate per body,
+            // so no two can mount at once.
+            readonly property bool showAlbumsList:
+                content.ready && root.activeTab === "albums" && root.albumsView === "list"
+            readonly property bool showPlaylistsList:
+                content.ready && root.activeTab === "playlists" && root.playlistsView === "list"
+            readonly property bool showArtistsPanel:
+                content.ready && root.activeTab === "artists" && root.artistsView === "sidepanel"
+            readonly property bool showList:
+                content.ready && ((root.activeTab === "all" && root.viewMode === "list")
+                                  || root.activeTab === "tracks")
+            readonly property bool showGrid:
+                content.ready && !content.showList && !content.showAlbumsList
+                && !content.showPlaylistsList && !content.showArtistsPanel
+
             // ============ GRID (all tabs; All in grid mode) ==============
             GridView {
                 id: grid
                 anchors.fill: parent
                 anchors.leftMargin: 32
-                anchors.rightMargin: 32
+                anchors.rightMargin: root.alphaVisible ? 52 : 32
                 anchors.topMargin: 16
-                visible: !QbzLibrary.libraryLoading && QbzLibrary.libraryError === ""
-                    && (root.activeTab !== "all" || root.viewMode === "grid")
-                    && root.activeTab !== "tracks"
+                visible: content.showGrid && root.activeTab !== "tracks"
                 cellWidth: 220
                 cellHeight: 266
                 cacheBuffer: 266 * 2
@@ -1323,113 +959,14 @@ Rectangle {
                 onWidthChanged: root.gridWindowReport()
                 Component.onCompleted: root.gridWindowReport()
 
-                delegate: Item {
+                delegate: FeedGridCell {
                     required property var modelData
                     required property int index
-                    width: 200
-                    height: 246
-
-                    Component {
-                        id: albumCardComp
-                        AlbumCard {
-                            albumId: modelData.id
-                            title: modelData.title
-                            artist: modelData.artist
-                            artistId: modelData.artistId
-                            genre: modelData.genre
-                            year: modelData.year
-                            qualityTier: modelData.qualityTier
-                            artSource: root.artMap[modelData.artKey] || ""
-                            isFavorite: modelData.isFavorite
-                            isPinned: modelData.isPinned
-                            // The pin payload's display snapshot: the REMOTE
-                            // url, never `artMap` (a local file:// cache path
-                            // that means nothing after a cache wipe). Without
-                            // it every album pinned from the Library grid
-                            // landed in the Home Pinned rail as a permanent
-                            // grey placeholder, across restarts.
-                            artworkUrl: modelData.imageUrl || ""
-                            source: modelData.source
-                        }
-                    }
-                    Component {
-                        id: trackCardComp
-                        TrackCard {
-                            item: modelData
-                            artSource: root.artMap[modelData.artKey] || ""
-                            showSourceBadge: root.showLocal
-                        }
-                    }
-                    Component {
-                        id: artistCardComp
-                        ArtistCard {
-                            item: modelData
-                            artSource: root.artMap[modelData.artKey] || ""
-                            isPinned: modelData.isPinned === true
-                            // Snapshot url for the pin payload (see the album
-                            // card above).
-                            artworkUrl: modelData.imageUrl || ""
-                            // The Slint reference SPLITS here, and this one
-                            // component serves both of its call sites: the
-                            // ARTISTS tab grids pass follow-mode "none"
-                            // (FavoritesView.slint:1820/1854 — every artist in
-                            // that grid is followed by definition, so the chip
-                            // would be a permanent tick), while the mixed ALL
-                            // feed keeps the default and seeds `following`
-                            // from `is-favorite` (:1143-1147), which is
-                            // exactly the second spelling ArtistCard reads.
-                            followMode: root.activeTab === "artists" ? "none" : "toggle"
-                        }
-                    }
-                    Component {
-                        id: playlistCardComp
-                        PlaylistCard {
-                            // artworkUrl is not passed on purpose: the card
-                            // defaults it to `item.imageUrl`, which IS this
-                            // row's remote cover (FeedItem.image_url).
-                            item: modelData
-                            artSource: root.artMap[modelData.artKey] || ""
-                            isPinned: modelData.isPinned === true
-                        }
-                    }
-                    Component {
-                        id: labelCardComp
-                        LabelCard {
-                            item: modelData
-                            artSource: root.artMap[modelData.artKey] || ""
-                        }
-                    }
-                    Loader {
-                        anchors.fill: parent
-                        sourceComponent: modelData.kind === "album" ? albumCardComp
-                            : modelData.kind === "track" ? trackCardComp
-                            : modelData.kind === "artist" ? artistCardComp
-                            : modelData.kind === "playlist" ? playlistCardComp
-                            : labelCardComp
-                    }
-                    // THE fix for "many grey squares that fill in unevenly":
-                    // each pending cover shimmers on its own and stops the
-                    // moment ITS file:// path lands in artMap, so the grid
-                    // resolves progressively instead of looking like a wall
-                    // of dead tiles. Artists and labels are excluded — their
-                    // cards already draw a designed round gradient+glyph
-                    // portrait placeholder (ArtistGridCard/LabelCard).
-                    // A bare Rectangle: it does not take pointer events, so
-                    // the card's hover/click areas keep working underneath.
-                    QbzSkeleton {
-                        variant: "art"
-                        width: 200
-                        height: 200
-                        visible: (modelData.kind === "album"
-                                  || modelData.kind === "track"
-                                  || modelData.kind === "playlist")
-                            && modelData.imageUrl !== ""
-                            && (root.artMap[modelData.artKey] || "") === ""
-                        phase: root.skelPhase
-                        // Viewport-relative so the 48-instance cap follows
-                        // the window, not the (possibly 10k-item) model.
-                        cellIndex: Math.max(0, index - root.artWindowFirst)
-                    }
+                    view: root
+                    item: modelData
+                    // Viewport-relative so the skeleton's 48-instance cap
+                    // follows the window, not the (possibly 10k-item) model.
+                    cellIndex: Math.max(0, index - root.artWindowFirst)
                 }
             }
 
@@ -1438,11 +975,9 @@ Rectangle {
                 id: list
                 anchors.fill: parent
                 anchors.leftMargin: 32
-                anchors.rightMargin: 32
-                anchors.topMargin: 10
-                visible: !QbzLibrary.libraryLoading && QbzLibrary.libraryError === ""
-                    && ((root.activeTab === "all" && root.viewMode === "list")
-                        || root.activeTab === "tracks")
+                anchors.rightMargin: root.alphaVisible ? 52 : 32
+                anchors.topMargin: 10 + content.barInset
+                visible: content.showList
                 cacheBuffer: 44 * 10
                 clip: true
                 boundsBehavior: Flickable.StopAtBounds
@@ -1455,12 +990,32 @@ Rectangle {
                     required property var modelData
                     required property int index
                     width: list.width
-                    height: root.activeTab === "tracks" ? 50 : 44
+                    height: modelData && modelData.kind === "group-header"
+                        ? 34
+                        : (root.activeTab === "tracks" ? 50 : 44)
+                    Component {
+                        id: listHeaderComp
+                        Item {
+                            Text {
+                                x: 2
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: parent.width - 4
+                                text: modelData.title
+                                color: theme.textSecondary
+                                font.pixelSize: theme.fontLegal
+                                font.weight: theme.weightSemibold
+                                elide: Text.ElideRight
+                            }
+                        }
+                    }
                     Component {
                         id: trackRowComp
                         TrackRow {
                             item: modelData
-                            number: index + 1
+                            number: modelData._no || (index + 1)
+                            selectMode: root.tracksMultiSelect
+                            checked: root.tracksSelected[modelData.id] === true
+                            onToggleSelect: root.toggleTrackSelected(modelData.id)
                             onPlayRequested: root.playTrackInContext(item.id)
                             onEnqueueRequested: function (m) { QbzPlayer.enqueueTrack(item.id, m) }
                             // MyQBZ "Add to mixtape" — the HOST builds the
@@ -1497,18 +1052,127 @@ Rectangle {
                     Component {
                         id: feedRowComp
                         FeedListRow {
+                            view: root
                             item: modelData
                             rowIndex: Math.max(0, index - root.artWindowFirst)
                         }
                     }
-                    sourceComponent: root.activeTab === "tracks" ? trackRowComp : feedRowComp
+                    sourceComponent: (modelData && modelData.kind === "group-header")
+                        ? listHeaderComp
+                        : (root.activeTab === "tracks" ? trackRowComp : feedRowComp)
                 }
+            }
+
+            // ============ Albums LIST mode ===============================
+            LibraryAlbumsList {
+                id: albumsList
+                visible: content.showAlbumsList
+                anchors.fill: parent
+                anchors.leftMargin: 32
+                anchors.rightMargin: root.alphaVisible ? 52 : 32
+                anchors.topMargin: 16
+                view: root
+                rows: content.showAlbumsList ? root.visibleRows : []
+            }
+
+            // ============ Playlists LIST mode ============================
+            // FavoritesView.slint:1935 — the same ViewToggle the albums tab
+            // has, over primitives/PlaylistListRow.
+            ListView {
+                id: playlistsList
+                visible: content.showPlaylistsList
+                anchors.fill: parent
+                anchors.leftMargin: 32
+                anchors.rightMargin: 32
+                anchors.topMargin: 16
+                clip: true
+                spacing: 2
+                cacheBuffer: 60 * 8
+                boundsBehavior: Flickable.StopAtBounds
+                model: content.showPlaylistsList ? root.visibleRows : []
+
+                function report() {
+                    var first = Math.max(0, Math.floor(playlistsList.contentY / 62) - 4)
+                    var last = Math.ceil((playlistsList.contentY + playlistsList.height) / 62) + 4
+                    root.queueWindowReport(first, Math.min(root.visibleRows.length - 1, last))
+                }
+                onContentYChanged: playlistsList.report()
+                onModelChanged: playlistsList.report()
+                onHeightChanged: playlistsList.report()
+                Component.onCompleted: playlistsList.report()
+
+                delegate: PlaylistListRow {
+                    required property var modelData
+                    required property int index
+                    width: playlistsList.width
+                    item: modelData
+                    rowIndex: index
+                    artSource: root.artMap[modelData.artKey] || ""
+                    covers: modelData.playlistOwnImage === true ? [] : (modelData.covers || [])
+                }
+            }
+
+            // ============ Artists SIDEPANEL mode =========================
+            // Behind a Loader so LEAVING the mode really destroys it: the
+            // panel drops its Rust-side selection in Component.onDestruction,
+            // and it also stops rebuilding its rail on every feed change while
+            // the user is on another tab.
+            Loader {
+                anchors.fill: parent
+                active: content.showArtistsPanel
+                sourceComponent: LibraryArtistsPanel { view: root }
+            }
+
+            // Declared AFTER every scrolling body: declaration order IS
+            // z-order, and this bar overlays the top of the content area.
+            // ---- Tracks multi-select bar (FavoritesView.slint:1570) -----
+            QbzMultiSelectBar {
+                id: tracksBar
+                visible: root.activeTab === "tracks" && root.tracksMultiSelect && content.ready
+                anchors.top: parent.top
+                anchors.topMargin: 10
+                anchors.left: parent.left
+                anchors.leftMargin: 32
+                anchors.right: parent.right
+                anchors.rightMargin: 32
+                selectedCount: root.tracksSelectedCount
+                // The reference's inventory MINUS "Make available offline":
+                // this port brings up no offline cache at all (src/
+                // library_bulk.rs names the check), and a bulk bar must not
+                // render a control that no-ops. Everything else is wired.
+                // "heart-crack" is likewise not in this port's icon set, so
+                // "Remove from Library" uses the same heart + danger pair
+                // views/local/LocalTracksTab.qml already ships.
+                actions: [
+                    { "id": "select-all", "label": QbzSession.tr("Select all", QbzSession.trRev), "icon": "square-check-big", "danger": false, "needsSelection": false },
+                    { "id": "play-next", "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-start", "danger": false, "needsSelection": true },
+                    { "id": "play-later", "label": QbzSession.tr("Play later", QbzSession.trRev), "icon": "list-plus", "danger": false, "needsSelection": true },
+                    { "id": "queue", "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "danger": false, "needsSelection": true },
+                    { "id": "add-to-playlist", "label": QbzSession.tr("Add to playlist", QbzSession.trRev), "icon": "list-music", "danger": false, "needsSelection": true },
+                    { "id": "add-to-mixtape", "label": QbzSession.tr("Add to Mixtape/Collection", QbzSession.trRev), "icon": "cassette-tape", "danger": false, "needsSelection": true },
+                    { "id": "remove-selected", "label": QbzSession.tr("Remove from Library", QbzSession.trRev), "icon": "heart", "danger": true, "needsSelection": true },
+                    { "id": "clear", "label": QbzSession.tr("Clear", QbzSession.trRev), "icon": "x", "danger": false, "needsSelection": true },
+                ]
+                onAction: function (id) { root.tracksBulkAction(id) }
+            }
+
+            // A-Z jump strip, right edge (FavoritesView.slint:1683 / :1992 /
+            // :2004 all pin it at `parent.width - self.width - 20px`).
+            QbzAlphaStrip {
+                visible: root.alphaVisible
+                anchors.right: parent.right
+                anchors.rightMargin: 12
+                anchors.top: parent.top
+                anchors.topMargin: 16
+                anchors.bottom: parent.bottom
+                jumps: root.alphaJumps
+                onJump: function (ordinal, index) { root.alphaJumpTo(index) }
             }
 
             // Thin auto-hiding scrollbars (ListScrollbar replica).
             QbzScrollBar {
                 anchors.right: parent.right
-                anchors.rightMargin: 4
+                anchors.rightMargin: root.alphaVisible ? 34 : 4
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
                 target: grid
@@ -1516,11 +1180,20 @@ Rectangle {
             }
             QbzScrollBar {
                 anchors.right: parent.right
-                anchors.rightMargin: 4
+                anchors.rightMargin: root.alphaVisible ? 34 : 4
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
                 target: list
                 visible: list.visible && list.contentHeight > list.height
+            }
+            QbzScrollBar {
+                anchors.right: parent.right
+                anchors.rightMargin: 4
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                target: playlistsList
+                visible: playlistsList.visible
+                    && playlistsList.contentHeight > playlistsList.height
             }
         }
     }

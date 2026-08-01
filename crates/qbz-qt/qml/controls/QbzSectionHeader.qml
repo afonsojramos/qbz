@@ -8,16 +8,35 @@
 // Arms: `title` (fontSection semibold); `showViewAll` + `viewAllLabel` +
 // `viewAllAccent` (Search's accent chip vs Home's secondary link) +
 // viewAllClicked(); `showChevrons` + `leftEnabled`/`rightEnabled` +
-// pageLeft()/pageRight() (the host owns the page-step math).
+// pageLeft()/pageRight() (the host owns the page-step math); and, since the
+// Playlist Manager landed, `collapsible` + `collapsed` + toggled() and
+// `titleSecondary`.
 // Deliberately NOT absorbed: ArtistView.ReleaseSection's header (adds a
 // sort dropdown + "See discography" — distinct arms, still stubs) and the
 // uppercase 10-11px eyebrow mini-headers (different type scale).
+//
+// ── THE `id: root` REFACTOR CAME FIRST, AND IT WAS NOT COSMETIC ───────────
+// This file used to have no root id: its Text read `text: parent.title` and
+// three deeper bindings walked `parent.parent…`. Wrapping that Text in the
+// Row the collapse chevron needs would have changed its `parent` and silently
+// BLANKED the title on all thirteen existing instantiations
+// (HomeView.qml:346,537,612,773,1096,1150 · SearchView.qml:526,555,584,690,790
+// · SectionRail.qml:28 · LabelView.qml:139). Every property read now goes
+// through `root`, so the tree can be restructured again without that trap.
+//
+// The collapse chevron sits IMMEDIATELY RIGHT OF THE TITLE (the Playlist
+// Manager's `PmSectionHeader`, playlist/PlaylistManagerView.slint:1034-1058),
+// not in the right-hand Row. `Row` skips invisible children, so with
+// `collapsible: false` — the default — the thirteen existing sites are
+// pixel-identical: no width, no spacing, nothing.
 
 import QtQuick
 import com.blitzfc.qbz
 import "../theme"
 
 Item {
+    id: root
+
     property string title: ""
     property bool showViewAll: false
     property string viewAllLabel: ""
@@ -25,30 +44,69 @@ Item {
     property bool showChevrons: true
     property bool leftEnabled: false
     property bool rightEnabled: false
+    /// Paint the title `text-secondary` instead of `text-primary` — the
+    /// Playlist Manager's two section headers do
+    /// (playlist/PlaylistManagerView.slint:1029).
+    property bool titleSecondary: false
+    /// Render the 22 × 22 collapse chevron right of the title.
+    property bool collapsible: false
+    property bool collapsed: false
     signal viewAllClicked()
     signal pageLeft()
     signal pageRight()
+    signal toggled()
 
     QbzTheme { id: theme }
 
     width: parent ? parent.width : 0
     height: 28
 
-    Text {
+    Row {
         anchors.left: parent.left
         anchors.verticalCenter: parent.verticalCenter
-        text: parent.title
-        color: theme.textPrimary
-        font.pixelSize: theme.fontSection
-        font.weight: theme.weightSemibold
+        spacing: 8
+
+        Text {
+            anchors.verticalCenter: parent.verticalCenter
+            text: root.title
+            color: root.titleSecondary ? theme.textSecondary : theme.textPrimary
+            font.pixelSize: theme.fontSection
+            font.weight: theme.weightSemibold
+        }
+        // The chevron's 22 × 22 PLATE lights on hover; the glyph itself stays
+        // `text-muted` in every state (`:1040-1049`).
+        Rectangle {
+            visible: root.collapsible
+            anchors.verticalCenter: parent.verticalCenter
+            width: 22
+            height: 22
+            radius: 4
+            color: chevArea.containsMouse ? theme.surfaceHover : "transparent"
+
+            QbzIcon {
+                anchors.centerIn: parent
+                name: root.collapsed ? "chevron-right" : "chevron-down"
+                width: 14
+                height: 14
+                tintName: "muted"
+            }
+            MouseArea {
+                id: chevArea
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.toggled()
+            }
+        }
     }
+
     Row {
         anchors.right: parent.right
         anchors.verticalCenter: parent.verticalCenter
         spacing: 4
         // "View all" link/chip (accent = Search's, secondary = Home's).
         Rectangle {
-            visible: parent.parent.showViewAll
+            visible: root.showViewAll
             anchors.verticalCenter: parent.verticalCenter
             width: vaText.implicitWidth + 16
             height: 26
@@ -57,10 +115,10 @@ Item {
             Text {
                 id: vaText
                 anchors.centerIn: parent
-                text: parent.parent.parent.viewAllLabel !== ""
-                    ? parent.parent.parent.viewAllLabel
+                text: root.viewAllLabel !== ""
+                    ? root.viewAllLabel
                     : QbzSession.tr("View all →", QbzSession.trRev)
-                color: parent.parent.parent.viewAllAccent ? theme.accent
+                color: root.viewAllAccent ? theme.accent
                     : vaArea.containsMouse ? theme.textPrimary : theme.textSecondary
                 font.pixelSize: 14
                 font.weight: theme.weightMedium
@@ -70,7 +128,7 @@ Item {
                 anchors.fill: parent
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
-                onClicked: parent.parent.parent.viewAllClicked()
+                onClicked: root.viewAllClicked()
             }
         }
         // `ambient: true` on BOTH: these two are the carousel page chevrons,
@@ -89,19 +147,22 @@ Item {
         // section header on OPAQUE chrome would need the arm off — there is
         // no such host today, and adding one means adding the property then,
         // not carrying a dead knob now.
+        //
+        // The Playlist Manager's two headers are the first consumers that are
+        // NOT carousels, and they say so with `showChevrons: false`.
         QbzNavButton {
-            visible: parent.parent.showChevrons
+            visible: root.showChevrons
             name: "chevron-left"
             ambient: true
-            btnEnabled: parent.parent.leftEnabled
-            onClicked: parent.parent.pageLeft()
+            btnEnabled: root.leftEnabled
+            onClicked: root.pageLeft()
         }
         QbzNavButton {
-            visible: parent.parent.showChevrons
+            visible: root.showChevrons
             name: "chevron-right"
             ambient: true
-            btnEnabled: parent.parent.rightEnabled
-            onClicked: parent.parent.pageRight()
+            btnEnabled: root.rightEnabled
+            onClicked: root.pageRight()
         }
     }
 }

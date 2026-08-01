@@ -68,6 +68,29 @@ Item {
     // Mosaic seam, 1:1 with PlaylistCollage.slint.
     property real gap: 2
 
+    /// `"mosaic"` (discover/PlaylistCollage.slint — the default everywhere) or
+    /// `"pm"` (primitives/PmCollage.slint, the Playlist Manager's thumbnail).
+    ///
+    /// They are genuinely different layout FUNCTIONS, which is the whole delta:
+    /// the mosaic splits 2 and 3 covers into cells, while the manager collapses
+    /// anything under four to ONE full-bleed cover and only splits at four, with
+    /// a 1 px seam instead of 2. Everything else — the url → path resolution
+    /// through QbzShell.sidebarArtworkWindow + QbzLibrary.libraryArtworkReady,
+    /// the 120 ms debounce, the MultiEffect rounding with the measured
+    /// maskThresholdMin 0.5 / maskSpreadAtMin 1.0, the three-way `_noShaders`
+    /// test and the recycled-delegate invalidation — is identical and must not
+    /// be forked into a second file.
+    property string layout: "mosaic"
+
+    /// The manager pins its seam at 1 px (PmCollage.slint:27).
+    readonly property real effGap: root.layout === "pm" ? 1 : root.gap
+
+    /// How many of the (up to four) tiles this layout actually draws. The
+    /// mosaic draws every cover it has; `"pm"` draws ONE below four.
+    readonly property int drawnTiles: root.layout === "pm"
+        ? (root.tiles.length >= 4 ? 4 : (root.tiles.length >= 1 ? 1 : 0))
+        : root.tiles.length
+
     QbzTheme { id: theme }
 
     // De-duplicated + capped at four (Tauri dedupes the same way: repeated
@@ -127,9 +150,19 @@ Item {
         var w = root.width
         var h = root.height
         var n = root.tiles.length
-        if (w <= 0 || h <= 0 || n <= 0 || index >= n)
+        if (w <= 0 || h <= 0 || n <= 0 || index >= root.drawnTiles)
             return Qt.rect(0, 0, 0, 0)
-        var g = root.gap
+        var g = root.effGap
+        // Playlist Manager: 1-3 covers -> one full-bleed tile, 4+ -> a 2×2 grid
+        // (PmCollage.slint:39-80).
+        if (root.layout === "pm") {
+            if (n < 4)
+                return Qt.rect(0, 0, w, h)
+            var cwPm = (w - g) / 2
+            var chPm = (h - g) / 2
+            return Qt.rect((index % 2) * (cwPm + g),
+                           Math.floor(index / 2) * (chPm + g), cwPm, chPm)
+        }
         if (n === 1)
             return Qt.rect(0, 0, w, h)
         if (n === 2) {
@@ -276,7 +309,7 @@ Item {
             delegate: RoundedImage {
                 required property int index
                 readonly property rect cell: root.cellOf(index)
-                visible: index < root.tiles.length
+                visible: index < root.drawnTiles
                 x: cell.x
                 y: cell.y
                 width: cell.width

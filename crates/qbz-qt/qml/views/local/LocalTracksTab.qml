@@ -71,6 +71,28 @@ Item {
         function onArtworkRefresh() { root.reportSoon() }
     }
 
+    // --------------------------- row play ---------------------------------
+    // PARITY-DEBT #14. Rust used to queue `state.tracks_raw` — the raw SQL
+    // page order — and find the clicked row in it, so with a group mode on
+    // (a CLIENT-side reorder, see LocalLibraryView.tracksVisible) the user
+    // heard a different order than the one on screen. The visible order only
+    // exists QML-side, so it goes down as a JSON id array and the raw rows
+    // play the part of the authoritative cache
+    // (local_playback::order_by_visible, the local twin of
+    // library_qt::order_by_visible).
+    //
+    // `view.tracksVisible` is THE array `entries` is built from — never read
+    // `list.model` back off the view (see views/LibraryView.qml).
+    function visibleTrackIds() {
+        var rows = root.view ? root.view.tracksVisible : []
+        var out = []
+        for (var i = 0; i < rows.length; i++) out.push(rows[i].id)
+        return out
+    }
+    function playRow(id) {
+        QbzLocal.playTracksVisible(JSON.stringify(visibleTrackIds()), id)
+    }
+
     // First page = the shape of the 50px track rows (the Slint mounts a bare
     // 36px LoadingSpinner). ONE instance for the whole viewport.
     QbzSkeleton {
@@ -115,7 +137,11 @@ Item {
                 { "id": "queue", "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "danger": false, "needsSelection": true },
                 { "id": "play-later", "label": QbzSession.tr("Play later", QbzSession.trRev), "icon": "list-plus", "danger": false, "needsSelection": true },
                 { "id": "play-next", "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-start", "danger": false, "needsSelection": true },
-                { "id": "remove-favorites", "label": QbzSession.tr("Remove from favorites", QbzSession.trRev), "icon": "heart", "danger": true, "needsSelection": true },
+                // NO "Remove from favorites": this tab is the whole local
+                // library, not a favourites surface — removing from a
+                // collection the user is not looking at is not an action this
+                // context can offer. (It was doubly wrong: local hearts are
+                // unwired, so `local_bulk.rs`'s arm is a log-only no-op.)
                 { "id": "add-to-playlist", "label": QbzSession.tr("Add to playlist", QbzSession.trRev), "icon": "list-music", "danger": false, "needsSelection": true },
                 { "id": "add-to-mixtape", "label": QbzSession.tr("Add to Mixtape/Collection", QbzSession.trRev), "icon": "cassette-tape", "danger": false, "needsSelection": true },
                 { "id": "clear", "label": QbzSession.tr("Clear", QbzSession.trRev), "icon": "x", "danger": false, "needsSelection": true },
@@ -220,7 +246,7 @@ Item {
                             showArtwork: root.view.trackArtwork
                             selectMode: root.view.tracksMultiSelect
                             checked: root.view.tracksSelected[modelData.row.id] === true
-                            onPlayRequested: QbzLocal.playTrack(modelData.row.id)
+                            onPlayRequested: root.playRow(modelData.row.id)
                             onEnqueueRequested: function (m) {
                                 QbzLocal.enqueue("track", modelData.row.id, m)
                             }
@@ -247,7 +273,7 @@ Item {
                     }
                 }
             }
-            AlphaStrip {
+            QbzAlphaStrip {
                 visible: root.view.tracksGroup === "name" && root.alphaJumps.length > 0
                 anchors.right: parent.right
                 anchors.top: parent.top

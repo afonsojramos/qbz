@@ -3880,6 +3880,16 @@ msgstr "Falha ao copiar a playlist"
 msgid "Playlist has no tracks to copy"
 msgstr "A playlist não tem faixas para copiar"
 
+msgid "Added {} track"
+msgid_plural "Added {} tracks"
+msgstr[0] "{} faixa adicionada"
+msgstr[1] "{} faixas adicionadas"
+
+msgid "Added {} track to {}"
+msgid_plural "Added {} tracks to {}"
+msgstr[0] "{} faixa adicionada a {}"
+msgstr[1] "{} faixas adicionadas a {}"
+
 msgid "Added {} track to queue"
 msgid_plural "Added {} tracks to queue"
 msgstr[0] "{} faixa adicionada à fila"
@@ -4889,3 +4899,44 @@ msgid "Removed {} album from blacklist"
 msgid_plural "Removed {} albums from blacklist"
 msgstr[0] "{} álbum removido da lista negra"
 msgstr[1] "{} álbuns removidos da lista negra"
+
+msgid "Playlist imported"
+msgstr "Playlist importada"
+
+msgid "Playlist import failed"
+msgstr "Falha ao importar a playlist"
+
+msgid "Not logged in to Qobuz"
+msgstr "Você não está conectado ao Qobuz"
+
+# Qt playlist manager — folder modals (contract block 2)
+
+msgid "Delete folder"
+msgstr "Excluir pasta"
+
+msgid "Delete the folder “{}”? Its playlists move back to the root."
+msgstr "Excluir a pasta “{}”? Suas playlists voltam para a raiz."
+
+msgid "Choose a folder image"
+msgstr "Escolha uma imagem para a pasta"
+
+msgid "Images"
+msgstr "Imagens"
+
+msgid "Failed to create folder"
+msgstr "Falha ao criar a pasta"
+
+msgid "Failed to save folder"
+msgstr "Falha ao salvar a pasta"
+
+msgid "Failed to delete folder"
+msgstr "Falha ao excluir a pasta"
+
+msgid "Failed to rename playlist"
+msgstr "Falha ao renomear a playlist"
+
+msgid "Failed to delete playlist"
+msgstr "Falha ao excluir a playlist"
+
+msgid "Couldn't create the playlist"
+msgstr "Não foi possível criar a playlist"

@@ -36,6 +36,15 @@ Popup {
 
     property int menuWidth: 196
     default property alias menuContent: col.data
+    /// Row gap inside the panel. Defaults to the Column's own 0 — every
+    /// existing call site is unaffected — and exists because a call site CANNOT
+    /// reach `col`: QML gives a component no access to another file's ids, so
+    /// `col.spacing: 1` inside a `QbzContextMenu { … }` block is a grouped
+    /// assignment against a property the type does not have and fails the WHOLE
+    /// consuming file at load. The Playlist Manager's three menus set 1, which
+    /// is the reference's `spacing: 1px`
+    /// (playlist/PlaylistManagerView.slint:1153, :1197, :816).
+    property alias contentSpacing: col.spacing
 
     QbzTheme { id: theme }
 

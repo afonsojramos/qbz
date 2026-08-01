@@ -3869,6 +3869,16 @@ msgstr "Kopiëren van afspeellijst mislukt"
 msgid "Playlist has no tracks to copy"
 msgstr "Afspeellijst heeft geen nummers om te kopiëren"
 
+msgid "Added {} track"
+msgid_plural "Added {} tracks"
+msgstr[0] "{} nummer toegevoegd"
+msgstr[1] "{} nummers toegevoegd"
+
+msgid "Added {} track to {}"
+msgid_plural "Added {} tracks to {}"
+msgstr[0] "{} nummer toegevoegd aan {}"
+msgstr[1] "{} nummers toegevoegd aan {}"
+
 msgid "Added {} track to queue"
 msgid_plural "Added {} tracks to queue"
 msgstr[0] "{} nummer aan wachtrij toegevoegd"
@@ -4879,3 +4889,44 @@ msgstr "{} nummers verwijderd uit favorieten"
 
 msgid "Removing {} tracks from favorites…"
 msgstr "{} nummers worden verwijderd uit favorieten…"
+
+msgid "Playlist imported"
+msgstr "Afspeellijst geïmporteerd"
+
+msgid "Playlist import failed"
+msgstr "Importeren van afspeellijst mislukt"
+
+msgid "Not logged in to Qobuz"
+msgstr "Niet ingelogd bij Qobuz"
+
+# Qt playlist manager — folder modals (contract block 2)
+
+msgid "Delete folder"
+msgstr "Map verwijderen"
+
+msgid "Delete the folder “{}”? Its playlists move back to the root."
+msgstr "Map “{}” verwijderen? De afspeellijsten gaan terug naar het hoofdniveau."
+
+msgid "Choose a folder image"
+msgstr "Kies een mapafbeelding"
+
+msgid "Images"
+msgstr "Afbeeldingen"
+
+msgid "Failed to create folder"
+msgstr "Aanmaken van map mislukt"
+
+msgid "Failed to save folder"
+msgstr "Opslaan van map mislukt"
+
+msgid "Failed to delete folder"
+msgstr "Verwijderen van map mislukt"
+
+msgid "Failed to rename playlist"
+msgstr "Hernoemen van afspeellijst mislukt"
+
+msgid "Failed to delete playlist"
+msgstr "Verwijderen van afspeellijst mislukt"
+
+msgid "Couldn't create the playlist"
+msgstr "Kon de afspeellijst niet aanmaken"

@@ -714,7 +714,9 @@ Rectangle {
                 color: "transparent"
                 QbzIcon { anchors.centerIn: parent; name: "cloud-download"; width: 16; height: 16; tintName: "muted" }
             }
-            // ⋯ (play-only menu for the POC).
+            // ⋯ row menu. It used to be a hover-lit button with NO handler at
+            // all — a control that renders and no-ops, which is the defect
+            // class this round is closing.
             Rectangle {
                 width: cols.colMenu
                 height: cols.colMenu
@@ -727,8 +729,80 @@ Rectangle {
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
-                    // POC-NOTE: the unified track context menu is out of scope.
+                    onClicked: function (mouse) { popMenu.openAtCursor(moreArea, mouse.x, mouse.y) }
                 }
+            }
+        }
+
+        // primitives/TrackContextMenu.slint, in ITS order, restricted to the
+        // entries whose seam is live at this call site.
+        //
+        // REUSE, and why it is not `rows/TrackRow.qml`: PopularTrackRow is a
+        // pre-existing, documented fork (see the component header) and the
+        // fork is load-bearing here — its heart reads the VIEW-level
+        // optimistic store (`root.toggleState("track:" + id, …)`, shared with
+        // the header and the library tab) while TrackRow owns a private
+        // `favorite` property, and its play route is the artist-context
+        // `playArtistTrack`. Swapping the component is a view rewrite, not a
+        // menu fix. What IS reused is the menu surface itself:
+        // `controls/CardMenu.qml`, the same primitive rows/TrackRow.qml opens.
+        //
+        // ABSENT, not dead (the same discipline TrackRow applies): the radio
+        // pair, Share Qobuz link / Song.link, the offline-cache block and
+        // Track info. The first two need bridge seams that do not exist; the
+        // last two need the shared row's lazy Loaders (a TextEdit for the
+        // clipboard, a TrackInfoModal), and duplicating those per artist row
+        // is exactly the fork-drift this file already paid for once.
+        CardMenu {
+            id: popMenu
+            menuWidth: 224
+            entries: {
+                var t = QbzSession.tr
+                var r = QbzSession.trRev
+                var fav = root.toggleState("track:" + popRow.row.id, popRow.row.isFavorite)
+                var m = [
+                    { "label": t("Play now", r), "icon": "play-fill", "action": "play" },
+                    { "label": t("Play next", r), "icon": "list-start", "action": "next" },
+                    { "label": t("Play later", r), "icon": "list-plus", "action": "later" },
+                    { "label": t("Add to queue", r), "icon": "list-end", "action": "queue" },
+                    { "label": fav ? t("Remove from Library", r) : t("Add to Library", r),
+                      "icon": fav ? "heart-filled" : "heart", "action": "favorite" },
+                    { "label": t("Add to mixtape", r), "icon": "cassette-tape", "action": "mixtape" },
+                    { "label": t("Add to playlist", r), "icon": "list-music", "action": "add-to-playlist" },
+                ]
+                if ((popRow.row.albumId || "") !== "")
+                    m.push({ "label": t("Go to album", r), "icon": "disc-3", "action": "go-album" })
+                if ((popRow.row.artistId || "") !== "")
+                    m.push({ "label": t("Go to artist", r), "icon": "user", "action": "go-artist" })
+                return m
+            }
+            onPicked: function (a) {
+                var id = popRow.row.id
+                if (a === "play") QbzPlayer.playArtistTrack(id)
+                else if (a === "next") QbzPlayer.enqueueTrack(id, "next")
+                else if (a === "later") QbzPlayer.enqueueTrack(id, "later")
+                else if (a === "queue") QbzPlayer.enqueueTrack(id, "queue")
+                else if (a === "favorite") {
+                    root.setToggleState("track:" + id,
+                        !root.toggleState("track:" + id, popRow.row.isFavorite))
+                    QbzLibrary.libraryToggleFavorite("track", id)
+                }
+                else if (a === "add-to-playlist") QbzPlaylistPicker.openForTrack(id)
+                else if (a === "mixtape") {
+                    // The HOST builds the AddItem payload. SOURCE: every row
+                    // this component draws is a Qobuz catalog track — the
+                    // `/artist/page` `top_tracks` / `appears_on` lists, and
+                    // the in-library tab's rows, which artist_qt maps from
+                    // Qobuz `Track` values. There is no local artist page.
+                    QbzMyQbzAdd.open(JSON.stringify([{
+                        "itemType": "track", "source": "qobuz",
+                        "sourceItemId": id, "title": popRow.row.title || "",
+                        "subtitle": popRow.row.artist || "", "artworkUrl": "",
+                        "year": null, "trackCount": null
+                    }]))
+                }
+                else if (a === "go-album") QbzAlbum.openAlbum(popRow.row.albumId)
+                else if (a === "go-artist") QbzArtist.openArtist(popRow.row.artistId)
             }
         }
 
@@ -739,6 +813,15 @@ Rectangle {
             propagateComposedEvents: true
             onDoubleClicked: QbzPlayer.playArtistTrack(row.id)
             onClicked: mouse.accepted = false
+        }
+        // Right press opens the SAME menu at the pointer — the invariant
+        // controls/QbzContextMenu.qml:20-22 states. Declared last so it sits
+        // on top, RIGHT-only so every left click still falls through.
+        MouseArea {
+            id: popRcArea
+            anchors.fill: parent
+            acceptedButtons: Qt.RightButton
+            onClicked: function (mouse) { popMenu.openAtCursor(popRcArea, mouse.x, mouse.y) }
         }
     }
 
@@ -2428,7 +2511,22 @@ Rectangle {
                             if (a === "shuffle-all") QbzPlayer.playArtistTop(true)
                             else if (a === "next-all") QbzPlayer.playArtistTop(false)
                             else if (a === "queue-all") QbzPlayer.enqueueArtistTop()
-                            // playlist-all: inert (no picker) — POC-NOTE.
+                            else if (a === "playlist-all") {
+                                // ArtistPageView.slint:797-802
+                                // `top-tracks-menu-action("playlist-all")` —
+                                // the picker over the section's tracks. `root
+                                // .topTracks` is the FILTERED list, which is
+                                // what `ArtistState.top-tracks` holds too
+                                // (artist.rs filters into the state, the view
+                                // never sees the raw list). Every row here is
+                                // a Qobuz catalog track (`/artist/page`
+                                // top_tracks), so the catalog arm is correct.
+                                var ids = []
+                                for (var i = 0; i < root.topTracks.length; i++)
+                                    ids.push(String(root.topTracks[i].id))
+                                if (ids.length > 0)
+                                    QbzPlaylistPicker.openForTracks(JSON.stringify(ids))
+                            }
                         }
                     }
                 }

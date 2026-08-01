@@ -65,6 +65,11 @@
 //                    add new ones.
 //   "black"          a dark glyph on a host painted light under every theme
 //   "amber"          #e0b341, the audio stamp's brand accent (one icon)
+//   "green"          #22c55e, PmLocalBadge's "all local" state (one icon:
+//                    wifi). A literal brand colour, not a theme token — the
+//                    `amber` precedent, one partial dir for one glyph.
+//   "orange"         #f59e0b, PmLocalBadge's "some local" state (one icon:
+//                    cloud-download). Same precedent.
 //
 // Getting this pair wrong is how the bug this file fixes happened in reverse:
 // resolving "primary" to Theme.text-primary would paint a DARK glyph on a
@@ -106,9 +111,10 @@
 // could not be trusted: `black/` and `warning/` were missing mp3 + translate,
 // `secondary/` and `accent/` were missing mp3 (and `black/cd.svg` was a
 // #cccccc glyph — a light-grey disc in the DARK-glyph directory). All six
-// neutral/chromatic dirs are now 96 files, the same set as primary/ and as
-// MASTERS; only `favorite/` (52) and `amber/` (1) stay deliberately partial,
-// and neither is reachable from the polarity mapping. A new icon goes into
+// neutral/chromatic dirs are now 111 files, the same set as primary/ and as
+// MASTERS; only `favorite/` (57), `amber/` (6) and the two one-glyph brand
+// dirs `green/` / `orange/` stay deliberately partial, and none of them is
+// reachable from the polarity mapping. A new icon goes into
 // assets/icons/primary/, into the MASTERS table in src/icon_tint_qt.rs, AND
 // into black/ + secondary/ + muted/ if any theme-following tint can ask for
 // it.
@@ -208,7 +214,11 @@ Image {
             return "muted"
 
         // "accent", "warning", "favorite" (chromatic, legible on both), and
-        // the fixed "black" / "amber" — each already names its own dir.
+        // the fixed "black" / "amber" / "green" / "orange" — each already
+        // names its own dir. The three fixed ones also fall out of the
+        // runtime bake by themselves: `token_for()` has no entry for them
+        // (icon_tint_qt.rs:323), so `dirFor` returns "" and this qrc dir is
+        // what actually serves them.
         default:
             return root.tintName
         }

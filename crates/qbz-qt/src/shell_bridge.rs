@@ -95,6 +95,14 @@ pub mod qbz_shell {
         #[qproperty(QString, sidebar_json)]
         #[qproperty(QString, sidebar_sort_by)]
         #[qproperty(bool, sidebar_sort_asc)]
+        // The MINI-RAIL folder flyout's own document (contract §4.7):
+        // `{folderId, folderName, count, rows:[{id,name,isLocal}]}`. It is a
+        // separate document from `sidebar_json` because a COLLAPSED folder's
+        // children are absent from the flattened entries — listing them used
+        // to require force-expanding the folder, a persistent side effect the
+        // reference does not have. The default is the FULL SHAPE, never "{}":
+        // `JSON.parse("{}").rows.length` throws in the pre-publish frame.
+        #[qproperty(QString, sidebar_folder_popup_json)]
 
         // --- Window chrome (phase 12) --------------------------------------
         // The APPLIED titlebar mode (the ui_prefs `use_system_title_bar`
@@ -268,8 +276,17 @@ pub mod qbz_shell {
         #[qinvokable]
         fn toggle_ambient_background(self: Pin<&mut QbzShell>);
 
-        /// Sidebar tree: rebuild + republish after load / sort / search /
-        /// folder toggle.
+        /// Sidebar tree: rebuild + republish (the `…` menu's Refresh row).
+        ///
+        /// Routes to `crate::reload_sidebar_including_local()`, NOT
+        /// `crate::reload_sidebar()`. The latter early-returns while offline,
+        /// which made the ONE recovery affordance for a broken tree unusable in
+        /// exactly the state where the user needs it — and an account-less user
+        /// has nothing else. The local-safe verb is not a no-op offline: it
+        /// re-reads folders, folder membership, the hidden set and the LOCAL
+        /// playlists from library.db and republishes, while `sidebar_qt::load`
+        /// preserves the cached Qobuz set rather than wiping it (see its
+        /// header). Online the two verbs do the same thing.
         #[qinvokable]
         fn reload_sidebar(self: Pin<&mut QbzShell>);
         #[qinvokable]
@@ -278,6 +295,12 @@ pub mod qbz_shell {
         fn sidebar_search(self: Pin<&mut QbzShell>, query: QString);
         #[qinvokable]
         fn sidebar_toggle_folder(self: Pin<&mut QbzShell>, id: QString);
+        /// Mini-rail folder click: publish that folder's playlists into
+        /// `sidebar_folder_popup_json`. Reads the sidebar CACHE only — no DB,
+        /// no network, no expand side effect — so it behaves identically
+        /// offline (contract §4.7 / block 6).
+        #[qinvokable]
+        fn sidebar_open_folder_popup(self: Pin<&mut QbzShell>, folder_id: QString);
         /// Sidebar "+" — create an empty playlist (single core call), then
         /// reload the tree.
         #[qinvokable]
@@ -329,6 +352,7 @@ pub struct QbzShellRust {
     sidebar_json: QString,
     sidebar_sort_by: QString,
     sidebar_sort_asc: bool,
+    sidebar_folder_popup_json: QString,
     system_title_bar: bool,
     system_title_bar_pref: bool,
     window_width: f32,
@@ -384,6 +408,10 @@ impl Default for QbzShellRust {
             sidebar_json: QString::from("[]"),
             sidebar_sort_by: QString::from("name"),
             sidebar_sort_asc: true,
+            // FULL SHAPE, not "{}" — see the qproperty comment.
+            sidebar_folder_popup_json: QString::from(
+                r#"{"folderId":"","folderName":"","count":0,"rows":[]}"#,
+            ),
             system_title_bar: crate::settings_qt::use_system_title_bar(),
             system_title_bar_pref: crate::settings_qt::use_system_title_bar(),
             window_width,
@@ -543,7 +571,8 @@ impl qbz_shell::QbzShell {
     }
 
     pub fn reload_sidebar(self: Pin<&mut Self>) {
-        crate::reload_sidebar();
+        // The OFFLINE-SAFE verb — see the declaration's doc comment.
+        crate::reload_sidebar_including_local();
     }
 
     pub fn sidebar_set_sort(self: Pin<&mut Self>, option: QString) {
@@ -556,6 +585,10 @@ impl qbz_shell::QbzShell {
 
     pub fn sidebar_toggle_folder(self: Pin<&mut Self>, id: QString) {
         crate::sidebar_toggle_folder(&id.to_string());
+    }
+
+    pub fn sidebar_open_folder_popup(self: Pin<&mut Self>, folder_id: QString) {
+        crate::sidebar_open_folder_popup(&folder_id.to_string());
     }
 
     pub fn create_playlist(self: Pin<&mut Self>) {

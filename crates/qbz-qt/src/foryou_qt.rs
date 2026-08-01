@@ -1002,7 +1002,7 @@ fn to_row(track: &Track) -> TrackRow {
 /// mix is a FLAT list, so no container context is stamped — the now-playing
 /// "playing from" falls back to each track's own album, 1:1 with the Slint
 /// `play_tracks_ctx(.., None)` radio/mix path.
-fn to_queue_track(track: &Track) -> QueueTrack {
+pub(crate) fn to_queue_track(track: &Track) -> QueueTrack {
     let (album_id, album_title, album_artwork) = match track.album.as_ref() {
         Some(album) => (
             album.id.clone(),

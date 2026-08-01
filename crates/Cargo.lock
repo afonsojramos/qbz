@@ -6636,6 +6636,7 @@ dependencies = [
  "qbz-mixtape",
  "qbz-models",
  "qbz-offline-cache",
+ "qbz-playlist-import",
  "qbz-plex",
  "qbz-qobuz",
  "qbz-source",

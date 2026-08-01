@@ -495,11 +495,23 @@ Rectangle {
                     "icon": root.npFavorite ? "heart-filled" : "heart",
                     "action": "favorite"
                 },
-                { "label": QbzSession.tr("Add to playlist", QbzSession.trRev), "icon": "list-music", "action": "playlist" },
                 { "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "action": "queue" },
                 { "label": QbzSession.tr("Play later", QbzSession.trRev), "icon": "list-plus", "action": "later" },
                 { "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-start", "action": "next" },
             ]
+            // "Add to playlist" is SECOND (TransportControls.slint:143 — the
+            // full bar carries the rationale). Same `npSource` gate as the
+            // mixtape entry: the picker's Qobuz arm takes catalog ids and an
+            // `isLocal` current row is four different id spaces this bar
+            // cannot tell apart, so unknown provenance drops the entry rather
+            // than rendering one that cannot work.
+            if (root.npSource === "qobuz") {
+                m.splice(1, 0, {
+                    "label": QbzSession.tr("Add to playlist", QbzSession.trRev),
+                    "icon": "list-music",
+                    "action": "playlist"
+                })
+            }
             // Only when the track's source is KNOWN (see `npSource`).
             if (root.npSource !== "") {
                 m.push({
@@ -523,6 +535,10 @@ Rectangle {
                 if (id !== "") QbzQueue.queueToggleFavorite("track", id)
             } else if (a === "queue" || a === "later" || a === "next") {
                 if (id !== "") QbzPlayer.enqueueTrack(id, a)
+            } else if (a === "playlist") {
+                // Only built when `npSource === "qobuz"`, so `id` is a catalog
+                // id here by the gate above.
+                if (id !== "") QbzPlaylistPicker.openForTrack(id)
             } else if (a === "album-favorite") {
                 if (QbzPlayer.npAlbumId !== "")
                     QbzLibrary.libraryToggleFavorite("album", QbzPlayer.npAlbumId)
@@ -540,9 +556,6 @@ Rectangle {
                         "year": null, "trackCount": null
                     }]))
             }
-            // TODO(qt-bridge): "playlist" (add-to-playlist modal) has no
-            // invokable in the Qt port yet — the row is rendered 1:1 with the
-            // Slint flyout and does nothing for now.
         }
     }
 }

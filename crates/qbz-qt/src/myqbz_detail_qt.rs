@@ -1958,12 +1958,34 @@ pub(crate) fn bulk_action(id: String) {
         "remove-selected" => crate::myqbz_edit_qt::remove_selected(),
         "clear" => clear_selection(),
         // The Slint's seventh action resolves the selection to Qobuz track ids
-        // and opens the global playlist picker. This port has no playlist picker
-        // yet — the same gap LabelView.qml:18 and MixView.qml:32 already record
-        // for their own bars — so the entry stays inert rather than silently
-        // doing something else.
+        // and opens the global playlist picker (LIVE here since
+        // QbzPlaylistPicker landed).
+        //
+        // Only QOBUZ TRACK items resolve to a catalog id. An album or playlist
+        // item is a container whose members this bar never fetched, and a
+        // local / Plex item's `source_item_id` is a library path or a rating
+        // key — the picker's Qobuz arm would read either as a catalog id and
+        // add an unrelated track (the id-confusion class
+        // `playlist_picker_qt.rs`'s header exists to make unrepresentable).
+        // Those rows are SKIPPED and counted in the log rather than guessed at.
         "add-to-playlist" => {
-            log::warn!("[qbz-qt] myqbz_detail bulk_action: add-to-playlist has no picker in this port");
+            let items = selected_full_items();
+            let ids: Vec<String> = items
+                .iter()
+                .filter(|it| it.item_type == ItemType::Track && it.source == AlbumSource::Qobuz)
+                .map(|it| it.source_item_id.clone())
+                .collect();
+            let skipped = items.len() - ids.len();
+            if skipped > 0 {
+                log::info!(
+                    "[qbz-qt] myqbz_detail add-to-playlist: skipped {skipped} non-Qobuz-track \
+                     item(s) (album / playlist containers and local / Plex refs have no catalog id)"
+                );
+            }
+            if ids.is_empty() {
+                return;
+            }
+            crate::playlist_picker_qt::open_for_ids(&crate::app(), ids);
         }
         other => {
             log::warn!("[qbz-qt] myqbz_detail bulk_action: unknown id {other}");

@@ -51,7 +51,7 @@ fn main() {
             // (myqbz_qt.rs, blacklist_qt.rs, toast_qt.rs, …) are plain
             // modules and must NOT be listed — only files that declare a
             // #[cxx_qt::bridge] mod belong in this array.
-            rust_files: &["src/bridge.rs", "src/session_bridge.rs", "src/shell_bridge.rs", "src/player_bridge.rs", "src/queue_bridge.rs", "src/home_bridge.rs", "src/viz_bridge.rs", "src/local_bridge.rs", "src/library_bridge.rs", "src/album_bridge.rs", "src/artist_bridge.rs", "src/lyrics_qt.rs", "src/icon_tint_qt.rs", "src/cast_bridge.rs", "src/myqbz_bridge.rs", "src/myqbz_add_bridge.rs", "src/disco_bridge.rs", "src/blacklist_bridge.rs"],
+            rust_files: &["src/bridge.rs", "src/session_bridge.rs", "src/shell_bridge.rs", "src/player_bridge.rs", "src/queue_bridge.rs", "src/home_bridge.rs", "src/viz_bridge.rs", "src/local_bridge.rs", "src/library_bridge.rs", "src/album_bridge.rs", "src/artist_bridge.rs", "src/lyrics_qt.rs", "src/icon_tint_qt.rs", "src/cast_bridge.rs", "src/myqbz_bridge.rs", "src/myqbz_add_bridge.rs", "src/disco_bridge.rs", "src/blacklist_bridge.rs", "src/playlist_picker_bridge.rs", "src/playlist_manager_bridge.rs", "src/playlist_import_bridge.rs", "src/folder_edit_bridge.rs", "src/playlist_edit_bridge.rs"],
             qml_files: &[
                 "qml/LoginScreen.qml",
                 "qml/Main.qml",
@@ -69,8 +69,14 @@ fn main() {
                 "qml/controls/CardMenu.qml",
                 "qml/controls/CardOverlayButton.qml",
                 "qml/controls/CardOverlayRow.qml",
+                "qml/controls/FolderEditPanel.qml",
+                "qml/controls/FolderModals.qml",
                 "qml/controls/GroupHeader.qml",
                 "qml/controls/MyQbzModals.qml",
+                "qml/controls/PlaylistEditModal.qml",
+                "qml/controls/PlaylistImportModal.qml",
+                "qml/controls/PlaylistPickerModal.qml",
+                "qml/controls/PmFolderIcon.qml",
                 "qml/controls/QbzCircleAction.qml",
                 "qml/controls/QbzConfirmModal.qml",
                 "qml/controls/QbzContextMenu.qml",
@@ -117,6 +123,8 @@ fn main() {
                 "qml/shell/PlayerBar.qml",
                 "qml/shell/QueuePanel.qml",
                 "qml/shell/Sidebar.qml",
+                "qml/shell/SidebarFolderFlyout.qml",
+                "qml/shell/SidebarRowMenu.qml",
                 "qml/shell/SidebarNowPlayingDock.qml",
                 "qml/shell/AudioSettingsMenu.qml",
                 "qml/shell/ViewModeMenu.qml",
@@ -160,6 +168,14 @@ fn main() {
                 "qml/shell/LyricsSyncEngine.qml",
                 "qml/shell/NavGestureLayer.qml",
                 "qml/controls/QbzCheckbox.qml",
+                // Library lane (B1-B5): the promoted A-Z strip + the
+                // per-surface bodies LibraryView.qml was split into.
+                "qml/controls/QbzAlphaStrip.qml",
+                "qml/views/library/FeedGridCell.qml",
+                "qml/views/library/FeedListRow.qml",
+                "qml/views/library/LibraryAlbumsList.qml",
+                "qml/views/library/LibraryArtistsPanel.qml",
+                "qml/views/library/LibraryToolbar.qml",
                 "qml/controls/WarningBanner.qml",
                 "qml/settings/AudioSettings.qml",
                 "qml/settings/BlacklistSettings.qml",
@@ -186,7 +202,6 @@ fn main() {
                 "qml/shell/SpectrumBand.qml",
                 "qml/shell/VizSettle.qml",
                 "qml/views/LocalAlbumView.qml",
-                "qml/views/local/AlphaStrip.qml",
                 "qml/views/local/FilterChip.qml",
                 "qml/views/local/FolderSubcard.qml",
                 "qml/views/local/LocalAlbumCollection.qml",
@@ -220,6 +235,24 @@ fn main() {
                 "qml/views/myqbz/MyQbzDetailRow.qml",
                 "qml/views/myqbz/MyQbzDetailView.qml",
                 "qml/views/myqbz/MyQbzGridView.qml",
+                // Playlist Manager (route "playlistmanager"): the router target
+                // plus the TWELVE files of its own module directory. A .qml
+                // missing from this array is absent from the qrc and fails its
+                // PARENT file at load with "… is not a type" — invisible to
+                // cargo check, and it takes the whole view down, not one row.
+                "qml/views/PlaylistManagerView.qml",
+                "qml/views/playlistmanager/PmActionButton.qml",
+                "qml/views/playlistmanager/PmFolderCard.qml",
+                "qml/views/playlistmanager/PmFolderChip.qml",
+                "qml/views/playlistmanager/PmFolderMenu.qml",
+                "qml/views/playlistmanager/PmGridCard.qml",
+                "qml/views/playlistmanager/PmListRow.qml",
+                "qml/views/playlistmanager/PmLocalBadge.qml",
+                "qml/views/playlistmanager/PmMenuRow.qml",
+                "qml/views/playlistmanager/PmPageHead.qml",
+                "qml/views/playlistmanager/PmToolbar.qml",
+                "qml/views/playlistmanager/PmTreeFolderRow.qml",
+                "qml/views/playlistmanager/PmTreePlaylistRow.qml",
             ],
             qrc_files: &qrc_refs,
             ..Default::default()

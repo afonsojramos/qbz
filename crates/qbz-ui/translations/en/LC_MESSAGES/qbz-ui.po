@@ -53,6 +53,16 @@ msgstr "Failed to copy playlist"
 msgid "Playlist has no tracks to copy"
 msgstr "Playlist has no tracks to copy"
 
+msgid "Added {} track"
+msgid_plural "Added {} tracks"
+msgstr[0] "Added {} track"
+msgstr[1] "Added {} tracks"
+
+msgid "Added {} track to {}"
+msgid_plural "Added {} tracks to {}"
+msgstr[0] "Added {} track to {}"
+msgstr[1] "Added {} tracks to {}"
+
 msgid "Added {} track to queue"
 msgid_plural "Added {} tracks to queue"
 msgstr[0] "Added {} track to queue"
@@ -685,3 +695,44 @@ msgid "Removed {} album from blacklist"
 msgid_plural "Removed {} albums from blacklist"
 msgstr[0] "Removed {} album from blacklist"
 msgstr[1] "Removed {} albums from blacklist"
+
+msgid "Playlist imported"
+msgstr "Playlist imported"
+
+msgid "Playlist import failed"
+msgstr "Playlist import failed"
+
+msgid "Not logged in to Qobuz"
+msgstr "Not logged in to Qobuz"
+
+# Qt playlist manager — folder modals (contract block 2)
+
+msgid "Delete folder"
+msgstr "Delete folder"
+
+msgid "Delete the folder “{}”? Its playlists move back to the root."
+msgstr "Delete the folder “{}”? Its playlists move back to the root."
+
+msgid "Choose a folder image"
+msgstr "Choose a folder image"
+
+msgid "Images"
+msgstr "Images"
+
+msgid "Failed to create folder"
+msgstr "Failed to create folder"
+
+msgid "Failed to save folder"
+msgstr "Failed to save folder"
+
+msgid "Failed to delete folder"
+msgstr "Failed to delete folder"
+
+msgid "Failed to rename playlist"
+msgstr "Failed to rename playlist"
+
+msgid "Failed to delete playlist"
+msgstr "Failed to delete playlist"
+
+msgid "Couldn't create the playlist"
+msgstr "Couldn't create the playlist"

@@ -41,11 +41,28 @@ mod myqbz_bridge;
 mod myqbz_add_bridge;
 mod disco_bridge;
 mod blacklist_bridge;
+mod playlist_picker_bridge;
+// Playlist Manager. THREE singletons, not one (contract D2): the manager
+// document + folder list + organisation writes here, the folder modals on
+// QbzFolderEdit and the shared playlist editor on QbzPlaylistEdit — so a
+// folder save cannot perturb an open playlist editor.
+mod playlist_manager_bridge;
+mod folder_edit_bridge;
+mod playlist_edit_bridge;
+// Playlist Importer (public Spotify / Apple Music / Tidal / Deezer playlists).
+// Its own singleton: a separate domain from both the playlist detail and the
+// manager, opened from two shell surfaces that outlive each other, and its
+// modal must survive the one that opened it (05 §5.8).
+mod playlist_import_bridge;
 mod artwork_qt;
 mod atmosphere_qt;
 mod bridge;
 mod discover_config_qt;
 mod fav_cache_qt;
+// The folder-modal controller. A plain module — it declares no
+// #[cxx_qt::bridge], so it must NOT appear in build.rs's rust_files.
+mod folder_edit_qt;
+mod folders_qt;
 mod foryou_qt;
 mod genre_filter_qt;
 mod home_qt;
@@ -54,7 +71,11 @@ mod recently_qt;
 mod recommendations_qt;
 mod library_db_qt;
 mod library_qt;
+mod library_bulk;
+mod library_prefs;
+mod library_sidepanel;
 mod local_library_qt;
+mod local_artist_match;
 mod local_rows;
 mod local_state;
 mod local_plex;
@@ -62,6 +83,7 @@ mod local_albums;
 mod local_tree;
 mod local_artwork;
 mod local_playback;
+mod local_playlist_qt;
 mod local_bridge_ops;
 mod local_bulk;
 mod local_ephemeral;
@@ -106,11 +128,30 @@ mod ambient_qt;
 mod artist_qt;
 mod lyrics_qt;
 mod playback_qt;
+mod playlist_picker_qt;
+// Playlist Importer controller (the `qbz-playlist-import` crate's frontend
+// half). Plain module — it declares no #[cxx_qt::bridge], so it must NOT
+// appear in build.rs's rust_files.
+mod playlist_import_qt;
+// Playlist Manager controller, split three ways up front (the reference is
+// 1053 lines BEFORE the two state machines and two serializers this port
+// adds): _qt = load / cache / toolbar / publish, _rows = the pure model
+// functions, _ops = the optimistic mutations. Plain modules — they declare no
+// #[cxx_qt::bridge], so they must NOT appear in build.rs's rust_files.
+mod playlist_manager_ops;
+mod playlist_manager_qt;
+mod playlist_manager_rows;
+// The SHARED playlist editor's controller (rename · description ·
+// offline-only · delete), driven from the manager's three delegates, the
+// sidebar row menu and the playlist detail header. Plain module — it declares
+// no #[cxx_qt::bridge], so it must NOT appear in build.rs's rust_files.
+mod playlist_edit_qt;
 mod playlist_qt;
 mod queue_qt;
 mod search_qt;
 mod settings_qt;
 mod sidebar_qt;
+mod sleep_timer_qt;
 mod theme_qt;
 mod integrations_qt;
 mod viz_qt;
@@ -153,6 +194,28 @@ static HOME_LOADED: Mutex<bool> = Mutex::new(false);
 /// Whether the favourite-id cache has had its network refresh this session
 /// (`warm_favorites_once`). Reset on logout with the rest.
 static FAV_WARMED: Mutex<bool> = Mutex::new(false);
+
+/// Whether the sidebar tree has been built this session (`load_sidebar_once`).
+///
+/// MODULE-LEVEL on purpose. It used to be a function-local `static` inside
+/// `load_sidebar_once`, which made it PROCESS-scoped with no way to reach it
+/// from `do_logout` — so after logout -> login the latch was still set, the
+/// tree was never rebuilt for the new session, and the sidebar stayed on the
+/// `"[]"` the logout block publishes until the user found the Refresh row.
+/// Owner-reproduced 2026-07-31 (qbz.log 20:33:32 login -> no `sidebar loaded`
+/// until 20:33:47, which is the manual refresh). Reset with its siblings below.
+static SIDEBAR_LOADED: Mutex<bool> = Mutex::new(false);
+
+/// Drop every "once per session" latch. Called at each session ENTRY
+/// (`on_session_entered`) and again on logout, so neither a logout -> login nor
+/// an offline -> login transition can leave a new session reading the previous
+/// one's answer. Each latch's own doc explains what it gates.
+fn reset_session_latches() {
+    *HOME_LOADED.lock().unwrap() = false;
+    *LIBRARY_LOADED.lock().unwrap() = false;
+    *FAV_WARMED.lock().unwrap() = false;
+    *SIDEBAR_LOADED.lock().unwrap() = false;
+}
 
 pub(crate) fn register_qt_thread(thread: CxxQtThread<QbzBridge>) {
     if QT_THREAD.set(thread).is_err() {
@@ -243,9 +306,34 @@ pub(crate) fn on_boot() {
     });
 }
 
-/// Post-login UI state: session header, refresh has-previous-session,
-/// clear login errors/phase, switch to the shell.
-fn enter_shell(session: auth_qt::SessionInfo) {
+/// Everything a SESSION ENTRY owes the shell, whatever the door was.
+///
+/// Extracted from [`enter_shell`] because `start_offline` — the "Start offline"
+/// button, the ONLY way into the app for a user with no network — did NOT run
+/// any of it. It recorded the nav entry, pushed the now-playing model and
+/// switched the screen; the sidebar tree, the 1 Hz playback pump, the
+/// integrations runtime, the streaming-quality seed, the settings document and
+/// the persisted volume were all skipped. On a warm session (login first, then
+/// offline) most of that had already run in the same process and hid the hole;
+/// on a COLD offline start the shell came up with an empty sidebar (no folders,
+/// no LOCAL playlists — the entire library for an account-less user), no
+/// playback pump and the volume at 100 % on an exclusive-mode DAC.
+///
+/// Every step below is either idempotent or self-gates offline
+/// (`load_home_once` / `warm_favorites_once` return early and, importantly,
+/// leave their latch UNSET so a later online session still runs them), so the
+/// two callers can share it verbatim.
+fn on_session_entered() {
+    // The once-per-session latches, reset HERE and not only in `do_logout`:
+    // logging in FROM an offline session (the D2 recovery banner, or the login
+    // screen after "Start offline") never passes through logout — verified in
+    // the owner's 2026-07-31 log, where the OAuth exchange at 20:33:32 follows
+    // the offline entry at 20:32:38 with no `logged out` line between them. A
+    // latch reset only at logout would leave that transition with the OFFLINE
+    // sidebar (folders + locals, no Qobuz playlists) for the rest of the run.
+    // Every caller of this function is one genuine session entry, so this is
+    // the one place that sees them all.
+    reset_session_latches();
     // Phase 2: the shell mounts on the (only) "home" view; seed the nav
     // history and push the current now-playing model onto the bar.
     nav_qt::record("home");
@@ -271,15 +359,6 @@ fn enter_shell(session: auth_qt::SessionInfo) {
     // Phase 10: seed the playback request tier from the persisted
     // streaming-quality pref (Settings > Audio writes it live after this).
     playback_qt::set_streaming_quality(&settings_qt::streaming_quality());
-    session_bridge::ui(move |mut b| {
-                b.as_mut().set_session_user_name(QString::from(session.display_name.as_str()));
-        b.as_mut().set_session_subscription(QString::from(session.subscription.as_str()));
-        b.as_mut().set_has_previous_session(true);
-        b.as_mut().set_login_error(QString::from(""));
-        b.as_mut().set_restore_error(QString::from(""));
-        b.as_mut().set_login_phase(0);
-        b.as_mut().set_screen(QString::from("shell"));
-    });
     // Seed the settings document ONCE at shell entry. It used to be published
     // only by `navigate_to("settings")` and by a language change, so until the
     // user opened Settings the shell read an EMPTY doc — and the now-playing
@@ -298,6 +377,21 @@ fn enter_shell(session: auth_qt::SessionInfo) {
     let restored = crate::settings_qt::read_pref_f32("volume").unwrap_or(1.0).clamp(0.0, 1.0);
     let rt = app();
     spawn(async move { playback_qt::set_volume(&rt, restored).await });
+}
+
+/// Post-login UI state: the shared session entry, then the session header,
+/// has-previous-session, cleared login errors/phase and the screen switch.
+fn enter_shell(session: auth_qt::SessionInfo) {
+    on_session_entered();
+    session_bridge::ui(move |mut b| {
+        b.as_mut().set_session_user_name(QString::from(session.display_name.as_str()));
+        b.as_mut().set_session_subscription(QString::from(session.subscription.as_str()));
+        b.as_mut().set_has_previous_session(true);
+        b.as_mut().set_login_error(QString::from(""));
+        b.as_mut().set_restore_error(QString::from(""));
+        b.as_mut().set_login_phase(0);
+        b.as_mut().set_screen(QString::from("shell"));
+    });
 }
 
 /// Login screen primary button / recovery banner: the system-browser OAuth
@@ -345,7 +439,12 @@ pub(crate) fn cancel_login() {
     session_bridge::ui(|mut b| b.as_mut().set_login_phase(0));
 }
 
-/// "Start offline": unauthenticated offline session -> shell placeholder.
+/// "Start offline": unauthenticated offline session -> the shell.
+///
+/// It runs the SAME [`on_session_entered`] sequence a login does. It used to
+/// run two lines of it (nav + now-playing), which is why an offline session
+/// came up with no sidebar at all — no folders, no local playlists — and the
+/// Refresh row was the only way back. See `on_session_entered`'s header.
 pub(crate) fn start_offline() {
     let runtime = app();
     spawn(async move {
@@ -356,6 +455,9 @@ pub(crate) fn start_offline() {
                 } else {
                     format!("Offline (user {user_id})")
                 };
+                // The full session entry, in the same order the login path
+                // uses it — NOT the two-line subset this used to run.
+                on_session_entered();
                 session_bridge::ui(move |mut b| {
                     b.as_mut().set_session_user_name(QString::from(name.as_str()));
                     b.as_mut().set_session_subscription(QString::from(""));
@@ -364,8 +466,6 @@ pub(crate) fn start_offline() {
                     b.as_mut().set_login_phase(0);
                     b.as_mut().set_screen(QString::from("shell"));
                 });
-                nav_qt::record("home");
-                now_playing::publish_current();
             }
             Err(e) => {
                 log::error!("[qbz-qt] failed to enter offline mode: {e}");
@@ -397,9 +497,25 @@ pub(crate) fn do_logout() {
         // and re-warm the favourite-id cache that `auth_qt::logout` just
         // emptied — otherwise the next account's hearts stay blank until it
         // opens Library.
-        *HOME_LOADED.lock().unwrap() = false;
-        *LIBRARY_LOADED.lock().unwrap() = false;
-        *FAV_WARMED.lock().unwrap() = false;
+        //
+        // The SIDEBAR latch is in that set too, for the same reason plus a
+        // sharper one: the block below publishes `"[]"` into the tree, so a
+        // latched `load_sidebar_once` leaves the next session staring at an
+        // empty sidebar with no way back except the Refresh row
+        // (owner-reproduced 2026-07-31). It is only resettable at all because
+        // it now lives at module level — see SIDEBAR_LOADED.
+        //
+        // `on_session_entered` resets the same set: logout is NOT the only way
+        // a session ends (offline -> login never passes through here).
+        reset_session_latches();
+        // The tree's own CACHE, not just the published document. It holds the
+        // outgoing user's playlists, folders, folder membership, hidden set and
+        // local rows, and NOTHING else clears it — every `publish_sidebar()`
+        // rebuilds straight from it (the Playlist Manager's optimistic
+        // move-to-folder does exactly that), so a leftover cache re-renders the
+        // previous account's tree for the next one. Same class as the
+        // `local_library_qt::reset()` above.
+        sidebar_qt::teardown();
         session_bridge::ui(|mut b| {
             b.as_mut().set_session_user_name(QString::from(""));
             b.as_mut().set_session_subscription(QString::from(""));
@@ -473,17 +589,26 @@ fn warm_favorites_once() {
 // ============================ Sidebar + pins (phase 7) =====================
 
 /// Load + publish the sidebar tree (session entry; idempotent per session).
+///
+/// It goes through [`reload_sidebar_including_local`], NOT [`reload_sidebar`],
+/// and it has no offline early return of its own. A session that STARTS
+/// offline used to get an entirely empty sidebar — no folders, no local
+/// playlists — which is the whole library for a user with no Qobuz account.
+/// `sidebar_qt::load` gates only its Qobuz fetch (preserving whatever the
+/// cache already holds), so offline this reads folders + locals and publishes
+/// them; online it is the same call it always was.
+/// The latch is [`SIDEBAR_LOADED`], a MODULE-level static reset by `do_logout`
+/// — see its declaration for the logout -> login bug a function-local one
+/// caused.
 fn load_sidebar_once() {
-    static LOADED: Mutex<bool> = Mutex::new(false);
-    if *LOADED.lock().unwrap() {
-        return;
+    {
+        let mut guard = SIDEBAR_LOADED.lock().unwrap();
+        if *guard {
+            return;
+        }
+        *guard = true;
     }
-    if offline_fwd::engine().status().is_offline() {
-        log::info!("[qbz-qt] sidebar load skipped (offline session)");
-        return;
-    }
-    *LOADED.lock().unwrap() = true;
-    reload_sidebar();
+    reload_sidebar_including_local();
 }
 
 /// Fetch playlists + folders and publish the flattened entries.
@@ -498,7 +623,32 @@ pub(crate) fn reload_sidebar() {
     });
 }
 
-fn publish_sidebar() {
+/// Same rebuild, but it also runs OFFLINE.
+///
+/// `reload_sidebar` bails while offline because its Qobuz fetch cannot
+/// succeed. The sidebar's LOCAL playlists can still change in that state — the
+/// picker's D8 branch creates one offline — and for a user with no Qobuz
+/// account they are the entire sidebar, so a no-op there means the playlist
+/// they just created never appears. `sidebar_qt::load` already reads the
+/// locals independently of the Qobuz fetch and survives it failing or being
+/// gate-refused, so there is nothing to guard against here beyond one wasted
+/// (and already-handled) request.
+pub(crate) fn reload_sidebar_including_local() {
+    let runtime = app();
+    spawn(async move {
+        sidebar_qt::load(&runtime).await;
+        publish_sidebar();
+    });
+}
+
+/// Republish the flattened entries from the sidebar CACHE — no fetch, no DB
+/// read.
+///
+/// `pub(crate)` since the Playlist Manager landed: its optimistic move-to-folder
+/// patches `sidebar_qt::CACHE` in place and then republishes from it, which is
+/// the only refresh that is correct offline AND does not cost a round trip
+/// (contract D10).
+pub(crate) fn publish_sidebar() {
     let entries = sidebar_qt::rebuild();
     let json = serde_json::to_string(&entries).unwrap_or_else(|_| "[]".into());
     log::debug!("[qbz-qt] sidebar published: {} entries ({} bytes)", entries.len(), json.len());
@@ -523,6 +673,39 @@ pub(crate) fn sidebar_set_search(query: &str) {
 pub(crate) fn sidebar_toggle_folder(id: &str) {
     sidebar_qt::toggle_folder(id);
     publish_sidebar();
+}
+
+/// Mini-rail folder flyout: publish that folder's playlists (contract §4.7).
+///
+/// This exists so the flyout does NOT have to force-expand the folder to see
+/// its children. `sidebar_json` only carries a folder's rows while it is
+/// EXPANDED, so the old path called `sidebar_toggle_folder` on the way in — a
+/// persistent side effect (the folder stayed open once the sidebar was
+/// re-opened) that the reference does not have. `sidebar_qt::folder_popup_rows`
+/// answers from the session CACHE instead, which is also what makes this work
+/// offline and on the Qt thread.
+///
+/// `count` is `rows.len()`, deliberately: the reference takes it from the entry
+/// row, which is computed AFTER the playlist search filter that
+/// `load_folder_popup` does not apply, so its header count and its list can
+/// legitimately disagree. `folderName` is a best-effort cache read — the flyout
+/// takes the name it renders from the clicked entry, synchronously, because
+/// this document lands a later event-loop turn.
+pub(crate) fn sidebar_open_folder_popup(folder_id: &str) {
+    let rows = sidebar_qt::folder_popup_rows(folder_id);
+    let count = rows.len();
+    let name = sidebar_qt::folder_name(folder_id).unwrap_or_default();
+    let doc = serde_json::json!({
+        "folderId": folder_id,
+        "folderName": name,
+        "count": count,
+        "rows": rows,
+    });
+    let json = doc.to_string();
+    log::debug!("[qbz-qt] sidebar folder popup: {folder_id} ({count} rows)");
+    shell_bridge::ui(move |mut b| {
+        b.as_mut().set_sidebar_folder_popup_json(QString::from(json.as_str()));
+    });
 }
 
 /// Sidebar cover dispatch: plain url list (the tree's collage is
@@ -648,7 +831,48 @@ pub(crate) fn load_release_section(artist_id: String, release_type: String, offs
 
 /// Sidebar "+" — create an empty playlist with the default name, then
 /// reload the tree (the Slint flow opens a naming modal — POC-NOTE).
+///
+/// OFFLINE it creates a LOCAL playlist instead, which is the reference's D8
+/// rule collapsed onto this port's no-modal shortcut: `on_create_playlist`
+/// (qbz/src/main.rs:21109) opens the create modal with `offline_only` set ON
+/// **and LOCKED** while offline, so creation there always produces a local
+/// playlist. Without this arm the "+" was a fully lit, pointer-cursor button
+/// whose entire offline effect was `log::error!` — the dead-control class the
+/// owner's standing rule forbids, on the ONE surface a user with no Qobuz
+/// account owns. `offline_only = true` matches the picker's own offline create
+/// (`playlist_picker_qt.rs:555-559`): the playlist is never offered for upload
+/// and never reaches a QConnect push.
 pub(crate) fn create_playlist() {
+    if offline_fwd::engine().status().is_offline() {
+        // The SAME default name the online arm uses — one msgid, one label,
+        // whichever door the user came through.
+        let name = qbz_i18n::t("New Playlist");
+        spawn(async move {
+            let created = tokio::task::spawn_blocking(move || {
+                local_playlist_qt::create_blocking(&name, None, true)
+            })
+            .await
+            .ok()
+            .flatten();
+            match created {
+                Some(new_id) => {
+                    log::info!("[qbz-qt] local playlist created offline: {new_id}");
+                    // The offline-safe verb — `reload_sidebar` early-returns
+                    // here, which is exactly this branch.
+                    reload_sidebar_including_local();
+                    // Land on it, like the online arm does. `open_playlist`
+                    // routes a `local:` id to the local loader and does NOT
+                    // offline-gate it.
+                    open_playlist(new_id);
+                }
+                None => {
+                    log::error!("[qbz-qt] offline local playlist create failed");
+                    toast_qt::error(qbz_i18n::t("Couldn't create the playlist"));
+                }
+            }
+        });
+        return;
+    }
     let runtime = app();
     spawn(async move {
         match runtime
@@ -795,6 +1019,31 @@ pub(crate) fn queue_toggle_favorite(kind: String, id: String) {
     spawn(async move { queue_qt::toggle_favorite(&runtime, &kind, &id).await });
 }
 
+pub(crate) fn queue_toggle_stop_after(id: String) {
+    let runtime = app();
+    spawn(async move { queue_qt::toggle_stop_after(&runtime, &id).await });
+}
+
+pub(crate) fn queue_toggle_infinite_play() {
+    let runtime = app();
+    spawn(async move { queue_qt::toggle_infinite_play(&runtime).await });
+}
+
+pub(crate) fn queue_save_as_playlist() {
+    let runtime = app();
+    spawn(async move { queue_qt::save_as_playlist(&runtime).await });
+}
+
+pub(crate) fn queue_add_to_playlist(index: i32) {
+    let runtime = app();
+    spawn(async move { queue_qt::add_to_playlist(&runtime, index.max(0) as usize).await });
+}
+
+pub(crate) fn queue_panel_opened() {
+    let runtime = app();
+    spawn(async move { queue_qt::panel_opened(&runtime).await });
+}
+
 /// AlbumView header Shuffle.
 pub(crate) fn play_album_shuffled(album_id: String) {
     let runtime = app();
@@ -872,6 +1121,21 @@ pub(crate) fn play_track(track_id: u64) {
 
 /// Open the playlist detail view (sidebar row / playlist card click).
 pub(crate) fn open_playlist(playlist_id: String) {
+    // LOCAL playlists (`local:<uuid>`) route to their own loader and open
+    // REGARDLESS of connectivity. They are the whole feature for people using
+    // QBZ as a player without Qobuz — refusing them while offline would gate
+    // local files behind a network the user does not have.
+    if local_playlist_qt::is_local_id(&playlist_id) {
+        nav_qt::record("playlist");
+        ui(|mut b| b.as_mut().set_playlist_json(QString::from("{}")));
+        let runtime = app();
+        spawn(async move {
+            if !local_playlist_qt::load(&runtime, &playlist_id).await {
+                log::warn!("[qbz-qt] local playlist {playlist_id} load failed");
+            }
+        });
+        return;
+    }
     if offline_fwd::engine().status().is_offline() {
         return;
     }
@@ -883,6 +1147,9 @@ pub(crate) fn open_playlist(playlist_id: String) {
     // Clear the previous playlist before the fetch — same stale-render as the
     // album and artist views had.
     ui(|mut b| b.as_mut().set_playlist_json(QString::from("{}")));
+    // A Qobuz detail must not inherit the previous LOCAL detail's snapshot, or
+    // its rows would resolve against the wrong playlist's queue.
+    local_playlist_qt::clear_open_snapshot();
     let runtime = app();
     spawn(async move {
         if let Err(e) = playlist_qt::load(&runtime, pid).await {
@@ -914,6 +1181,13 @@ pub(crate) fn myqbz_open_detail(id: String) {
 pub(crate) fn playlist_play_all() {
     let runtime = app();
     spawn(async move {
+        // A LOCAL detail plays from its OWN resolved snapshot: its rows are a
+        // mix of catalog, file and Plex tracks that the Qobuz play-all path
+        // cannot build, and an offline-only one has to stamp the queue.
+        if local_playlist_qt::open_id().is_some() {
+            local_playlist_qt::play(&runtime, "").await;
+            return;
+        }
         if let Err(e) = playlist_qt::play_all(&runtime).await {
             log::error!("[qbz-qt] playlist play-all failed: {e}");
         }
@@ -975,9 +1249,66 @@ pub(crate) fn playlist_enqueue_track(track_id: String, mode: String) {
     });
 }
 
-pub(crate) fn playlist_remove_track(playlist_track_id: u64) {
+/// Row ⋯ "Remove from playlist", BY DISPLAY ROW ID.
+///
+/// The id is a string because a LOCAL playlist's rows are not all catalog
+/// tracks: a local-file row's id is a library row id, an unresolved one is
+/// `"plex:<key>"` or a bare path. The Qobuz arm parses it back to the
+/// membership row id, which for a Qobuz playlist IS the catalog id
+/// (`playlist_qt.rs:364` sets `playlist_track_id: track.id`).
+///
+/// Routing by OPEN DETAIL, not by the id's shape: `local_playlist_qt::open_id`
+/// is `Some` only while a `local:` detail is the open page (`open_playlist`
+/// clears the snapshot before a Qobuz load), and it is the same test
+/// `playlist_play_all` already routes on.
+pub(crate) fn playlist_remove_track(row_id: String) {
     let runtime = app();
-    spawn(async move { playlist_qt::remove_track(&runtime, playlist_track_id).await });
+    spawn(async move {
+        if local_playlist_qt::open_id().is_some() {
+            local_playlist_qt::remove_row(&runtime, &row_id).await;
+            return;
+        }
+        let Ok(playlist_track_id) = row_id.parse::<u64>() else {
+            log::warn!("[qbz-qt] playlist remove: non-numeric row id {row_id}");
+            return;
+        };
+        playlist_qt::remove_track(&runtime, playlist_track_id).await
+    });
+}
+
+/// Drag-reorder drop: move the visible row `from` to insertion slot `slot`.
+///
+/// Routes like the chevrons below: a LOCAL playlist writes the repo `position`
+/// order directly (no sidecar — the repo order IS the order), a Qobuz one
+/// rebuilds the custom-order sidecar. Same split as the reference
+/// (`main.rs:20815` `on_reorder_track`).
+pub(crate) fn playlist_reorder(from: i32, slot: i32) {
+    if from < 0 || slot < 0 || slot == from || slot == from + 1 {
+        return;
+    }
+    if local_playlist_qt::open_id().is_some() {
+        let runtime = app();
+        spawn(async move {
+            local_playlist_qt::reorder_row(&runtime, from as usize, slot as usize).await;
+        });
+        return;
+    }
+    playlist_qt::reorder_track(from as usize, slot as usize);
+}
+
+/// Per-row reorder chevrons: -1 = up, +1 = down. Same routing as the drag.
+pub(crate) fn playlist_move_row(row_id: String, delta: i32) {
+    if delta == 0 {
+        return;
+    }
+    if local_playlist_qt::open_id().is_some() {
+        let runtime = app();
+        spawn(async move {
+            local_playlist_qt::move_row(&runtime, &row_id, delta).await;
+        });
+        return;
+    }
+    playlist_qt::move_row(&row_id, delta);
 }
 
 // --- Drag & drop (DragState + DragActions, state.slint parity) -----------

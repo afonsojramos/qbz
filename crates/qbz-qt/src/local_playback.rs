@@ -329,17 +329,62 @@ pub async fn play_folder_track(runtime: &Runtime, folder: String, row_id: i64) {
     play_rows(runtime, tracks, start, false).await;
 }
 
-/// Tracks tab row click: the ALREADY-LOADED page set becomes the queue so
-/// playback continues down the list. No DB re-query — the raw rows are kept
-/// by the loader, which is also what makes a merged PLEX row playable (it has
-/// no `local_tracks` row to re-query).
-pub async fn play_tracks_from(runtime: &Runtime, row_id: i64) {
+/// Reorder the loaded raw rows into the order the Tracks tab is RENDERING and
+/// locate the clicked row inside it.
+///
+/// `None` — and the caller falls back to the SQL-page order — when the clicked
+/// id does not resolve inside the ordered list. Same guard, same reason as
+/// `library_qt::order_by_visible` (the port of `playback.rs::order_by_visible`,
+/// :3408-3428): better the old queue than a queue that starts on the wrong row.
+///
+/// Ids arrive as strings because that is what the QML rows carry
+/// (`local_rows::TrackRow.id`); unparseable ones are dropped.
+pub(crate) fn order_by_visible(
+    rows: &[LocalTrack],
+    visible_ids: &[String],
+    clicked_id: i64,
+) -> Option<(Vec<LocalTrack>, usize)> {
+    let by_id: std::collections::HashMap<i64, &LocalTrack> =
+        rows.iter().map(|t| (t.id, t)).collect();
+    let ordered: Vec<LocalTrack> = visible_ids
+        .iter()
+        .filter_map(|id| id.parse::<i64>().ok())
+        .filter_map(|id| by_id.get(&id).map(|t| (*t).clone()))
+        .collect();
+    let idx = ordered.iter().position(|t| t.id == clicked_id)?;
+    Some((ordered, idx))
+}
+
+/// Tracks tab row click (PARITY-DEBT #14): the ALREADY-LOADED page set becomes
+/// the queue so playback continues down the list, in the order ON SCREEN. No
+/// DB re-query — the raw rows are kept by the loader, which is also what makes
+/// a merged PLEX row playable (it has no `local_tracks` row to re-query).
+///
+/// `visible_ids_json` is the JSON string array of the track ids the tab is
+/// CURRENTLY rendering, in render order; `clicked_id` is the row that was hit.
+///
+/// The Tracks tab's SORT is server-side (it defines the pagination order), but
+/// its GROUP modes ("by album" / "by artist" / "by name") are a client-side
+/// visual reorder on top of the loaded pages — the reference is explicit that
+/// they "keep their client-side visual reorder on top" (commit `e379aa65`).
+/// Queueing `tracks_raw` therefore played the SQL order while the user was
+/// looking at the grouped one: click row 3 of the "Air" group and you heard
+/// whatever happened to sit at SQL offset 3. The order can only come from the
+/// view (it is derived in QML, like `LibraryView`'s), so it comes down as an
+/// id array and the raw rows play the part of the authoritative cache.
+pub async fn play_tracks_visible(runtime: &Runtime, visible_ids_json: String, clicked_id: i64) {
     let rows: Vec<LocalTrack> = state(|s| s.tracks_raw.clone());
     if rows.is_empty() {
         return;
     }
-    let start = rows.iter().position(|t| t.id == row_id).unwrap_or(0);
-    play_rows(runtime, rows, start, false).await;
+    let ids: Vec<String> = serde_json::from_str(&visible_ids_json).unwrap_or_default();
+    match order_by_visible(&rows, &ids, clicked_id) {
+        Some((ordered, start)) => play_rows(runtime, ordered, start, false).await,
+        None => {
+            let start = rows.iter().position(|t| t.id == clicked_id).unwrap_or(0);
+            play_rows(runtime, rows, start, false).await;
+        }
+    }
 }
 
 /// Look up ONE raw row by id: the loaded Tracks page first, then the open
@@ -409,7 +454,57 @@ pub async fn enqueue(runtime: &Runtime, kind: String, id: String, mode: String) 
 
 #[cfg(test)]
 mod tests {
-    use super::plex_rating_key;
+    use super::{order_by_visible, plex_rating_key};
+    use qbz_library::LocalTrack;
+
+    fn track(id: i64, title: &str) -> LocalTrack {
+        LocalTrack {
+            id,
+            title: title.to_string(),
+            ..Default::default()
+        }
+    }
+
+    fn ids(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn titles(rows: &[LocalTrack]) -> Vec<&str> {
+        rows.iter().map(|t| t.title.as_str()).collect()
+    }
+
+    /// PARITY-DEBT #14: the queue follows the VISIBLE order (here: reversed by
+    /// a group mode), not the SQL page order the loader cached.
+    #[test]
+    fn queue_follows_the_visible_order() {
+        let rows = vec![track(1, "a"), track(2, "b"), track(3, "c")];
+        let (ordered, start) =
+            order_by_visible(&rows, &ids(&["3", "1", "2"]), 1).expect("clicked row resolves");
+        assert_eq!(titles(&ordered), vec!["c", "a", "b"]);
+        assert_eq!(start, 1);
+    }
+
+    /// Ids the loaded page does not have (a row scrolled out of the raw cache,
+    /// a stale report) are dropped rather than poisoning the queue, and the
+    /// start index still points at the clicked row AFTER the drop.
+    #[test]
+    fn unknown_and_unparseable_ids_are_dropped() {
+        let rows = vec![track(1, "a"), track(2, "b")];
+        let (ordered, start) = order_by_visible(&rows, &ids(&["99", "not-a-number", "2", "1"]), 1)
+            .expect("clicked row resolves");
+        assert_eq!(titles(&ordered), vec!["b", "a"]);
+        assert_eq!(start, 1);
+    }
+
+    /// The clicked row not being in the visible list is the one case the
+    /// caller must NOT start a queue from: `None` sends it to the SQL-order
+    /// fallback instead of playing the wrong track.
+    #[test]
+    fn clicked_row_outside_the_visible_list_is_none() {
+        let rows = vec![track(1, "a"), track(2, "b")];
+        assert!(order_by_visible(&rows, &ids(&["2"]), 1).is_none());
+        assert!(order_by_visible(&rows, &[], 1).is_none());
+    }
 
     /// LocalLibrary path: the hint IS the raw rating key (`local_queue_track`
     /// stamps `file_path`, which for a Plex row is the server key). Unchanged

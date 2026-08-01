@@ -198,16 +198,36 @@ async fn apply(rows: Vec<LocalTrack>, action: &str) -> bool {
             crate::myqbz_add_qt::open_items(crate::myqbz_add_qt::track_items_from_local(&rows));
             false
         }
-        // GAP (not a half-path): this port has no playlist picker modal — the
-        // Slint routes this into `playlist_picker::open_multi`, which was not
-        // ported. Same gap the PlayerBar / NowPlayingBarSmall menus document.
+        // The app-wide picker in LOCAL MODE — the Slint's
+        // `playlist_picker::open_multi(&ids, local = true)`. The refs are
+        // SOURCE-AWARE (`local_picker_ref_for_track`: Plex rows as
+        // "plex:<rating key>", everything else as its library row id, resolved
+        // at insert time), and they are carried as refs the whole way: the
+        // picker's `Payload::LocalRefs` is the type that keeps a library row
+        // id from ever reaching the Qobuz endpoint, where it would mean a
+        // different track.
+        //
+        // Returns FALSE (keep the selection) for the same reason
+        // `add-to-mixtape` does: the picker is still open and a failed write
+        // is retried from the same modal.
         "add-to-playlist" => {
-            log::warn!(
-                "[qbz-qt] local bulk {action}: no picker seam in this port ({} row(s) dropped)",
-                rows.len()
-            );
+            if rows.is_empty() {
+                return false;
+            }
+            let refs: Vec<String> = rows
+                .iter()
+                .map(crate::local_playlist_qt::local_picker_ref_for_track)
+                .collect();
+            crate::playlist_picker_qt::open_for_local_refs(&crate::app(), refs);
             false
         }
+        // NO CALLER as of 2026-07-31: no bulk bar offers this action any more.
+        // The Local Library Tracks tab used to (LocalTracksTab.qml), and the
+        // owner removed it as a context error — that tab is the whole local
+        // library, not a favourites surface. The arm is kept because the
+        // vocabulary is shared with the surfaces that WILL want it once local
+        // hearts land; it must stay a no-op until then.
+        //
         // GAP: local hearts are not wired in this port at all — `map_track`
         // publishes `isFavorite: false` unconditionally, and the local
         // favorites store is keyed by FILE PATH behind a private handle in

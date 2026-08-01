@@ -20,6 +20,11 @@ Rectangle {
 
     QbzTheme { id: theme }
 
+    /// Mirrors AlbumListRow.selectMode: the rows below grow an 18px leading
+    /// checkbox cell in Library > Albums multi-select, and the header has to
+    /// inset by the same amount or every column label drifts off its column.
+    property bool selectMode: false
+
     // AlbumListCols: art 52, quality 150, year 64, overflow 36, gap 12.
     readonly property int colArt: 52
     readonly property int colQuality: 150
@@ -46,10 +51,12 @@ Rectangle {
         anchors.rightMargin: 12
         spacing: root.colGap
 
+        Item { visible: root.selectMode; width: visible ? 18 : 0; height: 1 }
         Item { width: root.colArt; height: 1 }
         ColLabel {
             width: parent.width - root.colArt - root.colQuality - root.colYear
                 - root.colOverflow - 4 * root.colGap
+                - (root.selectMode ? 18 + root.colGap : 0)
             text: QbzSession.tr("ITEM", QbzSession.trRev)
             elide: Text.ElideRight
         }

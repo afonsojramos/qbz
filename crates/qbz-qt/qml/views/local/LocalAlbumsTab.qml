@@ -127,7 +127,7 @@ Item {
                 onEnqueueRequested: function (id, m) { QbzLocal.enqueue("album", id, m) }
                 onToggleSelect: function (id) { root.view.toggleAlbumSelected(id) }
             }
-            AlphaStrip {
+            QbzAlphaStrip {
                 visible: root.view.albumsGroup === "alpha"
                     && collection.alphaJumps.length > 0
                 anchors.right: parent.right

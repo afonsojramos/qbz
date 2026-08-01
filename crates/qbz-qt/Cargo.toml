@@ -43,6 +43,12 @@ qbz-source = { path = "../qbz-source" }
 qbz-cast = { path = "../qbz-cast" }
 qbz-plex = { path = "../qbz-plex" }
 qbz-lyrics = { path = "../qbz-lyrics" }
+# Playlist Importer: the provider scrapers (Spotify / Apple Music / Tidal /
+# Deezer), the Qobuz matcher and the playlist creation. Headless and
+# frontend-agnostic (ADR-006) — the same crate the Slint app uses
+# (crates/qbz/Cargo.toml), so the two frontends share one importer instead of
+# each growing its own. src/playlist_import_qt.rs drives it.
+qbz-playlist-import = { path = "../qbz-playlist-import" }
 qbz-text-utils = { path = "../qbz-text-utils" }
 qbz-credentials = { path = "../qbz-credentials" }
 qbz-i18n = { path = "../qbz-i18n" }

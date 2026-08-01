@@ -21,8 +21,30 @@ use qbz_library::{LibraryDatabase, LibraryError};
 
 /// `<data_dir>/qbz/users/<uid>/library.db` — the same per-user path the
 /// reference uses, so the local organization data is shared between builds.
+///
+/// `unwrap_or(0)` — the GUEST profile, not a bail. This used to `?` out when
+/// `last_user_id` was absent, which is the state of a machine that has never
+/// completed a Qobuz login: for that user `db_path()` was permanently `None`,
+/// so `with_db` answered `None` to every call and the ENTIRE local-playlist
+/// feature (plus folders, local favourites and the mixtape tables) simply did
+/// not exist — for exactly the population local playlists are FOR. It survived
+/// review because every developer machine has logged in at least once.
+///
+/// `users/0/` is the designed home for that data, not an invention:
+/// `AppRuntime::activate_offline` resolves its own user with the SAME
+/// `load_last_user_id().unwrap_or(0)`, and `adopt_guest_profile` (#553)
+/// renames `users/0/` onto the account on first login precisely so work done
+/// logged-off follows the user in. The reference has no such hole because it
+/// binds a session-scoped id instead (`library_db::set_user(user_id)` from
+/// `init_shell_for_user`, which qbz/src/main.rs:172 documents as shared by the
+/// ONLINE AND OFFLINE entries) — this is the port's substitution of
+/// `load_last_user_id()` for that id, made to agree with it in the one case
+/// where they diverged.
+///
+/// Reads still pass `create: false`, so nothing is conjured by listing; only a
+/// write brings `users/0/library.db` into existence.
 fn db_path() -> Option<PathBuf> {
-    let uid = UserDataPaths::load_last_user_id()?;
+    let uid = UserDataPaths::load_last_user_id().unwrap_or(0);
     Some(
         dirs::data_dir()?
             .join("qbz")

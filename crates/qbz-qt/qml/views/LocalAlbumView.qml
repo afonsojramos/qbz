@@ -11,6 +11,12 @@
 // Local actions ONLY: play all / shuffle / edit tags / add to playlist /
 // add to Mixtape. A multi-artist album gets the "+N more artists" expander;
 // a multi-disc album gets the disc dividers with their per-disc ⋯ menu.
+//
+// ONE deliberate ADDITION over the reference (owner, 2026-07-31): the
+// toolbar's multi-select toggle and its bulk bar. The Slint puts those on the
+// QOBUZ album page (AlbumPageView.slint:752-808) and not on the local one,
+// which is an asymmetry, not a design — the local page is where the owner
+// asked for them. See the `multiSelect` block below for the wiring.
 
 import QtQuick
 import QtQuick.Window
@@ -73,6 +79,58 @@ Rectangle {
         }
         return out
     }
+    // ------------------------- multi-select ------------------------------
+    // The Slint's LOCAL album page has no bulk bar; its QOBUZ one does
+    // (album/AlbumPageView.slint:752-808 — the 30x30 square toggle in the
+    // toolbar beside the search box, then MultiSelectBar over the rows).
+    // Owner call 2026-07-31: close that asymmetry here, in the local page.
+    //
+    // Selection lives in QML, exactly as the two Local Library tabs keep
+    // theirs (LocalLibraryView.qml:684-720) — the ids go down per action, so
+    // `select-all` / `clear` never reach Rust. Scope is "track": the album
+    // detail's rows ARE `LocalState.detail_raw` (local_album_actions.rs:154
+    // caches every version's rows there), which is one of the two caches
+    // `local_bulk::resolve_blocking` reads for that scope, so a Plex row with
+    // no DB id resolves too.
+    property bool multiSelect: false
+    property var selected: ({})
+    readonly property int selectedCount: Object.keys(selected).length
+    // A republish means the track list changed underneath the selection — a
+    // different album, or the version picker swapping every row for another
+    // physical copy's. Both invalidate the ids, so the selection goes and
+    // select mode with it (the same "leaving drops the selection" contract
+    // `local_bulk::set_select_mode` documents for the tree rail).
+    onDocChanged: { multiSelect = false; selected = ({}) }
+    function toggleSelected(id) {
+        var s = Object.assign({}, selected)
+        if (s[id]) delete s[id]; else s[id] = true
+        selected = s
+    }
+    /// Selected ids in the order they are ON SCREEN, so a bulk enqueue lands
+    /// in disc/track order. `Object.keys` on the selection map would sort the
+    /// numeric-looking keys ascending by row id, which is the INSERT order of
+    /// the scan, not the album's. Iterates `tracks`, not `visibleTracks`, so a
+    /// selection made before typing in the search box still enqueues whole.
+    function selectedIdsInOrder() {
+        var out = []
+        for (var i = 0; i < tracks.length; i++) {
+            if (selected[tracks[i].id] === true) out.push(tracks[i].id)
+        }
+        return out
+    }
+    function bulkAction(action) {
+        if (action === "clear") { selected = ({}); return }
+        if (action === "select-all") {
+            // What the user can SEE: the search box is a view filter, so
+            // "select all" means the filtered set (LocalLibraryView.qml:715).
+            var s = {}
+            for (var i = 0; i < visibleTracks.length; i++) s[visibleTracks[i].id] = true
+            selected = s
+            return
+        }
+        QbzLocal.bulkAction("track", JSON.stringify(selectedIdsInOrder()), action)
+    }
+
     // Disc divider before the first row of each disc on a multi-disc album
     // (0 = flat list, as the Slint's disc-header-number).
     function discHeader(i) {
@@ -221,7 +279,12 @@ Rectangle {
                 phase: root.skelPhase
             }
 
-            // ---- Toolbar: quality badge + track search ----
+            // ---- Toolbar: quality badge + track search + select toggle ----
+            // AlbumPageView.slint:686-786 numbers: 52px band, the search box
+            // cut from 280 to 168 "so the toolbar gives room to the square
+            // select button beside it", 16px gap, a 30x30 radius-6 square
+            // (NOT a round CircleAction) that goes accent while select mode
+            // is on.
             Item {
                 width: parent.width
                 height: 52
@@ -231,52 +294,117 @@ Rectangle {
                     tier: root.album ? (root.album.qualityTier || "") : ""
                     detail: root.album ? (root.album.qualityDetail || "") : ""
                 }
-                Rectangle {
+                Row {
                     anchors.right: parent.right
                     anchors.verticalCenter: parent.verticalCenter
-                    width: 280
-                    height: 34
-                    radius: 6
-                    border.width: 1
-                    border.color: theme.borderSubtle
-                    color: theme.surfaceElevated
-                    Row {
-                        anchors.fill: parent
-                        anchors.leftMargin: 10
-                        anchors.rightMargin: 10
-                        spacing: 7
-                        QbzIcon {
-                            name: "search"
-                            width: 14
-                            height: 14
-                            anchors.verticalCenter: parent.verticalCenter
-                            tintName: "muted"
-                        }
-                        Item {
-                            width: parent.width - 21
-                            height: parent.height
-                            clip: true
-                            TextInput {
-                                id: searchInput
-                                anchors.fill: parent
-                                color: theme.textPrimary
-                                font.pixelSize: 13
-                                verticalAlignment: Text.AlignVCenter
-                                selectByMouse: true
-                                onTextEdited: root.trackQuery = text
+                    spacing: 16
+                    Rectangle {
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 168
+                        height: 34
+                        radius: 6
+                        border.width: 1
+                        border.color: theme.borderSubtle
+                        color: theme.surfaceElevated
+                        Row {
+                            anchors.fill: parent
+                            anchors.leftMargin: 10
+                            anchors.rightMargin: 10
+                            spacing: 7
+                            QbzIcon {
+                                name: "search"
+                                width: 14
+                                height: 14
+                                anchors.verticalCenter: parent.verticalCenter
+                                tintName: "muted"
                             }
-                            Text {
-                                visible: searchInput.text === ""
-                                anchors.fill: parent
-                                text: QbzSession.tr("Search tracks...", QbzSession.trRev)
-                                color: theme.textMuted
-                                font.pixelSize: 13
-                                verticalAlignment: Text.AlignVCenter
+                            Item {
+                                width: parent.width - 21
+                                height: parent.height
+                                clip: true
+                                TextInput {
+                                    id: searchInput
+                                    anchors.fill: parent
+                                    color: theme.textPrimary
+                                    font.pixelSize: 13
+                                    verticalAlignment: Text.AlignVCenter
+                                    selectByMouse: true
+                                    onTextEdited: root.trackQuery = text
+                                }
+                                Text {
+                                    visible: searchInput.text === ""
+                                    anchors.fill: parent
+                                    text: QbzSession.tr("Search tracks...", QbzSession.trRev)
+                                    color: theme.textMuted
+                                    font.pixelSize: 13
+                                    verticalAlignment: Text.AlignVCenter
+                                }
+                            }
+                        }
+                    }
+                    // Multi-select toggle. Unlike the Qobuz AlbumView.qml's
+                    // (dimmed and inert — that bridge has no bulk seam), this
+                    // one is LIVE: QbzLocal.bulkAction already carries the
+                    // "track" scope this page needs.
+                    Rectangle {
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 30
+                        height: 30
+                        radius: 6
+                        border.width: 1
+                        border.color: root.multiSelect ? theme.accent : theme.borderSubtle
+                        color: (root.multiSelect || selectArea.containsMouse)
+                            ? theme.surfaceHover
+                            : theme.surfaceElevated
+                        QbzIcon {
+                            name: "square-check-big"
+                            width: 15
+                            height: 15
+                            anchors.centerIn: parent
+                            tintName: root.multiSelect
+                                ? "accent"
+                                : (selectArea.containsMouse ? "textPrimary" : "secondary")
+                        }
+                        MouseArea {
+                            id: selectArea
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                root.multiSelect = !root.multiSelect
+                                if (!root.multiSelect) root.selected = ({})
                             }
                         }
                     }
                 }
             }
+
+            // ---- Bulk action bar ----
+            // Only actions with a LIVE backend, in a context where they mean
+            // something. Dropped from the Slint album bar's seven:
+            //   * add-to-favorites / remove-favorites — local hearts are not
+            //     wired at all (local_bulk.rs's arm is a log-only no-op, and
+            //     the store is keyed by file path behind a private handle);
+            //   * make-offline — these tracks ARE the local files.
+            // Added: add-to-mixtape, which the two Local Library bars already
+            // offer and which `local_bulk::apply` serves live.
+            QbzMultiSelectBar {
+                visible: root.multiSelect
+                width: parent.width
+                selectedCount: root.selectedCount
+                actions: [
+                    { "id": "select-all", "label": QbzSession.tr("Select all", QbzSession.trRev), "icon": "square-check-big", "danger": false, "needsSelection": false },
+                    { "id": "play-next", "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-start", "danger": false, "needsSelection": true },
+                    { "id": "play-later", "label": QbzSession.tr("Play later", QbzSession.trRev), "icon": "list-plus", "danger": false, "needsSelection": true },
+                    { "id": "queue", "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "danger": false, "needsSelection": true },
+                    { "id": "add-to-playlist", "label": QbzSession.tr("Add to playlist", QbzSession.trRev), "icon": "list-music", "danger": false, "needsSelection": true },
+                    { "id": "add-to-mixtape", "label": QbzSession.tr("Add to Mixtape/Collection", QbzSession.trRev), "icon": "cassette-tape", "danger": false, "needsSelection": true },
+                    { "id": "clear", "label": QbzSession.tr("Clear", QbzSession.trRev), "icon": "x", "danger": false, "needsSelection": true },
+                ]
+                onAction: function (id) { root.bulkAction(id) }
+            }
+            // The Slint's 8px gutter under the bar (AlbumPageView.slint:808).
+            Item { visible: root.multiSelect; width: 1; height: 8 }
 
             // ---- Column header ----
             // rows/TrackListHeader.qml, on rows/TrackCols.qml geometry — the
@@ -375,11 +503,17 @@ Rectangle {
                                 ? trackBlock.modelData.number : trackBlock.index + 1
                             showAlbum: false
                             showArtwork: false
+                            // The checkbox LocalTrackRow already draws over
+                            // the number cell for the Tracks tab — no fork,
+                            // no new component (rule 5).
+                            selectMode: root.multiSelect
+                            checked: root.selected[trackBlock.modelData.id] === true
                             onPlayRequested: QbzLocal.playAlbumTrack(
                                 root.album.id, trackBlock.modelData.id)
                             onEnqueueRequested: function (m) {
                                 QbzLocal.enqueue("track", trackBlock.modelData.id, m)
                             }
+                            onToggleSelect: root.toggleSelected(trackBlock.modelData.id)
                         }
                     }
                 }

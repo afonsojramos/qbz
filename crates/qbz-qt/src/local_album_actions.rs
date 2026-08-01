@@ -18,11 +18,11 @@
 //! that. The split is cached in `LocalState` so the picker switches with NO DB
 //! round-trip (the Slint's `ALBUM_VERSIONS` static, 1:1).
 //!
-//! NOT WIRED (deliberate, reported): `album_edit_tags` and
-//! `album_add_to_playlist` are LOGGED SEAMS. The Qt port has no tag-editor
-//! modal and no playlist picker, and a menu item must never write tags to disk
-//! with no UI in front of it. `album_add_to_mixtape` is LIVE since the MyQBZ
-//! domain landed — it opens the Mixtape/Collection picker.
+//! NOT WIRED (deliberate, reported): `album_edit_tags` is a LOGGED SEAM — the
+//! Qt port has no tag-editor modal, and a menu item must never write tags to
+//! disk with no UI in front of it. `album_add_to_mixtape` is LIVE since the
+//! MyQBZ domain landed, and `album_add_to_playlist` since QbzPlaylistPicker
+//! did: it opens the picker in LOCAL MODE over the selected version's tracks.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -372,15 +372,24 @@ pub fn edit_tags(id: String) {
     );
 }
 
-/// Album header ＋: the Slint opens the playlist picker over the version's
-/// tracks. The Qt port has no picker modal and `playlist_qt::add_tracks` only
-/// speaks Qobuz track ids, so this is a logged seam.
+/// Album header ＋: the picker over the SELECTED version's tracks, in LOCAL
+/// MODE (the Slint's `playlist_picker::open_for_ids(.., local = true)`).
+///
+/// The refs are built by `local_picker_ref_for_track`, never by hand: a Plex
+/// row rides `plex:<rating key>` and everything else its library row id, and
+/// the `Payload::LocalRefs` variant is what keeps either of them from reaching
+/// a Qobuz endpoint, where the same number means a different track.
 pub fn add_to_playlist(id: String) {
-    let n = current_version_tracks().len();
-    log::info!(
-        "[qbz-qt] local album add-to-playlist: no playlist picker in the Qt port yet \
-         (album '{id}', {n} tracks) — seam only"
-    );
+    let tracks = current_version_tracks();
+    if tracks.is_empty() {
+        log::warn!("[qbz-qt] local album add-to-playlist: no version open for album '{id}'");
+        return;
+    }
+    let refs: Vec<String> = tracks
+        .iter()
+        .map(crate::local_playlist_qt::local_picker_ref_for_track)
+        .collect();
+    crate::playlist_picker_qt::open_for_local_refs(&crate::app(), refs);
 }
 
 /// Album header 📼: ONE `album` payload (source "local", no artwork_url, no

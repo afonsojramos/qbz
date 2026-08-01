@@ -191,10 +191,18 @@ pub mod qbz_bridge {
         fn playlist_play_track(self: Pin<&mut QbzBridge>, track_id: QString);
         #[qinvokable]
         fn playlist_enqueue_track(self: Pin<&mut QbzBridge>, track_id: QString, mode: QString);
+        /// "Remove from playlist" by DISPLAY row id (`item.id`). A string,
+        /// not the numeric membership id: a LOCAL playlist's rows carry
+        /// library-row / `"plex:<key>"` / path ids too, and the numeric
+        /// invokable this replaced could not express them.
         #[qinvokable]
-        fn playlist_remove_track(self: Pin<&mut QbzBridge>, playlist_track_id: f64);
+        fn playlist_remove_track(self: Pin<&mut QbzBridge>, row_id: QString);
+        /// Drag-reorder drop: visible row `from` -> insertion slot `slot`.
         #[qinvokable]
         fn playlist_reorder(self: Pin<&mut QbzBridge>, from: i32, slot: i32);
+        /// Per-row reorder chevrons: -1 = up, +1 = down.
+        #[qinvokable]
+        fn playlist_move_row(self: Pin<&mut QbzBridge>, row_id: QString, delta: i32);
 
         /// Card-level playlist actions (LibPlaylistCard overlay + menu).
         #[qinvokable]
@@ -436,12 +444,16 @@ impl qbz_bridge::QbzBridge {
         crate::playlist_enqueue_track(track_id.to_string(), mode.to_string());
     }
 
-    pub fn playlist_remove_track(self: Pin<&mut Self>, playlist_track_id: f64) {
-        crate::playlist_remove_track(playlist_track_id as u64);
+    pub fn playlist_remove_track(self: Pin<&mut Self>, row_id: QString) {
+        crate::playlist_remove_track(row_id.to_string());
     }
 
     pub fn playlist_reorder(self: Pin<&mut Self>, from: i32, slot: i32) {
-        crate::playlist_qt::reorder_track(from.max(0) as usize, slot.max(0) as usize);
+        crate::playlist_reorder(from, slot);
+    }
+
+    pub fn playlist_move_row(self: Pin<&mut Self>, row_id: QString, delta: i32) {
+        crate::playlist_move_row(row_id.to_string(), delta);
     }
 
     pub fn playlist_set_follow_by_id(self: Pin<&mut Self>, playlist_id: QString, follow: bool) {

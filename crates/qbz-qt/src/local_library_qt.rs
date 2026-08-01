@@ -59,8 +59,8 @@ pub use crate::local_rows::{
 
 // --- state / prefs ---------------------------------------------------------
 pub use crate::local_state::{
-    album_mode, counts, has_library, set_album_mode, set_tracks_query, set_tracks_sort, state,
-    tracks_has_more, tracks_sort, with_db,
+    album_mode, counts, has_library, set_album_mode, set_tracks_group, set_tracks_query,
+    set_tracks_sort, state, tracks_group, tracks_has_more, tracks_sort, with_db,
 };
 
 // --- queries ---------------------------------------------------------------
@@ -81,7 +81,7 @@ pub use crate::local_artwork::{fetch_plex_misses, resolve_window_blocking, Artwo
 // --- playback --------------------------------------------------------------
 pub use crate::local_playback::{
     enqueue, local_queue_track, play_album, play_current_if_local, play_folder, play_folder_track,
-    play_local_file, play_plex_track, play_tracks_from,
+    play_local_file, play_plex_track, play_tracks_visible,
 };
 
 // --- plex ------------------------------------------------------------------

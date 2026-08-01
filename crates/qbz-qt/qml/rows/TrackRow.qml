@@ -11,7 +11,9 @@
 //
 // item contract: { id, title, artist, artistId, album, albumId, number?,
 // duration, qualityTier, qualityDetail, explicit, isFavorite, artPath? }
-// (plus playlistTrackId for the remove-from-playlist arm). `qualityDetail`
+// (plus playlistTrackId for the remove-from-playlist arm, and the OPTIONAL
+// `source` / `unavailable` a mixed-source producer carries — the Add to
+// playlist gate below is the one arm that reads them). `qualityDetail`
 // is the bare exact-quality string ("16-bit / 44.1 kHz"); when a producer
 // does not carry it yet the badge degrades to the tier label alone rather
 // than to a blank cell. `item.isFavorite` SEEDS the row's own `favorite`
@@ -27,7 +29,8 @@
 // removeRequested(), bodyDragStarted(index) (fired BEFORE the shared
 // dragStart — the #589 reorder pre-hook), mixtapeRequested() (the host
 // builds the MyQBZ AddItem payload), goToRequested(kind) (only when
-// `routeGoToExternally` is set).
+// `routeGoToExternally` is set), playlistAddRequested() (only when
+// `routePlaylistAddExternally` is set — the local-mode "Add to playlist").
 // Favorite toggling, Go-to-artist/album, Share and Track info are
 // identical on every site — handled internally. The row BODY is the drag
 // source (6px threshold, ghost + sidebar drops in main.rs) and its RIGHT
@@ -85,12 +88,34 @@ Rectangle {
     property bool menuShowGoTo: true
     property bool menuShowFavorite: true
     property bool menuShowRemove: false
+    /// Reorder arm (primitives/TrackRow.slint:87 `show-reorder`): a leading
+    /// 22px gutter with an up/down chevron stack. ON = this list is in an
+    /// order the user OWNS and can rewrite (the playlist detail under custom
+    /// sort; a LOCAL playlist under its natural order, whose repo `position`
+    /// IS that order). Default off, so no existing call site grows a gutter.
+    ///
+    /// It is also the gate for `preventStealing` on the row-body drag — see
+    /// the DRAG vs. DRAG-TO-SCROLL block at the bottom of this file.
+    property bool showReorder: false
+    /// Ends of the list: the reference dims nothing, but a chevron that
+    /// renders and no-ops is the defect class this round is fixing, so the
+    /// first row's ↑ and the last row's ↓ are drawn disabled instead.
+    property bool canMoveUp: true
+    property bool canMoveDown: true
     // Drag source arm (additive; default = the existing behaviour). The
     // Local Library rows set this false: their `item.id` is a local DB row
     // id, and the sidebar drop handler forwards whatever it receives to
     // `playlist add-tracks` as a QOBUZ catalog id — a local row dropped on a
     // playlist would silently add an unrelated catalog track.
     property bool draggable: true
+    /// Multi-select arm (primitives/TrackRow.slint:58 `multi-select-mode`):
+    /// the leading play/number cell becomes a selection checkbox, the WHOLE
+    /// row body is a selection target, and the row's own gestures (play,
+    /// double-click, drag, right-click menu) stand down. Default off, so every
+    /// existing call site is untouched.
+    property bool selectMode: false
+    property bool checked: false
+    signal toggleSelect()
     // Per-row artwork placeholder (see the 36px cell below). The host view
     // owns the phase clock so one timer drives every row.
     property bool artPending: false
@@ -112,13 +137,45 @@ Rectangle {
     // matching `menuAction` branch when the invokable lands; the entry then
     // appears in its .slint-correct slot. Why each is missing:
     //   radio        no radio invokable on any Qt bridge object
-    //   playlistAdd  no picker modal, no by-id add (only the sidebar drag)
     //   songlink     needs the ISRC -> Deezer -> Odesli round-trip (backend)
     //   offlineCache no per-track cache bridge (the download cell is a stub)
     readonly property bool hasRadioSeam: false
-    readonly property bool hasPlaylistAddSeam: false
     readonly property bool hasSonglinkSeam: false
     readonly property bool hasOfflineCacheSeam: false
+
+    // --- Add to playlist -------------------------------------------------
+    // LIVE since QbzPlaylistPicker landed. It is NOT a flat constant, because
+    // the entry's correctness depends on WHICH ID SPACE this row's `item.id`
+    // lives in — the one thing the picker's whole design exists to keep
+    // unmistakable (playlist_picker_qt.rs's four-case matrix):
+    //
+    //   catalogRow          `item.id` is a Qobuz catalog id -> openForTrack.
+    //   localSourceRow      the row carries its own source word and it says
+    //                       local/plex -> `item.id` is a library.db row id or
+    //                       a Plex synthetic id. Sending it to the Qobuz arm
+    //                       adds an UNRELATED track, so the entry is only
+    //                       offered when the HOST takes the routing
+    //                       (`routePlaylistAddExternally`, below), and is
+    //                       ABSENT otherwise rather than wrong.
+    //   item.unavailable    a stored ref that cannot resolve at all
+    //                       (playlist_qt.rs PlaylistTrackRow.unavailable);
+    //                       there is no track to copy anywhere.
+    //
+    // Ephemeral rows never reach this decision: their surface sets
+    // `showMenu: false`, so the whole menu is absent (LocalEphemeralPane).
+    readonly property bool localSourceRow:
+        root.item.source === "local" || root.item.source === "plex"
+    /// Hand "Add to playlist" to the HOST (the `routeGoToExternally` idiom):
+    /// the host answers `playlistAddRequested()` with the LOCAL-mode call its
+    /// surface can make. The local playlist detail is the one that needs it —
+    /// only Rust can turn a detail row's display id into a source-aware ref
+    /// (`local_playlist_qt::local_picker_ref_for_row`).
+    property bool routePlaylistAddExternally: false
+    signal playlistAddRequested()
+    property bool hasPlaylistAddSeam: root.item.unavailable === true
+        ? false
+        : (root.routePlaylistAddExternally
+            || (root.catalogRow && !root.localSourceRow))
     // LIVE since the MyQBZ domain landed: QbzMyQbzAdd.open() takes a JSON
     // array of AddItem, so the row only has to ASK — it does not know its own
     // itemType/source, which is why the payload is built by the host (see
@@ -130,6 +187,11 @@ Rectangle {
     signal enqueueRequested(string mode)
     signal removeRequested()
     signal bodyDragStarted(int index)
+    /// Reorder gutter (`showReorder`). The HOST answers — only it knows the
+    /// row's id and which playlist is open (TrackRow.slint routes the same
+    /// pair through `media-action("track", id, "move-up"/"move-down")`).
+    signal moveUpRequested()
+    signal moveDownRequested()
     /// "Add to mixtape" — the HOST answers, because only the host knows the
     /// row's `itemType` / `source` (a MyQBZ AddItem needs both) and building
     /// the array here would hardcode `("track", "qobuz")` for every surface.
@@ -232,8 +294,13 @@ Rectangle {
     // has-hover does not propagate to ancestor TouchAreas" — Qt's does not
     // either, so without this the row (and the play circle with it) would go
     // un-hovered exactly while the pointer sits on the play button.
+    // The reorder chevrons are in the same set for the same reason: they are
+    // hover-enabled areas ON the row, and the row must not un-hover under
+    // them. Their ids resolve whether or not the gutter is `visible` — the
+    // objects always exist (no Loader / no `if`), only their painting is off.
     readonly property bool hovered: trArea.containsMouse || favArea.containsMouse
         || moreArea.containsMouse || playArea.containsMouse
+        || chevUp.hovered || chevDown.hovered
     readonly property bool isActive: QbzPlayer.npTrackId === (item.id || "")
 
     // --- Column geometry: rows/TrackCols.qml, NOT literals ---------------
@@ -243,9 +310,58 @@ Rectangle {
     // arithmetic lives there too (`titleWidth`) — the header asks the same
     // function the same question and gets the same answer.
     TrackCols { id: cols }
+
+    /// One chevron of the reorder gutter. Declared at the file's top level
+    /// (an inline component must be — the same rule TrackListHeader's
+    /// `ColLabel` follows), not inside the Row.
+    ///
+    /// It reads NOTHING off an outer id: `width` is set by the two call
+    /// sites, which are in the outer scope and can reach `cols` there. An
+    /// inline component that reaches for an enclosing id is legal only under
+    /// the default (unbound) ComponentBehavior, and this file does not
+    /// declare the pragma either way — so it simply does not depend on it.
+    component ReorderChevron: Item {
+        id: chev
+        property string glyph: "chevron-up"
+        property bool armed: true
+        /// Read by the row's own `hovered` (see it): a hover-enabled MouseArea
+        /// on top BLOCKS hover to the areas below it, so without republishing
+        /// it here the row un-hovers the moment the pointer enters the gutter
+        /// — the same defect this file already documents for the play cell.
+        readonly property bool hovered: chevArea.containsMouse
+        signal activated()
+        height: 18
+        QbzIcon {
+            name: chev.glyph
+            width: 14
+            height: 14
+            anchors.centerIn: parent
+            opacity: chev.armed ? 1.0 : 0.35
+            tintName: (chev.armed && chevArea.containsMouse) ? "textPrimary" : "muted"
+        }
+        MouseArea {
+            id: chevArea
+            anchors.fill: parent
+            // ENABLED even when the chevron is not armed, and the click is
+            // swallowed instead. A DISABLED MouseArea does not accept the
+            // press at all, so it fell through to the row body underneath
+            // (`trArea`, z:-1) — and this surface has `clickPlays: true`, so
+            // clicking the greyed-out ↑ on the first row STARTED PLAYBACK.
+            // The reference has no disabled state at all (its chevrons are
+            // always armed and the Rust arm no-ops at the ends), so a dead
+            // click there is genuinely dead; ours has to make it dead too.
+            hoverEnabled: true
+            cursorShape: chev.armed ? Qt.PointingHandCursor : Qt.ArrowCursor
+            onClicked: {
+                if (chev.armed)
+                    chev.activated()
+            }
+        }
+    }
+
     readonly property int titleColWidth: cols.titleWidth(root.width,
         root.showArtwork, root.showAlbum, root.showFavorite,
-        root.showDownload, root.showMenu)
+        root.showDownload, root.showMenu, root.showReorder)
 
     // Static now-playing mark: 3px accent pill on the left edge.
     Rectangle {
@@ -263,6 +379,45 @@ Rectangle {
         anchors.leftMargin: cols.padH
         anchors.rightMargin: cols.padH
         spacing: cols.gap
+
+        // --- Reorder gutter (primitives/TrackRow.slint:270-311) ----------
+        // The LEADING cell on a reorderable list: a 22px column with an
+        // up/down chevron stack, 18px each. It is the affordance a user who
+        // cannot (or does not want to) drag reorders with — the reference
+        // ships it and the port had only the drag, which is half of owner
+        // finding 8.
+        //
+        // Reuse note: the Playlist Manager's equivalent is
+        // views/playlistmanager/PmGridCard.qml's 22px header (chevron-up ·
+        // grip-vertical · chevron-down through PmActionButton). That one is
+        // a GRID card with 140px of width to spend; this is a 50px table row
+        // whose gutter is 22px wide, so the same three-across header does not
+        // fit and PmActionButton's 22px disc would leave no room for the
+        // second chevron. The geometry here is the reference row's own.
+        Item {
+            visible: root.showReorder
+            width: cols.colReorder
+            height: parent.height
+
+            Column {
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: 0
+                ReorderChevron {
+                    id: chevUp
+                    width: cols.colReorder
+                    glyph: "chevron-up"
+                    armed: root.canMoveUp
+                    onActivated: root.moveUpRequested()
+                }
+                ReorderChevron {
+                    id: chevDown
+                    width: cols.colReorder
+                    glyph: "chevron-down"
+                    armed: root.canMoveDown
+                    onActivated: root.moveDownRequested()
+                }
+            }
+        }
 
         // Number cell — the number-variant of primitives/TrackPlayCell.slint
         // (:172-232), the play affordance shared by every track row.
@@ -304,15 +459,48 @@ Rectangle {
             readonly property bool showOverlay: root.hovered || root.isActive
             // `accent-ring` (:108): the playing row, static form.
             readonly property bool accentRing: root.isActive && QbzPlayer.npPlaying
+            // Selection checkbox — TrackRow.slint:392-419: a 13px disc, accent
+            // when selected, muted/text-primary ring when not. It REPLACES the
+            // number and the play disc (both gate on !selectMode below), so
+            // the leading column keeps its width and nothing else shifts.
+            Rectangle {
+                visible: root.selectMode
+                anchors.centerIn: parent
+                width: 14
+                height: 14
+                radius: 7
+                color: root.checked ? theme.accent : "transparent"
+                border.width: root.checked ? 0 : 1.5
+                border.color: selArea.containsMouse ? theme.textPrimary : theme.textMuted
+                Behavior on color { ColorAnimation { duration: 120 } }
+                QbzIcon {
+                    visible: root.checked
+                    name: "check"
+                    width: 8
+                    height: 8
+                    anchors.centerIn: parent
+                    // The glyph sits ON the accent fill — the same selector
+                    // controls/QbzCheckbox.qml routes through, not a literal
+                    // #ffffff (which is under 2.6:1 on 16 of the 35 palettes).
+                    tintName: theme.accentGlyphTint
+                }
+                MouseArea {
+                    id: selArea
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.toggleSelect()
+                }
+            }
             Text {
-                visible: !playCell.showOverlay
+                visible: !playCell.showOverlay && !root.selectMode
                 anchors.centerIn: parent
                 text: root.number
                 color: theme.textMuted
                 font.pixelSize: 13
             }
             Rectangle {
-                visible: playCell.showOverlay
+                visible: playCell.showOverlay && !root.selectMode
                 anchors.centerIn: parent
                 width: 24
                 height: 24
@@ -342,6 +530,12 @@ Rectangle {
             MouseArea {
                 id: playArea
                 anchors.fill: parent
+                // Declared BEFORE the checkbox in z-order terms? No — the
+                // checkbox is declared FIRST and this fills the same cell, so
+                // it would swallow the checkbox's press. Disabling it in
+                // select mode is what hands the cell over (the play
+                // affordance is invisible there anyway).
+                enabled: !root.selectMode
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
                 onClicked: {
@@ -511,6 +705,11 @@ Rectangle {
             MouseArea {
                 id: favArea
                 anchors.fill: parent
+                // TrackRow.slint:527/558/623/688 — the in-row controls stand
+                // down in select mode so their click reaches the row body.
+                // Without it, aiming at a row and hitting the heart
+                // un-favourites a track the user meant to tick.
+                enabled: !root.selectMode
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
                 onClicked: root.toggleFavorite()
@@ -623,6 +822,17 @@ Rectangle {
         }
         else if (a === "favorite") root.toggleFavorite()
         else if (a === "mixtape") root.mixtapeRequested()
+        // Add to playlist. The internal arm is the CATALOG one and nothing
+        // else can reach it: `hasPlaylistAddSeam` only builds the entry for a
+        // `catalogRow` that is not a local/plex row, or when the host has
+        // taken the routing. Belt and braces on the dispatch too, so a host
+        // that sets `routePlaylistAddExternally` and forgets the handler
+        // cannot fall through into the Qobuz call with a local id.
+        else if (a === "add-to-playlist") {
+            if (root.routePlaylistAddExternally) root.playlistAddRequested()
+            else if (root.catalogRow && !root.localSourceRow)
+                QbzPlaylistPicker.openForTrack(root.item.id)
+        }
         else if (a === "remove") root.removeRequested()
         else if (a === "share-qobuz") root.copyToClipboard(
             "https://open.qobuz.com/track/" + (root.item.id || ""))
@@ -676,6 +886,51 @@ Rectangle {
     // release plays (clickPlays) or ignores (album view: double-click).
     property bool dragging: false
     property point downPos: Qt.point(0, 0)
+
+    // --- DRAG vs. DRAG-TO-SCROLL (owner finding 8) -----------------------
+    // The reference does not solve this because it does not HAVE it: Slint's
+    // ListView is not mouse-drag-scrollable, so its row-body drag has no
+    // competitor. Qt's is — every one of these rows lives in a Flickable, and
+    // a Flickable filters its children's mouse events and takes the grab once
+    // the press travels past `QStyleHints.startDragDistance` (~10px). Our
+    // drag arms at 6px, so BOTH fire: the ghost appears, the list then takes
+    // the grab, this area gets `canceled` and never `released`, `dragging`
+    // stays true and the ghost never ends.
+    //
+    // The resolution is the one this port ALREADY made for the same collision
+    // in shell/QueuePanel.qml:479-491 — `preventStealing` scoped to the rows
+    // that are actually reorderable, described there as "the Qt equivalent of
+    // QueueSidebar.slint's `interactive: false` on the queue Flickable, but
+    // without that side effect: Qt's Flickable also drops WHEEL events when
+    // it is non-interactive, so wheel + scrollbar keep working, and only a
+    // press that starts ON a reorderable row is denied to the flick." Same
+    // trade here, same shape, so the two reorderable lists in the app behave
+    // identically: while a list is reorderable it is not drag-scrollable, and
+    // the wheel and the scrollbar carry scrolling.
+    //
+    // Scoped to `showReorder` on purpose: on every OTHER surface the row-body
+    // drag is the add-to-a-sidebar-playlist gesture, which shipped with the
+    // >6px arm and drag-scroll both live, and re-timing it is not this
+    // round's job. `onCanceled` below is the universal half — it costs no
+    // gesture change and it is what stops a stolen drag from stranding the
+    // ghost anywhere.
+    //
+    // Rejected: constraining the drag AXIS (a reorder drag is vertical, i.e.
+    // the same axis as the scroll — it separates nothing), and moving the
+    // drag source onto a grip handle (see the gutter above: 22 x 50 leaves no
+    // room beside the two chevrons, and the chevrons already are the non-drag
+    // affordance a grip would duplicate).
+
+    /// Release / cancel teardown — ONE implementation, because the two used
+    /// to be able to disagree about whether the shared drag had ended.
+    function endBodyDrag() {
+        if (root.dragging) {
+            QbzShell.dragEnd()
+            root.dragging = false
+            return true
+        }
+        return false
+    }
     MouseArea {
         id: trArea
         anchors.fill: parent
@@ -689,10 +944,15 @@ Rectangle {
         propagateComposedEvents: true
         // Right press opens the SAME menu as ⋯ (rowMenu), at the pointer.
         acceptedButtons: Qt.LeftButton | Qt.RightButton
-        cursorShape: root.clickPlays ? Qt.PointingHandCursor : Qt.ArrowCursor
+        cursorShape: (root.clickPlays || root.selectMode) ? Qt.PointingHandCursor : Qt.ArrowCursor
+        // Keep the grab on a reorderable row so the enclosing Flickable
+        // cannot turn a reorder drag into a scroll — see the block above.
+        preventStealing: root.showReorder && root.draggable && !root.selectMode
         onPressed: function (mouse) {
             if (mouse.button === Qt.RightButton) {
-                if (root.showMenu)
+                // TrackRow.slint:201 — the row menu is suppressed in
+                // multi-select mode (a right-click toggles nothing there).
+                if (root.showMenu && !root.selectMode)
                     rowMenu.openAtCursor(trArea, mouse.x, mouse.y)
                 mouse.accepted = true
                 return
@@ -701,7 +961,10 @@ Rectangle {
         }
         onPositionChanged: function (mouse) {
             // Only a LEFT press drags — a right press is the context gesture.
-            if (!pressed || !(pressedButtons & Qt.LeftButton) || !root.draggable) return
+            // Dragging a row onto a sidebar playlist is off in select mode
+            // (TrackRow.slint keeps the whole body as a selection target).
+            if (!pressed || !(pressedButtons & Qt.LeftButton) || !root.draggable
+                || root.selectMode) return
             const g = mapToItem(null, mouse.x, mouse.y)
             if (!root.dragging
                 && (Math.abs(mouse.x - root.downPos.x) > 6
@@ -716,9 +979,15 @@ Rectangle {
         onReleased: function (mouse) {
             if (mouse.button === Qt.RightButton)
                 return
-            if (root.dragging) {
-                QbzShell.dragEnd()
-                root.dragging = false
+            const wasDragging = root.endBodyDrag()
+            // In select mode the WHOLE row body is a selection target
+            // (TrackRow.slint:174) — never a play.
+            if (root.selectMode) {
+                root.toggleSelect()
+                mouse.accepted = true
+                return
+            }
+            if (wasDragging) {
                 mouse.accepted = true
             } else if (root.clickPlays) {
                 root.playRequested()
@@ -726,7 +995,17 @@ Rectangle {
                 mouse.accepted = false
             }
         }
+        // Grab lost (the Flickable stole it, the delegate was recycled, the
+        // window lost focus). Without this the shared drag stayed "active"
+        // with no way to end it and the ghost never disappeared.
+        onCanceled: root.endBodyDrag()
         onDoubleClicked: function (mouse) {
+            // ":156 — In select mode a double-click just selects (via
+            // `clicked`); no play." The single-click release above has already
+            // toggled twice by then, which lands back where it started, so the
+            // double-click must not add a third.
+            if (root.selectMode)
+                return
             if (mouse.button === Qt.LeftButton)
                 root.playRequested()
         }

@@ -131,6 +131,25 @@ ApplicationWindow {
         QbzMyQbzAdd.boot()
         QbzDisco.boot()
         QbzBlacklist.boot()
+        QbzPlaylistPicker.boot()
+        // The folder modals. Its boot() also publishes both closed documents,
+        // which is what puts the icon-preset and colour-swatch constants on
+        // the QML side BEFORE the first open rather than one turn after it.
+        QbzFolderEdit.boot()
+        // The SHARED playlist editor (rename · description · offline-only ·
+        // delete), opened from the manager's three delegates, the sidebar row
+        // menu and the playlist detail header's pencil. Its boot() publishes
+        // the closed document so the modal's parse sees the full shape.
+        QbzPlaylistEdit.boot()
+        // Playlist Manager. Its boot() also seeds the default document and
+        // kicks the cache-independent folder read, so the SIDEBAR's folder
+        // consumers have a list before the manager view has ever been opened.
+        QbzPlaylistManager.boot()
+        // Playlist Importer. Nothing to seed — the modal is closed until a
+        // sidebar row opens it — but WITHOUT this line every publish the
+        // importer makes (the whole progress panel, the log, the summary) is
+        // dropped on the floor with nothing logged on either side.
+        QbzPlaylistImport.boot()
 
         // Seed the maximized latch ONCE, imperatively — see its declaration for
         // why it must not be a binding on the bridge property.

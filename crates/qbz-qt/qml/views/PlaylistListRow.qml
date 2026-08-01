@@ -15,6 +15,7 @@
 
 import QtQuick
 import com.blitzfc.qbz
+import "../cards"
 import "../controls"
 import "../theme"
 
@@ -22,6 +23,17 @@ Rectangle {
     id: root
 
     property var item: ({})
+    /// Cover override for hosts whose rows carry no `artPath` of their own.
+    /// The Library feed is id-keyed (`artKey` -> a decoded file:// path in
+    /// LibraryView's artMap); "" falls straight back to `item.artPath`, so the
+    /// browse pages are untouched.
+    property string artSource: ""
+    /// Up to four member-track covers — the 2x2 mosaic a USER playlist shows
+    /// when it has no artwork of its own (`library_qt::FeedItem.covers`). The
+    /// browse pages publish none, so they keep the designed glyph placeholder.
+    property var covers: []
+    readonly property string artResolved:
+        root.artSource !== "" ? root.artSource : (root.item.artPath || "")
     /// Row index — drives the even/odd zebra (coherent with TrackRow).
     /// NOT named `index`: a Repeater injects one into the delegate context
     /// and a same-named property here would shadow it.
@@ -88,12 +100,20 @@ Rectangle {
             // and still crops the square `image.covers[0]` fallback.
             RoundedImage {
                 anchors.fill: parent
-                source: root.item.artPath || ""
+                visible: !rowCollage.visible
+                source: root.artResolved
                 radius: 6
                 fit: "auto"
             }
+            PlaylistCollage {
+                id: rowCollage
+                anchors.fill: parent
+                visible: root.artResolved === "" && (root.covers || []).length > 0
+                urls: root.covers || []
+                radius: 6
+            }
             QbzIcon {
-                visible: (root.item.artPath || "") === ""
+                visible: root.artResolved === "" && !rowCollage.visible
                 name: "list-music"
                 width: 20
                 height: 20

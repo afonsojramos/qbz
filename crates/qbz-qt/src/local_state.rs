@@ -25,8 +25,15 @@ pub const TRACKS_PAGE: u64 = 500;
 // handle, so it never crosses an await point).
 // ---------------------------------------------------------------------------
 
+/// `unwrap_or(0)` = the GUEST profile — kept identical to
+/// `library_db_qt::db_path`, which carries the full reasoning. Short version:
+/// `?`-ing out here made the whole local library invisible on a machine that
+/// has never completed a Qobuz login, and `users/0/` is the profile
+/// `activate_offline` and `adopt_guest_profile` already use for that user.
+/// The two helpers open the SAME file and must never disagree about where it
+/// is.
 pub fn db_path() -> Option<PathBuf> {
-    let uid = UserDataPaths::load_last_user_id()?;
+    let uid = UserDataPaths::load_last_user_id().unwrap_or(0);
     Some(
         dirs::data_dir()?
             .join("qbz")
@@ -81,6 +88,10 @@ pub struct LocalState {
     pub tracks_offset: u64,
     pub tracks_query: String,
     pub tracks_sort: String,
+    /// Tracks-tab grouping ("off" | "album" | "artist" | "name") — persisted
+    /// (locallibrary_ui `tracks_group`). Client-side only: the group modes
+    /// reorder the loaded pages, they never touch the SQL ORDER BY.
+    pub tracks_group: String,
     pub tracks_has_more: bool,
     /// The FULL flattened tree (visible derivation applies the rail search).
     pub tree: Vec<TreeNode>,
@@ -113,6 +124,7 @@ pub fn state<R>(f: impl FnOnce(&mut LocalState) -> R) -> R {
         LocalState {
             album_mode: prefs.albums_id_mode,
             tracks_sort: prefs.tracks_sort,
+            tracks_group: prefs.tracks_group,
             ..LocalState::default()
         }
     });
@@ -274,6 +286,23 @@ pub fn set_tracks_sort(sort: &str) {
 
 pub fn tracks_sort() -> String {
     state(|s| s.tracks_sort.clone())
+}
+
+/// Tracks-tab grouping. Persisted through the SAME read-modify-write of
+/// `locallibrary_ui.json` the sort and the album identity use — the key was
+/// already read back on load and preserved on write, it was only ever missing
+/// its setter and its seed (PARITY-DEBT #13).
+pub fn set_tracks_group(mode: &str) {
+    let mode = match mode {
+        "album" | "artist" | "name" => mode,
+        _ => "off",
+    };
+    state(|s| s.tracks_group = mode.to_string());
+    update_prefs(|p| p.tracks_group = mode.to_string());
+}
+
+pub fn tracks_group() -> String {
+    state(|s| s.tracks_group.clone())
 }
 
 pub fn set_tracks_query(q: &str) {

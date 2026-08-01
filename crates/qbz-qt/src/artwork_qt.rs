@@ -233,6 +233,22 @@ fn disk_path(key: &str, fetch: &str) -> Option<PathBuf> {
         return Some(path);
     }
     let path = cache().and_then(|c| c.lock().ok()?.get(fetch))?;
+    // A ZERO-BYTE entry is a failed download that still landed a file, and the
+    // cache counts it as a hit FOREVER — that cover is then permanently broken
+    // and QML logs `Error decoding: ....img` on every paint. Treat it as a
+    // miss (and do not memo it), so the next window pass re-fetches it. The
+    // local arm of `cached_path` already stats for the same class of problem;
+    // this is the remote arm's half. Found live: one 0-byte file in the image
+    // cache, one undecodable sidebar cover (2026-07-31).
+    match std::fs::metadata(&path) {
+        Ok(meta) if meta.len() > 0 => {}
+        Ok(_) => {
+            log::debug!("[qbz-qt] artwork: empty cache entry for {fetch}, re-fetching");
+            let _ = std::fs::remove_file(&path);
+            return None;
+        }
+        Err(_) => return None,
+    }
     memo_put(key, path.clone());
     Some(path)
 }
@@ -538,9 +554,33 @@ pub fn scaled_path(path: &str, w: u32, h: u32) -> Option<std::path::PathBuf> {
     // (`artwork.rs` `decode_rgba`). Measured at 200px it is within RMSE 1.3 of
     // a Lanczos reference and carries the same edge energy (Laplacian variance
     // 334.5 vs 337.3), i.e. no visible softening and no ringing.
-    img.thumbnail(w, h)
-        .save_with_format(&out, image::ImageFormat::Png)
-        .ok()?;
+    // ATOMIC: encode into a unique sibling, then rename. Writing straight to
+    // `out` publishes the path the instant the file is created, so a QML
+    // `Image` that resolves it mid-encode opens a TRUNCATED png and reports
+    // "Unsupported image format" — and Qt caches that failure against the URL,
+    // so the cover stays dead for the rest of the session even though the file
+    // on disk ends up perfectly valid. Observed in the offscreen smoke
+    // (2026-07-31): two covers failed to decode while `file(1)` called the very
+    // same paths valid 200x200 PNGs seconds later. `rename` within one
+    // directory is atomic, so a reader sees either nothing or the whole image.
+    // Same discipline `local_state.rs` already uses for the prefs JSON.
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let tmp = out.with_extension(format!(
+        "part{}-{}",
+        std::process::id(),
+        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    if img
+        .thumbnail(w, h)
+        .save_with_format(&tmp, image::ImageFormat::Png)
+        .is_err()
+        || std::fs::rename(&tmp, &out).is_err()
+    {
+        // Never leave a partial behind: `prune` bills the directory by total
+        // bytes, so an orphan would eat the budget without ever being a hit.
+        let _ = std::fs::remove_file(&tmp);
+        return None;
+    }
     Some(out)
 }
 

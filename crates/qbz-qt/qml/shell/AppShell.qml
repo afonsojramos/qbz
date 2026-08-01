@@ -193,7 +193,13 @@ Rectangle {
                 : QbzShell.currentView === "discobuilder" ? "../views/myqbz/DiscoBuilderView.qml"
                 // Settings > Blacklist > Manage. Not reachable from the
                 // sidebar — blacklist_qt::open_manager records the route.
-                : QbzShell.currentView === "blacklist" ? "../views/BlacklistManagerView.qml" : ""
+                : QbzShell.currentView === "blacklist" ? "../views/BlacklistManagerView.qml"
+                // Sidebar > Playlists ⋯ > Manage playlists. Not a sidebar
+                // section — playlist_manager_qt::navigate() records the route.
+                // The route is a TWO-FILE contract (nav_qt.rs:9-16): the caller
+                // records the id, this arm mounts it, and the failure mode for a
+                // missing arm is a BLANK content pane, logged nowhere.
+                : QbzShell.currentView === "playlistmanager" ? "../views/PlaylistManagerView.qml" : ""
         }
 
         // MyQbzGridView serves BOTH the "mixtapes" and "collections" routes
@@ -548,7 +554,48 @@ Rectangle {
     AddToMixtapeModal {
         anchors.fill: parent
     }
+    // PlaylistPickerModal — the "Add to playlist" picker, opened from the
+    // queue footer (save the queue as a playlist) and the queue row menu.
+    // Same reason it lives out here as its Mixtape sibling: the surface that
+    // opened it is often gone by the time the user picks a target, and the
+    // queue panel in particular is `visible`-gated.
+    PlaylistPickerModal {
+        anchors.fill: parent
+    }
+    // PlaylistImportModal — the public-playlist importer (Spotify / Apple
+    // Music / Tidal / Deezer), opened from the sidebar `...` menu and from the
+    // closed-sidebar flyout. It mounts HERE and not in the sidebar by explicit
+    // contract (05 §5.8.5): closing it must not cancel an in-flight import, and
+    // neither surface that opens it has a lifetime guarantee across a
+    // navigation — the importer's own completion arm navigates to the imported
+    // playlist while the modal is still up.
+    PlaylistImportModal {
+        anchors.fill: parent
+    }
     MyQbzModals {
+        anchors.fill: parent
+    }
+    // FolderModals — the "New folder" create panel, the full folder editor and
+    // their delete confirm (contract D21). Out here for the same reason as its
+    // neighbours: it is opened from the SIDEBAR's "..." menu and row menu as
+    // well as from the Playlist Manager view, and the sidebar animates to
+    // width 0 with clip: true, so a modal parented into it would disappear
+    // with it. Self-gates on QbzFolderEdit.createJson / editJson, so while
+    // both are closed it is an invisible, non-interactive Item.
+    FolderModals {
+        anchors.fill: parent
+    }
+    // PlaylistEditModal — the ONE playlist editor (rename · description ·
+    // offline-only · delete), for both `local:` and Qobuz playlists (contract
+    // D20/D21). Out here for the same reason as its neighbours: it is opened
+    // from the manager's cards and rows, from the SIDEBAR's row context menu
+    // and from the playlist detail header — and its delete arm navigates away
+    // from the page that raised it. It replaces the inline Popup that used to
+    // live in views/PlaylistView.qml, which could express neither a
+    // description nor the offline-only flag. Self-gates on
+    // QbzPlaylistEdit.editJson, so while closed it is an invisible,
+    // non-interactive Item.
+    PlaylistEditModal {
         anchors.fill: parent
     }
     QbzToast {

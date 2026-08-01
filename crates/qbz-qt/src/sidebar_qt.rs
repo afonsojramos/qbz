@@ -107,6 +107,26 @@ pub struct SidebarEntry {
     pub folder_id: String,
     /// Up to 4 de-duplicated cover urls for the 2x2 micro-collage.
     pub covers: Vec<String>,
+    /// A first-class LOCAL playlist (`local:<uuid>`), not a Qobuz one. The row
+    /// carries a hard-drive mark and routes to the local detail; its id is a
+    /// string, so nothing may parse it as a catalog number.
+    #[serde(default, rename = "isLocal", skip_serializing_if = "std::ops::Not::not")]
+    pub is_local: bool,
+}
+
+/// One LOCAL playlist listed in the sidebar (library.db, ids `local:<uuid>`).
+///
+/// Present online AND offline — that is the whole point of the feature for
+/// people running QBZ without Qobuz. Folder membership rides
+/// `local_playlists.folder_id`, which points at the SAME folders the Qobuz
+/// playlists use, so one folder holds both kinds.
+#[derive(Clone)]
+struct SidebarLocal {
+    id: String,
+    name: String,
+    folder_id: Option<String>,
+    hidden: bool,
+    covers: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -126,6 +146,8 @@ struct SidebarData {
     /// playlist id -> folder id.
     folder_map: HashMap<u64, String>,
     hidden_playlists: HashSet<u64>,
+    /// First-class local playlists, listed alongside the Qobuz set.
+    locals: Vec<SidebarLocal>,
 }
 
 static CACHE: Mutex<Option<SidebarData>> = Mutex::new(None);
@@ -138,72 +160,139 @@ static SORT: std::sync::LazyLock<Mutex<(String, bool)>> =
     std::sync::LazyLock::new(|| Mutex::new(("name".to_string(), true)));
 static SEARCH: Mutex<String> = Mutex::new(String::new());
 
+/// Logout: drop the outgoing user's tree and the session-scoped view state.
+///
+/// `do_logout` publishes `"[]"` into the QML property, but that is only the
+/// rendered document — this CACHE is what every `crate::publish_sidebar()`
+/// rebuilds from (the Playlist Manager's optimistic move-to-folder patches it
+/// in place and republishes without any fetch), so leaving it populated makes
+/// the previous account's playlists, folders, folder membership, hidden set and
+/// local rows re-appear for the next one. Same reasoning as `fav_cache_qt` /
+/// `myqbz_*` / `artist_blacklist` teardowns in `auth_qt::logout`.
+///
+/// The expand set and the search box are session state and go with it. SORT
+/// stays: it is a view preference, holds no user data, and the reference keeps
+/// it for the process too.
+pub fn teardown() {
+    *CACHE.lock().unwrap() = None;
+    EXPANDED.lock().unwrap().clear();
+    SEARCH.lock().unwrap().clear();
+    log::info!("[qbz-qt] sidebar cache cleared (logout)");
+}
+
 /// Fetch playlists (Qobuz) + folders + membership + hidden set (library.db).
+///
+/// The Qobuz half is GATED on connectivity and, when refused, KEEPS whatever
+/// the cache already holds. That distinction is load-bearing: this function is
+/// also the body of `crate::reload_sidebar_including_local()`, the refresh verb
+/// every local mutation uses, and it runs offline by design. Attempting the
+/// fetch there would yield `Vec::new()` (the gate answers with an error), so
+/// hiding a local playlist after going offline mid-session would WIPE the
+/// Qobuz playlists out of the tree. The folders + locals reads below are
+/// unconditional — they are the whole sidebar for a user with no Qobuz account.
 pub async fn load(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
-    log::debug!("[qbz-qt] sidebar load: fetching user playlists");
-    let playlists: Vec<SidebarPlaylist> = match runtime.core().get_user_playlists().await {
-        Ok(pls) => {
-            // Same response, second consumer: the playlist ownership /
-            // follow snapshot every PlaylistCard's tri-state overlay reads
-            // (`playlist_qt::set_user_playlists`). This is the earliest point
-            // in the session where the user's own playlist list exists, and
-            // it costs no extra request — the alternative was every card
-            // rendering the "follow a foreign playlist" arm until the Library
-            // view had been opened at least once.
-            let pairs: Vec<(u64, u64)> = pls.iter().map(|p| (p.id, p.owner.id)).collect();
-            crate::playlist_qt::set_user_playlists(&pairs);
-            pls
+    let offline = crate::offline_fwd::engine().status().is_offline();
+    let playlists: Vec<SidebarPlaylist> = if offline {
+        // Preserve, never substitute: an empty vector here is a WIPE, not a
+        // refresh. Empty on a cold offline start, which is correct — there is
+        // nothing to preserve yet.
+        let cached = CACHE
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|d| d.playlists.clone())
+            .unwrap_or_default();
+        log::info!(
+            "[qbz-qt] sidebar load: offline — Qobuz fetch skipped, {} cached playlist(s) kept",
+            cached.len()
+        );
+        cached
+    } else {
+        log::debug!("[qbz-qt] sidebar load: fetching user playlists");
+        match runtime.core().get_user_playlists().await {
+            Ok(pls) => {
+                // Same response, second consumer: the playlist ownership /
+                // follow snapshot every PlaylistCard's tri-state overlay reads
+                // (`playlist_qt::set_user_playlists`). This is the earliest point
+                // in the session where the user's own playlist list exists, and
+                // it costs no extra request — the alternative was every card
+                // rendering the "follow a foreign playlist" arm until the Library
+                // view had been opened at least once.
+                let pairs: Vec<(u64, u64)> = pls.iter().map(|p| (p.id, p.owner.id)).collect();
+                crate::playlist_qt::set_user_playlists(&pairs);
+                pls
+            }
+            Err(e) => {
+                log::warn!("[qbz-qt] sidebar playlists load failed: {e}");
+                Vec::new()
+            }
         }
-        Err(e) => {
-            log::warn!("[qbz-qt] sidebar playlists load failed: {e}");
-            Vec::new()
-        }
-    }
-    .into_iter()
-    .map(|p| {
-        let cover_urls = {
-            let source = [&p.images300, &p.images150, &p.images]
-                .into_iter()
-                .flatten()
-                .find(|v| !v.is_empty());
-            let mut out: Vec<String> = Vec::new();
-            if let Some(list) = source {
-                for url in list {
-                    if !url.is_empty() && !out.contains(url) {
-                        out.push(url.clone());
-                    }
-                    if out.len() == 4 {
-                        break;
+        .into_iter()
+        .map(|p| {
+            let cover_urls = {
+                let source = [&p.images300, &p.images150, &p.images]
+                    .into_iter()
+                    .flatten()
+                    .find(|v| !v.is_empty());
+                let mut out: Vec<String> = Vec::new();
+                if let Some(list) = source {
+                    for url in list {
+                        if !url.is_empty() && !out.contains(url) {
+                            out.push(url.clone());
+                        }
+                        if out.len() == 4 {
+                            break;
+                        }
                     }
                 }
+                out
+            };
+            SidebarPlaylist {
+                id: p.id,
+                name: p.name,
+                tracks_count: p.tracks_count,
+                cover_urls,
+                position: 0,
             }
-            out
-        };
-        SidebarPlaylist {
-            id: p.id,
-            name: p.name,
-            tracks_count: p.tracks_count,
-            cover_urls,
-            position: 0,
-        }
-    })
-    .collect();
+        })
+        .collect()
+    };
 
     log::debug!("[qbz-qt] sidebar load: playlists fetch settled, reading folders");
     let (folders, folder_map, positions, hidden_playlists) = folders_blocking();
     log::debug!("[qbz-qt] sidebar load: folders read");
     let mut playlists = playlists;
     for p in &mut playlists {
-        if let Some(pos) = positions.get(&p.id) {
-            p.position = *pos;
-        }
+        // Assign, don't merge: a preserved cached row carries its previous
+        // position, and a settings row that has since been deleted must reset
+        // it to 0 rather than leave the stale value in place.
+        p.position = positions.get(&p.id).copied().unwrap_or(0);
     }
+    // First-class LOCAL playlists (D7). Read AFTER the Qobuz fetch settles but
+    // independently of it: the fetch can fail, or be gate-refused offline, and
+    // the local set must still list — for a user without Qobuz it is the ONLY
+    // set. Hidden locals drop here the way hidden Qobuz playlists do (B3).
+    // Covers resolve with no network, from the playlist's own tracks.
+    let locals: Vec<SidebarLocal> = crate::local_playlist_qt::list_blocking()
+        .into_iter()
+        .filter(|p| !p.hidden)
+        .map(|p| SidebarLocal {
+            covers: crate::local_playlist_qt::resolve_cover_urls_blocking(&p.id, 4),
+            id: p.id,
+            name: p.name,
+            folder_id: p.folder_id,
+            hidden: p.hidden,
+        })
+        .collect();
+    log::debug!("[qbz-qt] sidebar load: {} local playlist(s)", locals.len());
+
     let (n_playlists, n_folders) = (playlists.len(), folders.len());
     *CACHE.lock().unwrap() = Some(SidebarData {
         playlists,
         folders,
         folder_map,
         hidden_playlists,
+        locals,
     });
     log::info!("[qbz-qt] sidebar loaded: {n_playlists} playlists, {n_folders} folders");
 }
@@ -250,6 +339,25 @@ fn folders_blocking() -> (Vec<(String, String)>, HashMap<u64, String>, HashMap<u
     (folders, folder_map, positions, hidden)
 }
 
+/// A Qobuz playlist's track count from the session cache (`sidebar.rs:389`).
+///
+/// This is the QOBUZ BLOCK SIZE — the base a library.db sidecar position is
+/// computed from (`next_playlist_sidecar_position`), when a local/Plex ref is
+/// attached to a Qobuz playlist. `None` when the sidebar has not loaded yet or
+/// the playlist is not one of the user's; the caller then treats the block as
+/// empty, and the sidecar's own `MAX(position) + 1` still keeps the batch past
+/// every stored slot.
+pub fn playlist_track_count(id: u64) -> Option<u32> {
+    CACHE
+        .lock()
+        .ok()?
+        .as_ref()?
+        .playlists
+        .iter()
+        .find(|p| p.id == id)
+        .map(|p| p.tracks_count)
+}
+
 /// SidebarPlaylist order for the active sort (sidebar.rs comparators:
 /// `recent`/`playcount` keep API order = newest-first; asc==true is always
 /// the natural direction).
@@ -292,7 +400,30 @@ pub fn rebuild() -> Vec<SidebarEntry> {
         indent,
         folder_id: folder_id.to_string(),
         covers: p.cover_urls.clone(),
+        is_local: false,
     };
+    let local_entry_for = |p: &SidebarLocal, indent: bool, folder_id: &str| SidebarEntry {
+        kind: "playlist".into(),
+        id: p.id.clone(),
+        name: p.name.clone(),
+        expanded: false,
+        count: 0,
+        indent,
+        folder_id: folder_id.to_string(),
+        covers: p.covers.clone(),
+        is_local: true,
+    };
+    let local_matches =
+        |p: &SidebarLocal| !searching || p.name.to_lowercase().contains(query.as_str());
+    /// Locals sort among THEMSELVES by name, always — they have no
+    /// track-count or custom-position stat to honour the toolbar's other
+    /// sorts with, and inventing one would order them arbitrarily.
+    fn sorted_locals<'a>(
+        mut list: Vec<&'a SidebarLocal>,
+    ) -> Vec<&'a SidebarLocal> {
+        list.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        list
+    }
 
     let mut entries: Vec<SidebarEntry> = Vec::new();
     for (fid, fname) in &data.folders {
@@ -302,8 +433,17 @@ pub fn rebuild() -> Vec<SidebarEntry> {
             .filter(|p| matches(p))
             .filter(|p| !data.hidden_playlists.contains(&p.id))
             .collect();
-        // While searching, skip folders with no matching playlists.
-        if searching && members.is_empty() {
+        // A folder holds BOTH kinds: local membership rides
+        // `local_playlists.folder_id`, pointing at this same folder.
+        let local_members: Vec<&SidebarLocal> = sorted_locals(
+            data.locals
+                .iter()
+                .filter(|p| p.folder_id.as_deref() == Some(fid.as_str()))
+                .filter(|p| local_matches(p))
+                .collect(),
+        );
+        // While searching, skip folders with nothing matching in EITHER set.
+        if searching && members.is_empty() && local_members.is_empty() {
             continue;
         }
         // When searching, force-expand so matches inside are visible.
@@ -313,14 +453,18 @@ pub fn rebuild() -> Vec<SidebarEntry> {
             id: fid.clone(),
             name: fname.clone(),
             expanded: is_exp,
-            count: members.len() as i32,
+            count: (members.len() + local_members.len()) as i32,
             indent: false,
             folder_id: String::new(),
             covers: Vec::new(),
+            is_local: false,
         });
         if is_exp {
             for p in members {
                 entries.push(entry_for(p, true, fid));
+            }
+            for p in local_members {
+                entries.push(local_entry_for(p, true, fid));
             }
         }
     }
@@ -334,6 +478,24 @@ pub fn rebuild() -> Vec<SidebarEntry> {
         if !in_folder && matches(p) && !data.hidden_playlists.contains(&p.id) {
             entries.push(entry_for(p, false, ""));
         }
+    }
+    // LOCAL playlists not in a folder (or in one that no longer exists) —
+    // root rows AFTER the Qobuz set, name-sorted, honouring the same search.
+    // Always present, online or offline.
+    for p in sorted_locals(
+        data.locals
+            .iter()
+            .filter(|p| {
+                let in_folder = p
+                    .folder_id
+                    .as_ref()
+                    .map(|f| folder_ids.contains(f))
+                    .unwrap_or(false);
+                !in_folder && local_matches(p)
+            })
+            .collect(),
+    ) {
+        entries.push(local_entry_for(p, false, ""));
     }
     entries
 }
@@ -372,4 +534,185 @@ pub fn toggle_folder(id: &str) -> bool {
     } else {
         true
     }
+}
+
+// ---------------------------------------------------------------------------
+// Cache accessors for the Playlist Manager seam (contract D10 / §5.2 / §5.6)
+//
+// All four answer from the SESSION CACHE only — no DB, no network — so they
+// are callable from the Qt thread and they behave identically offline. Each
+// returns `None` / an empty vector when the sidebar has never loaded, and each
+// caller has a documented fallback for that state rather than treating it as
+// an error.
+// ---------------------------------------------------------------------------
+
+/// One row of the mini-rail folder flyout (`QbzShell.sidebarFolderPopupJson`).
+#[derive(Clone, Serialize)]
+pub struct FolderPopupRow {
+    pub id: String,
+    pub name: String,
+    #[serde(rename = "isLocal")]
+    pub is_local: bool,
+}
+
+/// The playlists inside `folder_id`, in the order the expanded tree would show
+/// them: Qobuz members under the active sort with hidden ones dropped, then
+/// that folder's locals appended name-sorted (mirrors `sidebar.rs:517-546`).
+///
+/// The search filter is deliberately NOT applied — the flyout is opened from a
+/// rail with no search field, and the reference's own header count comes from
+/// the entry row, which is computed post-search. Here `count = rows.len()`, so
+/// the header and the list can never disagree.
+///
+/// Consumed by `crate::sidebar_open_folder_popup` (block 6), which serialises
+/// the rows into `QbzShell.sidebarFolderPopupJson`.
+pub fn folder_popup_rows(folder_id: &str) -> Vec<FolderPopupRow> {
+    let Some(data) = CACHE.lock().unwrap().clone() else {
+        return Vec::new();
+    };
+    let mut rows: Vec<FolderPopupRow> = sort_playlists(&data.playlists)
+        .into_iter()
+        .filter(|p| data.folder_map.get(&p.id).map(|f| f == folder_id).unwrap_or(false))
+        .filter(|p| !data.hidden_playlists.contains(&p.id))
+        .map(|p| FolderPopupRow {
+            id: p.id.to_string(),
+            name: p.name,
+            is_local: false,
+        })
+        .collect();
+    let mut locals: Vec<&SidebarLocal> = data
+        .locals
+        .iter()
+        .filter(|p| p.folder_id.as_deref() == Some(folder_id))
+        .collect();
+    locals.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    rows.extend(locals.into_iter().map(|p| FolderPopupRow {
+        id: p.id.clone(),
+        name: p.name.clone(),
+        is_local: true,
+    }));
+    rows
+}
+
+/// A folder's display name from the session cache (`None` when the sidebar has
+/// never loaded, or when the id names a HIDDEN folder — `SidebarData.folders`
+/// is the already-filtered visible set, D11).
+///
+/// Only `crate::sidebar_open_folder_popup` calls it, to fill the `folderName`
+/// key of the §4.7 document. The FLYOUT does not read that key — it takes the
+/// name synchronously from the clicked entry, because the document lands a
+/// later event-loop turn — so a `None` here degrades to `""` in a field nobody
+/// renders rather than to a blank header.
+pub fn folder_name(folder_id: &str) -> Option<String> {
+    CACHE
+        .lock()
+        .ok()?
+        .as_ref()?
+        .folders
+        .iter()
+        .find(|(id, _)| id == folder_id)
+        .map(|(_, name)| name.clone())
+}
+
+/// Insert an OPTIMISTIC Qobuz playlist row at the top of the sidebar cache —
+/// the port of `crates/qbz/src/sidebar.rs:437-454`.
+///
+/// The playlist importer creates playlists through the API, and the
+/// user-playlists endpoint lags the write by seconds: without this the newly
+/// imported playlist is simply absent from the tree until the bounded-retry
+/// reload catches up, and the user's only evidence it exists is a toast. The
+/// row carries no covers (the collage fills on the next real load) and is a
+/// no-op when the id is already cached, so the retry loop can call it again
+/// after a failed reload without duplicating.
+///
+/// Cache-only, like every accessor in this block: the caller publishes
+/// (`crate::publish_sidebar()`), which keeps this correct offline and free of a
+/// round trip.
+pub fn insert_qobuz_entry(id: u64, name: &str, tracks_count: u32) {
+    let mut guard = CACHE.lock().unwrap();
+    // `None` = the sidebar has never loaded this session. The reference's cache
+    // is not an Option and always has somewhere to insert; synthesising an
+    // empty one here is the same behaviour — there is nothing yet for the
+    // single row to hide, and the retry loop's `load()` replaces it wholesale.
+    let data = guard.get_or_insert_with(SidebarData::default);
+    if data.playlists.iter().any(|p| p.id == id) {
+        return;
+    }
+    data.playlists.insert(
+        0,
+        SidebarPlaylist {
+            id,
+            name: name.to_string(),
+            tracks_count,
+            cover_urls: Vec::new(),
+            position: 0,
+        },
+    );
+}
+
+/// Patch a playlist's folder membership in the sidebar cache — `""` = root.
+///
+/// The Playlist Manager's move-to-folder calls this and then
+/// `crate::publish_sidebar()`, instead of a reload: the reload verb that works
+/// offline still re-reads the whole DB, and the network one is a no-op offline
+/// (D10). Both id kinds are handled — a Qobuz id patches `folder_map`, a
+/// `local:` id patches the local row's own `folder_id` column mirror.
+pub fn move_playlist_optimistic(id: &str, folder_id: &str) {
+    let mut guard = CACHE.lock().unwrap();
+    let Some(data) = guard.as_mut() else {
+        return;
+    };
+    let target = (!folder_id.is_empty()).then(|| folder_id.to_string());
+    if crate::local_playlist_qt::is_local_id(id) {
+        if let Some(p) = data.locals.iter_mut().find(|p| p.id == id) {
+            p.folder_id = target;
+        }
+    } else if let Ok(pid) = id.parse::<u64>() {
+        match target {
+            Some(fid) => {
+                data.folder_map.insert(pid, fid);
+            }
+            None => {
+                data.folder_map.remove(&pid);
+            }
+        }
+    }
+}
+
+/// A Qobuz playlist's name from the session cache.
+///
+/// The offline-synthesis fallback name for the Playlist Manager (§5.2): a
+/// playlist that only exists offline as "some id with local sidecar rows" is
+/// named from whatever the sidebar loaded while online, else from
+/// `"Playlist ({} local)"`.
+///
+/// It CANNOT supply a description — `SidebarPlaylist` has no such field, unlike
+/// the reference's `sidebar::playlist_name_desc` — so the playlist editor
+/// resolves descriptions elsewhere and never through this.
+pub fn playlist_name(id: u64) -> Option<String> {
+    CACHE
+        .lock()
+        .ok()?
+        .as_ref()?
+        .playlists
+        .iter()
+        .find(|p| p.id == id)
+        .map(|p| p.name.clone())
+}
+
+/// A LOCAL playlist's already-resolved cover urls from the session cache.
+///
+/// `resolve_cover_urls_blocking` opens the per-user DB per call, so the manager
+/// loader asks here FIRST and only falls back to the repo for the locals the
+/// cache cannot answer (§5.6). `None` means "not in the cache" — an empty
+/// `Some(vec![])` means "cached, and it genuinely has no covers".
+pub fn local_covers(id: &str) -> Option<Vec<String>> {
+    CACHE
+        .lock()
+        .ok()?
+        .as_ref()?
+        .locals
+        .iter()
+        .find(|p| p.id == id)
+        .map(|p| p.covers.clone())
 }

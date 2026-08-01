@@ -42,6 +42,11 @@ Rectangle {
     property bool btnEnabled: true
     property bool destructive: false
     property int btnHeight: 48
+    /// Label size. The control draws Typography.button (17px), which is right
+    /// for the footer chips it was written for; the folder / playlist modals
+    /// are 15px (Typography.body) in the reference, and hardcoding 17 there
+    /// would be a visible parity break on every one of them.
+    property int labelSize: theme.fontButton
     signal clicked()
 
     QbzTheme { id: theme }
@@ -67,7 +72,7 @@ Rectangle {
         width: Math.min(implicitWidth, root.width - 40)
         text: root.label
         color: theme.accentGlyphColor
-        font.pixelSize: theme.fontButton
+        font.pixelSize: root.labelSize
         font.weight: theme.weightSemibold
         horizontalAlignment: Text.AlignHCenter
         verticalAlignment: Text.AlignVCenter

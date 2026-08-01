@@ -49,6 +49,14 @@ QtObject {
     /// Inter-column gap (TrackRow.slint:267).
     readonly property int gap: 14
 
+    /// Reorder gutter — the up/down chevron stack at the LEADING edge of a
+    /// custom-order row (TrackRow.slint:272-280, `width: 22px`). Drawn only
+    /// on a reorderable surface (the playlist detail under custom sort, and
+    /// a local playlist under its natural order), so it is the one arm the
+    /// Slint header does NOT reserve. It is reserved here, because a header
+    /// that ignores a column the row draws slides every label after it by
+    /// width + gap — the exact drift this file exists to prevent.
+    readonly property int colReorder: 22
     /// Number / play-cell (TrackRow.slint:344 `number-width: 32px`).
     readonly property int colNumber: 32
     /// Artwork thumbnail (TrackRow.slint:336, show-artwork arm).
@@ -67,11 +75,15 @@ QtObject {
     readonly property int colMenu: 32
 
     /// Sum of every FIXED cell that is actually drawn for these arms.
-    function fixedWidth(artwork, albumCol, favorite, download, menu) {
+    ///
+    /// `reorder` is TRAILING and optional on all three functions: it landed
+    /// after the call sites did, and `undefined` is falsy, so a caller that
+    /// does not know about the gutter keeps its old answer exactly.
+    function fixedWidth(artwork, albumCol, favorite, download, menu, reorder) {
         return colNumber + (artwork ? colArt : 0) + (albumCol ? colAlbum : 0)
             + colDuration + colQuality
             + (favorite ? colFavorite : 0) + (download ? colDownload : 0)
-            + (menu ? colMenu : 0)
+            + (menu ? colMenu : 0) + (reorder ? colReorder : 0)
     }
 
     /// Sum of the inter-column gaps. The unconditional cells are number,
@@ -79,17 +91,17 @@ QtObject {
     /// (QML's Row skips invisible children entirely — no cell, no gap — and
     /// so does Slint's `if` in a HorizontalLayout, which is why the count is
     /// arm-dependent on both sides.)
-    function gapWidth(artwork, albumCol, favorite, download, menu) {
+    function gapWidth(artwork, albumCol, favorite, download, menu, reorder) {
         return (3 + (artwork ? 1 : 0) + (albumCol ? 1 : 0) + (favorite ? 1 : 0)
-            + (download ? 1 : 0) + (menu ? 1 : 0)) * gap
+            + (download ? 1 : 0) + (menu ? 1 : 0) + (reorder ? 1 : 0)) * gap
     }
 
     /// The stretch column. `rowWidth` is the OUTER width of the row (the
     /// padding is subtracted here), so a header and a row that are the same
     /// width place every column at the same x.
-    function titleWidth(rowWidth, artwork, albumCol, favorite, download, menu) {
+    function titleWidth(rowWidth, artwork, albumCol, favorite, download, menu, reorder) {
         return Math.max(0, rowWidth - 2 * padH
-            - fixedWidth(artwork, albumCol, favorite, download, menu)
-            - gapWidth(artwork, albumCol, favorite, download, menu))
+            - fixedWidth(artwork, albumCol, favorite, download, menu, reorder)
+            - gapWidth(artwork, albumCol, favorite, download, menu, reorder))
     }
 }

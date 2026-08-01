@@ -90,7 +90,12 @@ Rectangle {
 
     // Tracks tab.
     property string tracksSearch: ""
-    property string tracksGroup: "off"      // off | album | artist | name
+    // off | album | artist | name — PERSISTED, so it is owned by the bridge
+    // exactly like the Tracks sort and the album-identity mode, not by a QML
+    // default. It used to be a plain `property string tracksGroup: "off"`:
+    // `locallibrary_ui.json` carried the user's choice across restarts and
+    // nothing ever read it back into the UI (PARITY-DEBT #13).
+    readonly property string tracksGroup: QbzLocal.localTracksGroup
     property bool tracksMultiSelect: false
     property var tracksSelected: ({})
     readonly property int tracksSelectedCount: Object.keys(tracksSelected).length
@@ -343,9 +348,40 @@ Rectangle {
         sortRows(filterRows(folders, foldersSearch), foldersSort)
     readonly property var foldersGrouped: groupRows(foldersVisible, foldersGroup)
 
-    // Tracks: search + sort are SERVER-side (pagination order), so the
-    // visible set is the loaded pages as published.
-    readonly property var tracksVisible: tracks
+    // Tracks: search + sort are SERVER-side (they define the pagination
+    // order), so the loaded pages arrive already ordered and the visible set
+    // is the pages as published.
+    //
+    // The GROUP modes are the exception: they are a CLIENT-side visual
+    // reorder layered on top of that order (`derive_tracks`,
+    // local_library.rs:1196-1247, sorts the rows by the group key before the
+    // headers go in; commit e379aa65 calls it out as "group modes keep their
+    // client-side visual reorder on top"). Doing it here rather than inside
+    // LocalTracksTab keeps ONE definition of "the visible order" — the tab's
+    // entry model, the artwork window, select-all and the play seam all read
+    // this same array, which is what makes the queue match the screen
+    // (PARITY-DEBT #14).
+    function cmpStr(a, b) { return a < b ? -1 : a > b ? 1 : 0 }
+    readonly property var tracksVisible: {
+        var rows = tracks
+        if (tracksGroup === "off" || rows.length === 0) return rows
+        var lc = function (v) { return (v || "").toString().toLowerCase() }
+        var out = rows.slice()
+        if (tracksGroup === "album") {
+            out.sort(function (a, b) {
+                return cmpStr(lc(a.album), lc(b.album)) || cmpStr(lc(a.title), lc(b.title))
+            })
+        } else if (tracksGroup === "artist") {
+            out.sort(function (a, b) {
+                return cmpStr(lc(a.artist), lc(b.artist))
+                    || cmpStr(lc(a.album), lc(b.album))
+                    || cmpStr(lc(a.title), lc(b.title))
+            })
+        } else if (tracksGroup === "name") {
+            out.sort(function (a, b) { return cmpStr(lc(a.title), lc(b.title)) })
+        }
+        return out
+    }
 
     readonly property var artistsVisible: {
         var q = artistsSearch.trim().toLowerCase()
@@ -375,16 +411,37 @@ Rectangle {
         return out
     }
 
-    // The selected artist's albums — client-side over the loaded album set
-    // (`allArtists` is the comma-joined contributor list the DB aggregates).
+    // The selected artist's albums.
+    //
+    // The MATCH lives in Rust — `QbzLocal.artistAlbumIds` ->
+    // local_artist_match::album_matches_artist, the port of
+    // local_library.rs:3368-3390 — because it is the same normalized-name rule
+    // the Artists merge uses and there must be exactly one of it. It compares
+    // NORMALIZED PARTS for exact equality against the primary artist, every
+    // `allArtists` comma part and every split-credit part (`,&/;`, feat/ft/
+    // featuring/with), plus the "various artists" special case.
+    //
+    // What it replaced: a lowercase equality on `artist` OR a SUBSTRING
+    // `indexOf` on `allArtists`. That listed "Airbourne" and "Blair" under
+    // "Air", and an album credited "A & B" never appeared under "B"
+    // (PARITY-DEBT #8).
+    //
+    // The ids come back rather than the rows, so the pane renders the very
+    // objects this view already parsed, in the published order.
     readonly property var artistAlbums: {
         if (selectedArtist === "") return []
-        var needle = selectedArtist.toLowerCase()
+        var rows = albums   // binding dependency: re-derive on every republish
+        var ids = {}
+        try {
+            var arr = JSON.parse(QbzLocal.artistAlbumIds(selectedArtist))
+            for (var j = 0; j < arr.length; j++) ids[arr[j]] = true
+        } catch (e) {
+            console.warn("[qbz-qt] local: bad artist album ids — " + e)
+            return []
+        }
         var out = []
-        for (var i = 0; i < albums.length; i++) {
-            var a = albums[i]
-            if ((a.artist || "").toLowerCase() === needle
-                || (a.allArtists || "").toLowerCase().indexOf(needle) >= 0) out.push(a)
+        for (var i = 0; i < rows.length; i++) {
+            if (ids[rows[i].id]) out.push(rows[i])
         }
         return out
     }

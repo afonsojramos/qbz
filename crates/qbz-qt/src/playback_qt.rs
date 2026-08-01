@@ -17,11 +17,15 @@
 //! - Streaming quality: seeded from ui_prefs ("streaming_quality") and
 //!   live-updated by Settings > Audio (settings_qt). The #638 device-cap clamp
 //!   lives in the Slint glue and is NOT ported.
-//! - Offline-cache tier (offline bytes), prefetch warming, stop-after,
-//!   infinite refill, QConnect branches.
+//! - Offline-cache tier (offline bytes), prefetch warming, QConnect branches.
 //!
 //! DONE, previously listed here — kept as one line each so the list above
 //! only ever names REAL gaps:
+//! - Stop-after-this-song (#35) — the end-of-track arm consumes the marker and
+//!   pauses AHEAD of repeat/shuffle, and the gapless pre-queue guard that was
+//!   already here now defends a marker the UI can actually place.
+//! - Infinite refill (#33) — `try_infinite_refill` chains a smart artist radio
+//!   off the ended track when the queue runs out and the ∞ toggle is on.
 //! - Gapless prefetch: the engine raises `gapless_ready` ~10s out and this
 //!   module now answers it with `play_next` (both the streaming and the
 //!   local/DSD arms), so transitions are sample-accurate again.
@@ -356,7 +360,11 @@ fn warn_dead_context(tracks: &[QueueTrack], site: &str) {
 
 /// Fetch the album, build the queue (playback.rs `make_queue_track` port),
 /// set it starting at track 1, and play through the core's resolved path.
-async fn fetch_album_queue(
+/// `pub(crate)` so `library_bulk` can build ONE concatenated queue out of a
+/// multi-album selection and hand it to `enqueue_track_list_mode` — going
+/// through `enqueue_album` per id would publish the queue N times and, for
+/// "later", append instead of landing in the manual block's tail.
+pub(crate) async fn fetch_album_queue(
     runtime: &Arc<AppRuntime<LoggingAdapter>>,
     album_id: &str,
 ) -> Result<Vec<QueueTrack>, String> {
@@ -774,6 +782,68 @@ pub async fn play_track_list_in(
         .map_err(|e| format!("play_track {first_id} failed: {e}"))?;
     refresh_now_playing(runtime).await;
     Ok(())
+}
+
+/// When the queue is exhausted and `InfiniteRadio` autoplay is on, build a
+/// smart artist radio seeded by the just-finished track and start it, replacing
+/// the spent queue. Returns `true` when a radio actually started.
+///
+/// Port of `playback.rs::try_infinite_refill`, including the reason it does not
+/// mirror Tauri literally: Tauri appends the radio and retries `next()`, which
+/// cannot work here because `QueueManager::next()` has already nulled
+/// `current_index` at the queue edge — the retry would replay the OLD queue
+/// from index 1 instead of the radio. Starting the radio fresh reaches the
+/// intended behaviour and chains: each radio's end re-seeds the next one, which
+/// is what makes it infinite rather than one extra radio.
+///
+/// `play_track_list` runs the queue through `filter_blacklisted_queue`, so a
+/// radio made entirely of blocked artists cannot come back as playback.
+async fn try_infinite_refill(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    seed_track_id: u64,
+) -> bool {
+    if !crate::queue_qt::is_infinite_play() || seed_track_id == 0 {
+        return false;
+    }
+    let artist_id = match runtime.core().get_track(seed_track_id).await {
+        Ok(track) => match track.performer.as_ref().map(|p| p.id) {
+            Some(id) => id,
+            None => {
+                log::warn!(
+                    "[qbz-qt] infinite radio: seed track {seed_track_id} has no performer"
+                );
+                return false;
+            }
+        },
+        Err(e) => {
+            log::warn!("[qbz-qt] infinite radio: get_track {seed_track_id} failed: {e}");
+            return false;
+        }
+    };
+    match runtime.core().create_smart_artist_radio(artist_id).await {
+        Ok(tracks) if !tracks.is_empty() => {
+            let queue: Vec<QueueTrack> =
+                tracks.iter().map(crate::foryou_qt::to_queue_track).collect();
+            match play_track_list(runtime, queue, 0, false).await {
+                Ok(()) => {
+                    log::info!(
+                        "[qbz-qt] infinite radio: chained {} track(s) from artist {artist_id}",
+                        tracks.len()
+                    );
+                    true
+                }
+                Err(e) => {
+                    log::warn!("[qbz-qt] infinite radio: play failed: {e}");
+                    false
+                }
+            }
+        }
+        Ok(_) => false,
+        Err(e) => {
+            log::warn!("[qbz-qt] infinite radio: build failed: {e}");
+            false
+        }
+    }
 }
 
 /// Append a pre-built queue to the current one ("Add all to queue").
@@ -1543,12 +1613,11 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
             // the current one still plays, via `Player::play_next`, which
             // appends to the same rodio sink and is what makes the transition
             // sample-accurate.
-            // The stop-after guard is last and short-circuited. It is a NO-OP
-            // today — this port has no UI that marks a track (queue_qt.rs:10
-            // records the cut) so the core always answers None — but it is
-            // kept 1:1 because the day the marker lands, its absence is a
-            // silent bug: the engine hands off seamlessly and the marker never
-            // fires, which is exactly what playback.rs:5372-5377 warns about.
+            // The stop-after guard is last and short-circuited. It is LIVE now
+            // (the queue row menu can place the marker): without it the engine
+            // would hand the next track's bytes over seamlessly and the marker
+            // would never fire, which is exactly what playback.rs:5372-5377
+            // warns about.
             if event.gapless_ready
                 && event.gapless_next_track_id == 0
                 && track_id != 0
@@ -1653,16 +1722,57 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                 && duration > 0
                 && seen_position + 2 >= duration;
             if track_ended {
+                // Seed for InfiniteRadio, read BEFORE anything moves the
+                // cursor: the track that just ended is still the current one.
+                let ended_track_id = runtime
+                    .core()
+                    .current_track()
+                    .await
+                    .map(|t| t.id)
+                    .unwrap_or(0);
+                // Stop-after-this-song: if the track that just ended carries
+                // the marker, HALT here — do not advance, do not refill. The
+                // queue stays intact and the finished track stays parked in
+                // now-playing, so pressing play resumes from where the user
+                // left off. `consume_stop_after_if` is one-shot (it clears the
+                // marker), and this runs AHEAD of repeat/shuffle exactly as
+                // the reference does (playback.rs:5749-5772) — behind them the
+                // marker would lose to a repeat-one and never fire.
+                if ended_track_id != 0
+                    && runtime.core().consume_stop_after_if(ended_track_id).await
+                {
+                    if let Err(e) = runtime.core().pause() {
+                        log::warn!("[qbz-qt] stop-after: pause failed: {e}");
+                    }
+                    last_track_id = 0;
+                    seen_position = 0;
+                    gapless_requested_for = 0;
+                    crate::now_playing::set_playing(false);
+                    // Republish so the row drops its CircleStop in the same
+                    // frame the marker is consumed.
+                    crate::queue_qt::publish(&runtime).await;
+                    // The tail-of-loop bookkeeping, inlined because this arm
+                    // returns to the top early and must NOT run
+                    // `seen_position = position` (the reset above is the
+                    // point). Dropping the Discord push here would leave the
+                    // presence saying "playing" after the timer stopped us.
+                    if is_playing != was_playing {
+                        crate::integrations_qt::discord_push(&runtime);
+                    }
+                    was_playing = is_playing;
+                    continue;
+                }
                 last_track_id = 0;
-                // POC-NOTE: no stop-after / infinite-refill — the core queue's
-                // own next (repeat/shuffle aware). The skip-unavailable walk
-                // this note also used to claim is missing IS ported: a failed
-                // play inside `play_queue_track` hands off to
-                // `auto_skip_unavailable` (PARITY-DEBT #2).
+                // The skip-unavailable walk is ported: a failed play inside
+                // `play_queue_track` hands off to `auto_skip_unavailable`
+                // (PARITY-DEBT #2).
                 if let Some(track) = runtime.core().next_track().await {
                     let next_id = track.id;
                     log::info!("[qbz-qt] poll: advancing to {next_id}");
                     play_queue_track(&runtime, next_id).await;
+                } else if try_infinite_refill(&runtime, ended_track_id).await {
+                    // InfiniteRadio started a fresh smart radio; it replaced
+                    // the queue and published on its way in.
                 } else {
                     log::info!("[qbz-qt] poll: queue finished");
                     crate::now_playing::set_playing(false);

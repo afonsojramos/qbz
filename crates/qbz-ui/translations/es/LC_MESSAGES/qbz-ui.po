@@ -3880,6 +3880,16 @@ msgstr "No se pudo copiar la lista de reproducción"
 msgid "Playlist has no tracks to copy"
 msgstr "La lista de reproducción no tiene pistas para copiar"
 
+msgid "Added {} track"
+msgid_plural "Added {} tracks"
+msgstr[0] "Se agregó {} pista"
+msgstr[1] "Se agregaron {} pistas"
+
+msgid "Added {} track to {}"
+msgid_plural "Added {} tracks to {}"
+msgstr[0] "Se agregó {} pista a {}"
+msgstr[1] "Se agregaron {} pistas a {}"
+
 msgid "Added {} track to queue"
 msgid_plural "Added {} tracks to queue"
 msgstr[0] "Se agregó {} pista a la cola"
@@ -4897,3 +4907,44 @@ msgstr "Se quitaron {} tracks de favoritos"
 
 msgid "Removing {} tracks from favorites…"
 msgstr "Quitando {} tracks de favoritos…"
+
+msgid "Playlist imported"
+msgstr "Lista de reproducción importada"
+
+msgid "Playlist import failed"
+msgstr "No se pudo importar la lista de reproducción"
+
+msgid "Not logged in to Qobuz"
+msgstr "No has iniciado sesión en Qobuz"
+
+# Qt playlist manager — folder modals (contract block 2)
+
+msgid "Delete folder"
+msgstr "Eliminar carpeta"
+
+msgid "Delete the folder “{}”? Its playlists move back to the root."
+msgstr "¿Eliminar la carpeta “{}”? Sus playlists vuelven a la raíz."
+
+msgid "Choose a folder image"
+msgstr "Elige una imagen para la carpeta"
+
+msgid "Images"
+msgstr "Imágenes"
+
+msgid "Failed to create folder"
+msgstr "No se pudo crear la carpeta"
+
+msgid "Failed to save folder"
+msgstr "No se pudo guardar la carpeta"
+
+msgid "Failed to delete folder"
+msgstr "No se pudo eliminar la carpeta"
+
+msgid "Failed to rename playlist"
+msgstr "No se pudo renombrar la playlist"
+
+msgid "Failed to delete playlist"
+msgstr "No se pudo eliminar la playlist"
+
+msgid "Couldn't create the playlist"
+msgstr "No se pudo crear la playlist"

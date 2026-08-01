@@ -28,13 +28,16 @@
 // rows/TrackCols.qml for both.
 //
 // POC-NOTEs, each deliberate and each with a precedent in this port:
-// - NO multi-select bar. qml/rows/TrackRow.qml has no multi-select arm, and
-//   one of the .slint bar's seven actions (add-to-playlist) still has no
-//   bridge seam at all — LabelView.qml made the same call. (add-to-mixtape
-//   IS live now: the per-row menu reaches QbzMyQbzAdd.open; it is only the
-//   BULK form that is missing, for want of a selection.) The .slint header's
-//   select disc renders DIMMED and inert here (the ArtistView / LabelView
-//   precedent).
+// - NO multi-select bar — and the ORIGINAL reason is now STALE on both
+//   halves: rows/TrackRow.qml:116 DOES have the `selectMode` arm, and
+//   add-to-playlist DOES have a bridge seam (QbzPlaylistPicker.openForTracks,
+//   src/playlist_picker_bridge.rs). What is still missing here is only the
+//   selection STATE and the bar itself — LibraryView.qml's `tracksSelected`
+//   map + qml/controls/MultiSelectBar-style host is the pattern to copy.
+//   Until then the .slint header's select disc renders DIMMED and inert here
+//   (the ArtistView / LabelView precedent). Per-ROW add-to-playlist and
+//   add-to-mixtape are both LIVE on this page already (the shared TrackRow
+//   menu).
 // - The "Add to playlist" disc (list-plus) is inert in the .slint too — it
 //   carries no `clicked` there (MixView.slint:182-188) — so it is inert
 //   here, dimmed the same way, rather than silently absent.

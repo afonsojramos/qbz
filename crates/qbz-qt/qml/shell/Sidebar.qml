@@ -15,13 +15,18 @@
 // flyout to the right (SidebarFolderPopup.slint) — in mini a folder cannot
 // expand in place, so a toggle there would be a control that does nothing.
 //
-// FILE LENGTH (>500): the mini folder flyout is a shared single instance
-// declared at this root (never one Popup per row), which is what keeps it
-// cheap; the hover bubble is not here at all any more — it is the shell's
-// shared QbzTooltip overlay. The flyout is an extraction candidate into
-// qml/shell/SidebarFolderFlyout.qml, but a new .qml also needs a build.rs
-// entry and an unregistered type fails the WHOLE file at load, so they stay
-// here until that glue lands.
+// FILE LENGTH (>500): what remains after the mini folder flyout moved to
+// shell/SidebarFolderFlyout.qml and the row context menu to
+// shell/SidebarRowMenu.qml is ONE surface with one state machine — the three
+// sidebar widths. Every block below is a WIDTH-CONDITIONAL variant of the same
+// tree (the nav rows, the PLAYLISTS toolbar, the row delegate and the
+// scrollbar each read `root.mini`), so splitting them into files would hand
+// each half a `mini` property to keep in sync and put the row delegate's
+// drop-target arithmetic — which needs `root`'s own window coordinates — a
+// file away from the root it measures. The three things that DID come out are
+// the three that are self-contained: both overlays and the hover bubble (the
+// shell's shared QbzTooltip). All three are shared single instances declared
+// at this root, never one per row: the tree can hold hundreds of rows.
 //
 // Top-level section nav rows (Discover / Library / Local Library / My QBZ)
 // replicate SidebarNavRow: 34px rows, radius 6, 16px icons, 13px/w500
@@ -45,14 +50,26 @@
 // nothing uses it today (a row that clicks into nothing is a defect, not a
 // stub). Its leading glyph goes through shell/NavSectionGlyph.qml, because My
 // QBZ can carry a user-supplied icon (SidebarNavRow `raw-icon`).
-// The playlist/folder tree below the nav IS live (sidebar_qt.rs: load,
-// sort, search, expand/collapse, drag-drop target); folder CREATION,
-// the Playlist Manager and the importer have no seam and are disabled in
-// the "..." menu.
+// The playlist/folder tree below the nav IS live (sidebar_qt.rs: load, sort,
+// search, expand/collapse, drag-drop target), and so is everything the "..."
+// menu offers: New folder opens QbzFolderEdit's create panel (the small
+// name-only create modal, controls/FolderModals.qml), Manage playlists routes
+// to the Playlist Manager, Import opens the importer and Refresh rebuilds the
+// tree. Import is the only row that dims — it is the only Qobuz-only one, so it
+// follows the reference's `enabled: !offline`; Refresh stays lit because its
+// bridge call is the offline-safe rebuild (see the Repeater's comment). Nothing
+// in this file renders a control that no-ops.
+//
+// Right-pressing a row opens shell/SidebarRowMenu.qml (edit / hide / mixtape /
+// move-to-folder). It is suppressed on the mini rail: Slint anchors that menu
+// at `row.width - 210px`, which on a 34px rail row is deeply negative and Qt's
+// viewport clamp would drop it at x=8 — not the reference's placement, just
+// the clamp.
 
 import QtQuick
 import QtQuick.Controls
 import com.blitzfc.qbz
+import "../controls"
 import "../theme"
 
 Rectangle {
@@ -184,33 +201,31 @@ Rectangle {
     // Mini folder click: the flyout, not a toggle (the nested rows are hidden,
     // so toggling is a control that renders and does nothing — Slint opens the
     // popup instead, Sidebar.slint:355-377).
+    //
+    // It no longer force-expands the folder on the way in. That used to be
+    // necessary because the flyout filtered the published `entries`, which
+    // carry a folder's children ONLY while it is expanded — a persistent side
+    // effect (the folder stayed open once the sidebar was re-opened) the
+    // reference does not have. The flyout now asks Rust for a dedicated
+    // cache-built document instead (SidebarFolderFlyout.qml / §4.7).
     function openFolderFlyout(row, entry) {
-        folderFlyout.folderId = entry.id
-        folderFlyout.folderName = entry.name
-        folderFlyout.folderCount = entry.count
-        // The children are only present in the published entries while the
-        // folder is EXPANDED. Expand it if it is not — never toggle blindly:
-        // a folder left open before the sidebar collapsed would be CLOSED by a
-        // toggle and the flyout would list nothing (and while a search query is
-        // active every folder is force-expanded, sidebar_qt.rs:299).
-        if (!entry.expanded) QbzShell.sidebarToggleFolder(entry.id)
-        var p = row.mapToItem(root, row.width + 6, 0)
-        folderFlyout.x = p.x
-        folderFlyout.y = p.y
         // The flyout takes the same +6px slot the bubble occupies, and it is a
         // Popup (window overlay) so it would paint straight over it. Slint drops
         // the tooltip explicitly here too (Sidebar.slint:353).
         if (root.tooltip) root.tooltip.hideAll()
-        folderFlyout.open()
+        folderFlyout.openFor(entry, row)
     }
 
-    // Cycling the sidebar while either is open would leave it floating over a
-    // rail that no longer exists (the bubble self-hides through `root.mini`;
-    // the flyout needs telling).
+    // Cycling the sidebar while any of the three is open would leave it
+    // floating over a rail that no longer exists (the bubble self-hides
+    // through `root.mini`; the two Popups need telling).
     Connections {
         target: QbzShell
         function onSidebarStateChanged() {
             folderFlyout.close()
+            // The row menu is row-anchored and the rows are about to change
+            // width — or, going to state 2, stop existing.
+            rowMenu.close()
             // The bubble's anchor is a rail row that is about to move or stop
             // existing (SidebarTooltip.slint:14 gates on sidebar-mini for the
             // same reason).
@@ -238,157 +253,34 @@ Rectangle {
     //     TooltipState, state.slint:4791), precisely so a clipped surface — and
     //     this sidebar clips — can still show a bubble outside its own bounds.
 
-    // Folder flyout — SidebarFolderPopup.slint: 230px, 30px header row +
-    // hairline + up to four 32px rows, 4px inner padding, surface-main /
-    // radius sm / 1px border-muted.
-    Popup {
+    // Folder flyout (mini rail) and the row context menu — ONE shared instance
+    // each, declared at this root, never one per delegate: the tree can hold
+    // hundreds of rows. Both are Popups, so their content is reparented to the
+    // WINDOW overlay and this root's `clip: true` cannot cut them off.
+    SidebarFolderFlyout {
         id: folderFlyout
-        width: 230
-        padding: 0
-        topPadding: 4
-        bottomPadding: 4
-        // Slint's literal panel height (34 + 1 + list + 8) — 4px taller than
-        // the content, kept 1:1 rather than tightened.
-        height: 34 + 1 + folderFlyout.visibleRows * 32 + 8
-        // Replaces Slint's full-window scrim TouchArea (SidebarFolderPopup
-        // .slint:56-60); the Popup's own background swallows clicks inside,
-        // so no hand-built scrim and no click-through.
-        closePolicy: Popup.CloseOnPressOutside | Popup.CloseOnEscape
+        onPlaylistActivated: function (id) { root.activePlaylistId = id }
+    }
 
-        property string folderId: ""
-        property string folderName: ""
-        property int folderCount: 0
+    // The canonical folder list, parsed once. `foldersJson` is the Playlist
+    // Manager's property because the manager owns the rich folder record, but
+    // it is kept fresh independently of the manager's document cache
+    // (refresh_folders()), so the sidebar can read it before — and without —
+    // the manager view ever being opened.
+    readonly property var pmFolders: {
+        try { return JSON.parse(QbzPlaylistManager.foldersJson) } catch (e) { return [] }
+    }
+    // Hidden folders are dropped EVERYWHERE in the sidebar tree, so the row
+    // menu must not offer them, must not count them toward its search
+    // threshold and must not let them suppress its empty state. Derived once,
+    // here, and read three times over there.
+    readonly property var visibleFolders: root.pmFolders.filter(function (f) {
+        return f.isHidden !== true
+    })
 
-        // The rows are a BINDING over the published entries, never a snapshot
-        // read inside the click handler: sidebarToggleFolder republishes
-        // sidebarJson through the cxx-qt UI queue (shell_bridge.rs::ui ->
-        // CxxQtThread::queue), so the children land a LATER event-loop turn.
-        // Reading `root.entries` at click time would open an empty panel.
-        readonly property var rows: root.entries.filter(function (e) {
-            return e.kind !== "folder" && e.folderId === folderFlyout.folderId
-        })
-        // Height off the folder's own count (known at click time) so the panel
-        // does not resize when the children land a tick later.
-        readonly property int visibleRows:
-            Math.min(Math.max(folderFlyout.folderCount, folderFlyout.rows.length), 4)
-
-        background: Rectangle {
-            color: theme.surfaceMain
-            radius: theme.radiusSm
-            border.width: 1
-            border.color: theme.borderMuted
-        }
-        contentItem: Column {
-            spacing: 0
-
-            // Header — folder name (30px, 12px side padding, 14px accent
-            // folder-open glyph, 13px/600 text-primary).
-            Item {
-                width: parent.width
-                height: 30
-                Row {
-                    anchors.fill: parent
-                    anchors.leftMargin: 12
-                    anchors.rightMargin: 12
-                    spacing: 8
-                    QbzIcon {
-                        name: "folder-open"
-                        width: 14
-                        height: 14
-                        anchors.verticalCenter: parent.verticalCenter
-                        tintName: "accent"
-                    }
-                    Text {
-                        width: parent.width - 22
-                        height: parent.height
-                        text: folderFlyout.folderName
-                        color: theme.textPrimary
-                        font.pixelSize: 13
-                        font.weight: theme.weightSemibold
-                        verticalAlignment: Text.AlignVCenter
-                        elide: Text.ElideRight
-                    }
-                }
-            }
-            Rectangle {
-                width: parent.width
-                height: 1
-                color: theme.borderSubtle
-            }
-
-            // Playlist list — four rows visible, the rest scroll (the shared
-            // QbzScrollBar mounts past four, like Slint's ListScrollbar).
-            Item {
-                width: parent.width
-                height: folderFlyout.visibleRows * 32
-
-                Flickable {
-                    id: fpFlick
-                    anchors.fill: parent
-                    clip: true
-                    contentWidth: width
-                    contentHeight: fpColumn.implicitHeight
-                    boundsBehavior: Flickable.StopAtBounds
-
-                    Column {
-                        id: fpColumn
-                        width: parent.width
-                        Repeater {
-                            model: folderFlyout.rows
-                            delegate: Rectangle {
-                                id: fpRow
-                                required property var modelData
-                                width: fpColumn.width
-                                height: 32
-                                radius: 5
-                                color: fpArea.containsMouse ? theme.surfaceHover : "transparent"
-                                Row {
-                                    anchors.fill: parent
-                                    anchors.leftMargin: 12
-                                    anchors.rightMargin: 12
-                                    spacing: 8
-                                    QbzIcon {
-                                        name: "list-music"
-                                        width: 14
-                                        height: 14
-                                        anchors.verticalCenter: parent.verticalCenter
-                                        tintName: "muted"
-                                    }
-                                    Text {
-                                        width: parent.width - 22
-                                        height: parent.height
-                                        text: fpRow.modelData.name
-                                        color: theme.textSecondary
-                                        font.pixelSize: 13
-                                        verticalAlignment: Text.AlignVCenter
-                                        elide: Text.ElideRight
-                                    }
-                                }
-                                MouseArea {
-                                    id: fpArea
-                                    anchors.fill: parent
-                                    hoverEnabled: true
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: {
-                                        root.activePlaylistId = fpRow.modelData.id
-                                        QbzBridge.openPlaylist(fpRow.modelData.id)
-                                        folderFlyout.close()
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                QbzScrollBar {
-                    visible: folderFlyout.folderCount > 4 && fpFlick.contentHeight > fpFlick.height
-                    target: fpFlick
-                    width: 10
-                    anchors.right: parent.right
-                    anchors.top: parent.top
-                    anchors.bottom: parent.bottom
-                }
-            }
-        }
+    SidebarRowMenu {
+        id: rowMenu
+        visibleFolders: root.visibleFolders
     }
 
     width: QbzShell.sidebarState === 2 ? 0
@@ -604,9 +496,17 @@ Rectangle {
                     }
                 }
             }
-            // New playlist (+) — single core call (create_playlist), then
+            // New playlist (+) — single bridge call (create_playlist), then
             // reload the tree. Slint opens a naming modal; the POC creates
             // with the default name (POC-NOTE).
+            //
+            // NOT offline-gated, and that is deliberate: `crate::create_playlist`
+            // branches on connectivity and creates a LOCAL playlist while
+            // offline (the reference's D8 — its create modal locks the
+            // offline-only toggle ON there). Dimming this row would take the
+            // ONE way an account-less user makes a playlist away from exactly
+            // the state they live in. Before that branch existed the button was
+            // lit and its whole offline effect was a log line.
             Rectangle {
                 width: 22
                 height: 22
@@ -649,15 +549,22 @@ Rectangle {
                 }
                 Popup {
                     id: sortMenu
-                    // Opens to the RIGHT of the "..." (overlay into the
-                    // content area) — owner request in Sidebar.slint.
-                    x: parent.width + 18
+                    // Slint puts this panel's left edge at `toolbar.width -
+                    // 40px`. Resolved: the open sidebar's content column is
+                    // 240 - 2*16 = 208 wide and the "..." button occupies
+                    // 160…182 of it, so 208 - 40 = 168 is the button's own
+                    // x + 8. This Popup is parented to the BUTTON, not to the
+                    // row, so the 1:1 value is x: 8 — the old `parent.width +
+                    // 18` (= 40) put it 32px too far right.
+                    x: 8
                     y: 26
                     width: 200
                     padding: 6
                     closePolicy: Popup.CloseOnPressOutside
                     background: Rectangle {
-                        color: theme.surfaceCard
+                        // Matches this root's own ambient treatment
+                        // (Sidebar.slint:920-922).
+                        color: root.ambientOn ? theme.surfaceCardA50 : theme.surfaceCard
                         radius: 8
                         border.width: 1
                         border.color: theme.borderSubtle
@@ -727,41 +634,104 @@ Rectangle {
                             }
                         }
                         Rectangle { width: parent.width; height: 1; color: theme.borderSubtle }
-                        // New folder / Manage playlists / Import — DISABLED.
-                        // GAP, not a half-path: this port has no folder
-                        // creation seam (`sidebar_qt.rs` exposes only
-                        // load/sort/search/toggle-folder — no create/delete),
-                        // no Playlist Manager view, and no importer. They used
-                        // to render as live-looking rows (hover highlight +
-                        // pointing-hand cursor) whose click did nothing at
-                        // all; a control that renders and no-ops is a defect,
-                        // so they now read as unavailable: dimmed, no hover
-                        // treatment, no pointer cursor, no MouseArea. Restore
-                        // the interactive form together with the seam.
+                        // New folder / Manage playlists / Import / Refresh —
+                        // all four LIVE (the Refresh row was missing from this
+                        // port entirely and is restored here).
+                        //
+                        // `on` is the enabled flag and it drives everything at
+                        // once: the hover fill, the pointer cursor, the glyph
+                        // tint, the 0.4 dim AND whether the MouseArea exists.
+                        // There is no way to light one row and leave another
+                        // inert without it.
+                        //
+                        // Import is the only row that can be off, and only
+                        // while offline — importing a playlist is Qobuz-only
+                        // work.
+                        //
+                        // REFRESH STAYS LIT OFFLINE (reversed 2026-07-31 on the
+                        // owner's smoke). The earlier decision dimmed it
+                        // because QbzShell.reloadSidebar() called
+                        // crate::reload_sidebar(), which early-returns offline
+                        // — a lit row would have been a no-op, and a control
+                        // that renders and no-ops is a defect. The bridge now
+                        // calls crate::reload_sidebar_including_local()
+                        // instead, which offline re-reads folders, folder
+                        // membership, the hidden set and the LOCAL playlists
+                        // from library.db and republishes (preserving the
+                        // cached Qobuz set). That is a real refresh, and it is
+                        // precisely the tree an account-less user owns — the
+                        // owner hit an empty offline sidebar with no way to
+                        // rebuild it.
+                        //
+                        // Every arm closes the menu FIRST. Slint's PopupWindow
+                        // dismisses on any click, including inside itself,
+                        // which is why its own items never call close(); Qt's
+                        // CloseOnPressOutside does the opposite. This is the
+                        // single most common silent divergence in this seam.
                         Repeater {
                             model: [
-                                { "icon": "folder-plus", "label": QbzSession.tr("New folder", QbzSession.trRev) },
-                                { "icon": "library-big", "label": QbzSession.tr("Manage playlists", QbzSession.trRev) },
-                                { "icon": "import", "label": QbzSession.tr("Import", QbzSession.trRev) },
+                                { "icon": "folder-plus", "label": QbzSession.tr("New folder", QbzSession.trRev),
+                                  "act": "newFolder", "on": true },
+                                { "icon": "library-big", "label": QbzSession.tr("Manage playlists", QbzSession.trRev),
+                                  "act": "manage", "on": true },
+                                // LIVE. The importer landed with this seam
+                                // (src/playlist_import_bridge.rs +
+                                // controls/PlaylistImportModal.qml), so contract
+                                // §10 Q2 resolves to "land the importer" and
+                                // there is no `typeof QbzPlaylistImport` guard
+                                // here: the row is a real row, dimmed only
+                                // while offline — the only row that dims.
+                                { "icon": "import", "label": QbzSession.tr("Import", QbzSession.trRev),
+                                  "act": "import", "on": !QbzSession.offline },
+                                { "icon": "refresh-cw", "label": QbzSession.tr("Refresh", QbzSession.trRev),
+                                  "act": "refresh", "on": true },
                             ]
                             delegate: Rectangle {
+                                id: actRow
                                 required property var modelData
+                                readonly property bool rowEnabled: modelData.on === true
                                 width: parent ? parent.width : 0
                                 height: 30
                                 radius: 5
-                                color: "transparent"
-                                opacity: 0.4
+                                color: (actRow.rowEnabled && actArea.containsMouse)
+                                    ? theme.surfaceHover : "transparent"
+                                opacity: actRow.rowEnabled ? 1.0 : 0.4
                                 Row {
                                     anchors.fill: parent
                                     anchors.leftMargin: 8
+                                    anchors.rightMargin: 8
                                     spacing: 8
-                                    QbzIcon { name: modelData.icon; width: 14; height: 14; anchors.verticalCenter: parent.verticalCenter; tintName: "muted" }
+                                    QbzIcon {
+                                        name: actRow.modelData.icon
+                                        width: 14
+                                        height: 14
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        tintName: actRow.rowEnabled ? "secondary" : "muted"
+                                    }
                                     Text {
+                                        width: parent.width - 22
                                         height: parent.height
-                                        text: modelData.label
-                                        color: theme.textMuted
+                                        text: actRow.modelData.label
+                                        color: actRow.rowEnabled ? theme.textSecondary : theme.textMuted
                                         font.pixelSize: 13
                                         verticalAlignment: Text.AlignVCenter
+                                        elide: Text.ElideRight
+                                    }
+                                }
+                                MouseArea {
+                                    id: actArea
+                                    anchors.fill: parent
+                                    enabled: actRow.rowEnabled
+                                    hoverEnabled: actRow.rowEnabled
+                                    cursorShape: actRow.rowEnabled
+                                        ? Qt.PointingHandCursor : Qt.ArrowCursor
+                                    onClicked: {
+                                        sortMenu.close()
+                                        var a = actRow.modelData.act
+                                        if (a === "newFolder") QbzFolderEdit.openCreate()
+                                        else if (a === "manage") QbzPlaylistManager.navigate()
+                                        else if (a === "import") QbzPlaylistImport.open()
+                                        else if (a === "refresh") QbzShell.reloadSidebar()
                                     }
                                 }
                             }
@@ -870,12 +840,18 @@ Rectangle {
                                 : 32
                             visible: !(root.mini && modelData.indent)
                             radius: 6
-                            // success-bg + success-border while hot (Theme
-                            // success family, #3fae6a at 10% / 30%).
-                            color: dropHot ? "#3fae6a1a"
+                            // success-bg + success-border while hot. These used
+                            // to be the Slint literals "#3fae6a1a" /
+                            // "#3fae6a4d" copied verbatim, which is a real
+                            // colour bug: Slint's 8-digit form is #RRGGBBAA and
+                            // Qt's is #AARRGGBB, so the drop target rendered
+                            // olive-brown at 25% alpha instead of success green
+                            // at 15% / 35%. The tokens carry the converted
+                            // values (theme.successBg = #263fae6a).
+                            color: dropHot ? theme.successBg
                                 : ((rowArea.containsMouse || isActive) ? theme.surfaceHover : "transparent")
                             border.width: dropHot ? 1 : 0
-                            border.color: "#3fae6a4d"
+                            border.color: theme.successBorder
 
                             Row {
                                 anchors.fill: parent
@@ -967,7 +943,12 @@ Rectangle {
                                         - (isFolder
                                             ? 22 + (countLabel.visible
                                                 ? countLabel.implicitWidth + 8 : 0)
-                                            : 0))
+                                            : 0)
+                                        // The local mark is a sibling AFTER
+                                        // this Text, so its width has to come
+                                        // out of the name's reserve or the
+                                        // glyph lands past the row's clip.
+                                        - (modelData.isLocal === true ? 20 : 0))
                                     height: parent.height
                                     text: modelData.name
                                     color: (rowArea.containsMouse || isActive) ? theme.textPrimary : theme.textSecondary
@@ -975,6 +956,18 @@ Rectangle {
                                     font.weight: isFolder ? theme.weightSemibold : theme.weightRegular
                                     verticalAlignment: Text.AlignVCenter
                                     elide: Text.ElideRight
+                                }
+                                // LOCAL playlist mark. A local playlist has no
+                                // Qobuz side at all — this is how the row says
+                                // so, and it is the only visual difference
+                                // between the two kinds in the list.
+                                QbzIcon {
+                                    visible: !root.mini && modelData.isLocal === true
+                                    name: "hard-drive"
+                                    width: 12
+                                    height: 12
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    tintName: "muted"
                                 }
                                 // Folder count (hover) + chevron. The count is
                                 // hover-FADED, not hidden — opacity does not
@@ -1014,16 +1007,39 @@ Rectangle {
                                 anchors.fill: parent
                                 hoverEnabled: true
                                 cursorShape: Qt.PointingHandCursor
+                                // Right-press anywhere on the row opens its
+                                // context menu (Sidebar.slint:389-397). The old
+                                // hover "..." button was removed upstream
+                                // because the scrollbar overlapped it and ate
+                                // the click — do not reintroduce it.
+                                acceptedButtons: Qt.LeftButton | Qt.RightButton
                                 // Mini: the row is an icon, so hovering names
                                 // it (Sidebar.slint:342-349). No-op while open.
                                 onContainsMouseChanged: {
                                     if (containsMouse) root.showMiniTip(plRow, plRow.modelData)
                                     else root.hideMiniTip(plRow.modelData.id)
                                 }
-                                onClicked: {
+                                onClicked: function (mouse) {
                                     // Slint drops the bubble on click so it
                                     // does not linger behind the flyout.
                                     root.hideMiniTip(plRow.modelData.id)
+                                    if (mouse.button === Qt.RightButton) {
+                                        // SUPPRESSED ON THE RAIL. Slint anchors
+                                        // this menu at `row.width - 210px`,
+                                        // which on a 34px rail row is deeply
+                                        // negative; Qt's viewport clamp would
+                                        // silently drop it at x=8, which is not
+                                        // the reference's placement, just the
+                                        // clamp.
+                                        if (root.mini)
+                                            return
+                                        var lx = plRow.width - rowMenu.menuWidth
+                                        if (isFolder)
+                                            rowMenu.openForFolder(plRow.modelData, plRow, lx, 28)
+                                        else
+                                            rowMenu.openForPlaylist(plRow.modelData, plRow, lx, 28)
+                                        return
+                                    }
                                     if (isFolder) {
                                         // Mini: the nested rows are hidden, so
                                         // a toggle would change NOTHING on

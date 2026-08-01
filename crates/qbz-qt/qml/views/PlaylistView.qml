@@ -9,15 +9,21 @@
 // more (the shared AppShell text modal), owner • N tracks • duration,
 // the action row: Play / Shuffle / heart (owned, wired) / pin (wired) /
 // follow (foreign, subscribe API) / copy (foreign, create+add) / edit
-// (owner: rename + delete modal). Right edge: in-playlist search + the
+// (owner: opens the SHARED controls/PlaylistEditModal.qml through
+// QbzPlaylistEdit — this view mounts no editor of its own; the inline
+// rename+delete Popup that used to live at the bottom of this file is gone,
+// contract D20). Right edge: in-playlist search + the
 // sort dropdown (Default/Title/Artist/Album/Duration/Date added/Custom).
 //
 // Track list: the exact PlaylistView row (# / 36px art / title+artist /
 // Album 220px link / Duration 70 / Quality 92 / heart / cloud reserve /
 // ⋯ menu with Remove-from-playlist for owners), column header, empty and
 // loading states. Per-row ⋯: Play / Play next / Play later / Add to
-// queue / Go to artist / Go to album / Add|Remove from Library / Remove
-// from playlist (owner).
+// queue / Add to mixtape / Add to playlist / Go to artist / Go to album /
+// Add|Remove from Library / Remove from playlist (owner). "Add to playlist"
+// routes by the ROW's source: a Qobuz row takes the catalog arm, a local /
+// Plex row of an adopted LOCAL playlist takes the local-mode one
+// (QbzPlaylistPicker.openForLocalRow -> local_picker_ref_for_row).
 //
 // Drag & drop (issue #589): the row BODY is the drag source (press-drag
 // >6px — the same gesture that drops onto sidebar playlists). A release
@@ -65,6 +71,29 @@ Rectangle {
     readonly property string sortField: doc.sortField || "default"
     readonly property bool sortAsc: doc.sortAsc === true
     readonly property string searchQuery: doc.search || ""
+    /// A LOCAL detail (`local:<uuid>`) adopted into this view
+    /// (local_playlist_qt.rs -> playlist_qt::adopt_doc). It drops the Qobuz-
+    /// only affordances and, for the reorder below, it changes WHICH sort is
+    /// the reorderable one.
+    readonly property bool isLocal: doc.isLocalPlaylist === true
+
+    // --- Reorderable? (owner findings 5 + 8) -----------------------------
+    // PlaylistView.slint:1094-1096 states the rule: the reorder affordance is
+    // offered under the CUSTOM sort — "or, on a LOCAL playlist, the Default
+    // sort: its natural order IS the editable repo order (B2), written via
+    // repo::reorder". A reorder against a COMPUTED order (title, duration, …)
+    // is meaningless, which is why it is a sort test and not an ownership one
+    // alone.
+    //
+    // The empty-search term is this port's own, and it is load-bearing: the
+    // in-playlist search filters `root.tracks` HERE, in QML, while the Rust
+    // arms index into the unfiltered document. Offering a reorder while a
+    // filter is active would hand a filtered index to a document index — the
+    // Playlist Manager takes the same precaution (`playlist_manager_qt.rs:236`
+    // requires `query.is_empty()` before it lights its arrows).
+    readonly property bool canReorder: root.isOwner
+        && root.searchQuery.trim() === ""
+        && (root.isLocal ? root.sortField === "default" : root.sortField === "custom")
 
     // --- Settled state from Rust (`libraryFavoriteChanged` / `pinChanged`) -
     // Two jobs, and the first one is why this exists at all.
@@ -440,7 +469,18 @@ Rectangle {
                         visible: root.isOwner
                         name: "pen-line"
                         anchors.verticalCenter: parent.verticalCenter
-                        onClicked: editModal.open()
+                        // The ONE shared editor (controls/PlaylistEditModal.qml,
+                        // mounted in AppShell), which replaced the inline Popup
+                        // that used to live at the bottom of this file: that one
+                        // could express neither a description nor the
+                        // offline-only flag, and it wiped nothing only because
+                        // it never sent one (contract D20).
+                        //
+                        // The id comes from `root.doc.id`. This view has no
+                        // dedicated id property of its own, and a missing one
+                        // would read `undefined`, convert to an empty QString
+                        // and open the editor on no playlist, silently.
+                        onClicked: QbzPlaylistEdit.open(String(root.doc.id || ""))
                     }
 
                     Item { width: parent.width - 40 - 32 * 6 - 7 * 12 - 220 - 140; height: 1 }
@@ -521,11 +561,20 @@ Rectangle {
                                     { "field": "album", "label": QbzSession.tr("Album", QbzSession.trRev) },
                                     { "field": "duration", "label": QbzSession.tr("Duration", QbzSession.trRev) },
                                     { "field": "added", "label": QbzSession.tr("Date added", QbzSession.trRev) },
-                                    { "field": "custom", "label": QbzSession.tr("Custom", QbzSession.trRev), "ownerOnly": true },
+                                    // Manual order — enables the per-row
+                                    // reorder chevrons. HIDDEN on a LOCAL
+                                    // playlist (PlaylistView.slint:945-952,
+                                    // B2): its Default order IS the editable
+                                    // repo order, so a separate custom
+                                    // sidecar is moot — and the sidecar is
+                                    // u64-keyed, which a local row's id is
+                                    // not.
+                                    { "field": "custom", "label": QbzSession.tr("Custom", QbzSession.trRev), "ownerOnly": true, "qobuzOnly": true },
                                 ]
                                 delegate: Rectangle {
                                     required property var modelData
-                                    visible: modelData.ownerOnly !== true || root.isOwner
+                                    visible: (modelData.ownerOnly !== true || root.isOwner)
+                                        && (modelData.qobuzOnly !== true || !root.isLocal)
                                     width: parent ? parent.width : 0
                                     height: visible ? 33 : 0
                                     radius: 5
@@ -599,6 +648,9 @@ Rectangle {
             showArtwork: true
             showAlbum: true
             showDownload: true
+            // MIRROR the delegate's arm, or the labels slide by 22 + 14 the
+            // moment the list becomes reorderable (TrackListHeader's rule 2).
+            showReorder: root.canReorder
         }
         Rectangle { visible: root.tracks.length > 0; width: 1; height: 3; color: "transparent" }
         Rectangle { visible: root.tracks.length > 0; width: parent.width; height: 1; color: theme.borderSubtle }
@@ -642,30 +694,66 @@ Rectangle {
                     showAlbum: true
                     showDownload: true
                     menuShowRemove: root.isOwner
+                    // Reorder chevrons (owner findings 5 + 8). `index` is the
+                    // index into `root.tracks`, which under `canReorder` is
+                    // the unfiltered document — the empty-search term of that
+                    // predicate is what guarantees it.
+                    showReorder: root.canReorder
+                    canMoveUp: index > 0
+                    canMoveDown: index < root.tracks.length - 1
+                    onMoveUpRequested: QbzBridge.playlistMoveRow(String(item.id), -1)
+                    onMoveDownRequested: QbzBridge.playlistMoveRow(String(item.id), 1)
                     onPlayRequested: QbzBridge.playlistPlayTrack(item.id)
                     onEnqueueRequested: function (m) { QbzBridge.playlistEnqueueTrack(item.id, m) }
-                    onRemoveRequested: QbzBridge.playlistRemoveTrack(item.playlistTrackId)
+                    // The DISPLAY row id, as a string. For a Qobuz row it IS
+                    // the membership id (`playlist_qt.rs:363-364` sets both
+                    // from `track.id`); for a LOCAL row `playlistTrackId` is a
+                    // queue id — or 0 on an unresolved one — and the removal
+                    // has to be keyed on the id the position map knows.
+                    onRemoveRequested: QbzBridge.playlistRemoveTrack(String(item.id))
+                    // "Add to playlist" — this view serves BOTH a Qobuz
+                    // playlist and a LOCAL one (`local_playlist_qt::load`
+                    // publishes into this same document through
+                    // `playlist_qt::adopt_doc`), so the row's id space is not
+                    // uniform here and the routing reads the row's own
+                    // `source` word ("" = Qobuz, "local" | "plex" = a
+                    // library.db / Plex ref). The local arm hands the DISPLAY
+                    // id to Rust, which resolves it through
+                    // `local_playlist_qt::local_picker_ref_for_row` — a Plex
+                    // row's rating key only exists in the open detail's queue
+                    // snapshot and QML cannot build the ref itself.
+                    routePlaylistAddExternally: modelData.source === "local"
+                        || modelData.source === "plex"
+                    onPlaylistAddRequested: QbzPlaylistPicker.openForLocalRow(item.id)
                     // MyQBZ "Add to mixtape" — the HOST builds the AddItem
                     // array (TrackRow does not know itemType/source).
                     //
-                    // SOURCE: `PlaylistTrackRow` (playlist_qt.rs:47-78) has no
-                    // source field because this whole view has one source —
-                    // LOCAL playlists are out of scope everywhere in it
-                    // (playlist_qt.rs:23-25), the document is mapped from
-                    // Qobuz `Track` values, and `playlistTrackId` is the
-                    // Qobuz membership row id. `item.id` is a Qobuz catalog
-                    // id by construction of the view, not by assumption here.
-                    // If local playlists are ever ported, the row must start
-                    // carrying its source and this must read it.
+                    // SOURCE comes off the ROW, never a literal: a Qobuz
+                    // playlist's rows carry no `source` and are catalog rows,
+                    // while a LOCAL playlist's rows carry "local" | "plex"
+                    // (playlist_qt.rs PlaylistTrackRow.source). "plex" folds
+                    // into "local" because `AddItem.source` is
+                    // "qobuz" | "local" and `source_from_str`
+                    // (myqbz_add_qt.rs:85-90) maps anything that is not
+                    // "local" back to Qobuz — passing "plex" verbatim would
+                    // store a Plex row under a catalog id again.
                     onMixtapeRequested: QbzMyQbzAdd.open(JSON.stringify([{
-                        "itemType": "track", "source": "qobuz",
+                        "itemType": "track",
+                        "source": (item.source === "local" || item.source === "plex")
+                            ? "local" : "qobuz",
                         "sourceItemId": item.id, "title": item.title || "",
                         "subtitle": item.artist || "", "artworkUrl": "",
                         "year": null, "trackCount": null
                     }]))
                     onBodyDragStarted: function (n) {
                         // #589: report the source index BEFORE the shared drag.
-                        if (root.isOwner) {
+                        // Gated on `canReorder`, not on ownership alone: under
+                        // a computed sort (or an active search) this drag is
+                        // ONLY the add-to-a-sidebar-playlist gesture, and
+                        // claiming a source index would let a release inside
+                        // the list commit a move against an order that is not
+                        // the stored one.
+                        if (root.canReorder) {
                             root.reorderFrom = index
                             root.reorderOver = -1
                             root.reorderDropPlaylist = ""
@@ -696,112 +784,6 @@ Rectangle {
                 anchors.rightMargin: 4
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
-            }
-        }
-    }
-
-    // --- Edit modal (rename + delete; owner) ---------------------------------
-    Popup {
-        id: editModal
-        parent: Overlay.overlay
-        anchors.centerIn: parent
-        width: 380
-        padding: 20
-        closePolicy: Popup.CloseOnEscape
-        background: Rectangle {
-            color: theme.surfaceCard
-            radius: theme.radiusMd
-            border.width: 1
-            border.color: theme.borderSubtle
-        }
-        contentItem: Column {
-            spacing: 14
-            Text {
-                text: QbzSession.tr("Edit playlist", QbzSession.trRev)
-                color: theme.textPrimary
-                font.pixelSize: theme.fontHeading
-                font.weight: theme.weightSemibold
-            }
-            Rectangle {
-                width: parent.width
-                height: 36
-                radius: 6
-                color: theme.surfaceElevated
-                border.width: 1
-                border.color: theme.borderSubtle
-                TextInput {
-                    id: nameInput
-                    anchors.fill: parent
-                    anchors.leftMargin: 10
-                    anchors.rightMargin: 10
-                    text: root.doc.name || ""
-                    color: theme.textPrimary
-                    font.pixelSize: 14
-                    verticalAlignment: Text.AlignVCenter
-                    clip: true
-                }
-            }
-            Row {
-                spacing: 10
-                anchors.right: parent.right
-                Rectangle {
-                    width: delText.implicitWidth + 28
-                    height: 34
-                    radius: 6
-                    color: delArea.containsMouse ? "#33ef4444" : "transparent"
-                    border.width: 1
-                    border.color: "#66ef4444"
-                    Text {
-                        id: delText
-                        anchors.centerIn: parent
-                        text: QbzSession.tr("Delete", QbzSession.trRev)
-                        color: "#ef4444"
-                        font.pixelSize: 13
-                        font.weight: theme.weightMedium
-                    }
-                    MouseArea {
-                        id: delArea
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: {
-                            editModal.close()
-                            QbzBridge.playlistDelete()
-                        }
-                    }
-                }
-                Rectangle {
-                    width: saveText.implicitWidth + 28
-                    height: 34
-                    radius: 6
-                    color: saveArea.containsMouse ? theme.accentHover : theme.accent
-                    Text {
-                        id: saveText
-                        anchors.centerIn: parent
-                        text: QbzSession.tr("Save", QbzSession.trRev)
-                        // Was a literal #ffffff, 1:1 with
-                        // primitives/EditPlaylistModal.slint:171 — and that
-                        // white is 1.70:1 on high-contrast, 1.74 on ikari,
-                        // 1.82 on wcag-dark, under 2.6:1 on 16 of the 35
-                        // palettes, on the SAME accent fill every other
-                        // on-accent site was just fixed against. The colour
-                        // twin of the glyph selector; see
-                        // theme/QbzTheme.qml, "ON AN ACCENT FILL".
-                        color: theme.accentGlyphColor
-                        font.pixelSize: 13
-                        font.weight: theme.weightMedium
-                    }
-                    MouseArea {
-                        id: saveArea
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: {
-                            editModal.close()
-                            QbzBridge.playlistRename(nameInput.text)
-                        }
-                    }
-                }
             }
         }
     }

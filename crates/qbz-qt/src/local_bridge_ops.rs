@@ -177,6 +177,21 @@ pub(crate) fn load_albums() {
     });
 }
 
+/// Album identity changed: the Artists tab's album cache is keyed by the group
+/// key, so it is stale the moment the mode flips (PARITY-DEBT #9 — a
+/// folder-mode compilation cross-lists under every artist). Drop the cached
+/// document, then re-run the load so the tab is correct even when the user is
+/// standing on it. Port of `local_library.rs:727-738 invalidate_artists` (the
+/// reference can stop at the drop: its `ensure_artists_loaded` guard re-fetches
+/// on the next visit, a guard this port does not have).
+pub(crate) fn invalidate_artists() {
+    lib::state(|s| {
+        s.artists.clear();
+    });
+    ui(|mut b| b.as_mut().set_local_artists_json(QString::from("[]")));
+    load_artists();
+}
+
 pub(crate) fn load_artists() {
     ui(|mut b| b.as_mut().set_local_artists_loading(true));
     crate::spawn(async move {

@@ -3745,6 +3745,18 @@ msgstr "Не удалось скопировать плейлист"
 msgid "Playlist has no tracks to copy"
 msgstr "В плейлисте нет треков для копирования"
 
+msgid "Added {} track"
+msgid_plural "Added {} tracks"
+msgstr[0] "Добавлен {} трек"
+msgstr[1] "Добавлено {} трека"
+msgstr[2] "Добавлено {} треков"
+
+msgid "Added {} track to {}"
+msgid_plural "Added {} tracks to {}"
+msgstr[0] "Добавлен {} трек в {}"
+msgstr[1] "Добавлено {} трека в {}"
+msgstr[2] "Добавлено {} треков в {}"
+
 msgid "Added {} track to queue"
 msgid_plural "Added {} tracks to queue"
 msgstr[0] "Добавлен {} трек в очередь"
@@ -4904,3 +4916,44 @@ msgid_plural "Removed {} albums from blacklist"
 msgstr[0] "Удалён {} альбом из чёрного списка"
 msgstr[1] "Удалено {} альбома из чёрного списка"
 msgstr[2] "Удалено {} альбомов из чёрного списка"
+
+msgid "Playlist imported"
+msgstr "Плейлист импортирован"
+
+msgid "Playlist import failed"
+msgstr "Не удалось импортировать плейлист"
+
+msgid "Not logged in to Qobuz"
+msgstr "Вход в Qobuz не выполнен"
+
+# Qt playlist manager — folder modals (contract block 2)
+
+msgid "Delete folder"
+msgstr "Удалить папку"
+
+msgid "Delete the folder “{}”? Its playlists move back to the root."
+msgstr "Удалить папку «{}»? Её плейлисты вернутся в корень."
+
+msgid "Choose a folder image"
+msgstr "Выберите изображение папки"
+
+msgid "Images"
+msgstr "Изображения"
+
+msgid "Failed to create folder"
+msgstr "Не удалось создать папку"
+
+msgid "Failed to save folder"
+msgstr "Не удалось сохранить папку"
+
+msgid "Failed to delete folder"
+msgstr "Не удалось удалить папку"
+
+msgid "Failed to rename playlist"
+msgstr "Не удалось переименовать плейлист"
+
+msgid "Failed to delete playlist"
+msgstr "Не удалось удалить плейлист"
+
+msgid "Couldn't create the playlist"
+msgstr "Не удалось создать плейлист"

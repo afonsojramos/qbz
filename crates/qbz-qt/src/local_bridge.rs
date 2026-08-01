@@ -23,8 +23,8 @@ use cxx_qt::Threading as _;
 use cxx_qt_lib::QString;
 
 use crate::local_bridge_ops::{
-    emit_artwork, emit_artwork_one, load_tab_impl, load_tracks, publish_plex_state, publish_tree,
-    reload_browse, run_sync,
+    emit_artwork, emit_artwork_one, invalidate_artists, load_tab_impl, load_tracks,
+    publish_plex_state, publish_tree, reload_browse, run_sync,
 };
 use crate::local_library_qt as lib;
 use crate::local_plex as plex;
@@ -82,6 +82,11 @@ pub mod qbz_local {
         #[qproperty(bool, local_tracks_loading_more)]
         #[qproperty(bool, local_tracks_has_more)]
         #[qproperty(QString, local_tracks_sort)]
+        /// Tracks-tab grouping: "off" | "album" | "artist" | "name". A
+        /// CLIENT-side visual reorder (unlike the sort, which is the SQL
+        /// ORDER BY), but persisted in the SAME locallibrary_ui.json key the
+        /// Slint writes — so it survives a restart and both frontends agree.
+        #[qproperty(QString, local_tracks_group)]
         #[qproperty(QString, local_tracks_json)]
 
         // --- Local album detail (the album pane) ---------------------------
@@ -147,6 +152,11 @@ pub mod qbz_local {
         /// Toolbar sort (SQL ORDER BY; resets to page 1).
         #[qinvokable]
         fn tracks_set_sort(self: Pin<&mut QbzLocal>, sort: QString);
+        /// Toolbar grouping ("off" | "album" | "artist" | "name"): persist +
+        /// republish. NO re-query — the group modes reorder what is already
+        /// loaded, on top of the SQL sort.
+        #[qinvokable]
+        fn tracks_set_group(self: Pin<&mut QbzLocal>, mode: QString);
         /// Infinite scroll: append the next page.
         #[qinvokable]
         fn tracks_load_more(self: Pin<&mut QbzLocal>);
@@ -195,6 +205,12 @@ pub mod qbz_local {
         /// "Go to artist" on a local/Plex album — a NAME route, not an id.
         #[qinvokable]
         fn open_artist_by_name(self: Pin<&mut QbzLocal>, name: QString);
+        /// Artists tab, right pane: the ids of the CACHED album rows that
+        /// credit `artist`, as a JSON array (PARITY-DEBT #8). SYNCHRONOUS and
+        /// cheap — it is a pass over the album document already in memory, and
+        /// QML uses it to filter the very array it renders.
+        #[qinvokable]
+        fn artist_album_ids(self: &QbzLocal, artist: QString) -> QString;
         /// Album header pencil — LOGGED SEAM (no tag-editor modal yet).
         #[qinvokable]
         fn album_edit_tags(self: Pin<&mut QbzLocal>, id: QString);
@@ -244,9 +260,16 @@ pub mod qbz_local {
         /// queue, starting at the clicked row.
         #[qinvokable]
         fn play_folder_track(self: Pin<&mut QbzLocal>, path: QString, track_id: QString);
-        /// Tracks-tab row click: the loaded page set becomes the queue.
+        /// Tracks-tab row click: the loaded page set becomes the queue, in the
+        /// order the tab is RENDERING it (PARITY-DEBT #14).
+        /// `visible_ids_json` = the JSON array of the ids on screen, in render
+        /// order; `track_id` = the row that was clicked.
         #[qinvokable]
-        fn play_track(self: Pin<&mut QbzLocal>, track_id: QString);
+        fn play_tracks_visible(
+            self: Pin<&mut QbzLocal>,
+            visible_ids_json: QString,
+            track_id: QString,
+        );
         /// Context menus: kind = "track" | "album" | "folder";
         /// mode = "next" | "later" | "queue".
         #[qinvokable]
@@ -317,6 +340,7 @@ pub struct QbzLocalRust {
     local_tracks_loading_more: bool,
     local_tracks_has_more: bool,
     local_tracks_sort: QString,
+    local_tracks_group: QString,
     local_tracks_json: QString,
     local_album_loading: bool,
     local_album_json: QString,
@@ -355,6 +379,7 @@ impl Default for QbzLocalRust {
             local_tracks_loading_more: false,
             local_tracks_has_more: false,
             local_tracks_sort: QString::from("default"),
+            local_tracks_group: QString::from("off"),
             local_tracks_json: QString::from("[]"),
             local_album_loading: false,
             local_album_json: QString::from(""),
@@ -395,8 +420,12 @@ impl qbz_local::QbzLocal {
         }
         // Seed the persisted toolbar choices so the first paint matches
         // what the user last picked (shared with the Slint frontend).
+        // `tracks_group` joined the seed with PARITY-DEBT #13: the key was
+        // read and preserved on disk but never reached the UI, so the Tracks
+        // tab silently reset to "No grouping" on every launch.
         let mode = lib::album_mode();
         let sort = lib::tracks_sort();
+        let group = lib::tracks_group();
         crate::spawn(async move {
             let available = tokio::task::spawn_blocking(lib::has_library)
                 .await
@@ -407,6 +436,8 @@ impl qbz_local::QbzLocal {
                     .set_local_album_mode(QString::from(mode.as_str()));
                 b.as_mut()
                     .set_local_tracks_sort(QString::from(sort.as_str()));
+                b.as_mut()
+                    .set_local_tracks_group(QString::from(group.as_str()));
             });
         });
         publish_plex_state();
@@ -429,6 +460,18 @@ impl qbz_local::QbzLocal {
         });
         // The grouping IS the query — reload both album surfaces.
         load_tab_impl("albums".to_string());
+        // ...and the ARTISTS tab derives from that same album set: its album
+        // cache is keyed by the group key, so a folder-mode compilation
+        // cross-lists under every artist until the tab is revisited
+        // (PARITY-DEBT #9). The Slint drops the model and lets
+        // `ensure_artists_loaded` re-fetch on the next visit
+        // (`local_library.rs:727-738 invalidate_artists`); this port has no
+        // such guard — `loadTab` re-queries on every tab change — so the
+        // equivalent is to drop the cache AND re-run the load right here.
+        // That also covers the case the lazy version cannot: the mode is
+        // reachable from Settings, so the user can flip it while STANDING on
+        // the Artists tab.
+        invalidate_artists();
     }
 
     pub fn tracks_search(self: Pin<&mut Self>, query: QString) {
@@ -444,6 +487,18 @@ impl qbz_local::QbzLocal {
                 .set_local_tracks_sort(QString::from(sort.as_str()));
         });
         load_tracks(true);
+    }
+
+    pub fn tracks_set_group(self: Pin<&mut Self>, mode: QString) {
+        let mode = mode.to_string();
+        lib::set_tracks_group(&mode);
+        ui(move |mut b| {
+            b.as_mut()
+                .set_local_tracks_group(QString::from(mode.as_str()));
+        });
+        // NO reload: unlike the sort, grouping is a client-side visual
+        // reorder over the pages already loaded (the reference's
+        // `set_tracks_group` only persists + re-derives).
     }
 
     pub fn tracks_load_more(self: Pin<&mut Self>) {
@@ -539,13 +594,18 @@ impl qbz_local::QbzLocal {
         });
     }
 
-    pub fn play_track(self: Pin<&mut Self>, track_id: QString) {
+    pub fn play_tracks_visible(
+        self: Pin<&mut Self>,
+        visible_ids_json: QString,
+        track_id: QString,
+    ) {
         let Ok(row) = track_id.to_string().parse::<i64>() else {
             return;
         };
+        let ids = visible_ids_json.to_string();
         let runtime = crate::app();
         crate::spawn(async move {
-            lib::play_tracks_from(&runtime, row).await;
+            lib::play_tracks_visible(&runtime, ids, row).await;
         });
     }
 
@@ -688,6 +748,10 @@ impl qbz_local::QbzLocal {
 
     pub fn open_artist_by_name(self: Pin<&mut Self>, name: QString) {
         crate::local_album_actions::open_artist_by_name(name.to_string());
+    }
+
+    pub fn artist_album_ids(&self, artist: QString) -> QString {
+        QString::from(crate::local_albums::artist_album_ids(&artist.to_string()).as_str())
     }
 
     pub fn album_edit_tags(self: Pin<&mut Self>, id: QString) {

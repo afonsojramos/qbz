@@ -41,6 +41,10 @@ Item {
     property bool showFavorite: true
     property bool showDownload: false
     property bool showMenu: true
+    /// Leading reorder gutter (the row's up/down chevrons). MIRROR the
+    /// delegate's `showReorder`, or every label slides by 22 + 14 the moment
+    /// the user switches the list to a custom / reorderable order.
+    property bool showReorder: false
 
     /// Draw the 14px heart / cloud-download in the head of those two
     /// reserved columns (AlbumPageView.slint). Off = an empty reserved slot,
@@ -96,6 +100,13 @@ Item {
         anchors.rightMargin: cols.padH
         spacing: cols.gap
 
+        // Reorder gutter — unlabelled, reserved (the row draws two chevrons
+        // there; there is nothing to name).
+        Item {
+            visible: root.showReorder
+            width: cols.colReorder
+            height: root.bandH
+        }
         // "#" — centred, because the cell it labels is TrackRow's play cell
         // and its number is centred in the same 32px. (Slint's album headers
         // left-align this one over a centred number; the playlist header
@@ -113,7 +124,8 @@ Item {
         }
         ColLabel {
             width: cols.titleWidth(root.innerWidth, root.showArtwork, root.showAlbum,
-                                   root.showFavorite, root.showDownload, root.showMenu)
+                                   root.showFavorite, root.showDownload, root.showMenu,
+                                   root.showReorder)
             text: QbzSession.tr("Title", QbzSession.trRev)
         }
         ColLabel {

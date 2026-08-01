@@ -144,10 +144,11 @@ pub struct QbzIconTintRust {
 
 /// Every icon the app can ask for, as the `primary/` bake's source text.
 ///
-/// This IS the shipped `qml/assets/icons/primary/` directory (99 files),
+/// This IS the shipped `qml/assets/icons/primary/` directory (111 files),
 /// compiled in. Two consequences worth knowing:
 ///   - every runtime tint is COMPLETE, so the partial-directory trap the qrc
-///     bakes have (`favorite/` = 56 files, `amber/` = 4) does not exist here;
+///     bakes have (`favorite/` = 57 files, `amber/` = 6, plus the two
+///     single-glyph brand dirs `green/` and `orange/`) does not exist here;
 ///   - a new icon dropped into `primary/` needs a line ADDED here, otherwise
 ///     that one glyph silently drops back to its qrc bake (visible, just not
 ///     theme-correct). `QbzIcon.qml` handles the miss; it does not go blank.
@@ -155,6 +156,7 @@ pub struct QbzIconTintRust {
 const MASTERS: &[(&str, &str)] = &[
     ("add-to-list", include_str!("../qml/assets/icons/primary/add-to-list.svg")),
     ("arrow-up-down", include_str!("../qml/assets/icons/primary/arrow-up-down.svg")),
+    ("audio-lines", include_str!("../qml/assets/icons/primary/audio-lines.svg")),
     ("award", include_str!("../qml/assets/icons/primary/award.svg")),
     ("blind-eye", include_str!("../qml/assets/icons/primary/blind-eye.svg")),
     ("book-open", include_str!("../qml/assets/icons/primary/book-open.svg")),
@@ -162,6 +164,7 @@ const MASTERS: &[(&str, &str)] = &[
     ("cassette-tape", include_str!("../qml/assets/icons/primary/cassette-tape.svg")),
     ("cast", include_str!("../qml/assets/icons/primary/cast.svg")),
     ("cd", include_str!("../qml/assets/icons/primary/cd.svg")),
+    ("chart-no-axes-column", include_str!("../qml/assets/icons/primary/chart-no-axes-column.svg")),
     ("check", include_str!("../qml/assets/icons/primary/check.svg")),
     ("chevron-down", include_str!("../qml/assets/icons/primary/chevron-down.svg")),
     ("chevron-left", include_str!("../qml/assets/icons/primary/chevron-left.svg")),
@@ -169,6 +172,7 @@ const MASTERS: &[(&str, &str)] = &[
     ("chevron-up", include_str!("../qml/assets/icons/primary/chevron-up.svg")),
     ("circle-alert", include_str!("../qml/assets/icons/primary/circle-alert.svg")),
     ("circle-check-big", include_str!("../qml/assets/icons/primary/circle-check-big.svg")),
+    ("circle-stop", include_str!("../qml/assets/icons/primary/circle-stop.svg")),
     ("clock", include_str!("../qml/assets/icons/primary/clock.svg")),
     ("cloud-download", include_str!("../qml/assets/icons/primary/cloud-download.svg")),
     ("cloud-off", include_str!("../qml/assets/icons/primary/cloud-off.svg")),
@@ -184,16 +188,19 @@ const MASTERS: &[(&str, &str)] = &[
     ("folder-open", include_str!("../qml/assets/icons/primary/folder-open.svg")),
     ("folder-plus", include_str!("../qml/assets/icons/primary/folder-plus.svg")),
     ("folder", include_str!("../qml/assets/icons/primary/folder.svg")),
+    ("grip-vertical", include_str!("../qml/assets/icons/primary/grip-vertical.svg")),
     ("hard-drive", include_str!("../qml/assets/icons/primary/hard-drive.svg")),
     ("heart-filled", include_str!("../qml/assets/icons/primary/heart-filled.svg")),
     ("heart", include_str!("../qml/assets/icons/primary/heart.svg")),
     ("home-gear", include_str!("../qml/assets/icons/primary/home-gear.svg")),
     ("image", include_str!("../qml/assets/icons/primary/image.svg")),
+    ("image-plus", include_str!("../qml/assets/icons/primary/image-plus.svg")),
     ("import", include_str!("../qml/assets/icons/primary/import.svg")),
     ("infinity", include_str!("../qml/assets/icons/primary/infinity.svg")),
     ("info", include_str!("../qml/assets/icons/primary/info.svg")),
     ("layers", include_str!("../qml/assets/icons/primary/layers.svg")),
     ("layout-grid", include_str!("../qml/assets/icons/primary/layout-grid.svg")),
+    ("library", include_str!("../qml/assets/icons/primary/library.svg")),
     ("library-big", include_str!("../qml/assets/icons/primary/library-big.svg")),
     ("link", include_str!("../qml/assets/icons/primary/link.svg")),
     ("list-end", include_str!("../qml/assets/icons/primary/list-end.svg")),
@@ -217,6 +224,7 @@ const MASTERS: &[(&str, &str)] = &[
     ("mp3", include_str!("../qml/assets/icons/primary/mp3.svg")),
     ("music-library-2", include_str!("../qml/assets/icons/primary/music-library-2.svg")),
     ("music", include_str!("../qml/assets/icons/primary/music.svg")),
+    ("network", include_str!("../qml/assets/icons/primary/network.svg")),
     ("panel-left", include_str!("../qml/assets/icons/primary/panel-left.svg")),
     ("panel-right-close", include_str!("../qml/assets/icons/primary/panel-right-close.svg")),
     ("pause", include_str!("../qml/assets/icons/primary/pause.svg")),
@@ -241,9 +249,19 @@ const MASTERS: &[(&str, &str)] = &[
     ("skip-forward", include_str!("../qml/assets/icons/primary/skip-forward.svg")),
     ("sliders-horizontal", include_str!("../qml/assets/icons/primary/sliders-horizontal.svg")),
     ("square-check-big", include_str!("../qml/assets/icons/primary/square-check-big.svg")),
+    ("star", include_str!("../qml/assets/icons/primary/star.svg")),
     ("sun-moon", include_str!("../qml/assets/icons/primary/sun-moon.svg")),
     ("sun", include_str!("../qml/assets/icons/primary/sun.svg")),
     ("thumbs-down", include_str!("../qml/assets/icons/primary/thumbs-down.svg")),
+    // The Tidal wordmark. The ONE brand mark in this table on purpose: it is
+    // monochrome (a black `fill` in the upstream asset), so the "never tint a
+    // logo, it becomes an accent silhouette" rule that keeps the Qobuz / Plex /
+    // Discogs marks in qml/assets/brand/ does not apply — there is no colour to
+    // lose. The reference tints it too (PlaylistImportModal.slint:271-279:
+    // "Tidal's SVG is black — tint white so it reads on dark surfaces"); going
+    // through the tint table instead of a fixed white rendition is what makes it
+    // legible on the 11 light themes as well.
+    ("tidal-tidal", include_str!("../qml/assets/icons/primary/tidal-tidal.svg")),
     ("translate", include_str!("../qml/assets/icons/primary/translate.svg")),
     ("trash-2", include_str!("../qml/assets/icons/primary/trash-2.svg")),
     ("trash-list", include_str!("../qml/assets/icons/primary/trash-list.svg")),
@@ -253,17 +271,44 @@ const MASTERS: &[(&str, &str)] = &[
     ("user", include_str!("../qml/assets/icons/primary/user.svg")),
     ("volume-2", include_str!("../qml/assets/icons/primary/volume-2.svg")),
     ("volume-x", include_str!("../qml/assets/icons/primary/volume-x.svg")),
+    ("wifi", include_str!("../qml/assets/icons/primary/wifi.svg")),
     ("x", include_str!("../qml/assets/icons/primary/x.svg")),
 ];
 
-/// The only paint literal in a `primary/` master (verified over all 99 files:
-/// 109 occurrences, no `#fff` short form). The uppercase form is accepted too
+/// The only paint literal in a `primary/` master (verified over all 111 files:
+/// 121 occurrences, no `#fff` short form). The uppercase form is accepted too
 /// so a hand-added master cannot silently skip the substitution.
 const MASTER_HEX_LOWER: &str = "#ffffff";
 const MASTER_HEX_UPPER: &str = "#FFFFFF";
 
-/// Written last into a tint directory; its presence means "complete".
+/// Written last into a tint directory; its presence means "complete" AND its
+/// CONTENT names the icon set that was written.
+///
+/// It used to hold the hex, which made "complete" mean "complete for whatever
+/// the icon list was when this directory was baked". Adding a glyph to
+/// `MASTERS` then never reached an already-baked cache — the directory still
+/// stamped complete, so the new icon resolved to a `file://` URL that does not
+/// exist and `QbzIcon` logged `Cannot open: .../<name>.svg` on EVERY repaint,
+/// for every user who had ever run an older build. Found by adding
+/// `circle-stop` for the queue's stop-after marker (2026-07-31); the fix is
+/// generic, so the next added glyph cannot repeat it.
 const STAMP: &str = ".complete";
+
+/// Fingerprint of the icon SET, stored in `STAMP`. A directory whose stamp
+/// does not match the running binary's set is stale and is re-baked.
+///
+/// The names, not the bodies: an EDITED glyph keeps its name, and re-baking
+/// every cache dir on an artwork tweak is not worth the I/O — a changed
+/// drawing still renders, a missing file does not.
+fn master_set_fingerprint() -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    MASTERS.len().hash(&mut h);
+    for (name, _) in MASTERS {
+        name.hash(&mut h);
+    }
+    format!("{:016x}", h.finish())
+}
 
 /// How many tinted sets to keep on disk (~390 KB each). 36 themes x 10 tokens
 /// is the theoretical ceiling, but the palettes share most of their text ramp,
@@ -316,6 +361,12 @@ fn token_for(tint: &str) -> Option<&'static str> {
         //                        every theme (scrims, gradients, accent fills)
         //   "black":             a dark glyph on a host painted light
         //   "amber":             #e0b341, the audio stamp's brand accent
+        //   "green" / "orange":  #22c55e / #f59e0b, PmLocalBadge's two
+        //                        availability states. Literal brand colours,
+        //                        not theme tokens — falling through to `None`
+        //                        here is what makes QbzIcon serve them from
+        //                        the one-glyph qrc dirs green/ and orange/.
+        //                        Do NOT "complete" them with a token.
         _ => return None,
     })
 }
@@ -400,8 +451,16 @@ fn tints_from_json(json: &str) -> HashMap<&'static str, String> {
 /// looks complete.
 fn bake(root: &Path, hex: &str) -> bool {
     let dir = root.join(hex);
-    if dir.join(STAMP).is_file() {
+    let fingerprint = master_set_fingerprint();
+    if stamp_matches(&dir, &fingerprint) {
         return true;
+    }
+    // Stale (or hex-stamped by an older build): drop it so the rename below
+    // lands. Leaving it would make every future run take the rename-lost
+    // branch and keep serving the incomplete set.
+    if dir.exists() {
+        log::info!("[qbz-qt] icon tint {hex}: icon set changed, re-baking");
+        let _ = fs::remove_dir_all(&dir);
     }
     let tmp = root.join(format!(".tmp-{hex}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&tmp);
@@ -423,7 +482,7 @@ fn bake(root: &Path, hex: &str) -> bool {
             return false;
         }
     }
-    if fs::write(tmp.join(STAMP), hex).is_err() {
+    if fs::write(tmp.join(STAMP), &fingerprint).is_err() {
         let _ = fs::remove_dir_all(&tmp);
         return false;
     }
@@ -433,11 +492,20 @@ fn bake(root: &Path, hex: &str) -> bool {
             true
         }
         Err(_) => {
-            // Another run won the race; keep whatever is already there.
+            // Another run won the race; keep whatever is already there — but
+            // only if it is the CURRENT set, or we would report success for a
+            // directory missing the very glyph that triggered this bake.
             let _ = fs::remove_dir_all(&tmp);
-            dir.join(STAMP).is_file()
+            stamp_matches(&dir, &fingerprint)
         }
     }
+}
+
+/// True when `dir` carries a stamp for the running binary's icon set.
+fn stamp_matches(dir: &Path, fingerprint: &str) -> bool {
+    fs::read_to_string(dir.join(STAMP))
+        .map(|s| s.trim() == fingerprint)
+        .unwrap_or(false)
 }
 
 /// Keep the cache bounded: drop the oldest complete sets past `MAX_TINT_DIRS`.

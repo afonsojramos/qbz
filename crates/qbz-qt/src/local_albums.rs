@@ -21,6 +21,9 @@ use qbz_library::album_grouping::AlbumGroupMode;
 use qbz_library::LocalTrack;
 
 use crate::local_album_actions::AlbumDetailDoc;
+use crate::local_artist_match::{
+    album_matches_artist, merge_artists, normalize_artist, AlbumCredit, ArtistInput,
+};
 use crate::local_rows::{
     artist_key, map_album, map_track, AlbumRow, ArtistRow, LocalCounts, TrackRow,
 };
@@ -84,73 +87,158 @@ pub fn load_folders_blocking() -> Result<Vec<AlbumRow>, String> {
     Ok(rows)
 }
 
-/// Artists tab: the on-disk artists, with the aggregated Plex artists folded
-/// in by case-insensitive name (a local + Plex artist of the same name counts
-/// ONCE, with summed album/track counts — the Slint's `merge_artists` rule).
+/// Artists tab: the on-disk artists merged by NORMALIZED name, with the
+/// aggregated Plex artists folded into the same buckets.
+///
+/// PARITY-DEBT #7 — this used to key the local<->Plex merge on a raw
+/// `trim().to_lowercase()`, so "Beyoncé" and "Beyonce" (or "Sigur Rós" and
+/// "Sigur Ros") were two rows with the user's albums and tracks split between
+/// them. The key is `local_artist_match::normalize_artist` now (lowercase +
+/// diacritic fold + punctuation collapse), which is also what lets the whole
+/// reference merge come across: canonical spelling, summed track counts,
+/// album counts recomputed from the album set (so a cross-credited album
+/// counts for every contributor) and the custom -> Plex thumb -> album cover
+/// portrait chain. Reference: `local_library.rs:3261-3358 merge_artists` and
+/// its caller at :3540-3607.
 pub fn load_artists_blocking() -> Result<Vec<ArtistRow>, String> {
-    let artists = with_db(|db| {
-        db.get_artists_with_filter(
+    let plex_on = crate::local_plex::is_enabled();
+    let mode = group_mode();
+    let plex_path = crate::local_plex::cache_db_path();
+
+    // ONE db open for the three reads the merge needs. The album set is the
+    // SAME query the Albums tab runs (Plex-aware union when the toggle is on),
+    // so an artist's album count matches the grid the user sees.
+    let (artists, albums, custom) = with_db(|db| {
+        let artists = db.get_artists_with_filter(
             /* include_qobuz_downloads */ true,
             /* exclude_network_folders */ false,
-        )
+        )?;
+        let albums = if plex_on {
+            db.get_albums_metadata_page(
+                0,
+                100_000,
+                None,
+                "artist",
+                "asc",
+                /* include_qobuz_downloads */ true,
+                /* exclude_network_folders */ false,
+                plex_path.as_deref(),
+                mode,
+            )?
+            .albums
+        } else {
+            db.get_albums_with_full_filter(
+                /* include_hidden */ false,
+                /* include_qobuz_downloads */ true,
+                /* exclude_network_folders */ false,
+            )?
+        };
+        // Custom AND previously-cached (Qobuz-fetched) portraits. A missing
+        // `artist_images` table must not fail the whole tab.
+        let custom = db.get_all_artist_image_urls().unwrap_or_default();
+        Ok((artists, albums, custom))
     })
     .ok_or_else(|| "local library not available".to_string())?;
 
-    let mut rows: Vec<ArtistRow> = artists
+    let mut inputs: Vec<ArtistInput> = artists
         .into_iter()
-        .map(|a| ArtistRow {
-            art_key: artist_key(&a.name),
+        .map(|a| ArtistInput {
             name: a.name,
             album_count: a.album_count,
             track_count: a.track_count,
-            source: "local".into(),
+            source: "local",
         })
         .collect();
 
-    if crate::local_plex::is_enabled() {
-        let mut index: HashMap<String, usize> = rows
-            .iter()
-            .enumerate()
-            .map(|(i, r)| (r.name.trim().to_lowercase(), i))
-            .collect();
-        let plex_artists = crate::local_plex::cached_artists();
-        with_art(|art| {
-            for pa in plex_artists {
-                let key = pa.name.trim().to_lowercase();
-                if key.is_empty() {
-                    continue;
-                }
-                let art_key = artist_key(&pa.name);
-                if let Some(thumb) = pa.artwork_path.as_ref().filter(|p| !p.is_empty()) {
-                    art.entry(art_key.clone()).or_insert_with(|| thumb.clone());
-                }
-                match index.get(&key) {
-                    Some(&i) => {
-                        rows[i].album_count += pa.album_count;
-                        rows[i].track_count += pa.track_count;
-                        rows[i].source = "mixed".into();
-                    }
-                    None => {
-                        index.insert(key, rows.len());
-                        rows.push(ArtistRow {
-                            art_key,
-                            name: pa.name,
-                            album_count: pa.album_count,
-                            track_count: pa.track_count,
-                            source: "plex".into(),
-                        });
-                    }
-                }
+    // Plex artists join the SAME merge input (not a second pass keyed by a
+    // different rule), so a local and a Plex "Radiohead" collapse to one row.
+    let mut plex_portraits: HashMap<String, String> = HashMap::new();
+    if plex_on {
+        for pa in crate::local_plex::cached_artists() {
+            let n = normalize_artist(&pa.name);
+            if n.is_empty() {
+                continue;
             }
-        });
-        rows.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+            if let Some(path) = pa.artwork_path.clone().filter(|p| !p.is_empty()) {
+                plex_portraits.entry(n).or_insert(path);
+            }
+            inputs.push(ArtistInput {
+                name: pa.name,
+                album_count: pa.album_count,
+                track_count: pa.track_count,
+                source: "plex",
+            });
+        }
     }
+
+    let credits: Vec<AlbumCredit<'_>> = albums
+        .iter()
+        .map(|a| AlbumCredit {
+            id: a.id.as_str(),
+            artist: a.artist.as_str(),
+            all_artists: a.all_artists.as_str(),
+            artwork_path: a.artwork_path.as_deref().unwrap_or(""),
+        })
+        .collect();
+
+    let merged = merge_artists(inputs, &credits, &custom, &plex_portraits, plex_on);
+
+    // The artwork index is keyed on the DISPLAY name (`artist:{name}`), so the
+    // portrait is registered under the CANONICAL spelling the row carries —
+    // registering it under the Plex spelling is what left a merged row with a
+    // key nobody had a source for. Overwrite rather than `or_insert`: this
+    // pass has just recomputed the chain, and a stale entry from a previous
+    // album-identity mode must not win.
+    let rows: Vec<ArtistRow> = with_art(|art| {
+        merged
+            .into_iter()
+            .map(|m| {
+                let key = artist_key(&m.name);
+                if !m.image_path.is_empty() {
+                    art.insert(key.clone(), m.image_path);
+                }
+                ArtistRow {
+                    art_key: key,
+                    name: m.name,
+                    album_count: m.album_count,
+                    track_count: m.track_count,
+                    source: m.source,
+                }
+            })
+            .collect()
+    });
 
     state(|s| {
         s.counts.artists = rows.len() as i64;
         s.artists = rows.clone();
     });
     Ok(rows)
+}
+
+/// The ids of the CACHED album rows that credit `artist`, as a JSON array —
+/// the Artists tab's right pane (PARITY-DEBT #8).
+///
+/// The match lives here, not in QML, because it is the same normalized-part
+/// rule the merge above uses and there must be exactly one of it. The QML did
+/// a lowercase equality on `artist` OR a SUBSTRING `indexOf` on `allArtists`,
+/// which listed "Airbourne" and "Blair" under "Air" and hid an album credited
+/// "A & B" from "B". Reference: `local_library.rs:3368-3390`.
+///
+/// Reads `state.albums` — the very document the QML renders — so the ids it
+/// returns always resolve to rows the view already has.
+pub fn artist_album_ids(artist: &str) -> String {
+    let nsel = normalize_artist(artist);
+    if nsel.is_empty() {
+        return "[]".to_string();
+    }
+    let ids: Vec<String> = state(|s| {
+        s.albums
+            .iter()
+            .filter(|a| album_matches_artist(&a.artist, &a.all_artists, &nsel))
+            .map(|a| a.id.clone())
+            .collect()
+    });
+    serde_json::to_string(&ids).unwrap_or_else(|_| "[]".to_string())
 }
 
 /// Tracks tab, ONE page. `reset` clears the accumulator (a new search or

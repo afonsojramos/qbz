@@ -18,7 +18,8 @@
 //! Ids in use: `home`, `library`, `local`, `localalbum`, `album`, `artist`,
 //! `settings`, `search`, `playlist`, `discoverbrowse`, `playlistbrowse`,
 //! `recentalbums`, `mostplayedalbums`, `label`, `labelreleases`, `mix`,
-//! `mixtapes`, `collections`, `mixtapedetail`, `discobuilder`, `blacklist`.
+//! `mixtapes`, `collections`, `mixtapedetail`, `discobuilder`, `blacklist`,
+//! `playlistmanager`.
 
 use std::sync::Mutex;
 
@@ -52,6 +53,19 @@ pub fn record(view: &str) {
         snapshot(h)
     });
     publish(can_back, can_forward, current);
+}
+
+/// The id of the entry the user is standing on.
+///
+/// Read-only, and the ONLY reader today is `playlist_qt::back_if_showing`
+/// (contract §5.1): a delete may only navigate away when the deleted playlist
+/// is the one whose detail page is open, or deleting a row from the Playlist
+/// Manager throws the user off the manager. The bridge already publishes this
+/// as `QbzShell.currentView`, but a Rust caller has no way to read a Qt
+/// property back off the Qt thread — hence the accessor rather than a QML
+/// round trip.
+pub fn current_view() -> String {
+    with_history(|h| h.entries[h.index].clone())
 }
 
 /// Move one entry back, if possible.

@@ -38,6 +38,14 @@ pub mod qbz_library_bridge {
         #[qproperty(QString, library_json)]
         // {tracks, albums, artists, playlists, labels, all} — tab badges.
         #[qproperty(QString, library_counts_json)]
+        // Persisted toolbar choices (library_prefs.rs — the SAME
+        // favorites_ui.json the shipping Slint build writes). Seeded in
+        // `boot`, written back one key at a time through `set_library_pref`.
+        #[qproperty(QString, library_prefs_json)]
+        // Artists SIDEPANEL: the selected artist's release sections
+        // (library_sidepanel.rs). Its own document, never folded into
+        // `library_json`: a selection must not re-serialize a 10k-row feed.
+        #[qproperty(QString, sidepanel_json)]
 
         type QbzLibrary = super::QbzLibraryRust;
 
@@ -85,6 +93,38 @@ pub mod qbz_library_bridge {
         #[qsignal]
         fn library_favorite_changed(self: Pin<&mut QbzLibrary>, key: QString, value: bool);
 
+        /// Library header: play (or shuffle) the whole VISIBLE track set.
+        /// `shuffle` reorders this queue only — it never latches the player's
+        /// shuffle mode (PARITY-DEBT #17).
+        #[qinvokable]
+        fn library_play_all(self: Pin<&mut QbzLibrary>, visible_ids_json: QString, shuffle: bool);
+
+        /// Persist ONE toolbar choice. `key` is a camelCase name from
+        /// `library_prefs::to_json` ("albumsView", "tracksGroup", …); `value`
+        /// is always a string ("true"/"false" for the booleans).
+        #[qinvokable]
+        fn set_library_pref(self: Pin<&mut QbzLibrary>, key: QString, value: QString);
+
+        /// Multi-select bulk bar. `scope` = "track" | "album"; `ids_json` is
+        /// the JSON array the bar built from its own selection map (the QML
+        /// owns the selection, so "select-all" / "clear" never arrive here).
+        #[qinvokable]
+        fn library_bulk_action(
+            self: Pin<&mut QbzLibrary>,
+            scope: QString,
+            ids_json: QString,
+            action: QString,
+        );
+
+        /// Artists sidepanel: load + show one artist's releases in the right
+        /// pane. Result lands on `sidepanel_json`.
+        #[qinvokable]
+        fn sidepanel_select_artist(self: Pin<&mut QbzLibrary>, id: QString, name: QString);
+
+        /// Artists sidepanel: drop the selection (leaving the mode).
+        #[qinvokable]
+        fn sidepanel_clear(self: Pin<&mut QbzLibrary>);
+
         /// AlbumCard pin badge: toggle pin (album/artist/playlist).
         #[qinvokable]
         fn toggle_pin(self: Pin<&mut QbzLibrary>, kind: QString, id: QString, title: QString, subtitle: QString, artwork_url: QString);
@@ -104,6 +144,8 @@ pub struct QbzLibraryRust {
     library_error: QString,
     library_json: QString,
     library_counts_json: QString,
+    library_prefs_json: QString,
+    sidepanel_json: QString,
 }
 
 impl Default for QbzLibraryRust {
@@ -113,6 +155,10 @@ impl Default for QbzLibraryRust {
             library_error: QString::default(),
             library_json: QString::from("[]"),
             library_counts_json: QString::from("{}"),
+            // Parseable defaults so QML's JSON.parse never throws on frame 1
+            // (the real values arrive in `boot`).
+            library_prefs_json: QString::from("{}"),
+            sidepanel_json: QString::from("{}"),
         }
     }
 }
@@ -132,10 +178,42 @@ pub(crate) fn ui(f: impl FnOnce(Pin<&mut QbzLibrary>) + Send + 'static) {
 }
 
 impl qbz_library_bridge::QbzLibrary {
-    pub fn boot(self: Pin<&mut Self>) {
+    pub fn boot(mut self: Pin<&mut Self>) {
         if QT_THREAD.set(self.qt_thread()).is_err() {
             log::warn!("[qbz-qt] library Qt thread already registered");
         }
+        // Seed the persisted toolbar choices so the FIRST paint of the Library
+        // is the view mode / sort / group the user last picked, not the
+        // defaults followed by a visible snap (`local_bridge::boot` does the
+        // same for the Local Library). Cheap: one small json read.
+        let prefs = crate::library_prefs::to_json();
+        self.as_mut()
+            .set_library_prefs_json(QString::from(prefs.as_str()));
+    }
+
+    pub fn set_library_pref(self: Pin<&mut Self>, key: QString, value: QString) {
+        crate::library_prefs::set(&key.to_string(), &value.to_string());
+    }
+
+    pub fn library_bulk_action(
+        self: Pin<&mut Self>,
+        scope: QString,
+        ids_json: QString,
+        action: QString,
+    ) {
+        crate::library_bulk::bulk_action(
+            scope.to_string(),
+            ids_json.to_string(),
+            action.to_string(),
+        );
+    }
+
+    pub fn sidepanel_select_artist(self: Pin<&mut Self>, id: QString, name: QString) {
+        crate::library_sidepanel::select(id.to_string(), name.to_string());
+    }
+
+    pub fn sidepanel_clear(self: Pin<&mut Self>) {
+        crate::library_sidepanel::clear();
     }
 
     pub fn reload_library(self: Pin<&mut Self>) {
@@ -156,6 +234,10 @@ impl qbz_library_bridge::QbzLibrary {
         clicked_id: QString,
     ) {
         crate::library_qt::play_from_visible(visible_ids_json.to_string(), clicked_id.to_string());
+    }
+
+    pub fn library_play_all(self: Pin<&mut Self>, visible_ids_json: QString, shuffle: bool) {
+        crate::library_qt::play_visible_all(visible_ids_json.to_string(), shuffle);
     }
 
     pub fn toggle_pin(self: Pin<&mut Self>, kind: QString, id: QString, title: QString, subtitle: QString, artwork_url: QString) {

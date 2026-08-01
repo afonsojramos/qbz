@@ -5,12 +5,18 @@
 //! History tab. Mutations go straight to the core queue API; every one
 //! ends with a republish.
 //!
-//! POC-NOTEs:
-//! - QConnect remote reorder, the playlist picker (save-as-playlist opens
-//!   a modal picker upstream), infinite-play engine, sleep timer, stop-after
-//!   marker, ephemeral rows, coverflow: out of scope.
-//! - Row favorite seeds from the phase-5 library feed (Slint uses
-//!   fav_cache — same truth).
+//! OWED PORTS (what the reference has and this file still does not):
+//! - QConnect remote reorder — `reorder_upcoming_if_remote` is offered the
+//!   move FIRST in the reference (the cloud is authoritative for queue order
+//!   while connected). There is no QConnect service in this port yet, so the
+//!   local core path is the only one; when the service lands, `move_track`
+//!   grows that arm BEFORE `core().move_track`.
+//! - Coverflow: the reference also feeds the immersive coverflow's flat model
+//!   from this same refresh. The immersive view does not exist here
+//!   (PARITY-DEBT #31), so there is nothing to feed.
+//!
+//! Row favorite seeds from the phase-5 library feed (Slint uses fav_cache —
+//! same truth).
 
 use std::collections::HashSet;
 use std::sync::Mutex;
@@ -51,6 +57,12 @@ pub struct QueueRow {
     /// #442 section header drawn ABOVE this row: "" | "next-in-queue" |
     /// "next-up" (only on the unfiltered list).
     pub section: String,
+    /// Ephemeral row (a one-shot file play that leaves no trace in QBZ).
+    /// The panel drops every PERSISTENCE affordance on these — the heart,
+    /// "Add to playlist", "Track info" — exactly as `QueueSidebar.slint`
+    /// gates on `item.is-ephemeral`.
+    #[serde(rename = "isEphemeral")]
+    pub is_ephemeral: bool,
 }
 
 #[derive(Default, Serialize)]
@@ -74,6 +86,18 @@ pub struct QueueDoc {
     pub shuffle: bool,
     #[serde(rename = "repeatMode")]
     pub repeat_mode: i32,
+    /// "Stop after this song" marker — the decimal-string id of the marked
+    /// track, or "" for none. Each row compares its own id to this to draw
+    /// the CircleStop in place of its track number (`QueueState.stop-after-id`).
+    #[serde(rename = "stopAfterId")]
+    pub stop_after_id: String,
+    /// Whether InfiniteRadio autoplay is on (the ∞ footer button's accent).
+    #[serde(rename = "infinitePlay")]
+    pub infinite_play: bool,
+    /// The live search query, echoed back so the panel can tell "the queue is
+    /// empty" apart from "nothing matched" (`QueueState.search-query`).
+    #[serde(rename = "searchQuery")]
+    pub search_query: String,
 }
 
 /// Panel view state (search + page), session-scope like the Slint view.
@@ -172,6 +196,11 @@ fn row_from(track: &QueueTrack, favorites: &HashSet<u64>) -> QueueRow {
         is_favorite,
         is_local: track.is_local,
         section: String::new(),
+        // Both halves of the reference's test (`queue.rs:148`): the queue
+        // track's own source tag, and the id-range check for a row that
+        // reached the queue without one.
+        is_ephemeral: track.source.as_deref() == Some("ephemeral")
+            || crate::local_ephemeral::is_ephemeral_id(track.id as i64),
     }
 }
 
@@ -321,6 +350,15 @@ pub async fn publish(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
         .collect();
     let current = state.current_track.as_ref().map(|t| row_from(t, &favorites));
 
+    // One core read for the marker (the reference reads it in the same pass,
+    // `queue.rs:396`), so a row can compare its id without a second round trip.
+    let stop_after_id = runtime
+        .core()
+        .get_stop_after()
+        .await
+        .map(|id| id.to_string())
+        .unwrap_or_default();
+
     let doc = QueueDoc {
         has_current: current.is_some(),
         current,
@@ -338,6 +376,12 @@ pub async fn publish(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
             qbz_models::RepeatMode::All => 1,
             qbz_models::RepeatMode::One => 2,
         },
+        stop_after_id,
+        infinite_play: is_infinite_play(),
+        // The RAW typed text, not the trimmed/lowercased `query` — this is
+        // what the reference's `QueueState.search-query` holds, and the
+        // "nothing matched" state gates on it being non-empty.
+        search_query: search,
     };
     let rows = doc.upcoming.len() + doc.history.len() + usize::from(doc.has_current);
     *LOCAL_ROW_IDS.lock().unwrap() = doc
@@ -476,13 +520,149 @@ pub async fn play_history(runtime: &Arc<AppRuntime<LoggingAdapter>>, index: usiz
     crate::playback_qt::play_queue_track_public(runtime, track.id).await;
 }
 
+/// Empty the queue — `queue.rs::clear` verbatim.
+///
+/// `keep_current` is the LIVE `is_playing` flag, not a constant: the reference
+/// keeps the now-playing slot only while it is audible, so clearing the queue
+/// mid-track empties Up Next and lets the current track finish, and clearing it
+/// while paused/stopped wipes the card too. This port used to pass `false` and
+/// then call `stop()` on top, which killed playback on every Clear — the one
+/// footer button that WAS wired was also the one that diverged.
+///
+/// The view state resets with it (page 0, search cleared), or the panel would
+/// come back showing "page 3 of 1" filtered by a query with nothing left to
+/// match.
 pub async fn clear_queue(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
-    // queue.rs clear_queue: drops everything INCLUDING the current track
-    // (keep_current: false) and stops playback.
-    runtime.core().clear_queue(false).await;
-    let _ = runtime.core().stop();
+    let playing = runtime.core().get_playback_state().is_playing;
+    runtime.core().clear_queue(playing).await;
+    {
+        let mut view = VIEW.lock().unwrap();
+        view.page = 0;
+        view.search.clear();
+    }
     publish(runtime).await;
     crate::playback_qt::refresh_now_playing(runtime).await;
+}
+
+/// Toggle the "stop after this song" marker on the queue track with `id` (a
+/// decimal string, matching `QueueRow.id`). Idempotent — tapping the same track
+/// clears it. The core auto-clears the marker on queue mutation, and `publish`
+/// reflects whatever it currently holds. `queue.rs::toggle_stop_after` 1:1.
+pub async fn toggle_stop_after(runtime: &Arc<AppRuntime<LoggingAdapter>>, id: &str) {
+    let Ok(track_id) = id.parse::<u64>() else {
+        return;
+    };
+    if runtime.core().get_stop_after().await == Some(track_id) {
+        runtime.core().clear_stop_after().await;
+    } else {
+        runtime.core().set_stop_after(track_id).await;
+    }
+    publish(runtime).await;
+}
+
+/// Whether `InfiniteRadio` autoplay is on (the queue auto-refills with a smart
+/// radio when it runs out). Read by the footer's ∞ tint AND by the refill
+/// engine in `playback_qt`'s end-of-track arm — same single truth as the
+/// reference's `QueueController::is_infinite_play`.
+pub fn is_infinite_play() -> bool {
+    crate::settings_qt::is_infinite_play()
+}
+
+/// Toggle infinite play: flips the persisted autoplay mode between
+/// `InfiniteRadio` and `ContinueWithinSource` (`queue.rs::toggle_infinite_play`).
+///
+/// Note the asymmetry with Settings > Playback's "Continue playback" switch,
+/// which flips `ContinueWithinSource` <-> `PlayTrackOnly`: the three modes share
+/// ONE preference, so turning infinite play off here lands on
+/// `ContinueWithinSource` and that switch reads as ON. That is the reference's
+/// behaviour, not a rounding of it.
+pub async fn toggle_infinite_play(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
+    crate::settings_qt::set_infinite_play(!is_infinite_play());
+    publish(runtime).await;
+}
+
+/// The panel became visible — re-pull the queue (`QueueState.panel-opened`).
+///
+/// The bridge property still holds the last document, so the panel does not
+/// mount blank without this; what it buys is the case the reference names —
+/// the queue changed while the panel was closed (session restore, a play from
+/// a view that does not republish) — and it is nearly free, because `publish`
+/// drops a byte-identical document before it reaches Qt.
+pub async fn panel_opened(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
+    publish(runtime).await;
+}
+
+/// Open the Add-to-Playlist picker seeded with the queue's tracks — current
+/// first, then upcoming, de-duplicated, in PLAY order (`queue.rs::save_as_playlist`).
+///
+/// The picker's inline "Create new playlist" row is what turns this into "save
+/// the queue as a playlist"; picking an existing one appends. There is no
+/// separate save-as-playlist endpoint in the reference either — same modal.
+///
+/// LOCAL/Plex and ephemeral rows are skipped: their `id` is a library.db row id
+/// (or a synthetic ephemeral id), and the picker's Qobuz arm would add an
+/// unrelated catalog track under that number.
+///
+/// The local-mode ARM now exists (`playlist_picker_qt::open_for_local_refs`),
+/// so the remaining blocker is narrower than the old note claimed: what this
+/// module lacks is a source-aware row -> ref RESOLVER. A `QueueTrack`'s
+/// `source_item_id_hint` is overloaded (`local_playback` documents it as the
+/// album id on the non-mixtape enqueue paths), so it is not a safe Plex rating
+/// key outside the local queue builder's own rows. PARITY-DEBT, recorded
+/// rather than silently mixing the id spaces.
+pub async fn save_as_playlist(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
+    let state = runtime.core().get_queue_state_full().await;
+    let mut ids: Vec<String> = Vec::new();
+    let mut seen: HashSet<u64> = HashSet::new();
+    let mut skipped = 0usize;
+    for track in state.current_track.iter().chain(state.upcoming.iter()) {
+        if track.is_local || crate::local_ephemeral::is_ephemeral_id(track.id as i64) {
+            skipped += 1;
+            continue;
+        }
+        if seen.insert(track.id) {
+            ids.push(track.id.to_string());
+        }
+    }
+    if skipped > 0 {
+        log::info!(
+            "[qbz-qt] queue save-as-playlist: skipped {skipped} local/ephemeral row(s) — \
+             no local-mode picker in this port"
+        );
+    }
+    if ids.is_empty() {
+        return;
+    }
+    crate::playlist_picker_qt::open_for_ids(runtime, ids);
+}
+
+/// Open the picker seeded with ONE upcoming row (page-local `page_index`) —
+/// the per-track "Add to playlist" entry in the row menu
+/// (`queue.rs::add_to_playlist`). Resolves through the same page-local ->
+/// queue-wide mapping as every other row action, so it is correct under a
+/// search filter and on any page.
+pub async fn add_to_playlist(runtime: &Arc<AppRuntime<LoggingAdapter>>, page_index: usize) {
+    let Some(&upcoming_index) = current_page_indices(runtime).await.get(page_index) else {
+        log::warn!("[qbz-qt] queue: add_to_playlist {page_index} out of range");
+        return;
+    };
+    let state = runtime.core().get_queue_state_full().await;
+    let Some(track) = state.upcoming.get(upcoming_index) else {
+        log::warn!("[qbz-qt] queue: add_to_playlist {page_index} -> no upcoming track");
+        return;
+    };
+    if track.is_local || crate::local_ephemeral::is_ephemeral_id(track.id as i64) {
+        // Defensive: QueuePanel.qml drops the entry for `isLocal` and
+        // `isEphemeral` rows, so this is only reachable from a stale page
+        // index. Not "no local-mode picker" (that arm exists) — no
+        // source-aware row -> ref resolver here; see `save_as_playlist`.
+        log::warn!(
+            "[qbz-qt] queue: add_to_playlist {page_index} is a local/ephemeral row — \
+             no source-aware ref resolver on the queue"
+        );
+        return;
+    }
+    crate::playlist_picker_qt::open_for_ids(runtime, vec![track.id.to_string()]);
 }
 
 /// Toggle a heart for a queue row (Qobuz favorite), then republish.

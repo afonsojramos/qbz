@@ -197,7 +197,7 @@ Item {
                             }
                         }
                     }
-                    AlphaStrip {
+                    QbzAlphaStrip {
                         visible: root.alphaJumps.length > 0
                         anchors.right: parent.right
                         anchors.top: parent.top

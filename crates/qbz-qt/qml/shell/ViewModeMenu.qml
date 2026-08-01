@@ -14,6 +14,18 @@ QbzContextMenu {
     id: root
     menuWidth: 196
 
+    // The theme tokens. Declared HERE even though the BASE type
+    // (controls/QbzContextMenu.qml) already has a `QbzTheme { id: theme }`:
+    // a QML id belongs to the document that declares it, and a derived
+    // document is a DIFFERENT scope — the base's context is created as a
+    // child of this one, never as its parent, so `theme` was resolving to
+    // nothing here and every binding below threw a silent ReferenceError
+    // (leaving the row Rectangles at their default WHITE fill). The four
+    // sibling menus built on the same base — CardMenu, AudioSettingsMenu,
+    // PmFolderMenu, SidebarRowMenu — all declare their own; this file was
+    // the lone outlier.
+    QbzTheme { id: theme }
+
     Repeater {
         model: [
             { "label": QbzSession.tr("New", QbzSession.trRev), "icon": "panel-left", "mode": 0 },

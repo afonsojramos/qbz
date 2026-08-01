@@ -14,13 +14,15 @@
 // - JUMP TO is NOT sticky. ArtistView.qml:1204 documents the same call for
 //   the .slint's sticky clamp; matching it keeps the two detail pages
 //   consistent. This is the one accepted visual delta.
-// - NO multi-select. qml/rows/TrackRow.qml has no multi-select arm, and one
-//   of the .slint MultiSelectBar's seven actions (add-to-playlist) has no
-//   bridge seam at all (TrackRow.qml:107-121), so a full port would ship a
-//   dead entry. (add-to-mixtape IS live now — the per-row menu reaches
-//   QbzMyQbzAdd.open; only the BULK form is missing, for want of a
-//   selection.) The select disc renders DIMMED and inert (the ArtistView
-//   "Radio" precedent) and the bar is absent.
+// - NO multi-select — and the ORIGINAL reason is now STALE on both halves:
+//   rows/TrackRow.qml:116 DOES have the `selectMode` arm, and add-to-playlist
+//   DOES have a bridge seam (QbzPlaylistPicker.openForTracks,
+//   src/playlist_picker_bridge.rs). What is still missing is only the
+//   selection STATE and the bar itself (LibraryView.qml's `tracksSelected`
+//   map is the pattern to copy). Until then the select disc renders DIMMED
+//   and inert (the ArtistView "Radio" precedent) and the bar is absent.
+//   Per-ROW add-to-playlist and add-to-mixtape are both LIVE on this page
+//   already, through the shared TrackRow menu.
 // - NO "In library" tab. The Qt library feed carries no label id, so
 //   `libraryCount` is always 0 and the SegmentedTabBar never mounts (see
 //   src/label_qt.rs). A toggle that switches to an empty tab is worse.

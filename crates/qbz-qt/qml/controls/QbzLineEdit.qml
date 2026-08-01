@@ -96,6 +96,19 @@ Rectangle {
         input.focus = false
     }
 
+    /// Focus the field from OUTSIDE the control — what a modal needs on open.
+    ///
+    /// The deferred Timer below already existed, but it was driven only by
+    /// `onOpenChanged`, and `open` is the EXPANDABLE-SEARCH arm's property;
+    /// the control exposes no alias to its inner TextInput either, so a modal
+    /// had no way in. Setting `open: true` on a plain field happens to work
+    /// (with `expandable: false`, `box.width` is `root.width` regardless of
+    /// `open`, :139) but it repurposes a search-arm property and reads as a
+    /// bug. This is the seam instead. It is deferred for the same reason the
+    /// expandable arm defers: focusing synchronously inside the caller's own
+    /// open transition races it.
+    function focusField() { focusDefer.restart() }
+
     // Deferred focus — see the header note.
     onOpenChanged: if (open) focusDefer.restart()
     Timer {

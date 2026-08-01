@@ -19,10 +19,21 @@
 //! - drag reorder (issue #589): visible-index move + persistence of the
 //!   custom order.
 //!
+//! LOCAL playlists are NOT out of scope any more (that POC-NOTE was stale and
+//! it had already misled one call site into stamping `"source": "qobuz"` on
+//! every row): `local_playlist_qt::load` resolves a `local:<uuid>` detail and
+//! publishes it THROUGH THIS DOCUMENT via [`adopt_doc`]. Consequences for
+//! anyone reading a row here:
+//! - `PlaylistDoc.is_local_playlist` says which kind is on screen.
+//! - `PlaylistTrackRow.source` is `""` (Qobuz) | `"local"` | `"plex"`, and
+//!   `id` lives in a DIFFERENT id space per source. Never read a row's `id`
+//!   as a catalog id without checking `source` first — that is the
+//!   id-confusion class `playlist_picker_qt.rs`'s header exists to prevent.
+//! - `unavailable` rows carry a ref that cannot resolve at all; they render
+//!   honestly and every "copy this track somewhere" affordance must be absent
+//!   on them.
+//!
 //! POC-NOTEs:
-//! - LOCAL playlists (library.db entities) are OUT OF SCOPE everywhere:
-//!   the view is Qobuz-only (the sidebar's local rows keep their
-//!   mark-active behavior from phase 7).
 //! - The custom drag order persists to a per-user `playlist_orders.json`
 //!   in the user dir (the Slint uses `playlist_orders.db` with
 //!   `(u64, bool, i32)` rows — same behavior, simpler backend for the POC).
@@ -75,6 +86,21 @@ pub struct PlaylistTrackRow {
     pub art_path: String,
     #[serde(rename = "isFavorite")]
     pub is_favorite: bool,
+    /// Row provenance for a LOCAL playlist's mixed rows: "" (Qobuz — the
+    /// default for every Qobuz playlist row) | "local" | "plex".
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source: String,
+    /// A ref that cannot resolve right now — a Plex key the cache does not
+    /// know, or a stored "Qobuz" id outside the catalog range (the legacy
+    /// mis-typed-drag class). The row renders HONESTLY and stays selectable so
+    /// the user can remove it, instead of vanishing: hiding is for genuinely
+    /// offline Qobuz rows, not for refs that can never heal on their own.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unavailable: bool,
+    /// The raw stored ref behind `unavailable`, shown so the user can see WHAT
+    /// is broken rather than just that something is.
+    #[serde(default, rename = "unavailableRef", skip_serializing_if = "String::is_empty")]
+    pub unavailable_ref: String,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -126,6 +152,16 @@ pub struct PlaylistDoc {
     #[serde(rename = "sortAsc")]
     pub sort_asc: bool,
     pub search: String,
+    /// This detail is a LOCAL playlist (`local:<uuid>`), not a Qobuz one. The
+    /// view drops every Qobuz-only affordance on it (follow, copy, share, the
+    /// Qobuz heart) and offers the local ones instead.
+    #[serde(default, rename = "isLocalPlaylist", skip_serializing_if = "std::ops::Not::not")]
+    pub is_local_playlist: bool,
+    /// D8: an OFFLINE-ONLY local playlist. Nothing from one may ever reach
+    /// Qobuz — the queue it builds is stamped so the QConnect push site skips
+    /// the cloud entirely.
+    #[serde(default, rename = "offlineOnly", skip_serializing_if = "std::ops::Not::not")]
+    pub offline_only: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -144,6 +180,22 @@ static USER_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new
 
 pub fn set_user_id(id: u64) {
     USER_ID.store(id, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// The signed-in user's id, or `None` when no session has been activated.
+///
+/// The Qt twin of the reference's `library_db::current_user_id()`
+/// (`main.rs:21024`) — same job, read out of the session snapshot this crate
+/// already stashes instead of re-opening the DB. `0` is the never-set
+/// sentinel and must NOT be compared against a real `owner.id`, hence the
+/// `Option`: `delete_by_id`'s ownership test would otherwise read
+/// "unauthenticated" as "owns nothing", which is right, and "owns playlist 0",
+/// which is not.
+fn current_user_id() -> Option<u64> {
+    match USER_ID.load(std::sync::atomic::Ordering::SeqCst) {
+        0 => None,
+        id => Some(id),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -251,6 +303,19 @@ fn publish(doc: &PlaylistDoc) {
     });
 }
 
+/// Publish a document built ELSEWHERE and adopt it as the open page.
+///
+/// The LOCAL playlist detail renders through this same view — the reference
+/// does exactly that (its local detail drives `PlaylistState` and the shared
+/// row machinery rather than growing a second view), so search / sort /
+/// multi-select / artwork all come for free and cannot drift between the two
+/// kinds of playlist. `PAGE` is set too, so `with_doc` readers (the sort and
+/// search handlers, the membership refresh) see the local page like any other.
+pub(crate) fn adopt_doc(doc: PlaylistDoc) {
+    publish(&doc);
+    *PAGE.lock().unwrap() = Some(PageState { doc });
+}
+
 fn with_doc<R>(f: impl FnOnce(&mut PlaylistDoc) -> R) -> Option<R> {
     let mut guard = PAGE.lock().unwrap();
     guard.as_mut().map(|page| f(&mut page.doc))
@@ -260,11 +325,11 @@ fn with_doc<R>(f: impl FnOnce(&mut PlaylistDoc) -> R) -> Option<R> {
 // Mapping (playlist.rs to_item + header)
 // ---------------------------------------------------------------------------
 
-fn mmss(secs: u32) -> String {
+pub(crate) fn mmss(secs: u32) -> String {
     format!("{}:{:02}", secs / 60, secs % 60)
 }
 
-fn tier(bit_depth: Option<u32>) -> &'static str {
+pub(crate) fn tier(bit_depth: Option<u32>) -> &'static str {
     match bit_depth {
         Some(d) if d >= 24 => "hires",
         Some(_) => "cd",
@@ -272,7 +337,7 @@ fn tier(bit_depth: Option<u32>) -> &'static str {
     }
 }
 
-fn quality_label(bit_depth: Option<u32>, sample_rate: Option<f64>) -> String {
+pub(crate) fn quality_label(bit_depth: Option<u32>, sample_rate: Option<f64>) -> String {
     match bit_depth {
         None => String::new(),
         Some(depth) => {
@@ -288,7 +353,7 @@ fn quality_label(bit_depth: Option<u32>, sample_rate: Option<f64>) -> String {
     }
 }
 
-fn map_track(track: &Track) -> PlaylistTrackRow {
+pub(crate) fn map_track(track: &Track) -> PlaylistTrackRow {
     let mut title = track.title.clone();
     if let Some(v) = track.version.as_ref().filter(|v| !v.is_empty()) {
         title = format!("{title} ({v})");
@@ -327,6 +392,12 @@ fn map_track(track: &Track) -> PlaylistTrackRow {
             .unwrap_or_default(),
         ..Default::default()
     }
+}
+
+/// `row_to_queue` for the LOCAL playlist detail, which builds the same rows
+/// through the same mapper and needs the same queue entries.
+pub(crate) fn row_to_queue_public(row: &PlaylistTrackRow) -> QueueTrack {
+    row_to_queue(row)
 }
 
 fn row_to_queue(row: &PlaylistTrackRow) -> QueueTrack {
@@ -708,11 +779,31 @@ pub fn set_sort(field: &str) {
             !matches!(field, "added")
         };
         apply_sort(d, field, asc);
-        d.clone()
+        (d.clone(), d.is_local_playlist)
     });
-    if let Some(doc) = doc {
+    let Some((doc, is_local)) = doc else { return };
+    // "default" is a NO-OP branch in `apply_sort` — it keeps whatever order
+    // the document is already in. On a Qobuz list that is right (the API's
+    // insertion order is the loaded order, and re-sorting is a reload away).
+    // On a LOCAL one it is not: "default" IS the editable repo order, the
+    // surface the reorder chevrons write to, so coming back to it after a
+    // Title sort has to RESTORE that order rather than leave the rows
+    // alphabetical under a label that says otherwise — the view offers the
+    // arrows on exactly this field. The repo is the cheap authority here (no
+    // network, works offline), so the reload rebuilds it.
+    if is_local && field == "default" {
+        let Some(id) = crate::local_playlist_qt::open_id() else {
+            publish(&doc);
+            return;
+        };
         publish(&doc);
+        let runtime = crate::app();
+        crate::spawn(async move {
+            crate::local_playlist_qt::load(&runtime, &id).await;
+        });
+        return;
     }
+    publish(&doc);
 }
 
 pub fn set_search(query: &str) {
@@ -880,33 +971,150 @@ pub async fn copy_playlist(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
     crate::reload_sidebar();
 }
 
-/// Rename (update_playlist, name only — the edit modal's save).
-pub async fn rename(runtime: &Arc<AppRuntime<LoggingAdapter>>, name: &str) -> Result<(), String> {
+/// The id of the playlist whose detail page is currently loaded, if any.
+/// `PAGE` holds the LOCAL detail too (`adopt_doc`), so this answers for both
+/// kinds — which is what makes [`back_if_showing`] correct for a `local:` id.
+pub fn open_doc_id() -> Option<String> {
+    with_doc(|d| d.id.clone())
+}
+
+/// Navigate back ONLY when the user is standing on `deleted_id`'s detail page
+/// (contract §5.1).
+///
+/// The reference gates its two back-navigations on
+/// `NavState.view == ContentView::Playlist && PlaylistState.id == deleted_id`
+/// (`main.rs:20996`, `:21054`). Dropping that gate — which
+/// `delete_playlist()` did — means deleting a row from the Playlist Manager or
+/// from the sidebar throws the user off the surface they were working on.
+pub(crate) fn back_if_showing(deleted_id: &str) {
+    if crate::nav_qt::current_view() != "playlist" {
+        return;
+    }
+    if open_doc_id().as_deref() != Some(deleted_id) {
+        return;
+    }
+    crate::nav_qt::back();
+}
+
+/// Rename + optional description write, BY ID — the seam the detail view's own
+/// rename and the shared playlist editor (`playlist_edit_qt`) both go through.
+///
+/// `description`:
+///   * `None` — leave the stored description ALONE. `update_playlist` treats an
+///     omitted field as unchanged, and this is what a caller that does not
+///     KNOW the description must pass (§5.2).
+///   * `Some(d)` — assert it. Only the editor passes this, and only when it
+///     actually resolved the real description. The reference seeds `""` and
+///     always sends `Some(trimmed)`, so every rename from its manager DELETES
+///     the description; that bug is not ported.
+///
+/// It NEVER navigates and NEVER reloads the sidebar — both are the caller's
+/// decision (§5.1). It does patch the OPEN detail document, but only when the
+/// renamed playlist happens to be the one on screen: the editor is reachable
+/// from the manager and the sidebar, where the detail behind it is somebody
+/// else's.
+pub async fn rename_by_id(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    pid: u64,
+    name: &str,
+    description: Option<&str>,
+) -> Result<(), String> {
     let name = name.trim().to_string();
     if name.is_empty() {
         return Err("empty playlist name".to_string());
     }
+    runtime
+        .core()
+        .update_playlist(pid, Some(&name), description, None)
+        .await
+        .map_err(|e| format!("rename playlist {pid} failed: {e}"))?;
+
+    let target = pid.to_string();
+    let patched = with_doc(|d| {
+        if d.id != target {
+            return None;
+        }
+        d.name = name.clone();
+        if let Some(desc) = description {
+            // The doc's `description` is the HTML-STRIPPED display copy (see
+            // the loader at :545) and `description_short` is derived from it,
+            // so both are re-derived here rather than dropping the raw string
+            // in and leaving the header showing a stale short.
+            let stripped = qbz_text_utils::strip_html::strip_html(desc);
+            d.description_short = truncate_words(&stripped, 160);
+            d.description = stripped;
+        }
+        Some(d.clone())
+    });
+    if let Some(Some(doc)) = patched {
+        publish(&doc);
+    }
+    Ok(())
+}
+
+/// Delete BY ID, with the ownership re-derivation the API requires (§5.1).
+///
+/// Qobuz's `playlist/delete` returns 200 and **no-ops** on a playlist you do
+/// not own — the "deleted ok but it stays" bug. A FOLLOWED playlist has to go
+/// through `unsubscribe_playlist` instead, and ownership is re-derived here
+/// rather than trusted from a card, because the caller may be the sidebar or
+/// the manager, where no `owner` was ever fetched.
+///
+/// A failed ownership check falls back to NOT-OWNED, matching the reference:
+/// unsubscribing something you own is a no-op, where deleting something you
+/// follow silently does nothing and looks like a broken button.
+///
+/// **NEVER navigates.** [`back_if_showing`] is the caller's to call.
+pub async fn delete_by_id(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    pid: u64,
+) -> Result<(), String> {
+    let me = current_user_id();
+    let owned = match runtime.core().get_playlist(pid).await {
+        Ok(p) => me.is_some_and(|uid| uid == p.owner.id),
+        Err(e) => {
+            log::warn!("[qbz-qt] delete playlist {pid}: ownership check failed: {e}");
+            false
+        }
+    };
+    let res = if owned {
+        runtime.core().delete_playlist(pid).await
+    } else {
+        runtime.core().unsubscribe_playlist(pid).await
+    };
+    res.map_err(|e| {
+        let verb = if owned { "delete" } else { "unsubscribe" };
+        format!("{verb} playlist {pid} failed: {e}")
+    })?;
+    log::info!(
+        "[qbz-qt] playlist {pid} {}",
+        if owned { "deleted" } else { "unsubscribed" }
+    );
+    Ok(())
+}
+
+/// Rename the OPEN playlist (`QbzBridge.playlistRename`).
+///
+/// Passes `None` for the description on purpose: this caller never showed the
+/// user a description field, so it has nothing to assert and must leave the
+/// stored one untouched (§5.2).
+pub async fn rename(runtime: &Arc<AppRuntime<LoggingAdapter>>, name: &str) -> Result<(), String> {
     let Some(pid) = with_doc(|d| d.id.parse::<u64>().ok()) else {
         return Err("no playlist open".to_string());
     };
     let Some(pid) = pid else {
         return Err("invalid playlist id".to_string());
     };
-    runtime
-        .core()
-        .update_playlist(pid, Some(&name), None, None)
-        .await
-        .map_err(|e| format!("rename playlist {pid} failed: {e}"))?;
-    with_doc(|d| {
-        d.name = name;
-        let doc = d.clone();
-        publish(&doc);
-    });
+    rename_by_id(runtime, pid, name, None).await?;
     crate::reload_sidebar();
     Ok(())
 }
 
-/// Delete the open playlist (edit modal's danger action) and navigate back.
+/// Delete the OPEN playlist (`QbzBridge.playlistDelete`) and navigate back.
+///
+/// The back-nav is still here — this caller is by definition standing on that
+/// playlist's page — but it is now GATED, so it cannot fire against a page the
+/// user navigated to in the meantime.
 pub async fn delete_playlist(runtime: &Arc<AppRuntime<LoggingAdapter>>) -> Result<(), String> {
     let Some(pid) = with_doc(|d| d.id.parse::<u64>().ok()) else {
         return Err("no playlist open".to_string());
@@ -914,14 +1122,9 @@ pub async fn delete_playlist(runtime: &Arc<AppRuntime<LoggingAdapter>>) -> Resul
     let Some(pid) = pid else {
         return Err("invalid playlist id".to_string());
     };
-    runtime
-        .core()
-        .delete_playlist(pid)
-        .await
-        .map_err(|e| format!("delete playlist {pid} failed: {e}"))?;
-    log::info!("[qbz-qt] playlist {pid} deleted");
+    delete_by_id(runtime, pid).await?;
     crate::reload_sidebar();
-    crate::nav_qt::back();
+    back_if_showing(&pid.to_string());
     Ok(())
 }
 
@@ -961,9 +1164,46 @@ pub async fn remove_track(runtime: &Arc<AppRuntime<LoggingAdapter>>, playlist_tr
     }
 }
 
+/// The open document's row ids, IN THE ORDER THE VIEW RENDERS THEM.
+///
+/// The Qt twin of the reference's `playlist::full_item_ids()`
+/// (`local_playlist.rs:1835` calls it for exactly this). `local_playlist_qt`'s
+/// reorder arms speak in visible indices and have to reach the repo positions
+/// behind them; `PAGE` holds the LOCAL detail too (`adopt_doc`), so this
+/// answers for both kinds of playlist.
+pub(crate) fn row_ids() -> Vec<String> {
+    with_doc(|d| d.tracks.iter().map(|t| t.id.clone()).collect()).unwrap_or_default()
+}
+
+/// Persist the document's CURRENT row order into the custom-order sidecar and
+/// stamp the sort as "custom" — the shared tail of the two Qobuz reorder arms
+/// (drag drop and the chevrons), so the two can never drift on which of the
+/// three things (write, field, direction) they do.
+fn stamp_custom_order(d: &mut PlaylistDoc) {
+    let ids: Vec<u64> = d
+        .tracks
+        .iter()
+        .filter_map(|t| t.id.parse::<u64>().ok())
+        .collect();
+    if let Ok(pid) = d.id.parse::<u64>() {
+        save_custom_orders(pid, &ids);
+    }
+    d.sort_field = "custom".to_string();
+    d.sort_asc = true;
+}
+
 /// Drag reorder (issue #589): move the row at visible index `from` to
 /// insertion slot `slot` (0..N), persist the custom order, and switch the
 /// sort to "custom" (the Slint's reorder rides the custom sort).
+///
+/// The QOBUZ arm only — `crate::playlist_reorder` routes a `local:` detail to
+/// `local_playlist_qt::reorder_row`, which writes repo positions instead of a
+/// sidecar.
+///
+/// `from`/`slot` are indices into `d.tracks`, which is the UNFILTERED
+/// document. The view therefore only offers a reorder while the in-playlist
+/// search is empty (the same rule `playlist_manager_qt.rs:236` applies to the
+/// manager's arrows), so a filtered index can never be read as a document one.
 pub fn reorder_track(from: usize, slot: usize) {
     let doc = with_doc(|d| {
         if !d.is_owner || from >= d.tracks.len() {
@@ -976,18 +1216,35 @@ pub fn reorder_track(from: usize, slot: usize) {
         let row = d.tracks.remove(from);
         let insert_at = if slot > from { slot - 1 } else { slot };
         d.tracks.insert(insert_at.min(d.tracks.len()), row);
-        // Persist the full id order in the new arrangement and flip the
-        // sort to custom so the order survives reloads.
-        let ids: Vec<u64> = d
-            .tracks
-            .iter()
-            .filter_map(|t| t.id.parse::<u64>().ok())
-            .collect();
-        if let Ok(pid) = d.id.parse::<u64>() {
-            save_custom_orders(pid, &ids);
+        stamp_custom_order(d);
+        Some(d.clone())
+    });
+    if let Some(doc) = doc.flatten() {
+        publish(&doc);
+    }
+}
+
+/// Arrow reorder — move the row `row_id` one slot up (`delta < 0`) or down
+/// (`delta > 0`) in the open QOBUZ playlist's custom order.
+///
+/// The keyboard/mouse-accessible twin of the drag: the same persisted sidecar,
+/// the same "custom" stamp, no gesture. `crate::playlist_move_row` routes a
+/// `local:` detail to `local_playlist_qt::move_row` instead.
+pub fn move_row(row_id: &str, delta: i32) {
+    if delta == 0 {
+        return;
+    }
+    let doc = with_doc(|d| {
+        if !d.is_owner {
+            return None;
         }
-        d.sort_field = "custom".to_string();
-        d.sort_asc = true;
+        let idx = d.tracks.iter().position(|t| t.id == row_id)?;
+        let target = idx as i32 + delta.signum();
+        if target < 0 || target as usize >= d.tracks.len() {
+            return None; // already first / last
+        }
+        d.tracks.swap(idx, target as usize);
+        stamp_custom_order(d);
         Some(d.clone())
     });
     if let Some(doc) = doc.flatten() {
@@ -1103,8 +1360,21 @@ pub async fn add_tracks(runtime: &Arc<AppRuntime<LoggingAdapter>>, playlist_id: 
             return;
         }
     }
+    refresh_after_membership_change(runtime, playlist_id).await;
+}
+
+/// The refresh every membership WRITE owes: the sidebar's per-playlist track
+/// count is stale, and a playlist page open on this id has to re-merge or the
+/// rows just added stay invisible until the user navigates away and back
+/// (the reference's E12 refresh).
+///
+/// Shared with the Add-to-Playlist picker, which writes to a playlist the user
+/// may well be looking at.
+pub(crate) async fn refresh_after_membership_change(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    playlist_id: u64,
+) {
     crate::reload_sidebar();
-    // E12: re-merge the open detail after a membership write to it.
     let open_id = with_doc(|d| d.id.parse::<u64>().ok()).flatten();
     if open_id == Some(playlist_id) {
         let _ = load(runtime, playlist_id).await;

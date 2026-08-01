@@ -234,7 +234,12 @@ Row {
             options: root.tracksGroupLabels
             marked: root.view.tracksGroup !== "off"
             currentIndex: Math.max(0, root.tracksGroupIds.indexOf(root.view.tracksGroup))
-            onSelected: function (i) { root.view.tracksGroup = root.tracksGroupIds[i] }
+            // Through the bridge, like the sort above and the album identity
+            // below it: the choice is PERSISTED (locallibrary_ui.json, shared
+            // with the Slint build). Writing the QML property directly is what
+            // made it reset on every restart (PARITY-DEBT #13). No re-query —
+            // grouping is a client-side reorder, not a new ORDER BY.
+            onSelected: function (i) { QbzLocal.tracksSetGroup(root.tracksGroupIds[i]) }
         }
     }
 

@@ -37,33 +37,54 @@ Rectangle {
     property bool active: false
     /// Active = accent FILL (labelled buttons) vs accent BORDER (icon-only).
     property bool fillActive: false
+    /// THE SECOND SCALE — the Playlist Manager toolbar's `PmToolButton` /
+    /// `PmIconButton` (playlist/PlaylistManagerView.slint:162-230), which is the
+    /// same control 4 px taller with more air. The port's established idiom for
+    /// a second size on one control (`QbzLineEdit.sm`, `QbzSelect.sm`,
+    /// `QbzToggleButton.sm`), rather than a 90 %-identical fork.
+    ///
+    /// Under `large`: height 34, padH 11 (the reference's `row { x: 11 }` and
+    /// `width: row.preferred-width + 22`), row spacing 7, label 13, NO border
+    /// (except the accent-border arm, which the PM never uses), and an
+    /// icon-only button is a 34 × 34 square with a 16 px glyph — the 15 → 16
+    /// delta between the labelled and icon-only forms IS the reference
+    /// (`:180-184` vs `:216-222`); do not unify it.
+    ///
+    /// The idle GLYPH tint also changes, and it is the largest of the deltas:
+    /// this control tints idle glyphs `muted` (#888888) where the reference
+    /// paints `Theme.text-secondary` (#cccccc) on five of its six toolbar
+    /// controls. Defaults are untouched, so the MyQBZ toolbars cannot regress.
+    property bool large: false
     signal clicked()
 
     QbzTheme { id: theme }
 
     readonly property bool filled: root.active && root.fillActive
-    readonly property int padH: root.label === "" ? 8 : 10
+    readonly property bool iconOnly: root.label === ""
+    readonly property int padH: root.large ? 11 : (root.iconOnly ? 8 : 10)
 
-    height: 30
-    implicitWidth: 2 * root.padH + row.implicitWidth
+    height: root.large ? 34 : 30
+    implicitWidth: (root.large && root.iconOnly)
+        ? 34
+        : 2 * root.padH + row.implicitWidth
     radius: 6
     color: root.filled ? theme.accent
         : (toolArea.containsMouse ? theme.surfaceHover : theme.surfaceElevated)
-    border.width: 1
+    border.width: (root.large && !(root.active && !root.fillActive)) ? 0 : 1
     border.color: (root.active && !root.fillActive) ? theme.accent : theme.borderSubtle
 
     Row {
         id: row
         anchors.centerIn: parent
-        spacing: 6
+        spacing: root.large ? 7 : 6
 
         QbzIcon {
             anchors.verticalCenter: parent.verticalCenter
             name: root.name
-            width: 15
-            height: 15
+            width: (root.large && root.iconOnly) ? 16 : 15
+            height: (root.large && root.iconOnly) ? 16 : 15
             tintName: root.filled ? theme.accentGlyphTint
-                : (root.active ? "textPrimary" : "muted")
+                : (root.active ? "textPrimary" : (root.large ? "secondary" : "muted"))
         }
         Text {
             visible: root.label !== ""
@@ -71,7 +92,7 @@ Rectangle {
             text: root.label
             color: root.filled ? theme.accentGlyphColor
                 : (root.active ? theme.textPrimary : theme.textSecondary)
-            font.pixelSize: 12
+            font.pixelSize: root.large ? 13 : 12
             verticalAlignment: Text.AlignVCenter
         }
         Rectangle {
