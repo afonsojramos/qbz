@@ -127,22 +127,37 @@ Rectangle {
                     onClicked: function (mouse) { trackMenu.openAtCursor(moreBtn, mouse.x, mouse.y) }
                 }
             }
-            // Source badge (All feed, show-local): bottom-right.
+            // Source badge (All feed, show-local): bottom-right of the art.
+            // 24x24 rounded SQUARE (ADR-008: not a pill), 6px inset —
+            // discover/TrackCard.slint:177-197. Simpler than the album card's:
+            // ONE chip colour (#000000b3 -> Qt #b3000000) and no purchase arm.
+            //
+            // The glyph goes through controls/SourceIcon.qml, never QbzIcon:
+            // the Plex and Qobuz marks are MULTI-COLOUR and a tint flattens
+            // them to a silhouette (this card used to draw an accent-tinted
+            // `hard-drive` for Plex — a blue hard drive).
             Rectangle {
-                visible: root.showSourceBadge && (root.item.source === "local" || root.item.source === "plex")
+                visible: root.showSourceBadge && (root.item.source || "") !== ""
                 x: parent.width - width - 6
                 y: parent.height - height - 6
                 width: 24
                 height: 24
                 radius: 4
                 color: "#b3000000"
-                QbzIcon {
-                    name: "hard-drive"
-                    width: 14
-                    height: 14
-                    anchors.centerIn: parent
-                    // On the #b3000000 badge — dark under every theme.
-                    tintName: root.item.source === "plex" ? "accent" : "white"
+                SourceIcon {
+                    kind: root.item.source || ""
+                    // .slint:191-193 — plex 16, qobuz 18, local 14. "offline"
+                    // is the Qt word for a Qobuz download (local_rows.rs
+                    // `badge_source`); the .slint's local-library track rows
+                    // reach the same arm spelled "qobuz" (local_library.rs:1047).
+                    glyphSize: 14
+                    plexSize: 16
+                    qobuzSize: 18
+                    // .slint:190 — #ffffff on the near-black chip.
+                    localTint: "white"
+                    // Explicit pixel rounding (.slint:194-195).
+                    x: Math.round((parent.width - width) / 2)
+                    y: Math.round((parent.height - height) / 2)
                 }
             }
             CardMenu {

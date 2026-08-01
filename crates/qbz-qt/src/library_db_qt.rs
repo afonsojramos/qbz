@@ -144,3 +144,25 @@ pub fn is_favorite_playlist(pid: u64) -> bool {
 pub fn set_favorite_playlist(pid: u64, favorite: bool) -> bool {
     with_db(true, |db| db.set_playlist_favorite(pid, favorite)).is_some()
 }
+
+/// Has this Qobuz playlist (by its SOURCE id) already been copied into the
+/// user's library?
+///
+/// The reference seeds `PlaylistState.is-copied` from exactly this read when
+/// the detail opens (`qbz/src/main.rs:4555`), which is what keeps the Copy
+/// button hidden on the SECOND visit. The port used to carry `is_copied` in
+/// the session document only, so a restart offered "Copy to your library"
+/// again on a playlist that was already copied.
+///
+/// Read-only (`create: false`): a user with no local flags yet has no db, and
+/// that is "not copied", not an error.
+pub fn is_playlist_copied(pid: u64) -> bool {
+    with_db(false, |db| db.is_playlist_copied(pid)).unwrap_or(false)
+}
+
+/// Record that a Qobuz playlist (by its SOURCE id) was copied into the user's
+/// library. Idempotent server-side of the sqlite (`INSERT OR IGNORE`), so a
+/// re-copy is a no-op. Returns false when the write did not land.
+pub fn mark_playlist_copied(pid: u64) -> bool {
+    with_db(true, |db| db.mark_playlist_copied(pid)).is_some()
+}

@@ -39,8 +39,9 @@
 //!   `(u64, bool, i32)` rows — same behavior, simpler backend for the POC).
 //! - Custom cover art (set/clear via library.db), multi-select + bulk bar,
 //!   Suggested Songs, offline download of the playlist, share: not ported.
-//! - is_copied persists only for the session (the Slint's mark_playlist_copied
-//!   local-db write is skipped).
+//!   The copy path therefore also skips the reference's
+//!   `update_playlist_artwork` write (main.rs:2132) — it would be state
+//!   nothing in this port can read.
 
 use std::sync::{Arc, Mutex};
 
@@ -292,6 +293,109 @@ fn mark_following(playlist_id: u64, following: bool) {
             g.insert(playlist_id);
         } else {
             g.remove(&playlist_id);
+        }
+    }
+}
+
+/// Everything a synthesized sidebar / Library row needs about a playlist the
+/// user just followed. `None` = the caller could not obtain it, which downgrades
+/// the follow arm to an authoritative refetch.
+pub(crate) struct FollowRowMeta {
+    pub name: String,
+    pub owner: String,
+    pub tracks_count: u32,
+    pub cover_url: String,
+    pub covers: Vec<String>,
+}
+
+impl FollowRowMeta {
+    /// Build from the API model — for the CARD seam, which holds an id and
+    /// nothing else.
+    ///
+    /// The two artwork fields go through `library_qt`'s own pickers rather than
+    /// re-deriving `image_rectangle` / `images300` here: `cover_url` is the
+    /// playlist's OWN editorial graphic and `covers` are its MEMBER-ALBUM
+    /// sleeves, and conflating the two is the exact bug that put an album
+    /// sleeve on every playlist card (`library_qt::map_playlist_row`'s note).
+    /// A second copy of that precedence would drift from this one.
+    fn from_playlist(playlist: &Playlist) -> Self {
+        Self {
+            name: playlist.name.clone(),
+            owner: playlist.owner.name.clone(),
+            tracks_count: playlist.tracks_count,
+            cover_url: crate::library_qt::playlist_own_image(playlist),
+            covers: crate::library_qt::playlist_cover_urls(playlist),
+        }
+    }
+}
+
+/// THE settle point for a follow / unfollow, wherever the click came from —
+/// the header toggle on the open detail and the card-overlay `set_follow_by_id`
+/// both end here, the way every heart ends at `crate::emit_library_favorite`.
+///
+/// Three surfaces have to agree, and before this they did not:
+///
+/// 1. the ownership snapshot (`mark_following`) — the only one the port
+///    updated, which is why the glyph settled and nothing else did;
+/// 2. the SIDEBAR, whose rows are `get_user_playlists()` — a followed playlist
+///    is in that list, so unfollowing must take the row out;
+/// 3. the LIBRARY feed, where the same playlist is a `following` row.
+///
+/// The unfollow arm patches the two caches and republishes them instead of
+/// re-fetching. That is not an optimisation, it is the fix: Qobuz's
+/// `playlist/getUserPlaylists` lags a write (the reference documents the same
+/// lag on the create side and answers it with a bounded retry,
+/// `qbz/src/main.rs:4884`), so the `crate::reload_sidebar()` this seam used to
+/// fire re-read the STALE list and put the row it had just removed straight
+/// back. The next natural load reconciles.
+///
+/// The follow arm inserts optimistically. Both seams have the metadata — the
+/// header takes it from the open document, the card seam fetches it once
+/// (`FollowRowMeta::from_playlist`) — so `None` here means only that the fetch
+/// FAILED, and it falls back to `crate::reload_sidebar()`, which is what this
+/// seam used to do unconditionally.
+///
+/// Reference note, stated because this is deliberately NOT 1:1: the Slint's
+/// `playlist_set_follow_by_id` (`qbz/src/main.rs:2189-2191`) flips the chip on
+/// every visible card and then calls `crate::playback::refresh_sidebar(true)` —
+/// which is the QUEUE panel (`qbz/src/playback.rs:42`), not the playlist tree.
+/// It never touches the playlist sidebar or the Favorites playlist models on a
+/// follow change, so the reference has the same defect the owner reported here.
+/// Ported behaviour would keep the bug; the owner asked for the row to leave
+/// both surfaces.
+fn follow_settled(playlist_id: u64, following: bool, meta: Option<FollowRowMeta>) {
+    mark_following(playlist_id, following);
+    let id = playlist_id.to_string();
+    if following {
+        let Some(meta) = meta else {
+            // No metadata to synthesize from: take the round trip.
+            crate::reload_sidebar();
+            return;
+        };
+        crate::sidebar_qt::insert_qobuz_entry(
+            playlist_id,
+            &meta.name,
+            meta.tracks_count,
+            &meta.covers,
+        );
+        crate::publish_sidebar();
+        if crate::library_qt::insert_playlist_row(
+            &id,
+            &meta.name,
+            &meta.owner,
+            meta.tracks_count,
+            &meta.cover_url,
+            meta.covers,
+            true,
+        ) {
+            crate::publish_library_document();
+        }
+    } else {
+        if crate::sidebar_qt::remove_qobuz_entry(playlist_id) {
+            crate::publish_sidebar();
+        }
+        if crate::library_qt::remove_playlist_rows(&id) {
+            crate::publish_library_document();
         }
     }
 }
@@ -626,6 +730,12 @@ pub async fn load(runtime: &Arc<AppRuntime<LoggingAdapter>>, playlist_id: u64) -
             })
             .unwrap_or(false));
     let pinned = crate::sidebar_qt::is_pinned("playlist", &playlist_id.to_string());
+    // "Copy to your library" hides once this playlist HAS been copied. The
+    // authority is `library.db`'s `copied_playlists` (reference: main.rs:4555
+    // seeds `PlaylistState.is-copied` from the identical read) — the port used
+    // to keep the flag in the session document only, so a restart offered the
+    // copy again on a playlist that already had one.
+    let is_copied = !is_owner && crate::library_db_qt::is_playlist_copied(playlist_id);
 
     // Custom drag order (applied when sort == custom).
     let sort_state = with_doc(|d| (d.sort_field.clone(), d.sort_asc)).unwrap_or(("default".into(), true));
@@ -649,6 +759,7 @@ pub async fn load(runtime: &Arc<AppRuntime<LoggingAdapter>>, playlist_id: u64) -
         doc.is_owner = is_owner;
         doc.is_favorite = is_favorite;
         doc.is_following = is_following;
+        doc.is_copied = is_copied;
         doc.pinned = pinned;
         doc.loading = false;
         let (field, asc) = sort_state;
@@ -872,11 +983,24 @@ fn revert_favorite(id: &str, value: bool) {
 /// Follow / unfollow a foreign playlist (subscribe API; optimistic flip,
 /// revert on error — main.rs playlist_set_follow_by_id).
 pub async fn toggle_follow(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
-    let Some((pid, follow)) = with_doc(|d| {
+    // The open document is the ONE place in the app that already holds
+    // everything a synthesized row needs, so the metadata is snapshotted in the
+    // same lock hop as the optimistic flip.
+    let Some((pid, follow, meta)) = with_doc(|d| {
         d.is_following = !d.is_following;
         let doc = d.clone();
         publish(&doc);
-        (d.id.parse::<u64>().ok(), d.is_following)
+        (
+            d.id.parse::<u64>().ok(),
+            d.is_following,
+            FollowRowMeta {
+                name: d.name.clone(),
+                owner: d.owner.clone(),
+                tracks_count: d.track_count.max(0) as u32,
+                cover_url: d.cover_url.clone(),
+                covers: d.covers.clone(),
+            },
+        )
     }) else {
         return;
     };
@@ -894,9 +1018,9 @@ pub async fn toggle_follow(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
             publish(&doc);
         });
     } else {
-        // Settle the ownership snapshot so every card built from here on
-        // draws the check (or the user-plus) that matches what just happened.
-        mark_following(pid, follow);
+        // Settle the ownership snapshot AND the two surfaces the playlist
+        // lives on (sidebar + Library feed) — see `follow_settled`.
+        follow_settled(pid, follow, Some(meta));
     }
 }
 
@@ -921,37 +1045,85 @@ pub fn toggle_pin() {
     }
 }
 
-/// "Copy to your library" — clone a foreign playlist: create + add all
-/// track ids (main.rs copy_playlist; the local mark_playlist_copied db
-/// write is a POC-NOTE — is_copied is session-only).
+/// "Copy to your library" — clone a foreign playlist into an OWNED one:
+/// create + add all track ids, then record the copy (`main.rs:2080`
+/// `playlist_copy_by_id`).
+///
+/// It does NOT unfollow the source, and it is not meant to: the reference's
+/// copy path contains no `unsubscribe_playlist` anywhere
+/// (`qbz/src/main.rs:2080-2150`), and `mark_playlist_copied` exists purely to
+/// hide the Copy button on a second visit (`qbz/src/main.rs:4555`). Following
+/// and copying are independent — after a copy the user has BOTH the followed
+/// original and their own editable clone.
+///
+/// Three gaps against that reference are closed here, all of them things the
+/// user can see:
+///
+/// * the ATTRIBUTION line the reference appends to the copied description
+///   (verbatim, and untranslated there too — it is a plain `format!`);
+/// * the `mark_playlist_copied` write, so the Copy button stays hidden across
+///   restarts instead of offering to copy the same playlist a second time
+///   (the module POC-NOTE said session-only; `library.db` already has the
+///   `copied_playlists` table and `qbz-library` already has both accessors,
+///   so no schema touch was needed);
+/// * the toasts — success, and the two failure arms that used to log and
+///   leave the user staring at an unchanged screen.
+///
+/// The new playlist is inserted into the sidebar + Library caches rather than
+/// re-fetched: `crate::reload_sidebar()` (what this used to call) re-reads
+/// `playlist/getUserPlaylists`, which lags a create by seconds — the same lag
+/// the importer's bounded retry exists for — so the copy the user just made
+/// was simply not there. See `follow_settled` for the same reasoning.
+///
+/// NOT ported: the reference also copies the source's artwork into the new
+/// playlist's `library.db` custom-artwork row (`update_playlist_artwork`,
+/// `main.rs:2132`). This port renders no custom playlist artwork at all (the
+/// module POC-NOTE), so the write would be unreadable state; porting it means
+/// porting the custom-cover feature, not one line here.
 pub async fn copy_playlist(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
-    let Some((pid, name, description, track_ids)) = with_doc(|d| {
+    let Some((pid, name, description, owner, track_ids, covers)) = with_doc(|d| {
         (
             d.id.parse::<u64>().ok(),
             d.name.clone(),
             d.description.clone(),
+            d.owner.clone(),
             d.tracks
                 .iter()
                 .filter_map(|t| t.id.parse::<u64>().ok())
                 .collect::<Vec<u64>>(),
+            // The member-album collage, NOT `cover_url`: that is the SOURCE's
+            // editorial `image_rectangle`, which the copy does not inherit
+            // (this port does not write custom artwork — see the doc comment).
+            // The copy holds the same tracks, so the same collage is what its
+            // own next load will produce.
+            d.covers.clone(),
         )
     }) else {
         return;
     };
     let Some(pid) = pid else { return };
-    let new_description = if description.is_empty() {
-        None
+    if track_ids.is_empty() {
+        log::warn!("[qbz-qt] copy playlist {pid}: no tracks to copy");
+        crate::toast_qt::error(qbz_i18n::t("Playlist has no tracks to copy"));
+        return;
+    }
+    // main.rs:2109-2119, verbatim: the attribution is appended to the source
+    // description, or becomes the whole description when there is none.
+    let attribution = format!("\n\n---\nOriginally curated by {owner} on Qobuz");
+    let new_description = if description.trim().is_empty() {
+        attribution.trim_start().to_string()
     } else {
-        Some(description.as_str())
+        format!("{description}{attribution}")
     };
     let new_playlist = match runtime
         .core()
-        .create_playlist(&name, new_description, false)
+        .create_playlist(&name, Some(new_description.as_str()), false)
         .await
     {
         Ok(p) => p,
         Err(e) => {
             log::error!("[qbz-qt] copy playlist {pid}: create failed: {e}");
+            crate::toast_qt::error(qbz_i18n::t("Failed to copy playlist"));
             return;
         }
     };
@@ -962,13 +1134,44 @@ pub async fn copy_playlist(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
     {
         log::error!("[qbz-qt] copy playlist {pid}: add tracks failed: {e}");
     }
-    with_doc(|d| {
+    // Persist the copy against the SOURCE id (idempotent). rusqlite is
+    // blocking, so it goes off the async path like every other db write here.
+    let _ = tokio::task::spawn_blocking(move || crate::library_db_qt::mark_playlist_copied(pid)).await;
+    // Only the page that asked for the copy gets the flag: the user may have
+    // navigated away while the create was in flight (reference `is_open`).
+    let source_id = pid.to_string();
+    let patched = with_doc(|d| {
+        if d.id != source_id {
+            return None;
+        }
         d.is_copied = true;
-        let doc = d.clone();
-        publish(&doc);
+        Some(d.clone())
     });
+    if let Some(Some(doc)) = patched {
+        publish(&doc);
+    }
     log::info!("[qbz-qt] playlist {pid} copied to library as {}", new_playlist.id);
-    crate::reload_sidebar();
+    crate::toast_qt::success(qbz_i18n::t("Copied to your library"));
+
+    // The copy is OWNED, so it joins the sidebar and the Library's favorites
+    // bucket. `tracks_count` comes from what was just sent, not from the
+    // create response — that response describes an empty playlist.
+    let new_id = new_playlist.id;
+    let copied_count = track_ids.len() as u32;
+    let new_owner = new_playlist.owner.name.clone();
+    crate::sidebar_qt::insert_qobuz_entry(new_id, &name, copied_count, &covers);
+    crate::publish_sidebar();
+    if crate::library_qt::insert_playlist_row(
+        &new_id.to_string(),
+        &name,
+        &new_owner,
+        copied_count,
+        "",
+        covers,
+        false,
+    ) {
+        crate::publish_library_document();
+    }
 }
 
 /// The id of the playlist whose detail page is currently loaded, if any.
@@ -1333,10 +1536,36 @@ pub async fn set_follow_by_id(
     if let Err(e) = res {
         log::error!("[qbz-qt] playlist {playlist_id} follow={follow} failed: {e}");
     } else {
-        // Keep the ownership snapshot in step: `reload_sidebar` will refresh
-        // it from the server anyway, but not before the next card is built.
-        mark_following(playlist_id, follow);
-        crate::reload_sidebar();
+        // Same settle point as the header toggle. The UNFOLLOW arm needs no
+        // metadata — it only removes rows.
+        //
+        // The FOLLOW arm buys it with ONE `get_playlist`, which is what the
+        // reference's copy path pays for the same reason (`qbz/src/main.rs:2087`).
+        // What that replaces is the `crate::reload_sidebar()` this seam used to
+        // fire, which was wrong twice over: it re-read `playlist/getUserPlaylists`,
+        // a list that LAGS the subscribe, so the row it was fetched for could
+        // still be missing; and it never touched the Library feed at all, while
+        // the Library loads exactly ONCE per session (`main.rs::load_library_once`)
+        // — so a playlist followed from a Discover / Search card stayed out of My
+        // Library for the rest of the session unless the user hit the toolbar's
+        // manual refresh. That is the owner's finding seen from the follow side.
+        //
+        // A failed metadata fetch degrades to `None`, which is the refetch this
+        // seam used to do unconditionally — never worse than before.
+        let meta = if follow {
+            match runtime.core().get_playlist(playlist_id).await {
+                Ok(playlist) => Some(FollowRowMeta::from_playlist(&playlist)),
+                Err(e) => {
+                    log::warn!(
+                        "[qbz-qt] playlist {playlist_id} follow: row metadata fetch failed: {e}"
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        follow_settled(playlist_id, follow, meta);
     }
 }
 

@@ -38,6 +38,9 @@ Rectangle {
         SourceIcon {
             anchors.verticalCenter: parent.verticalCenter
             kind: root.currentVersion.source || "local"
+            // No size overrides on purpose: LocalAlbumView.slint:24-26 draws
+            // ALL THREE kinds at a flat 14px here, which is SourceIcon's
+            // default (the row glyphs are the ones that grow the marks).
         }
         Text {
             anchors.verticalCenter: parent.verticalCenter

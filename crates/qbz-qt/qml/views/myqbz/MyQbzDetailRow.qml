@@ -6,9 +6,10 @@
 // bottom hairline `Theme.alpha-4`, hover/selected fill `surface-hover`.
 //
 // Plus a NINTH, leading 24px cell that no reference has: the accordion
-// chevron (owner-authorised divergence, see its own comment below). It shifts
-// the eight reference columns 36px right; `titleColWidth` and the host's
-// `ColHead` row are retuned together.
+// chevron (owner-authorised divergence, see its own comment below). It is
+// mounted ONLY in the details arm (`showExpander`, owner 2026-07-31); when it
+// is, it shifts the eight reference columns 36px right and `titleColWidth`
+// plus the host's `ColHead` row are retuned together.
 //
 // --- TWO THINGS THAT ARE LOAD-BEARING -----------------------------------
 //
@@ -57,6 +58,23 @@ Rectangle {
     /// without shadowing the delegate's own context `index`.
     property int ordinal: 0
     property bool selectMode: false
+    /// Does THIS row carry the accordion chevron cell?
+    ///
+    /// The accordion is the owner's feature, but it is scoped to the DETAILS
+    /// arm (the `expanded` segment) — the plain LIST arm never had a use for it
+    /// and the owner asked for it back out of there (2026-07-31). Off, the
+    /// leading 24px cell is `visible: false`, which in a `Row` drops the cell
+    /// AND its 12px gap, so the eight reference columns land exactly where
+    /// `MixtapeDetailView.slint:219-491` puts them again (`titleColWidth`
+    /// below switches back to the reference's 700 with it).
+    ///
+    /// The STATE is untouched: `rowOpen` stays the one notion of open and Rust
+    /// stays its only writer. Rust also AND-s `rowOpen` with the details arm
+    /// (`myqbz_detail_qt.rs` `to_item` / `resync_row_open`), so with the chevron
+    /// gone from list mode no row renders open there and nothing is orphaned —
+    /// while the user's open set itself SURVIVES the round trip (it is persisted
+    /// per collection now, `collection_open_rows.json`).
+    property bool showExpander: false
     /// The host's shared 3-phase clock for `QbzLoadingDots` (ONE timer per
     /// view — spec 01 §7.5 / §15.5).
     property int dotPhase: 0
@@ -87,8 +105,8 @@ Rectangle {
     /// nothing to show, so it gets no chevron (Rust decides — `canExpand`).
     readonly property bool canExpand: root.rev >= 0 && root.item.canExpand === true
     /// THE accordion state, and the ONLY one: Rust derives it from the shared
-    /// `OPEN_ROWS` set that the `expanded` view-mode segment also writes, so
-    /// this row never needs to know what the view mode is.
+    /// `OPEN_ROWS` set — the chevron's own writes, persisted per collection —
+    /// so this row never needs to know what the view mode is.
     readonly property bool rowOpen: root.rev >= 0 && root.item.rowOpen === true
 
     /// track → music, playlist → list-music, else disc (.slint :263-267).
@@ -106,14 +124,16 @@ Rectangle {
     height: 56
     color: (root.hovered || root.selected) ? theme.surfaceHover : "transparent"
 
-    /// Title column = rowWidth − padding(24) − fixed cells(616) − gaps(96).
+    /// Title column = rowWidth − padding(24) − fixed cells(592) − gaps(84)
+    /// = width − 700, the reference's own arithmetic (:219-491).
     ///
-    /// 736, not the reference's 700: the accordion chevron added a NINTH cell
-    /// (24px) and a ninth 12px gap in front of the ordinal, shifting the
-    /// 8-column template 36px right. `MyQbzDetailView.qml`'s `ColHead` row
-    /// carries the identical 24px leader and the identical `- 736`, and the two
-    /// must be changed together or the header stops lining up with the rows.
-    readonly property int titleColWidth: Math.max(0, root.width - 736)
+    /// 736 while `showExpander`: the accordion chevron adds a NINTH cell (24px)
+    /// and a ninth 12px gap in front of the ordinal, shifting the 8-column
+    /// template 36px right. `MyQbzDetailView.qml`'s `ColHead` row carries the
+    /// identical leader and the identical switch, and the two must be changed
+    /// together or the header stops lining up with the rows.
+    readonly property int titleColWidth: Math.max(0,
+        root.width - (root.showExpander ? 736 : 700))
 
     // Bottom hairline — `#ffffff0a` in the .slint (:200) == `alpha-4`, taken
     // from the polarity-baked ramp so it is visible on light themes too. The
@@ -154,14 +174,20 @@ Rectangle {
         anchors.rightMargin: 12
         spacing: 12
 
-        // --- Col 0 (24) — THE ACCORDION CHEVRON --------------------------
+        // --- Col 0 (24) — THE ACCORDION CHEVRON, details arm only ---------
         //
         // ADDITIVE, and a deliberate divergence from BOTH references
         // (owner-authorised 2026-07-30): neither `MixtapeDetailView.slint` nor
         // the Tauri build ever had a per-row accordion — both render inline
         // tracks only as a whole-list VIEW MODE, explicitly "no chevron". The
         // owner asked for the accordion anyway. The view mode survives
-        // untouched and now means "open all", through the same per-row state.
+        // untouched but no longer means "open all" (owner 2026-08-01): the arm
+        // opens fully CLOSED and what the user opens here is remembered, per
+        // collection, across view switches and restarts.
+        //
+        // SCOPED to the details arm 2026-07-31 (`showExpander`): the plain LIST
+        // arm shows no chevron and is the reference's 8-column row again. Do
+        // not remove the accordion itself — only this gate is the owner's.
         //
         // The MouseArea is INVISIBLE on a non-expandable row, and an invisible
         // item is not hit-tested — so a track row's chevron cell falls through
@@ -170,6 +196,7 @@ Rectangle {
         // area sits at the default z, above `rowArea`'s `z: -1`, and swallows
         // the click: the chevron toggles ONLY this row, it never navigates.
         Item {
+            visible: root.showExpander
             width: 24
             height: parent.height
             QbzIcon {
@@ -354,9 +381,11 @@ Rectangle {
                 x: 0
                 anchors.verticalCenter: parent.verticalCenter
                 kind: root.sourceKind
-                // Row glyph, so SourceGlyph.slint's numbers (15px, muted),
-                // not the version picker's defaults.
+                // Row glyph, so SourceGlyph.slint's numbers (:31 — 15px, the
+                // three Qobuz kinds 16px, muted local tint), not the version
+                // picker's flat-14 defaults.
                 glyphSize: 15
+                qobuzSize: 16
                 localTint: "muted"
             }
         }

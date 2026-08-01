@@ -430,8 +430,12 @@ Rectangle {
                 SourceIcon {
                     anchors.centerIn: parent
                     kind: root.candidate.source || ""
-                    // Row glyph — SourceGlyph.slint:29-30.
+                    // Row glyph — SourceGlyph.slint:31: 15px, and the three
+                    // Qobuz kinds one pixel larger (the wordmark's
+                    // proportions). Explicit since the size rule became a
+                    // per-arm knob; it used to be a hardcoded +2.
                     glyphSize: 15
+                    qobuzSize: 16
                     localTint: "muted"
                 }
             }

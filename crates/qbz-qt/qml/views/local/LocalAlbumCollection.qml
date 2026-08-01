@@ -243,10 +243,35 @@ Item {
                                 qualityTier: cardCell.modelData.qualityTier
                                 artSource: root.view
                                     ? (root.view.artMap[cardCell.modelData.artKey] || "") : ""
-                                source: root.showSource ? cardCell.modelData.source : ""
-                                onOpenRequested: root.selectMode
-                                    ? root.toggleSelect(cardCell.modelData.id)
-                                    : root.openRequested(cardCell.modelData.id)
+                                // LocalLibraryView.slint:1267 `show-source-badge`
+                                // — the card takes the raw source word and the
+                                // BADGE is what the flag switches (blanking
+                                // `source` would also silence the card's
+                                // source-aware menu gates).
+                                source: cardCell.modelData.source
+                                showSourceBadge: root.showSource
+                                // SELECT MODE IS THE CARD'S (AlbumCard's
+                                // `selectMode`/`selected`/`selectToggled`, the
+                                // port of discover/AlbumCard.slint:83, :179-197,
+                                // :207, :239, :465). This host used to paint its
+                                // OWN 22px tick on top of the card at top-left —
+                                // a THIRD geometry, and one that could only add
+                                // the indicator: the card's hover PLAY button
+                                // stayed live underneath it, so hovering a card
+                                // you meant to tick and hitting play started the
+                                // album. The card hides the whole hover action
+                                // row and the pin badge in select mode and draws
+                                // the reference's 24px tick in the reference's
+                                // corner (top-right); all three move together,
+                                // which is exactly what a host overlay cannot
+                                // do. Do not re-add one.
+                                selectMode: root.selectMode
+                                selected: root.selected[cardCell.modelData.id] === true
+                                onSelectToggled: root.toggleSelect(cardCell.modelData.id)
+                                // Non-select mode only — the card routes a
+                                // select-mode click to `selectToggled` and never
+                                // emits this while ticking.
+                                onOpenRequested: root.openRequested(cardCell.modelData.id)
                                 onPlayRequested: root.playRequested(cardCell.modelData.id)
                                 onEnqueueRequested: function (m) {
                                     root.enqueueRequested(cardCell.modelData.id, m)
@@ -287,22 +312,9 @@ Item {
                                     cardMenu.openAtCursor(cardRc, mouse.x, mouse.y)
                                 }
                             }
-                            // Multi-select tick — the collection view's
-                            // select-mode overlay (top-left of the artwork).
-                            Rectangle {
-                                visible: root.selectMode
-                                x: 8
-                                y: 8
-                                width: 22
-                                height: 22
-                                radius: 11
-                                color: "#b3000000"
-                                SelectCheck {
-                                    anchors.centerIn: parent
-                                    on: root.selected[cardCell.modelData.id] === true
-                                    onToggled: root.toggleSelect(cardCell.modelData.id)
-                                }
-                            }
+                            // (The multi-select tick that used to sit here is
+                            //  gone — it is AlbumCard's `selectMode` now; see
+                            //  the note on the card above.)
                         }
                     }
                 }

@@ -4940,3 +4940,8 @@ msgstr "Playlist konnte nicht gelöscht werden"
 
 msgid "Couldn't create the playlist"
 msgstr "Playlist konnte nicht erstellt werden"
+
+# My QBZ grid card — the heterogeneous grid mounts the standard AlbumCard,
+# whose first menu entry is "Open album"; a playlist cell overrides the NOUN.
+msgid "Open playlist"
+msgstr "Playlist öffnen"

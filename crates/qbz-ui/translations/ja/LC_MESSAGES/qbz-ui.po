@@ -4925,3 +4925,8 @@ msgstr "プレイリストの削除に失敗しました"
 
 msgid "Couldn't create the playlist"
 msgstr "プレイリストを作成できませんでした"
+
+# My QBZ grid card — the heterogeneous grid mounts the standard AlbumCard,
+# whose first menu entry is "Open album"; a playlist cell overrides the NOUN.
+msgid "Open playlist"
+msgstr "プレイリストを開く"

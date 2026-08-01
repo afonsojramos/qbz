@@ -167,14 +167,21 @@ Rectangle {
             visible: root.showSource
             width: visible ? 34 : 0
             height: parent.height
-            QbzIcon {
-                visible: root.item.source === "local" || root.item.source === "plex"
-                    || root.item.source === "offline"
-                name: root.item.source === "offline" ? "cloud-download" : "hard-drive"
-                width: 14
-                height: 14
+            // AlbumListRow.slint:308-322 — through controls/SourceIcon.qml,
+            // never QbzIcon: the Plex and Qobuz marks are MULTI-COLOUR and a
+            // tint flattens them to a silhouette. This row used to draw an
+            // accent-tinted `hard-drive` for Plex (a blue hard drive) and
+            // `cloud-download` for an offline copy.
+            SourceIcon {
+                visible: (root.item.source || "") !== ""
+                kind: root.item.source || ""
+                // .slint:319 — local 15, the marks 16; muted local tint.
+                glyphSize: 15
+                plexSize: 16
+                qobuzSize: 16
+                localTint: "muted"
+                x: 0                                    // .slint:321
                 anchors.verticalCenter: parent.verticalCenter
-                tintName: root.item.source === "plex" ? "accent" : "muted"
             }
         }
         // Trailing ⋯ overflow (AlbumListRow.slint:360).

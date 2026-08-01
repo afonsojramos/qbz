@@ -9,9 +9,11 @@
 //! ```text
 //! <data_dir>/qbz/users/<uid>/myqbz_branding.json        { label, icon_path }
 //! <data_dir>/qbz/users/<uid>/collection_view_prefs.json { "<id>": { …7 fields… } }
+//! <data_dir>/qbz/users/<uid>/collection_open_rows.json  { "<id>": ["src|itemId", …] }
 //! ```
 //!
-//! Both documents are SHARED with the shipping Slint app, so:
+//! The first two documents are SHARED with the shipping Slint app (the third is
+//! Qt-only — see below), so:
 //!  - the persisted keys stay snake_case and EXACTLY as Slint spells them — a
 //!    rename would silently drop the user's stored prefs (spec 02 §12 Q11);
 //!  - every write goes through `settings_qt::read_json_object` +
@@ -34,6 +36,16 @@
 //!  - persist on change: `save_view_prefs(id, &prefs)`;
 //!  - clear on delete: `remove_view_prefs(id)`.
 //!
+//! The OPEN-ROWS sidecar (`collection_open_rows.json`) has the SAME three-call
+//! lifecycle and lives here for the same reason the view prefs do — but in its
+//! OWN file, not as an eighth key of `collection_view_prefs.json`, because that
+//! document is co-owned with the shipping Slint build: `myqbz_view_prefs.rs`
+//! deserializes it into `HashMap<String, Prefs>` and `write_all` re-serializes
+//! THAT map, so any key this port added inside a collection's object would be
+//! dropped the next time the user touched the same collection in the Slint app.
+//! The accordion is a Qt-only owner feature (neither reference has one), so its
+//! state has no Slint counterpart and must not ride in a shared document.
+//!
 //! The hydration gate (spec 02 §7 T15 — no persist until `apply()` has restored
 //! the stored prefs, or an early setter clobbers them) lives in
 //! `myqbz_detail_qt`, which is the state machine that opens and closes it
@@ -55,6 +67,7 @@ pub(crate) const DEFAULT_LABEL: &str = "My QBZ";
 
 const BRANDING_FILE: &str = "myqbz_branding.json";
 const VIEW_PREFS_FILE: &str = "collection_view_prefs.json";
+const OPEN_ROWS_FILE: &str = "collection_open_rows.json";
 
 /// The per-user directory, bound at session activation. `None` before login —
 /// both stores then degrade to defaults (there is no pre-login MyQBZ surface).
@@ -80,6 +93,10 @@ fn branding_path() -> Option<PathBuf> {
 
 fn view_prefs_path() -> Option<PathBuf> {
     Some(user_dir()?.join(VIEW_PREFS_FILE))
+}
+
+fn open_rows_path() -> Option<PathBuf> {
+    Some(user_dir()?.join(OPEN_ROWS_FILE))
 }
 
 // ---------------------------------------------------------------------------
@@ -377,6 +394,128 @@ pub(crate) fn remove_view_prefs(id: &str) {
 }
 
 // ---------------------------------------------------------------------------
+// Per-collection ACCORDION open rows
+// ---------------------------------------------------------------------------
+//
+// `{ "<collection-id>": ["<source>|<source_item_id>", …] }` — the keys are
+// `myqbz_detail_qt::cache_key`, the same string that keys `INLINE_CACHE`,
+// `RESOLVE_CACHE` and the in-memory `OPEN_ROWS` set. Storing the KEY rather
+// than the row position is what survives a reorder: position 3 is a different
+// album after a drag, `qobuz|12345` is not.
+//
+// Lifetime: created on the first chevron click, replaced wholesale on every
+// later one, and dropped by `remove_open_rows` when the collection is deleted.
+// A stale key (an item removed from the collection) is pruned on the next open
+// by `myqbz_detail_qt::apply`, and the pruned set is what the next click
+// persists — the file self-heals rather than growing forever.
+
+/// The whole `{ collection-id -> [row key] }` map. A missing / unreadable /
+/// unparseable file degrades to an empty map, exactly like the view prefs.
+fn read_open_rows() -> serde_json::Map<String, serde_json::Value> {
+    let Some(path) = open_rows_path() else {
+        return serde_json::Map::new();
+    };
+    match std::fs::read_to_string(&path) {
+        Ok(text) => match serde_json::from_str::<serde_json::Value>(&text) {
+            Ok(serde_json::Value::Object(map)) => map,
+            _ => serde_json::Map::new(),
+        },
+        Err(_) => serde_json::Map::new(),
+    }
+}
+
+/// ONE collection's stored entry -> its open-row keys.
+///
+/// Anything that is not an array of non-empty strings (an older shape, a hand
+/// edit, a null) degrades to "nothing was open" rather than resurrecting
+/// garbage as open rows. Split out of `load_open_rows` so the unit test can
+/// exercise THIS function instead of a copy of it — the store itself needs a
+/// bound user directory and is not reachable from a test.
+fn parse_open_rows_entry(entry: Option<&serde_json::Value>) -> Vec<String> {
+    match entry {
+        Some(serde_json::Value::Array(keys)) => keys
+            .iter()
+            .filter_map(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// The stored open-row keys for `id` (empty when none are stored, the id is
+/// empty, or the stored entry is malformed).
+///
+/// BLOCKING (one small file read) — call it from `spawn_blocking`, never on the
+/// GUI thread. `myqbz_detail_qt::load` reads it inside the same
+/// `spawn_blocking` that fetches the collection.
+pub(crate) fn load_open_rows(id: &str) -> Vec<String> {
+    if id.is_empty() {
+        return Vec::new();
+    }
+    parse_open_rows_entry(read_open_rows().get(id))
+}
+
+/// Persist the open-row keys for `id`. An EMPTY set removes the entry instead
+/// of writing `[]` — closing every row must not leave the user's file carrying
+/// one key per collection ever visited.
+///
+/// BLOCKING — same rule as `load_open_rows`.
+pub(crate) fn save_open_rows(id: &str, keys: &[String]) {
+    if id.is_empty() {
+        return;
+    }
+    let Some(path) = open_rows_path() else {
+        log::warn!("[qbz-qt] collection open-rows: no active user, not saving");
+        return;
+    };
+    let Some(mut doc) = crate::settings_qt::read_json_object(&path) else {
+        return;
+    };
+    if keys.is_empty() {
+        if doc.remove(id).is_none() {
+            return; // nothing stored and nothing to store — skip the write.
+        }
+    } else {
+        // Sorted so an unordered `HashSet` drain cannot rewrite the same
+        // logical document with a different byte order on every click.
+        let mut keys: Vec<&str> = keys.iter().map(String::as_str).collect();
+        keys.sort_unstable();
+        keys.dedup();
+        doc.insert(
+            id.to_string(),
+            serde_json::Value::Array(
+                keys.into_iter()
+                    .map(|k| serde_json::Value::String(k.to_string()))
+                    .collect(),
+            ),
+        );
+    }
+    crate::settings_qt::write_json_object_atomic(&path, &doc);
+}
+
+/// Drop the orphaned entry after a collection is deleted, alongside
+/// `remove_view_prefs`. No-op when absent.
+///
+/// Collection ids are v4 UUIDs (`qbz_mixtape::repo` line 33), so a re-created
+/// collection cannot inherit a deleted one's key even without this — it exists
+/// so the file does not accumulate entries for collections that no longer are.
+pub(crate) fn remove_open_rows(id: &str) {
+    if id.is_empty() {
+        return;
+    }
+    let Some(path) = open_rows_path() else {
+        return;
+    };
+    let Some(mut doc) = crate::settings_qt::read_json_object(&path) else {
+        return;
+    };
+    if doc.remove(id).is_some() {
+        crate::settings_qt::write_json_object_atomic(&path, &doc);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Session binding
 // ---------------------------------------------------------------------------
 
@@ -481,5 +620,32 @@ mod tests {
         // either way; what is pinned is that the id guard comes first.
         save_view_prefs("", &Prefs::default());
         remove_view_prefs("");
+    }
+
+    /// Same guard on the open-rows sidecar. No user dir is bound in tests, so
+    /// what is pinned is that the id guard comes first on all three paths.
+    #[test]
+    fn empty_id_is_a_no_op_on_every_open_rows_path() {
+        assert!(load_open_rows("").is_empty());
+        save_open_rows("", &["qobuz|1".to_string()]);
+        remove_open_rows("");
+    }
+
+    /// The stored entry is a plain array of `cache_key` strings; anything else
+    /// (an older shape, a hand edit) degrades to "nothing was open" rather than
+    /// resurrecting garbage as open rows. Calls the PRODUCTION parser — the
+    /// store around it needs a bound user directory, which a unit test has not
+    /// got, so the parse is the seam that gets pinned.
+    #[test]
+    fn open_rows_entry_parses_only_a_string_array() {
+        let doc: serde_json::Value = serde_json::from_str(
+            r#"{"a":["qobuz|1","local|/x",""],"b":{"nope":true},"c":["qobuz|2",7],"d":null}"#,
+        )
+        .expect("parses");
+        assert_eq!(parse_open_rows_entry(doc.get("a")), vec!["qobuz|1", "local|/x"]);
+        assert!(parse_open_rows_entry(doc.get("b")).is_empty());
+        assert_eq!(parse_open_rows_entry(doc.get("c")), vec!["qobuz|2"]);
+        assert!(parse_open_rows_entry(doc.get("d")).is_empty());
+        assert!(parse_open_rows_entry(doc.get("missing")).is_empty());
     }
 }

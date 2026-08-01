@@ -76,6 +76,12 @@ Rectangle {
     /// only affordances and, for the reorder below, it changes WHICH sort is
     /// the reorderable one.
     readonly property bool isLocal: doc.isLocalPlaylist === true
+    /// A Qobuz WRITE can be attempted. `QbzSession.offlineMode` is the shared
+    /// tri-state (0 = online, 1 = no connection, 2 = induced offline — the same
+    /// property `shell/HeaderBar.qml:101` and `controls/QbzOfflinePlaceholder`
+    /// read), and BOTH non-zero arms refuse the request in Rust, so the buttons
+    /// that depend on one must not advertise otherwise.
+    readonly property bool online: QbzSession.offlineMode === 0
 
     // --- Reorderable? (owner findings 5 + 8) -----------------------------
     // PlaylistView.slint:1094-1096 states the rule: the reorder affordance is
@@ -452,8 +458,17 @@ Rectangle {
                         anchors.verticalCenter: parent.verticalCenter
                         onClicked: QbzBridge.playlistTogglePin()
                     }
+                    // Follow / unfollow and Copy are Qobuz WRITES
+                    // (`playlist/subscribe`, `playlist/create`): offline they
+                    // cannot succeed, and the port let them be clicked anyway —
+                    // the request was gate-refused and the only trace was a log
+                    // line. They stay visible and go inert (0.4 opacity, no
+                    // hover, arrow cursor), which is the reference's read-only
+                    // treatment of the offline hearts rather than a control
+                    // that vanishes and leaves the row jumping.
                     QbzCircleAction {
                         visible: !root.isOwner
+                        btnEnabled: root.online
                         name: (doc.isFollowing === true) ? "check" : "user-plus"
                         active: doc.isFollowing === true
                         anchors.verticalCenter: parent.verticalCenter
@@ -461,6 +476,7 @@ Rectangle {
                     }
                     QbzCircleAction {
                         visible: !root.isOwner && doc.isCopied !== true
+                        btnEnabled: root.online
                         name: "copy"
                         anchors.verticalCenter: parent.verticalCenter
                         onClicked: QbzBridge.playlistCopy()

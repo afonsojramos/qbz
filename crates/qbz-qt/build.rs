@@ -105,6 +105,10 @@ fn main() {
                 "qml/controls/SettingsButton.qml",
                 "qml/controls/SettingsDivider.qml",
                 "qml/controls/SettingsSpacer.qml",
+                // Moved out of views/local/ on 2026-07-31: the album/track
+                // CARD badges mount it too, and Slint keeps its counterpart in
+                // primitives/ (SourceGlyph.slint).
+                "qml/controls/SourceIcon.qml",
                 "qml/rows/BlacklistRow.qml",
                 "qml/rows/TrackCols.qml",
                 "qml/rows/TrackListHeader.qml",
@@ -222,7 +226,6 @@ fn main() {
                 "qml/views/local/LocalTracksTab.qml",
                 "qml/views/local/LocalTreeRail.qml",
                 "qml/views/local/SelectCheck.qml",
-                "qml/views/local/SourceIcon.qml",
                 "qml/views/local/TreeRow.qml",
                 "qml/views/local/VersionPicker.qml",
                 // MyQBZ (Mixtapes / Collections / Artist-Collection builder).
@@ -231,7 +234,6 @@ fn main() {
                 "qml/views/myqbz/DiscoBuilderView.qml",
                 "qml/views/myqbz/DiscoCandidateRow.qml",
                 "qml/views/myqbz/MyQbzCard.qml",
-                "qml/views/myqbz/MyQbzDetailCard.qml",
                 "qml/views/myqbz/MyQbzDetailRow.qml",
                 "qml/views/myqbz/MyQbzDetailView.qml",
                 "qml/views/myqbz/MyQbzGridView.qml",

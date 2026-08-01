@@ -692,16 +692,30 @@ Rectangle {
     }
 
     // Debounced window reporting (180ms, library_all.rs throttle).
+    //
+    // `pendingRows` is the array the band indexes into. It is null for every
+    // body that scrolls `visibleRows` itself (grid, list, albums list,
+    // playlists list) and non-null ONLY for a body whose mounted order is not
+    // `visibleRows` — today that is the Artists sidepanel rail, which sorts
+    // A-Z and interleaves letter headers, so its ListView index N is NOT
+    // `visibleRows[N]`. Reporting the rail against `visibleRows` would name
+    // the wrong artists; reporting nothing (what it did until now) left
+    // `artMap` empty for every row it mounts and every rail avatar fell to
+    // the placeholder.
     Timer {
         id: windowDebounce
         interval: 180
-        onTriggered: root.reportWindow(root.visibleRows, pendingFirst, pendingLast)
+        onTriggered: root.reportWindow(
+            pendingRows ? pendingRows : root.visibleRows, pendingFirst, pendingLast)
         property int pendingFirst: 0
         property int pendingLast: 0
+        property var pendingRows: null
     }
-    function queueWindowReport(first, last) {
+    /// `rows` is optional — omit it and the band is read off `visibleRows`.
+    function queueWindowReport(first, last, rows) {
         windowDebounce.pendingFirst = first
         windowDebounce.pendingLast = last
+        windowDebounce.pendingRows = rows === undefined ? null : rows
         windowDebounce.restart()
     }
 
@@ -957,6 +971,7 @@ Rectangle {
                 onContentYChanged: root.gridWindowReport()
                 onModelChanged: root.gridWindowReport()
                 onWidthChanged: root.gridWindowReport()
+                onVisibleChanged: root.gridWindowReport()
                 Component.onCompleted: root.gridWindowReport()
 
                 delegate: FeedGridCell {
@@ -984,6 +999,7 @@ Rectangle {
                 model: root.visibleRows
                 onContentYChanged: root.listWindowReport()
                 onModelChanged: root.listWindowReport()
+                onVisibleChanged: root.listWindowReport()
                 Component.onCompleted: root.listWindowReport()
 
                 delegate: Loader {
@@ -1091,7 +1107,16 @@ Rectangle {
                 boundsBehavior: Flickable.StopAtBounds
                 model: content.showPlaylistsList ? root.visibleRows : []
 
+                // Gated on visibility for the same reason gridWindowReport and
+                // listWindowReport are: `artMap` is ONE map, a report PRUNES
+                // outside its band, and this body still fires while hidden —
+                // `model` flips to [] on every tab switch (onModelChanged) and
+                // `anchors.fill` makes every window resize an onHeightChanged.
+                // Ungated, a resize on the Artists sidepanel evicted the rail's
+                // avatars and requested a `visibleRows` band the rail is not
+                // even showing (its order is A-Z, not feed order).
                 function report() {
+                    if (!playlistsList.visible) return
                     var first = Math.max(0, Math.floor(playlistsList.contentY / 62) - 4)
                     var last = Math.ceil((playlistsList.contentY + playlistsList.height) / 62) + 4
                     root.queueWindowReport(first, Math.min(root.visibleRows.length - 1, last))
@@ -1099,6 +1124,7 @@ Rectangle {
                 onContentYChanged: playlistsList.report()
                 onModelChanged: playlistsList.report()
                 onHeightChanged: playlistsList.report()
+                onVisibleChanged: playlistsList.report()
                 Component.onCompleted: playlistsList.report()
 
                 delegate: PlaylistListRow {
@@ -1202,7 +1228,18 @@ Rectangle {
     // setModel() — see the visibleRows comment. Everything they touch on the
     // view (width/height/contentY/cellWidth/cellHeight) is a plain qreal on
     // the private; the array comes from root, never from the view.
+    //
+    // Both early-return while their body is hidden. `artMap` is ONE map and a
+    // report PRUNES everything outside the reported band, so a hidden body
+    // that still fires (the grid's rightMargin changes when `alphaVisible`
+    // flips; the list's `onModelChanged` fires on every tab switch because its
+    // `model` is bound to `visibleRows` unconditionally) would evict the
+    // covers of whichever body is actually on screen — the Artists sidepanel
+    // rail above all, since it is the one body whose band is NOT a
+    // `visibleRows` band. `onVisibleChanged` keeps the gate from swallowing
+    // the first report of a body that becomes visible after its model landed.
     function gridWindowReport() {
+        if (!grid.visible) return
         var cols = Math.max(1, Math.floor(grid.width / grid.cellWidth))
         var firstRow = Math.max(0, Math.floor(grid.contentY / grid.cellHeight) - 1)
         var lastRow = Math.ceil((grid.contentY + grid.height) / grid.cellHeight) + 1
@@ -1210,6 +1247,7 @@ Rectangle {
         queueWindowReport(firstRow * cols, Math.min(m.length - 1, lastRow * cols - 1))
     }
     function listWindowReport() {
+        if (!list.visible) return
         var first = Math.max(0, Math.floor(list.contentY / 44) - 4)
         var last = Math.ceil((list.contentY + list.height) / 44) + 4
         queueWindowReport(first, Math.min(root.visibleRows.length - 1, last))

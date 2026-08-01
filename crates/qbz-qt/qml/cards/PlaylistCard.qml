@@ -29,10 +29,18 @@
 // SETTLE ASYMMETRY, deliberate and not a hole this file can close: the
 // OWNED arm settles on `QbzLibrary.libraryFavoriteChanged` (rollback on a
 // failed write included). The FOREIGN follow arm has no signal at all —
-// `playlist_qt::set_follow_by_id` logs the error and only calls
-// `reload_sidebar()`, so a failed subscribe leaves the optimistic tick up
+// `playlist_qt::set_follow_by_id` logs the error and otherwise settles only
+// the caches (`follow_settled`: the ownership snapshot, the sidebar tree and
+// the Library feed), so a FAILED subscribe leaves the optimistic tick up
 // until the card's document is republished. Closing it needs a Rust-side
 // settle emit, not a QML change.
+//
+// Offline the foreign arm is a WRITE that cannot land (`playlist/subscribe`
+// is gate-refused), and this card offers it anyway — the detail header now
+// disables its twin (`views/PlaylistView.qml`, `online`). Not fixed here
+// because the same control also carries the OWNED heart, which is a local
+// library.db write and MUST stay live offline; splitting the enablement is a
+// change to this card's contract, not a one-liner.
 //
 // --- Menu inventory vs discover/PlaylistCard.slint ---------------------
 //   Play · Play next · Play later · Add to queue ·

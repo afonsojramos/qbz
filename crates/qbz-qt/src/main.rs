@@ -1826,6 +1826,37 @@ pub(crate) fn reload_library() {
     });
 }
 
+/// Re-publish the Library document from the CACHED feed — no fetch, no db read.
+/// The `publish_sidebar()` of this domain.
+///
+/// Reserved for the mutations that REMOVE or ADD a row, which is the one thing
+/// the in-place `libraryFavoriteChanged` / `pinChanged` signals cannot express:
+/// they patch a badge on a row that stays, while an unfollow has to make the
+/// row leave. Everything else must keep using the signals — see the long note
+/// on `library_toggle_favorite` about `QQuickItemView::setModel()`.
+///
+/// Handing `model:` a new array is exactly what a tab switch already does, and
+/// the crash that note describes was reading `.model` BACK off the view inside
+/// the teardown; `LibraryView.visibleRows` no longer does that. What the user
+/// does pay is the scroll offset, which is why this is not a per-click verb.
+///
+/// No-op before the Library has ever loaded (`with_library` -> `None`).
+pub(crate) fn publish_library_document() {
+    let Some((feed_json, counts_json)) = library_qt::with_library(|d| {
+        (
+            serde_json::to_string(&d.feed).unwrap_or_else(|_| "[]".into()),
+            serde_json::to_string(&d.counts).unwrap_or_else(|_| "{}".into()),
+        )
+    }) else {
+        return;
+    };
+    library_bridge::ui(move |mut b| {
+        b.as_mut().set_library_json(QString::from(feed_json.as_str()));
+        b.as_mut()
+            .set_library_counts_json(QString::from(counts_json.as_str()));
+    });
+}
+
 /// VmRSS (KiB) from /proc/self/status — phase-5 RSS-delta measurement.
 fn log_rss(mark: &str) {
     if let Ok(status) = std::fs::read_to_string("/proc/self/status") {

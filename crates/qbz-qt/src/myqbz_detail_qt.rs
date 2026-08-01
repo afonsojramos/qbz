@@ -9,10 +9,12 @@
 //! caches are plain statics reachable from the tokio tasks with no GUI hop.
 //!
 //! Load order (spec 02 §6.2 `navigate`): `reset()` (clears the three caches +
-//! the prefs gate, publishes `{loading:true, found:true}`) -> BLOCK fetch ->
+//! the prefs gate, publishes `{loading:true, found:true}`) -> BLOCK fetch (the
+//! collection AND its persisted accordion set, one `spawn_blocking`) ->
 //! `apply()` (header -> hero mosaic -> restore view-prefs -> open the persist
-//! gate -> FULL_ITEMS -> rebuild) -> ONE artwork pass + ONE republish ->
-//! `resolve_items` (fire-and-forget, <= 6 concurrent).
+//! gate -> restore the pruned open set -> FULL_ITEMS -> rebuild) -> ONE artwork
+//! pass + ONE republish -> `resolve_items` (fire-and-forget, <= 6 concurrent)
+//! -> `ensure_expanded` (a no-op unless the restored set opened something).
 //!
 //! Two divergences from the reference are REPRODUCED on purpose and must not
 //! be "unified" (spec 02 §6.2 + review items 23/26):
@@ -143,6 +145,40 @@ pub struct DetailRow {
     pub artwork_url: String,
     #[serde(rename = "artworkPath")]
     pub artwork_path: String,
+    /// The SECOND cover, for the GRID arm — same row, bigger rung.
+    ///
+    /// `artUrl` is the 50px list thumbnail (the reference's `_50` downscale,
+    /// `myqbz_detail.rs:269`), and the grid used to read that same field into a
+    /// 200px `AlbumCard`: a 4x upscale, which is the owner's "la calidad de la
+    /// portada es menor que la del albumcard". The owner's ruling (2026-07-31)
+    /// is "list sí deben ser los de 50, grid 200", i.e. the row carries BOTH
+    /// sizes rather than one being re-derived per view-mode switch — a
+    /// re-derive republishes the document, and a republish hands `model:` a new
+    /// array, which resets the view's scroll offset (see `RowPatch`). Two
+    /// strings per row buy an instant list/grid toggle.
+    ///
+    /// See `GRID_ART_TARGET` for why the rung is 600 and not 200.
+    #[serde(rename = "artUrlLarge")]
+    pub art_url_large: String,
+    #[serde(rename = "artPathLarge")]
+    pub art_path_large: String,
+    /// Heart state for a row whose `sourceItemId` IS a Qobuz catalog album id
+    /// (stored source `qobuz` + item type `album`); `false` for everything
+    /// else, which is also everything the grid card hides the heart on.
+    ///
+    /// Read through `fav_cache_qt::is_album_favorite`, the same door every
+    /// other card PRODUCER in this port uses (`home_qt`, `library_qt`,
+    /// `album_qt`) — never `library_qt::is_favorite`, which ORs in a linear
+    /// scan of the whole Library feed and is O(rows x feed) on a 200-item
+    /// collection.
+    #[serde(rename = "isFavorite")]
+    pub is_favorite: bool,
+    /// Pin state, same gate and the same producer door as `is_favorite`
+    /// (`sidebar_qt::is_pinned`). Both settle themselves after a click through
+    /// `QbzLibrary.libraryFavoriteChanged` / `pinChanged`, so neither needs a
+    /// `RowPatch` field.
+    #[serde(rename = "isPinned")]
+    pub is_pinned: bool,
     pub selected: bool,
     #[serde(rename = "canExpand")]
     pub can_expand: bool,
@@ -152,11 +188,13 @@ pub struct DetailRow {
     /// (owner-authorised 2026-07-30): neither `MixtapeDetailView.slint` nor the
     /// Tauri build had a per-row accordion, they render inline tracks only as a
     /// whole-list VIEW MODE ("no chevron"). The owner asked for the accordion
-    /// anyway; the view mode SURVIVES and now simply means "open all".
+    /// anyway. The view mode SURVIVES but no longer means "open all" (owner,
+    /// 2026-08-01): it only decides whether the arm carries the chevron.
     ///
-    /// It is ONE notion of open, not two: the chevron and the `expanded`
-    /// segment both write `OPEN_ROWS`, and this flag is derived from that set
-    /// in `to_item`. Do not add a second `viewMode === "expanded"` test in QML.
+    /// It is ONE notion of open, not two: `OPEN_ROWS` is the persisted truth,
+    /// written by the chevron alone, and this flag is derived from it in
+    /// `to_item` (AND-ed with the details arm, which is a render gate, not a
+    /// second state). Do not add a `viewMode === "expanded"` test in QML.
     #[serde(rename = "rowOpen")]
     pub row_open: bool,
     #[serde(rename = "tracksLoaded")]
@@ -211,6 +249,14 @@ struct RowPatch {
     artwork_url: Option<String>,
     #[serde(rename = "artworkPath", skip_serializing_if = "Option::is_none")]
     artwork_path: Option<String>,
+    /// The GRID rung (`DetailRow::art_url_large`). Travels with the small pair
+    /// on the resolve backfill — the grid delegate reads these two and nothing
+    /// else, so a patch that moved only `artUrl` left the grid on its
+    /// placeholder glyph for the whole session.
+    #[serde(rename = "artUrlLarge", skip_serializing_if = "Option::is_none")]
+    art_url_large: Option<String>,
+    #[serde(rename = "artPathLarge", skip_serializing_if = "Option::is_none")]
+    art_path_large: Option<String>,
     #[serde(rename = "rowOpen", skip_serializing_if = "Option::is_none")]
     row_open: Option<bool>,
     #[serde(rename = "tracksLoaded", skip_serializing_if = "Option::is_none")]
@@ -361,12 +407,17 @@ static INLINE_CACHE: LazyLock<Mutex<HashMap<String, Vec<InlineTrackRow>>>> =
 
 /// THE per-row accordion OPEN set, same key as `INLINE_CACHE`.
 ///
-/// ONE notion of "is this row open", written by BOTH mechanisms: the chevron
-/// (`toggle_row_expand`, one key) and the `expanded` view-mode segment
-/// (`set_view_mode` / `rebuild`, every expandable key = "open all"). Two
-/// parallel states would disagree the first time a user closed a row inside
-/// expanded mode. Surviving a re-derive is deliberate: a sort or a search must
-/// not fold the rows the user opened.
+/// ONE notion of "is this row open", with exactly ONE writer: the chevron
+/// (`toggle_row_expand`). The `expanded` segment used to write it too — entering
+/// the details arm force-opened every expandable row — and the owner asked for
+/// the opposite (2026-08-01): the view starts CLOSED and remembers. Surviving a
+/// re-derive is deliberate: a sort or a search must not fold the rows the user
+/// opened.
+///
+/// PERSISTED per collection in `collection_open_rows.json`
+/// (`myqbz_prefs_qt::{load,save,remove}_open_rows`): seeded in `apply` from the
+/// pruned stored keys, written by `persist_open_rows` on every chevron flip,
+/// cleared in-memory by `reset`/`teardown` (which never touch the file).
 static OPEN_ROWS: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
 
 /// resolveItems results, same key. A MISS is what flags a row
@@ -560,6 +611,51 @@ fn year_text(item: &MixtapeCollectionItem) -> String {
     item.year.map(|y| y.to_string()).unwrap_or_default()
 }
 
+/// Cover rung for the GRID arm's `AlbumCard` (200px artwork well).
+///
+/// The owner's words are "list sí deben ser los de 50, grid 200" (2026-07-31).
+/// 200 is not a rung Qobuz serves: the static CDN has a FIXED ladder —
+/// 50 / 100 / 150 / 230 / 300 / 600 / max / org, which is exactly the token
+/// list `myqbz_qt::small_qobuz_url` rewrites — and `_200.jpg` answers **404**
+/// (probed against a live cover on 2026-08-01: 50/150/230/300/600 -> 200,
+/// 200 -> 404). Emitting the literal 200 would have swapped a low-res cover
+/// for NO cover.
+///
+/// The rung is 600, not the smallest one that covers 200 (which is 230),
+/// because the owner's actual complaint was "la calidad de la portada es menor
+/// que la del albumcard" and the instruction was "USAR el AlbumCard normal" —
+/// and every other `AlbumCard` in the app is fed `album.image.large`, which IS
+/// `_600.jpg`. 230 would still read softer than its neighbours:
+/// `theme/RoundedImage.qml` decodes at native size with no `sourceSize`, so a
+/// 200pt well is 400 device px on a HiDPI screen and 230 upscales ~1.7x. "200"
+/// was the CARD's size, not a CDN rung.
+///
+/// Cost, accepted deliberately: a Qobuz row now caches `_50` (list) and `_600`
+/// (grid), so a collection's first open fetches both. The owner ruled on
+/// exactly this trade — "si había un motivo para hacer ligera esa vista en
+/// Tauri y Slint... ya no más, Qt sí puede con esas vistas" (2026-08-01).
+const GRID_ART_TARGET: u32 = 600;
+
+/// Is this item's `source_item_id` a Qobuz CATALOG ALBUM id?
+///
+/// THE gate for the grid card's catalog-only affordances (heart, pin, "Block
+/// this album"). Both halves matter:
+///   * the stored `source` — `AlbumSource::Qobuz` is what makes the id a
+///     catalog id at all (a local or Plex item's is a path or a `plex:` key);
+///   * the item TYPE — a Qobuz TRACK item carries a track id and a Qobuz
+///     PLAYLIST item a playlist id, and `libraryToggleFavorite("album", …)` on
+///     either would heart a different entity, or none.
+///
+/// The RESOLVED `source_kind` is deliberately not consulted: it can read
+/// "offline" for a Qobuz download, which is still a catalog album, and "plex"
+/// for an item stored as Local — the stored source is the authority on what
+/// the id IS.
+fn is_catalog_album(item: &MixtapeCollectionItem) -> bool {
+    item.source == AlbumSource::Qobuz
+        && item.item_type == ItemType::Album
+        && !item.source_item_id.is_empty()
+}
+
 /// Stable per-item cache key. `source_item_id` alone is the logical key;
 /// pairing it with the source makes a qobuz-vs-local collision impossible.
 fn cache_key(source: &str, source_item_id: &str) -> String {
@@ -618,22 +714,29 @@ fn to_item(
     inline_cache: &HashMap<String, Vec<InlineTrackRow>>,
     selected: &HashSet<i32>,
     open_rows: &HashSet<String>,
+    arm_open: bool,
 ) -> DetailRow {
     let source = source_str(item.source);
     // `small_qobuz_url` only rewrites Qobuz CDN `_<size>.jpg` urls; running it
     // on a local filesystem path (or a Plex `/library/...` path) corrupts it.
-    let mut art_url = item
-        .artwork_url
-        .as_deref()
-        .filter(|u| !u.is_empty())
-        .map(|u| {
-            if item.source == AlbumSource::Qobuz {
-                crate::myqbz_qt::small_qobuz_url(u, 50)
-            } else {
-                u.to_string()
+    //
+    // TWO rungs off the ONE stored url: 50 for the list row, `GRID_ART_TARGET`
+    // for the 200px grid card (see `DetailRow::art_url_large`). The non-Qobuz
+    // guard applies to BOTH — a local path or a Plex `/library/...` path is
+    // passed through raw on both fields, which also means the two are the same
+    // string there and the grid gets whatever the file is.
+    let stored_art = item.artwork_url.as_deref().filter(|u| !u.is_empty());
+    let rung = |target: u32| -> String {
+        match stored_art {
+            Some(u) if item.source == AlbumSource::Qobuz => {
+                crate::myqbz_qt::small_qobuz_url(u, target)
             }
-        })
-        .unwrap_or_default();
+            Some(u) => u.to_string(),
+            None => String::new(),
+        }
+    };
+    let mut art_url = rung(50);
+    let mut art_url_large = rung(GRID_ART_TARGET);
 
     let key = cache_key(source, &item.source_item_id);
     let (source_kind, quality_tier, quality_detail, type_label_text, artist_id, quality_resolving) =
@@ -643,6 +746,14 @@ fn to_item(
                 // stored `artwork_url` was empty (disco-builder local items).
                 if art_url.is_empty() && !r.artwork_url.is_empty() {
                     art_url = r.artwork_url.clone();
+                }
+                // The backfill is a RESOLVED track's own artwork (a local file
+                // path, or whatever rung the catalog handed back) — it is NOT
+                // re-rung, exactly as the small field is not, so the two stay
+                // the same string and the grid never asks for a size the
+                // backfill source cannot serve.
+                if art_url_large.is_empty() && !r.artwork_url.is_empty() {
+                    art_url_large = r.artwork_url.clone();
                 }
                 (
                     r.source_kind.clone(),
@@ -697,53 +808,66 @@ fn to_item(
         art_url,
         artwork_url: String::new(),
         artwork_path: String::new(),
+        art_path_large: crate::artwork_qt::cached_path(&art_url_large),
+        art_url_large,
+        // The catalog gate, decided ONCE here: a Qobuz ALBUM item's
+        // `source_item_id` IS the catalog album id, so its heart and its pin
+        // are the same entity every other AlbumCard in the app talks about. A
+        // track, a playlist, a local or a Plex item's is not — those answer
+        // `false` and the grid card hides both affordances rather than drawing
+        // a dead one (`MyQbzDetailView.qml`'s `cCatalogAlbum`, same predicate).
+        is_favorite: is_catalog_album(item)
+            && crate::fav_cache_qt::is_album_favorite(&item.source_item_id),
+        is_pinned: is_catalog_album(item)
+            && crate::sidebar_qt::is_pinned("album", &item.source_item_id),
         selected: selected.contains(&item.position),
         can_expand,
         // Re-derives (sort / search / filter) rebuild every row, so the open
         // state has to be re-read off the set here or the accordion would snap
         // shut on the first keystroke.
-        row_open: can_expand && open_rows.contains(&key),
+        //
+        // `arm_open` is the ARM gate, not a second notion of open: the chevron
+        // exists in the DETAILS arm only (`MyQbzDetailView.qml` `rowExpander`),
+        // so the list and grid arms must not render an inline block the user has
+        // no affordance to close. The SET is the persisted truth and survives the
+        // round trip untouched — which is what makes an open row still open when
+        // the user comes back to details (and after a restart).
+        row_open: can_expand && arm_open && open_rows.contains(&key),
         tracks_loaded,
         expand_loading: false,
         inline_tracks,
     }
 }
 
-fn build_rows(items: &[MixtapeCollectionItem]) -> Vec<DetailRow> {
+fn build_rows(items: &[MixtapeCollectionItem], arm_open: bool) -> Vec<DetailRow> {
     let resolved = RESOLVE_CACHE.lock().unwrap();
     let inline = INLINE_CACHE.lock().unwrap();
     let selected = SELECTED.lock().unwrap();
     let open_rows = OPEN_ROWS.lock().unwrap();
     items
         .iter()
-        .map(|it| to_item(it, &resolved, &inline, &selected, &open_rows))
+        .map(|it| to_item(it, &resolved, &inline, &selected, &open_rows, arm_open))
         .collect()
 }
 
-/// Force every expandable row OPEN, in the document AND in the shared set — the
-/// `expanded` view-mode's whole meaning. Returns the rows it changed as
-/// patches, so a caller that is not already republishing can send just those.
+/// Re-derive every row's `rowOpen` from the shared set for the CURRENT arm,
+/// in place — no rebuild of the model, no re-derive of the filter chain, so the
+/// caches, the selection and the scroll position all survive (which is what
+/// `set_view_mode` promises). The caller publishes.
 ///
-/// Called from `rebuild` as well as `set_view_mode` because a re-derive can
-/// REVEAL a row (a filter cleared, a search narrowed then widened) that has
-/// never been opened: without this it would render collapsed among its open
-/// neighbours and the segment would be lying.
-fn open_all_expandable(d: &mut DetailDoc) -> Vec<RowPatch> {
-    let mut open = OPEN_ROWS.lock().unwrap();
-    let mut patches = Vec::new();
+/// This is the whole of what a view-mode switch does to the accordion now:
+/// leaving the details arm hides the inline blocks (their affordance is gone),
+/// coming back restores exactly what the user had open. The SET is never
+/// touched here — it is the persisted truth.
+fn resync_row_open(d: &mut DetailDoc) {
+    let arm_open = d.view_mode == "expanded";
+    let open = OPEN_ROWS.lock().unwrap();
     for row in d.items.iter_mut() {
-        if !row.can_expand {
-            continue;
-        }
-        open.insert(cache_key(&row.source, &row.source_item_id));
-        if !row.row_open {
-            row.row_open = true;
-            let mut patch = RowPatch::of(row);
-            patch.row_open = Some(true);
-            patches.push(patch);
-        }
+        let want = row.can_expand
+            && arm_open
+            && open.contains(&cache_key(&row.source, &row.source_item_id));
+        row.row_open = want;
     }
-    patches
 }
 
 /// The source word a RESOLVED track renders as — the glyph kind in
@@ -902,15 +1026,12 @@ fn rebuild(d: &mut DetailDoc) {
     }
 
     let view = filtered_sorted(d);
-    d.items = build_rows(&view);
-    // `expanded` means OPEN ALL. The rows were just rebuilt off `OPEN_ROWS`,
-    // so this only ever adds the ones the re-derive revealed. (A row closed by
-    // its chevron WHILE in expanded mode therefore re-opens on the next
-    // re-derive — the price of one shared state, and the honest reading of a
-    // segment whose meaning is "all of them".)
-    if d.view_mode == "expanded" {
-        open_all_expandable(d);
-    }
+    // The rows come out of `OPEN_ROWS` — the ONLY thing that opens a row is the
+    // user's chevron. Entering the details arm used to force every expandable
+    // row open here (`open_all_expandable`); the owner asked for the opposite
+    // (2026-08-01): the view starts fully CLOSED and remembers what he opened.
+    let arm_open = d.view_mode == "expanded";
+    d.items = build_rows(&view, arm_open);
     d.selected_count = SELECTED.lock().unwrap().len() as i32;
 
     let source_count = i32::from(d.src_qobuz) + i32::from(d.src_plex) + i32::from(d.src_local);
@@ -938,19 +1059,21 @@ fn rebuild(d: &mut DetailDoc) {
 /// out has never been fetched, so without this it appears in expanded mode with
 /// no inline tracks and no spinner until the user toggles the mode again.
 /// Idempotent — rows already loaded or loading are skipped, and a row cached in
-/// `INLINE_CACHE` re-hydrates in `to_item` rather than re-fetching. Deliberately
-/// NOT called from `apply`: the reference's load path does not auto-expand
-/// either, even when the restored view-mode is `expanded`.
+/// `INLINE_CACHE` re-hydrates in `to_item` rather than re-fetching. `load` calls
+/// it once after `apply` for the same reason, since the RESTORED open set can
+/// carry rows whose tracks this session has never fetched; that is not the old
+/// auto-expand, which opened rows the user never opened.
 pub(crate) fn refresh_view() {
     with_doc(rebuild);
     let missing = attach_artwork();
     publish_current();
     dispatch_downloads(missing);
     // Unconditional now that `ensure_expanded` keys off the per-row OPEN state
-    // rather than the view mode: with nothing open it is one pass over the
-    // rows and no fetch, and it covers the accordion in LIST mode too (a row
-    // the user opened, then filtered out and back in, has lost its in-flight
-    // spinner and must be re-fetched).
+    // rather than the view mode: with nothing open it is one pass over the rows
+    // and no fetch. It matters for a row the user opened, then filtered out and
+    // back in — the re-derive rebuilt it from `OPEN_ROWS` as open, but its
+    // in-flight spinner died with the old row object and its tracks must be
+    // re-fetched.
     ensure_expanded();
 }
 
@@ -1036,15 +1159,27 @@ fn attach_artwork() -> Vec<String> {
             }
         }
         for row in d.items.iter_mut() {
-            if row.art_url.is_empty() || !row.art_path.is_empty() {
-                continue;
+            // BOTH rungs, or the grid asks for a file nothing ever fetches:
+            // `artUrlLarge` is a DIFFERENT url from `artUrl` (`_230` vs `_50`)
+            // and therefore a different disk-cache entry, so a sweep that only
+            // knew about the small one left every grid cell empty.
+            if !row.art_url.is_empty() && row.art_path.is_empty() {
+                let hit = crate::artwork_qt::cached_path(&row.art_url);
+                if hit.is_empty() {
+                    let url = row.art_url.clone();
+                    push(&url, &mut missing);
+                } else {
+                    row.art_path = hit;
+                }
             }
-            let hit = crate::artwork_qt::cached_path(&row.art_url);
-            if hit.is_empty() {
-                let url = row.art_url.clone();
-                push(&url, &mut missing);
-            } else {
-                row.art_path = hit;
+            if !row.art_url_large.is_empty() && row.art_path_large.is_empty() {
+                let hit = crate::artwork_qt::cached_path(&row.art_url_large);
+                if hit.is_empty() {
+                    let url = row.art_url_large.clone();
+                    push(&url, &mut missing);
+                } else {
+                    row.art_path_large = hit;
+                }
             }
         }
         missing
@@ -1078,6 +1213,10 @@ fn refresh_artwork_paths() {
         for row in d.items.iter_mut() {
             if row.art_path.is_empty() {
                 row.art_path = crate::artwork_qt::cached_path(&row.art_url);
+            }
+            // The grid rung is its own cache entry — see `attach_artwork`.
+            if row.art_path_large.is_empty() {
+                row.art_path_large = crate::artwork_qt::cached_path(&row.art_url_large);
             }
         }
         d.clone()
@@ -1133,6 +1272,40 @@ fn persist_prefs() {
     }
 }
 
+/// Persist the accordion's OPEN set for the collection on screen.
+///
+/// Called from `toggle_row_expand`, which runs on the GUI thread (a QML
+/// invokable), so the write is pushed onto `spawn_blocking` — every disk helper
+/// in this port is blocking and none of them may sit on the Qt event loop.
+///
+/// The snapshot is taken INSIDE the blocking task, not at call time: two fast
+/// chevron clicks spawn two tasks that the runtime may run in either order, and
+/// a task that carried its own older snapshot could then land last and persist a
+/// stale set. Reading the live set in the task makes both writes converge on
+/// whatever the current state is. The collection id is re-checked there too — a
+/// task queued while the user navigated away must not write another
+/// collection's file.
+///
+/// Local UI state end to end: no network verb, no Qobuz session, works offline
+/// and on a machine that has never logged in (the store degrades to a no-op when
+/// there is no per-user directory, exactly like the view prefs).
+fn persist_open_rows() {
+    let collection_id = current_id();
+    if collection_id.is_empty() {
+        return;
+    }
+    crate::spawn(async move {
+        let _ = tokio::task::spawn_blocking(move || {
+            if current_id() != collection_id {
+                return;
+            }
+            let keys: Vec<String> = OPEN_ROWS.lock().unwrap().iter().cloned().collect();
+            crate::myqbz_prefs_qt::save_open_rows(&collection_id, &keys);
+        })
+        .await;
+    });
+}
+
 // ---------------------------------------------------------------------------
 // reset / apply
 // ---------------------------------------------------------------------------
@@ -1143,6 +1316,8 @@ fn reset() {
     FULL_ITEMS.lock().unwrap().clear();
     INLINE_CACHE.lock().unwrap().clear();
     RESOLVE_CACHE.lock().unwrap().clear();
+    // In-memory only — the on-disk set for this collection is untouched, and
+    // `apply` seeds this one back from it.
     OPEN_ROWS.lock().unwrap().clear();
     SELECTED.lock().unwrap().clear();
     *LAST_FILTER_KEY.lock().unwrap() = None;
@@ -1161,7 +1336,10 @@ fn reset() {
 
 /// Apply a freshly-loaded collection. The ORDER is load-bearing: the persist
 /// gate opens AFTER the restore, so the restore itself is not re-persisted.
-fn apply(c: MixtapeCollection) {
+///
+/// `stored_open` is this collection's persisted accordion set, read off disk by
+/// the caller's `spawn_blocking` (never here — `apply` runs inline).
+fn apply(c: MixtapeCollection, stored_open: Vec<String>) {
     with_doc(|d| {
         let item_count = c.items.len();
         d.id = c.id.clone();
@@ -1190,6 +1368,24 @@ fn apply(c: MixtapeCollection) {
 
         restore_prefs(d, &c.id);
         PREFS_HYDRATED.store(true, Ordering::SeqCst);
+
+        // Restore the accordion, PRUNED to the rows that still exist and can
+        // actually expand. A key whose item was removed from the collection (or
+        // whose type changed) would otherwise sit in the file forever and, worse,
+        // could re-open a DIFFERENT row if that id came back under another type.
+        // The pruned set is what the next chevron click persists, so the file
+        // self-heals without a write on every open.
+        {
+            let live: HashSet<String> = c
+                .items
+                .iter()
+                .filter(|it| matches!(it.item_type, ItemType::Album | ItemType::Playlist))
+                .map(|it| cache_key(source_str(it.source), &it.source_item_id))
+                .collect();
+            let mut open = OPEN_ROWS.lock().unwrap();
+            open.clear();
+            open.extend(stored_open.into_iter().filter(|k| live.contains(k)));
+        }
 
         *FULL_ITEMS.lock().unwrap() = c.items;
         rebuild(d);
@@ -1329,6 +1525,21 @@ fn apply_resolved(item: &MixtapeCollectionItem, resolved: ResolvedItem, collecti
                 patch.artwork_url = Some(row.art_url.clone());
                 patch.artwork_path = Some(row.art_path.clone());
             }
+            // The GRID rung, backfilled from the SAME resolved url and NOT
+            // re-rung (`to_item` does the same) — a resolved track's artwork is
+            // whatever its source hands back, and asking a local file for a
+            // `_230` variant is meaningless. Its own `if`, not the small one's
+            // branch: the two fields are only ever equal by accident and a row
+            // can perfectly well have one filled and the other empty.
+            if row.art_url_large.is_empty() && !resolved.artwork_url.is_empty() {
+                row.art_url_large = resolved.artwork_url.clone();
+                row.art_path_large = crate::artwork_qt::cached_path(&row.art_url_large);
+                if row.art_path_large.is_empty() && stored_art_empty && backfill.is_none() {
+                    backfill = Some(row.art_url_large.clone());
+                }
+                patch.art_url_large = Some(row.art_url_large.clone());
+                patch.art_path_large = Some(row.art_path_large.clone());
+            }
             patches.push(patch);
         }
         (patches, backfill)
@@ -1414,11 +1625,12 @@ fn full_item_by_source_id(source_item_id: &str) -> Option<MixtapeCollectionItem>
 /// is instant.
 ///
 /// The gate is `row_open`, not `can_expand`: with the accordion, "expandable"
-/// is no longer "will be shown". In expanded mode every expandable row IS open
-/// (`rebuild` / `set_view_mode`), so the old behaviour is unchanged; in list
-/// mode this fetches only what the user actually opened, which is what makes
-/// the chevron lazy. `toggle_row_expand` fetches its own single row directly
-/// rather than routing through here, so one chevron never sweeps the list.
+/// is no longer "will be shown". Nothing force-opens rows any more, so this
+/// fetches only what the USER opened — that is the whole of what makes the
+/// chevron lazy, and it is why entering the details arm on a 200-item
+/// collection now costs zero requests. `toggle_row_expand` fetches its own
+/// single row directly rather than routing through here, so one chevron never
+/// sweeps the list.
 ///
 /// DEVIATION (reported): the fan-out is capped at `MAX_RESOLVE_CONCURRENCY`,
 /// the same cap T18 mandates for `resolve_items`. The reference is uncapped and
@@ -1531,15 +1743,25 @@ fn patch_expanded(source_item_id: &str, collection_id: &str, rows: Option<Vec<In
 /// re-hydrates `inlineTracks` from it, and `tracks_loaded` short-circuits the
 /// fetch. Closing never drops the cache.
 ///
-/// It writes the SAME `OPEN_ROWS` set the `expanded` view-mode segment writes,
-/// which is what keeps "open all" and "open this one" from disagreeing. The
-/// view mode itself is NOT touched — a chevron in list mode does not flip the
+/// It is the ONLY writer of `OPEN_ROWS` — the view-mode segment stopped writing
+/// it (see `set_view_mode`), so "open" means exactly "the user opened this row".
+/// The view mode itself is NOT touched either: a chevron does not flip the
 /// segment, and closing every row by hand does not leave the segment stranded.
+///
+/// Every flip is PERSISTED (`persist_open_rows`), which is what makes the
+/// accordion survive a view switch, a re-open and a restart.
 pub(crate) fn toggle_row_expand(source_item_id: &str) {
     let mut fetch = false;
     let (collection_id, patches) = with_doc(|d| {
         let mut patches: Vec<RowPatch> = Vec::new();
         let id = d.id.clone();
+        // The affordance lives in the details arm only, and so does the state
+        // it writes: opening a row from anywhere else would render an inline
+        // block with no chevron to close it. The QML never offers the gesture
+        // there — this is the invariant enforced where the state lives.
+        if d.view_mode != "expanded" {
+            return (id, patches);
+        }
         let Some(row) = d
             .items
             .iter_mut()
@@ -1572,7 +1794,16 @@ pub(crate) fn toggle_row_expand(source_item_id: &str) {
         patches.push(patch);
         (id, patches)
     });
+    // Exactly one patch is pushed, and only on the path that actually flipped a
+    // row — every early return above (wrong arm, no such row, not expandable)
+    // leaves `patches` empty. So this is the "did the set change" flag, and it
+    // keeps a click that changed nothing from spending a read-modify-write on
+    // the sidecar.
+    let flipped = !patches.is_empty();
     publish_rows(&collection_id, patches);
+    if flipped {
+        persist_open_rows();
+    }
     if !fetch || collection_id.is_empty() {
         return;
     }
@@ -1645,28 +1876,25 @@ pub(crate) fn reset_filters() {
 /// item list is unchanged, only the layout switches), so neither do we: mutate,
 /// persist, PUBLISH. The caches, the selection and the scroll position survive.
 ///
-/// The segment now drives the SAME per-row open state the chevron does:
-/// `expanded` = open all, and leaving it = close all. Without the close-all arm
-/// the list would keep every inline block rendered after switching back and the
-/// segment would appear to do nothing. Toggling list <-> grid leaves the set
-/// alone, so a row opened in list mode is still open when you come back from
-/// the grid.
+/// The segment does NOT open or close anything any more (owner, 2026-08-01):
+/// `expanded` used to mean "open all" and leaving it meant "close all, and
+/// forget". Both are gone. The segment now only decides whether the arm RENDERS
+/// the accordion — the chevron lives in the details arm alone
+/// (`MyQbzDetailView.qml` `rowExpander`), so the list and grid arms must not
+/// show an inline block there is no affordance to close. `resync_row_open`
+/// re-derives the flag from the untouched set, which is why a row the user
+/// opened is still open when he comes back to details.
 pub(crate) fn set_view_mode(mode: &str) {
-    let was_expanded = with_doc(|d| d.view_mode == "expanded");
     with_doc(|d| {
         d.view_mode = mode.to_string();
-        if mode == "expanded" {
-            open_all_expandable(d);
-        } else if was_expanded {
-            OPEN_ROWS.lock().unwrap().clear();
-            for row in d.items.iter_mut() {
-                row.row_open = false;
-            }
-        }
+        resync_row_open(d);
     });
     persist_prefs();
     publish_current();
     if mode == "expanded" {
+        // Restoring the arm can reveal rows whose inline tracks were never
+        // fetched (a restored set on a fresh session). Idempotent, and a no-op
+        // when nothing is open.
         ensure_expanded();
     }
 }
@@ -1798,24 +2026,37 @@ pub(crate) async fn load(runtime: &Arc<AppRuntime<LoggingAdapter>>, id: String) 
     // D11.c GAP: the reference drops items failing the offline availability
     // rule here (`myqbz.rs:231 retain_available_offline`). This port opens no
     // offline-cache index, so no item is hidden (spec 02 §1.1).
+    // ONE blocking hop for both reads: the collection (DB) and this
+    // collection's persisted accordion set (a small per-user JSON). Neither may
+    // run on the GUI thread, and pairing them keeps the load at one hop.
     let fetch_id = id.clone();
-    let collection = tokio::task::spawn_blocking(move || get_collection(&fetch_id))
-        .await
-        .ok()
-        .flatten();
+    let loaded = tokio::task::spawn_blocking(move || {
+        get_collection(&fetch_id).map(|c| {
+            let open = crate::myqbz_prefs_qt::load_open_rows(&fetch_id);
+            (c, open)
+        })
+    })
+    .await
+    .ok()
+    .flatten();
 
-    let Some(collection) = collection else {
+    let Some((collection, stored_open)) = loaded else {
         log::warn!("[qbz-qt] myqbz_detail load({id}): collection not found");
         apply_not_found();
         return;
     };
 
-    apply(collection);
+    apply(collection, stored_open);
     let missing = attach_artwork();
     publish_current();
     dispatch_downloads(missing);
 
     resolve_items(Arc::clone(runtime));
+    // The restored set can carry rows the user left open: they render open with
+    // an empty body until something fetches their tracks. This is NOT the old
+    // auto-expand — with nothing restored (the default, and every first open) it
+    // is one pass over the rows and no fetch at all.
+    ensure_expanded();
 }
 
 /// Grid card click: push the route, then load.
@@ -2061,16 +2302,53 @@ mod tests {
         open.insert(cache_key("qobuz", &album.source_item_id));
         open.insert(cache_key("qobuz", &track.source_item_id));
 
-        let album_row = to_item(&album, &resolved, &inline, &selected, &open);
+        let album_row = to_item(&album, &resolved, &inline, &selected, &open, true);
         assert!(album_row.can_expand);
         assert!(album_row.row_open);
 
-        let track_row = to_item(&track, &resolved, &inline, &selected, &open);
+        let track_row = to_item(&track, &resolved, &inline, &selected, &open, true);
         assert!(!track_row.can_expand);
         assert!(!track_row.row_open);
 
         let closed: HashSet<String> = HashSet::new();
-        assert!(!to_item(&album, &resolved, &inline, &selected, &closed).row_open);
+        assert!(!to_item(&album, &resolved, &inline, &selected, &closed, true).row_open);
+    }
+
+    /// The ARM gate: outside the details arm no row renders open, and the SET
+    /// is not consulted destructively — the very same set still opens the row
+    /// when the arm comes back. This is what makes a view switch lossless while
+    /// keeping the list and grid arms free of inline blocks they cannot close.
+    #[test]
+    fn row_open_is_gated_by_the_details_arm_without_losing_the_set() {
+        let resolved = HashMap::new();
+        let inline = HashMap::new();
+        let selected = HashSet::new();
+        let album = item(0, "A", ItemType::Album, AlbumSource::Qobuz);
+        let mut open = HashSet::new();
+        open.insert(cache_key("qobuz", &album.source_item_id));
+
+        assert!(!to_item(&album, &resolved, &inline, &selected, &open, false).row_open);
+        assert!(to_item(&album, &resolved, &inline, &selected, &open, true).row_open);
+        assert!(open.contains(&cache_key("qobuz", &album.source_item_id)));
+    }
+
+    /// A fresh collection starts CLOSED: nothing but the user's own chevron puts
+    /// a key in the set, so an empty set means every row renders collapsed even
+    /// in the details arm.
+    #[test]
+    fn a_collection_with_no_stored_state_starts_fully_closed() {
+        let resolved = HashMap::new();
+        let inline = HashMap::new();
+        let selected = HashSet::new();
+        let open: HashSet<String> = HashSet::new();
+        for (i, kind) in [ItemType::Album, ItemType::Playlist, ItemType::Track]
+            .into_iter()
+            .enumerate()
+        {
+            let it = item(i as i32, "X", kind, AlbumSource::Qobuz);
+            let row = to_item(&it, &resolved, &inline, &selected, &open, true);
+            assert!(!row.row_open, "{kind:?} row must start closed");
+        }
     }
 
     /// A patch carries the join key plus ONLY what changed — the point of the

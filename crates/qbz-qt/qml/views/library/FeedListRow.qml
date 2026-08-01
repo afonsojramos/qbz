@@ -243,16 +243,28 @@ Rectangle {
             width: 44
             height: parent.height
             color: "transparent"
-            QbzIcon {
-                visible: feedRow.item.source === "local" || feedRow.item.source === "plex"
-                name: "hard-drive"
-                width: 14
-                height: 14
-                anchors.verticalCenter: parent.verticalCenter
+            // Through controls/SourceIcon.qml, never QbzIcon: the Plex and
+            // Qobuz marks are MULTI-COLOUR and a tint flattens them to a
+            // silhouette. This column used to draw an accent-tinted
+            // `hard-drive` for Plex — a blue hard drive.
+            //
+            // DEVIATION, stated on purpose: the .slint has NO source column in
+            // this list at all (FavoritesView.slint:1767/2154 pass
+            // `show-source: false` to AlbumCollectionView). The numbers below
+            // are therefore its siblings' — AlbumListRow.slint:319, the row
+            // glyph, not the card badge.
+            SourceIcon {
+                visible: (feedRow.item.source || "") !== ""
+                    && feedRow.item.source !== "qobuz"
+                kind: feedRow.item.source || ""
+                glyphSize: 15
+                plexSize: 16
+                qobuzSize: 16
                 // Host is a transparent column over the theme row (NOT an
                 // artwork scrim), so this matches its siblings
                 // local/LocalAlbumRow.qml and local/LocalTrackRow.qml.
-                tintName: feedRow.item.source === "plex" ? "accent" : "muted"
+                localTint: "muted"
+                anchors.verticalCenter: parent.verticalCenter
             }
         }
         // Col — quality (albums + tracks).

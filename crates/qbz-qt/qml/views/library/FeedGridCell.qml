@@ -49,7 +49,13 @@ Item {
             // landed in the Home Pinned rail as a permanent grey placeholder,
             // across restarts.
             artworkUrl: cell.item.imageUrl || ""
+            // The source word is ALWAYS passed (the "Block this album" menu
+            // gate reads it); the toolbar's show-local toggle only decides
+            // whether the BADGE is drawn — FavoritesView.slint:1097
+            // `show-source-badge: LibraryAllState.show-local`, the same gate
+            // the track card below already uses.
             source: cell.item.source
+            showSourceBadge: cell.view.showLocal
         }
     }
     // Group separator. These are pseudo-rows injected into the SAME flat model

@@ -17,22 +17,30 @@
 // ListView/GridView (spec 01 §15.1, non-negotiable). A recycling view cannot
 // be content-sized inside an outer Flickable, and `ListView.header` is not
 // available to the GRID arm either — the grid is hosted in a clipped Item and
-// given `width: parent.width + 20 - 24` to reproduce Slint's column count
-// (spec 01 §7.4), which would offset and over-widen a header inside it. The
+// given a corrected width to reproduce the app album grid's column count
+// (see the grid arm), which would offset and over-widen a header inside it. The
 // paddings, the 32px hero→body gap and the 10px toolbar tail are all kept;
 // the toolbar simply became literally sticky, which is what §7.2 calls it.
 //
 // --- PER-ROW COLLAPSIBLE ROWS (owner-authorised divergence) -------------
-// Every album / playlist row carries a chevron that opens ITS OWN inline track
-// list (`MyQbzDetailRow.qml`, col 0). NEITHER the .slint NOR the Tauri build
-// had this — both render inline tracks only as a whole-list view MODE,
-// explicitly "no chevron". The owner asked for the accordion anyway
+// In the DETAILS arm every album / playlist row carries a chevron that opens
+// ITS OWN inline track list (`MyQbzDetailRow.qml`, col 0). NEITHER the .slint
+// NOR the Tauri build had this — both render inline tracks only as a whole-list
+// view MODE, explicitly "no chevron". The owner asked for the accordion anyway
 // (2026-07-30); do not "restore" it toward either reference.
 // It is ADDITIVE on machinery that already existed: Rust already published
 // per-row `canExpand` / `inlineTracks` / `expandLoading` / `tracksLoaded`, so
 // the accordion added exactly one thing — `rowOpen`, THE single notion of open.
-// The `expanded` segment writes the same state and now means "open all"; there
-// is deliberately no second, QML-side definition of "is this row open".
+// There is deliberately no second, QML-side definition of "is this row open".
+// DEFAULT + PERSISTENCE, owner 2026-08-01: the details arm opens with every row
+// CLOSED (the segment no longer force-opens anything) and the rows the user
+// opens are remembered per collection across view switches and restarts
+// (`collection_open_rows.json`). Rust gates the published `rowOpen` on the
+// details arm itself, so the other arms still render no inline block.
+// SCOPE, owner 2026-07-31: the chevron belongs to the DETAILS arm only — the
+// plain LIST arm carries no affordance and is the reference's 8-column row
+// again (`rowExpander` below). The accordion itself stays; only its reach
+// changed, and `rowOpen` is still the one notion of open.
 //
 // --- THE MODEL IS PATCHED, NEVER REPLACED, AND PARSED ONCE --------------
 // `QbzMyQbz` carries no signals: every Rust-side change arrives as a whole new
@@ -51,7 +59,18 @@
 // a real re-derive (sort / filter / search / another collection), which is
 // exactly when Slint also rebuilds and the scroll reset is correct.
 //
-// Reused, not rebuilt: rows/TrackRow.qml (inline tracks),
+// --- THE GRID ARM MOUNTS THE STANDARD CARD ------------------------------
+// `cards/AlbumCard.qml`, not a My QBZ card. The port used to carry
+// `MyQbzDetailCard.qml`, a 1:1 of the reference's local `DetailCard`
+// (MixtapeDetailView.slint:495-594); the owner rejected it (2026-07-31,
+// "quiero el de siempre con su overlay") and it is DELETED. Select mode is the
+// CARD's (`selectMode`/`selected`/`selectToggled` — the port of the reference
+// card's own `select-mode`, discover/AlbumCard.slint:83), because it has to
+// hide the pin and the hover action row as well as draw the tick; only "Remove
+// from collection" is host knowledge and it rides AlbumCard's
+// `extraMenuEntries` tail.
+//
+// Reused, not rebuilt: rows/TrackRow.qml (inline tracks), cards/AlbumCard,
 // controls/QualityBadgeFull, controls/CardMenu, controls/QbzContextMenu,
 // controls/QbzSegToggle, controls/QbzMultiSelectBar, controls/QbzToolButton,
 // controls/QbzLoadingDots, controls/QbzLineEdit, controls/QbzSelect,
@@ -180,6 +199,19 @@ Rectangle {
     readonly property int selectedCount: doc.selectedCount || 0
     readonly property int filterCount: doc.filterCount || 0
     readonly property bool hasAnyFilter: doc.hasAnyFilter === true
+
+    /// Does the body carry the per-row accordion chevron?
+    ///
+    /// ONLY the DETAILS arm — the `rows-3` segment, the one whose whole point
+    /// is showing each item's tracks (the segment id stays `expanded`, which is
+    /// now only the arm's name: it no longer means "open all"). The owner asked
+    /// for the chevron out of the plain LIST arm (2026-07-31); it is not a
+    /// removal of the accordion, which stays his feature, and `rowOpen` stays
+    /// the ONE notion of open with Rust as its only writer. Rust AND-s the
+    /// published `rowOpen` with this same arm, so list mode cannot render an
+    /// open row and no state is orphaned by hiding the affordance — the user's
+    /// open set survives the switch instead of being cleared by it.
+    readonly property bool rowExpander: root.viewMode === "expanded"
 
     // --------------------------- the row model -----------------------------
     property var rows: []
@@ -602,15 +634,19 @@ Rectangle {
                         spacing: 12
                         // The accordion chevron's leading cell (see
                         // MyQbzDetailRow.qml). Unlabelled — a header for a
-                        // disclosure control would be noise — but it MUST be
-                        // here, at exactly the row's 24px, or the eight
-                        // reference columns below drift 36px out of the header.
-                        Item { width: 24; height: 1 }
+                        // disclosure control would be noise — but while the
+                        // details arm mounts it, it MUST be here at exactly the
+                        // row's 24px or the eight reference columns below drift
+                        // 36px out of the header. `visible: false` drops the
+                        // cell AND its 12px gap, exactly like the row's.
+                        Item { visible: root.rowExpander; width: 24; height: 1 }
                         ColHead { width: 40; text: "#"; horizontalAlignment: Text.AlignHCenter }
                         ColHead {
                             // Paired with MyQbzDetailRow's `titleColWidth`:
-                            // 24 padding + 616 fixed cells + 96 gaps.
-                            width: Math.max(0, listHost.width - 736)
+                            // 24 padding + 592 fixed cells + 84 gaps = 700,
+                            // plus the chevron's 24 + 12 while it is mounted.
+                            width: Math.max(0,
+                                listHost.width - (root.rowExpander ? 736 : 700))
                             text: root.trs("Item")
                         }
                         ColHead { width: 140; text: root.trs("Type") }
@@ -694,11 +730,11 @@ Rectangle {
                             /// two writers (the chevron and the segment) and
                             /// two definitions would disagree the first time a
                             /// row was closed inside expanded mode — so the
-                            /// view mode is not read here at all. Rust sets
-                            /// `rowOpen` on every expandable row while the mode
-                            /// is `expanded` (open all) and clears it on the
-                            /// way out; `canExpand` is implied, because a
-                            /// non-expandable row is never marked open.
+                            /// view mode is not read here at all. Rust publishes
+                            /// `rowOpen` only for a row the USER opened while
+                            /// the details arm is up; `canExpand` is implied,
+                            /// because a non-expandable row is never marked
+                            /// open.
                             ///
                             /// Through `live`, like every other row read — see
                             /// the note above.
@@ -716,6 +752,7 @@ Rectangle {
                                 item: rowCell.live
                                 ordinal: rowCell.index + 1
                                 selectMode: root.selectMode
+                                showExpander: root.rowExpander
                                 dotPhase: root.dotPhase
                                 rev: root.patchRev
                             }
@@ -723,23 +760,27 @@ Rectangle {
                             // Inline tracks (.slint :1151-1218): padding
                             // 52 / 12 / 4 / 8, spacing 0.
                             //
-                            // 88, not 52: the reference's 52 is `12 padding +
-                            // 40 ordinal cell`, i.e. exactly where the row's
-                            // artwork column starts. The chevron cell added
-                            // `24 + 12` in front of the ordinal, so the same
-                            // alignment is 88 and the right inset stays 12
-                            // (width - 88 - 12). Keep it tied to the row's
-                            // template or the inline block stops hanging under
-                            // the title it belongs to.
+                            // The reference's 52 is `12 padding + 40 ordinal
+                            // cell`, i.e. exactly where the row's artwork
+                            // column starts; the chevron cell adds `24 + 12` in
+                            // front of the ordinal, so the same alignment is 88
+                            // whenever the chevron is mounted. The right inset
+                            // stays 12 either way (width - x - 12). Keep it tied
+                            // to the row's template — off by one cell and the
+                            // inline block stops hanging under its own title.
+                            //
+                            // Only the details arm can have an open row today
+                            // (see `rowExpander`), so the 88 branch is the live
+                            // one; the 52 keeps the two definitions honest.
                             Item {
                                 visible: rowCell.expanded
                                 width: parent.width
                                 height: visible ? inlineCol.height + 12 : 0
                                 Column {
                                     id: inlineCol
-                                    x: 88
+                                    x: root.rowExpander ? 88 : 52
                                     y: 4
-                                    width: Math.max(0, parent.width - 100)
+                                    width: Math.max(0, parent.width - inlineCol.x - 12)
                                     spacing: 0
 
                                     Item {
@@ -831,33 +872,47 @@ Rectangle {
             }
 
             // ======================= BODY: GRID =======================
-            // `auto-fill minmax(150, 1fr)`, gap 20, 12px content inset
-            // (.slint :1090-1108). The clipped host + `width: parent.width +
-            // 20 - 24` reproduces Slint's `floor((W - 24 + gap) / (150 + gap))`
-            // column count, which GridView's own `floor(W / cellWidth)` would
-            // otherwise undercount by one at every exact boundary.
+            // THE STANDARD `cards/AlbumCard.qml`, at its app-wide size, with
+            // its own hover overlay and its own ⋯ / right-click menu.
+            //
+            // This REPLACES the port's `MyQbzDetailCard.qml` (deleted), which
+            // was a faithful 1:1 of the reference's local `DetailCard`
+            // (MixtapeDetailView.slint:495-594): a 150px-ish hand-rolled tile
+            // with no overlay buttons, no quality badge, no source badge and no
+            // menu. The owner ruled against that card (2026-07-31): "quiero el
+            // de siempre con su overlay". So this arm is a DELIBERATE, OWNER-
+            // ORDERED divergence from the .slint, and the .slint's `auto-fill
+            // minmax(150,1fr)` / gap-20 arithmetic went with it.
+            //
+            // Geometry is now the one every other album grid in the app uses
+            // (`views/AlbumCollection.qml:44-46`): a fixed 200x246 card in a
+            // 200x266 cell with a 24px gap. AlbumCard hardcodes its 200px
+            // width, so this grid cannot be fluid — matching the app is both
+            // the correct and the only option.
             Item {
                 id: gridHost
                 anchors.fill: parent
                 visible: root.viewMode === "grid"
                 clip: true
 
-                readonly property int columns: Math.max(1,
-                    Math.floor((width - 24 + 20) / (150 + 20)))
-                // Clamped: the first frame has width 0, and a negative
-                // cellWidth is a silent GridView layout trap.
-                readonly property real cardW: Math.max(1,
-                    (width - 24 - 20 * (columns - 1)) / columns)
-                readonly property real cardH: cardW + 58
+                readonly property int cardWidth: 200
+                readonly property int cardHeight: 266
+                readonly property int cardGap: 24
 
                 GridView {
                     id: itemGrid
                     x: 12
                     y: 0
-                    width: Math.max(0, gridHost.width + 20 - 24)
+                    // The app grid takes `floor((avail + gap) / (card + gap))`
+                    // columns over `avail = width - 24` (the 12px content inset
+                    // on both sides); GridView takes `floor(width / cellWidth)`.
+                    // Since the gap and the two insets are both 24, handing it
+                    // the UNINSET width makes the two agree exactly — the same
+                    // correction the old 150/20 arm made with `+ 20 - 24`.
+                    width: Math.max(0, gridHost.width)
                     height: gridHost.height
-                    cellWidth: gridHost.cardW + 20
-                    cellHeight: gridHost.cardH + 20
+                    cellWidth: gridHost.cardWidth + gridHost.cardGap
+                    cellHeight: gridHost.cardHeight + gridHost.cardGap
                     cacheBuffer: 500
                     reuseItems: true
                     boundsBehavior: Flickable.StopAtBounds
@@ -865,15 +920,219 @@ Rectangle {
                     bottomMargin: 100
                     model: root.rows
 
-                    delegate: MyQbzDetailCard {
+                    delegate: Item {
+                        id: gcell
                         required property var modelData
                         required property int index
+                        width: gridHost.cardWidth
+                        height: gridHost.cardHeight
+
                         // Live row, not the delegate model's snapshot — see the
-                        // list delegate's `live` note.
-                        item: root.patchRev >= 0 ? (root.rows[index] || modelData) : modelData
-                        cardW: gridHost.cardW
-                        selectMode: root.selectMode
-                        rev: root.patchRev
+                        // list delegate's `live` note. AlbumCard has no `rev`
+                        // property, so EVERY leaf below carries the
+                        // `root.patchRev >= 0` guard itself: that is what makes
+                        // `patchRev` a captured dependency of the binding, and
+                        // an in-place `Object.assign` patch fires no notifier of
+                        // its own. Always true; never "simplify" it away.
+                        readonly property var live: root.patchRev >= 0
+                            ? (root.rows[index] || modelData) : modelData
+                        readonly property int cPosition: root.patchRev >= 0 ? (gcell.live.position || 0) : 0
+                        readonly property string cItemId: root.patchRev >= 0 ? (gcell.live.sourceItemId || "") : ""
+                        readonly property string cItemType: root.patchRev >= 0 ? (gcell.live.itemType || "") : ""
+                        readonly property string cSource: root.patchRev >= 0 ? (gcell.live.source || "") : ""
+                        readonly property string cTitle: root.patchRev >= 0 ? (gcell.live.title || "") : ""
+                        readonly property string cSubtitle: root.patchRev >= 0 ? (gcell.live.subtitle || "") : ""
+                        readonly property string cYear: root.patchRev >= 0 ? (gcell.live.yearText || "") : ""
+                        readonly property string cQuality: root.patchRev >= 0 ? (gcell.live.qualityTier || "") : ""
+                        /// The GRID rung of the cover, NOT the list row's.
+                        /// `artPath` is the 50px thumbnail every list row draws
+                        /// at 40px; this cell's artwork well is 200px, so
+                        /// reading `artPath` here upscaled it 4x — the owner's
+                        /// "la calidad de la portada es menor que la del
+                        /// albumcard". Rust publishes both rungs per row
+                        /// (`myqbz_detail_qt::DetailRow::art_url_large`) so the
+                        /// list/grid toggle stays instant: re-deriving one rung
+                        /// per view mode would republish the document, and a
+                        /// republish resets the view's scroll offset.
+                        readonly property string cArt: root.patchRev >= 0 ? (gcell.live.artPathLarge || "") : ""
+                        /// The REMOTE url of that same rung — AlbumCard's
+                        /// `artworkUrl`, i.e. the pin payload and the block
+                        /// snapshot, never the `file://` cache path.
+                        readonly property string cArtUrl: root.patchRev >= 0 ? (gcell.live.artUrlLarge || "") : ""
+                        readonly property string cSourceKind: root.patchRev >= 0 ? (gcell.live.sourceKind || "") : ""
+                        readonly property bool cSelected: root.patchRev >= 0 && gcell.live.selected === true
+                        readonly property bool cFavorite: root.patchRev >= 0 && gcell.live.isFavorite === true
+                        readonly property bool cPinned: root.patchRev >= 0 && gcell.live.isPinned === true
+                        /// Is THIS cell's `sourceItemId` a Qobuz catalog album
+                        /// id? The per-item gate for the card's catalog-only
+                        /// affordances (heart, pin, "Block this album"), and the
+                        /// QML twin of `myqbz_detail_qt::is_catalog_album` — the
+                        /// two must agree, because Rust seeds `isFavorite` /
+                        /// `isPinned` behind the same predicate.
+                        ///
+                        /// The STORED source (`source`, "qobuz" | "local"), not
+                        /// the resolved `sourceKind`: the stored word is what
+                        /// makes the id a catalog id. And the TYPE, because a
+                        /// Qobuz track item carries a track id and a Qobuz
+                        /// playlist item a playlist id — hearting either as
+                        /// "album" would hit a different entity.
+                        readonly property bool cCatalogAlbum: gcell.cSource === "qobuz"
+                            && gcell.cItemType === "album" && gcell.cItemId !== ""
+                        /// track → music, playlist → list-music, else disc —
+                        /// the reference card's empty-well glyph (.slint
+                        /// :522-526), carried over on AlbumCard's opt-in
+                        /// `placeholderIcon`.
+                        readonly property string cGlyph: gcell.cItemType === "track" ? "music"
+                            : (gcell.cItemType === "playlist" ? "list-music" : "disc")
+
+                        /// RE-ESTABLISH the two self-mutating bindings whenever
+                        /// this delegate changes row.
+                        ///
+                        /// `AlbumCard` writes its OWN `isFavorite` / `isPinned`
+                        /// — optimistically in `toggleFavorite()` /
+                        /// `togglePin()`, and again from its
+                        /// `libraryFavoriteChanged` / `pinChanged` Connections —
+                        /// and a QML property assignment DESTROYS the binding
+                        /// that fed it. On a non-recycling host that is
+                        /// harmless: the delegate dies with its row. This grid
+                        /// sets `reuseItems: true`, so the very same AlbumCard
+                        /// instance is handed the NEXT row, with a dead
+                        /// `isFavorite` binding — it would keep the previous
+                        /// album's filled heart, and clicking it would toggle
+                        /// the new album the wrong way (glyph says "remove", the
+                        /// call adds). Same for the pin badge.
+                        ///
+                        /// This is the idiom the port already uses for exactly
+                        /// this hazard on the cards that own an `item`
+                        /// (`cards/TrackCard.qml:49`, `cards/PlaylistCard.qml:117`,
+                        /// `rows/TrackRow.qml:233`, `views/library/FeedListRow.qml:39`);
+                        /// AlbumCard takes flat properties instead of an `item`,
+                        /// so the restore belongs to the recycling HOST. Keyed
+                        /// on `cItemId`, which is derived from `index` and
+                        /// therefore changes on every reuse.
+                        onCItemIdChanged: gcell.rebindCardState()
+                        function rebindCardState() {
+                            // The change signal can fire while the delegate is
+                            // still being built, before the child below exists;
+                            // at that point nothing has broken a binding yet, so
+                            // skipping is the correct answer, not a workaround.
+                            if (!gcard)
+                                return
+                            gcard.isFavorite = Qt.binding(function () { return gcell.cFavorite })
+                            gcard.isPinned = Qt.binding(function () { return gcell.cPinned })
+                        }
+
+                        AlbumCard {
+                            id: gcard
+                            // localMode = ROUTING: open / play / enqueue go to
+                            // the host signals below, because a My QBZ item can
+                            // be a Plex or local album, a track or a playlist
+                            // and only `QbzMyQbz` knows how to open and play
+                            // one. TRUE for every cell, no exceptions.
+                            localMode: true
+                            // …but the catalog-only affordances are decided PER
+                            // ITEM, which is the whole point of the split (see
+                            // AlbumCard's `catalogAffordances`). A My QBZ
+                            // container is multi-source per ROW: a Qobuz album
+                            // cell's id IS a catalog album id and its heart /
+                            // pin / block are perfectly valid; a track, a
+                            // playlist, a local or a Plex cell's is not, and
+                            // there the three are ABSENT rather than dead.
+                            catalogAffordances: gcell.cCatalogAlbum
+                            // Seeded by Rust behind the SAME predicate, then
+                            // settled by the card itself on
+                            // `QbzLibrary.libraryFavoriteChanged` / `pinChanged`
+                            // — so a heart flipped here, on the album page or
+                            // on a Home rail agrees everywhere, and no toggle
+                            // republishes this document.
+                            isFavorite: gcell.cFavorite
+                            isPinned: gcell.cPinned
+                            albumId: gcell.cItemId
+                            title: gcell.cTitle
+                            artist: gcell.cSubtitle
+                            // No artist link: the reference grid card's subtitle
+                            // is a plain Text (.slint :578-583), and a My QBZ
+                            // subtitle can be a Plex/local artist whose id would
+                            // route QbzArtist.openArtist into a Qobuz lookup.
+                            artistId: ""
+                            genre: ""
+                            year: gcell.cYear
+                            qualityTier: gcell.cQuality
+                            artSource: gcell.cArt
+                            // The pin payload / block snapshot url (see
+                            // `cArtUrl`). Without it a pinned My QBZ album
+                            // lands in the Pinned rail as a placeholder.
+                            artworkUrl: gcell.cArtUrl
+                            // Badge ON: a My QBZ container is multi-source BY
+                            // DEFINITION and the sibling LIST arm gives every
+                            // row a Source column (col 4, the same
+                            // `sourceKind` through the same `SourceIcon`), so
+                            // the grid arm hiding it would be the odd one out.
+                            // All four kinds `sourceKind` can carry —
+                            // qobuz / plex / local / offline — draw a mark;
+                            // only "" (nothing resolved yet) draws none, which
+                            // is AlbumCard's `source !== ""` gate.
+                            source: gcell.cSourceKind
+                            showSourceBadge: true
+                            placeholderIcon: gcell.cGlyph
+                            // The first menu entry's NOUN. `open_item` sends
+                            // "album" AND "track" to the album page and only
+                            // "playlist" elsewhere (myqbz_detail_qt.rs:1893-1901,
+                            // 1:1 with qbz/src/main.rs:6275-6288), so "Open
+                            // album" is accurate on an album and on a track and
+                            // wrong on exactly one arm. A label, not an action:
+                            // the routing below is unchanged.
+                            openLabel: gcell.cItemType === "playlist"
+                                ? root.trs("Open playlist") : ""
+                            // The container action the card cannot know about.
+                            // Same msgid, same icon and same destructive styling
+                            // as the list row's last entry
+                            // (MyQbzDetailRow.qml:457-458 == .slint :481-486),
+                            // after the same separator. It applies to a
+                            // Collection, a Mixtape and an artist Collection
+                            // alike: `remove_item` removes by POSITION from
+                            // whatever container is open
+                            // (myqbz_edit_qt.rs:360-362), so there is no arm
+                            // here that could render and no-op.
+                            extraMenuEntries: [
+                                { "sep": true },
+                                { "label": QbzSession.tr("Remove from collection", QbzSession.trRev),
+                                  "icon": "trash-2", "action": "remove", "danger": true },
+                            ]
+                            onExtraMenuAction: function (a) {
+                                if (a === "remove") QbzMyQbz.removeItem(gcell.cPosition)
+                            }
+                            // SELECT MODE is the card's, not this host's
+                            // (discover/AlbumCard.slint:83 declares
+                            // `select-mode` and :179-239 hides the pin and the
+                            // whole hover action row behind it). Overlaying a
+                            // tick from here — the shape
+                            // `views/local/LocalAlbumCollection.qml` used until
+                            // 2026-08-01 — can only add the indicator: it leaves
+                            // the hover
+                            // PLAY button live under the selection, so hovering
+                            // a card you meant to tick and hitting play starts
+                            // the album instead. The owner's own instruction
+                            // for this round was to extend AlbumCard with the
+                            // selection checkbox rather than bolt one on.
+                            selectMode: root.selectMode
+                            selected: gcell.cSelected
+                            onSelectToggled: QbzMyQbz.detailToggleItemSelect(gcell.cPosition)
+                            // Card body click, non-select mode only (the card
+                            // routes a select-mode click to `selectToggled`).
+                            onOpenRequested: QbzMyQbz.openItem(gcell.cSource,
+                                gcell.cItemType, gcell.cItemId)
+                            onPlayRequested: QbzMyQbz.playItem(gcell.cItemId)
+                            // AlbumCard's `next|later|queue` -> the wire's
+                            // `play-next|play-later|add-to-queue`
+                            // (myqbz_play_qt.rs:84-91), the same mapping the
+                            // row menu hands `itemAction`.
+                            onEnqueueRequested: function (mode) {
+                                QbzMyQbz.itemAction(gcell.cItemId,
+                                    mode === "next" ? "play-next"
+                                        : mode === "later" ? "play-later" : "add-to-queue")
+                            }
+                        }
                     }
                 }
             }

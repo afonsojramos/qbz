@@ -218,19 +218,16 @@ Rectangle {
             spacing: 0
 
             // ---- History navigation ----
-            Row {
-                spacing: 6
-                QbzNavButton {
-                    name: "chevron-left"
-                    btnEnabled: QbzShell.canBack
-                    onClicked: QbzShell.navigateBack()
-                }
-                QbzNavButton {
-                    name: "chevron-right"
-                    btnEnabled: QbzShell.canForward
-                    onClicked: QbzShell.navigateForward()
-                }
-            }
+            // NOTHING here, by design. LocalAlbumView.slint:207 does mount
+            // `NavButtons { }`, but NavButtons.slint:5-8 is a ZERO-SIZE empty
+            // placeholder: "the back / forward / collapse buttons moved to the
+            // app header (HeaderBar, floating right) … the real buttons live
+            // once, in the header". Drawing real chevrons here was a Tauri-era
+            // leftover — the page-level nav from before the app had global
+            // history — and views/AlbumView.qml already gets this right.
+            // The 22px spacer stays: it is the .slint's own
+            // `Rectangle { height: 22px; }` (:211), which follows a zero-high
+            // NavButtons, so the header lands exactly where it does today.
             Item { width: 1; height: 22 }
 
             // ---- Album header ----

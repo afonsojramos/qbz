@@ -419,7 +419,13 @@ fn map_artist(artist: Artist) -> FeedItem {
 /// > `images`) — the collage source. Same picker as `sidebar_qt::load` and
 /// `qbz::search::playlist_cover_urls`; these lists are the covers of the
 /// playlist's MEMBER ALBUMS, never the playlist's own artwork.
-fn playlist_cover_urls(playlist: &Playlist) -> Vec<String> {
+///
+/// `pub(crate)` since the follow seam landed: `playlist_qt::FollowRowMeta`
+/// synthesizes a Library row from the API model and must pick its covers with
+/// THIS function, not a second copy of the precedence — two copies of it is
+/// how the cards ended up showing a member-album sleeve where the playlist
+/// graphic belongs.
+pub(crate) fn playlist_cover_urls(playlist: &Playlist) -> Vec<String> {
     let source = [&playlist.images300, &playlist.images150, &playlist.images]
         .into_iter()
         .flatten()
@@ -445,12 +451,38 @@ fn playlist_cover_urls(playlist: &Playlist) -> Vec<String> {
 /// fall back to the member-cover collage, exactly the Tauri split between
 /// `QobuzPlaylistCard` (`image.rectangle`, contain-fitted) and
 /// `FavoritePlaylistCard` (`PlaylistCollage`).
-fn playlist_own_image(playlist: &Playlist) -> String {
+///
+/// `pub(crate)` for the same reason as [`playlist_cover_urls`].
+pub(crate) fn playlist_own_image(playlist: &Playlist) -> String {
     [&playlist.image_rectangle, &playlist.image_rectangle_mini]
         .into_iter()
         .flatten()
         .find_map(|list| list.iter().find(|u| !u.is_empty()).cloned())
         .unwrap_or_default()
+}
+
+/// The playlist card's subtitle line: the owner, then the track count.
+///
+/// Factored out of [`map_playlist_row`] so the follow / copy seams
+/// ([`insert_playlist_row`]) can synthesize a row that reads exactly like the
+/// one the next full load will produce — the alternative was a second copy of
+/// this format string drifting from this one.
+pub(crate) fn playlist_subtitle(owner: &str, tracks_count: u32) -> String {
+    let mut subtitle = owner.to_string();
+    if tracks_count > 0 {
+        let tracks_label = qbz_i18n::tf(
+            "{} track",
+            "{} tracks",
+            tracks_count as i64,
+            &[&tracks_count.to_string()],
+        );
+        subtitle = if subtitle.is_empty() {
+            tracks_label
+        } else {
+            format!("{}   •   {}", subtitle, tracks_label)
+        };
+    }
+    subtitle
 }
 
 fn map_playlist_row(playlist: &Playlist, is_following: bool) -> FeedItem {
@@ -459,16 +491,7 @@ fn map_playlist_row(playlist: &Playlist, is_following: bool) -> FeedItem {
     // on every playlist card; the mosaic is fed separately via `covers`.
     let cover_url = playlist_own_image(playlist);
     let covers = playlist_cover_urls(playlist);
-    let mut subtitle = playlist.owner.name.clone();
-    if playlist.tracks_count > 0 {
-        let count = playlist.tracks_count;
-        let tracks_label = qbz_i18n::tf("{} track", "{} tracks", count as i64, &[&count.to_string()]);
-        subtitle = if subtitle.is_empty() {
-            tracks_label
-        } else {
-            format!("{}   •   {}", subtitle, tracks_label)
-        };
-    }
+    let subtitle = playlist_subtitle(&playlist.owner.name, playlist.tracks_count);
     let uid = UserDataPaths::load_last_user_id();
     let owned = uid.map(|uid| uid == playlist.owner.id).unwrap_or(false);
     FeedItem {
@@ -1068,6 +1091,136 @@ pub(crate) fn set_feed_favorite(kind: &str, id: &str, value: bool) {
             item.is_favorite = value;
         }
     });
+}
+
+/// An UNFOLLOW just landed: drop the playlist's rows from the live Library
+/// document. Returns whether anything was removed (so the caller only
+/// republishes when it must).
+///
+/// Why the feed is mutated instead of left to the next reload: unfollowing is
+/// the user asking for the playlist to leave their library, and `load_library`
+/// only re-runs when the view is (re)entered — so the row sat there, still
+/// listed, until a manual refresh. That is the owner's report.
+///
+/// ALL matching rows, not the first: a foreign playlist that is ALSO hearted
+/// locally is pushed TWICE by `load_library` (once from the not-owned pass,
+/// :553-560, once from the hearted-ids pass, :576-585 — both with
+/// `is_following = true`, so `group` cannot tell them apart), and leaving one
+/// of them behind would leave the row on screen.
+///
+/// HEARTED IS NOT UNFOLLOWED. The local heart is a qbz-only flag in library.db
+/// and it survives the unsubscribe, so the state the NEXT full load produces
+/// for a hearted-and-unfollowed playlist is exactly ONE row: `get_user_playlists`
+/// no longer lists it, the hearted-ids pass falls through to `get_playlist(fid)`
+/// and maps it with `is_following = false` — a `favorites` row (`load_library`
+/// :580-584). The reference surfaces the same "favorited but neither owned nor
+/// subscribed" playlist deliberately (`qbz/src/playlist_manager.rs:212-215`).
+/// So this collapses to that one row instead of removing it: dropping it would
+/// make the playlist vanish now and reappear at the next load, which is the
+/// owner's original complaint wearing the other shoe.
+///
+/// `counts.all` follows the rows that actually left. `counts.playlists` is the
+/// FAVORITES bucket (`load_library`: `playlists_total = pl_favorites.len()` =
+/// owned ∪ locally hearted) — an unfollow only ever targets a FOREIGN playlist,
+/// so it was in that bucket iff it is hearted, and in that case the row STAYS.
+/// Either way the count is unchanged. Clamped: the badge must never go negative.
+pub(crate) fn remove_playlist_rows(id: &str) -> bool {
+    let hearted = crate::fav_cache_qt::is_favorite("playlist", id);
+    with_library_mut(|d| {
+        // Snapshot one row before the retain — it is the only place the
+        // playlist's title / covers / subtitle still exist without a refetch.
+        let kept = if hearted {
+            d.feed
+                .iter()
+                .find(|i| i.kind == "playlist" && i.id == id)
+                .cloned()
+        } else {
+            None
+        };
+        let before = d.feed.len();
+        d.feed.retain(|i| !(i.kind == "playlist" && i.id == id));
+        let removed = before - d.feed.len();
+        if removed == 0 {
+            return false;
+        }
+        d.counts.all = (d.counts.all - removed as i64).max(0);
+        if let Some(mut row) = kept {
+            // Re-filed exactly as the next `load_library` will map it.
+            row.group = "favorites".into();
+            row.playlist_following = false;
+            row.playlist_owned = false;
+            d.feed.insert(0, row);
+            d.counts.all += 1;
+        }
+        true
+    })
+    .unwrap_or(false)
+}
+
+/// A playlist just JOINED the user's library (a follow, or a copy that created
+/// an owned one): put it into the live Library document so it appears without a
+/// manual refresh. Returns whether the document changed.
+///
+/// The mirror of [`remove_playlist_rows`], and it takes the pieces rather than
+/// a `&Playlist` because its callers hold a mapped document, not the raw API
+/// model — re-fetching the playlist just to re-map it would pull its whole
+/// track list back over the wire for one card. The fields it does fill are
+/// produced by the SAME helpers `map_playlist_row` uses ([`playlist_subtitle`],
+/// `fav_cache_qt`, `sidebar_qt::is_pinned`), so the synthesized row and the one
+/// the next full load produces agree.
+///
+/// `following` picks the bucket exactly as `map_playlist_row` does: a followed
+/// playlist is a `following` row, an owned one a `favorites` row — which is the
+/// sub-tab the Library's Playlists tab opens on.
+///
+/// `counts.playlists` follows only the owned arm, because that is the count
+/// `load_library` publishes (`pl_favorites.len()`).
+///
+/// No-op when the Library was never loaded this session (`LIBRARY` is `None`) —
+/// there is no document to patch and the eventual load fetches the truth.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn insert_playlist_row(
+    id: &str,
+    title: &str,
+    owner: &str,
+    tracks_count: u32,
+    cover_url: &str,
+    covers: Vec<String>,
+    following: bool,
+) -> bool {
+    with_library_mut(|d| {
+        if d.feed.iter().any(|i| i.kind == "playlist" && i.id == id) {
+            return false;
+        }
+        let item = FeedItem {
+            is_pinned: crate::sidebar_qt::is_pinned("playlist", id),
+            kind: "playlist".into(),
+            group: if following { "following" } else { "favorites" }.into(),
+            source: "qobuz".into(),
+            id: id.to_string(),
+            title: title.to_string(),
+            subtitle: playlist_subtitle(owner, tracks_count),
+            playlist_own_image: !cover_url.is_empty(),
+            image_url: cover_url.to_string(),
+            covers,
+            is_favorite: crate::fav_cache_qt::is_favorite("playlist", id),
+            playlist_owned: !following,
+            playlist_following: following,
+            // 0.0 = most-recently added, which is what this just made it. The
+            // feed is kept sorted by this proxy, so the row lands at the head
+            // of the All tab exactly like the newest favourite does.
+            added_rank: 0.0,
+            ..Default::default()
+        }
+        .keyed();
+        d.feed.insert(0, item);
+        d.counts.all += 1;
+        if !following {
+            d.counts.playlists += 1;
+        }
+        true
+    })
+    .unwrap_or(false)
 }
 
 /// A pin/unpin just landed: patch the cached feed rows so a later

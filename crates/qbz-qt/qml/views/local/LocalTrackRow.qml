@@ -148,16 +148,25 @@ Item {
         }
     }
 
-    // Source glyph (local / offline cache / Plex).
-    QbzIcon {
-        visible: root.item.source === "local" || root.item.source === "plex"
-            || root.item.source === "offline"
-        name: root.item.source === "offline" ? "cloud-download" : "hard-drive"
-        width: 14
-        height: 14
-        x: root.width - 20
+    // Source glyph (local / offline cache / Plex) — TrackRow.slint:709-727.
+    // Through controls/SourceIcon.qml, never QbzIcon: the Plex and Qobuz marks
+    // are MULTI-COLOUR and a tint flattens them to a silhouette. This row used
+    // to draw an accent-tinted `hard-drive` for Plex (a blue hard drive) and
+    // `cloud-download` for an offline copy, where the .slint draws the two
+    // brand marks.
+    SourceIcon {
+        visible: (root.item.source || "") !== ""
+        kind: root.item.source || ""
+        // .slint:722 — local 15, the marks 16. `localTint` muted is the rule
+        // SourceGlyph.slint:6-8 calls load-bearing (never accent).
+        glyphSize: 15
+        plexSize: 16
+        qobuzSize: 16
+        localTint: "muted"
+        // The glyph's CENTRE stays where the 14px icon's was (x = width-20,
+        // centre = width-13) now that the marks are 15-16px wide.
+        x: Math.round(root.width - 13 - width / 2)
         anchors.verticalCenter: parent.verticalCenter
-        tintName: root.item.source === "plex" ? "accent" : "muted"
     }
 
     // Right-click anywhere on the row opens the SAME menu at the pointer

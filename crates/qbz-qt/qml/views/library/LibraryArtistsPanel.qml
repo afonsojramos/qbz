@@ -39,6 +39,25 @@ Item {
     // shape), instead of a Repeater per section.
     property var entries: []
     property var alphaJumps: []
+    // The SAME array, indexed the same way, in the shape LibraryView's
+    // `reportWindow` reads (`kind` / `artKey` / `imageUrl`): rail rows are the
+    // feed row objects themselves, letter headers are the group-header
+    // sentinel that report already knows to skip. It exists because the rail's
+    // order is NOT `visibleRows` (it re-sorts A-Z and interleaves headers), so
+    // index N here is not `visibleRows[N]` and the band has to travel with its
+    // own array — see LibraryView.queueWindowReport's third argument.
+    property var railRows: []
+    readonly property var headerRow: ({ "kind": "group-header", "artKey": "", "imageUrl": "" })
+    /// Held while `entries` and `railRows` are being swapped. Assigning
+    /// `entries` re-evaluates the ListView's `model` binding SYNCHRONOUSLY,
+    /// which emits `onModelChanged` -> `report()` one statement BEFORE
+    /// `railRows` is updated — an index band read off the new entries against
+    /// the old flat array. The trailing `report()` supersedes it in the common
+    /// case (the debounce is a `restart()`), but NOT when the rebuild ends
+    /// empty: `report()` bails on `railRows.length === 0`, leaving the stale
+    /// band queued and pinning covers for artists the rail no longer shows
+    /// (the "search with no matches" path). One flag closes both.
+    property bool _rebuilding: false
     function rebuild() {
         var rows = root.view ? root.view.visibleRows : []
         var artists = []
@@ -52,6 +71,7 @@ Item {
             return av < bv ? -1 : av > bv ? 1 : 0
         })
         var out = []
+        var flat = []
         var jumps = []
         var last = null
         for (i = 0; i < artists.length; i++) {
@@ -59,17 +79,67 @@ Item {
             if (key !== last) {
                 jumps.push({ "letter": key, "index": out.length })
                 out.push({ "t": 0, "label": key })
+                flat.push(root.headerRow)
                 last = key
             }
             out.push({ "t": 1, "item": artists[i] })
+            flat.push(artists[i])
         }
+        root._rebuilding = true
         root.entries = out
+        root.railRows = flat
         root.alphaJumps = jumps
+        root._rebuilding = false
+        root.report()
     }
-    Component.onCompleted: root.rebuild()
+    Component.onCompleted: { root.rebuild(); root.reportSoon() }
     Connections {
         target: root.view
         function onVisibleRowsChanged() { root.rebuild() }
+    }
+
+    // ------------------------ windowed avatars ---------------------------
+    // The rail rides the SAME id-keyed artwork window every other Library
+    // body uses — LibraryView.reportWindow -> QbzLibrary.libraryArtworkWindow
+    // -> main.rs library_artwork_window -> libraryArtworkReady -> `artMap`,
+    // which is what the row avatars bind to below. Until this landed the
+    // panel reported nothing at all, so `artMap` only ever held whatever
+    // another tab had left in it and practically every rail avatar drew the
+    // placeholder glyph.
+    //
+    // Only the mounted band is asked for (rule 6): the rail is one row per
+    // followed artist and can run to hundreds.
+    function report() {
+        if (root._rebuilding) return
+        if (!root.view || root.railRows.length === 0) return
+        // Same gate the sibling rail uses (views/local/LocalArtistsTab.qml:309)
+        // and the host's own bodies now use: a hidden surface must not report,
+        // because `artMap` is ONE map and a report PRUNES outside its band.
+        // `contentY`/`height` keep firing while the whole Library view is off
+        // screen (another nav destination), and a report made then evicts the
+        // covers of whatever IS on screen. The `onVisibleChanged` handler on
+        // `railList` re-reports when the rail comes back.
+        if (!railList.visible) return
+        var first = railList.indexAt(4, railList.contentY + 1)
+        var last = railList.indexAt(4, railList.contentY + Math.max(1, railList.height) - 1)
+        if (first < 0) first = 0
+        if (last < 0) last = Math.min(root.railRows.length - 1, first + 12)
+        root.view.queueWindowReport(Math.max(0, first - 4),
+                                    Math.min(root.railRows.length - 1, last + 4),
+                                    root.railRows)
+    }
+    /// Report now, then again once the ListView has laid out — `indexAt`
+    /// answers -1 before that, which is the state of a rail that has just been
+    /// built or just been mounted (views/local/LocalArtistsTab.qml:330).
+    Timer {
+        id: reportSettle
+        interval: 50
+        repeat: false
+        onTriggered: root.report()
+    }
+    function reportSoon() {
+        root.report()
+        reportSettle.restart()
     }
     // Leaving the mode drops the selection, so re-entering does not paint a
     // stale artist's discography under a rail with nothing highlighted.
@@ -139,6 +209,16 @@ Item {
             cacheBuffer: 56 * 8
             boundsBehavior: Flickable.StopAtBounds
             model: root.entries
+
+            // The trigger set views/local/LocalArtistsTab.qml:161-165 already
+            // uses for the same shape of rail: scroll, model swap, viewport
+            // resize, and a settle pass when the pane becomes visible (a
+            // report made against a ListView that has not laid out gets -1
+            // from `indexAt`, and nothing re-fires once it has).
+            onContentYChanged: root.report()
+            onModelChanged: root.report()
+            onHeightChanged: root.report()
+            onVisibleChanged: if (visible) root.reportSoon()
 
             delegate: Loader {
                 required property var modelData

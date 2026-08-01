@@ -337,6 +337,11 @@ pub(crate) fn confirm_delete() {
             Ok(()) => {
                 close();
                 crate::myqbz_prefs_qt::remove_view_prefs(&id);
+                // Same lifetime as the view prefs: the collection is gone, so
+                // its accordion state goes with it. (Ids are v4 UUIDs, so a
+                // re-created collection could not inherit it either way — this
+                // keeps the sidecar from accumulating dead entries.)
+                crate::myqbz_prefs_qt::remove_open_rows(&id);
                 crate::nav_qt::back();
                 crate::myqbz_qt::reload_grids();
             }

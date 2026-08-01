@@ -620,15 +620,20 @@ pub fn folder_name(folder_id: &str) -> Option<String> {
 /// The playlist importer creates playlists through the API, and the
 /// user-playlists endpoint lags the write by seconds: without this the newly
 /// imported playlist is simply absent from the tree until the bounded-retry
-/// reload catches up, and the user's only evidence it exists is a toast. The
-/// row carries no covers (the collage fills on the next real load) and is a
-/// no-op when the id is already cached, so the retry loop can call it again
+/// reload catches up, and the user's only evidence it exists is a toast. It is
+/// a no-op when the id is already cached, so the retry loop can call it again
 /// after a failed reload without duplicating.
+///
+/// `covers` is the 2x2 micro-collage. The importer has none to give and passes
+/// `&[]` (the collage fills on the next real load, which is what the reference
+/// does unconditionally); the FOLLOW seam does have them — the open playlist
+/// document already resolved the same urls — and passing them keeps the row
+/// from appearing as a blank tile for the rest of the session.
 ///
 /// Cache-only, like every accessor in this block: the caller publishes
 /// (`crate::publish_sidebar()`), which keeps this correct offline and free of a
 /// round trip.
-pub fn insert_qobuz_entry(id: u64, name: &str, tracks_count: u32) {
+pub fn insert_qobuz_entry(id: u64, name: &str, tracks_count: u32, covers: &[String]) {
     let mut guard = CACHE.lock().unwrap();
     // `None` = the sidebar has never loaded this session. The reference's cache
     // is not an Option and always has somewhere to insert; synthesising an
@@ -644,10 +649,35 @@ pub fn insert_qobuz_entry(id: u64, name: &str, tracks_count: u32) {
             id,
             name: name.to_string(),
             tracks_count,
-            cover_urls: Vec::new(),
+            cover_urls: covers.iter().take(4).cloned().collect(),
             position: 0,
         },
     );
+}
+
+/// Drop a Qobuz playlist row from the sidebar cache. Returns whether anything
+/// was actually removed, so the caller can skip a pointless republish.
+///
+/// The twin of [`insert_qobuz_entry`], and it exists for the same reason the
+/// insert does — Qobuz's `playlist/getUserPlaylists` lags a write. UNFOLLOWING
+/// a playlist removes it from that list server-side, but a `reload_sidebar()`
+/// fired immediately after the unsubscribe re-reads the STALE list and puts the
+/// row straight back: the owner's report is literally "I unfollow it and it is
+/// still in the sidebar". Patching the cache and republishing from it is the
+/// D10 refresh — instant, correct offline, no round trip — and the next natural
+/// load reconciles.
+///
+/// Folder membership, hidden flag and custom position are deliberately left
+/// alone: they are per-playlist SETTINGS in library.db, and a re-follow should
+/// find the playlist where the user filed it.
+pub fn remove_qobuz_entry(id: u64) -> bool {
+    let mut guard = CACHE.lock().unwrap();
+    let Some(data) = guard.as_mut() else {
+        return false;
+    };
+    let before = data.playlists.len();
+    data.playlists.retain(|p| p.id != id);
+    before != data.playlists.len()
 }
 
 /// Patch a playlist's folder membership in the sidebar cache — `""` = root.

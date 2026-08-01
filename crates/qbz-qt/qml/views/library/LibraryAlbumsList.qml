@@ -96,7 +96,17 @@ Item {
                 // Windowed artwork, same contract as the grid: never read
                 // `list.model` back off the view (views/LibraryView.qml
                 // documents the SIGSEGV), always the array from the host.
+                //
+                // Gated on visibility like the host's own bodies
+                // (LibraryView.gridWindowReport / listWindowReport): `artMap`
+                // is ONE map and a report PRUNES outside its band, while this
+                // body keeps firing hidden — `rows` flips to [] on every tab
+                // switch (onModelChanged) and `anchors.fill` turns any window
+                // resize into onHeightChanged. Ungated it evicted whichever
+                // body is actually on screen, the Artists sidepanel rail above
+                // all, whose band is NOT a `visibleRows` band.
                 function report() {
+                    if (!list.visible) return
                     var stride = root.rowH + root.rowGap
                     var first = Math.max(0, Math.floor(list.contentY / stride) - 4)
                     var last = Math.ceil((list.contentY + list.height) / stride) + 4
@@ -106,6 +116,7 @@ Item {
                 onContentYChanged: list.report()
                 onModelChanged: list.report()
                 onHeightChanged: list.report()
+                onVisibleChanged: list.report()
                 Component.onCompleted: list.report()
 
                 delegate: AlbumListRow {

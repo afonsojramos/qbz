@@ -865,7 +865,9 @@ fn reconcile_sidebar_after_import(
     // Optimistic insert NOW (single-playlist imports only — multi-part imports
     // get their per-part names from the API once it catches up).
     if single {
-        crate::sidebar_qt::insert_qobuz_entry(first, &name, tracks_count);
+        // No covers to give: the import created the playlist seconds ago and
+        // nothing has resolved its collage yet (the next real load fills it).
+        crate::sidebar_qt::insert_qobuz_entry(first, &name, tracks_count, &[]);
         crate::publish_sidebar();
     }
     let runtime = runtime.clone();
@@ -888,7 +890,7 @@ fn reconcile_sidebar_after_import(
             // wiped out of, and the row would vanish for up to 15 s. Idempotent
             // by id, and evaluated AFTER `present` so it cannot fake it.
             if !present && single {
-                crate::sidebar_qt::insert_qobuz_entry(first, &name, tracks_count);
+                crate::sidebar_qt::insert_qobuz_entry(first, &name, tracks_count, &[]);
             }
             if present || attempt >= MAX_ATTEMPTS {
                 if !present {
