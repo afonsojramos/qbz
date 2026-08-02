@@ -24,6 +24,19 @@ urlencoding = "2"
 open = "5"
 dirs = "5"
 
+# Share links (src/share_qt.rs, the port of crates/qbz/src/share.rs:32-70).
+# Rust owns the clipboard on this side because the toast does: cxx-qt-lib 0.7
+# ships no QClipboard binding, and QML cannot publish QbzShell.toastJson, so
+# splitting the copy and its confirmation across the boundary would buy
+# nothing. Same pin as the reference (crates/qbz/Cargo.toml:68), comment
+# included:
+#
+# wayland-data-control: Wayland-native clipboard via the data-control
+# protocols (GNOME/KDE/sway/niri/Hyprland), falling back to X11 when Wayland
+# is absent (#514 — without it arboard is X11-only and every copy fails on
+# Wayland-only sessions).
+arboard = { version = "3", features = ["wayland-data-control"] }
+
 qbz-core = { path = "../qbz-core" }
 qbz-app = { path = "../qbz-app" }
 qbz-audio = { path = "../qbz-audio" }

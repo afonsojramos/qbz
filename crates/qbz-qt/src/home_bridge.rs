@@ -164,6 +164,12 @@ pub mod qbz_home {
         fn label_top_action(self: Pin<&mut QbzHome>, mode: QString);
         #[qinvokable]
         fn label_open_releases(self: Pin<&mut QbzHome>);
+        /// Label header ⋯ → Share. Rust-side because the reference raises a
+        /// toast and only Rust can publish `QbzShell.toastJson` — and because
+        /// the URL host is per-entity (`play.qobuz.com` for a label), which a
+        /// QML call site formatting its own string got wrong.
+        #[qinvokable]
+        fn label_share(self: Pin<&mut QbzHome>, label_id: QString);
 
         // --- Discover > For You: Qobuz Mixes / Radio / Spotlight ----------
         /// A Qobuz Mixes tile: open the mix landing page ("daily" | "weekly"
@@ -430,6 +436,12 @@ impl qbz_home::QbzHome {
 
     pub fn label_open_releases(self: Pin<&mut Self>) {
         crate::label_qt::open_releases();
+    }
+
+    /// Straight through to `share_qt` — no nav and no bridge state is touched,
+    /// exactly like `QbzArtist::share`.
+    pub fn label_share(self: Pin<&mut Self>, label_id: QString) {
+        crate::share_qt::share_label(label_id.to_string());
     }
 
     // --- Discover > For You: mixes / radio / spotlight ---------------------

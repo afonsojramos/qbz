@@ -28,9 +28,14 @@
 //!   `album_blacklisted` (label.rs:92, :133, :537, :567) and stamps the row
 //!   flag (:900); `derive_releases` here does neither, so a blocked artist's
 //!   album still RENDERS on a label page (playing it is already blocked).
-//! - **Share** is QML-side (a clipboard write through the `TrackRow.qml`
-//!   Loader/TextEdit pattern) — there is no Rust clipboard bridge and no
-//!   toast seam, so no invokable exists for it here.
+//! - **Share** is DONE and Rust-side (`QbzHome::label_share` →
+//!   `share_qt::share_label`), 1:1 with `main.rs:13164-13178`: the
+//!   `play.qobuz.com/label/{id}` link plus the "Link copied" success toast.
+//!   It used to be a QML clipboard write that formatted
+//!   `open.qobuz.com/label/{id}` — a host with NO `/label/` route, so the
+//!   copied link was dead on arrival (owner-reported 2026-08-02). The host is
+//!   per-entity, not per-app: track/album on `open.`, artist/playlist/label on
+//!   `play.` — which is exactly why the URL builders live in one place now.
 //! - **Scroll restore**: no Qt counterpart exists (`nav_qt` stores view ids
 //!   only), so `report-scroll` / `sr-restore` are not ported.
 

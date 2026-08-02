@@ -102,22 +102,15 @@ Rectangle {
         }
     }
 
-    // --- Share (TrackRow.qml's Loader/TextEdit pattern — QtQuick exposes no
-    // Clipboard type, and there is no toast seam, so the copy is silent).
-    Loader {
-        id: clipLoader
-        active: false
-        sourceComponent: TextEdit { visible: false }
-    }
-    function copyToClipboard(text) {
-        if (!text || text === "")
-            return
-        clipLoader.active = true
-        clipLoader.item.text = text
-        clipLoader.item.selectAll()
-        clipLoader.item.copy()
-        clipLoader.active = false
-    }
+    // --- Share ------------------------------------------------------------
+    // The QML `Loader`/`TextEdit`/`copy()` clipboard hack that used to live
+    // here is GONE. Its header said "there is no toast seam, so the copy is
+    // silent" — both halves of that are now false (`toast_qt.rs`, and
+    // `share_qt.rs` since the artist Share landed), and the hack was not
+    // merely silent: it formatted `https://open.qobuz.com/label/{id}`, a host
+    // with no `/label/` route, so the link it copied did not resolve at all.
+    // The header ⋯ entry calls `QbzHome.labelShare(id)` and Rust owns the URL,
+    // the clipboard and the "Link copied" toast — 1:1 with main.rs:13164-13178.
 
     // ============================ shared rail =============================
     // ONE horizontal rail for all five carousels; `kind` picks the card, the
@@ -405,8 +398,13 @@ Rectangle {
                     { "label": QbzSession.tr("Share", QbzSession.trRev), "icon": "link", "action": "share" },
                 ]
                 onPicked: function (a) {
+                    // Share goes through Rust (share_qt::share_label): it owns
+                    // the long-lived clipboard AND the "Link copied" toast the
+                    // reference raises (main.rs:13164-13178). The URL is built
+                    // there too — this call site used to format it here and
+                    // got the HOST wrong (see the header note above).
                     if (a === "share")
-                        root.copyToClipboard("https://open.qobuz.com/label/" + (root.doc.id || ""))
+                        QbzHome.labelShare(root.doc.id || "")
                     else
                         QbzHome.labelTopAction(a)
                 }
@@ -516,6 +514,41 @@ Rectangle {
                             width: parent ? parent.width : 0
                             visible: index < root.previewCount
                             height: visible ? 50 : 0
+                            // SMOOTH REVEAL (owner, 2026-08-02: "que la
+                            // aparicion de lo que se cargue, sea smooth").
+                            // This site is CLIENT-SIDE: every row of
+                            // topTracks is already instantiated by the
+                            // Repeater and only gated on `previewCount`
+                            // (LabelPageView.slint:426, which snaps), so the
+                            // fade goes on the rows themselves — there is no
+                            // appended tail and therefore no `fadeFrom`
+                            // threshold to keep.
+                            //
+                            // It is safe to fade UNCONDITIONALLY here, which
+                            // is NOT true of the network-backed Load-more
+                            // sites: a QML Behavior does not run while its
+                            // object is being created, so when the label
+                            // document is republished (the artwork pass —
+                            // see onDocChanged above) and the Repeater
+                            // rebuilds every delegate, each one takes its
+                            // opacity as a plain initial value and NOTHING
+                            // re-fades. The animation only ever runs when
+                            // `previewCount` moves on delegates that already
+                            // exist, i.e. exactly on the reveal.
+                            //
+                            // 220ms / OutCubic = the content duration this
+                            // round standardises on (controls/QbzLoadMore
+                            // .qml uses 180ms for its skeleton).
+                            // The COLLAPSE back to 5 stays instant on
+                            // purpose: `visible` is left snapping, so the
+                            // rows leave the layout in the same frame. Held
+                            // open for a 220ms fade-out instead, the page
+                            // would show ~2200px of blank list and then jump
+                            // — worse than the snap, not better.
+                            opacity: index < root.previewCount ? 1.0 : 0.0
+                            Behavior on opacity {
+                                NumberAnimation { duration: 220; easing.type: Easing.OutCubic }
+                            }
                             item: modelData
                             number: index + 1
                             showArtwork: true
@@ -545,40 +578,41 @@ Rectangle {
                         }
                     }
 
-                    // Reveal control: 5 -> 20 -> 50, then back to 5.
+                    // Reveal control: 5 -> 20 -> 50, then back to 5
+                    // (LabelPageView.slint:439-466). This was the fifth
+                    // hand-rolled copy of the plain Load-more shape; it is
+                    // now controls/QbzLoadMore.qml, arm (e) in that file's
+                    // inventory — same 28-tall box, same 13px centred label,
+                    // same hover textPrimary / textSecondary, same
+                    // `implicitWidth + 24` hit box. Idle pixels unchanged.
+                    //
+                    // CLIENT-SIDE, so no fetch to wait on: `busy` stays
+                    // false and `skeleton` stays "none", which is what keeps
+                    // a placeholder from appearing under a button whose
+                    // rows are revealed in the same frame. The smooth half
+                    // of the owner's request lives on the TrackRow delegate
+                    // above, not here (see the SMOOTH REVEAL note there).
                     Item { visible: root.topTracks.length > 5; width: 1; height: visible ? 4 : 0 }
-                    Item {
+                    QbzLoadMore {
                         visible: root.topTracks.length > 5
                         width: parent.width
-                        height: visible ? 28 : 0
-                        Rectangle {
-                            anchors.centerIn: parent
-                            width: revealText.implicitWidth + 24
-                            height: 28
-                            color: "transparent"
-                            Text {
-                                id: revealText
-                                anchors.centerIn: parent
-                                text: (root.previewCount < 50
-                                       && root.topTracks.length > root.previewCount)
-                                    ? QbzSession.tr("Load more", QbzSession.trRev)
-                                    : QbzSession.tr("View less", QbzSession.trRev)
-                                color: revealArea.containsMouse ? theme.textPrimary : theme.textSecondary
-                                font.pixelSize: 13
-                            }
-                            MouseArea {
-                                id: revealArea
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: {
-                                    if (root.previewCount < 50
-                                        && root.topTracks.length > root.previewCount)
-                                        root.previewCount = root.previewCount === 5 ? 20 : 50
-                                    else
-                                        root.previewCount = 5
-                                }
-                            }
+                        buttonHeight: 28
+                        skeleton: "none"
+                        busy: false
+                        // The label ternary is verbatim from the copy this
+                        // replaces: "Load more" while the reveal can still
+                        // grow, "View less" once it cannot (both are
+                        // existing msgids — no new strings).
+                        label: (root.previewCount < 50
+                                && root.topTracks.length > root.previewCount)
+                            ? QbzSession.tr("Load more", QbzSession.trRev)
+                            : QbzSession.tr("View less", QbzSession.trRev)
+                        onClicked: {
+                            if (root.previewCount < 50
+                                && root.topTracks.length > root.previewCount)
+                                root.previewCount = root.previewCount === 5 ? 20 : 50
+                            else
+                                root.previewCount = 5
                         }
                     }
                 }

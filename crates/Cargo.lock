@@ -6612,6 +6612,7 @@ dependencies = [
 name = "qbz-qt"
 version = "2.0.2"
 dependencies = [
+ "arboard",
  "async-trait",
  "cxx",
  "cxx-qt",
