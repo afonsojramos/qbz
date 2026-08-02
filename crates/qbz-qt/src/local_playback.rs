@@ -436,6 +436,12 @@ pub async fn enqueue(runtime: &Runtime, kind: String, id: String, mode: String) 
     // Same core helpers the Qobuz rows use: "next" inserts at the cursor
     // (reversed so a multi-track insert keeps its order), "later" appends to
     // the block tail, anything else appends.
+    //
+    // QConnect EXEMPT (contract §6.3): no routed arm and no sync-on-add tail
+    // here — this is a LOCAL-only path, so `batch_all_qconnect_castable` is
+    // always false and the push would never fire; hooking the arm would only
+    // risk the refusal toast on every click (Slint local_playback.rs:437-450
+    // is likewise unhooked).
     match mode.as_str() {
         "next" => {
             for t in queue.into_iter().rev() {

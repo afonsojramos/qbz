@@ -111,7 +111,7 @@
 // could not be trusted: `black/` and `warning/` were missing mp3 + translate,
 // `secondary/` and `accent/` were missing mp3 (and `black/cd.svg` was a
 // #cccccc glyph — a light-grey disc in the DARK-glyph directory). All six
-// neutral/chromatic dirs are now 111 files, the same set as primary/ and as
+// neutral/chromatic dirs are now 115 files, the same set as primary/ and as
 // MASTERS; only `favorite/` (57), `amber/` (6) and the two one-glyph brand
 // dirs `green/` / `orange/` stay deliberately partial, and none of them is
 // reachable from the polarity mapping. A new icon goes into

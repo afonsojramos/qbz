@@ -16,10 +16,11 @@
 //! (`set_effective_stream`, only when the delivered params actually move).
 //! Without those edges the stamp only refreshed when the user changed page.
 //!
-//! POC-NOTE: playback transport is wired (playback_qt poll pump). Cast /
-//! Qobuz Connect are NOT in the POC build (no qbz-cast / qconnect deps), so
-//! `set_cast_session` / `set_remote` exist as the wiring seam and the flags
-//! stay at their idle defaults until a session service calls them.
+//! POC-NOTE: playback transport is wired (playback_qt poll pump). Cast is NOT
+//! in the POC build (no qbz-cast dep), so `set_cast_session` exists as the
+//! wiring seam; `set_remote` / `set_remote_volume_locked` ARE live — written
+//! by the Qobuz Connect port (qconnect_event_sink_qt's badge refresh + the
+//! facade's disconnect tail).
 
 use std::sync::Mutex;
 
@@ -73,6 +74,11 @@ pub struct NowPlayingModel {
     pub eff_bits: u32,
     /// A peer Qobuz Connect renderer owns playback.
     pub is_remote: bool,
+    /// The active PEER renderer disallows remote volume control (the remote
+    /// half of Slint `NowPlayingState.volume-locked`, contract §11.3). Kept
+    /// OUT of the settings-derived `np_volume_locked` — that one is
+    /// republished on every settings/track edge and would clobber this.
+    pub remote_volume_locked: bool,
     /// Active renderer / cast target name; empty when local.
     pub cast_target: String,
     /// A Chromecast/DLNA session is connected.
@@ -160,6 +166,8 @@ fn publish(m: &NowPlayingModel) {
             .set_np_quality_limit_cause(m.delivered.limit_cause);
         // --- Cast / remote ------------------------------------------------
         b.as_mut().set_np_is_remote(m.is_remote);
+        b.as_mut()
+            .set_np_remote_volume_locked(m.remote_volume_locked);
         b.as_mut()
             .set_np_cast_target(QString::from(m.cast_target.as_str()));
         b.as_mut().set_np_cast_active(m.cast_active);
@@ -340,6 +348,7 @@ pub fn clear_track() {
             // would carry a 0.3 lock into the next track's first tick.
             seekable_max: 1.0,
             is_remote: m.is_remote,
+            remote_volume_locked: m.remote_volume_locked,
             cast_target: m.cast_target.clone(),
             cast_active: m.cast_active,
             cast_protocol: m.cast_protocol.clone(),
@@ -367,11 +376,24 @@ pub fn set_cast_session(active: bool, protocol: &str, target: &str) {
     });
 }
 
-/// A peer Qobuz Connect renderer took over (or handed back) the transport
-/// (`qconnect_event_sink.rs` `refresh_transport_modes`). `target` is the
-/// renderer's friendly name, empty when local.
-#[allow(dead_code)] // wired by the poll pump / a cast service (see GLUE)
+/// A peer Qobuz Connect renderer took over (or handed back) the transport.
+/// THE writer is the qconnect sink's `refresh_now_playing_remote_state`
+/// (`qconnect_event_sink_qt.rs`, gated on `transport_connected` — the
+/// stale-badge fix); the facade's disconnect tail is the second write site.
+/// `target` is the renderer's friendly name, empty when local.
 pub fn set_remote(is_remote: bool, target: &str) {
+    if !is_remote {
+        // Contract §11.1: remote mode ended — drop the lyrics remote anchor.
+        // This setter is the ONE choke point every remote-end path funnels
+        // through (the qconnect sink's badge refresh and the facade's
+        // disconnect tail — which the cast suspend also rides), so the clear
+        // lives here instead of the Slint's per-tick poll-loop site
+        // (playback.rs:5279): the Qt lyrics getters gate on THIS model flag
+        // rather than a lyrics-side ACTIVE atomic, and the poll loop's local
+        // fallthrough is skipped while the cast branch runs — exactly the
+        // window where a stale anchor would otherwise linger.
+        crate::lyrics_qt::clear_remote_anchor();
+    }
     mutate(|m| {
         m.is_remote = is_remote;
         if is_remote {
@@ -380,6 +402,21 @@ pub fn set_remote(is_remote: bool, target: &str) {
             m.cast_target.clear();
         }
     });
+}
+
+/// Read-only: a peer Qobuz Connect renderer owns playback. The lyrics sync
+/// engine gates its remote-anchor read on this (contract §11.1).
+pub fn is_remote() -> bool {
+    with_model(|m| m.is_remote).0
+}
+
+/// The REMOTE volume lock (contract §11.3): the active peer Qobuz Connect
+/// renderer disallows remote volume control. Written from the qconnect sink's
+/// badge refresh alongside `set_remote`, and cleared by the facade's
+/// disconnect tail — publish onto `QbzPlayer.np_remote_volume_locked` (never
+/// folded into the settings-derived `np_volume_locked`).
+pub fn set_remote_volume_locked(locked: bool) {
+    mutate(|m| m.remote_volume_locked = locked);
 }
 
 /// The DELIVERED quality measured by a cast session, which the local poll
@@ -401,6 +438,17 @@ pub fn set_artwork_path(path: String) {
 
 /// 1 Hz position push from the poll pump. `has_audio` = the engine
 /// surfaced a track id (clears the loading spinner).
+///
+/// Standalone `loading = false` publish for the paths that never reach a
+/// position push — the QConnect routed-play REFUSAL case (mixed queue refused
+/// by the peer, §12.29): the Slint clears PENDING_PLAY_ID right after
+/// `play_on_peer_if_active` (playback.rs:643-650); here the poll loop's peer
+/// branch normally clears the spinner via `set_position(has_audio = true)`,
+/// but a refused play never primes the peer, so a paused+idle peer would
+/// leave the spinner latched.
+pub(crate) fn clear_loading() {
+    mutate(|m| m.loading = false);
+}
 pub fn set_position(
     elapsed_secs: i32,
     duration_secs: i32,

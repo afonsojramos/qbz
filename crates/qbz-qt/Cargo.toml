@@ -57,6 +57,24 @@ qbz-theme = { path = "../qbz-theme" }
 qbz-integrations = { path = "../qbz-integrations" }
 # Last.fm "similar albums" row on the album page (external_reco_qt.rs).
 qbz-external-reco = { path = "../qbz-external-reco" }
+# Qobuz Connect (2026-08-01 Qt-port contract): the shared session/renderer
+# orchestration and the WS transport, consumed VERBATIM — backend untouchable,
+# same edges as the Slint crate (crates/qbz/Cargo.toml:87-88). Driven by
+# src/qconnect_transport_qt.rs + src/qconnect_engine_qt.rs (+ the B3/B4 facade
+# and sink).
+qconnect-app = { path = "../qconnect-app" }
+qconnect-transport-ws = { path = "../qconnect-transport-ws" }
+# Type-level edge only, sanctioned by contract §1.1: the QConnect renderer
+# engine trait names `qbz_player::PlaybackState`, and the engine's feeder
+# reaches the protected player seams THROUGH `runtime.core().player()` — the
+# same edge the Slint crate has (crates/qbz/Cargo.toml:85). No
+# qbz-player/qbz-audio internals are touched (TRACK-RULES §7).
+qbz-player = { path = "../qbz-player" }
+# QConnect: uuid v4 for controller action ids (the B3 facade / B4 sink — same
+# as crates/qbz/Cargo.toml:90); futures-util for the engine's HTTP feeder
+# (StreamExt over the response byte stream).
+uuid = { version = "1", features = ["v4"] }
+futures-util = { workspace = true }
 async-trait = "0.1"
 
 rusqlite = { version = "0.31", features = ["bundled"] }

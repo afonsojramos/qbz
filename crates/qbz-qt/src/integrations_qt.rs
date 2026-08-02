@@ -596,11 +596,21 @@ pub fn on_track_changed(meta: ScrobbleMeta) {
     });
 }
 
-/// The whole integrations reaction to a track-change edge, in one call:
+/// The whole integrations reaction to a LOCAL track-change edge, in one call:
 /// scrobble now-playing + arm the delayed scrobble, and refresh the Discord
 /// presence. Both halves early-return when the user has not opted in, so this
 /// is free for everyone else (the queue state is only read when at least one
 /// integration is live).
+///
+/// §11.2 SPLIT (Slint playback.rs:2266-2278): the peer-active guard covers
+/// the SCROBBLE half only — never scrobble a peer's audio. The Discord half
+/// is deliberately UNGUARDED: in Slint controller mode Discord keeps
+/// following the peer's tracks while scrobbles are suppressed (the push
+/// inside `refresh_now_playing_meta`, playback.rs:2236-2239, which the peer
+/// track edge also reaches, :5137-5141). The poll loop's PEER edge therefore
+/// calls [`discord_push`] directly and never this entry. The ephemeral-mode
+/// product law (scrobble MAY happen) is unaffected — this guard is about
+/// REMOTE ownership, not ephemeral.
 ///
 /// GLUE: call from the playback poll's DE-DUPED track-change edge
 /// (`track_id != last_track_id`), never from `refresh_now_playing` — that runs
@@ -614,11 +624,24 @@ pub fn on_track_change_edge(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
     let rt = runtime.clone();
     crate::spawn(async move {
         if scrobblers_live {
-            let state = rt.core().get_queue_state().await;
-            if let Some(track) = state.current_track {
-                on_track_changed(meta_from_queue_track(&track));
+            // The guard (playback.rs:2267-2271): a remote QConnect renderer
+            // owns playback — skip the scrobble half ONLY. The spawn's other
+            // half (Discord) must still run, so this is a skip, not the
+            // reference's early `return` (its spawn holds no Discord half).
+            // Fires in the topology-vs-snapshot window, where `is_peer_active`
+            // is already true but the poll loop still runs the LOCAL path.
+            let peer_active = match crate::qconnect_qt::service() {
+                Some(svc) => svc.is_peer_active().await,
+                None => false,
+            };
+            if !peer_active {
+                let state = rt.core().get_queue_state().await;
+                if let Some(track) = state.current_track {
+                    on_track_changed(meta_from_queue_track(&track));
+                }
             }
         }
+        // UNGUARDED, 1:1 with the reference — Discord follows the peer.
         discord_push(&rt);
     });
 }

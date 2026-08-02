@@ -303,6 +303,14 @@ pub(crate) async fn set_queue_stamped(
     stamp_context(&mut tracks, context);
     warn_dead_context(&tracks, "set_queue");
     runtime.core().set_queue(tracks, start).await;
+    // QConnect (contract §6.3, Slint playback.rs:3697-3703): when WE are the
+    // active renderer, push the new queue to the session immediately so a
+    // controller's UI reflects the freshly-built queue — covers infinite-play
+    // refills + album/radio plays. Self-gates to a no-op when not connected
+    // or when a peer owns playback.
+    if let Some(svc) = crate::qconnect_qt::service() {
+        svc.sync_local_queue_if_changed().await;
+    }
 }
 
 /// Same guarantee for the ADD paths (play-next / add-to-queue): appended tracks
@@ -330,6 +338,109 @@ pub(crate) fn stamped(tracks: Vec<QueueTrack>, context: Option<PlayContext>) -> 
     stamp_context(&mut tracks, context);
     warn_dead_context(&tracks, "enqueue");
     tracks
+}
+
+// ---------------------------------------------------------------------------
+// QConnect routing helpers (contract §6.3/§7 — Slint playback.rs:4082-4111
+// plus the routed arms on every Qobuz-castable add path)
+// ---------------------------------------------------------------------------
+
+/// QConnect sync-on-add predicate (#442, playback.rs:4082-4096): true when
+/// EVERY track of an added batch is Qobuz-castable (mirrors
+/// `sync_local_queue_if_changed`'s all-or-nothing admission — `local` /
+/// `plex` refused, offline `qobuz_download` eligible). A non-castable batch
+/// skips the post-add push so a local/plex add never trips the refusal toast
+/// on every click; the next track tick already surfaces that state.
+pub(crate) fn batch_all_qconnect_castable(tracks: &[QueueTrack]) -> bool {
+    tracks.iter().all(|qt| {
+        qt.id > 0
+            && !matches!(
+                qt.source.as_deref().map(|s| s.to_ascii_lowercase()).as_deref(),
+                Some("local") | Some("plex")
+            )
+    })
+}
+
+/// QConnect sync-on-add (#442, playback.rs:4098-4111): after a local queue
+/// ADD (play-next / play-later / add-to-queue), push the updated queue to the
+/// session immediately so a connected controller sees the new item AT its
+/// position — previously it only re-synced on the next track transition.
+/// `sync_local_queue_if_changed` self-gates (no-op when not connected, when a
+/// peer owns playback, or when the queue is unchanged), so this is cheap in
+/// every non-renderer situation.
+pub(crate) async fn sync_qconnect_after_add(added_castable: bool) {
+    if !added_castable {
+        return;
+    }
+    if let Some(svc) = crate::qconnect_qt::service() {
+        svc.sync_local_queue_if_changed().await;
+    }
+}
+
+/// QConnect CONTROLLER-mode enqueue routing (contract §7 — the Slint add-path
+/// arms, e.g. playback.rs:3012-3023, 4116-4128): when a PEER renderer owns
+/// playback, route the add to the peer's queue instead of mutating only the
+/// LOCAL queue (the peer never sees a local-only enqueue; the cloud echoes a
+/// QueueUpdated that `materialize_remote_queue` applies). Mode-matched to the
+/// caller's LOCAL placement: "next" inserts after the peer's current track,
+/// "later" lands on the peer's manual-block tail, anything else appends.
+/// Returns `true` when handled remotely — the caller MUST NOT enqueue
+/// locally, and its sync tail does not run (the peer owns the queue now).
+pub(crate) async fn route_enqueue_to_peer(tracks: &[QueueTrack], mode: &str) -> bool {
+    let Some(svc) = crate::qconnect_qt::service() else {
+        return false;
+    };
+    let routed: Vec<(u64, Option<String>)> = tracks
+        .iter()
+        .map(|qt| (qt.id, qt.source.clone()))
+        .collect();
+    match mode {
+        "next" => svc.play_next_batch_on_peer_if_active(&routed).await,
+        "later" => svc.play_later_batch_on_peer_if_active(&routed).await,
+        _ => svc.add_to_queue_batch_on_peer_if_active(&routed).await,
+    }
+}
+
+/// Single-track variant of [`route_enqueue_to_peer`] (Slint
+/// playback.rs:4120-4128's single-track arm).
+pub(crate) async fn route_track_to_peer(track: &QueueTrack, mode: &str) -> bool {
+    let Some(svc) = crate::qconnect_qt::service() else {
+        return false;
+    };
+    match mode {
+        "next" => svc.play_next_on_peer_if_active(track.id, track.source.as_deref()).await,
+        "later" => svc.play_later_on_peer_if_active(track.id, track.source.as_deref()).await,
+        _ => svc.add_to_queue_on_peer_if_active(track.id, track.source.as_deref()).await,
+    }
+}
+
+/// QConnect CONTROLLER-mode play routing (contract §7's decided arm position —
+/// Slint playback.rs:638-651): when a PEER renderer owns playback, route the
+/// play to the peer instead of running the local audible step. Call AFTER
+/// `set_queue_stamped` (the arm pushes the CURRENT core queue — placed before
+/// the funnel it would push the STALE one) and BEFORE `play_track_resolved`.
+/// On handled, refreshes the bar + queue from the core cursor (the Slint
+/// `after_track_change` meta refresh + sidebar) and returns `true` — the
+/// caller early-returns and MUST NOT play locally. The Slint's `clear_loading`
+/// after `play_on_peer_if_active` (playback.rs:643-650) maps to
+/// `now_playing::clear_loading()` here: the poll loop's peer branch normally
+/// clears the spinner via its position push (`has_audio = true`) on the next
+/// tick, but a REFUSED routed play (mixed queue) never primes the peer — a
+/// paused+idle peer would leave the spinner latched (sign-off F1).
+pub(crate) async fn route_play_to_peer(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    track_id: u64,
+) -> bool {
+    let Some(svc) = crate::qconnect_qt::service() else {
+        return false;
+    };
+    if !svc.play_on_peer_if_active(track_id).await {
+        return false;
+    }
+    crate::now_playing::clear_loading();
+    refresh_now_playing(runtime).await;
+    publish_queue(runtime).await;
+    true
 }
 
 /// Tripwire: a track with NEITHER a container origin NOR an album id publishes
@@ -498,6 +609,11 @@ pub async fn play_artist(runtime: &Arc<AppRuntime<LoggingAdapter>>, artist_id: &
         let first_id = top[0].id;
         set_queue_stamped(runtime, top, Some(0), PlayContext::artist(artist_id)).await;
         publish_queue(runtime).await;
+        // QConnect CONTROLLER mode (§7): a peer owns playback — route the play
+        // to it AFTER the funnel, never run the local audible step.
+        if route_play_to_peer(runtime, first_id).await {
+            return Ok(());
+        }
         runtime
             .core()
             .play_track_resolved(first_id, current_quality(), None, None, 0)
@@ -544,6 +660,11 @@ pub async fn play_artist(runtime: &Arc<AppRuntime<LoggingAdapter>>, artist_id: &
     }
     set_queue_stamped(runtime, queue, Some(0), PlayContext::artist(artist_id)).await;
     publish_queue(runtime).await;
+    // QConnect CONTROLLER mode (§7): route the play to the peer (after the
+    // funnel, before the local audible step).
+    if route_play_to_peer(runtime, first_id).await {
+        return Ok(());
+    }
     runtime
         .core()
         .play_track_resolved(first_id, current_quality(), None, None, 0)
@@ -587,6 +708,16 @@ pub async fn enqueue_album(
         PlayContext::album(album_id),
     );
     log::info!("[qbz-qt] enqueue_album {album_id} ({mode}): {} tracks", tracks.len());
+    // QConnect CONTROLLER mode (contract §7): route the add to the peer's
+    // queue — early-returns when handled, so the local insert + sync tail
+    // below only run in local/renderer mode. The mode is normalized to what
+    // THIS fn's local match does: only "next" inserts at the cursor, every
+    // other mode appends (there is no block-tail arm here).
+    let routed_mode = if mode == "next" { "next" } else { "queue" };
+    if route_enqueue_to_peer(&tracks, routed_mode).await {
+        return Ok(());
+    }
+    let added_castable = batch_all_qconnect_castable(&tracks);
     if mode == "next" {
         // add_track_next inserts directly after the current track — feed
         // in reverse so the album's first track lands first.
@@ -596,6 +727,10 @@ pub async fn enqueue_album(
     } else {
         runtime.core().add_tracks(tracks).await;
     }
+    // QConnect sync-on-add (#442): push the updated queue to the session so a
+    // connected controller sees the new items; skipped silently for a
+    // non-castable batch (self-gating when a peer owns playback).
+    sync_qconnect_after_add(added_castable).await;
     publish_queue(runtime).await;
     Ok(())
 }
@@ -632,6 +767,11 @@ pub async fn play_album_from(
     set_queue_stamped(runtime, tracks, Some(start), PlayContext::album(album_id)).await;
     publish_queue(runtime).await;
     log::info!("[qbz-qt] play_album: queue set ({count} tracks), playing track {first_id}");
+    // QConnect CONTROLLER mode (§7): route the play to the peer (after the
+    // funnel, before the local audible step).
+    if route_play_to_peer(runtime, first_id).await {
+        return Ok(());
+    }
     runtime
         .core()
         .play_track_resolved(first_id, current_quality(), None, None, 0)
@@ -665,6 +805,11 @@ pub async fn play_album_from_track(
     let first_id = tracks[start].id;
     set_queue_stamped(runtime, tracks, Some(start), PlayContext::album(album_id)).await;
     publish_queue(runtime).await;
+    // QConnect CONTROLLER mode (§7): route the play to the peer (after the
+    // funnel, before the local audible step).
+    if route_play_to_peer(runtime, first_id).await {
+        return Ok(());
+    }
     runtime
         .core()
         .play_track_resolved(first_id, current_quality(), None, None, 0)
@@ -775,6 +920,11 @@ pub async fn play_track_list_in(
     let first_id = tracks[start].id;
     set_queue_stamped(runtime, tracks, Some(start), context).await;
     publish_queue(runtime).await;
+    // QConnect CONTROLLER mode (§7): route the play to the peer (after the
+    // funnel, before the local audible step).
+    if route_play_to_peer(runtime, first_id).await {
+        return Ok(());
+    }
     runtime
         .core()
         .play_track_resolved(first_id, current_quality(), None, None, 0)
@@ -871,6 +1021,13 @@ pub async fn enqueue_track_list_mode(
         return Err("empty track list".to_string());
     }
     let tracks = stamped(tracks, None);
+    // QConnect CONTROLLER mode (contract §7): route the add to the peer's
+    // queue — early-returns when handled, so the local insert + sync tail
+    // below only run in local/renderer mode.
+    if route_enqueue_to_peer(&tracks, mode).await {
+        return Ok(());
+    }
+    let added_castable = batch_all_qconnect_castable(&tracks);
     match mode {
         "next" => {
             for track in tracks.into_iter().rev() {
@@ -884,6 +1041,9 @@ pub async fn enqueue_track_list_mode(
         }
         _ => runtime.core().add_tracks(tracks).await,
     }
+    // QConnect sync-on-add (#442): push the updated queue to the session;
+    // skipped silently for a non-castable batch.
+    sync_qconnect_after_add(added_castable).await;
     publish_queue(runtime).await;
     Ok(())
 }
@@ -891,6 +1051,10 @@ pub async fn enqueue_track_list_mode(
 /// ArtistView ⋯ "Play all next" / "Add all to queue" — the whole body, so the
 /// invokable in `player_bridge.rs` can call it without a `main.rs` shim (see
 /// GLUE in the report).
+///
+/// The QConnect routed arm + sync tail live in the delegate
+/// (`enqueue_track_list_mode`) — arming here too would double-fire the routed
+/// send whenever a peer is active.
 pub async fn enqueue_artist_top_mode(
     runtime: &Arc<AppRuntime<LoggingAdapter>>,
     mode: &str,
@@ -925,11 +1089,23 @@ pub async fn enqueue_album_track(
     let Some(track) = tracks.into_iter().find(|t| t.id == track_id) else {
         return Err(format!("track {track_id} not in album {album_id}"));
     };
+    // QConnect CONTROLLER mode (contract §7): route the add to the peer's
+    // queue — early-returns when handled. The mode is normalized to what THIS
+    // fn's local match does: only "next" inserts at the cursor, every other
+    // mode appends (no block-tail arm here).
+    let routed_mode = if mode == "next" { "next" } else { "queue" };
+    if route_track_to_peer(&track, routed_mode).await {
+        return Ok(());
+    }
+    let added_castable = batch_all_qconnect_castable(std::slice::from_ref(&track));
     if mode == "next" {
         runtime.core().add_track_next(track).await;
     } else {
         runtime.core().add_track(track).await;
     }
+    // QConnect sync-on-add (#442): push the updated queue to the session;
+    // skipped silently for a non-castable add.
+    sync_qconnect_after_add(added_castable).await;
     publish_queue(runtime).await;
     Ok(())
 }
@@ -1087,6 +1263,11 @@ pub async fn play_single_track(
     set_queue_stamped(runtime, vec![qt], Some(0), None).await;
     publish_queue(runtime).await;
     log::info!("[qbz-qt] play_single_track: playing {track_id}");
+    // QConnect CONTROLLER mode (§7): route the play to the peer (after the
+    // funnel, before the local audible step).
+    if route_play_to_peer(runtime, track_id).await {
+        return Ok(());
+    }
     runtime
         .core()
         .play_track_resolved(track_id, current_quality(), None, None, 0)
@@ -1107,11 +1288,21 @@ pub async fn enqueue_single_track(
     let qt = stamped(vec![queue_track_for(runtime, track_id).await?], None)
         .pop()
         .expect("one track in, one track out");
+    // QConnect CONTROLLER mode (contract §7): route the add to the peer's
+    // queue — early-returns when handled, so the local insert + sync tail
+    // below only run in local/renderer mode.
+    if route_track_to_peer(&qt, mode).await {
+        return Ok(());
+    }
+    let added_castable = batch_all_qconnect_castable(std::slice::from_ref(&qt));
     match mode {
         "next" => runtime.core().add_track_next(qt).await,
         "later" => runtime.core().add_track_later(qt).await,
         _ => runtime.core().add_track(qt).await,
     }
+    // QConnect sync-on-add (#442): push the updated queue to the session;
+    // skipped silently for a non-castable add.
+    sync_qconnect_after_add(added_castable).await;
     publish_queue(runtime).await;
     Ok(())
 }
@@ -1130,6 +1321,21 @@ pub async fn toggle_play(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
             return;
         }
     }
+    // QConnect CONTROLLER mode (dispatch priority cast → QConnect → local,
+    // Slint main.rs:14238-14247): a peer renderer owns playback — toggle IT.
+    // `true` = handled remotely; the local path MUST NOT run. On error there
+    // is no local fallback (a peer owns audio; a local resume would
+    // double-play).
+    if let Some(svc) = crate::qconnect_qt::service() {
+        match svc.toggle_remote_renderer_playback_if_active().await {
+            Ok(true) => return,
+            Ok(false) => {}
+            Err(e) => {
+                log::warn!("[qbz-qt][QConnect] toggle-play handoff: {e}");
+                return;
+            }
+        }
+    }
     let event = runtime.core().player().get_playback_event();
     let result = if event.is_playing {
         runtime.core().pause()
@@ -1142,12 +1348,38 @@ pub async fn toggle_play(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
 }
 
 pub async fn next(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
+    // QConnect CONTROLLER mode (Slint main.rs:14268-14277): a peer renderer
+    // owns playback — skip on IT and return; the local cursor stays put (the
+    // cloud echo re-materializes the queue). NOTE: no cast branch here, 1:1
+    // with the reference (main.rs:14261-14267) — while casting, the local
+    // next() flow runs and the play arm casts the new current track.
+    if let Some(svc) = crate::qconnect_qt::service() {
+        match svc.skip_next_if_remote().await {
+            Ok(true) => return,
+            Ok(false) => {}
+            Err(e) => {
+                log::warn!("[qbz-qt][QConnect] next handoff: {e}");
+                return;
+            }
+        }
+    }
     if let Some(track) = runtime.core().next_track().await {
         play_queue_track(runtime, track.id).await;
     }
 }
 
 pub async fn previous(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
+    // QConnect CONTROLLER mode (Slint main.rs:14293-14302) — see next() above.
+    if let Some(svc) = crate::qconnect_qt::service() {
+        match svc.skip_previous_if_remote().await {
+            Ok(true) => return,
+            Ok(false) => {}
+            Err(e) => {
+                log::warn!("[qbz-qt][QConnect] previous handoff: {e}");
+                return;
+            }
+        }
+    }
     if let Some(track) = runtime.core().previous_track().await {
         play_queue_track(runtime, track.id).await;
     }
@@ -1163,6 +1395,13 @@ async fn play_queue_track(runtime: &Arc<AppRuntime<LoggingAdapter>>, track_id: u
     if crate::cast_qt::play_current_if_cast(runtime).await {
         refresh_now_playing(runtime).await;
         publish_queue(runtime).await;
+        return;
+    }
+    // QConnect CONTROLLER mode (Slint playback.rs:638-651, AFTER the cast
+    // gate, BEFORE the local arms): a peer renderer owns playback — route the
+    // play to it (it pushes the current core queue, which the caller's cursor
+    // move already updated) and never start the local backend.
+    if route_play_to_peer(runtime, track_id).await {
         return;
     }
     // Source-aware audible step: a LOCAL file plays from disk through the
@@ -1283,6 +1522,24 @@ pub async fn seek_frac(runtime: &Arc<AppRuntime<LoggingAdapter>>, frac: f32) {
             return;
         }
     }
+    // QConnect CONTROLLER mode (Slint main.rs:14334-14351): seek the REMOTE
+    // renderer. The remote API wants absolute position in MILLISECONDS; the
+    // bar gives a 0..1 fraction — derive ms from the locally-known duration
+    // (SECONDS here, hence the ×1000).
+    if let Some(svc) = crate::qconnect_qt::service() {
+        let fraction = frac.clamp(0.0, 1.0);
+        let duration_secs = runtime.core().get_playback_state().duration;
+        let position_ms =
+            (fraction as f64 * duration_secs as f64 * 1000.0).round() as i64;
+        match svc.set_position_if_remote(position_ms).await {
+            Ok(true) => return,
+            Ok(false) => {}
+            Err(e) => {
+                log::warn!("[qbz-qt][QConnect] seek handoff: {e}");
+                return;
+            }
+        }
+    }
     let event = runtime.core().player().get_playback_event();
     if event.duration == 0 {
         return;
@@ -1297,11 +1554,42 @@ pub async fn set_volume(runtime: &Arc<AppRuntime<LoggingAdapter>>, volume: f32) 
     if matches!(crate::cast_qt::service().set_volume_if_cast(volume).await, Ok(true)) {
         return;
     }
+    // QConnect CONTROLLER mode (Slint main.rs:14378-14389): set the REMOTE
+    // renderer's volume. The remote API wants 0..100; the bar gives a 0..1
+    // fraction. TRAP (§12.30): a volume-DISALLOWING peer returns Ok(true) —
+    // handled NO-OP — so a drag on a volume-locked peer never falls through
+    // to change the LOCAL volume.
+    if let Some(svc) = crate::qconnect_qt::service() {
+        let remote_volume = (volume.clamp(0.0, 1.0) * 100.0).round() as i32;
+        match svc.set_volume_if_remote(remote_volume).await {
+            Ok(true) => return,
+            Ok(false) => {}
+            Err(e) => {
+                log::warn!("[qbz-qt][QConnect] set-volume handoff: {e}");
+                return;
+            }
+        }
+    }
     let _ = runtime.core().set_volume(volume.clamp(0.0, 1.0));
     MUTED.store(volume <= 0.0 && PREMUTE_VOLUME.load(Ordering::Relaxed) != 0, Ordering::Relaxed);
 }
 
 pub async fn toggle_mute(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
+    // QConnect FIRST (Slint main.rs:14455-14478 — the ONE dispatch that checks
+    // QConnect before cast; the reference has NO cast arm for mute). The
+    // remote API wants the target value; send the negation of the
+    // authoritative local MUTED flag.
+    if let Some(svc) = crate::qconnect_qt::service() {
+        let target = !MUTED.load(Ordering::Relaxed);
+        match svc.mute_if_remote(target).await {
+            Ok(true) => return,
+            Ok(false) => {}
+            Err(e) => {
+                log::warn!("[qbz-qt][QConnect] toggle-mute handoff: {e}");
+                return;
+            }
+        }
+    }
     if MUTED.swap(false, Ordering::Relaxed) {
         // Unmute — restore the stored level.
         let restored = f32::from_bits(PREMUTE_VOLUME.load(Ordering::Relaxed) as u32);
@@ -1320,12 +1608,39 @@ pub async fn toggle_mute(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
 }
 
 pub async fn toggle_shuffle(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
+    // QConnect (Slint main.rs:14492-14501 — no cast arm in the reference):
+    // the CLOUD owns shuffle order while connected (gated on
+    // transport_connected inside the service — §12.14, no extra gate here);
+    // QBZ applies only the echo. `true` = handled remotely — a local reorder
+    // would diverge from the cloud's order.
+    if let Some(svc) = crate::qconnect_qt::service() {
+        match svc.toggle_shuffle_if_remote().await {
+            Ok(true) => return,
+            Ok(false) => {}
+            Err(e) => {
+                log::warn!("[qbz-qt][QConnect] toggle-shuffle handoff: {e}");
+                return;
+            }
+        }
+    }
     let enabled = runtime.core().toggle_shuffle().await;
     crate::now_playing::set_shuffle(enabled);
     publish_queue(runtime).await;
 }
 
 pub async fn cycle_repeat(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
+    // QConnect (Slint main.rs:14517-14526 — no cast arm in the reference):
+    // gated on transport_connected inside the service (§12.14).
+    if let Some(svc) = crate::qconnect_qt::service() {
+        match svc.cycle_repeat_if_remote().await {
+            Ok(true) => return,
+            Ok(false) => {}
+            Err(e) => {
+                log::warn!("[qbz-qt][QConnect] cycle-repeat handoff: {e}");
+                return;
+            }
+        }
+    }
     let next_mode = match crate::now_playing::repeat_mode() {
         0 => RepeatMode::All,
         1 => RepeatMode::One,
@@ -1473,6 +1788,15 @@ pub async fn publish_queue(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
 
 static POLL_STARTED: AtomicBool = AtomicBool::new(false);
 
+/// Wall-clock now in ms — the peer-position extrapolation clock (the Slint
+/// `now_ms`, playback.rs:5162).
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 /// Start the 1 Hz pump on shell entry (idempotent). Publishes position /
 /// playing / cache into the NowPlayingModel, detects track changes (meta +
 /// queue refresh), and advances the queue at end-of-track through the core.
@@ -1488,6 +1812,35 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
         // does not re-request it on every tick while the download is in flight
         // (playback.rs:5049-5051).
         let mut gapless_requested_for: u64 = 0;
+
+        // QConnect renderer-report throttle (contract §6.2): the official
+        // client reports RndrSrvrStateUpdated ~every 2s while playing PLUS
+        // immediately on a transition (track / play-state change). The Slint
+        // ticks at 450ms and reports every 4 ticks ≈ 1.8s
+        // (playback.rs:5053-5059); this loop ticks at 1 Hz, so the wall-clock
+        // equivalent is every 2 ticks — tick-count throttles do NOT translate
+        // 1:1, translate by wall time.
+        let mut last_reported_track_id: u64 = 0;
+        let mut last_reported_playing = false;
+        let mut report_tick: u64 = 0;
+        const QCONNECT_REPORT_EVERY_N_TICKS: u64 = 2;
+
+        // QConnect CONTROLLER mode (contract §6.1): the peer's last-seen
+        // current track id. When the peer advances a track on its own, this
+        // edge-detects the change so the bar/queue meta refresh from the core
+        // cursor (which the sink already aligned to the peer's track). Reset
+        // to 0 when the peer branch is not taken so re-entering controller
+        // mode refreshes meta (playback.rs:5061-5066).
+        let mut last_peer_track_id: u64 = 0;
+        // Dirty-guard for the per-tick peer UI pushes (playback.rs:5194-5204):
+        // (track_id, position_ms, duration_secs, playing, volume f32 bits,
+        // shuffle, repeat_mode). Re-pushing identical values every second
+        // dirties bindings and repaints even when fully idle. `track_id` is
+        // load-bearing: it guarantees the push after a peer track change (the
+        // meta refresh just reset the bar's position to 0). Reset to None
+        // whenever another owner (local/cast poll) may have written the bar.
+        let mut last_remote_ui_push: Option<(u64, u64, u64, bool, u32, bool, i32)> = None;
+
         let mut ticker = tokio::time::interval(std::time::Duration::from_secs(1));
         loop {
             ticker.tick().await;
@@ -1510,6 +1863,146 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                 crate::toast_qt::error(stream_error_text(&msg, sandboxed));
             }
 
+            // --- QConnect CONTROLLER mode: peer-state reflection ----------
+            // (contract §6.1 — Slint playback.rs:5117-5244, inserted BEFORE
+            // the cast branch exactly like the reference.) When QBZ is
+            // CONTROLLING a peer renderer, the event sink stops the LOCAL
+            // player, so `get_playback_event()` reports track_id == 0 / not
+            // playing and the seek bar would freeze. While a peer owns
+            // playback, drive the bar from the peer's renderer snapshot
+            // instead: title / artist / art come from the materialized local
+            // core queue (the sink aligns the core cursor to the peer's
+            // track), only position / playing / duration come from the peer.
+            // Returns None in every NON-controller situation (disconnected,
+            // renderer mode where active == local, no active renderer), so
+            // the local path below runs byte-unchanged.
+            //
+            // UNITS (contract §6): `RemoteNowPlaying.position_ms` /
+            // `updated_at_ms` are MILLISECONDS; `now_playing::set_position`
+            // takes SECONDS. Convert at the publish boundary.
+            if let Some(remote) = match crate::qconnect_qt::service() {
+                Some(svc) => svc.remote_now_playing().await,
+                None => None,
+            } {
+                // The peer changed track on its own → refresh the bar/queue
+                // meta from the core cursor (the event sink already aligned
+                // it to the peer's track via sync_active_renderer_projection).
+                // This resets position to 0, which is correct on a track
+                // change; the per-tick position push below immediately
+                // re-applies the peer's real position. Done BEFORE the
+                // per-tick push so peer values win.
+                if remote.track_id != last_peer_track_id {
+                    refresh_now_playing(&runtime).await;
+                    publish_queue(&runtime).await;
+                    // Discord follows the peer (§11.2): the peer track edge
+                    // pushes Discord but NEVER scrobbles — 1:1 with the
+                    // Slint, where this edge reaches the UNGUARDED push
+                    // inside refresh_now_playing_meta (playback.rs:5137-5141
+                    // -> :2236-2239). The scrobble half of the LOCAL edge is
+                    // peer-guarded inside `on_track_change_edge` instead.
+                    crate::integrations_qt::discord_push(&runtime);
+                    last_peer_track_id = remote.track_id;
+                }
+                // Lyrics follow the peer (Q7, §11.1): publish the RAW
+                // renderer anchor on EVERY peer-branch tick — the lyrics
+                // sync invokables extrapolate between poll ticks exactly
+                // like the position extrapolation below
+                // (playback.rs:5142-5149). Outside the track edge AND the
+                // dirty guard on purpose: re-anchoring a peer pause promptly
+                // beats a skipped UI push.
+                crate::lyrics_qt::publish_remote_anchor(
+                    remote.position_ms,
+                    remote.updated_at_ms,
+                    remote.playing,
+                );
+                // Duration from the core queue's current track (aligned to the
+                // peer's track by the sink). Zero when unknown — the clamp is
+                // skipped then; without it the seekbar is wrong.
+                let duration_secs = runtime
+                    .core()
+                    .current_track()
+                    .await
+                    .map(|track| track.duration_secs)
+                    .unwrap_or(0);
+                let duration_ms = duration_secs.saturating_mul(1000);
+                // Extrapolate position while playing; clamp to the track length.
+                let mut position_ms = remote.position_ms;
+                if remote.playing && remote.updated_at_ms > 0 {
+                    position_ms = position_ms
+                        .saturating_add(now_ms().saturating_sub(remote.updated_at_ms));
+                }
+                if duration_ms > 0 && position_ms > duration_ms {
+                    position_ms = duration_ms;
+                }
+                // ms → s at the publish boundary (see UNITS above).
+                let position_secs = position_ms / 1000;
+                let playing = remote.playing;
+                // Reflect the PEER's actual volume on the bar so a drag starts
+                // from a safe level (never QBZ's local 100). When the peer
+                // hasn't reported a volume, clamp to 50% — the AVR-nuke
+                // safety default (playback.rs:5174-5180, §12.13).
+                let remote_volume = remote
+                    .volume
+                    .map(|v| (v as f32 / 100.0).clamp(0.0, 1.0))
+                    .unwrap_or(0.5);
+                // Reflect the PEER's shuffle/repeat state on the bar buttons.
+                // Pure UI reflection of the cloud's reported state — no local
+                // order is generated (WS-authoritative for shuffle order).
+                let shuffle_on = remote.shuffle_mode;
+                let repeat_mode = remote.repeat_mode;
+                // Skip the UI hop when nothing the push depends on changed
+                // since the last push (see the dirty-guard comment at the
+                // trackers). While playing, `position_ms` extrapolates every
+                // tick, so pushes proceed; paused, the bar stops repainting.
+                let remote_snapshot = (
+                    remote.track_id,
+                    position_ms,
+                    duration_secs,
+                    playing,
+                    remote_volume.to_bits(),
+                    shuffle_on,
+                    repeat_mode,
+                );
+                if last_remote_ui_push != Some(remote_snapshot) {
+                    last_remote_ui_push = Some(remote_snapshot);
+                    // Keep the visualizer producer in step with the same flag
+                    // the drain gate reads (a paused PEER parks it too;
+                    // playback.rs:5205-5209).
+                    crate::viz_qt::set_paused(!playing);
+                    // The peer branch `continue`s past the local body that
+                    // re-sets the seek lock every tick — force it open here
+                    // (playback.rs:5219) or a mid-stream takeover would latch
+                    // the last buffer fraction and refuse routed seeks.
+                    crate::now_playing::set_seekable_max(1.0);
+                    // `has_audio = true` clears the fetch spinner: a peer owns
+                    // audio, so there is no local fetch wait and the bar's
+                    // spinner must never linger here (the Slint force-clears
+                    // PENDING_PLAY_ID on the peer edge, playback.rs:5228-5233
+                    // — Qt has no PENDING_PLAY_ID/clear_loading; this push is
+                    // guaranteed on the edge because track_id is in the
+                    // dirty-guard tuple). Cache overlay 0.0 = "not streaming",
+                    // same value the cast poll publishes (cast_qt.rs:1000).
+                    crate::now_playing::set_position(
+                        position_secs as i32,
+                        duration_secs as i32,
+                        playing,
+                        0.0,
+                        true,
+                    );
+                    crate::now_playing::set_volume(remote_volume);
+                    crate::now_playing::set_shuffle(shuffle_on);
+                    crate::now_playing::set_repeat_mode(repeat_mode);
+                }
+                // Reset the LOCAL edge trackers so when control returns to QBZ
+                // the end-of-track / gapless / transition logic re-detects
+                // from a clean slate (the local player was stopped while
+                // peer-active).
+                last_track_id = 0;
+                was_playing = false;
+                seen_position = 0;
+                continue;
+            }
+
             // CAST: the cast service runs its own 1 s poll and the local player is
     // stopped, so this path would push position 0 / not-playing every
     // second and fight it.
@@ -1517,6 +2010,13 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
         last_track_id = 0;
         was_playing = false;
         seen_position = 0;
+        // Same invariant for the PEER edge trackers (playback.rs:5268-5269):
+        // the remote branch above did not run, so without this reset a
+        // re-taken peer whose snapshot happens to match the last controller
+        // push would be skipped, leaving the cast renderer's values on the
+        // bar (mirrors the fall-through reset below).
+        last_peer_track_id = 0;
+        last_remote_ui_push = None;
         // A cast target owns playback and there is no local download to
         // outrun: seek is unlocked while casting, the way the Slint cast
         // publish forces it (`cast_service.rs:1118`). Without this the last
@@ -1524,6 +2024,16 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
         crate::now_playing::set_seekable_max(1.0);
         continue;
     }
+    // Not in controller mode (no peer / returned to local): reset the
+    // peer-track edge var so re-entering the peer state refreshes meta
+    // (playback.rs:5274-5277).
+    last_peer_track_id = 0;
+    last_remote_ui_push = None;
+    // §11.1: deliberately NO lyrics anchor clear here (the Slint clears
+    // per-tick at playback.rs:5279) — the Qt anchor clears from the single
+    // `now_playing::set_remote(false)` choke point, which unlike this
+    // fallthrough also runs while the cast branch owns the loop. See the
+    // note in `now_playing::set_remote`.
     let event = runtime.core().player().get_playback_event();
             let track_id = event.track_id;
             let position = event.position;
@@ -1711,6 +2221,47 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                             }
                         });
                     }
+                }
+            }
+
+            // --- QConnect: outbound renderer state report -----------------
+            // (contract §6.2 — Slint playback.rs:5676-5710, placed after the
+            // position push / before the end-of-track edge exactly like the
+            // reference.) When QBZ is the ACTIVE LOCAL renderer (controlled by
+            // a remote controller like the iOS app), report our playback state
+            // so the controller's seek bar + current-track follow. Mirrors the
+            // official client: position/duration in MILLISECONDS (the Qt poll
+            // position is SECONDS — ×1000 at the call), ~2s periodic while
+            // playing + an immediate report on every transition. The service
+            // self-gates on is_local_renderer_active (no-op when we're a peer
+            // controller or not connected) and resolves the queue_item_ids —
+            // no extra gates.
+            report_tick = report_tick.wrapping_add(1);
+            if track_id != 0 {
+                let transition =
+                    track_id != last_reported_track_id || is_playing != last_reported_playing;
+                let periodic = is_playing && report_tick % QCONNECT_REPORT_EVERY_N_TICKS == 0;
+                if transition || periodic {
+                    if let Some(svc) = crate::qconnect_qt::service() {
+                        let playing_state = if is_playing {
+                            qconnect_app::renderer::PLAYING_STATE_PLAYING
+                        } else {
+                            qconnect_app::renderer::PLAYING_STATE_PAUSED
+                        };
+                        let position_ms = (position as i64) * 1000;
+                        let duration_ms = (duration as i64) * 1000;
+                        svc.report_playback_state(playing_state, position_ms, duration_ms, track_id)
+                            .await;
+                        // On a track change, also reconcile the session queue:
+                        // if the user started a new album/playlist on QBZ,
+                        // push it so the controller follows. Self-gates +
+                        // echo-suppresses.
+                        if transition {
+                            svc.sync_local_queue_if_changed().await;
+                        }
+                    }
+                    last_reported_track_id = track_id;
+                    last_reported_playing = is_playing;
                 }
             }
 

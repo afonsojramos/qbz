@@ -98,6 +98,14 @@ pub mod qbz_player {
         #[qproperty(bool, np_cast_active)]
         // "cast" | "dlna".
         #[qproperty(QString, np_cast_protocol)]
+        // REMOTE volume lock (Qobuz Connect half of Slint
+        // `NowPlayingState.volume-locked`, contract §11.3): the active PEER
+        // renderer disallows remote volume control. Distinct from
+        // `np_volume_locked` (the read-only ALSA-hw settings derivation in
+        // `output_labels.rs`) — the bars' volume-lock expression combines
+        // both. Written by `now_playing::set_remote_volume_locked` from the
+        // qconnect sink's badge refresh + the facade's disconnect tail.
+        #[qproperty(bool, np_remote_volume_locked)]
         // Now-playing track id (playing-row indicator in track lists).
         #[qproperty(QString, np_track_id)]
         #[qproperty(QString, np_album)]
@@ -194,7 +202,9 @@ pub mod qbz_player {
     impl cxx_qt::Threading for QbzPlayer {}
 }
 
-use qbz_player::QbzPlayer;
+// `self::` disambiguates the bridge mod from the `qbz-player` extern crate
+// (added for the QConnect engine, contract §1.1) — E0659 otherwise.
+use self::qbz_player::QbzPlayer;
 
 /// Rust side of the player bridge (plain storage, phase-1 pattern).
 pub struct QbzPlayerRust {
@@ -229,6 +239,7 @@ pub struct QbzPlayerRust {
     np_cast_target: QString,
     np_cast_active: bool,
     np_cast_protocol: QString,
+    np_remote_volume_locked: bool,
     np_track_id: QString,
     np_album: QString,
     np_album_id: QString,
@@ -280,6 +291,7 @@ impl Default for QbzPlayerRust {
             np_cast_target: QString::default(),
             np_cast_active: false,
             np_cast_protocol: QString::default(),
+            np_remote_volume_locked: false,
             np_track_id: QString::default(),
             np_album: QString::default(),
             np_album_id: QString::default(),

@@ -340,15 +340,22 @@ pub(crate) async fn play_all_tracks(
         .runtime()
         .set_queue_source_collection(Some(collection_id.to_string()))
         .await;
-    if let Err(e) = runtime
-        .core()
-        .play_track_resolved(first_id, crate::playback_qt::current_quality(), None, None, 0)
-        .await
-    {
-        log::error!("[qbz-qt] myqbz_play: play_track {first_id} failed: {e}");
+    // QConnect CONTROLLER mode (§7): route the play to the peer (after the
+    // funnel, before the local audible step). NOT an early return here —
+    // `touch_play` below is frontend-local recency bookkeeping that runs
+    // regardless of where the audio plays (the Slint collection-play flow
+    // records it on the routed path too).
+    if !crate::playback_qt::route_play_to_peer(runtime, first_id).await {
+        if let Err(e) = runtime
+            .core()
+            .play_track_resolved(first_id, crate::playback_qt::current_quality(), None, None, 0)
+            .await
+        {
+            log::error!("[qbz-qt] myqbz_play: play_track {first_id} failed: {e}");
+        }
+        crate::playback_qt::refresh_now_playing(runtime).await;
+        crate::queue_qt::publish(runtime).await;
     }
-    crate::playback_qt::refresh_now_playing(runtime).await;
-    crate::queue_qt::publish(runtime).await;
     touch_play(collection_id).await;
 }
 
@@ -468,6 +475,31 @@ pub(crate) fn item_action(source_item_id: String, action: String) {
             crate::toast_qt::error(qbz_i18n::t("This item resolved to 0 playable tracks"));
             return;
         }
+        // Stamp ONCE, ahead of both the routed arm and the local arms: the
+        // blacklist drop must apply to what reaches the PEER exactly as it
+        // does to what lands locally (a blocked track never routes). The
+        // Play arm's `set_queue_stamped` re-runs the same two passes, which
+        // are idempotent (filter drops nothing twice; stamping skips
+        // pre-stamped tracks).
+        let tracks = crate::playback_qt::stamped(tracks, None);
+
+        // QConnect CONTROLLER mode (contract §7): route the add to the peer's
+        // queue — mode-matched to the row's LOCAL placement. Early-returns
+        // when handled, so the local insert + sync tail below only run in
+        // local/renderer mode. (Play replaces the queue instead — routed via
+        // `route_play_to_peer` inside its own arm.)
+        let routed_mode = match mode {
+            RowMode::Play => None,
+            RowMode::PlayNext => Some("next"),
+            RowMode::PlayLater => Some("later"),
+            RowMode::AddToQueue => Some("queue"),
+        };
+        if let Some(routed_mode) = routed_mode {
+            if crate::playback_qt::route_enqueue_to_peer(&tracks, routed_mode).await {
+                return;
+            }
+        }
+        let added_castable = crate::playback_qt::batch_all_qconnect_castable(&tracks);
 
         match mode {
             RowMode::Play => {
@@ -475,6 +507,11 @@ pub(crate) fn item_action(source_item_id: String, action: String) {
                 // touch_play (per-row action, not "play the whole collection").
                 let first_id = tracks[0].id;
                 crate::playback_qt::set_queue_stamped(&runtime, tracks, Some(0), None).await;
+                // QConnect CONTROLLER mode (§7): route the play to the peer
+                // (after the funnel, before the local audible step).
+                if crate::playback_qt::route_play_to_peer(&runtime, first_id).await {
+                    return;
+                }
                 if let Err(e) = runtime
                     .core()
                     .play_track_resolved(
@@ -494,26 +531,26 @@ pub(crate) fn item_action(source_item_id: String, action: String) {
             RowMode::PlayNext => {
                 // REVERSE so the first resolved track lands immediately after
                 // the current one (T12).
-                for track in crate::playback_qt::stamped(tracks, None).into_iter().rev() {
+                for track in tracks.into_iter().rev() {
                     runtime.core().add_track_next(track).await;
                 }
+                crate::playback_qt::sync_qconnect_after_add(added_castable).await;
                 crate::queue_qt::publish(&runtime).await;
                 crate::toast_qt::success(qbz_i18n::t("Playing next"));
             }
             RowMode::PlayLater => {
                 // #442: NATURAL order — each insert appends to the END of the
                 // manual block.
-                for track in crate::playback_qt::stamped(tracks, None) {
+                for track in tracks {
                     runtime.core().add_track_later(track).await;
                 }
+                crate::playback_qt::sync_qconnect_after_add(added_castable).await;
                 crate::queue_qt::publish(&runtime).await;
                 crate::toast_qt::success(qbz_i18n::t("Added to play later"));
             }
             RowMode::AddToQueue => {
-                runtime
-                    .core()
-                    .add_tracks(crate::playback_qt::stamped(tracks, None))
-                    .await;
+                runtime.core().add_tracks(tracks).await;
+                crate::playback_qt::sync_qconnect_after_add(added_castable).await;
                 crate::queue_qt::publish(&runtime).await;
                 crate::toast_qt::success(qbz_i18n::t("Added to queue"));
             }
@@ -585,11 +622,26 @@ fn bulk_enqueue_inner(items: Vec<MixtapeCollectionItem>, mode: BulkEnqueueMode) 
         }
         let tracks = crate::playback_qt::stamped(tracks, None);
 
+        // QConnect CONTROLLER mode (contract §7): route the add to the peer's
+        // queue — mode-matched to the bulk bar's LOCAL placement (Next /
+        // Later / Append). Early-returns when handled, so the local insert +
+        // sync tail below only run in local/renderer mode.
+        let routed_mode = match mode {
+            BulkEnqueueMode::Next => "next",
+            BulkEnqueueMode::Later => "later",
+            BulkEnqueueMode::Append => "queue",
+        };
+        if crate::playback_qt::route_enqueue_to_peer(&tracks, routed_mode).await {
+            return;
+        }
+        let added_castable = crate::playback_qt::batch_all_qconnect_castable(&tracks);
+
         match mode {
             BulkEnqueueMode::Next => {
                 for track in tracks.into_iter().rev() {
                     runtime.core().add_track_next(track).await;
                 }
+                crate::playback_qt::sync_qconnect_after_add(added_castable).await;
                 crate::queue_qt::publish(&runtime).await;
                 crate::toast_qt::success(qbz_i18n::t("Playing next"));
             }
@@ -597,11 +649,13 @@ fn bulk_enqueue_inner(items: Vec<MixtapeCollectionItem>, mode: BulkEnqueueMode) 
                 for track in tracks {
                     runtime.core().add_track_later(track).await;
                 }
+                crate::playback_qt::sync_qconnect_after_add(added_castable).await;
                 crate::queue_qt::publish(&runtime).await;
                 crate::toast_qt::success(qbz_i18n::t("Added to play later"));
             }
             BulkEnqueueMode::Append => {
                 runtime.core().add_tracks(tracks).await;
+                crate::playback_qt::sync_qconnect_after_add(added_castable).await;
                 crate::queue_qt::publish(&runtime).await;
                 crate::toast_qt::success(qbz_i18n::t("Added to queue"));
             }
@@ -679,6 +733,11 @@ pub(crate) fn play_inline_track(
             InlineTrackMode::Play => {
                 let first_id = track.id;
                 crate::playback_qt::set_queue_stamped(&runtime, vec![track], Some(0), None).await;
+                // QConnect CONTROLLER mode (§7): route the play to the peer
+                // (after the funnel, before the local audible step).
+                if crate::playback_qt::route_play_to_peer(&runtime, first_id).await {
+                    return;
+                }
                 if let Err(e) = runtime
                     .core()
                     .play_track_resolved(
@@ -698,16 +757,37 @@ pub(crate) fn play_inline_track(
             InlineTrackMode::PlayNext => {
                 let mut stamped = crate::playback_qt::stamped(vec![track], None);
                 if let Some(track) = stamped.pop() {
+                    // QConnect CONTROLLER mode (§7): route the insert to the
+                    // peer's queue — early-returns when handled (stamped
+                    // first: a blacklisted track must not reach the peer when
+                    // the local path would drop it).
+                    if crate::playback_qt::route_track_to_peer(&track, "next").await {
+                        return;
+                    }
+                    let added_castable =
+                        crate::playback_qt::batch_all_qconnect_castable(std::slice::from_ref(&track));
                     runtime.core().add_track_next(track).await;
+                    crate::playback_qt::sync_qconnect_after_add(added_castable).await;
                 }
                 crate::queue_qt::publish(&runtime).await;
                 crate::toast_qt::success(qbz_i18n::t("Playing next"));
             }
             InlineTrackMode::PlayLater => {
-                runtime
-                    .core()
-                    .add_tracks(crate::playback_qt::stamped(vec![track], None))
-                    .await;
+                let mut stamped = crate::playback_qt::stamped(vec![track], None);
+                if let Some(track) = stamped.pop() {
+                    // QConnect CONTROLLER mode (§7): route the add to the
+                    // peer's queue. Mode "queue", NOT "later": the local op
+                    // here appends via `add_tracks` (the documented inline/row
+                    // divergence above), so the route matches what the LOCAL
+                    // path does.
+                    if crate::playback_qt::route_track_to_peer(&track, "queue").await {
+                        return;
+                    }
+                    let added_castable =
+                        crate::playback_qt::batch_all_qconnect_castable(std::slice::from_ref(&track));
+                    runtime.core().add_tracks(vec![track]).await;
+                    crate::playback_qt::sync_qconnect_after_add(added_castable).await;
+                }
                 crate::queue_qt::publish(&runtime).await;
                 crate::toast_qt::success(qbz_i18n::t("Added to queue"));
             }

@@ -1,12 +1,9 @@
 // Settings > Developer — the QML port of crates/qbz-ui/ui/settings/
 // DeveloperSettings.slint.
 //
-// Shipped, in the Slint's order: LOGS · SETTINGS PORTABILITY.
+// Shipped, in the Slint's order: QOBUZ CONNECT · LOGS · SETTINGS PORTABILITY.
 //
 // Deltas vs the Slint (no dead rows):
-// - "QOBUZ CONNECT / Connect diagnostics" is absent: this port has no live
-//   Qobuz Connect service, so the diagnostics modal would have no session to
-//   describe.
 // - LOGS opens the on-disk log FILE (qbz_log's file sink) instead of the
 //   in-app log viewer overlay (copy / redact / upload), which is not ported.
 // - "Export settings…" writes the bundle immediately with auth EXCLUDED; the
@@ -29,6 +26,19 @@ Column {
     QbzTheme { id: theme }
 
     spacing: 4
+
+    // ========================== QOBUZ CONNECT ============================
+    GroupHeader { text: QbzSession.tr("QOBUZ CONNECT", QbzSession.trRev) }
+    SettingRow {
+        label: QbzSession.tr("Connect diagnostics", QbzSession.trRev)
+        description: QbzSession.tr("Live session topology and a rolling event log for debugging Qobuz Connect at runtime.", QbzSession.trRev)
+        SettingsButton {
+            text: QbzSession.tr("Open diagnostics", QbzSession.trRev)
+            onClicked: QbzQConnect.diagSetOpen(true)
+        }
+    }
+
+    SettingsSpacer { }
 
     // ============================== LOGS =================================
     GroupHeader { text: QbzSession.tr("LOGS", QbzSession.trRev) }

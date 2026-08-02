@@ -251,6 +251,10 @@ async fn apply(rows: Vec<LocalTrack>, action: &str) -> bool {
 /// (`local_playback::enqueue`): "play-next" inserts at the cursor REVERSED so
 /// a multi-row insert keeps its order, "play-later" appends to the manual
 /// block's tail, anything else appends.
+///
+/// QConnect EXEMPT (contract §6.3): no routed arm / sync-on-add tail — a
+/// local-only batch is never Qobuz-castable, so the predicate is always false
+/// (Slint local_bulk.rs:261-269 is likewise unhooked).
 async fn enqueue_rows(rows: Vec<LocalTrack>, mode: &str) {
     let runtime = crate::app();
     let queue: Vec<QueueTrack> = rows.iter().map(local_queue_track).collect();

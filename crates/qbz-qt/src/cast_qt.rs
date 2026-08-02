@@ -28,15 +28,27 @@
 //! ONE file for the same reason; this is the trimmed port of it. The Qt
 //! boundary (properties + invokables) IS split out, into `cast_bridge.rs`.
 //!
+//! QConnect coexistence (contract §11.4, 1:1 with cast_service.rs:280-294 /
+//! :405-437 / :1140-1161): cast connect halts local playback, then SUSPENDS a
+//! live QConnect session (best-effort — casting never blocks on it); cast
+//! disconnect restores it. The golden bar badge is republished around the
+//! suspend/restore because the facade deliberately leaves badge flips to its
+//! callers (the toggle / startup auto-connect / offline watcher pattern).
+//!
 //! DELIBERATE CUTS vs the Slint service, each named:
 //!   - no offline-cache tier: the Qt port never brings up `OfflineCacheState`
 //!     (`settings_qt/offline.rs` says so), so the resolver is called with
 //!     `None` — cache -> network still works, a download-only track does not;
-//!   - no QConnect coexistence: there is no QConnect service in the Qt port;
 //!   - no Plex casting: the Slint has the same TODO (needs the Plex bytes
 //!     resolver);
-//!   - no lyrics remote anchor: `lyrics_qt::position_ms` reads the local
-//!     player directly (see GLUE in the report).
+//!   - no CAST-side lyrics anchor feed: the Slint cast poll publishes its
+//!     position into the lyrics remote anchor (cast_service.rs:1086-1097) so
+//!     lyrics auto-follow while casting; here `lyrics_qt::position_ms` reads
+//!     the local player while casting (the QConnect anchor, §11.1, gates on
+//!     `now_playing::is_remote()`, which is false during a cast — see GLUE in
+//!     the report). The cast-disconnect `clear_remote_anchor`
+//!     (cast_service.rs:439-440) is likewise subsumed: the QConnect suspend
+//!     already cleared the anchor through `now_playing::set_remote(false)`.
 //! ADDITION (asked for): a renderer that goes silent mid-session is torn down
 //! after `LOST_POLL_MAX` consecutive failed reads instead of leaving the UI
 //! claiming a live connection forever.
@@ -166,6 +178,9 @@ struct CastInner {
     cast_premature_stop_polls: u32,
     // Consecutive failed position reads (device-disappeared detection).
     lost_polls: u32,
+    // QConnect coexistence (§11.4): whether QConnect was on before casting,
+    // so `disconnect` restores exactly the sessions `connect` suspended.
+    qconnect_was_on_before_cast: bool,
     // Position-poll task; aborted on disconnect.
     poll_task: Option<tokio::task::JoinHandle<()>>,
     // Device-refresh task (2 s loop while the picker is open).
@@ -272,8 +287,9 @@ impl CastService {
 
     // ---- Connect / disconnect ----------------------------------------------
 
-    /// Connect to a device: halt local playback, then re-cast the current
-    /// track at its position if one was playing (`castStore.connectToDevice`).
+    /// Connect to a device: halt local playback, suspend QConnect if it was
+    /// on (§11.4), then re-cast the current track at its position if one was
+    /// playing (`castStore.connectToDevice`).
     pub(crate) async fn connect(
         self: &Arc<Self>,
         device_id: String,
@@ -291,6 +307,11 @@ impl CastService {
         // Halt the local audio backend (no double audio). ENTERING the
         // protected path's public seam only — nothing about it changes.
         let _ = self.runtime.core().stop();
+
+        // Suspend QConnect if it was on (§11.4 — best-effort; NEVER blocks
+        // casting). Same ordering as the reference (cast_service.rs:293-294):
+        // after the local halt, before the renderer connect.
+        self.suspend_qconnect_if_on().await;
 
         // Connect to the renderer.
         let device_ip = match proto {
@@ -400,12 +421,13 @@ impl CastService {
         Ok(ip)
     }
 
-    /// Disconnect: stop the renderer, drop the connection, reset state.
+    /// Disconnect: stop the renderer, drop the connection, restore the
+    /// QConnect session connect() suspended (§11.4), reset state.
     pub(crate) async fn disconnect(&self) {
         // Stop the renderer first (disconnect alone leaves it playing).
         let _ = self.stop_renderer().await;
 
-        let poll = {
+        let (poll, was_on) = {
             let mut inner = self.inner.lock().await;
             if let Some(h) = inner.chromecast.take() {
                 let _ = h.disconnect();
@@ -427,10 +449,16 @@ impl CastService {
             inner.is_playing = false;
             inner.track_end_detected = false;
             inner.lost_polls = 0;
-            inner.poll_task.take()
+            (inner.poll_task.take(), inner.qconnect_was_on_before_cast)
         };
         if let Some(task) = poll {
             task.abort();
+        }
+        // Restore the QConnect session connect() suspended (best-effort),
+        // then reset the latch (cast_service.rs:435-438).
+        if was_on {
+            self.restore_qconnect().await;
+            self.inner.lock().await.qconnect_was_on_before_cast = false;
         }
         // Clear the per-connection disclosure + cap row.
         cast_bridge::ui(|mut b| {
@@ -444,6 +472,44 @@ impl CastService {
             b.as_mut().set_device_cap_index(0);
         });
         self.push_connection_state().await;
+    }
+
+    // ---- QConnect coexistence (§11.4 — cast_service.rs:1140-1161) -----------
+
+    /// Suspend QConnect while casting (mutual exclusion). Best-effort: a
+    /// failure logs and casting proceeds. The latch is recorded ONLY when a
+    /// session was actually live, so `disconnect` restores exactly what this
+    /// suspended.
+    async fn suspend_qconnect_if_on(&self) {
+        let Some(qc) = crate::qconnect_qt::service() else {
+            return;
+        };
+        if !qc.is_running().await {
+            return;
+        }
+        self.inner.lock().await.qconnect_was_on_before_cast = true;
+        if let Err(e) = qc.disconnect().await {
+            log::warn!("[qbz-qt][Cast] QConnect suspend failed (continuing): {e}");
+        }
+        // The facade deliberately does NOT flip the bar badge itself (the
+        // toggle / startup auto-connect / offline force-disconnect paths each
+        // publish their own — the qconnect_bridge.rs connectToggle tail); a
+        // suspend must not leave the golden button lit while the session is
+        // down. The facade's disconnect always tears the runtime down, so the
+        // badge goes dark even when the call above logged an error.
+        crate::qconnect_qt::publish::connected(false);
+    }
+
+    /// Bring the suspended session back after casting (best-effort). The
+    /// badge only re-lights when the session is actually live again.
+    async fn restore_qconnect(&self) {
+        let Some(qc) = crate::qconnect_qt::service() else {
+            return;
+        };
+        match qc.connect().await {
+            Ok(()) => crate::qconnect_qt::publish::connected(true),
+            Err(e) => log::warn!("[qbz-qt][Cast] QConnect restore failed: {e}"),
+        }
     }
 
     // ---- Casting a track ----------------------------------------------------

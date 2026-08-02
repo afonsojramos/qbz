@@ -479,8 +479,8 @@ pub async fn remove_all_after(runtime: &Arc<AppRuntime<LoggingAdapter>>, page_in
 /// queue index once the filter is resolved.
 ///
 /// POC-NOTE: the Slint arm first offers the move to the QConnect cloud
-/// (WS-authoritative when connected); there is no QConnect seam in this port,
-/// so the local core path is the only one.
+/// (WS-authoritative when connected) — that seam is now ported below, 1:1
+/// with `queue.rs:686-697`.
 pub async fn move_track(
     runtime: &Arc<AppRuntime<LoggingAdapter>>,
     from_page: usize,
@@ -501,6 +501,20 @@ pub async fn move_track(
     };
     if from_q == to_q {
         return;
+    }
+    // Connected -> the cloud reorders and echoes a QueueUpdated that
+    // materialize_remote_queue applies; do NOT also reorder locally (would
+    // diverge). TRAP (§7): routed reorders never touch the local queue, and
+    // on ERROR there is NO local fallback (Slint queue.rs:688-697).
+    if let Some(svc) = crate::qconnect_qt::service() {
+        match svc.reorder_upcoming_if_remote(from_q, to_q).await {
+            Ok(true) => return,
+            Ok(false) => {} // not connected -> local path
+            Err(e) => {
+                log::warn!("[qbz-qt] queue: reorder handoff failed: {e}");
+                return; // connected but errored -> do NOT local-reorder
+            }
+        }
     }
     runtime.core().move_track(from_q, to_q).await;
     publish(runtime).await;

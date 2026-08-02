@@ -54,6 +54,10 @@ mod playlist_edit_bridge;
 // manager, opened from two shell surfaces that outlive each other, and its
 // modal must survive the one that opened it (05 §5.8).
 mod playlist_import_bridge;
+// Qobuz Connect (2026-08-01 contract §8, block B4-Rust): the QbzQConnect
+// singleton — the QML surface of the facade/sink controllers below
+// (qconnect_qt.rs / qconnect_event_sink_qt.rs).
+mod qconnect_bridge;
 mod artwork_qt;
 mod atmosphere_qt;
 mod bridge;
@@ -155,6 +159,17 @@ mod sleep_timer_qt;
 mod theme_qt;
 mod integrations_qt;
 mod viz_qt;
+// Qobuz Connect port (2026-08-01 contract), blocks B1/B2: transport config +
+// credential discovery + device identity, and the renderer engine over
+// `runtime.core()`. Plain modules — they declare no #[cxx_qt::bridge], so
+// they must NOT appear in build.rs's rust_files. Wired by the B3 facade.
+mod qconnect_engine_qt;
+mod qconnect_transport_qt;
+// QConnect port block B3: the facade (service singleton + controller routing)
+// and the inbound event sink. Plain modules, same convention as B1/B2. The
+// §11.5 wiring (init_service + spawns) lives in `on_session_entered` below.
+mod qconnect_event_sink_qt;
+mod qconnect_qt;
 
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -377,6 +392,36 @@ fn on_session_entered() {
     let restored = crate::settings_qt::read_pref_f32("volume").unwrap_or(1.0).clamp(0.0, 1.0);
     let rt = app();
     spawn(async move { playback_qt::set_volume(&rt, restored).await });
+
+    // Qobuz Connect service wiring (2026-08-01 contract §11.5), in order.
+    // This fn is MULTI-ENTRY (login, session restore AND start_offline all
+    // land here), and every caller runs on the tokio runtime, so
+    // `Handle::current()` is valid.
+    // 1. The service singleton — without it `service()` is None and every
+    //    arm no-ops silently. OnceLock-idempotent, so the multi-entry seam
+    //    calls it every time.
+    let qconnect_service = qconnect_qt::init_service(app());
+    let tokio_handle = tokio::runtime::Handle::current();
+    {
+        // 2. The offline force-disconnect watcher — ONCE per process: the fn
+        //    carries NO idempotency guard of its own (unlike the auto-connect
+        //    below), so a naive re-spawn per shell entry would leak one
+        //    permanent watcher task per entry (double force-disconnect,
+        //    double badge flip).
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static OFFLINE_WATCHER_SPAWNED: AtomicBool = AtomicBool::new(false);
+        if !OFFLINE_WATCHER_SPAWNED.swap(true, Ordering::SeqCst) {
+            qconnect_service.spawn_offline_force_disconnect(&tokio_handle);
+        }
+    }
+    // 3. Startup auto-connect — gated on NOT offline: the offline shell entry
+    //    never auto-connects, and calling the spawn there would burn its
+    //    internal once-per-process FIRED latch before a real online entry
+    //    could use it. (The task itself also re-checks offline inside its
+    //    retry loop and bails silently.)
+    if !offline_fwd::engine().status().is_offline() {
+        qconnect_qt::spawn_startup_auto_connect(&tokio_handle);
+    }
 }
 
 /// Post-login UI state: the shared session entry, then the session header,

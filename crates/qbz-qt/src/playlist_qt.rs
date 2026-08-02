@@ -1504,6 +1504,13 @@ pub async fn enqueue_playlist_by_id(
         queue_for(runtime, playlist_id).await?,
         crate::playback_qt::PlayContext::playlist(&playlist_id.to_string()),
     );
+    // QConnect CONTROLLER mode (contract §7): route the add to the peer's
+    // queue — early-returns when handled, so the local insert + sync tail
+    // below only run in local/renderer mode.
+    if crate::playback_qt::route_enqueue_to_peer(&tracks, mode).await {
+        return Ok(());
+    }
+    let added_castable = crate::playback_qt::batch_all_qconnect_castable(&tracks);
     match mode {
         "next" => {
             for track in tracks.into_iter().rev() {
@@ -1517,6 +1524,9 @@ pub async fn enqueue_playlist_by_id(
         }
         _ => runtime.core().add_tracks(tracks).await,
     }
+    // QConnect sync-on-add (#442): push the updated queue to the session;
+    // skipped silently for a non-castable batch.
+    crate::playback_qt::sync_qconnect_after_add(added_castable).await;
     crate::queue_qt::publish(runtime).await;
     Ok(())
 }
@@ -1632,6 +1642,11 @@ async fn play_queue_at(
     let first_id = tracks[start].id;
     crate::playback_qt::set_queue_stamped(runtime, tracks, Some(start), context).await;
     crate::queue_qt::publish(runtime).await;
+    // QConnect CONTROLLER mode (§7): route the play to the peer (after the
+    // funnel, before the local audible step).
+    if crate::playback_qt::route_play_to_peer(runtime, first_id).await {
+        return Ok(());
+    }
     runtime
         .core()
         .play_track_resolved(first_id, crate::playback_qt::current_quality(), None, None, 0)
@@ -1675,11 +1690,21 @@ pub async fn enqueue_track(
     let qt = crate::playback_qt::stamped(vec![row_to_queue(&row)], open_context())
         .pop()
         .expect("one row in, one row out");
+    // QConnect CONTROLLER mode (contract §7): route the add to the peer's
+    // queue — early-returns when handled, so the local insert + sync tail
+    // below only run in local/renderer mode.
+    if crate::playback_qt::route_track_to_peer(&qt, mode).await {
+        return Ok(());
+    }
+    let added_castable = crate::playback_qt::batch_all_qconnect_castable(std::slice::from_ref(&qt));
     match mode {
         "next" => runtime.core().add_track_next(qt).await,
         "later" => runtime.core().add_track_later(qt).await,
         _ => runtime.core().add_track(qt).await,
     }
+    // QConnect sync-on-add (#442): push the updated queue to the session;
+    // skipped silently for a non-castable add.
+    crate::playback_qt::sync_qconnect_after_add(added_castable).await;
     crate::queue_qt::publish(runtime).await;
     Ok(())
 }

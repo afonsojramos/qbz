@@ -6618,6 +6618,7 @@ dependencies = [
  "cxx-qt-build",
  "cxx-qt-lib",
  "dirs 5.0.1",
+ "futures-util",
  "image",
  "log",
  "open",
@@ -6636,12 +6637,15 @@ dependencies = [
  "qbz-mixtape",
  "qbz-models",
  "qbz-offline-cache",
+ "qbz-player",
  "qbz-playlist-import",
  "qbz-plex",
  "qbz-qobuz",
  "qbz-source",
  "qbz-text-utils",
  "qbz-theme",
+ "qconnect-app",
+ "qconnect-transport-ws",
  "rand 0.10.1",
  "reqwest",
  "rfd",
@@ -6650,6 +6654,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "urlencoding",
+ "uuid 1.22.0",
 ]
 
 [[package]]

@@ -23,9 +23,10 @@
 // is AudioStamp.qml — the inline 2-row stamp (quality line over the backend /
 // mode LEDs) that PlayerBarSmall.slint mounts, shared with the Large bar.
 //
-// Connect / Settings / ViewMode are still inert visual replicas where no Qt
-// invokable exists (TODO comments at the call sites); Volume, Queue, Shuffle,
-// Repeat, Mute, Lyrics and the add flyout are live. Cast opens
+// Connect is LIVE (the golden ConnectButton opens shell/QconnectFlyout.qml —
+// NO tooltip, the reference asymmetry of contract §8); Settings / ViewMode
+// are live too. Volume, Queue, Shuffle, Repeat, Mute, Lyrics and the add
+// flyout are live. Cast opens
 // shell/CastPicker.qml (QbzCast — discovery, connect/disconnect, the
 // per-device quality cap) and lights while a renderer is connected. Track
 // Info (the (i) button and the song-card title) opens
@@ -46,6 +47,15 @@ Rectangle {
        
 
     QbzTheme { id: theme }
+
+    // Volume lock, both halves (contract §11.3 — the same `vol-locked`
+    // formula PlayerBar.slint:152-158 carries and PlayerBar.qml repeats):
+    // the ALSA-Direct hw derivation inside npVolumeLocked is LIFTED while a
+    // peer owns playback; npRemoteVolumeLocked is the sink-pushed "peer
+    // disallows remote volume" half.
+    readonly property bool volLocked:
+        (QbzPlayer.npVolumeLocked && !QbzPlayer.npIsRemote)
+        || QbzPlayer.npRemoteVolumeLocked
 
     // Responsive side fraction — IDENTICAL to PlayerBarSmall's mechanism:
     // LEFT and RIGHT columns share this fraction so the CENTER transport
@@ -383,11 +393,38 @@ Rectangle {
                         gapRight: 8
                     }
 
-                    // Qobuz Connect.
-                    // TODO(qt-bridge): no qconnect state/toggle exposed
-                    // (Slint: NowPlayingState.qconnect-connected +
-                    // qconnect-toggle()). Rendered 1:1, inert.
-                    QbzIconButton { name: "monitor-speaker" }
+                    // Qobuz Connect — the same golden ConnectButton as the
+                    // full bar (Slint keeps a file-private copy in each bar,
+                    // PlayerBarSmall.slint:52-55), minus the tooltip: the
+                    // reference binds NO tooltip on the small bar's button
+                    // (contract §8). Opens the shared flyout.
+                    Rectangle {
+                        id: smallQconnectBtn
+                        readonly property bool qcActive: QbzQConnect.qconnectConnected
+                        readonly property color gold: "#e0b341"
+                        width: 32
+                        height: 32
+                        radius: theme.radiusSm
+                        color: qcActive ? Qt.rgba(gold.r, gold.g, gold.b, 0.16)
+                            : (smallQcArea.containsMouse ? theme.surfaceHover : "transparent")
+                        border.width: qcActive ? 1 : 0
+                        border.color: Qt.rgba(gold.r, gold.g, gold.b, 0.45)
+                        QbzIcon {
+                            name: "monitor-speaker"
+                            width: 16
+                            height: 16
+                            anchors.centerIn: parent
+                            tintName: smallQconnectBtn.qcActive ? "amber"
+                                : smallQcArea.containsMouse ? "textPrimary" : "secondary"
+                        }
+                        MouseArea {
+                            id: smallQcArea
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: smallQcFlyout.openBelowRight(smallQconnectBtn)
+                        }
+                    }
                     // Cast (Chromecast / DLNA) — opens the picker modal and,
                     // with it, device discovery (PlayerBarSmall.slint:596-611:
                     // picker-open = true + CastActions.open()); lit while a
@@ -430,16 +467,17 @@ Rectangle {
                     Item { width: 4; height: 1 }
 
                     // Volume — mute icon + (WIDE) inline horizontal slider.
+                    // Both gate on root.volLocked (§11.3), like the full bar.
                     QbzIconButton {
                         name: QbzPlayer.npMuted ? "volume-x" : "volume-2"
-                        btnEnabled: !QbzPlayer.npVolumeLocked
+                        btnEnabled: !root.volLocked
                         active: QbzPlayer.npMuted
                         onClicked: QbzPlayer.toggleMute()
                     }
                     // WIDE: the shared QbzSlider (PlayerBarSmall mounts the
                     // same primitive at 72px on the 0..1000 scale).
                     QbzSlider {
-                        enabled: !QbzPlayer.npVolumeLocked
+                        enabled: !root.volLocked
                         visible: root.volumeWide
                         width: 72
                         anchors.verticalCenter: parent.verticalCenter
@@ -480,6 +518,11 @@ Rectangle {
         }
     }
     AudioSettingsMenu { id: smallAudioMenu; doc: root.settingsDoc }
+
+    // Qobuz Connect device flyout — the ONE shared component both bars mount
+    // (contract §8; the Slint `qconnect-menu` PopupWindow). Opened below-
+    // right of the Connect button.
+    QconnectFlyout { id: smallQcFlyout }
 
     // "Add to…" flyout behind the transport "+" (TransportControls.slint's
     // add-menu) — same seven entries, order and icons as the full bar.

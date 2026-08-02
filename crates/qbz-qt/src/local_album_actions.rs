@@ -474,6 +474,10 @@ async fn play_rows(runtime: &Runtime, tracks: Vec<LocalTrack>) {
 
 /// "Play next" / "Play later" / "Add to queue" over a track SUBSET — the same
 /// core helpers `local_playback::enqueue` uses, just without the id round-trip.
+///
+/// QConnect EXEMPT (contract §6.3): no routed arm / sync-on-add tail — a
+/// local-only batch is never Qobuz-castable, so the predicate is always false
+/// (Slint local_album_actions.rs:486-494 is likewise unhooked).
 async fn enqueue_rows(runtime: &Runtime, tracks: Vec<LocalTrack>, mode: &str) {
     let queue: Vec<QueueTrack> = tracks.iter().map(local_queue_track).collect();
     if queue.is_empty() {

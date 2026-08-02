@@ -44,11 +44,12 @@
 // Info — the (i) button and the song-card title open shell/TrackInfoModal.qml
 // (needs the QbzAlbum.openTrackInfo glue; see that file's header). Cast opens
 // shell/CastPicker.qml (QbzCast — discovery, connect/disconnect, the
-// per-device quality cap) and lights while a renderer is connected.
-// Inert (TODO comments at the call sites): Connect (the QConnect device
-// flyout) and add-to-playlist. add-to-mixtape is LIVE since the MyQBZ domain
-// landed (QbzMyQbzAdd.open). The volume LOCK (ALSA hw / remote) is still not
-// enforced.
+// per-device quality cap) and lights while a renderer is connected. Qobuz
+// Connect is LIVE: the golden ConnectButton opens shell/QconnectFlyout.qml
+// (QbzQConnect — device list, set-active, connect/disconnect) and carries
+// the "Qobuz Connect: On/Off" hover bubble via the shell's tooltip overlay.
+// Inert (TODO comments at the call sites): add-to-playlist. add-to-mixtape
+// is LIVE since the MyQBZ domain landed (QbzMyQbzAdd.open).
 //
 // SIZE (project rule): the inline SongCard / TransportControls / FavToggle
 // components moved out to shell/SongCard.qml, shell/TransportControls.qml and
@@ -67,6 +68,25 @@ Rectangle {
     readonly property bool ambientOn: QbzShell.ambientMode > 0 && QbzPlayer.npHasTrack
     readonly property bool largeActive: QbzShell.npbMode === 3 && QbzShell.sidebarState === 0
     readonly property bool isClassic: QbzShell.npbMode === 1
+
+    // The shell's shared hover-tooltip overlay (controls/QbzTooltip.qml),
+    // fed in through NowPlayingBar.qml's Binding. Consumed by the Qobuz
+    // Connect button's "Qobuz Connect: On/Off" bubble — the ONE tooltip the
+    // reference binds on this bar (PlayerBar.slint:405-407; the small bar's
+    // button has none, contract §8).
+    property Item tooltip: null
+
+    // Volume lock, both halves (contract §11.3 = PlayerBar.slint:152-158's
+    // `vol-locked`): npVolumeLocked carries the ALSA-Direct hw derivation
+    // INSIDE it, and that local bit-perfect lock is LIFTED when a peer owns
+    // playback (the `&& !npIsRemote` term) so the user CAN adjust the remote
+    // renderer; npRemoteVolumeLocked is the sink-pushed "peer disallows
+    // remote volume" half. The natural misread (`!npVolumeLocked &&
+    // !npIsRemote && ...`) would disable the slider for EVERY peer, breaking
+    // §7 volume routing to volume-ALLOWING peers.
+    readonly property bool volLocked:
+        (QbzPlayer.npVolumeLocked && !QbzPlayer.npIsRemote)
+        || QbzPlayer.npRemoteVolumeLocked
 
     QbzTheme { id: theme }
 
@@ -442,14 +462,60 @@ Rectangle {
                         onClicked: QbzCast.openPicker()
                     }
 
-                    // Qobuz Connect — inert (device flyout out of scope).
-                    // monitor-speaker is the icon both Slint bars use.
-                    QbzIconButton {
-                        name: "monitor-speaker"
+                    // Qobuz Connect — the Slint ConnectButton (PlayerBar.
+                    // slint:32-77): monitor-speaker glyph, GOLDEN over a soft
+                    // golden tint whenever a session is on — whether qbz is
+                    // the renderer or controlling a peer (not just is-remote).
+                    // Opens the shared flyout (QconnectFlyout.qml). This is
+                    // NOT a QbzIconButton: the reference's active state is a
+                    // gold tint + 1px border + gold glyph, which the shared
+                    // button's accent-glyph `active` cannot express. The
+                    // "amber" tint IS the reference's gold (#e0b341).
+                    Rectangle {
+                        id: qconnectBtn
+                        readonly property bool qcActive: QbzQConnect.qconnectConnected
+                        readonly property color gold: "#e0b341"
+                        width: 32
+                        height: 32
+                        radius: theme.radiusSm
                         anchors.verticalCenter: parent.verticalCenter
-                        // TODO(qt-bridge): no qconnect state/toggle exposed
-                        // (Slint: NowPlayingState.qconnect-connected +
-                        // qconnect-toggle()). Rendered 1:1, inert.
+                        color: qcActive ? Qt.rgba(gold.r, gold.g, gold.b, 0.16)
+                            : (qcArea.containsMouse ? theme.surfaceHover : "transparent")
+                        border.width: qcActive ? 1 : 0
+                        border.color: Qt.rgba(gold.r, gold.g, gold.b, 0.45)
+                        QbzIcon {
+                            name: "monitor-speaker"
+                            width: 16
+                            height: 16
+                            anchors.centerIn: parent
+                            tintName: qconnectBtn.qcActive ? "amber"
+                                : qcArea.containsMouse ? "textPrimary" : "secondary"
+                        }
+                        MouseArea {
+                            id: qcArea
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                if (root.tooltip)
+                                    root.tooltip.hide("qconnect")
+                                qcFlyout.openBelowRight(qconnectBtn)
+                            }
+                            // The ONE bar tooltip the reference binds (always
+                            // shows on hover, even while connected — Slint
+                            // PlayerBar.slint:64-74 says why out loud).
+                            onContainsMouseChanged: {
+                                if (!root.tooltip)
+                                    return
+                                if (containsMouse)
+                                    root.tooltip.showAbove(qconnectBtn, "qconnect",
+                                        QbzQConnect.qconnectConnected
+                                            ? QbzSession.tr("Qobuz Connect: On", QbzSession.trRev)
+                                            : QbzSession.tr("Qobuz Connect: Off", QbzSession.trRev))
+                                else
+                                    root.tooltip.hide("qconnect")
+                            }
+                        }
                     }
 
                     // Lyrics.
@@ -484,16 +550,18 @@ Rectangle {
 
                     // Volume: mute · slider · −/+ steppers (the steppers are
                     // the Tauri volume-step buttons, gated by the appearance
-                    // preference like the Slint bar).
+                    // preference like the Slint bar). All four controls gate
+                    // on root.volLocked (§11.3 — the local ALSA-hw lock lifts
+                    // under a peer; a volume-disallowing peer locks).
                     QbzIconButton {
                         name: QbzPlayer.npMuted ? "volume-x" : "volume-2"
-                        btnEnabled: !QbzPlayer.npVolumeLocked
+                        btnEnabled: !root.volLocked
                         active: QbzPlayer.npMuted
                         anchors.verticalCenter: parent.verticalCenter
                         onClicked: QbzPlayer.toggleMute()
                     }
                     QbzSlider {
-                        enabled: !QbzPlayer.npVolumeLocked
+                        enabled: !root.volLocked
                         width: 81
                         anchors.verticalCenter: parent.verticalCenter
                         minimum: 0
@@ -510,7 +578,7 @@ Rectangle {
                         name: "minus"
                         iconSize: 15
                         anchors.verticalCenter: parent.verticalCenter
-                        btnEnabled: !QbzPlayer.npVolumeLocked
+                        btnEnabled: !root.volLocked
                         onClicked: QbzPlayer.setVolume(Math.max(0.0, QbzPlayer.npVolume - 0.05))
                     }
                     QbzIconButton {
@@ -518,7 +586,7 @@ Rectangle {
                         name: "plus"
                         iconSize: 15
                         anchors.verticalCenter: parent.verticalCenter
-                        btnEnabled: !QbzPlayer.npVolumeLocked
+                        btnEnabled: !root.volLocked
                         onClicked: QbzPlayer.setVolume(Math.min(1.0, QbzPlayer.npVolume + 0.05))
                     }
 
@@ -545,6 +613,11 @@ Rectangle {
     // `audio-menu` PopupWindow). Fed the already-parsed document so it does
     // not re-parse settingsJson on every open.
     AudioSettingsMenu { id: audioMenu; doc: root.settingsDoc }
+
+    // Qobuz Connect device flyout — the ONE shared component both bars mount
+    // (contract §8; the Slint `qconnect-menu` PopupWindow, PlayerBar.slint:
+    // 412-642). Opened below-right of the Connect button.
+    QconnectFlyout { id: qcFlyout }
 
     // "Add to…" flyout behind the transport "+" (TransportControls.slint's
     // add-menu), on the shared CardMenu surface. Same seven entries, same

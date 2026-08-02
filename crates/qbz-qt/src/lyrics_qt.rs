@@ -23,21 +23,33 @@
 //!
 //! # Position source
 //!
-//! [`position_ms`] reads `SharedState::current_position_ms()` — the read-only
-//! ms getter on `qbz-player` (pure derivation from the existing playback
-//! anchors; the audio path is untouched). The 1 Hz `npElapsedSecs` poll is
-//! NOT used for lyrics: it is second-granular and would resurrect the 1 Hz
-//! highlight this port is replacing.
+//! Locally, [`position_ms`] reads `SharedState::current_position_ms()` — the
+//! read-only ms getter on `qbz-player` (pure derivation from the existing
+//! playback anchors; the audio path is untouched). The 1 Hz `npElapsedSecs`
+//! poll is NOT used for lyrics: it is second-granular and would resurrect the
+//! 1 Hz highlight this port is replacing.
+//!
+//! While a peer Qobuz Connect renderer owns playback (Q7, contract §11.1 —
+//! port of `lyrics_sync.rs`'s REMOTE_* store), the sync invokables read the
+//! REMOTE anchor instead: the playback poll's peer branch publishes the raw
+//! renderer triple (position_ms / updated_at_ms / playing — MS end-to-end,
+//! the facade's `RemoteNowPlaying` units) via [`publish_remote_anchor`] on
+//! every tick, and [`position_ms`] extrapolates by `now_ms - updated_at_ms`
+//! while playing, exactly like the bar's peer position. The remote gate is
+//! the now-playing model's `is_remote` flag (`now_playing::is_remote()`);
+//! the anchor itself clears from `now_playing::set_remote(false)` — the
+//! single choke point every remote-end path funnels through (the qconnect
+//! sink's badge refresh and the facade's disconnect tail, which the cast
+//! suspend also rides).
 //!
 //! # Not ported (no seam in this shell — see the effort report)
-//! - QConnect peer-position anchor (Q7): the Qt port has no controller mode.
 //! - Immersive / miniplayer lyrics surfaces: neither host exists here.
 //! - The "Lyrics copied" / "translation unavailable" TOASTS: the Qt port has
 //!   no toast host, so both surface as an inline notice line in the panel
 //!   ([`notice`]) instead of silently doing nothing.
 
 use std::pin::Pin;
-use std::sync::atomic::{AtomicI32, AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use cxx_qt::CxxQtThread;
@@ -118,11 +130,14 @@ pub mod qbz_lyrics_bridge {
         fn boot(self: Pin<&mut QbzLyrics>);
 
         // --- Sync engine (pulled by LyricsSyncEngine.qml) -----------------
-        /// Millisecond playback position. Read-only derivation from the
-        /// player's existing anchors — never a poll of the audio path.
+        /// Millisecond playback position. Local: read-only derivation from
+        /// the player's existing anchors — never a poll of the audio path.
+        /// While a peer QConnect renderer owns playback (§11.1): the remote
+        /// anchor, extrapolated by `now - updated_at_ms` when playing.
         #[qinvokable]
         fn position_ms(self: &QbzLyrics) -> f64;
-        /// Effective playing flag (the engine's tick gate).
+        /// Effective playing flag (the engine's tick gate). Remote while a
+        /// peer owns playback, like [`position_ms`].
         #[qinvokable]
         fn playing(self: &QbzLyrics) -> bool;
         /// Active line index at `now_ms`, or -1 (binary search,
@@ -218,6 +233,52 @@ pub(crate) fn ui(f: impl FnOnce(Pin<&mut QbzLyrics>) + Send + 'static) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// QConnect remote anchor (contract §11.1 — port of lyrics_sync.rs's REMOTE_*)
+// ---------------------------------------------------------------------------
+
+/// The peer renderer's RAW playback anchor, published by the playback poll's
+/// peer branch on every tick while a peer owns playback (Slint
+/// playback.rs:5142-5149). MS end-to-end — the facade's `RemoteNowPlaying`
+/// units — until `position_ms()` extrapolates. Plain atomics, like the
+/// reference: both sides touch them at low rates and a torn read across
+/// fields self-corrects on the next tick. There is deliberately NO
+/// lyrics-side ACTIVE flag (the Slint's `REMOTE_ACTIVE`): the getters gate
+/// on `now_playing::is_remote()` instead, so the anchor's owner and the
+/// gate's owner are the same model flag.
+static REMOTE_POSITION_MS: AtomicU64 = AtomicU64::new(0);
+static REMOTE_UPDATED_AT_MS: AtomicU64 = AtomicU64::new(0);
+static REMOTE_PLAYING: AtomicBool = AtomicBool::new(false);
+
+/// Wall-clock now in ms — the anchor extrapolation clock (the Slint
+/// `now_ms`).
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// Publish the RAW peer-renderer anchor (NOT the already-extrapolated
+/// position — the getter extrapolates at read time, like the reference's
+/// engine tick). Called from the playback poll's peer branch on every tick
+/// while a peer owns playback (`lyrics_sync::publish_remote_anchor`).
+pub fn publish_remote_anchor(position_ms: u64, updated_at_ms: u64, playing: bool) {
+    REMOTE_POSITION_MS.store(position_ms, Ordering::Relaxed);
+    REMOTE_UPDATED_AT_MS.store(updated_at_ms, Ordering::Relaxed);
+    REMOTE_PLAYING.store(playing, Ordering::Relaxed);
+}
+
+/// Drop the stored anchor. Called from `now_playing::set_remote(false)` —
+/// the single remote-mode-ENDED choke point (see the note there). The
+/// getters gate on that same model flag, so this is hygiene against a stale
+/// first read on remote re-entry, not the gate itself.
+pub fn clear_remote_anchor() {
+    REMOTE_POSITION_MS.store(0, Ordering::Relaxed);
+    REMOTE_UPDATED_AT_MS.store(0, Ordering::Relaxed);
+    REMOTE_PLAYING.store(false, Ordering::Relaxed);
+}
+
 impl qbz_lyrics_bridge::QbzLyrics {
     pub fn boot(mut self: Pin<&mut Self>) {
         let thread = self.qt_thread();
@@ -233,6 +294,18 @@ impl qbz_lyrics_bridge::QbzLyrics {
     // ---- sync engine ---------------------------------------------------
 
     pub fn position_ms(&self) -> f64 {
+        // QConnect controller mode (§11.1): lyrics follow the PEER.
+        // Extrapolate between the poll's anchor publishes exactly like the
+        // reference's resolver (lyrics_sync.rs:176-183 — no duration clamp
+        // there either).
+        if crate::now_playing::is_remote() {
+            let position_ms = REMOTE_POSITION_MS.load(Ordering::Relaxed);
+            let updated_at_ms = REMOTE_UPDATED_AT_MS.load(Ordering::Relaxed);
+            if REMOTE_PLAYING.load(Ordering::Relaxed) && updated_at_ms > 0 {
+                return position_ms.saturating_add(now_ms().saturating_sub(updated_at_ms)) as f64;
+            }
+            return position_ms as f64;
+        }
         match runtime_handle() {
             Some(runtime) => runtime.core().player().state.current_position_ms() as f64,
             None => 0.0,
@@ -240,6 +313,9 @@ impl qbz_lyrics_bridge::QbzLyrics {
     }
 
     pub fn playing(&self) -> bool {
+        if crate::now_playing::is_remote() {
+            return REMOTE_PLAYING.load(Ordering::Relaxed);
+        }
         match runtime_handle() {
             Some(runtime) => runtime.core().player().state.is_playing(),
             None => false,

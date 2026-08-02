@@ -106,6 +106,12 @@ ApplicationWindow {
     // hop; QbzSession.boot additionally fires the app boot sequence).
     Component.onCompleted: {
         QbzSession.boot()
+        // Qobuz Connect (2026-08-01 contract §2/§8). Booted right after
+        // QbzSession because QbzSession.boot fires the whole app boot
+        // sequence, whose shell entry runs the §11.5 service wiring — the
+        // badge/devices publishes it makes must find the Qt-thread hop
+        // already registered or they are dropped silently.
+        QbzQConnect.boot()
         QbzShell.boot()
         QbzPlayer.boot()
         QbzQueue.boot()

@@ -144,7 +144,7 @@ pub struct QbzIconTintRust {
 
 /// Every icon the app can ask for, as the `primary/` bake's source text.
 ///
-/// This IS the shipped `qml/assets/icons/primary/` directory (111 files),
+/// This IS the shipped `qml/assets/icons/primary/` directory (115 files),
 /// compiled in. Two consequences worth knowing:
 ///   - every runtime tint is COMPLETE, so the partial-directory trap the qrc
 ///     bakes have (`favorite/` = 57 files, `amber/` = 6, plus the two
@@ -188,6 +188,7 @@ const MASTERS: &[(&str, &str)] = &[
     ("folder-open", include_str!("../qml/assets/icons/primary/folder-open.svg")),
     ("folder-plus", include_str!("../qml/assets/icons/primary/folder-plus.svg")),
     ("folder", include_str!("../qml/assets/icons/primary/folder.svg")),
+    ("globe", include_str!("../qml/assets/icons/primary/globe.svg")),
     ("grip-vertical", include_str!("../qml/assets/icons/primary/grip-vertical.svg")),
     ("hard-drive", include_str!("../qml/assets/icons/primary/hard-drive.svg")),
     ("heart-filled", include_str!("../qml/assets/icons/primary/heart-filled.svg")),
@@ -219,6 +220,7 @@ const MASTERS: &[(&str, &str)] = &[
     ("mic-vocal", include_str!("../qml/assets/icons/primary/mic-vocal.svg")),
     ("minimize-2", include_str!("../qml/assets/icons/primary/minimize-2.svg")),
     ("minus", include_str!("../qml/assets/icons/primary/minus.svg")),
+    ("monitor", include_str!("../qml/assets/icons/primary/monitor.svg")),
     ("monitor-speaker", include_str!("../qml/assets/icons/primary/monitor-speaker.svg")),
     ("moon", include_str!("../qml/assets/icons/primary/moon.svg")),
     ("mp3", include_str!("../qml/assets/icons/primary/mp3.svg")),
@@ -248,6 +250,8 @@ const MASTERS: &[(&str, &str)] = &[
     ("skip-back", include_str!("../qml/assets/icons/primary/skip-back.svg")),
     ("skip-forward", include_str!("../qml/assets/icons/primary/skip-forward.svg")),
     ("sliders-horizontal", include_str!("../qml/assets/icons/primary/sliders-horizontal.svg")),
+    ("smartphone", include_str!("../qml/assets/icons/primary/smartphone.svg")),
+    ("speaker", include_str!("../qml/assets/icons/primary/speaker.svg")),
     ("square-check-big", include_str!("../qml/assets/icons/primary/square-check-big.svg")),
     ("star", include_str!("../qml/assets/icons/primary/star.svg")),
     ("sun-moon", include_str!("../qml/assets/icons/primary/sun-moon.svg")),
@@ -275,8 +279,8 @@ const MASTERS: &[(&str, &str)] = &[
     ("x", include_str!("../qml/assets/icons/primary/x.svg")),
 ];
 
-/// The only paint literal in a `primary/` master (verified over all 111 files:
-/// 121 occurrences, no `#fff` short form). The uppercase form is accepted too
+/// The only paint literal in a `primary/` master (verified over all 115 files:
+/// 125 occurrences, no `#fff` short form). The uppercase form is accepted too
 /// so a hand-added master cannot silently skip the substitution.
 const MASTER_HEX_LOWER: &str = "#ffffff";
 const MASTER_HEX_UPPER: &str = "#FFFFFF";

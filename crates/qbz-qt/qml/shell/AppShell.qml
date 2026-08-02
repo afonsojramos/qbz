@@ -78,6 +78,11 @@ Rectangle {
         // Mode-aware height (AppShell.slint:396): Small collapses to one
         // header-tall row; New/Classic/Large keep the full 112px.
         height: QbzShell.npbMode === 2 ? theme.npbSmallHeight : theme.npbLargeHeight
+        // The shared hover-tooltip overlay (declared further down — id
+        // references resolve at completion). Only the FULL bar consumes it
+        // (the Qobuz Connect button's "Qobuz Connect: On/Off" bubble); the
+        // small bar's button has no tooltip in the reference.
+        tooltip: tooltipOverlay
     }
 
     Sidebar {
@@ -620,4 +625,15 @@ Rectangle {
         id: tooltipOverlay
         anchors.fill: parent
     }
+
+    // Qobuz Connect diagnostics modal (DeveloperSettings > QOBUZ CONNECT) —
+    // mounted LAST, mirroring QconnectDevModal.slint's topmost mount in
+    // AppShell.slint. Ordering against the tooltip above is a non-issue: this
+    // is a Popup parented to Overlay.overlay (the CastPicker pattern), so it
+    // renders in the overlay layer above EVERY plain Item in this tree —
+    // the tooltip's "LAST child so no neighbour can cover it" invariant is
+    // about Items, and no Item was added after it. Self-gates on
+    // QbzQConnect.diagOpen, so while closed it is an invisible,
+    // non-interactive Item.
+    QconnectDevModal { }
 }
