@@ -4,27 +4,81 @@
 // QML port of the `spectrum := Rectangle` block in
 // crates/qbz-ui/ui/shell/SidebarNowPlayingDock.slint:122-183 (VBar / WaveCol).
 //
-// PERF — this strip redraws next to a full-window ambient canvas, so:
-//  1. The FFT streams REPLACE their QList each publish, so a Repeater bound to
-//     QbzViz.bars would rebuild every delegate every frame. The Repeaters use
-//     STATIC models (column counts) and bind only each bar's HEIGHT.
+// F3 RENDER PATH (2026-08-02) — ONE node, ONE draw call per mode. The modes
+// used to be Repeaters of 28/48/5 Rectangle delegates: on macOS (Metal RHI)
+// the per-frame batch churn of 28-48 height-mutating nodes was a measured
+// slice of the ~2.5 ms render-thread frame (62 fps). Each mode is now ONE
+// ShaderEffect — a single scene-graph node — whose fragment shader draws
+// every bar itself: the bar index comes from the x coordinate, the gap
+// geometry is per mode (bars = 1px-gapped columns, waveform = centred
+// columns, energy = 5 wide bars), the height comes from scalar uniforms
+// b0..bN (QML maps `property real bN` onto a GLSL uniform BY NAME — uniform
+// arrays are NOT supported by ShaderEffect, hence N loose properties), and
+// the fill is the SAME vertical topColor->bottomColor gradient plus the 1px
+// radius the delegates had (rounded-rect SDF with a 1px AA edge, including
+// Rectangle's clamp of r to half the short side). Heights are pushed in ONE
+// JS pass per VizSettle re-evaluation — the push hooks the exact same
+// from/to/progress triplet the delegates' at(i) bindings used to capture —
+// so a 16 ms tick dirties ONE node instead of 28-48. No Canvas anywhere:
+// Canvas is CPU raster and is banned on this path.
+//
+// THE SHADER IS A .qsb, NOT AN INLINE STRING. Qt 6's ShaderEffect takes the
+// vertexShader/fragmentShader properties as URLs of .qsb files produced by
+// the qsb tool — an inline GLSL string is parsed as a URL (the leading
+// `#version` even becomes a URL fragment) and the effect dies with
+// "Failed to deserialize QShader … status Error". The GLSL 440 sources live
+// in qml/assets/shaders/spectrum_{bars,wave,energy}.frag (+ the shared
+// spectrum.vert — Qt 6.11's built-in default vertex stage emits no
+// qt_TexCoord0, so the program link fails without an explicit one) and the
+// baked shaders next to them as .qsb (GLSL 440 for the Linux OpenGL RHI,
+// MSL 1.2 for Metal, SPIR-V always embedded for Vulkan). Regenerate after
+// ANY shader-source edit, from crates/qbz-qt:
+//   for m in bars wave energy; do \
+//     /usr/lib64/qt6/bin/qsb --glsl 440 --msl 12 \
+//       -o qml/assets/shaders/spectrum_$m.frag.qsb \
+//       qml/assets/shaders/spectrum_$m.frag; \
+//   done
+//   /usr/lib64/qt6/bin/qsb --glsl 440 --msl 12 \
+//     -o qml/assets/shaders/spectrum.vert.qsb qml/assets/shaders/spectrum.vert
+// (macOS: qsb is at $(brew --prefix qt)/bin/qsb.) A .qsb is keyed to the Qt
+// Shader Tools version that baked it — rebake when the system Qt moves.
+//
+// FALLBACK ARM. ShaderEffect draws nothing where shaders do not exist —
+// the software scene-graph backend (the Settings "Software" renderer,
+// QT_QUICK_BACKEND=software, the offscreen/VNC platforms), detected exactly
+// like theme/RoundedImage.qml via GraphicsInfo.api — or where the shader
+// fails to load (ShaderEffect.status === Error; this fired HERE during
+// development when the shader was an inline string, and the band kept
+// rendering on the Repeater arm — a load failure must never blank the
+// band). In both cases the ORIGINAL Repeater delegates take over (`model`
+// flips from 0 back to N), so the band renders the same everywhere. The
+// fallback is also what an offscreen/VNC smoke sees.
+//
+// PERF — notes 1-8 predate the shader arm. They now describe the FALLBACK
+// Repeaters and the VizSettle feeding, which are byte-for-byte unchanged:
+//  1. The FFT streams REPLACE their QList each publish, so a Repeater bound
+//     to QbzViz.bars would rebuild every delegate every frame. The Repeaters
+//     use STATIC models (column counts) and bind only each bar's HEIGHT.
 //  2. Each mode marshals its QList into JS ONCE per publish (a `target`
 //     binding), never once per delegate — the 512-float waveform read is the
 //     single most expensive thing in the dock.
-//  3. ONE shared Gradient for every bar, not one object per delegate.
+//  3. ONE shared Gradient for every bar, not one object per delegate. (On
+//     the shader arm the gradient is two vec4 uniforms mixed in GLSL; the
+//     Gradient object remains for the fallback Repeaters.)
 //  4. Motion comes from ONE VizSettle driver per mode, NOT 28 per-bar
 //     Behaviors (the Slint dock animates each bar; one driver is the cheap
 //     equivalent — see VizSettle.qml for the full argument).
 //  5. Only the ACTIVE mode is instantiated, and only while the band is shown:
 //     hiding it unloads the delegates, and viz_qt.rs only ever publishes the
-//     one stream the visible mode consumes.
+//     one stream the visible mode consumes. (This is also what keeps an
+//     inactive mode's SHADER from loading: the Loader owns the effect.)
 //  6. Capture itself is gated by the dock's vizShouldRun — a hidden band costs
 //     zero: the producer parks and the drain thread sleeps.
-//  7. ONE JS binding per bar, not two. `y` used to be a DERIVED binding on
-//     `height`, so every height change evaluated two bindings per bar; a static
-//     anchor (bottom / verticalCenter) does the same arithmetic in C++ and
-//     evaluates nothing. Combined with note 8 and VizSettle's 16 ms tick, bars
-//     mode went from 180 Hz x 56 binding evaluations/s to 62 Hz x 28.
+//  7. ONE JS binding per bar, not two (fallback arm). `y` used to be a DERIVED
+//     binding on `height`, so every height change evaluated two bindings per
+//     bar; a static anchor (bottom / verticalCenter) does the same arithmetic
+//     in C++ and evaluates nothing. On the shader arm the anchor math is one
+//     line of GLSL (`px.y - (bandH - h)` / `* 0.5`).
 //  8. `at()` indexes a PLAIN JS ARRAY: VizSettle materialises each published
 //     QList_f32 frame once per publish (30/s) instead of letting every `at(i)`
 //     cross into the sequence wrapper twice per bar per tick. The waveform arm
@@ -32,6 +86,7 @@
 //     copied twice (VizSettle branches on Array.isArray).
 
 import QtQuick
+import QtQuick.Window
 import com.blitzfc.qbz
 import "../theme"
 
@@ -57,7 +112,14 @@ Rectangle {
     readonly property color topColor: QbzShell.ambientPrimary
     readonly property color bottomColor: QbzShell.ambientSecondary
 
-    // ONE gradient instance shared by every bar (perf note 3).
+    // No-shader renderer detection, verbatim from theme/RoundedImage.qml (read
+    // its ARM SELECTION note): test Software/Null NEGATIVELY — under the RHI an
+    // OpenGL backend reports GraphicsInfo.OpenGL and Metal reports Metal, so
+    // "not software" is the only test that does not break the Mac path.
+    readonly property bool _noShaders: GraphicsInfo.api === GraphicsInfo.Software
+        || GraphicsInfo.api === GraphicsInfo.Null
+
+    // ONE gradient instance shared by every fallback bar (perf note 3).
     Gradient {
         id: barGradient
         GradientStop { position: 0.0; color: band.topColor }
@@ -82,8 +144,67 @@ Rectangle {
                 live: band.capturing
             }
 
+            // ONE JS pass per VizSettle re-evaluation, writing the 14 heights
+            // into the shader's scalar uniforms (the shader does the 14->28
+            // mirroring). The trigger is the same dependency triplet the
+            // delegates' at(i) bindings captured: from, to, progress.
+            function push() {
+                for (var i = 0; i < 14; ++i)
+                    barsFx["b" + i] = barsSettle.at(barsMode.activeBins[i]);
+            }
+            Connections {
+                target: barsSettle
+                function onFromChanged() { barsMode.push() }
+                function onToChanged() { barsMode.push() }
+                function onProgressChanged() { barsMode.push() }
+            }
+
+            // Shader arm health: no shaders at all (software backend) or a
+            // rejected compile -> the fallback Repeater below renders.
+            readonly property bool fxOk: !band._noShaders && barsFx.status !== ShaderEffect.Error
+
+            ShaderEffect {
+                id: barsFx
+                anchors.fill: parent
+                visible: barsMode.fxOk
+
+                property real bandW: width
+                property real bandH: height
+                property color topColor: band.topColor
+                property color bottomColor: band.bottomColor
+                property real b0: 0.0
+                property real b1: 0.0
+                property real b2: 0.0
+                property real b3: 0.0
+                property real b4: 0.0
+                property real b5: 0.0
+                property real b6: 0.0
+                property real b7: 0.0
+                property real b8: 0.0
+                property real b9: 0.0
+                property real b10: 0.0
+                property real b11: 0.0
+                property real b12: 0.0
+                property real b13: 0.0
+
+                Component.onCompleted: barsMode.push()
+                onStatusChanged: {
+                    if (status === ShaderEffect.Error)
+                        console.warn("SpectrumBand: bars shader failed:", log);
+                }
+
+                // .qsb baked from qml/assets/shaders/spectrum_bars.frag — see the header.
+                fragmentShader: "../assets/shaders/spectrum_bars.frag.qsb"
+                // Shared default-equivalent vertex stage (Qt 6.11's
+                // built-in default emits no qt_TexCoord0, so the link
+                // fails without an explicit one).
+                vertexShader: "../assets/shaders/spectrum.vert.qsb"
+            }
+
+            // FALLBACK ARM — the pre-F3 delegates, verbatim. Geometry: x =
+            // index*slot+1, width slot-2, bottom-anchored, radius 1.
             Repeater {
-                model: 28
+                model: barsMode.fxOk ? 0 : 28
                 delegate: Rectangle {
                     required property int index
                     // Mirror: columns 14..27 replay 13..0.
@@ -93,13 +214,6 @@ Rectangle {
                     x: index * barsMode.slot + 1
                     width: barsMode.slot - 2
                     height: Math.max(2, barsSettle.at(bin) * band.height)
-                    // `y: band.height - height` was a SECOND JS binding that
-                    // re-evaluated on every height change. An anchor does the
-                    // same arithmetic in C++ and evaluates no JS at all.
-                    // Geometry is identical (Slint's VBar does
-                    // `y: root.area-h - self.height`). Only the VERTICAL axis
-                    // is anchored — `x`/`width` stay positional, which QML
-                    // allows and which keeps the slot arithmetic untouched.
                     anchors.bottom: parent.bottom
                     radius: 1
                     gradient: barGradient
@@ -134,15 +248,100 @@ Rectangle {
                 }
             }
 
+            // ONE JS pass per VizSettle re-evaluation (48 uniforms).
+            function push() {
+                for (var i = 0; i < 48; ++i)
+                    waveFx["b" + i] = waveSettle.at(i);
+            }
+            Connections {
+                target: waveSettle
+                function onFromChanged() { waveMode.push() }
+                function onToChanged() { waveMode.push() }
+                function onProgressChanged() { waveMode.push() }
+            }
+
+            readonly property bool fxOk: !band._noShaders && waveFx.status !== ShaderEffect.Error
+
+            ShaderEffect {
+                id: waveFx
+                anchors.fill: parent
+                visible: waveMode.fxOk
+
+                property real bandW: width
+                property real bandH: height
+                property color topColor: band.topColor
+                property real b0: 0.0
+                property real b1: 0.0
+                property real b2: 0.0
+                property real b3: 0.0
+                property real b4: 0.0
+                property real b5: 0.0
+                property real b6: 0.0
+                property real b7: 0.0
+                property real b8: 0.0
+                property real b9: 0.0
+                property real b10: 0.0
+                property real b11: 0.0
+                property real b12: 0.0
+                property real b13: 0.0
+                property real b14: 0.0
+                property real b15: 0.0
+                property real b16: 0.0
+                property real b17: 0.0
+                property real b18: 0.0
+                property real b19: 0.0
+                property real b20: 0.0
+                property real b21: 0.0
+                property real b22: 0.0
+                property real b23: 0.0
+                property real b24: 0.0
+                property real b25: 0.0
+                property real b26: 0.0
+                property real b27: 0.0
+                property real b28: 0.0
+                property real b29: 0.0
+                property real b30: 0.0
+                property real b31: 0.0
+                property real b32: 0.0
+                property real b33: 0.0
+                property real b34: 0.0
+                property real b35: 0.0
+                property real b36: 0.0
+                property real b37: 0.0
+                property real b38: 0.0
+                property real b39: 0.0
+                property real b40: 0.0
+                property real b41: 0.0
+                property real b42: 0.0
+                property real b43: 0.0
+                property real b44: 0.0
+                property real b45: 0.0
+                property real b46: 0.0
+                property real b47: 0.0
+
+                Component.onCompleted: waveMode.push()
+                onStatusChanged: {
+                    if (status === ShaderEffect.Error)
+                        console.warn("SpectrumBand: waveform shader failed:", log);
+                }
+
+                // .qsb baked from qml/assets/shaders/spectrum_wave.frag — see the header.
+                fragmentShader: "../assets/shaders/spectrum_wave.frag.qsb"
+                // Shared default-equivalent vertex stage (Qt 6.11's
+                // built-in default emits no qt_TexCoord0, so the link
+                // fails without an explicit one).
+                vertexShader: "../assets/shaders/spectrum.vert.qsb"
+            }
+
+            // FALLBACK ARM — the pre-F3 delegates, verbatim. Geometry: x =
+            // index*slot+1, width slot-2, vertically centred, flat topColor.
             Repeater {
-                model: 48
+                model: waveMode.fxOk ? 0 : 48
                 delegate: Rectangle {
                     required property int index
                     x: index * waveMode.slot + 1
                     width: waveMode.slot - 2
                     height: Math.max(2, waveSettle.at(index) * band.height)
-                    // Was `y: (band.height - height) / 2` — a second JS binding
-                    // per column (48 of them). Same geometry, no JS.
                     anchors.verticalCenter: parent.verticalCenter
                     radius: 1
                     color: band.topColor
@@ -165,14 +364,58 @@ Rectangle {
                 live: band.capturing
             }
 
+            // ONE JS pass per VizSettle re-evaluation (5 uniforms).
+            function push() {
+                for (var i = 0; i < 5; ++i)
+                    energyFx["b" + i] = energySettle.at(i);
+            }
+            Connections {
+                target: energySettle
+                function onFromChanged() { energyMode.push() }
+                function onToChanged() { energyMode.push() }
+                function onProgressChanged() { energyMode.push() }
+            }
+
+            readonly property bool fxOk: !band._noShaders && energyFx.status !== ShaderEffect.Error
+
+            ShaderEffect {
+                id: energyFx
+                anchors.fill: parent
+                visible: energyMode.fxOk
+
+                property real bandW: width
+                property real bandH: height
+                property color topColor: band.topColor
+                property color bottomColor: band.bottomColor
+                property real b0: 0.0
+                property real b1: 0.0
+                property real b2: 0.0
+                property real b3: 0.0
+                property real b4: 0.0
+
+                Component.onCompleted: energyMode.push()
+                onStatusChanged: {
+                    if (status === ShaderEffect.Error)
+                        console.warn("SpectrumBand: energy shader failed:", log);
+                }
+
+                // .qsb baked from qml/assets/shaders/spectrum_energy.frag — see the header.
+                fragmentShader: "../assets/shaders/spectrum_energy.frag.qsb"
+                // Shared default-equivalent vertex stage (Qt 6.11's
+                // built-in default emits no qt_TexCoord0, so the link
+                // fails without an explicit one).
+                vertexShader: "../assets/shaders/spectrum.vert.qsb"
+            }
+
+            // FALLBACK ARM — the pre-F3 delegates, verbatim. Geometry: x =
+            // index*slot+3, width slot-6, bottom-anchored, radius 1.
             Repeater {
-                model: 5
+                model: energyMode.fxOk ? 0 : 5
                 delegate: Rectangle {
                     required property int index
                     x: index * energyMode.slot + 3
                     width: energyMode.slot - 6
                     height: Math.max(2, energySettle.at(index) * band.height)
-                    // Was `y: band.height - height` — see the bars delegate.
                     anchors.bottom: parent.bottom
                     radius: 1
                     gradient: barGradient
