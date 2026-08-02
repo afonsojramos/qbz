@@ -76,6 +76,16 @@ Item {
     property var to: []
     property real progress: 1.0
 
+    // Staged publish state: written by onTargetChanged, committed to the bound
+    // outputs ONLY inside the driver tick. A publish must NEVER touch
+    // from/to/progress directly — those are at()'s ONLY dependencies, so every
+    // direct write is a full-window invalidation of its own. Measured on macOS
+    // (2026-08-02, QSG_RENDER_TIMING on the F1 build): publish-write + tick-
+    // write = 2 invalidations per period ≈ 51 fps; committing in the tick
+    // makes it 1 ≈ 30 fps.
+    property var pendFrom: []
+    property var pendTo: []
+
     // Publish period estimate, ms. Seeded at 1000/TARGET_FPS and tracked with a
     // slow EMA so a producer that drifts off 30 Hz still lands on time.
     property real periodMs: 33.3
@@ -133,10 +143,15 @@ Item {
             for (var i = 0; i < n; ++i)
                 arr[i] = t[i];
         }
-        settle.from = settle.to;
-        settle.to = arr;
+        // STAGE ONLY — do not touch from/to/progress here (see `pendFrom`:
+        // every direct write to at()'s dependencies is its own full-window
+        // invalidation; the tick commits and advances in ONE visual write).
+        // `progress` is deliberately NOT reset: at() keeps showing the settled
+        // old frame until the tick, which is pixel-identical to progress=0
+        // holding `from`.
+        settle.pendFrom = settle.to;
+        settle.pendTo = arr;
         settle.lastTickMs = now;
-        settle.progress = 0.0;
         if (!driver.running)
             driver.running = true;
     }
@@ -176,6 +191,10 @@ Item {
         running: false
         onTriggered: {
             var p = (Date.now() - settle.lastTickMs) / settle.periodMs;
+            // Commit the staged publish and advance in ONE write set — the
+            // single visual invalidation per period (~30/s), not two.
+            settle.from = settle.pendFrom;
+            settle.to = settle.pendTo;
             if (p >= 1.0) {
                 settle.progress = 1.0;
                 driver.running = false; // park until the next publish
