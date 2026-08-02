@@ -530,6 +530,18 @@ fn row_to_display(item: &RowItem) -> (PlaylistTrackRow, Option<QueueTrack>) {
                     t.bit_depth,
                     Some(t.sample_rate),
                 ),
+                // The raw numbers, normalized to kHz exactly like
+                // `local_playback::local_queue_track` (:155-159) does — a local
+                // row reports Hz (44100), the catalog reports kHz (44.1), and
+                // `quality_state::rate_to_hz` must not multiply a kHz value
+                // twice. Kept in sync with the row's own `quality_detail`
+                // above so nothing downstream has to re-parse the string.
+                bit_depth: t.bit_depth,
+                sample_rate: Some(if t.sample_rate >= 1000.0 {
+                    t.sample_rate / 1000.0
+                } else {
+                    t.sample_rate
+                }),
                 art_url: t.artwork_path.clone().unwrap_or_default(),
                 // `TrackRow.qml` renders `artPath`, never `artUrl` — the Qobuz
                 // arm fills it from the download cache, and a local row's
@@ -818,19 +830,40 @@ pub async fn load(runtime: &Runtime, playlist_id: &str) -> bool {
 /// cleared for every non-offline-only playlist, or a stamp would leak into the
 /// next thing the user plays.
 pub async fn play(runtime: &Runtime, start_row_id: &str) {
-    let (queue, offline_only) = {
+    play_in(runtime, start_row_id, false).await
+}
+
+/// Header Shuffle for a LOCAL playlist: the same path, with the list mixed and
+/// the anchor dropped.
+///
+/// Raising the shuffle MODE and playing from the top is NOT a shuffle — the
+/// mode only randomises what comes NEXT, so the first track was the playlist's
+/// #1 every time. Owner ruling 2026-08-01: every shuffle must be genuinely
+/// random. Same shape as `playlist_qt::play_shuffled` and
+/// `playback_qt::play_track_list_in`.
+pub async fn play_shuffled(runtime: &Runtime) {
+    play_in(runtime, "", true).await
+}
+
+async fn play_in(runtime: &Runtime, start_row_id: &str, shuffle: bool) {
+    let (queue, offline_only, playlist_id) = {
         let Ok(q) = CURRENT_QUEUE.lock() else { return };
-        let offline_only = CURRENT_META
+        let meta = CURRENT_META
             .lock()
             .ok()
-            .and_then(|m| m.as_ref().map(|(_, o)| *o))
-            .unwrap_or(false);
-        (q.clone(), offline_only)
+            .and_then(|m| m.clone());
+        let offline_only = meta.as_ref().map(|(_, o)| *o).unwrap_or(false);
+        let playlist_id = meta.map(|(id, _)| id).unwrap_or_default();
+        (q.clone(), offline_only, playlist_id)
     };
     if queue.is_empty() {
         return;
     }
-    let start = if start_row_id.is_empty() {
+    let mut queue = queue;
+    let start = if shuffle {
+        crate::playback_qt::xorshift_shuffle(&mut queue);
+        0
+    } else if start_row_id.is_empty() {
         0
     } else {
         queue
@@ -840,7 +873,26 @@ pub async fn play(runtime: &Runtime, start_row_id: &str) {
     };
     runtime.core().set_queue_offline_only(offline_only);
     let first_id = queue[start].id;
-    crate::playback_qt::set_queue_stamped(runtime, queue, Some(start), None).await;
+    // The "playing from" origin is ("playlist", <local:uuid>) — the reference
+    // stamps it on BOTH local play paths (`local_playlist.rs:1578` play_all /
+    // Shuffle and `:1599` play_from_visible), with the explicit note that "the
+    // now-playing context stays ('playlist', id)" for a mixed detail because
+    // anything Qobuz-bound re-resolves membership and excludes the sidecar rows
+    // by construction (playback.rs:3478-3488).
+    //
+    // Passing `None` here was the port's gap: `set_queue_stamped` then falls to
+    // `derive_context`, which returns None for a many-album playlist, so
+    // `refresh_now_playing` used its per-track ALBUM fallback and the song card
+    // drew the album glyph pointing at a local `album_group_key` instead of the
+    // playlist. It also made the row click REGRESS once main.rs started routing
+    // it here — `playlist_qt::play_track` had been stamping `open_context()`.
+    crate::playback_qt::set_queue_stamped(
+        runtime,
+        queue,
+        Some(start),
+        crate::playback_qt::PlayContext::playlist(&playlist_id),
+    )
+    .await;
     crate::playback_qt::play_queue_track_public(runtime, first_id).await;
 }
 

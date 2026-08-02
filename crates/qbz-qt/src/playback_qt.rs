@@ -838,7 +838,13 @@ fn xorshift_shuffle_seeded<T>(items: &mut [T], seed: u64) {
 }
 
 /// `xorshift_shuffle_seeded` with the reference's wall-clock seed.
-fn xorshift_shuffle<T>(items: &mut [T]) {
+///
+/// `pub(crate)` so every Shuffle entry point can reorder its OWN list instead
+/// of only raising the global shuffle MODE. Owner ruling 2026-08-01: "todos los
+/// shuffles deben ser totalmente random"; a path that raises the flag and then
+/// plays the list's #1 track is not shuffled, it is the original order with a
+/// toggle lit — an artifact of a very early Tauri experiment.
+pub(crate) fn xorshift_shuffle<T>(items: &mut [T]) {
     let seed = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos() as u64)
@@ -1110,15 +1116,31 @@ pub async fn enqueue_album_track(
     Ok(())
 }
 
-/// Shuffle-play an album (AlbumView header Shuffle): enable shuffle, then
-/// play — the core queue owns the shuffled order.
+/// Shuffle-play an album (AlbumView header Shuffle): mix the album's own list
+/// and start at the top of the mixed order.
+///
+/// The MODE alone was not a shuffle. `set_shuffle(true)` only randomises what
+/// comes NEXT, so `play_album` still started on track 1 — pressing Shuffle on
+/// an album played its opener every single time. Owner ruling 2026-08-01:
+/// every shuffle must be genuinely random; the flag-and-play-from-the-top
+/// shape is an artifact of a very early Tauri experiment. The mode is still
+/// raised so playback stays shuffled past this album.
+///
+/// A LOCAL album keeps going through the local path, which owns its own queue
+/// building and does the same mix inside `local_playback::play_rows`.
 pub async fn play_album_shuffled(
     runtime: &Arc<AppRuntime<LoggingAdapter>>,
     album_id: &str,
 ) -> Result<(), String> {
     runtime.core().set_shuffle(true).await;
     crate::now_playing::set_shuffle(true);
-    play_album(runtime, album_id).await
+    if is_local_album(album_id) {
+        crate::local_playback::play_album(runtime, album_id.to_string(), None, true).await;
+        return Ok(());
+    }
+    let mut tracks = fetch_album_queue(runtime, album_id).await?;
+    xorshift_shuffle(&mut tracks);
+    play_track_list_in(runtime, tracks, 0, false, PlayContext::album(album_id)).await
 }
 
 /// Build the queue meta for a Library-feed track (shared by
@@ -1151,9 +1173,14 @@ fn feed_queue_track(track_id: u64) -> Result<QueueTrack, String> {
         } else {
             Some(item.image_url.clone())
         },
+        // playback.rs `make_queue_track` (:2426): the CATALOG max travels with
+        // the queue track. `None` here zeroed `quality_state`'s `TRACK_MAX_*`
+        // seed, so a Library-feed track play drew a bare tier on the NPB
+        // AudioStamp with no "24-bit / 96 kHz" line. `library_qt::FeedItem`
+        // carries the raw numbers alongside the formatted `quality_detail`.
         hires: item.quality_tier == "hires",
-        bit_depth: None,
-        sample_rate: None,
+        bit_depth: item.bit_depth,
+        sample_rate: item.sample_rate,
         is_local: false,
         album_id: if item.album_id.is_empty() {
             None
@@ -1759,19 +1786,38 @@ pub(crate) async fn refresh_now_playing(runtime: &Arc<AppRuntime<LoggingAdapter>
     });
 }
 
-/// Quality tier + exact label from a queue track's bit depth / sample rate
-/// (kHz float, catalog), matching the discover card badge format.
+/// Quality tier + exact label from a queue track's bit depth / sample rate.
+///
+/// 1:1 with `playback.rs:2025-2042` (`refresh_now_playing_meta`), which this
+/// had forked from in three ways, each of them visible on the NPB AudioStamp:
+///
+///  - **DSD.** `bit_depth == Some(1)` marks a DSD stream (1-bit, `sample_rate`
+///    = the DSD bit rate). The reference tiers it "hires" and labels it
+///    through `dsd_multiple_label` ("DSD64"); the forked version tiered it
+///    "cd" and printed "1-bit / 2822.4 kHz".
+///  - **Hz vs kHz.** `quality_state::detail` normalizes either unit (the
+///    `>= 1000` guard) exactly like the track rows do, so the stamp and the
+///    row can never disagree. The forked `format!` printed a raw Hz value as
+///    "44100 kHz".
+///  - **The empty-detail gate.** The reference blanks the line only when the
+///    TIER is unknown or BOTH params are missing; the fork blanked it whenever
+///    either one was missing, so a track with a known rate and no depth lost
+///    its whole detail line instead of taking the formatter's depth default.
 fn quality_badge(track: &QueueTrack) -> (String, String) {
     let tier = match track.bit_depth {
+        Some(1) => "hires",
         Some(d) if d >= 24 => "hires",
         Some(_) => "cd",
         None if track.hires => "hires",
         None => "",
     }
     .to_string();
-    let label = match (track.bit_depth, track.sample_rate) {
-        (Some(bd), Some(sr)) => format!("{}-bit / {} kHz", bd, crate::home_qt::format_rate(sr)),
-        _ => String::new(),
+    let label = if tier.is_empty() || (track.bit_depth.is_none() && track.sample_rate.is_none()) {
+        String::new()
+    } else if track.bit_depth == Some(1) {
+        crate::quality_state::dsd_multiple_label(track.sample_rate)
+    } else {
+        crate::quality_state::detail(track.bit_depth, track.sample_rate)
     };
     (tier, label)
 }

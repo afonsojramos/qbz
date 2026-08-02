@@ -325,6 +325,11 @@ fn map_track(index: usize, track: PageArtistTrack) -> TrackRow {
         duration: mmss(track.duration.unwrap_or(0)),
         quality_tier: home_qt::quality_tier_from_depth(bit_depth).to_string(),
         quality_detail: home_qt::quality_detail_from_parts(bit_depth, sample_rate),
+        // The RAW numbers ride with the row (see `TrackRow::bit_depth`) so
+        // `track_row_to_queue` can fill the queue entry the way the reference's
+        // `make_top_track_queue` (playback.rs:3188) fills it off `audio_info`.
+        bit_depth,
+        sample_rate,
         explicit: track.parental_warning.unwrap_or(false),
         disc: 1,
         work_header: String::new(),
@@ -593,9 +598,13 @@ fn track_row_to_queue(row: &TrackRow) -> QueueTrack {
         } else {
             Some(row.artwork_url.clone())
         },
+        // playback.rs `make_top_track_queue` (:3188): the CATALOG max travels
+        // with the queue track. `None` here zeroed `quality_state`'s
+        // `TRACK_MAX_*` seed, so the NPB AudioStamp drew a bare tier with no
+        // "24-bit / 96 kHz" line on every artist Popular-Tracks play.
         hires: row.quality_tier == "hires",
-        bit_depth: None,
-        sample_rate: None,
+        bit_depth: row.bit_depth,
+        sample_rate: row.sample_rate,
         is_local: false,
         album_id: if row.album_id.is_empty() {
             None

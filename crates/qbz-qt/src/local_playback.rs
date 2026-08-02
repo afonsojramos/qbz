@@ -25,6 +25,112 @@ use crate::local_state::{state, with_db};
 type Runtime = Arc<AppRuntime<LoggingAdapter>>;
 
 // ---------------------------------------------------------------------------
+// On-disk cover backfill (playback.rs `fill_missing_covers` +
+// local_library.rs `find_folder_cover`, both 1:1)
+// ---------------------------------------------------------------------------
+
+/// The reference's robust on-disk cover lookup for one folder
+/// (`local_library.rs:3110 find_folder_cover`): a known stem first, then a
+/// file named after the folder, then any image at all. Stems and extensions
+/// are the reference's list verbatim — do not prune it, the order IS the
+/// preference.
+pub(crate) fn find_folder_cover(folder: &Path) -> Option<String> {
+    const STEMS: &[&str] = &[
+        "cover",
+        "folder",
+        "front",
+        "art",
+        "album",
+        "albumart",
+        "albumartsmall",
+        "thumb",
+        "artwork",
+        "scan",
+        "booklet",
+        "title",
+    ];
+    const EXTS: &[&str] = &["jpg", "jpeg", "png", "webp", "bmp", "gif", "tif", "tiff"];
+    let is_img = |p: &Path| {
+        p.extension()
+            .and_then(|e| e.to_str())
+            .map(|e| EXTS.iter().any(|x| x.eq_ignore_ascii_case(e)))
+            .unwrap_or(false)
+    };
+    let mut entries: Vec<PathBuf> = std::fs::read_dir(folder)
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_file() && is_img(p))
+        .collect();
+    if entries.is_empty() {
+        return None;
+    }
+    entries.sort();
+    let stem_lower = |p: &Path| {
+        p.file_stem()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_lowercase())
+            .unwrap_or_default()
+    };
+    let folder_name = folder
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    let by_stem = entries
+        .iter()
+        .find(|p| STEMS.contains(&stem_lower(p).as_str()));
+    let by_name = entries
+        .iter()
+        .find(|p| !folder_name.is_empty() && stem_lower(p) == folder_name);
+    by_stem
+        .or(by_name)
+        .cloned()
+        .or_else(|| entries.into_iter().next())
+        .map(|p| p.to_string_lossy().into_owned())
+}
+
+/// Fill `artwork_path` for the rows that lack one, from a cover image sitting
+/// in the track's folder — the port of `playback.rs:1490 fill_missing_covers`,
+/// which the reference runs on EVERY local play/enqueue path before it maps
+/// rows to `QueueTrack`s (playback.rs:1094/1322/1349/1382, local_library.rs:1826,
+/// main.rs:10636, offline_favorites.rs:128). This port had none of it, so a
+/// library row whose `artwork_path` is NULL — the offline cache writes
+/// `cover.jpg` next to the file without always backfilling the index, and a
+/// ripped folder often carries the art only on disk — reached the queue with
+/// `artwork_url: None` and the panel had nothing to request.
+///
+/// BLOCKING (one `read_dir` per distinct folder, memoized), so every caller
+/// runs it inside `spawn_blocking`: a NAS-backed library would otherwise stall
+/// a tokio worker.
+pub(crate) fn fill_missing_covers(tracks: &mut [LocalTrack]) {
+    use std::collections::HashMap;
+    let mut memo: HashMap<String, Option<String>> = HashMap::new();
+    for t in tracks.iter_mut() {
+        if t.artwork_path.as_deref().is_some_and(|s| !s.is_empty()) {
+            continue;
+        }
+        let p = Path::new(&t.file_path);
+        let folder = if p.is_dir() {
+            p.to_path_buf()
+        } else {
+            match p.parent() {
+                Some(d) => d.to_path_buf(),
+                None => continue,
+            }
+        };
+        let key = folder.to_string_lossy().into_owned();
+        let cover = memo
+            .entry(key)
+            .or_insert_with(|| find_folder_cover(&folder))
+            .clone();
+        if cover.is_some() {
+            t.artwork_path = cover;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Queue mapping (playback.rs `local_queue_track` 1:1, all three sources)
 // ---------------------------------------------------------------------------
 
@@ -273,13 +379,35 @@ async fn play_rows(runtime: &Runtime, tracks: Vec<LocalTrack>, start: usize, shu
     if tracks.is_empty() {
         return;
     }
-    let queue: Vec<QueueTrack> = tracks.iter().map(local_queue_track).collect();
-    let start = start.min(queue.len() - 1);
-    let first = queue[start].clone();
-    if shuffle {
+    // Folder-cover backfill BEFORE the mapping (the reference runs it at every
+    // local play site: playback.rs:1094 / :1322 / :1349 / :1382). This is the
+    // funnel for album / folder / folder-track / Tracks-tab play, so one call
+    // here covers all four. Blocking fs, hence spawn_blocking.
+    let tracks = tokio::task::spawn_blocking(move || {
+        let mut tracks = tracks;
+        fill_missing_covers(&mut tracks);
+        tracks
+    })
+    .await
+    .unwrap_or_default();
+    if tracks.is_empty() {
+        return;
+    }
+    let mut queue: Vec<QueueTrack> = tracks.iter().map(local_queue_track).collect();
+    // Shuffle reorders THIS list and starts at the top of the mixed order. The
+    // mode alone only randomises what comes next, so the first track the user
+    // hears was the folder's #1 every time — owner ruling 2026-08-01, every
+    // shuffle must be genuinely random. The caller's anchor is meaningless once
+    // the order is mixed, so it is dropped (`play_track_list_in` does the same).
+    let start = if shuffle {
         runtime.core().set_shuffle(true).await;
         crate::now_playing::set_shuffle(true);
-    }
+        crate::playback_qt::xorshift_shuffle(&mut queue);
+        0
+    } else {
+        start.min(queue.len() - 1)
+    };
+    let first = queue[start].clone();
     // Through the SHARED seam (not `core().set_queue`) so the origin is derived
     // from the queue: one album -> ("album", group_key), a mixed folder queue ->
     // nothing, and the per-track album fallback lands it on the same view.
@@ -412,15 +540,24 @@ fn find_track_blocking(row_id: i64) -> Option<LocalTrack> {
 pub async fn enqueue(runtime: &Runtime, kind: String, id: String, mode: String) {
     let k = kind.clone();
     let ident = id.clone();
-    let tracks: Vec<LocalTrack> = tokio::task::spawn_blocking(move || match k.as_str() {
-        "track" => ident
-            .parse::<i64>()
-            .ok()
-            .and_then(find_track_blocking)
-            .into_iter()
-            .collect(),
-        "folder" => with_db(|db| db.list_folder_tracks_recursive(&ident, false)).unwrap_or_default(),
-        _ => fetch_album_tracks_blocking(&ident),
+    let tracks: Vec<LocalTrack> = tokio::task::spawn_blocking(move || {
+        let mut rows: Vec<LocalTrack> = match k.as_str() {
+            "track" => ident
+                .parse::<i64>()
+                .ok()
+                .and_then(find_track_blocking)
+                .into_iter()
+                .collect(),
+            "folder" => {
+                with_db(|db| db.list_folder_tracks_recursive(&ident, false)).unwrap_or_default()
+            }
+            _ => fetch_album_tracks_blocking(&ident),
+        };
+        // Same backfill the play funnel does — an enqueued row must carry the
+        // same cover it would have carried had it been played
+        // (reference: main.rs:10636 fills before `enqueue_local_tracks`).
+        fill_missing_covers(&mut rows);
+        rows
     })
     .await
     .unwrap_or_default();

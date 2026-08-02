@@ -257,6 +257,17 @@ async fn apply(rows: Vec<LocalTrack>, action: &str) -> bool {
 /// (Slint local_bulk.rs:261-269 is likewise unhooked).
 async fn enqueue_rows(rows: Vec<LocalTrack>, mode: &str) {
     let runtime = crate::app();
+    // Same folder-cover backfill the single-row path runs
+    // (`local_playback::enqueue`): a bulk-queued row must reach the queue with
+    // the cover its folder has, not a blank thumbnail. Blocking fs, so it goes
+    // through spawn_blocking like every other caller.
+    let rows = tokio::task::spawn_blocking(move || {
+        let mut rows = rows;
+        crate::local_playback::fill_missing_covers(&mut rows);
+        rows
+    })
+    .await
+    .unwrap_or_default();
     let queue: Vec<QueueTrack> = rows.iter().map(local_queue_track).collect();
     log::info!("[qbz-qt] local bulk {mode}: {} track(s)", queue.len());
     match mode {

@@ -339,10 +339,16 @@ pub fn fetch_album_tracks_blocking(id: &str) -> Vec<LocalTrack> {
 /// `local_album_actions`, which is also what the version picker and the
 /// per-disc menu read back.
 pub fn load_album_detail_blocking(id: &str) -> Option<AlbumDetailDoc> {
-    let tracks = fetch_album_tracks_blocking(id);
+    let mut tracks = fetch_album_tracks_blocking(id);
     if tracks.is_empty() {
         return None;
     }
+    // Backfill covers from cover.jpg/folder.jpg on disk (the DB may not have an
+    // artwork_path even when a cover sits in the folder) — the reference does
+    // exactly this here, `local_library.rs:1826`. It is what makes the detail
+    // rows AND everything that later reads `detail_raw` (the per-disc menu, the
+    // bulk bar, `find_track_blocking`) carry the cover the folder has.
+    crate::local_playback::fill_missing_covers(&mut tracks);
     crate::local_album_actions::open_versions(id, tracks)
 }
 

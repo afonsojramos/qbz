@@ -987,6 +987,9 @@ fn to_row(track: &Track) -> TrackRow {
         duration: mmss(track.duration),
         quality_tier: crate::home_qt::quality_tier_from_depth(bit_depth).to_string(),
         quality_detail: crate::home_qt::quality_detail_from_parts(bit_depth, sample_rate),
+        // See `TrackRow::bit_depth` — the raw numbers ride with the row.
+        bit_depth,
+        sample_rate,
         explicit: track.parental_warning,
         artwork_url: track
             .album

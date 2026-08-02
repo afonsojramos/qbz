@@ -21,6 +21,43 @@ use serde::Serialize;
 use crate::local_rows::{basename, folder_key, map_track, FolderDetail, SubfolderRow, TrackRow, TreeNode};
 use crate::local_state::{state, with_art, with_db};
 
+/// `list_folder_children` + the reference's on-disk cover fallback for the
+/// Folder entries (`local_library.rs:2947-2966`): the index carries an
+/// `artwork` only when a track under the folder had embedded art, so a folder
+/// whose cover sits on disk as `cover.jpg` / `folder.jpg` / `<album>.jpg` drew
+/// a blank subcard here while the Slint drew the cover. Same
+/// `find_folder_cover` the queue backfill uses, so the tree card and the queue
+/// thumbnail can never disagree.
+///
+/// BLOCKING (one `read_dir` per child folder that has no indexed artwork) —
+/// both callers are `*_blocking` and run inside `spawn_blocking`, which is
+/// where the reference puts it too ("Off-thread, so the fs scan is fine here").
+fn folder_children_with_covers(path: &str) -> Vec<FolderTreeEntry> {
+    with_db(|db| db.list_folder_children(path, false))
+        .unwrap_or_default()
+        .into_iter()
+        .map(|e| match e {
+            FolderTreeEntry::Folder {
+                path,
+                segment,
+                track_count_under,
+                artwork,
+            } => {
+                let artwork = artwork.filter(|a| !a.is_empty()).or_else(|| {
+                    crate::local_playback::find_folder_cover(std::path::Path::new(&path))
+                });
+                FolderTreeEntry::Folder {
+                    path,
+                    segment,
+                    track_count_under,
+                    artwork,
+                }
+            }
+            other => other,
+        })
+        .collect()
+}
+
 fn entry_to_node(
     e: &FolderTreeEntry,
     depth: i32,
@@ -109,7 +146,7 @@ pub fn tree_collapse(path: &str) -> Vec<TreeNode> {
 /// Expand: fetch ONE child level and splice it in (never a recursive
 /// preload).
 pub fn tree_expand_blocking(path: &str) -> Vec<TreeNode> {
-    let children = with_db(|db| db.list_folder_children(path, false)).unwrap_or_default();
+    let children = folder_children_with_covers(path);
     let nodes = state(|s| s.tree.iter().position(|n| n.path == path).map(|pos| (pos, s.tree[pos].depth)));
     let Some((pos, depth)) = nodes else {
         return state(|s| s.tree.clone());
@@ -354,7 +391,7 @@ pub fn tree_select_all_blocking() {
 /// The right pane of tree mode: subfolders (cover cards) + the folder's
 /// DIRECT tracks + the recursive count shown next to the name.
 pub fn load_folder_detail_blocking(path: &str) -> FolderDetail {
-    let children = with_db(|db| db.list_folder_children(path, false)).unwrap_or_default();
+    let children = folder_children_with_covers(path);
     let tracks = with_db(|db| db.list_folder_tracks(path, false)).unwrap_or_default();
     let count = with_db(|db| db.count_folder_tracks_recursive(path, false)).unwrap_or(0);
     let (subfolders, rows) = with_art(|art| {

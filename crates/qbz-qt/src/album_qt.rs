@@ -60,6 +60,24 @@ pub struct TrackRow {
     pub quality_tier: String,
     #[serde(rename = "qualityDetail")]
     pub quality_detail: String,
+    /// RAW catalog max bit depth / sample rate (kHz) — the SAME two numbers
+    /// `quality_detail` above is derived from.
+    ///
+    /// THE CONTRACT (reference: `crates/qbz/src/playback.rs:2426`
+    /// `make_queue_track`, which fills `bit_depth: track.maximum_bit_depth` /
+    /// `sample_rate: track.maximum_sampling_rate` straight off the API model):
+    /// a queue track must carry the numbers, never only the formatted string.
+    /// The row builders here map a DISPLAY row into a `QueueTrack`
+    /// (`artist_qt::track_row_to_queue`, `label_qt::track_row_to_queue`), so
+    /// without these fields they physically could not fill them and hardcoded
+    /// `None` — which zeroes `quality_state`'s `TRACK_MAX_*` seed and leaves
+    /// the NPB AudioStamp with a tier and no detail line. Re-parsing
+    /// `quality_detail` back into numbers would be a second source of truth
+    /// (and lossy); the producer has the numbers in hand, so it passes them.
+    #[serde(rename = "bitDepth", skip_serializing_if = "Option::is_none")]
+    pub bit_depth: Option<u32>,
+    #[serde(rename = "sampleRate", skip_serializing_if = "Option::is_none")]
+    pub sample_rate: Option<f64>,
     pub explicit: bool,
     pub disc: u32,
     /// Work-section header text ("" = none; album view only).
@@ -464,6 +482,8 @@ fn map_track(track: &Track) -> TrackRow {
             track.maximum_bit_depth,
             track.maximum_sampling_rate,
         ),
+        bit_depth: track.maximum_bit_depth,
+        sample_rate: track.maximum_sampling_rate,
         explicit: track.parental_warning,
         disc: track.media_number.unwrap_or(1),
         work_header: work,

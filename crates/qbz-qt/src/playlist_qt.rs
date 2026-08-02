@@ -80,6 +80,22 @@ pub struct PlaylistTrackRow {
     pub quality_detail: String,
     #[serde(rename = "qualityLabel")]
     pub quality_label: String,
+    /// RAW catalog max bit depth / sample rate (kHz) — the SAME two numbers
+    /// `quality_detail` / `quality_label` above are derived from.
+    ///
+    /// THE CONTRACT (reference: `crates/qbz/src/playback.rs:2426`
+    /// `make_queue_track`): a queue track carries the NUMBERS, never only the
+    /// formatted string. `row_to_queue` below maps this display row into a
+    /// `QueueTrack`; without these fields it could not fill them and hardcoded
+    /// `None`, which zeroes `quality_state`'s `TRACK_MAX_*` seed — the NPB
+    /// AudioStamp then shows a tier with NO "24-bit / 96 kHz" line for every
+    /// playlist-sourced play. Re-parsing the formatted string back into
+    /// numbers would be lossy and a second source of truth; the producer has
+    /// them in hand, so it passes them.
+    #[serde(rename = "bitDepth", skip_serializing_if = "Option::is_none")]
+    pub bit_depth: Option<u32>,
+    #[serde(rename = "sampleRate", skip_serializing_if = "Option::is_none")]
+    pub sample_rate: Option<f64>,
     pub explicit: bool,
     #[serde(rename = "artUrl")]
     pub art_url: String,
@@ -490,6 +506,10 @@ pub(crate) fn map_track(track: &Track) -> PlaylistTrackRow {
             track.maximum_sampling_rate,
         ),
         quality_label: quality_label(track.maximum_bit_depth, track.maximum_sampling_rate),
+        // See `PlaylistTrackRow::bit_depth` — the raw catalog numbers ride
+        // with the row so `row_to_queue` can hand them to the queue.
+        bit_depth: track.maximum_bit_depth,
+        sample_rate: track.maximum_sampling_rate,
         explicit: track.parental_warning,
         art_url: album
             .and_then(|a| a.image.best().cloned())
@@ -518,9 +538,14 @@ fn row_to_queue(row: &PlaylistTrackRow) -> QueueTrack {
         } else {
             Some(row.art_url.clone())
         },
+        // playback.rs `make_queue_track` (:2426): the CATALOG max travels with
+        // the queue track. `None` here zeroed `quality_state`'s `TRACK_MAX_*`
+        // seed, so a playlist play drew a bare tier on the NPB AudioStamp with
+        // no "24-bit / 96 kHz" line — perfect from an album, blank from a
+        // playlist. The row carries the numbers now (see the struct).
         hires: row.quality_tier == "hires",
-        bit_depth: None,
-        sample_rate: None,
+        bit_depth: row.bit_depth,
+        sample_rate: row.sample_rate,
         is_local: false,
         album_id: if row.album_id.is_empty() {
             None
@@ -1662,12 +1687,22 @@ pub async fn play_all(runtime: &Arc<AppRuntime<LoggingAdapter>>) -> Result<(), S
     play_queue_at(runtime, tracks, 0, open_context()).await
 }
 
-/// Header Shuffle: shuffle on, then play (the core queue owns the order —
-/// play_album_shuffled parity).
+/// Header Shuffle: reorder THIS list and play the top of the shuffled order.
+///
+/// The flag alone is not a shuffle. Raising `set_shuffle(true)` and calling
+/// `play_all` starts on the playlist's #1 track every single time — the core's
+/// mode only randomises what comes NEXT — so the one track the user actually
+/// hears when they press Shuffle was deterministic. Owner ruling 2026-08-01:
+/// every shuffle must be genuinely random. Same shape as
+/// `playback_qt::play_track_list_in`'s shuffle arm and as the reference's
+/// `play_album_shuffled` (playback.rs:3945-3957): mix the Vec, start at 0.
+/// The MODE is still raised, so continuing past this list stays shuffled.
 pub async fn play_shuffled(runtime: &Arc<AppRuntime<LoggingAdapter>>) -> Result<(), String> {
     runtime.core().set_shuffle(true).await;
     crate::now_playing::set_shuffle(true);
-    play_all(runtime).await
+    let mut tracks = current_queue();
+    crate::playback_qt::xorshift_shuffle(&mut tracks);
+    play_queue_at(runtime, tracks, 0, open_context()).await
 }
 
 /// Row play: the playlist as the queue, starting at this track.

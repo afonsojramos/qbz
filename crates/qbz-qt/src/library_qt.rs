@@ -70,6 +70,19 @@ pub struct FeedItem {
     pub quality_tier: String,
     #[serde(rename = "qualityDetail")]
     pub quality_detail: String,
+    /// RAW catalog max bit depth / sample rate (kHz) — the SAME two numbers
+    /// `quality_detail` above is derived from.
+    ///
+    /// THE CONTRACT (reference: `crates/qbz/src/playback.rs:2426`
+    /// `make_queue_track`): a queue track carries the NUMBERS. Both feed ->
+    /// queue builders (`feed_track_to_queue` below and
+    /// `playback_qt::feed_queue_track`) map THIS row into a `QueueTrack`, so
+    /// without the fields they hardcoded `None` and every Library-feed track
+    /// play left the NPB AudioStamp with a tier and no detail line.
+    #[serde(rename = "bitDepth", skip_serializing_if = "Option::is_none")]
+    pub bit_depth: Option<u32>,
+    #[serde(rename = "sampleRate", skip_serializing_if = "Option::is_none")]
+    pub sample_rate: Option<f64>,
     #[serde(rename = "isFavorite")]
     pub is_favorite: bool,
     pub genre: String,
@@ -338,6 +351,10 @@ fn map_track(track: Track) -> FeedItem {
             track.maximum_bit_depth,
             track.maximum_sampling_rate,
         ),
+        // See `FeedItem::bit_depth` — the raw catalog numbers ride with the
+        // row so the two feed -> queue builders can hand them to the queue.
+        bit_depth: track.maximum_bit_depth,
+        sample_rate: track.maximum_sampling_rate,
         explicit: track.parental_warning,
         image_url: artwork_url,
         is_favorite: true,
@@ -805,6 +822,12 @@ async fn fetch_purchases(
                 album_id: aid,
                 image_url: img,
                 quality_tier: tier.into(),
+                // See `FeedItem::bit_depth` — a purchased TRACK row is a queue
+                // source too (`feed_track_to_queue` / `playback_qt::
+                // feed_queue_track` look this row up by id), so it carries the
+                // raw catalog numbers like every other track producer.
+                bit_depth: t.maximum_bit_depth,
+                sample_rate: t.maximum_sampling_rate,
                 id: t.id.to_string(),
                 title: t.title,
                 ..Default::default()
@@ -1301,9 +1324,13 @@ pub(crate) fn feed_track_to_queue(item: &FeedItem) -> Option<QueueTrack> {
         } else {
             Some(item.image_url.clone())
         },
+        // playback.rs `make_queue_track` (:2426): the CATALOG max travels with
+        // the queue track. `None` here zeroed `quality_state`'s `TRACK_MAX_*`
+        // seed, so a Library track play drew a bare tier on the NPB AudioStamp
+        // with no "24-bit / 96 kHz" line.
         hires: item.quality_tier == "hires",
-        bit_depth: None,
-        sample_rate: None,
+        bit_depth: item.bit_depth,
+        sample_rate: item.sample_rate,
         is_local: false,
         album_id: if item.album_id.is_empty() {
             None

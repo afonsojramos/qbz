@@ -54,13 +54,11 @@ Rectangle {
         if (!visible)
             return
         QbzQueue.queuePanelOpened()
-        // AND re-dispatch the covers. `onDocChanged` alone is not enough: the
-        // panel is `visible`-gated rather than mounted on demand, and a queue
-        // that was published while it was hidden leaves the covers never
-        // requested — measured live, a local track's now-playing thumbnail
-        // stayed blank with NO artwork dispatch after the publish. The
-        // publish dedup means `queuePanelOpened` above often changes nothing,
-        // so it cannot be relied on to trigger the doc change either.
+        // AND re-dispatch the covers: the publish dedup means
+        // `queuePanelOpened` above often changes nothing, so it cannot be
+        // relied on to trigger the doc change either. (This handler runs
+        // OUTSIDE the docChanged storm, which is why it used to be the only
+        // dispatch that asked for the right urls — see `dispatchCovers`.)
         dispatchCovers()
     }
 
@@ -163,12 +161,33 @@ Rectangle {
     }
     Component.onCompleted: dispatchCovers()
     onDocChanged: dispatchCovers()
+    // Collect the covers of the document CURRENTLY on the property and ask the
+    // shared pipeline for them.
+    //
+    // It re-derives current/upcoming/history from `root.doc` instead of reading
+    // the `currentRow` / `upcoming` / `historyRows` bindings, and that is the
+    // whole fix: called from `onDocChanged`, those three derived properties are
+    // still holding the PREVIOUS document. Measured on this Qt build (three
+    // publishes, one per event-loop turn): reading the derived properties in
+    // the handler dispatched [], then A's urls on B's publish, then B's on C's
+    // — always exactly one publish behind, so the row on screen NEVER had its
+    // cover requested. Re-reading `root.doc` in the same handler dispatched
+    // A, B, C in step.
+    //
+    // It is also why the defect looked source-dependent: an ALBUM queue has one
+    // cover for every row, so asking one publish late asks for the same url and
+    // is indistinguishable from correct. A PLAYLIST queue (a different album per
+    // row) and a mixed LOCAL queue ask for the previous row's cover forever.
     function dispatchCovers() {
+        var d = root.doc
+        var cur = d.current || null
+        var up = d.upcoming || []
+        var hist = d.history || []
         var urls = []
-        if (currentRow && currentRow.artUrl) urls.push(currentRow.artUrl)
+        if (cur && cur.artUrl) urls.push(cur.artUrl)
         var i
-        for (i = 0; i < upcoming.length; i++) if (upcoming[i].artUrl) urls.push(upcoming[i].artUrl)
-        for (i = 0; i < historyRows.length; i++) if (historyRows[i].artUrl) urls.push(historyRows[i].artUrl)
+        for (i = 0; i < up.length; i++) if (up[i].artUrl) urls.push(up[i].artUrl)
+        for (i = 0; i < hist.length; i++) if (hist[i].artUrl) urls.push(hist[i].artUrl)
         if (urls.length > 0) {
             QbzShell.sidebarArtworkWindow(JSON.stringify(urls))
             root.artPulse = true

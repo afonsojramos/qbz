@@ -1281,6 +1281,11 @@ fn parse_top_track(index: usize, raw: &Value) -> TrackRow {
         duration: mmss(duration as u32),
         quality_tier: crate::home_qt::quality_tier_from_depth(bit_depth).to_string(),
         quality_detail: crate::home_qt::quality_detail_from_parts(bit_depth, sample_rate),
+        // Same contract as the album / artist rows (`TrackRow::bit_depth`):
+        // the RAW numbers ride with the row so `track_row_to_queue` can fill
+        // the queue entry instead of hardcoding `None`.
+        bit_depth,
+        sample_rate,
         explicit: raw
             .get("parental_warning")
             .and_then(|v| v.as_bool())
@@ -1399,9 +1404,13 @@ fn track_row_to_queue(row: &TrackRow) -> QueueTrack {
         } else {
             Some(row.artwork_url.clone())
         },
+        // playback.rs `make_queue_track` (:2426): the CATALOG max travels with
+        // the queue track. `None` here zeroed `quality_state`'s `TRACK_MAX_*`
+        // seed, so a label Popular-Tracks play drew a bare tier on the NPB
+        // AudioStamp with no "24-bit / 96 kHz" line.
         hires: row.quality_tier == "hires",
-        bit_depth: None,
-        sample_rate: None,
+        bit_depth: row.bit_depth,
+        sample_rate: row.sample_rate,
         is_local: false,
         album_id: if row.album_id.is_empty() {
             None

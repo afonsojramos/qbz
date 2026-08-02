@@ -1242,6 +1242,17 @@ pub(crate) fn playlist_play_all() {
 pub(crate) fn playlist_shuffle() {
     let runtime = app();
     spawn(async move {
+        // The local guard `playlist_play_all` carries. The MODE is raised so
+        // what follows this list stays shuffled, but the list itself is mixed
+        // by `play_shuffled` — the flag alone would start on the playlist's #1
+        // track every time (owner ruling 2026-08-01: every shuffle must be
+        // genuinely random).
+        if local_playlist_qt::open_id().is_some() {
+            runtime.core().set_shuffle(true).await;
+            now_playing::set_shuffle(true);
+            local_playlist_qt::play_shuffled(&runtime).await;
+            return;
+        }
         if let Err(e) = playlist_qt::play_shuffled(&runtime).await {
             log::error!("[qbz-qt] playlist shuffle failed: {e}");
         }
@@ -1279,6 +1290,19 @@ pub(crate) fn playlist_delete() {
 pub(crate) fn playlist_play_track(track_id: String) {
     let runtime = app();
     spawn(async move {
+        // Same guard as `playlist_play_all` above, and for the same reason: a
+        // LOCAL detail plays from its OWN resolved snapshot. Without it a row
+        // click went through `playlist_qt::play_track` -> `current_queue()` ->
+        // `row_to_queue`, which types EVERY row as Qobuz (`is_local: false`,
+        // `source: "qobuz"`) — so a local file was queued as a catalog track
+        // and `governed` came out true on the quality seed. `local_playlist_qt
+        // ::play` matches on the same display id the rows carry
+        // (`row_to_display` sets `id: queue.id.to_string()`), Qobuz rows
+        // included, so the whole mixed detail is served by one path.
+        if local_playlist_qt::open_id().is_some() {
+            local_playlist_qt::play(&runtime, &track_id).await;
+            return;
+        }
         if let Err(e) = playlist_qt::play_track(&runtime, &track_id).await {
             log::error!("[qbz-qt] playlist row play failed: {e}");
         }

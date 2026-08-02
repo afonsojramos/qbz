@@ -476,7 +476,17 @@ Rectangle {
         for (i = 0; i < rawPlaylists.length; i++)
             if (rawPlaylists[i].artUrl) urls.push(rawPlaylists[i].artUrl)
         // Magazine story thumbnails ride the same pipeline (arc-cdn URLs).
-        for (i = 0; i < stories.length; i++) if (stories[i].artUrl) urls.push(stories[i].artUrl)
+        // Off `artist.stories`, NOT the derived `stories` property (:110): this
+        // function is called from `onArtistChanged`, and a derived binding still
+        // holds the PREVIOUS document inside its source's change handler on this
+        // Qt build (measured — the same race QueuePanel.dispatchCovers and
+        // AlbumView's `onHeaderChanged` exist for). The stories land in a LATER
+        // publish than the page itself, so a stale read asked for the previous
+        // pass's thumbnails and the story cards stayed empty frames whenever the
+        // stories pass was the last publish.
+        var rawStories = artist.stories || []
+        for (i = 0; i < rawStories.length; i++)
+            if (rawStories[i].artUrl) urls.push(rawStories[i].artUrl)
         dispatchArtwork(urls)
     }
 
