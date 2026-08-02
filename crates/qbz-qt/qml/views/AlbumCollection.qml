@@ -24,6 +24,10 @@
 // scroll frame, which is the O(n)-per-frame cost the .slint's own sampler
 // exists to avoid (see its "POST-LAYOUT SNAPSHOT SAMPLING" note). Grouped
 // sections are never windowed — same call the .slint makes (:265-277).
+//
+// TAIL FADE (opt-in via armTailFade(), see the block below): the arrival half
+// of the Load-more round. OFF unless a host arms it, so the two hosts that do
+// not (Discover Browse, Play History) are bit-for-bit unchanged.
 
 import QtQuick
 import com.blitzfc.qbz
@@ -86,12 +90,138 @@ Column {
     }
     Component.onCompleted: root.sampleBand()
 
+    // --- Tail fade: the appended page APPEARS, it does not pop -------------
+    // The owner's second ask for the Load-more round (2026-08-02): "que la
+    // aparicion de lo que se cargue, sea smooth". controls/QbzLoadMore.qml
+    // owns the WAITING half (the skeleton under the button); the ARRIVAL half
+    // can only live here — only the collection knows which of its delegates
+    // are new. A host asks for it by calling armTailFade() immediately BEFORE
+    // the bridge call that fetches the next page.
+    //
+    // WHY AN ID SET AND NOT "index >= the old count": this collection is
+    // SORTED by its host (LabelReleasesView's sort control does newest /
+    // oldest / title / artist, src/label_qt.rs::sort_cards). Only under
+    // "newest" does a fetched page land as a tail; under any other order the
+    // new albums INTERLEAVE, and an index threshold would then re-fade albums
+    // that never moved — the very flicker this exists to avoid. Membership in
+    // the pre-fetch id set is the honest question, and it costs one JS object
+    // of N keys per click. It also lets GROUPED mode fade correctly, where
+    // there is no flat index at all: a fetched album is folded into whichever
+    // artist section it belongs to, anywhere in the page.
+    //
+    // WHY BOTH LISTS: `visible` and `grouped` are mutually exclusive in Rust —
+    // derive_releases returns `Vec::new()` for the flat list as soon as
+    // group-by is on (label_qt.rs:923). Snapshotting only `albums` would
+    // capture an EMPTY set in grouped mode and every card on screen would read
+    // as "new".
+    //
+    // INERT BY DEFAULT: a host that never arms leaves `_tailSeen` null, every
+    // delegate's opacity short-circuits to 1.0, `_tailReveal` is never read
+    // (so it is never even a binding dependency) and no animation exists.
+    property var _tailSeen: null
+    property real _tailReveal: 1.0
+
+    /// Host-supplied identity of the page on screen (a label id, an artist
+    /// id…). Changing it disarms a pending fade, so a click that never landed
+    /// cannot colour the NEXT page's first paint. "" = the hosts that do not
+    /// use the fade at all.
+    property string collectionKey: ""
+    onCollectionKeyChanged: root.clearTailFade()
+
+    function _addIds(seen, list) {
+        for (var i = 0; i < list.length; i++) {
+            var a = list[i]
+            if (a && a.id !== undefined && a.id !== null && a.id !== "")
+                seen[a.id] = true
+        }
+    }
+
+    /// Snapshot what is on screen NOW. Call it BEFORE the bridge call: the
+    /// bridge may republish synchronously.
+    function armTailFade() {
+        var seen = {}
+        root._addIds(seen, root.albums)
+        for (var g = 0; g < root.grouped.length; g++)
+            root._addIds(seen, root.grouped[g].albums || [])
+        // Arming ALSO parks the reveal at 0. A delegate for a new id can be
+        // built by a Repeater's model binding BEFORE onAlbumsChanged runs —
+        // both hang off the same change signal and the order between them is
+        // not ours to choose — and it must never be painted at full opacity
+        // for one frame before the fade starts.
+        root._tailReveal = 0.0
+        root._tailSeen = seen
+    }
+
+    /// Disarm without fading.
+    function clearTailFade() {
+        root._tailSeen = null
+        root._tailReveal = 1.0
+    }
+
+    /// 1.0 for everything the arm already saw — and for every host that never
+    /// armed, and for a card with no id at all (an unknown id must fail
+    /// OPAQUE, never invisible).
+    function tailOpacity(id) {
+        if (!root._tailSeen || id === undefined || id === null || id === "")
+            return 1.0
+        return root._tailSeen[id] === true ? 1.0 : root._tailReveal
+    }
+
+    function _hasFreshId(list) {
+        for (var i = 0; i < list.length; i++) {
+            var a = list[i]
+            if (a && a.id !== undefined && a.id !== null && a.id !== ""
+                    && root._tailSeen[a.id] !== true)
+                return true
+        }
+        return false
+    }
+
+    function _maybeStartTailFade() {
+        if (!root._tailSeen)
+            return
+        var fresh = root._hasFreshId(root.albums)
+        for (var g = 0; !fresh && g < root.grouped.length; g++)
+            fresh = root._hasFreshId(root.grouped[g].albums || [])
+        // A republish with no new id — an artwork batch, a favourite toggle, a
+        // sort flip, a group-by flip — is NOT the page landing. Stay armed and
+        // stay silent; re-fading what is already on screen is the regression.
+        if (fresh)
+            tailFade.restart()
+    }
+
+    onAlbumsChanged: root._maybeStartTailFade()
+    onGroupedChanged: root._maybeStartTailFade()
+
+    NumberAnimation {
+        id: tailFade
+        target: root
+        property: "_tailReveal"
+        from: 0.0
+        to: 1.0
+        // 220ms / OutCubic is the content half of the Load-more round (the
+        // skeleton half uses the tree's 180ms — QbzSkeleton.qml:216).
+        duration: 220
+        easing.type: Easing.OutCubic
+        // Disarm on the way out, so the NEXT republish finds no arm at all.
+        // `finished` is emitted only on a natural end — a restart() stops the
+        // animation without it, which is exactly what we want mid-flight.
+        onFinished: root.clearTailFade()
+    }
+
     // One group-by section's card grid (FULL mounts — see the header note).
     // Declared before its use for readability; QML registers inline
     // components document-wide either way.
     component SectionGrid: Item {
         id: sg
         property var items: []
+        /// Tail fade, PASSED IN rather than read off `root`: an inline
+        /// `component` does not share the document's scope the way a plain
+        /// Component does (controls/QbzSkeleton.qml:269-270 spells this out),
+        /// so the mount site — which is in file scope — hands it the two
+        /// values. Null / 1.0 = no fade, which is every other host.
+        property var seenIds: null
+        property real reveal: 1.0
         width: parent ? parent.width : 0
         readonly property int columns: Math.max(
             1, Math.floor((width + root.cardGap) / (root.cardWidth + root.cardGap)))
@@ -110,6 +240,12 @@ Column {
                 y: Math.floor(gcell.index / sg.columns) * (root.cardHeight + root.cardGap)
                 width: root.cardWidth
                 height: root.cardHeight
+                // Same rule as the flat grid, expressed with the passed-in
+                // pair (see `seenIds`): an album the arm already saw is
+                // opaque, so only a fetched one fades.
+                opacity: (sg.seenIds && gcell.modelData && gcell.modelData.id
+                          && sg.seenIds[gcell.modelData.id] !== true)
+                    ? sg.reveal : 1.0
                 AlbumCard {
                     albumId: gcell.modelData.id
                     title: gcell.modelData.title
@@ -170,6 +306,9 @@ Column {
                             required property int index
                             item: modelData
                             rowIndex: index
+                            // Plain Component, file scope — `root` resolves
+                            // here, unlike inside SectionGrid.
+                            opacity: root.tailOpacity(modelData ? modelData.id : "")
                         }
                     }
                 }
@@ -177,6 +316,8 @@ Column {
                 SectionGrid {
                     visible: root.viewMode !== "list"
                     items: sectionCol.modelData.albums || []
+                    seenIds: root._tailSeen
+                    reveal: root._tailReveal
                 }
             }
         }
@@ -196,6 +337,7 @@ Column {
                 required property int index
                 item: modelData
                 rowIndex: index
+                opacity: root.tailOpacity(modelData ? modelData.id : "")
             }
         }
     }
@@ -223,6 +365,14 @@ Column {
                 y: cell.rowIndex * (root.cardHeight + root.cardGap)
                 width: root.cardWidth
                 height: root.cardHeight
+                // Tail fade (see the block at the top). A LIVE binding, never
+                // a Component.onCompleted write: this delegate is destroyed
+                // and rebuilt on every republish, and the binding gives the
+                // rebuilt cell the right value at creation instead of a frame
+                // at the wrong one. Everything the arm saw — and everything,
+                // on every host that never arms — reads 1.0 and never even
+                // depends on `_tailReveal`.
+                opacity: root.tailOpacity(cell.modelData ? cell.modelData.id : "")
 
                 // Component declared in the DELEGATE scope so `modelData`
                 // resolves (the PinnedRail dispatch pattern).

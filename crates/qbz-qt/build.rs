@@ -84,6 +84,7 @@ fn main() {
                 "qml/controls/QbzIconButton.qml",
                 "qml/controls/QbzLineEdit.qml",
                 "qml/controls/QbzLoadingDots.qml",
+                "qml/controls/QbzLoadMore.qml",
                 "qml/controls/QbzMultiSelectBar.qml",
                 "qml/controls/QbzNavButton.qml",
                 "qml/controls/QbzOfflinePlaceholder.qml",

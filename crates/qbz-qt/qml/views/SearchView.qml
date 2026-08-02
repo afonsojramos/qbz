@@ -26,6 +26,19 @@
 // coming, plus a per-card cover placeholder that clears when THAT card's
 // cover lands. See the "skeleton plumbing" block below for the cost.
 //
+// LOAD MORE: the four per-tab buttons are the shared controls/QbzLoadMore.qml
+// on its BORDERED arm (that arm IS this file's old `LoadMoreButton`, pixel for
+// pixel — see that file's header, item c). Two things moved with it:
+//   - the appended-page placeholder now hangs BELOW its button instead of
+//     above it. Each tab had a standalone QbzSkeleton sitting on top of the
+//     button; that is the wrong side, because the page being fetched is
+//     appended UNDER the content already on screen and the button is the
+//     bottom of that content. The knobs (pitch, settleMs) came across.
+//   - the appended DELEGATES fade in — the other half of what the owner asked
+//     for ("que la aparicion de lo que se cargue, sea smooth"). Only this file
+//     can do that half: only the host knows which delegates are new. See the
+//     `fadeAt` block below.
+//
 // SIZE: this file is over the 500-line guideline (it already was at 638
 // before the skeleton work). It is NOT split because every section is one
 // tab of one document and the split would be arbitrary; the skeleton
@@ -66,6 +79,10 @@ Rectangle {
     readonly property bool loading: doc.loading === true
     readonly property int tab: doc.tab || 0
     readonly property int filterIndex: doc.filterIndex || 0
+    // The query echo (search_qt::SearchPageDoc.query). Read only as an
+    // IDENTITY: when it changes, the page on screen is a different result set
+    // and any pending "fade the tail" threshold is stale (see clearFade).
+    readonly property string query: doc.query || ""
     readonly property bool hasResults: albums.length + tracks.length + artists.length + playlists.length > 0
     readonly property int previewCap: 6
 
@@ -110,7 +127,8 @@ Rectangle {
     // placeholder is tracked locally — armed on the click, disarmed the
     // moment that tab's array actually grows. A page that comes back empty
     // (end of the result set) never grows it, which is why every appended
-    // placeholder carries settleMs.
+    // placeholder carries settleMs (QbzLoadMore mounts its own with the same
+    // 8000ms bound this file used when it drew the block by hand).
     property int moreTab: -1
     property int moreFrom: 0
     function rowsFor(t) {
@@ -120,10 +138,73 @@ Rectangle {
     readonly property bool morePending: root.moreTab >= 0
         && root.moreTab === root.tab
         && root.rowsFor(root.moreTab).length === root.moreFrom
+
+    // ---- the appended TAIL fades in (the "smooth" half) -------------------
+    // Only the tail, and only once. Both halves of that sentence are load
+    // bearing:
+    //   - only the TAIL, because every republish of this document hands the
+    //     views a brand-new array and recreates EVERY delegate. search_qt.rs
+    //     republishes on the artwork pass, on tab_changed, on filter_changed
+    //     and on apply_pin_change (its doc comment at :990 spells this out).
+    //     A blanket fade would therefore re-dissolve the whole grid when a
+    //     cover lands or a pin is clicked — a flicker, not a polish. So a
+    //     delegate fades only when its index is at or past the row count that
+    //     was on screen when the button was pressed.
+    //   - only ONCE, because that threshold would otherwise survive into the
+    //     NEXT republish of the same page (load_more publishes the rows, then
+    //     the artwork pass publishes again ~a second later) and blink the new
+    //     cards a second time. `fadeRetire` drops it a beat after the page
+    //     lands.
+    // `fadeTab` scopes it to the tab that asked: the four tabs share one
+    // document, so a threshold armed on Albums must not fade Playlists.
+    property int fadeTab: -1
+    property int fadeFrom: -1
+    function fadeAt(t, i) {
+        return root.fadeTab === t && root.fadeFrom >= 0 && i >= root.fadeFrom
+    }
+    function clearFade() {
+        root.fadeTab = -1
+        root.fadeFrom = -1
+    }
+    Timer {
+        id: fadeRetire
+        // > the 220ms delegate fade, and long enough for the views to have
+        // built the new delegates (a model swap is applied in the polish
+        // step, not synchronously).
+        interval: 300
+        onTriggered: root.clearFade()
+    }
+    onMorePendingChanged: if (!root.morePending && root.fadeFrom >= 0) fadeRetire.restart()
+    // A new query, a filter re-query or a tab switch is a NEW identity — the
+    // stale threshold must never fade the first page of the next thing.
+    onQueryChanged: root.clearFade()
+    onFilterIndexChanged: root.clearFade()
+    onTabChanged: root.clearFade()
+
     function armLoadMore(t) {
         root.moreTab = t
         root.moreFrom = root.rowsFor(t).length
+        // Armed here, for all four tabs at once: the tail starts exactly
+        // where the current page ends. BEFORE the bridge call, because the
+        // reply may republish before this function yields.
+        root.fadeTab = t
+        root.fadeFrom = root.moreFrom
+        moreSettle.restart()
         QbzBridge.searchLoadMore(t)
+    }
+    // `morePending` clears only when the tab's array GROWS — and search_qt::
+    // load_more never republishes on a failed fetch (main.rs just logs), nor
+    // grows the array on a page whose rows were all blacklisted away. Left
+    // unbounded, a stuck `morePending` now DISARMS the button forever (the
+    // old LoadMoreButton stayed clickable; QbzLoadMore's busy arm does not)
+    // and keeps the placeholder block's height reserved after its shimmer
+    // settles. Same 8s bound ArtistView.releaseSettle uses for the identical
+    // reason, after which the button comes back armed for a retry.
+    Timer {
+        id: moreSettle
+        interval: 8000
+        repeat: false
+        onTriggered: root.moreTab = -1
     }
 
     Timer {
@@ -245,42 +326,16 @@ Rectangle {
 
     // Track row (primitives/TrackRow.slint, 50px — number/play, title +
     // explicit, artist, duration, quality, ⋯ menu).
-    // "Load more (loaded / total)" (LoadMoreButton).
-    component LoadMoreButton: Item {
-        property int loaded: 0
-        property int total: 0
-        // The click is reported OUT (the call site arms the appended-page
-        // placeholder and then calls the bridge). An inline component does
-        // not see this file's outer ids, so it must not reach for `root`.
-        signal loadMore()
-        width: parent ? parent.width : 0
-        visible: loaded < total
-        height: visible ? 44 : 0
-        Rectangle {
-            anchors.horizontalCenter: parent.horizontalCenter
-            y: 6
-            width: lmText.implicitWidth + 36
-            height: 32
-            radius: theme.radiusSm
-            color: lmArea.containsMouse ? theme.surfaceElevated : theme.surfaceCard
-            border.width: 1
-            border.color: theme.borderSubtle
-            Text {
-                id: lmText
-                anchors.centerIn: parent
-                text: QbzSession.tr("Load more", QbzSession.trRev) + " (" + loaded + " / " + total + ")"
-                color: theme.textSecondary
-                font.pixelSize: 13
-            }
-            MouseArea {
-                id: lmArea
-                anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                onClicked: parent.parent.loadMore()
-            }
-        }
-    }
+    //
+    // "Load more (loaded / total)" WAS an inline `LoadMoreButton` here. It is
+    // now controls/QbzLoadMore.qml with `bordered: true` — the same 32-tall
+    // radiusSm pill on surfaceCard / surfaceElevated-on-hover, 1px
+    // borderSubtle, 13px textSecondary label, `implicitWidth + 36` hit box,
+    // at y:6 inside a 44-tall box. That arm was written FROM this component,
+    // so the idle pixels are unchanged; what it adds is the placeholder block
+    // underneath and the busy disarm. The host still owns the whole label
+    // string (it carries the "n / total" counter) and the whole visibility
+    // rule — both are passed in at the four mount sites below.
 
     // searchType filter radio (FilterRadio: 14px ring + 8px accent dot).
     component FilterRadio: Item {
@@ -637,10 +692,25 @@ Rectangle {
                         interactive: false
                         model: root.albums
                         delegate: Item {
+                            id: albumCell
                             required property var modelData
                             required property int index
                             width: 200
                             height: 246
+                            // The appended tail dissolves in; every other
+                            // delegate is created at 1.0 with the Behavior
+                            // DISABLED, so the republishes that recreate this
+                            // grid (artwork, pins, tab switch) cost no fade at
+                            // all. `opacity` is a plain value, never a
+                            // binding, so the assignment below clobbers
+                            // nothing.
+                            readonly property bool fadeIn: root.fadeAt(1, albumCell.index)
+                            opacity: 0
+                            Behavior on opacity {
+                                enabled: albumCell.fadeIn
+                                NumberAnimation { duration: 220; easing.type: Easing.OutCubic }
+                            }
+                            Component.onCompleted: opacity = 1
                             AlbumCard {
                                 albumId: modelData.id
                                 title: modelData.title
@@ -662,24 +732,34 @@ Rectangle {
                         }
                     }
                     // The page that "Load more" asked for, in the shape it
-                    // will arrive in. One row of cells, one animator; it
-                    // disappears the moment the array grows (or settles out
-                    // if the page comes back empty).
-                    QbzSkeleton {
-                        visible: root.tab === 1 && root.morePending
-                        variant: "cardGrid"
+                    // will arrive in: one row of 224x270 cells on one
+                    // animator, now drawn BELOW the button by QbzLoadMore
+                    // (the standalone block that used to sit here was above
+                    // it). It disappears the moment the array grows, or
+                    // settles out after 8s if the page comes back empty.
+                    //
+                    // `visible` merges the two gates that were split before:
+                    // the mount said `visible: root.tab === 1` and that
+                    // binding OVERRODE the component's own `loaded < total`,
+                    // so the pill survived past the end of the result set
+                    // ("Load more (20 / 20)"). Both live in one expression
+                    // now, which is what the component always meant.
+                    QbzLoadMore {
+                        visible: root.tab === 1
+                            && root.albums.length < (root.doc.albumsTotal || 0)
                         width: parent.width
-                        height: visible ? 270 : 0
+                        bordered: true
+                        buttonHeight: 44
+                        label: QbzSession.tr("Load more", QbzSession.trRev)
+                            + " (" + root.albums.length + " / " + (root.doc.albumsTotal || 0) + ")"
+                        // morePending is already scoped to the active tab
+                        // (moreTab === tab), so the other three mounts cannot
+                        // see a busy that is not theirs.
+                        busy: root.morePending
+                        skeleton: "cards"
                         cellW: 224
                         cellH: 270
-                        phase: root.skelPhase
-                        settleMs: 8000
-                    }
-                    LoadMoreButton {
-                        visible: root.tab === 1
-                        loaded: root.albums.length
-                        total: root.doc.albumsTotal || 0
-                        onLoadMore: root.armLoadMore(1)
+                        onClicked: root.armLoadMore(1)
                     }
 
                     // ---- Tracks --------------------------------------------
@@ -697,6 +777,19 @@ Rectangle {
                         Repeater {
                             model: root.tab === 2 ? root.tracks : root.tracks.slice(0, root.previewCap)
                             delegate: TrackRow {
+                                id: trackCell
+                                // Tail fade, tab 2 only: this Repeater also
+                                // draws the All tab's 6-row preview, which has
+                                // no Load more of its own — `fadeAt` keys on
+                                // the tab that armed the threshold, so the
+                                // preview can never inherit it.
+                                readonly property bool fadeIn: root.fadeAt(2, index)
+                                opacity: 0
+                                Behavior on opacity {
+                                    enabled: trackCell.fadeIn
+                                    NumberAnimation { duration: 220; easing.type: Easing.OutCubic }
+                                }
+                                Component.onCompleted: opacity = 1
                                 item: modelData
                                 number: index + 1
                                 menuShowFavorite: false
@@ -725,22 +818,32 @@ Rectangle {
                             }
                         }
                     }
-                    QbzSkeleton {
-                        visible: root.tab === 2 && root.morePending
-                        variant: "rowList"
-                        width: parent.width
-                        height: visible ? 200 : 0
-                        rowH: 50
-                        rowGap: 0
-                        rowArtSize: 36
-                        phase: root.skelPhase
-                        settleMs: 8000
-                    }
-                    LoadMoreButton {
+                    // Tracks: the appended page arrives as TrackRows, so the
+                    // placeholder is the "rows" arm — 50px, the row height
+                    // TrackRow.qml declares, on the 4px pitch the Column
+                    // above uses (`spacing: 4`). The full-page loading
+                    // skeleton further down passes rowGap: 0 because it
+                    // covers a whole viewport, where the pitch stands next to
+                    // nothing; these two rows stand directly under the last
+                    // real row, so they use the real one. TWO rows — the
+                    // owner's "una o dos filas".
+                    QbzLoadMore {
                         visible: root.tab === 2
-                        loaded: root.tracks.length
-                        total: root.doc.tracksTotal || 0
-                        onLoadMore: root.armLoadMore(2)
+                            && root.tracks.length < (root.doc.tracksTotal || 0)
+                        width: parent.width
+                        bordered: true
+                        buttonHeight: 44
+                        label: QbzSession.tr("Load more", QbzSession.trRev)
+                            + " (" + root.tracks.length + " / " + (root.doc.tracksTotal || 0) + ")"
+                        busy: root.morePending
+                        skeleton: "rows"
+                        rowH: 50
+                        rowGap: 4
+                        rowCount: 2
+                        // TrackRow draws 36px art in its 50px row, and the
+                        // standalone block this replaced said so too.
+                        rowArtSize: 36
+                        onClicked: root.armLoadMore(2)
                     }
 
                     // ---- Artists grid (per-type tab) ------------------------
@@ -755,31 +858,47 @@ Rectangle {
                         interactive: false
                         model: root.artists
                         delegate: ArtistCard {
+                            id: artistCell
+                            // Tail fade — same rule as the album grid. This
+                            // delegate declares no REQUIRED properties, so
+                            // `index` stays the injected context property the
+                            // view provides (adding a required one here would
+                            // switch the whole delegate to required-property
+                            // mode and strand `modelData`).
+                            readonly property bool fadeIn: root.fadeAt(3, index)
+                            opacity: 0
+                            Behavior on opacity {
+                                enabled: artistCell.fadeIn
+                                NumberAnimation { duration: 220; easing.type: Easing.OutCubic }
+                            }
+                            Component.onCompleted: opacity = 1
                             item: modelData
                             artSource: modelData.artPath || ""
                             isPinned: modelData.isPinned === true
                             artworkUrl: modelData.artUrl || ""
                         }
                     }
-                    // Artists: ROUND cells (ArtistGridCard's portrait), and
-                    // no per-item overlay anywhere — a missing artist photo
-                    // has a designed placeholder already.
-                    QbzSkeleton {
-                        visible: root.tab === 3 && root.morePending
-                        variant: "cardGrid"
+                    // Artists: this grid's own 216x262 pitch, NOT the 224x270
+                    // the album/playlist grids use — the cells here are the
+                    // ArtistCard portrait footprint: 200-wide ROUND cells on
+                    // a 16px gutter (the GridView above says (width+16)/216),
+                    // both of which the standalone block this replaces passed
+                    // and QbzLoadMore now passes through.
+                    QbzLoadMore {
+                        visible: root.tab === 3
+                            && root.artists.length < (root.doc.artistsTotal || 0)
                         width: parent.width
-                        height: visible ? 262 : 0
+                        bordered: true
+                        buttonHeight: 44
+                        label: QbzSession.tr("Load more", QbzSession.trRev)
+                            + " (" + root.artists.length + " / " + (root.doc.artistsTotal || 0) + ")"
+                        busy: root.morePending
+                        skeleton: "cards"
                         cellW: 216
                         cellH: 262
                         roundCells: true
-                        phase: root.skelPhase
-                        settleMs: 8000
-                    }
-                    LoadMoreButton {
-                        visible: root.tab === 3
-                        loaded: root.artists.length
-                        total: root.doc.artistsTotal || 0
-                        onLoadMore: root.armLoadMore(3)
+                        cardGutter: 16
+                        onClicked: root.armLoadMore(3)
                     }
 
                     // ---- Playlists ------------------------------------------
@@ -834,10 +953,19 @@ Rectangle {
                         interactive: false
                         model: root.playlists
                         delegate: Item {
+                            id: playlistCell
                             required property var modelData
                             required property int index
                             width: 200
                             height: 246
+                            // Tail fade — same rule as the album grid.
+                            readonly property bool fadeIn: root.fadeAt(4, playlistCell.index)
+                            opacity: 0
+                            Behavior on opacity {
+                                enabled: playlistCell.fadeIn
+                                NumberAnimation { duration: 220; easing.type: Easing.OutCubic }
+                            }
+                            Component.onCompleted: opacity = 1
                             PlaylistCard {
                                 item: modelData
                                 artSource: modelData.artPath || ""
@@ -850,21 +978,20 @@ Rectangle {
                             }
                         }
                     }
-                    QbzSkeleton {
-                        visible: root.tab === 4 && root.morePending
-                        variant: "cardGrid"
+                    // Playlists share the album grid's 224x270 pitch.
+                    QbzLoadMore {
+                        visible: root.tab === 4
+                            && root.playlists.length < (root.doc.playlistsTotal || 0)
                         width: parent.width
-                        height: visible ? 270 : 0
+                        bordered: true
+                        buttonHeight: 44
+                        label: QbzSession.tr("Load more", QbzSession.trRev)
+                            + " (" + root.playlists.length + " / " + (root.doc.playlistsTotal || 0) + ")"
+                        busy: root.morePending
+                        skeleton: "cards"
                         cellW: 224
                         cellH: 270
-                        phase: root.skelPhase
-                        settleMs: 8000
-                    }
-                    LoadMoreButton {
-                        visible: root.tab === 4
-                        loaded: root.playlists.length
-                        total: root.doc.playlistsTotal || 0
-                        onLoadMore: root.armLoadMore(4)
+                        onClicked: root.armLoadMore(4)
                     }
                 }
 

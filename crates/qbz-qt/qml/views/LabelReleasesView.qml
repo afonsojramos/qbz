@@ -251,7 +251,13 @@ Rectangle {
 
             // --- Album collection -----------------------------------------
             AlbumCollection {
+                id: collection
                 width: parent.width - 64
+                // Identity of the catalog on screen. Navigating to ANOTHER
+                // label disarms a tail fade that was armed by a click whose
+                // page never landed, so the new catalog's first paint is
+                // never coloured by it (AlbumCollection.collectionKey).
+                collectionKey: root.doc.id || ""
                 albums: root.visibleAlbums
                 grouped: root.grouped
                 isGrouped: root.groupBy
@@ -267,31 +273,59 @@ Rectangle {
             }
 
             // --- Load more (gated on hasMore, NEVER on total) -------------
+            // Ported to the shared controls/QbzLoadMore.qml (2026-08-02).
+            // This site is the ONE that already had a real busy arm — the
+            // "Loading…" label swap and the disarmed MouseArea this block used
+            // to spell out by hand are what the control's `busy` property was
+            // modelled on, so the wiring is a straight rename and the idle
+            // pixels are unchanged (plain arm, 32-tall box, same 13px label,
+            // same `implicitWidth + 24` hit box).
+            //
+            // The wrapper Item STAYS: `- 64` is the page Column's own
+            // left+right padding, and a Column's padding does NOT narrow
+            // `parent.width` for its children, so the wrapper is what keeps
+            // this block inside the gutters. Its collapsed height is still 0.
             Item {
                 visible: root.shown > 0 && root.doc.hasMore === true
                 width: parent.width - 64
-                height: visible ? 32 : 0
-                Rectangle {
-                    anchors.centerIn: parent
-                    width: loadMoreText.implicitWidth + 24
-                    height: 32
-                    color: "transparent"
-                    Text {
-                        id: loadMoreText
-                        anchors.centerIn: parent
-                        text: root.doc.loadMoreLoading === true
-                            ? QbzSession.tr("Loading…", QbzSession.trRev)
-                            : QbzSession.tr("Load more", QbzSession.trRev)
-                        color: loadMoreArea.containsMouse ? theme.textPrimary : theme.textSecondary
-                        font.pixelSize: 13
-                    }
-                    MouseArea {
-                        id: loadMoreArea
-                        anchors.fill: parent
-                        enabled: root.doc.loadMoreLoading !== true
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: QbzHome.labelReleasesLoadMore()
+                // Was a literal `visible ? 32 : 0`. The box now also has to
+                // make room for the skeleton block the control drops UNDER
+                // the button while a page is in flight; idle that block is
+                // 0-tall, so this is still exactly 32 (and still 0 hidden).
+                height: visible ? loadMore.height : 0
+
+                QbzLoadMore {
+                    id: loadMore
+                    width: parent.width
+                    // 32 here, not the 28 of the plain sites — this block was
+                    // always a 32-tall box.
+                    buttonHeight: 32
+                    busy: root.doc.loadMoreLoading === true
+                    // The placeholder must be the shape of what will land, and
+                    // this page has both arms: `viewMode` is the UI-only grid /
+                    // list toggle (see the header note), read here exactly as
+                    // AlbumCollection reads it ("list" vs everything else).
+                    skeleton: root.viewMode === "list" ? "rows" : "cards"
+                    // The grid PITCH, not the card size: the collection above
+                    // is mounted with 200x266 cards and a 24px gap, so the
+                    // pitch is 224 x 290 and the control derives the drawn
+                    // card back as pitch - 24 = the same 200x266.
+                    cellW: 224
+                    cellH: 290
+                    // List arm: AlbumListRow is 64 tall and this page mounts
+                    // the collection with listRowGap 4; its art cell is the
+                    // 44px thumb (AlbumListRow.qml:144-150), not a full-height
+                    // square.
+                    rowH: 64
+                    rowGap: 4
+                    rowCount: 2
+                    rowArtSize: 44
+                    onClicked: {
+                        // Snapshot the album ids already on screen so ONLY the
+                        // page that lands fades in. BEFORE the bridge call:
+                        // labelReleasesLoadMore() may republish synchronously.
+                        collection.armTailFade()
+                        QbzHome.labelReleasesLoadMore()
                     }
                 }
             }
