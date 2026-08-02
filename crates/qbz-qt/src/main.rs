@@ -113,10 +113,24 @@ mod myqbz_builder_fetch_qt;
 mod artist_blacklist;
 mod reco_dismiss_qt;
 mod blacklist_qt;
+// Artist page per-section release sort, persisted by release_type. Co-owns
+// `<data-dir>/qbz/artist_ui.json` with the Slint's crates/qbz/src/artist_prefs.rs
+// exactly the way library_prefs co-owns favorites_ui.json.
+mod artist_prefs;
+// The dedicated discography page — one release bucket of one artist, paged.
+// Reached from the artist page's "See discography" and from the album page's
+// "From the same artist" View all. A plain module, NOT a bridge: it publishes
+// onto QbzArtist.artistReleasesJson (artist_bridge.rs) and records its own nav
+// entry, the label_qt shape.
+mod artist_releases_qt;
 // Shared in-app toast publisher (the port of qbz-slint-common's toast.rs).
 // A plain module, NOT a bridge — it publishes onto QbzShell.toastJson, and
 // `controls/QbzToast.qml` owns the auto-hide timer.
 mod toast_qt;
+// Share links + the system clipboard (the port of crates/qbz/src/share.rs).
+// A plain module, NOT a bridge — the artist header's ⋯ → Share reaches it
+// through QbzArtist.share (artist_bridge.rs).
+mod share_qt;
 mod nav_qt;
 mod browse_qt;
 mod cast_qt;
@@ -860,6 +874,20 @@ pub(crate) fn load_release_section(artist_id: String, release_type: String, offs
             .await
         {
             Ok((cards, has_more)) => {
+                // The user may have opened ANOTHER artist while this page was
+                // in flight. `merge_release_page` already dropped the stash
+                // merge in that case (its id guard), but the signal carries no
+                // artist id, and ArtistView.qml keys its append overlay by
+                // release_type alone — emitting here would graft this artist's
+                // page onto the new artist's same-named bucket. Same test the
+                // merge used (artist_qt::stash_is_for), applied to the second
+                // leg of the same delivery.
+                if !artist_qt::stash_is_for(&artist_id) {
+                    log::info!(
+                        "[qbz-qt] dropping stale release page ({release_type}): artist changed"
+                    );
+                    return;
+                }
                 let json = serde_json::to_string(&cards).unwrap_or_else(|_| "[]".into());
                 artist_bridge::ui(move |mut b| {
                     b.as_mut().release_section_ready(
@@ -1668,6 +1696,11 @@ pub(crate) fn apply_language(code: String) {
     myqbz_qt::republish_all();
     myqbz_detail_qt::republish();
     myqbz_builder_qt::republish();
+    // Same reason, same unconditional call: the discography page's header
+    // title is `artist_qt::release_type_title(...)`, a Rust-translated string
+    // living inside a JSON document, and LAST_DETAIL only ever latches "album"
+    // or "artist" — it cannot reach this page. No-op when nothing is open.
+    artist_releases_qt::republish();
     let (view, id) = LAST_DETAIL.lock().unwrap().clone();
     if !id.is_empty() {
         match view.as_str() {

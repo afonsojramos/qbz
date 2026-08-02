@@ -67,6 +67,33 @@ const RELEASE_SECTION_ORDER: &[(&str, &str)] = &[
     ("next", "Upcoming"),
 ];
 
+/// Title-case a raw release_type key — the fallback for a bucket the table
+/// above does not know (`qbz/src/artist.rs:117-123` `title_case`).
+fn title_case(key: &str) -> String {
+    let mut chars = key.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
+/// Display title for one release_type — the discography page's header
+/// (`qbz/src/artist.rs:107-114` `release_type_title`).
+///
+/// Same table, same fallback, as the per-section headers `map_artist` builds
+/// below: the page the user lands on after "See discography" must be titled
+/// exactly like the section they clicked from.
+///
+/// Translated HERE rather than in QML because it travels inside a JSON
+/// document — which is also why `artist_releases_qt::republish` exists.
+pub(crate) fn release_type_title(release_type: &str) -> String {
+    RELEASE_SECTION_ORDER
+        .iter()
+        .find(|(rt, _)| *rt == release_type)
+        .map(|(_, title)| qbz_i18n::t(title))
+        .unwrap_or_else(|| title_case(release_type))
+}
+
 #[derive(Clone, Serialize)]
 pub struct ArtistReleaseSection {
     #[serde(rename = "releaseType")]
@@ -75,6 +102,20 @@ pub struct ArtistReleaseSection {
     #[serde(rename = "hasMore")]
     pub has_more: bool,
     pub cards: Vec<AlbumCardData>,
+    /// The bucket's persisted sort (`default` | `newest` | `oldest` |
+    /// `title-asc` | `title-desc`) — the Slint's `ArtistReleaseSection.sort-by`.
+    ///
+    /// It travels WITH the data because that is what makes the picker come
+    /// back showing the user's choice: `ReleaseGrid.slint:34-39` maps this
+    /// string back to a `current-index` for its QbzSelect, and the QML port
+    /// does the same (`ArtistView.qml`, the ReleaseSection header). The value
+    /// is stamped here at page build from `artist_prefs::read_all()`, so the
+    /// FIRST paint is already in the right order — the cards below are sorted
+    /// before this struct exists (`artist.rs:786-812`: "Apply the persisted
+    /// per-bucket sort up front so the first paint already honors the user's
+    /// choice").
+    #[serde(rename = "sortBy")]
+    pub sort_by: String,
 }
 
 #[derive(Clone, Serialize)]
@@ -293,6 +334,77 @@ pub(crate) fn map_release(release: &PageArtistRelease) -> AlbumCardData {
     }
 }
 
+/// `album_map::sort_album_items` (crates/qbz/src/album_map.rs:244-264) for the
+/// artist page's release buckets — the SAME function `label_qt::sort_cards`
+/// already ports for `HomeCard`, here for `AlbumCardData`.
+///
+/// `year` on these cards is the PLAIN 4-digit year (`map_release` slices
+/// `dates.original[..4]`), so the lexicographic compare IS a chronological one.
+/// `title`/`artist` are case-insensitive, per the reference's doc comment.
+///
+/// "default" — and any key this function does not know — falls through
+/// UNSORTED (`album_map.rs:262` is a bare `_ => {}`). That is not an oversight:
+/// "Default" in the picker means "the order Qobuz sent", which is exactly what
+/// leaving the vector alone produces, and it is why `artist_prefs::set_sort`
+/// DELETES the entry for it instead of storing a no-op.
+///
+/// `artist-asc` / `artist-desc` are unreachable from the artist page's picker
+/// (its five options stop at title-desc) but are carried anyway so this stays
+/// 1:1 with `sort_album_items`.
+///
+/// The discography page has its OWN copy of these arms
+/// (`artist_releases_qt::sort_cards`) rather than reusing this one: its rows
+/// are `home_qt::HomeCard` (they must carry `artPath` for `AlbumCollection`),
+/// not `AlbumCardData`, so the two differ in their item type and nothing else.
+/// `label_qt::sort_cards` is the third copy, for the same reason.
+pub(crate) fn sort_release_cards(items: &mut [AlbumCardData], sort: &str) {
+    match sort {
+        "oldest" | "year-asc" => items.sort_by(|a, b| a.year.cmp(&b.year)),
+        "newest" | "year-desc" => items.sort_by(|a, b| b.year.cmp(&a.year)),
+        "title-asc" => items.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase())),
+        "title-desc" => items.sort_by(|a, b| b.title.to_lowercase().cmp(&a.title.to_lowercase())),
+        "artist-asc" => items.sort_by(|a, b| a.artist.to_lowercase().cmp(&b.artist.to_lowercase())),
+        "artist-desc" => {
+            items.sort_by(|a, b| b.artist.to_lowercase().cmp(&a.artist.to_lowercase()))
+        }
+        _ => {}
+    }
+}
+
+/// `sort_release_cards` over the STASHED document's `cards` array, which is raw
+/// JSON rather than typed rows (the stash is a `serde_json::Value` — see
+/// `ARTIST_DOC`).
+///
+/// The round-trip through `AlbumCardData` is deliberate: it keeps ONE copy of
+/// the sort arms above instead of a second comparator written against
+/// `Value`, and these arrays are at most a few dozen rows. A row that fails to
+/// deserialize leaves the whole bucket untouched rather than half-sorted — the
+/// document is what the view paints, and a partial re-order would be worse
+/// than none.
+fn sort_release_values(items: &mut [serde_json::Value], sort: &str) {
+    if sort == crate::artist_prefs::DEFAULT_SORT {
+        return;
+    }
+    let parsed: Result<Vec<AlbumCardData>, _> = items
+        .iter()
+        .map(|v| serde_json::from_value::<AlbumCardData>(v.clone()))
+        .collect();
+    let mut cards = match parsed {
+        Ok(cards) => cards,
+        Err(e) => {
+            log::warn!("[qbz-qt] release bucket not sortable ({e}) — leaving its order alone");
+            return;
+        }
+    };
+    sort_release_cards(&mut cards, sort);
+    for (slot, card) in items.iter_mut().zip(cards.iter()) {
+        match serde_json::to_value(card) {
+            Ok(value) => *slot = value,
+            Err(e) => log::warn!("[qbz-qt] release card re-serialize failed: {e}"),
+        }
+    }
+}
+
 /// artist.rs `map_track` (Popular Tracks / Appears On rows — album title +
 /// cover ride the nested album object).
 fn map_track(index: usize, track: PageArtistTrack) -> TrackRow {
@@ -488,6 +600,17 @@ fn map_artist(page: PageArtistResponse) -> ArtistViewData {
         .map(|(index, track)| map_track(index, track))
         .collect();
 
+    // The persisted per-bucket sorts, read ONCE for the whole page (the Slint
+    // calls `artist_prefs::get_sort` per bucket off a thread_local cache;
+    // this port has no cache by design — see artist_prefs.rs's header).
+    let saved_sorts = crate::artist_prefs::read_all();
+    let sort_for = |rt: &str| {
+        saved_sorts
+            .get(rt)
+            .cloned()
+            .unwrap_or_else(|| crate::artist_prefs::DEFAULT_SORT.to_string())
+    };
+
     // One section per non-empty bucket in the official order; "download"
     // drains but never renders (Purchase Only is hidden upstream too).
     let mut release_sections: Vec<ArtistReleaseSection> = Vec::new();
@@ -496,35 +619,44 @@ fn map_artist(page: PageArtistResponse) -> ArtistViewData {
             bucket_cards.remove(rt);
             continue;
         }
-        if let Some(cards) = bucket_cards.remove(rt) {
+        if let Some(mut cards) = bucket_cards.remove(rt) {
             if cards.is_empty() {
                 continue;
             }
+            // artist.rs:786-812 — the sort is applied at page BUILD, not on
+            // first click, "so the first paint already honors the user's
+            // choice", and `sort_by` is stamped so the picker seats itself on
+            // that choice instead of snapping back to Default on a revisit.
+            let sort = sort_for(rt);
+            sort_release_cards(&mut cards, &sort);
             release_sections.push(ArtistReleaseSection {
                 release_type: rt.to_string(),
                 title: qbz_i18n::t(title),
                 has_more: bucket_has_more.get(rt).copied().unwrap_or(false),
                 cards,
+                sort_by: sort,
             });
         }
     }
     // Leftovers: server buckets unknown to the table, appended (title-cased).
-    for (rt, cards) in bucket_cards {
+    // These render a full ReleaseSection header, sort picker included, so they
+    // must round-trip the pref exactly like the known buckets.
+    for (rt, mut cards) in bucket_cards {
         if cards.is_empty() {
             continue;
         }
-        let title = {
-            let mut chars = rt.chars();
-            match chars.next() {
-                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-                None => rt.clone(),
-            }
-        };
+        // Factored into `title_case` (above) when the discography page needed
+        // the same fallback — one copy, so a leftover bucket's section header
+        // and its discography page header cannot drift apart.
+        let title = title_case(&rt);
+        let sort = sort_for(&rt);
+        sort_release_cards(&mut cards, &sort);
         release_sections.push(ArtistReleaseSection {
             has_more: false,
             release_type: rt,
             title,
             cards,
+            sort_by: sort,
         });
     }
 
@@ -710,6 +842,15 @@ fn merge_release_page(
         return;
     };
     section["hasMore"] = json!(has_more);
+    // The bucket's live sort, read off the row itself — artist.rs:1245-1258
+    // `append_release_page` does exactly this (`let sort = row.sort_by...`)
+    // before re-sorting, because under a custom sort a page appended at the
+    // TAIL is simply in the wrong place.
+    let sort = section
+        .get("sortBy")
+        .and_then(|v| v.as_str())
+        .unwrap_or(crate::artist_prefs::DEFAULT_SORT)
+        .to_string();
     let Some(existing) = section.get_mut("cards").and_then(|v| v.as_array_mut()) else {
         return;
     };
@@ -725,6 +866,96 @@ fn merge_release_page(
             existing.push(value);
         }
     }
+    // No-op under "default" (the whole point of that key), so the common path
+    // pays nothing.
+    sort_release_values(existing, &sort);
+}
+
+/// Whether the stashed artist document still belongs to `artist_id` — the
+/// SAME test `merge_release_page` opens with, exported so main.rs's
+/// `load_release_section` can apply it to the OTHER half of a landed page.
+///
+/// The page travels on two legs: `merge_release_page` folds it into the stash
+/// (guarded — a stash for a different artist drops it), and the
+/// `releaseSectionReady` signal hands it to the view. The signal carries NO
+/// artist id, and ArtistView.qml folds whatever arrives into
+/// `root.releaseOverlay` keyed by release_type alone — keys every artist
+/// shares ("album" exists on all of them). So a page requested on artist A
+/// that lands after artist B's document has been published would graft A's
+/// albums onto B's album grid, permanently (the overlay is only reset when the
+/// artist ID changes again). Emitting only while the stash still names the
+/// requesting artist closes that leak at its source; the view cannot, because
+/// the signal does not tell it whose page this is.
+pub(crate) fn stash_is_for(artist_id: &str) -> bool {
+    match ARTIST_DOC.lock() {
+        Ok(guard) => guard
+            .as_ref()
+            .map(|(_, doc)| doc.get("id").and_then(|v| v.as_str()) == Some(artist_id))
+            .unwrap_or(false),
+        Err(_) => false,
+    }
+}
+
+/// Artist page per-section sort — the port of `crates/qbz/src/artist.rs:1178-1210`
+/// `resort_section` ("Re-sort one release bucket in place […] and persist the
+/// choice"), reached from `QbzArtist.setSectionSort` (artist_bridge.rs).
+///
+/// THE SORT NEVER LEAVES THIS PROCESS. `main.rs:14997-15007` — the whole Slint
+/// handler — calls `artist::resort_section` and nothing else: no refetch, no
+/// query param. Every artist-page `get_releases_grid` call in BOTH trees passes
+/// the constant `Some("release_date")` (here: `load_release_page`), and the five
+/// picker keys have no server equivalent; `album_map::sort_album_items` applies
+/// them locally over the cards already loaded. So `load_release_page` is
+/// deliberately left untouched by this feature.
+///
+/// Persist FIRST (so the choice survives even if the page is being torn down),
+/// then patch the stashed document and republish it through the existing
+/// generation-guarded `publish_patch` — the port's ONE transport for the artist
+/// view. Re-serializing the whole document is also what makes QML notice: a JS
+/// array handed back by the same reference re-triggers nothing
+/// (cards/PlaylistCollage.qml's rule), whereas a fresh `artistJson` string
+/// re-runs the parse.
+///
+/// Reading the generation off the stash rather than off `ARTIST_GEN` is what
+/// keeps a click aimed at the page ON SCREEN: if the user has already navigated
+/// away, the stash belongs to another artist and `publish_patch` drops the
+/// edit.
+///
+/// 1:1 note — picking "Default" after "A–Z" does NOT restore the server order
+/// until the page is reloaded, because "default" is a no-op sort over the
+/// vector as it stands. The reference behaves identically (`sort_album_items`
+/// falls through on that key); restoring it would need an untouched copy of the
+/// server order that neither tree keeps.
+pub(crate) fn resort_section(release_type: &str, sort: &str) {
+    crate::artist_prefs::set_sort(release_type, sort);
+    // The guard is dropped at the end of this statement — `publish_patch`
+    // takes the same non-reentrant lock.
+    let generation = ARTIST_DOC
+        .lock()
+        .ok()
+        .and_then(|guard| guard.as_ref().map(|(gen, _)| *gen));
+    let Some(generation) = generation else {
+        return;
+    };
+    let release_type = release_type.to_string();
+    let sort = sort.to_string();
+    publish_patch(generation, move |doc| {
+        let Some(sections) = doc.get_mut("releaseSections").and_then(|v| v.as_array_mut()) else {
+            return;
+        };
+        let Some(section) = sections.iter_mut().find(|s| {
+            s.get("releaseType").and_then(|v| v.as_str()) == Some(release_type.as_str())
+        }) else {
+            return;
+        };
+        // Stamp the key BEFORE the cards: `sortBy` is what seats the picker
+        // (and what `merge_release_page` reads for the next page), so it has to
+        // be written even when the sort itself is a no-op.
+        section["sortBy"] = json!(sort);
+        if let Some(cards) = section.get_mut("cards").and_then(|v| v.as_array_mut()) {
+            sort_release_values(cards, &sort);
+        }
+    });
 }
 
 /// Fetch + publish (perf-marked like phase 5), then kick the progressive

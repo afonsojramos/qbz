@@ -16,10 +16,10 @@
 //! which is exactly why it is easy to miss.
 //!
 //! Ids in use: `home`, `library`, `local`, `localalbum`, `album`, `artist`,
-//! `settings`, `search`, `playlist`, `discoverbrowse`, `playlistbrowse`,
-//! `recentalbums`, `mostplayedalbums`, `label`, `labelreleases`, `mix`,
-//! `mixtapes`, `collections`, `mixtapedetail`, `discobuilder`, `blacklist`,
-//! `playlistmanager`.
+//! `artistreleases`, `settings`, `search`, `playlist`, `discoverbrowse`,
+//! `playlistbrowse`, `recentalbums`, `mostplayedalbums`, `label`,
+//! `labelreleases`, `mix`, `mixtapes`, `collections`, `mixtapedetail`,
+//! `discobuilder`, `blacklist`, `playlistmanager`.
 
 use std::sync::Mutex;
 

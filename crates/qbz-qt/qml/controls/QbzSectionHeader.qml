@@ -11,9 +11,11 @@
 // pageLeft()/pageRight() (the host owns the page-step math); and, since the
 // Playlist Manager landed, `collapsible` + `collapsed` + toggled() and
 // `titleSecondary`.
-// Deliberately NOT absorbed: ArtistView.ReleaseSection's header (adds a
-// sort dropdown + "See discography" — distinct arms, still stubs) and the
-// uppercase 10-11px eyebrow mini-headers (different type scale).
+// Deliberately NOT absorbed: ArtistView.ReleaseSection's header (adds a sort
+// dropdown and a "See discography" link — two arms this header does not have,
+// and both are now LIVE controls rather than the stubs this note used to
+// describe) and the uppercase 10-11px eyebrow mini-headers (different type
+// scale).
 //
 // ── THE `id: root` REFACTOR CAME FIRST, AND IT WAS NOT COSMETIC ───────────
 // This file used to have no root id: its Text read `text: parent.title` and

@@ -6,8 +6,13 @@
 //! documented precedent). The QML type name comes from the QObject
 //! (`QbzArtist`), not from the module, so QML is unaffected.
 //!
-//! Props: the one artist-view JSON document + its loading flag.
-//! Invokables: openArtist, loadReleaseSection (per-bucket "Load more").
+//! Props: the one artist-view JSON document + its loading flag, and the one
+//! discography-page document (artistReleasesJson — the sub-view reached from
+//! "See discography", state and all).
+//! Invokables: openArtist, resolveMusician, share, loadReleaseSection
+//! (per-bucket "Load more"), setSectionSort (per-bucket release sort, persisted
+//! by release_type), and the discography page's four —
+//! openReleases / releasesLoadMore / releasesSetSort / releasesRetry.
 //! Signal: releaseSectionReady (the next page of one releases bucket).
 //!
 //! `view_param_id` is NOT here and NOT in album_bridge.rs: it was a
@@ -41,6 +46,12 @@ pub mod qbz_artist_bridge {
         // ONE JSON document (artist_qt.rs ArtistViewData: header + top
         // tracks + releases buckets + labels/similar/playlists).
         #[qproperty(QString, artist_json)]
+        // --- Discography sub-view ------------------------------------------
+        // ONE JSON document too (artist_releases_qt.rs ArtistReleasesDoc:
+        // header + the paged grid + loading / error / has-more / sort). Its
+        // `loading` rides INSIDE the document rather than as a second
+        // property — the reason is written down on that struct.
+        #[qproperty(QString, artist_releases_json)]
 
         type QbzArtist = super::QbzArtistRust;
 
@@ -57,9 +68,78 @@ pub mod qbz_artist_bridge {
         #[qinvokable]
         fn resolve_musician(self: Pin<&mut QbzArtist>, name: QString, role: QString);
 
+        /// Header ⋯ → Share. `ArtistPageView.slint:530-538` fires
+        /// `media-action("artist", ArtistState.id, "share")`; the arm at
+        /// `main.rs:12749` copies `share::qobuz_artist_url(&id)` and raises
+        /// the "Link copied" success toast. Link-only — artists have no
+        /// Song.link/Album.link path (see share_qt.rs).
+        ///
+        /// `#[auto_cxx_name]` on this block makes the QML name
+        /// `QbzArtist.share(...)`; renaming the Rust fn renames the QML call,
+        /// which QML only discovers when the menu opens.
+        #[qinvokable]
+        fn share(self: Pin<&mut QbzArtist>, artist_id: QString);
+
         /// ArtistView per-section "Load more" — the next releases page.
         #[qinvokable]
         fn load_release_section(self: Pin<&mut QbzArtist>, artist_id: QString, release_type: QString, offset: i32);
+
+        /// ArtistView per-section sort — `ReleaseGrid.slint:26`
+        /// `set-section-sort(release-type, sort)`, fired by that view's
+        /// QbzSelect. `sort` is one of `default` | `newest` | `oldest` |
+        /// `title-asc` | `title-desc` (the .slint's index mapping at :81-89),
+        /// and those five strings are BOTH the persisted values and the
+        /// sort-function keys.
+        ///
+        /// Persists by release_type and re-sorts the LOADED bucket in place —
+        /// the reference never refetches (main.rs:14997-15007 is the whole
+        /// handler; see the wire note on `artist_qt::resort_section`).
+        ///
+        /// `#[auto_cxx_name]` makes the QML name `QbzArtist.setSectionSort`.
+        #[qinvokable]
+        fn set_section_sort(self: Pin<&mut QbzArtist>, release_type: QString, sort: QString);
+
+        // --- Discography page ----------------------------------------------
+        // `#[auto_cxx_name]` makes the QML names QbzArtist.openReleases /
+        // .releasesLoadMore / .releasesSetSort / .releasesRetry. QML resolves
+        // singleton members LAZILY: a call with no matching invokable here
+        // compiles clean and throws the first time a user clicks, so these four
+        // and the QML that calls them are one edit.
+
+        /// "See discography" (artist/ReleaseGrid.slint:63-68 ->
+        /// ArtistPageView.slint:928-929 -> main.rs:15055-15087) and the album
+        /// page's "From the same artist" View all
+        /// (album/AlbumPageView.slint:1131 -> main.rs:11839-11865, which pins
+        /// `release_type` to "album").
+        ///
+        /// The NAME travels with the call rather than being read out of the
+        /// artist document, because the second door has no artist document
+        /// open — it passes `AlbumState.artist`, exactly as main.rs:11844 does.
+        #[qinvokable]
+        fn open_releases(
+            self: Pin<&mut QbzArtist>,
+            artist_id: QString,
+            artist_name: QString,
+            release_type: QString,
+        );
+
+        /// Infinite-scroll tail (ArtistReleasesView.slint:121-129). The page
+        /// has no "Load more" button — the view fires this when the flick gets
+        /// within 600px of the bottom, and every guard lives in Rust as well so
+        /// a burst of scroll frames cannot queue two pages.
+        #[qinvokable]
+        fn releases_load_more(self: Pin<&mut QbzArtist>);
+
+        /// The header's sort select. Client-side only, persisted per
+        /// release_type in the SAME store as the artist page's per-section
+        /// picker (artist_prefs.rs) — see artist_releases_qt::set_sort.
+        #[qinvokable]
+        fn releases_set_sort(self: Pin<&mut QbzArtist>, sort: QString);
+
+        /// The error state's Retry button (main.rs:15158-15176) — a full reset
+        /// + refetch that records NO nav entry.
+        #[qinvokable]
+        fn releases_retry(self: Pin<&mut QbzArtist>);
 
         /// Emitted with the next page of a releases bucket.
         #[qsignal]
@@ -75,6 +155,7 @@ use qbz_artist_bridge::QbzArtist;
 pub struct QbzArtistRust {
     artist_loading: bool,
     artist_json: QString,
+    artist_releases_json: QString,
 }
 
 impl Default for QbzArtistRust {
@@ -82,6 +163,9 @@ impl Default for QbzArtistRust {
         Self {
             artist_loading: false,
             artist_json: QString::from("{}"),
+            // "{}" and not "": the views JSON.parse this straight, and an empty
+            // string throws into the catch arm on the very first frame.
+            artist_releases_json: QString::from("{}"),
         }
     }
 }
@@ -114,8 +198,55 @@ impl qbz_artist_bridge::QbzArtist {
     pub fn load_release_section(self: Pin<&mut Self>, artist_id: QString, release_type: QString, offset: i32) {
         crate::load_release_section(artist_id.to_string(), release_type.to_string(), offset);
     }
+    /// Straight through to `artist_qt`, with no `crate::` forwarder in main.rs:
+    /// unlike `load_release_section` (main.rs:856) this path is SYNCHRONOUS and
+    /// touches no `AppRuntime` — it persists a small json and patches the
+    /// already-stashed document. Wrapping it in an async hop would only add a
+    /// frame of latency between the click and the re-ordered grid.
+    pub fn set_section_sort(self: Pin<&mut Self>, release_type: QString, sort: QString) {
+        crate::artist_qt::resort_section(&release_type.to_string(), &sort.to_string());
+    }
+
     pub fn resolve_musician(self: Pin<&mut Self>, name: QString, role: QString) {
         crate::resolve_musician(name.to_string(), role.to_string());
     }
 
+    /// Straight through to `share_qt` — no nav and no bridge state is touched,
+    /// so there is no `crate::` forwarder in main.rs for this one (the
+    /// `crate::open_artist` style exists because that one mutates both).
+    pub fn share(self: Pin<&mut Self>, artist_id: QString) {
+        crate::share_qt::share_artist(artist_id.to_string());
+    }
+
+    // --- Discography page ---------------------------------------------------
+    // One-line delegates into `artist_releases_qt`, with no `crate::` forwarder
+    // in main.rs: that indirection exists for the paths that mutate main.rs's
+    // own state (LAST_DETAIL, the nav latch). This page owns its state in its
+    // own module and records its own nav entry, so there is nothing for main.rs
+    // to coordinate.
+
+    pub fn open_releases(
+        self: Pin<&mut Self>,
+        artist_id: QString,
+        artist_name: QString,
+        release_type: QString,
+    ) {
+        crate::artist_releases_qt::open(
+            artist_id.to_string(),
+            artist_name.to_string(),
+            release_type.to_string(),
+        );
+    }
+
+    pub fn releases_load_more(self: Pin<&mut Self>) {
+        crate::artist_releases_qt::load_more();
+    }
+
+    pub fn releases_set_sort(self: Pin<&mut Self>, sort: QString) {
+        crate::artist_releases_qt::set_sort(sort.to_string());
+    }
+
+    pub fn releases_retry(self: Pin<&mut Self>) {
+        crate::artist_releases_qt::retry();
+    }
 }

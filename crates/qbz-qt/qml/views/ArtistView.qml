@@ -16,9 +16,14 @@
 // MusicBrainz is off in Settings or the artist has no confident MB match, is
 // simply ABSENT — never an error frame, and nothing is requested.
 //
-// POC-NOTEs: blacklist banner, artist Scene, Share, Create Collection, radio
+// POC-NOTEs: blacklist banner, artist Scene, Create Collection, radio
 // engines (dropdown inert), multi-select, the sticky behavior of the JUMP TO
 // bar (it scrolls with the page).
+//
+// "Share" left this list when the seam landed: the ⋯ entry now calls
+// QbzArtist.share (artist_bridge.rs -> src/share_qt.rs), which copies
+// play.qobuz.com/artist/{id} and raises the same "Link copied" toast as
+// ArtistPageView.slint:530-538 / main.rs:12749.
 //
 // Header atmosphere (ArtistPageView.slint:120-147, 211-247): wired through
 // the shared controls/HeaderGradient.qml — the SAME component AlbumView
@@ -82,21 +87,144 @@ Rectangle {
     // A section whose albums all filter out DISAPPEARS (artist.rs:1033), and
     // Load more is suppressed while a filter is active (:1042 — appending
     // would bring back unfiltered items).
+    //
+    // ---- THE PAGED TAIL IS MERGED HERE, NOT PUSHED INTO `artist` ----------
+    // Owner, 2026-08-02: "el error esta en que nunca cargan mas albumes."
+    // The old handler parsed the page and pushed it into
+    // `artist.releaseSections[i].cards` IN PLACE, then fired artistChanged().
+    // Both Repeaters (`model: releaseSections` at :1997/:2114 and
+    // `model: section.cards` inside ReleaseSection) were then handed the very
+    // SAME array object they already held, and the unfiltered arm below used
+    // to `return all` — the identical array again. Nothing was dirty, so
+    // nothing rebuilt: the page was fetched, parsed and appended to a data
+    // structure no view ever re-read. This tree already writes the rule down,
+    // in cards/PlaylistCollage.qml: "Rebind requires a NEW object reference."
+    // (PRE-EXISTING, not a regression from today's smooth-append work — that
+    // pass only added the `releaseMoreLanded` call to the handler. What it
+    // changed is that the button now shows an in-flight placeholder, which is
+    // what made a silent no-op visible.)
+    //
+    // So the appended pages live in `root.releaseOverlay` (see its header)
+    // and are merged HERE, which builds a NEW section object with a NEW cards
+    // array whenever the overlay has anything for that bucket — the one thing
+    // that actually invalidates both Repeaters. `artist` is never mutated, so
+    // a republish of the document (the progressive Magazine / MusicBrainz
+    // passes) cannot lose the tail either.
+    //
+    // De-dup by album id is MANDATORY on this path and not merely defensive:
+    // artist_qt.rs `merge_release_page` (:686) folds every landed page into
+    // the STASHED document too, so the moment the next enrichment pass
+    // republishes, the document already carries the cards the overlay holds.
+    // Without the id filter every appended album would appear twice from that
+    // frame on. (Qobuz can also repeat a row across pages by itself.)
     readonly property var releaseSections: {
         var all = artist.releaseSections || []
-        if (root.needle === "") return all
         var out = []
         for (var i = 0; i < all.length; i++) {
+            var src = all[i]
+            var extra = root.releaseOverlay[src.releaseType]
+            var cards = src.cards || []
+            // The bucket's persisted sort, stamped on the row by
+            // artist_qt.rs `map_artist` / `resort_section`. It has to be COPIED
+            // into every rebuilt literal below: an object literal carries only
+            // the keys it names, so a `sortBy` left out here makes the header's
+            // QbzSelect snap back to "Default" the moment this arm is taken.
+            var sortBy = src.sortBy || "default"
+            // `hasMore` is only overridden once a page has actually LANDED
+            // (`extra.hasMore` stays undefined otherwise): the document's copy
+            // is the truth until then, and blanking it would hide the button —
+            // and with it the in-flight placeholder QbzLoadMore draws under it.
+            var hasMore = src.hasMore === true
+            var k
+            if (extra !== undefined) {
+                var seen = {}
+                var merged = []
+                for (k = 0; k < cards.length; k++) {
+                    merged.push(cards[k])
+                    seen[cards[k].id] = true
+                }
+                var tail = extra.cards || []
+                for (k = 0; k < tail.length; k++) {
+                    if (seen[tail[k].id]) continue
+                    seen[tail[k].id] = true
+                    merged.push(tail[k])
+                }
+                // THE TAIL IS APPENDED, SO IT MUST BE RE-SORTED HERE.
+                // artist.rs:1245-1258 `append_release_page` re-sorts after
+                // folding a page in, "before computing the artwork jobs at
+                // their post-sort positions" — under "A–Z" a page-2 album
+                // belongs wherever its title puts it, not at the bottom.
+                // artist_qt.rs `merge_release_page` does that to the STASHED
+                // document; this does it to the copy actually on screen, which
+                // is a DIFFERENT array (the overlay never reaches the stash).
+                // Fixing only one of the two leaves the grid correct until the
+                // next enrichment republish, or wrong until it — see the
+                // overlay's own header for why the two copies exist.
+                cards = root.sortReleaseCards(merged, sortBy)
+                if (extra.hasMore !== undefined) hasMore = extra.hasMore === true
+            }
+            if (root.needle === "") {
+                // No overlay for this bucket -> hand back the document's own
+                // object: nothing was appended, so there is nothing to rebind
+                // and a fresh wrapper would only churn delegates. (The document
+                // arrives already sorted — artist_qt.rs sorts at page build and
+                // on every `setSectionSort` — so there is nothing to do to it.)
+                out.push(extra === undefined ? src
+                         : { "releaseType": src.releaseType, "title": src.title,
+                             "cards": cards, "hasMore": hasMore, "sortBy": sortBy })
+                continue
+            }
+            // Filtered arm: the merge happened FIRST, so an appended album
+            // that matches the needle is searchable like any other — but
+            // `hasMore` is still forced false (artist.rs:1042) and only the
+            // KEPT cards travel, so the overlay can never leak a filtered-out
+            // card into this arm.
             var kept = []
-            var cards = all[i].cards || []
             for (var j = 0; j < cards.length; j++)
                 if ((cards[j].title || "").toLowerCase().indexOf(root.needle) >= 0)
                     kept.push(cards[j])
             if (kept.length === 0) continue
-            out.push({ "releaseType": all[i].releaseType, "title": all[i].title,
-                       "cards": kept, "hasMore": false })
+            out.push({ "releaseType": src.releaseType, "title": src.title,
+                       "cards": kept, "hasMore": false, "sortBy": sortBy })
         }
         return out
+    }
+    /// JS twin of `artist_qt::sort_release_cards`, itself the port of
+    /// `album_map::sort_album_items` (crates/qbz/src/album_map.rs:244-264).
+    ///
+    /// Both exist because the bucket exists TWICE: Rust owns the stashed
+    /// document (page 1 plus every page `merge_release_page` folded in) and
+    /// sorts it there, while `releaseOverlay` holds the pages Load more brought
+    /// in on THIS side and is concatenated onto the document's array by the
+    /// projection above — an array Rust never sees. The two must agree, so the
+    /// arms are kept identical.
+    ///
+    /// Returns a NEW array (`slice()` before `sort()`): the projection binds to
+    /// the result, and sorting the caller's array in place would hand the
+    /// Repeaters the same reference back — "Rebind requires a NEW object
+    /// reference" (cards/PlaylistCollage.qml).
+    ///
+    /// `year` on these cards is the PLAIN 4-digit year (artist_qt.rs
+    /// `map_release` slices `dates.original[..4]`), so the string compare is
+    /// chronological. "default" and every unknown key fall through UNSORTED —
+    /// `album_map.rs:262` is a bare `_ => {}`, because "Default" means "the
+    /// order Qobuz sent".
+    function sortReleaseCards(cards, sort) {
+        function byTitle(a, b) {
+            var x = (a.title || "").toLowerCase(), y = (b.title || "").toLowerCase()
+            return x < y ? -1 : (x > y ? 1 : 0)
+        }
+        function byYear(a, b) {
+            var x = a.year || "", y = b.year || ""
+            return x < y ? -1 : (x > y ? 1 : 0)
+        }
+        switch (sort) {
+        case "oldest": return cards.slice().sort(byYear)
+        case "newest": return cards.slice().sort(function (a, b) { return byYear(b, a) })
+        case "title-asc": return cards.slice().sort(byTitle)
+        case "title-desc": return cards.slice().sort(function (a, b) { return byTitle(b, a) })
+        default: return cards
+        }
     }
     readonly property var labels: artist.labels || []
     readonly property var similarArtists: artist.similarArtists || []
@@ -149,6 +277,253 @@ Rectangle {
     property bool topTracksExpanded: false
     property bool appearsOnExpanded: false
     property bool otherExpanded: false
+
+    // ---- Release-section "Load more": in-flight + append-fade state -------
+    // controls/QbzLoadMore.qml owns the button and the placeholder row under
+    // it; the APPEARANCE of what lands is the HOST's job (that file's "WHAT
+    // THIS CONTROL DOES *NOT* DO" note) because only this view knows the index
+    // the appended page starts at.
+    //
+    // Both maps live on `root`, keyed by releaseType, and NOT on the
+    // ReleaseSection instances: the Repeater at :1787 re-creates every
+    // delegate whenever `artist` changes (a `var` property notifies on every
+    // write, and the document is republished once per enrichment pass —
+    // stories, then each MusicBrainz section), and one of those republishes is
+    // the very frame the new page lands in. A flag parked on the section would
+    // be destroyed exactly when it was needed.
+    //
+    // `releasePending` is COPY-ON-WRITE because the ReleaseSection BINDS
+    // `busy` to it, so it has to notify. `releaseFade` is mutated IN PLACE on
+    // purpose: it is read once, imperatively, by each card's
+    // Component.onCompleted, and a notify there would re-run bindings for
+    // nothing.
+    property var releasePending: ({})
+    /// releaseType -> { from: <index the appended page starts at>,
+    ///                  at: <ms the page LANDED, 0 while in flight> }.
+    property var releaseFade: ({})
+
+    /// ---- The appended pages themselves -----------------------------------
+    /// releaseType -> { cards: [<pages 2..n, deduped, NEVER page 1>],
+    ///                  hasMore: <the newest page's has_more; undefined until
+    ///                            a page has landed>,
+    ///                  pages: <index pages loaded so far, 1 = the embedded
+    ///                          bucket — the LOADED_PAGES twin, see
+    ///                          releaseMoreLanded's cap note> }.
+    ///
+    /// The document owns page 1 and stays the source of truth for it; this
+    /// overlay owns everything Load more brought in, and `releaseSections`
+    /// (:115) merges the two into a NEW array so the Repeaters rebuild. It is
+    /// COPY-ON-WRITE for exactly that reason — the projection binds to it, so
+    /// a write has to notify.
+    ///
+    /// Why an overlay and not a push into `artist`: `artist` is
+    /// `JSON.parse(QbzArtist.artistJson)` (:52), a BINDING. Every progressive
+    /// republish (Magazine stories, then each MusicBrainz section — see
+    /// artist_qt.rs) re-runs that parse and yields a brand-new object, so
+    /// anything written onto the parsed copy is discarded on the next pass.
+    /// This is the same reasoning `localToggles` (:437) already carries for
+    /// the heart/pin state.
+    property var releaseOverlay: ({})
+    /// releaseType -> { sent: <offset the page in flight asked for>,
+    ///                  next: <offset the NEXT page must ask for> }.
+    ///
+    /// The paging cursor is the count of rows RECEIVED from the server, which
+    /// is NOT the count on screen: both sides drop duplicate ids (here and in
+    /// artist_qt.rs `merge_release_page`), so after a page that repeated three
+    /// rows the on-screen count trails the server cursor by three. Handing the
+    /// on-screen count back as the offset would re-request rows already held,
+    /// and the dedup would then swallow them — a Load more that visibly does
+    /// nothing, which is the very bug this block exists to kill.
+    ///
+    /// Mutated IN PLACE on purpose, same as `releaseFade`: it is written from
+    /// the landing handler and read imperatively from the button's onClicked,
+    /// and no binding reads it. A notifying write here would tear down and
+    /// rebuild every AlbumCard in every release grid on each click, for
+    /// nothing.
+    property var releaseCursor: ({})
+    /// How long after a landing the threshold stays live. The republish that
+    /// carries the page re-creates the delegates in the same tick, so this is
+    /// generous; what it buys is that a LATER, unrelated republish (a
+    /// MusicBrainz pass) re-creates that tail WITHOUT re-fading it.
+    readonly property int releaseFadeWindowMs: 1500
+
+    /// Called from the section's Load more BEFORE the bridge call, so the
+    /// threshold is the count that was on screen at click time. RETURNS the
+    /// offset the caller must pass to the bridge (see `releaseCursor`).
+    ///
+    /// `sorted` = this bucket carries a non-default sort. The append fade is
+    /// then SUPPRESSED, deliberately: `releaseFadeFrom` hands back an INDEX and
+    /// the card delegate fades everything at or past it, which only means "the
+    /// page that just landed" while new rows sit at the TAIL. Under "A–Z" the
+    /// projection interleaves them (see `sortReleaseCards`), so that band would
+    /// dissolve an arbitrary run of cards the user has been looking at all
+    /// along. The reference has no fade at all here, so no fade is strictly
+    /// closer to it than the wrong one — and tracking the new ids through a
+    /// re-sort is not a thing the .slint does either.
+    function releaseMoreRequested(releaseType, loadedCount, sorted) {
+        if (sorted === true) delete releaseFade[releaseType]
+        else releaseFade[releaseType] = { "from": loadedCount, "at": 0 }
+        var c = releaseCursor[releaseType]
+        // First page of this bucket: nothing has been fetched through the
+        // paging endpoint yet, so the document's own row count IS the server
+        // cursor. Afterwards the cursor is authoritative.
+        var off = (c !== undefined && c.next !== undefined) ? c.next : loadedCount
+        releaseCursor[releaseType] = { "sent": off,
+                                       "next": (c !== undefined ? c.next : undefined) }
+        var m = Object.assign({}, root.releasePending)
+        m[releaseType] = true
+        root.releasePending = m
+        // artist_bridge.rs emits releaseSectionReady only on SUCCESS
+        // (main.rs:872 just logs the error and returns), so a failed page would
+        // otherwise leave the skeleton up forever. Bound it with the same 8s
+        // QbzLoadMore's own skeleton settles at, after which the button comes
+        // back armed.
+        releaseSettle.restart()
+        return off
+    }
+    /// The page landed (or came back empty): fold it into the overlay, advance
+    /// the cursor, arm the fade window and disarm the placeholder.
+    ///
+    /// `cards` is the RAW page as the bridge sent it; `hasMore` is the
+    /// server's own flag for the bucket.
+    ///
+    /// ORDER IS LOAD-BEARING. The overlay write is COPY-ON-WRITE, so it
+    /// notifies, so `releaseSections` re-evaluates and the Repeater at :1997
+    /// destroys and rebuilds every section delegate — QbzLoadMore and every
+    /// AlbumCard included — SYNCHRONOUSLY, inside that assignment. Everything
+    /// those rebuilt delegates read has to be true BEFORE it happens:
+    ///   - `releaseFade[rt].at`, or each appended card's Component.onCompleted
+    ///     asks `releaseFadeFrom()` while the landing still reads "in flight"
+    ///     (at === 0 -> MAX_VALUE) and the page snaps in with no fade at all;
+    ///   - `releasePending`, or the button is re-created with `busy` still
+    ///     true and the skeleton flashes back for a frame UNDER the page that
+    ///     just landed (the note the old handler carried, kept verbatim in
+    ///     spirit).
+    /// So: cursor + fade + placeholder first, overlay LAST.
+    function releaseMoreLanded(releaseType, cards, hasMore) {
+        // ---- 1. the cursor (in place — nothing binds to it) ---------------
+        // Advance by the RAW page length, not by what survived the dedup: the
+        // server counted every row it sent.
+        var c = releaseCursor[releaseType]
+        var base = (c !== undefined && c.sent !== undefined) ? c.sent : 0
+        releaseCursor[releaseType] = { "sent": base, "next": base + cards.length }
+
+        // ---- 2. fade window + placeholder ---------------------------------
+        if (releaseFade[releaseType] !== undefined)
+            releaseFade[releaseType].at = Date.now()
+        if (root.releasePending[releaseType] !== undefined) {
+            var m = Object.assign({}, root.releasePending)
+            delete m[releaseType]
+            root.releasePending = m
+        }
+
+        // ---- 3. the overlay (COPY-ON-WRITE — the projection binds to it) ---
+        var prev = root.releaseOverlay[releaseType]
+        var tail = (prev !== undefined && prev.cards !== undefined)
+                   ? prev.cards.slice() : []
+        var seen = {}
+        var i
+        // Page 1 lives in the document, and once artist_qt.rs
+        // `merge_release_page` has folded an earlier page into the STASHED
+        // document a republish puts that page there too — so both are checked
+        // before anything is kept, and the overlay never grows a row the
+        // document already carries.
+        var doc = root.artist.releaseSections || []
+        for (i = 0; i < doc.length; i++) {
+            if (doc[i].releaseType !== releaseType) continue
+            var dc = doc[i].cards || []
+            for (var j = 0; j < dc.length; j++) seen[dc[j].id] = true
+            break
+        }
+        for (i = 0; i < tail.length; i++) seen[tail[i].id] = true
+        var before = tail.length
+        for (i = 0; i < cards.length; i++) {
+            if (seen[cards[i].id]) continue
+            seen[cards[i].id] = true
+            tail.push(cards[i])
+        }
+        // The reference CAPS the index at 4 pages per bucket and hands off to
+        // the discography page beyond that: artist.rs:718-720 ("Page 1 is the
+        // embedded bucket; 3 more loads reach the cap" — MAX_INDEX_PAGES = 4),
+        // enforced at append_release_page:1268. This port has that page now
+        // (QbzArtist.openReleases, the section title's own click), so the cap
+        // carries over 1:1 — an uncapped index button would page a 300-album
+        // Singles bucket into this grid forever, which is exactly what the
+        // dedicated page exists to absorb.
+        var pages = ((prev !== undefined && prev.pages !== undefined) ? prev.pages : 1) + 1
+        // …and `!appended_ids.is_empty()` is the same line's other clause: a
+        // page that contributed NOTHING after the dedup (all rows already on
+        // screen, or empty outright) kills the button no matter what the flag
+        // says — leaving it up would offer a page that can never change the
+        // grid, and every further click would burn a request and land here
+        // again.
+        var more = (hasMore === true) && (tail.length > before) && (pages < 4)
+        var o = Object.assign({}, root.releaseOverlay)
+        o[releaseType] = { "cards": tail, "hasMore": more, "pages": pages }
+        root.releaseOverlay = o
+    }
+    /// Index the appended page of `releaseType` starts at — +inf when this
+    /// section never paged, when its page has not landed yet, or when the
+    /// landing is already stale. Fading unconditionally would re-dissolve the
+    /// whole grid on every enrichment pass, which reads as a flicker, not as
+    /// polish.
+    function releaseFadeFrom(releaseType) {
+        var e = releaseFade[releaseType]
+        if (e === undefined || e.at === 0)
+            return Number.MAX_VALUE
+        if (Date.now() - e.at > root.releaseFadeWindowMs)
+            return Number.MAX_VALUE
+        return e.from
+    }
+    /// The user picked a sort for one bucket (ReleaseGrid.slint:81-89). Hand it
+    /// to the bridge — `QbzArtist.setSectionSort` persists it by release_type
+    /// and re-sorts the STASHED document, which comes back as a republished
+    /// `artistJson` — and reconcile the local paging state first.
+    ///
+    /// The OVERLAY's CARDS for this bucket are dropped. Nothing is lost by
+    /// that: an overlay entry is only ever written when a page LANDS, and by
+    /// then artist_qt.rs `load_release_page` has already folded that page into
+    /// the stashed document (`merge_release_page`, called before the signal is
+    /// emitted) — so every card the overlay holds is in the document the
+    /// republish is about to carry, now in the new order. Keeping the cards
+    /// would leave a second, stale copy of those rows whose only remaining job
+    /// is to be deduped away.
+    ///
+    /// `hasMore` and `pages` are KEPT (the entry survives as a card-less
+    /// stub). They are paging state, not row data, and neither is in the
+    /// document: merge_release_page writes the SERVER's has_more flag into the
+    /// stash, not the capped one, so dropping the whole entry after the cap
+    /// closed a bucket would let the document's `hasMore: true` resurrect the
+    /// button — and the reference's LOADED_PAGES counter survives a sort
+    /// change too (nothing in artist.rs `resort_section` touches it).
+    ///
+    /// The CURSOR is deliberately kept. It counts rows the SERVER has sent, and
+    /// the server's own order (`release_date`, hardcoded on purpose — the five
+    /// picker keys are applied locally and never reach the API) has not changed
+    /// just because we re-ordered them here. Resetting it would make the next
+    /// Load more re-request pages we already hold, which the dedup would then
+    /// swallow — the "button does nothing" bug the cursor exists to prevent.
+    ///
+    /// The FADE threshold is dropped for the same reason `releaseMoreRequested`
+    /// suppresses it under a custom sort: it is an index into an order that no
+    /// longer exists, and the republish re-creates every delegate.
+    function releaseSortChanged(releaseType, sortKey) {
+        delete releaseFade[releaseType]
+        if (root.releaseOverlay[releaseType] !== undefined) {
+            var e = Object.assign({}, root.releaseOverlay[releaseType])
+            delete e.cards
+            var o = Object.assign({}, root.releaseOverlay)
+            o[releaseType] = e
+            root.releaseOverlay = o
+        }
+        QbzArtist.setSectionSort(releaseType, sortKey)
+    }
+    Timer {
+        id: releaseSettle
+        interval: 8000
+        repeat: false
+        onTriggered: root.releasePending = ({})
+    }
 
     // ---- Network sidebar open/closed -------------------------------------
     // ShellState.content-constrained (state.slint:4114): window under the NPB
@@ -357,23 +732,29 @@ Rectangle {
     Connections {
         target: QbzArtist
         function onReleaseSectionReady(releaseType, cardsJson, hasMore) {
+            // Hand the page to the OVERLAY (root.releaseOverlay) and let the
+            // `releaseSections` projection merge it. It used to be pushed
+            // straight into `root.artist.releaseSections[i].cards` followed by
+            // a manual `artistChanged()`, and that is why "nunca cargan mas
+            // albumes": the push mutated the array IN PLACE, so both Repeaters
+            // were re-handed the identical array reference and QML had nothing
+            // to invalidate — the fake `artistChanged()` re-ran every OTHER
+            // binding on the page and left the two that mattered untouched,
+            // because `releaseSections`' unfiltered arm returned `all`, the
+            // document's own array, unchanged.
+            //
+            // The signal is emitted only on SUCCESS (main.rs:872 logs errors
+            // and returns), and an empty page comes through here too — that is
+            // what clears the skeleton when a bucket runs out.
             var cards = JSON.parse(cardsJson)
-            // The document, not root.releaseSections: that one is a FILTERED
-            // projection and may hand back fresh objects, so a push into it
-            // would be dropped on the next re-evaluation.
-            var sections = root.artist.releaseSections || []
-            for (var i = 0; i < sections.length; i++) {
-                if (sections[i].releaseType === releaseType) {
-                    var seen = {}
-                    for (var j = 0; j < sections[i].cards.length; j++) seen[sections[i].cards[j].id] = true
-                    for (j = 0; j < cards.length; j++) {
-                        if (!seen[cards[j].id]) sections[i].cards.push(cards[j])
-                    }
-                    sections[i].hasMore = hasMore
-                    break
-                }
-            }
-            root.artistChanged()
+            root.releaseMoreLanded(releaseType, cards, hasMore)
+            // The appended covers are not in the document (artist_qt.rs folds
+            // them into the STASHED copy, which only reaches us on the next
+            // enrichment republish), so the document-driven dispatch would
+            // leave the new row as blank tiles until an unrelated pass
+            // happened to land. dispatchCovers() reads the overlay too, and
+            // `dispatchedCovers` makes the re-scan free.
+            root.dispatchCovers()
         }
     }
     Component.onCompleted: {
@@ -407,6 +788,18 @@ Rectangle {
         networkOpen = !contentConstrained
         dismissedDiscovery = ({})
         localToggles = ({})
+        // A fresh artist must never inherit the previous one's paging state:
+        // a stale threshold would fade a band of the new artist's first page
+        // for no reason, a stale pending flag would show a skeleton under a
+        // button nobody pressed, a stale OVERLAY would graft the previous
+        // artist's albums onto this one's grids (release types are shared
+        // keys — every artist has an "album" bucket), and a stale CURSOR would
+        // page the new artist from the old one's offset.
+        releasePending = ({})
+        releaseFade = ({})
+        releaseOverlay = ({})
+        releaseCursor = ({})
+        releaseSettle.stop()
         membersExpanded = false
         groupsExpanded = false
         collabsExpanded = false
@@ -473,6 +866,17 @@ Rectangle {
         for (i = 0; i < rawSections.length; i++)
             for (j = 0; j < (rawSections[i].cards || []).length; j++)
                 if (rawSections[i].cards[j].artUrl) urls.push(rawSections[i].cards[j].artUrl)
+        // …and the pages "Load more" appended, which are NOT in the document:
+        // they live in root.releaseOverlay until artist_qt.rs's stashed copy
+        // reaches us through the next enrichment republish. Off the overlay
+        // rather than off `releaseSections` for the same reason the lists
+        // above are RAW — the projection is filtered, and a covers dispatch
+        // must not depend on the search box.
+        for (var rt in root.releaseOverlay) {
+            var tail = root.releaseOverlay[rt].cards || []
+            for (i = 0; i < tail.length; i++)
+                if (tail[i].artUrl) urls.push(tail[i].artUrl)
+        }
         for (i = 0; i < rawPlaylists.length; i++)
             if (rawPlaylists[i].artUrl) urls.push(rawPlaylists[i].artUrl)
         // Magazine story thumbnails ride the same pipeline (arc-cdn URLs).
@@ -557,11 +961,21 @@ Rectangle {
                 elide: Text.ElideRight
             }
             // Cover with hover play overlay.
+            //
+            // RADIUS 4, not `theme.radiusSm` (8): rows/TrackRow.qml:553 — the
+            // SHARED row this component is a fork of, and the one PlaylistView
+            // / the album detail / search all draw — rounds its artwork cell
+            // at 4. The fork had drifted to 8 and the owner saw it ("los album
+            // arts de Popular tracks esta mas redondo que otros, por ejemplo,
+            // los de playlistview"). All THREE stacked elements carry the same
+            // number — the cell, the image and the hover scrim — or the scrim's
+            // corners stick out past the art. The ROW's own `radius: 8` above
+            // is correct and matches TrackRow.qml:288; only the cover moved.
             Rectangle {
                 width: showAlbum ? cols.colArt : cols.colNumber
                 height: showAlbum ? cols.colArt : 28
                 anchors.verticalCenter: parent.verticalCenter
-                radius: theme.radiusSm
+                radius: 4
                 color: theme.surfaceElevated
                 clip: true
                 QbzIcon {
@@ -574,11 +988,11 @@ Rectangle {
                 RoundedImage {
                     anchors.fill: parent
                     source: root.coverMap[row.artUrl] || ""
-                    radius: theme.radiusSm
+                    radius: 4
                 }
                 Rectangle {
                     anchors.fill: parent
-                    radius: theme.radiusSm
+                    radius: 4
                     color: "#000000"
                     opacity: trArea.containsMouse || isActive ? 0.6 : 0.0
                     Behavior on opacity { NumberAnimation { duration: 150 } }
@@ -1018,6 +1432,10 @@ Rectangle {
 
     // Release section (ReleaseGrid).
     component ReleaseSection: Column {
+        // Named because the card delegate below reaches for `section` from a
+        // nested scope, and an inline component's own root id is the one
+        // handle that is unambiguous there.
+        id: relSection
         property var section: ({})
         property string anchorId: ""
         width: parent ? parent.width : 0
@@ -1048,35 +1466,95 @@ Rectangle {
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
-                    // POC-NOTE: dedicated discography page out of scope.
+                    // ReleaseGrid.slint:63-68 -> ArtistPageView.slint:928-929
+                    // -> ArtistActions.open-releases -> main.rs:15055-15087,
+                    // which records the nav entry and mounts
+                    // ArtistReleasesView on this bucket.
+                    //
+                    // The artist NAME travels with the call: the second door to
+                    // the same page (AlbumView's "From the same artist" View
+                    // all) has no artist document open and supplies its own,
+                    // exactly as main.rs:11844 does.
+                    //
+                    // `relSection.section`, not a bare `section` — the inline
+                    // component's own root id is the one unambiguous handle
+                    // from a nested scope, which is why `relSection` is named
+                    // at all (:1409-1411). `root.` is the same pattern the card
+                    // delegate below already uses for `coverMap` and
+                    // `releaseFadeFrom`.
+                    //
+                    // (What stood here was an empty MouseArea under a POC-NOTE
+                    // reading "dedicated discography page out of scope" — a
+                    // fully lit, pointer-cursor control whose entire effect was
+                    // nothing. The page now exists; the note is gone with it.)
+                    onClicked: QbzArtist.openReleases(root.artist.id || "",
+                        root.artist.name || "",
+                        relSection.section.releaseType || "")
                 }
             }
-            // Per-section sort (ReleaseGrid.slint:70 QbzSelect). No seam:
-            // `set-section-sort` persists per release_type and re-sorts
-            // server-side, and neither exists on this bridge — so the control
-            // is DIMMED and carries no MouseArea at all instead of offering a
-            // pointer cursor over a menu that never opens.
-            Rectangle {
+            // Per-section sort — ReleaseGrid.slint:70-90, the SAME control the
+            // reference mounts (primitives/QbzSelect.slint), here through the
+            // port's existing replica controls/QbzSelect.qml.
+            //
+            // `sm: true` + `menuWidth: 150` are the .slint's own values,
+            // verbatim: QbzSelect.qml:34 is `width = menuWidth - 40` under
+            // `sm`, so 150 lands at the 110 x 30 the reference computes at
+            // QbzSelect.slint:88. Passing 190 "to get 150" is the exact mistake
+            // that file's :42-50 note documents.
+            //
+            // `id: sortBtn` is load-bearing beyond this block — the section
+            // title above measures `parent.width - seeAll.width - sortBtn.width
+            // - 24`. The control grows 28 -> 30 tall with the swap; that IS the
+            // reference (QbzSelect.slint `sm` is 30px). Row children are
+            // top-aligned, hence the explicit verticalCenter.
+            //
+            // (What stood here was a dimmed Rectangle with no MouseArea, whose
+            // note claimed `set-section-sort` "re-sorts server-side" and that
+            // no seam existed. Both halves were wrong: main.rs:14997-15007 sorts
+            // the ALREADY-LOADED cards in process and never touches the API —
+            // see artist_qt::resort_section — and the label lied twice on top of
+            // that, reading "Newest" over data in server order.)
+            QbzSelect {
                 id: sortBtn
-                width: sortRow.width
-                height: 28
-                radius: 5
-                opacity: 0.4
                 anchors.verticalCenter: parent.verticalCenter
-                color: theme.surfaceElevated
-                Row {
-                    id: sortRow
-                    height: parent.height
-                    leftPadding: 10
-                    rightPadding: 10
-                    spacing: 6
-                    Text {
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: QbzSession.tr("Newest", QbzSession.trRev)
-                        color: theme.textSecondary
-                        font.pixelSize: 12
-                    }
-                    QbzIcon { name: "chevron-down"; width: 12; height: 12; anchors.verticalCenter: parent.verticalCenter; tintName: "secondary" }
+                sm: true
+                menuWidth: 150
+                // The .slint's five options in its order (:74-79). "A–Z"/"Z–A"
+                // carry a U+2013 EN DASH — the msgid in the catalogue is the
+                // en-dash form, and a hyphen would silently go untranslated in
+                // all seven non-English locales. (LibraryToolbar's "Title A-Z"
+                // is a DIFFERENT, hyphenated msgid — do not copy it here.)
+                options: [QbzSession.tr("Default", QbzSession.trRev),
+                          QbzSession.tr("Newest", QbzSession.trRev),
+                          QbzSession.tr("Oldest", QbzSession.trRev),
+                          QbzSession.tr("A–Z", QbzSession.trRev),
+                          QbzSession.tr("Z–A", QbzSession.trRev)]
+                // ReleaseGrid.slint:34-39 — the wire key back to an index. This
+                // is what makes the picker come back showing the sort the user
+                // actually chose: `sortBy` is stamped on the section by
+                // artist_qt.rs at page build from the persisted pref, so a
+                // revisited artist seats the control without a click.
+                //
+                // A BINDING, never an assignment: QbzSelect does not
+                // self-assign `currentIndex` (it closes the popup and emits,
+                // QbzSelect.qml:299-300), and every enrichment republish
+                // re-creates this delegate — an assignment would be lost.
+                currentIndex: {
+                    var s = relSection.section.sortBy || "default"
+                    return s === "newest" ? 1 : s === "oldest" ? 2
+                         : s === "title-asc" ? 3 : s === "title-desc" ? 4 : 0
+                }
+                // ReleaseGrid.slint:81-89 — index to wire key. These five
+                // strings are BOTH what gets persisted and what the sort
+                // functions switch on, on either side of the bridge.
+                //
+                // `relSection.section`, not a bare `section`: this header lives
+                // inside an inline `component`, which does not see the enclosing
+                // document's ids — `relSection` exists for exactly this.
+                onSelected: function (i) {
+                    root.releaseSortChanged(relSection.section.releaseType,
+                        i === 1 ? "newest" : i === 2 ? "oldest"
+                        : i === 3 ? "title-asc" : i === 4 ? "title-desc" : "default")
                 }
             }
         }
@@ -1089,6 +1567,7 @@ Rectangle {
             Repeater {
                 model: section.cards
                 delegate: AlbumCard {
+                    id: relCard
                     albumId: modelData.id
                     title: modelData.title
                     // The subtitle slot carries the YEAR on the artist page,
@@ -1115,35 +1594,84 @@ Rectangle {
                     // artist_qt::map_release stamps this the same way it
                     // stamps the pin; false inverted the first click.
                     isFavorite: modelData.isFavorite === true
+
+                    // ---- smooth append (owner, 2026-08-02) ---------------
+                    // "que la aparicion de lo que se cargue, sea smooth" —
+                    // fade in ONLY the page Load more just brought in. The
+                    // Repeater re-creates EVERY delegate on any republish (see
+                    // `releasePending` at the top of this file), so an
+                    // unconditional fade would re-dissolve the whole grid on
+                    // an unrelated pass and read as a flicker.
+                    //
+                    // `opacity` carries NO binding on purpose: the assignment
+                    // below would destroy one, and a Behavior would then fire
+                    // for every card (Behaviors are inert only DURING
+                    // creation, and Component.onCompleted runs after it). A
+                    // card below the threshold is never touched at all, so it
+                    // is created — and stays — fully opaque.
+                    NumberAnimation {
+                        id: appendFade
+                        target: relCard
+                        property: "opacity"
+                        from: 0.0
+                        to: 1.0
+                        // 220ms / OutCubic is the content duration; the
+                        // skeleton above it fades at 180ms.
+                        duration: 220
+                        easing.type: Easing.OutCubic
+                    }
+                    Component.onCompleted: {
+                        if (index >= root.releaseFadeFrom(relSection.section.releaseType)) {
+                            relCard.opacity = 0.0
+                            appendFade.start()
+                        }
+                    }
                 }
             }
         }
 
-        Row {
+        // The shared affordance (controls/QbzLoadMore.qml) — this site is the
+        // `a` arm its header cites: plain centred text, 28 tall, and the same
+        // `section.hasMore` gate and bridge call as before. What is new is the
+        // placeholder row it draws underneath while the page is in flight.
+        QbzLoadMore {
             visible: section.hasMore
             width: parent.width
-            Item { width: (parent.width - loadMoreBtn.width) / 2; height: 1 }
-            Rectangle {
-                id: loadMoreBtn
-                width: loadMoreText.implicitWidth + 24
-                height: 28
-                color: "transparent"
-                Text {
-                    id: loadMoreText
-                    anchors.centerIn: parent
-                    text: QbzSession.tr("Load more", QbzSession.trRev)
-                    color: loadMoreArea.containsMouse ? theme.textPrimary : theme.textSecondary
-                    font.pixelSize: 13
-                }
-                MouseArea {
-                    id: loadMoreArea
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: QbzArtist.loadReleaseSection(artist.id, section.releaseType, section.cards.length)
-                }
+            // The grid above has a 224 x 270 PITCH: cards/AlbumCard.qml:186-189
+            // is 200 x 246 and the Grid adds 24px of column/row spacing — the
+            // same pitch SearchView's block was built around, so the
+            // placeholder lands exactly where the first appended row will.
+            skeleton: "cards"
+            cellW: 224
+            cellH: 270
+            // There is NO per-section loading flag to bind to: the bridge
+            // publishes one artist document plus the `releaseSectionReady`
+            // signal (artist_bridge.rs:60-66) and nothing in between. So the
+            // in-flight state is driven locally, off root's map, cleared by
+            // that signal and capped by root's 8s settle timer (the error path
+            // emits nothing at all — main.rs:872).
+            busy: root.releasePending[section.releaseType] === true
+            onClicked: {
+                // BEFORE the call: the threshold is the count on screen now
+                // (`section.cards` is the MERGED array — document page 1 plus
+                // every page the overlay holds — so the fade threshold lines
+                // up with the tail this request will add).
+                //
+                // The OFFSET is not that count: releaseMoreRequested returns
+                // the server cursor (see `releaseCursor`), which is the number
+                // of rows the server has actually sent. They differ as soon as
+                // a page repeats a row, and passing the on-screen count then
+                // re-requests rows we already have — the dedup swallows them
+                // and the button appears to do nothing, forever.
+                //
+                // The third argument suppresses the append fade when this
+                // bucket carries a non-default sort: the page will be
+                // INTERLEAVED, not appended, so an index threshold would fade
+                // the wrong cards (see releaseMoreRequested).
+                var off = root.releaseMoreRequested(section.releaseType, section.cards.length,
+                                                    (section.sortBy || "default") !== "default")
+                QbzArtist.loadReleaseSection(artist.id, section.releaseType, off)
             }
-            Item { width: (parent.width - loadMoreBtn.width) / 2; height: 1 }
         }
     }
 
@@ -1587,32 +2115,47 @@ Rectangle {
                 Repeater {
                     model: topTracks.length
                     delegate: PopularTrackRow {
-                        visible: root.topTracksExpanded || index < root.preview
-                        height: visible ? 50 : 0
+                        // Smooth reveal (owner, 2026-08-02). This expander is
+                        // CLIENT-SIDE: the model is a COUNT, so every row is
+                        // already instantiated and "Load more" only flipped
+                        // `visible` — twenty rows arriving in one frame, which
+                        // is the "carga de golpe" the owner reported.
+                        //
+                        // OPACITY ONLY, deliberately: the row is 50 tall with
+                        // a 36px cover and text anchored to its verticalCenter
+                        // and it does NOT clip, so animating `height` would
+                        // paint those children outside the row box and over
+                        // its neighbours for the whole 220ms. Height still
+                        // snaps (the space opens at once); the content
+                        // dissolves into it. Same 220ms / OutCubic the
+                        // appended release cards use.
+                        //
+                        // The gate is this explicit `revealed`, not the item's
+                        // own `visible`: Item.visible is EFFECTIVE visibility,
+                        // so binding opacity to it would re-fade every row
+                        // whenever the whole catalog Column is shown again
+                        // (tab switch, artistLoading clearing).
+                        readonly property bool revealed: root.topTracksExpanded || index < root.preview
+                        visible: revealed
+                        height: revealed ? 50 : 0
+                        opacity: revealed ? 1.0 : 0.0
+                        Behavior on opacity { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
                         row: topTracks[index]
                         rowIndex: index
                         showAlbum: true
                     }
                 }
                 Item { visible: topTracks.length > root.preview; width: 1; height: 4 }
-                Rectangle {
+                // The shared affordance — the `b` arm of controls/QbzLoadMore
+                // .qml's header: same plain 28-tall shape, same label pair,
+                // same client-side toggle. No `busy` and no skeleton: there is
+                // no fetch, the reveal is instant (the rows above own the
+                // smoothing).
+                QbzLoadMore {
                     visible: topTracks.length > root.preview
                     width: parent.width
-                    height: 28
-                    color: "transparent"
-                    Text {
-                        anchors.centerIn: parent
-                        text: root.topTracksExpanded ? QbzSession.tr("View less", QbzSession.trRev) : QbzSession.tr("Load more", QbzSession.trRev)
-                        color: loadMoreTopArea.containsMouse ? theme.textPrimary : theme.textSecondary
-                        font.pixelSize: 13
-                        MouseArea {
-                            id: loadMoreTopArea
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: root.topTracksExpanded = !root.topTracksExpanded
-                        }
-                    }
+                    label: root.topTracksExpanded ? QbzSession.tr("View less", QbzSession.trRev) : QbzSession.tr("Load more", QbzSession.trRev)
+                    onClicked: root.topTracksExpanded = !root.topTracksExpanded
                 }
 
                 // --- Latest release --------------------------------------
@@ -1676,32 +2219,26 @@ Rectangle {
                     Repeater {
                         model: appearsOn.length
                         delegate: PopularTrackRow {
-                            visible: root.appearsOnExpanded || index < root.preview
-                            height: visible ? 50 : 0
+                            // Same client-side reveal as Popular Tracks above
+                            // — same component, same 50px pitch, same reason
+                            // for fading opacity and letting height snap.
+                            readonly property bool revealed: root.appearsOnExpanded || index < root.preview
+                            visible: revealed
+                            height: revealed ? 50 : 0
+                            opacity: revealed ? 1.0 : 0.0
+                            Behavior on opacity { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
                             row: appearsOn[index]
                             rowIndex: index
                             showAlbum: false
                         }
                     }
                     Item { visible: appearsOn.length > root.preview; width: 1; height: 4 }
-                    Rectangle {
+                    // Shared affordance, `b` arm again (client-side toggle).
+                    QbzLoadMore {
                         visible: appearsOn.length > root.preview
                         width: parent.width
-                        height: 28
-                        color: "transparent"
-                        Text {
-                            anchors.centerIn: parent
-                            text: root.appearsOnExpanded ? QbzSession.tr("View less", QbzSession.trRev) : QbzSession.tr("Load more", QbzSession.trRev)
-                            color: loadMoreAppArea.containsMouse ? theme.textPrimary : theme.textSecondary
-                            font.pixelSize: 13
-                            MouseArea {
-                                id: loadMoreAppArea
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: root.appearsOnExpanded = !root.appearsOnExpanded
-                            }
-                        }
+                        label: root.appearsOnExpanded ? QbzSession.tr("View less", QbzSession.trRev) : QbzSession.tr("Load more", QbzSession.trRev)
+                        onClicked: root.appearsOnExpanded = !root.appearsOnExpanded
                     }
                 }
 
@@ -2390,7 +2927,7 @@ Rectangle {
                 model: [
                     { "label": QbzSession.tr("Create Artist Collection", QbzSession.trRev), "icon": "library-big", "action": "disco", "live": true },
                     { "label": QbzSession.tr("Artist Scene", QbzSession.trRev), "icon": "map-pin", "action": "stub", "live": false },
-                    { "label": QbzSession.tr("Share", QbzSession.trRev), "icon": "link", "action": "stub", "live": false },
+                    { "label": QbzSession.tr("Share", QbzSession.trRev), "icon": "link", "action": "share", "live": true },
                     { "label": root.toggleState("artistPin", artist.isPinned) ? QbzSession.tr("Unpin", QbzSession.trRev) : QbzSession.tr("Pin", QbzSession.trRev), "icon": root.toggleState("artistPin", artist.isPinned) ? "pin-filled" : "pin", "action": "pin", "live": true },
                 ]
                 delegate: Rectangle {
@@ -2432,6 +2969,23 @@ Rectangle {
                                 // "build-collection")`. This is the ONLY route
                                 // to it; the nav flyout has no builder entry.
                                 QbzDisco.open(artist.id)
+                            } else if (modelData.action === "share") {
+                                // ArtistPageView.slint:530-538 -> main.rs
+                                // :12749 `media-action("artist", id,
+                                // "share")`. The bridge builds the
+                                // play.qobuz.com/artist/{id} URL, copies it
+                                // and raises the "Link copied" toast, exactly
+                                // as the .slint arm does. Nothing is copied
+                                // QML-side here (unlike TrackRow.qml's
+                                // Loader/TextEdit idiom): cxx-qt-lib exposes
+                                // no QClipboard, and only Rust can publish
+                                // QbzShell.toastJson, so the copy and its
+                                // confirmation stay on one side.
+                                //
+                                // Link-only — artists have no Song.link path
+                                // (share.rs's Song.link resolvers serve the
+                                // track and album menus).
+                                QbzArtist.share(artist.id)
                             }
                         }
                     }

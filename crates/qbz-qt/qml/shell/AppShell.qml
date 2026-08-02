@@ -180,6 +180,14 @@ Rectangle {
                 : QbzShell.currentView === "mostplayedalbums" ? "../views/PlayHistoryView.qml"
                 : QbzShell.currentView === "label" ? "../views/LabelView.qml"
                 : QbzShell.currentView === "labelreleases" ? "../views/LabelReleasesView.qml"
+                // Artist page > a release section > "See discography", and the
+                // album page's "From the same artist" View all. Same two-file
+                // contract as the rest of this chain (nav_qt.rs:9-16):
+                // artist_releases_qt::open records the id, this arm mounts it.
+                // Forgetting the arm is NOT a crash — the ternary falls through
+                // to "" and the pane goes blank with nothing logged, i.e. the
+                // dead "See discography" in a new costume.
+                : QbzShell.currentView === "artistreleases" ? "../views/ArtistReleasesView.qml"
                 // For You > Qobuz Mixes. The whole chain existed —
                 // HomeView's tile -> QbzHome.openMix -> foryou_qt -> nav_qt
                 // records the "mix" view — and MixView.qml is written and

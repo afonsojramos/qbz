@@ -14,6 +14,13 @@ Column {
     property var items: []
     // The host's url-keyed cover map ({url: file://path}).
     property var coverMap: ({})
+    /// Carousel.slint's `show-view-all` (default false, as there). The ONE
+    /// mount that turns it on today is AlbumView's "From the same artist" rail
+    /// — album/AlbumPageView.slint:1124-1132 — whose link opens the artist's
+    /// discography. Every other SectionRail in the tree is untouched: the
+    /// property defaults off and QbzSectionHeader draws nothing for it.
+    property bool showViewAll: false
+    signal viewAllClicked()
 
     QbzTheme { id: theme }
     width: parent ? parent.width : 0
@@ -27,6 +34,10 @@ Column {
 
     QbzSectionHeader {
         title: root.title
+        // The shared header already implements both halves
+        // (QbzSectionHeader.qml:42-54, :107-131) — this only forwards them.
+        showViewAll: root.showViewAll
+        onViewAllClicked: root.viewAllClicked()
         leftEnabled: rail.contentX > 1
         rightEnabled: rail.contentX < root.maxScroll - 1
         onPageLeft: rail.contentX = Math.max(0, rail.contentX - root.step)

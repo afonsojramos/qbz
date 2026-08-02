@@ -1059,30 +1059,57 @@ Rectangle {
             // (album_qt.rs spawn_deferred_rows). While a fetch is out the
             // rail's placeholder holds its band; when it resolves to nothing
             // both the placeholder and the rail are gone — no empty frame.
+            //
+            // WIDTH — every rail below spells `parent.width - 64` on purpose.
+            // `page` is a Column with leftPadding/rightPadding 32, and a QML
+            // Column's padding does NOT narrow `parent.width` for its
+            // children: it only shifts them. A child that says
+            // `width: parent.width` therefore comes out 64px too wide and
+            // hangs 32px off the right edge — which put SectionRail's
+            // right-aligned chevron Row entirely outside the viewport (owner
+            // report: the bottom rails had no right chevron at all, and the
+            // left one sat jammed against the window edge). The inset is
+            // applied at the MOUNT SITES, not inside SectionRail /
+            // RailSkeleton, exactly as the page's other direct children
+            // already do it — see :442, :480, :690 and :695.
             Item { visible: moreRail.visible || moreRailSk.visible; width: 1; height: 40 }
             RailSkeleton {
                 id: moreRailSk
+                width: parent.width - 64
                 visible: root.moreLoading
                 phase: skeletonPhase.on
                 cardCount: root.railSkeletonCount
             }
             SectionRail {
                 id: moreRail
+                width: parent.width - 64
                 visible: (album.moreFromArtist || []).length > 0
                 title: QbzSession.tr("From the same artist", QbzSession.trRev)
                 items: album.moreFromArtist || []
                 coverMap: root.coverMap
+                // album/AlbumPageView.slint:1124-1132 — this rail is the ONE
+                // carousel on the album page with `show-view-all: true`, and
+                // its link is the SECOND door to the artist discography page
+                // (main.rs:11839-11865 handles it with release_type "album" and
+                // the name taken from AlbumState.artist, which is why
+                // openReleases takes the name as a parameter). The other door
+                // is "See discography" on the artist page itself.
+                showViewAll: true
+                onViewAllClicked: QbzArtist.openReleases(root.header.artistId || "",
+                    root.header.artist || "", "album")
             }
 
             Item { visible: sugRail.visible || sugRailSk.visible; width: 1; height: 40 }
             RailSkeleton {
                 id: sugRailSk
+                width: parent.width - 64
                 visible: root.suggestionsLoading
                 phase: skeletonPhase.on
                 cardCount: root.railSkeletonCount
             }
             SectionRail {
                 id: sugRail
+                width: parent.width - 64
                 visible: (album.suggestions || []).length > 0
                 title: QbzSession.tr("Listening suggestions", QbzSession.trRev)
                 items: album.suggestions || []
@@ -1096,12 +1123,14 @@ Rectangle {
             Item { visible: simRail.visible || simRailSk.visible; width: 1; height: 40 }
             RailSkeleton {
                 id: simRailSk
+                width: parent.width - 64
                 visible: root.similarLoading
                 phase: skeletonPhase.on
                 cardCount: root.railSkeletonCount
             }
             SectionRail {
                 id: simRail
+                width: parent.width - 64
                 visible: (album.similarAlbums || []).length > 0
                 title: QbzSession.tr("Similar albums", QbzSession.trRev)
                 items: album.similarAlbums || []

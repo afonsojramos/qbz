@@ -144,6 +144,7 @@ fn main() {
                 "qml/theme/QbzTheme.qml",
                 "qml/theme/RoundedImage.qml",
                 "qml/views/AlbumView.qml",
+                "qml/views/ArtistReleasesView.qml",
                 "qml/views/ArtistView.qml",
                 "qml/views/BlacklistManagerView.qml",
                 "qml/views/HomeView.qml",

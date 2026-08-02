@@ -36,7 +36,7 @@ use cxx_qt_lib::QString;
 use qbz_app::shell::AppRuntime;
 use qbz_core::LoggingAdapter;
 use qbz_models::{Album, Track};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::home_qt;
@@ -98,7 +98,15 @@ pub struct TrackRow {
     pub is_favorite: bool,
 }
 
-#[derive(Clone, Serialize)]
+/// `Deserialize` rides along with `Serialize` so a card can be read BACK out of
+/// the stashed artist document: `artist_qt::sort_release_values` re-sorts a
+/// release bucket that already lives on disk-shaped JSON (the stash the
+/// progressive enrichment passes republish), and doing that through the typed
+/// struct keeps ONE copy of the sort arms — `artist_qt::sort_release_cards` —
+/// instead of a second comparator written against raw `serde_json::Value`.
+/// The `#[serde(rename)]`s below are bidirectional, so the camelCase the QML
+/// document carries round-trips unchanged.
+#[derive(Clone, Serialize, Deserialize)]
 pub struct AlbumCardData {
     pub id: String,
     pub title: String,
