@@ -29,10 +29,15 @@
 //    `progress` changes per tick. `to` is materialised into a plain JS array
 //    ONCE per publish (30/s) so `at()` does not cross into the QList_f32
 //    sequence wrapper twice per bar per tick — see `onTargetChanged`.
-//  - The DRIVER IS A 16 ms Timer, not a FrameAnimation. The producer publishes
+//  - The DRIVER IS A 33 ms Timer, not a FrameAnimation. The producer publishes
 //    at 30/s; a per-frame trigger fired 180x/s on Linux (100x/s on macOS) for
-//    it. ~62 Hz keeps two interpolated steps per published frame, which is all
-//    the motion there is to buy.
+//    it. It was 16 ms (~62 Hz, two interpolated steps per published frame)
+//    until the 2026-08-02 macOS measurement (2026-08-02-macos-perf-fix-plan.md
+//    §1): each tick INVALIDATES THE WHOLE WINDOW — Qt Quick has no partial
+//    damage — so every driver Hz costs a full-window re-render (~2 passes),
+//    ~6x pricier per frame on Qt's Metal path than on Linux/Mesa. 33 ms keeps
+//    one interpolated step per published frame: the render bill halves and
+//    the motion difference is at the edge of perception.
 //  - SELF-PARKING, exactly like the Rust drain: the driver starts on a publish
 //    and stops itself the moment `progress` reaches 1 (within one 33 ms period
 //    of the last publish). A paused player, a hidden band or a disabled tap
@@ -148,9 +153,12 @@ Item {
     // removes). The TRIGGER, however, must not run at the frame rate either —
     // the producer publishes at TARGET_FPS = 30 (qbz-audio visualizer/mod.rs:32)
     // and FrameAnimation fired 180x/s on Linux and 100x/s on macOS for it,
-    // i.e. 3-6x the frames the data justifies. 16 ms = ~62 Hz gives two
-    // interpolated steps per published frame, which is what buys the motion
-    // (Slint's equivalent is `animate bar-h { duration: 90ms; easing: ease; }`,
+    // i.e. 3-6x the frames the data justifies. 33 ms = ~30 Hz gives one
+    // interpolated step per published frame — halved from the original 16 ms
+    // after the 2026-08-02 macOS measurement showed every tick pays a
+    // full-window re-render (Qt Quick has no partial damage; ~2 Metal render
+    // passes at 3440x1440). The motion kept is what buys the effect (Slint's
+    // equivalent is `animate bar-h { duration: 90ms; easing: ease; }`,
     // SidebarNowPlayingDock.slint:45).
     //
     // `repeat: true` is MANDATORY — Timer defaults to false, and without it the
@@ -163,7 +171,7 @@ Item {
     // missed tick degrades to a hold, never a jump.
     Timer {
         id: driver
-        interval: 16
+        interval: 33
         repeat: true
         running: false
         onTriggered: {
