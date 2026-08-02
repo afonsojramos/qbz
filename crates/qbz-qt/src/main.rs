@@ -2126,6 +2126,57 @@ fn publish_home_sections(sections: &home_qt::DiscoverSections) {
 }
 
 
+/// The Settings > Appearance RENDERER row, consumed at startup (PARITY-DEBT
+/// #104 — the row rendered and persisted into the SAME ui_prefs the Slint
+/// reads, but nothing consumed it, so it lied).
+///
+/// Precedence (Slint `requested_renderer_tier`, main.rs:7825-7848): explicit
+/// Qt envs (`QSG_RHI_BACKEND` / `QT_QUICK_BACKEND`) > `QBZ_RENDERER` > the
+/// persisted pref > Qt's default backend (Metal on macOS, OpenGL on Linux —
+/// both measured healthy, 2026-08-01/02). Cross-frontend mapping: the GPU
+/// tiers (`auto`/`wgpu`/`gpu`/`hardware`/`hw`) ARE Qt's default on both
+/// platforms; `gl` maps to `QSG_RHI_BACKEND=opengl` on Linux and to the
+/// Metal default on macOS (the Slint remaps GL to skia(Metal) there,
+/// main.rs:7651-7653); `software` maps to `QT_QUICK_BACKEND=software`.
+///
+/// OWED and kept in PARITY-DEBT #104: the crash auto-revert sentinel and
+/// the frame-liveness watchdog — forcing a renderer without them can leave
+/// a broken startup, exactly what the Slint sentinel was built for.
+fn apply_renderer_preference() {
+    if std::env::var_os("QSG_RHI_BACKEND").is_some()
+        || std::env::var_os("QT_QUICK_BACKEND").is_some()
+    {
+        log::info!("[renderer] explicit Qt backend env present; leaving the choice to it");
+        return;
+    }
+    let choice = match std::env::var("QBZ_RENDERER")
+        .ok()
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| !s.is_empty() && s != "auto")
+    {
+        Some(v) => v,
+        None => settings_qt::pref_str("renderer", "auto"),
+    };
+    match choice.as_str() {
+        "software" | "cpu" | "soft" => {
+            std::env::set_var("QT_QUICK_BACKEND", "software");
+            log::info!("[renderer] '{choice}' -> QT_QUICK_BACKEND=software");
+        }
+        "gl" | "gles" | "femtovg" => {
+            if cfg!(target_os = "macos") {
+                log::info!("[renderer] '{choice}' on macOS -> Metal default (the Slint GL remap)");
+            } else {
+                std::env::set_var("QSG_RHI_BACKEND", "opengl");
+                log::info!("[renderer] '{choice}' -> QSG_RHI_BACKEND=opengl");
+            }
+        }
+        "auto" | "wgpu" | "gpu" | "hardware" | "hw" => {
+            log::info!("[renderer] '{choice}' -> Qt default backend (GPU path)");
+        }
+        other => log::warn!("[renderer] unrecognized choice '{other}' -> Qt default backend"),
+    }
+}
+
 fn main() {
     qbz_log::install("info");
     // i18n (phase 20): honor the persisted ui_prefs language; "auto"/missing
@@ -2158,6 +2209,8 @@ fn main() {
         log::warn!("[qbz-qt] runtime has no visualizer tap; the Large dock band stays empty");
     }
     let _ = APP.set(runtime);
+
+    apply_renderer_preference();
 
     let mut app = QGuiApplication::new();
     let mut engine = QQmlApplicationEngine::new();
