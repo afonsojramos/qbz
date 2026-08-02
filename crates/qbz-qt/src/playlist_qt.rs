@@ -525,6 +525,23 @@ pub(crate) fn row_to_queue_public(row: &PlaylistTrackRow) -> QueueTrack {
 }
 
 fn row_to_queue(row: &PlaylistTrackRow) -> QueueTrack {
+    // PROVENANCE IS LOAD-BEARING (wrong-track hazard, the QConnect
+    // track-source-admission P0 family). A LOCAL playlist's detail adopts
+    // its rows into this shared page via `local_playlist_qt::adopt_doc`, and
+    // its local/Plex rows carry `row.source` + the LIBRARY rowid (or a 2^40
+    // synthetic Plex id) in `row.id` — NOT a catalog id. Hardcoding
+    // `source: "qobuz"` here passed every QConnect admission guard
+    // (`id > 0 && source != local/plex`) and pushed the rowid to the
+    // WebSocket as a Qobuz catalog id: the peer renderer played an
+    // UNRELATED track (reference guards this at main.rs:11906-11932, "the
+    // catalog path below would mis-resolve them"). Typed correctly, the
+    // existing guards do their job: with a peer active the add is refused
+    // with the castable toast and lands nowhere; with no peer it lands
+    // locally, correctly typed, and the sync-on-add predicate skips it.
+    // Unavailable rows (a raw path or `kind:ref` id) parse to 0 and fail
+    // the `id > 0` guard — they can never reach the WS either.
+    let provenance = row.source.as_str();
+    let is_local_row = matches!(provenance, "local" | "plex");
     QueueTrack {
         id: row.id.parse().unwrap_or(0),
         title: row.title.clone(),
@@ -546,7 +563,7 @@ fn row_to_queue(row: &PlaylistTrackRow) -> QueueTrack {
         hires: row.quality_tier == "hires",
         bit_depth: row.bit_depth,
         sample_rate: row.sample_rate,
-        is_local: false,
+        is_local: provenance == "local",
         album_id: if row.album_id.is_empty() {
             None
         } else {
@@ -554,7 +571,11 @@ fn row_to_queue(row: &PlaylistTrackRow) -> QueueTrack {
         },
         artist_id: row.artist_id.parse::<u64>().ok(),
         streamable: true,
-        source: Some("qobuz".to_string()),
+        source: Some(if is_local_row {
+            provenance.to_string()
+        } else {
+            "qobuz".to_string()
+        }),
         parental_warning: row.explicit,
         source_item_id_hint: None,
         // A ROW does not know which playlist it belongs to. Stamping a kind
