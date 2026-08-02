@@ -68,6 +68,7 @@
 
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Effects
 import com.blitzfc.qbz
 import "../controls"
 import "../theme"
@@ -156,6 +157,26 @@ Rectangle {
             root.coverMap = Object.assign({}, m)
         }
     }
+
+    /// Shader availability for the playlist micro-collage's rounding mask.
+    /// Verbatim from cards/PlaylistCollage.qml:120-122 (and
+    /// theme/RoundedImage.qml:234-236): the ONLY case the retired "effects
+    /// render nothing" doctrine was ever true for is the software/Null
+    /// renderer, and `GraphicsInfo.api` answers it per window at runtime
+    /// (`api` carries `notify: "apiChanged"`, so this re-evaluates when the
+    /// window arrives). Test Software/Null NEGATIVELY — under the RHI an
+    /// OpenGL backend reports `GraphicsInfo.OpenGL`. `QbzShell.forceCanvasArt`
+    /// (env `QBZ_QT_ROUND_MODE=canvas`, default OFF) is honoured here too, so
+    /// a machine where `GraphicsInfo` reports a GPU and the mask still
+    /// misbehaves degrades to square corners instead of losing the covers.
+    /// `typeof` guard mirrors both files: eager binding, and the sidebar must
+    /// stay loadable in an isolated qml6 scene.
+    ///
+    /// Declared ONCE on this root rather than per delegate: the answer is a
+    /// per-window constant and the playlist tree can hold hundreds of rows.
+    readonly property bool _noShaders: GraphicsInfo.api === GraphicsInfo.Software
+        || GraphicsInfo.api === GraphicsInfo.Null
+        || (typeof QbzShell !== "undefined" && QbzShell.forceCanvasArt)
 
     QbzTheme { id: theme }
 
@@ -887,28 +908,178 @@ Rectangle {
                                         y: Math.round((parent.height - height) / 2)
                                         tintName: "accent"
                                     }
-                                    // 2x2 micro-collage (or list-music glyph).
-                                    Rectangle {
+                                    // Playlist micro-collage (or list-music
+                                    // glyph) — the port of
+                                    // primitives/SidebarPlaylistCollage.slint:
+                                    // a 20px box, 3px radius, surface-elevated
+                                    // backing, 1px seam.
+                                    //
+                                    // TWO arms, not one. The reference splits
+                                    // on the cover count (.slint:27-68):
+                                    // 1-3 covers -> ONE full-bleed cover, 4+ ->
+                                    // the 2x2 grid. This used to be an
+                                    // unconditional 2x2 of hard-coded 10x10
+                                    // tiles with no seam, so a playlist with a
+                                    // single cover drew one 10x10 tile in the
+                                    // top-left quadrant and left three quarters
+                                    // of the box empty.
+                                    //
+                                    // Covers stay on the host's already-resolved
+                                    // `root.coverMap` (filled by the ONE
+                                    // `sidebarArtworkWindow` dispatch in
+                                    // parseEntries) — this is not a second
+                                    // artwork seam.
+                                    Item {
+                                        id: collage
                                         visible: useCollage
                                         width: 20
                                         height: 20
                                         x: Math.round((parent.width - width) / 2)
                                         y: Math.round((parent.height - height) / 2)
-                                        radius: 3
-                                        color: theme.surfaceElevated
-                                        clip: true
-                                        Grid {
+
+                                        // `n`, straight off SidebarEntry.cover-count
+                                        // (.slint:24). sidebar_qt.rs already
+                                        // de-duplicates and caps `covers` at 4
+                                        // (SidebarEntry::covers), so this is 0..4
+                                        // and no dedup pass is owed here.
+                                        readonly property int n: useCollage ? plRow.modelData.covers.length : 0
+                                        // .slint:25 `gap: 1px`. NOT the mosaic
+                                        // card's 2px seam — the micro-collage is
+                                        // its own component with its own number.
+                                        readonly property real gap: 1
+
+                                        // Backing surface. A Rectangle's OWN
+                                        // rounded fill paints correctly; only its
+                                        // CHILDREN need the mask below, which is
+                                        // exactly the distinction the old code
+                                        // missed.
+                                        Rectangle {
                                             anchors.fill: parent
-                                            columns: 2
-                                            Repeater {
-                                                model: modelData.covers.slice(0, 4)
-                                                delegate: Image {
-                                                    required property string modelData
-                                                    width: 10
-                                                    height: 10
-                                                    source: root.coverMap[modelData] || ""
-                                                    fillMode: Image.PreserveAspectCrop
-                                                    asynchronous: true
+                                            radius: 3
+                                            color: theme.surfaceElevated
+                                        }
+
+                                        // The rounded outer shape as a mask
+                                        // texture. `clip: true` in Qt Quick is a
+                                        // RECTANGULAR scissor and IGNORES
+                                        // `radius`, which is why the old
+                                        // `Rectangle { radius: 3; clip: true }`
+                                        // shipped square collages: the fill was
+                                        // round, the four covers painted on top
+                                        // of it were not (owner report). The
+                                        // documented fix is the `layer.enabled` +
+                                        // `MultiEffect { maskEnabled }` idiom —
+                                        // same mechanism, same constants, as
+                                        // cards/PlaylistCollage.qml:264-305 and
+                                        // theme/RoundedImage.qml.
+                                        Item {
+                                            id: collageMask
+                                            anchors.fill: parent
+                                            visible: false
+                                            // A layer renders even when its item
+                                            // is invisible — that IS the mask
+                                            // idiom — so the gate has to be
+                                            // `useCollage`, not `visible`.
+                                            // PlaylistCollage.qml gates its own
+                                            // two layers on `tiles.length > 0`
+                                            // for the same reason, and it matters
+                                            // MORE here: this delegate is inside
+                                            // a Repeater over the whole playlist
+                                            // tree, so an ungated pair of layers
+                                            // would cost two FBOs on every folder
+                                            // row and every glyph row too.
+                                            layer.enabled: useCollage && !root._noShaders
+                                            layer.smooth: true
+                                            Rectangle {
+                                                anchors.fill: parent
+                                                radius: 3
+                                                color: "#ffffff"
+                                            }
+                                        }
+
+                                        // ONE layer + ONE mask for the whole
+                                        // collage, not one per tile. `clip` stays
+                                        // on the container because
+                                        // PreserveAspectCrop paints OUTSIDE its
+                                        // item's bounds unless clipped — it just
+                                        // cannot round on its own.
+                                        Item {
+                                            anchors.fill: parent
+                                            clip: true
+                                            layer.enabled: useCollage && !root._noShaders
+                                            layer.smooth: true
+                                            layer.effect: MultiEffect {
+                                                maskEnabled: true
+                                                maskSource: collageMask
+                                                // 0.5 / 1.0 — MEASURED; the full
+                                                // table is in
+                                                // theme/RoundedImage.qml. Qt's
+                                                // mask is a smoothstep CENTRED on
+                                                // maskThresholdMin of width
+                                                // maskSpreadAtMin, so this is the
+                                                // only pair that maps mask alpha
+                                                // 0..1 onto 0..1. (0.0, 0.0)
+                                                // collapses it to step() and the
+                                                // corners come back HARD; (0.0,
+                                                // > 0) clamps everything opaque
+                                                // and disables the mask outright.
+                                                // Do not "restore the defaults".
+                                                maskThresholdMin: 0.5
+                                                maskSpreadAtMin: 1.0
+                                            }
+
+                                            // 1-3 covers -> a single full-bleed
+                                            // cover (.slint:28-33). `image-fit:
+                                            // cover` = PreserveAspectCrop.
+                                            Image {
+                                                anchors.fill: parent
+                                                visible: collage.n >= 1 && collage.n < 4
+                                                // Empty out of arm so the hidden
+                                                // branch holds no texture. Reading
+                                                // `visible` back gives the
+                                                // EFFECTIVE visibility, so this
+                                                // also drops the texture for a row
+                                                // the mini rail collapses — and
+                                                // re-binds when it comes back.
+                                                source: visible ? (root.coverMap[plRow.modelData.covers[0]] || "") : ""
+                                                fillMode: Image.PreserveAspectCrop
+                                                asynchronous: true
+                                            }
+
+                                            // 4+ covers -> a 2x2 grid of
+                                            // (size - gap) / 2 tiles with the 1px
+                                            // seam (.slint:36-68). Grid `spacing`
+                                            // IS that seam: 9.5 + 1 + 9.5 = 20.
+                                            Grid {
+                                                anchors.fill: parent
+                                                columns: 2
+                                                spacing: collage.gap
+                                                Repeater {
+                                                    // Empty below four — the arm
+                                                    // is not merely hidden, it
+                                                    // holds no tiles and no
+                                                    // textures.
+                                                    model: collage.n >= 4 ? plRow.modelData.covers.slice(0, 4) : []
+                                                    delegate: Image {
+                                                        required property string modelData
+                                                        width: (collage.width - collage.gap) / 2
+                                                        height: (collage.height - collage.gap) / 2
+                                                        source: root.coverMap[modelData] || ""
+                                                        fillMode: Image.PreserveAspectCrop
+                                                        asynchronous: true
+                                                        // Per-tile scissor: a crop
+                                                        // fit overflows its own
+                                                        // bounds, and the
+                                                        // container's clip is 20px
+                                                        // wide — without this a
+                                                        // wide cover bleeds into
+                                                        // the neighbouring cell
+                                                        // instead of being cropped
+                                                        // to it (Slint's
+                                                        // `image-fit: cover`
+                                                        // clips per element).
+                                                        clip: true
+                                                    }
                                                 }
                                             }
                                         }

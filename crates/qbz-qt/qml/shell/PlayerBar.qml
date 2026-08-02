@@ -31,9 +31,14 @@
 // Slint TransportControls/PlayerBar that descend from it):
 //   transport: info · shuffle · prev · play · next · repeat · "+" (Add to…)
 //              (+ the inline favorite heart in Classic, like Tauri)
-//   right:     Cast · Connect · Lyrics · Now-Playing view · Audio settings
+//   right:     Connect · Cast · Lyrics · Now-Playing view · Audio settings
 //              (normalization) · [6px] · Mute · slider · −/+ steppers ·
 //              [6px] · Queue
+// Connect BEFORE Cast is the reference's order, not a preference: PlayerBar.
+// slint mounts the ConnectButton at :395-401 and the cast IconButton at
+// :646-653. This file had the pair inverted (Cast first) until the order was
+// homologated; NowPlayingBarSmall.qml always matched (PlayerBarSmall.slint
+// ConnectButton :368, cast :603).
 // Tauri's Miniplayer + Full screen buttons live inside the Now-Playing view
 // flyout (ViewModeMenu) since 2.0 — that ONE button holds both.
 //
@@ -451,17 +456,6 @@ Rectangle {
                     }
                     Item { visible: root.largeActive; width: 12; height: 1 }
 
-                    // Cast (Chromecast / DLNA) — Tauri's first right-cluster
-                    // button. Opens the picker modal and, with it, discovery
-                    // (PlayerBar.slint:646-664: picker-open = true +
-                    // CastActions.open()); lit while a renderer is connected.
-                    QbzIconButton {
-                        name: "cast"
-                        active: QbzPlayer.npCastActive
-                        anchors.verticalCenter: parent.verticalCenter
-                        onClicked: QbzCast.openPicker()
-                    }
-
                     // Qobuz Connect — the Slint ConnectButton (PlayerBar.
                     // slint:32-77): monitor-speaker glyph, GOLDEN over a soft
                     // golden tint whenever a session is on — whether qbz is
@@ -471,6 +465,10 @@ Rectangle {
                     // gold tint + 1px border + gold glyph, which the shared
                     // button's accent-glyph `active` cannot express. The
                     // "amber" tint IS the reference's gold (#e0b341).
+                    //
+                    // FIRST of the icon cluster, ahead of Cast — the order the
+                    // reference lays out (PlayerBar.slint:395-401 Connect,
+                    // :646-653 Cast) and the one the Small bar already used.
                     Rectangle {
                         id: qconnectBtn
                         readonly property bool qcActive: QbzQConnect.qconnectConnected
@@ -516,6 +514,17 @@ Rectangle {
                                     root.tooltip.hide("qconnect")
                             }
                         }
+                    }
+
+                    // Cast (Chromecast / DLNA) — SECOND, straight after
+                    // Connect. Opens the picker modal and, with it, discovery
+                    // (PlayerBar.slint:646-664: picker-open = true +
+                    // CastActions.open()); lit while a renderer is connected.
+                    QbzIconButton {
+                        name: "cast"
+                        active: QbzPlayer.npCastActive
+                        anchors.verticalCenter: parent.verticalCenter
+                        onClicked: QbzCast.openPicker()
                     }
 
                     // Lyrics.

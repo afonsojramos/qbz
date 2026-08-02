@@ -366,6 +366,23 @@ Rectangle {
                 width: (root.width - 6) * root.sideFrac
                 clip: true
 
+                // VERTICAL CENTRING IS PER-CHILD HERE. This Row is as tall as
+                // the whole ~39px controls row (`height: parent.height`), and
+                // a QML Row TOP-ALIGNS every child that does not anchor itself
+                // — so a 32px button with no anchor rendered at y=0, flush
+                // against the 3px seekbar, with all 7px of slack below it. The
+                // active-state fill then read as "too big" when it was simply
+                // sitting too high (the button IS 32x32, matching
+                // controls/QbzIconButton.qml's btnSize and the reference's
+                // 32x32 ConnectButton Rectangle).
+                // The reference has no such bug because PlayerBarSmall.slint
+                // builds this cluster as a HorizontalLayout, which centres by
+                // default; every wrapper there is a `VerticalLayout {
+                // alignment: center; }` (e.g. Connect :366-368, cast :601-603).
+                // A child of a Row MAY anchor vertically — only horizontal
+                // anchoring is forbidden — which is what AudioStamp and
+                // QbzSlider already did, and what every sibling below now does
+                // so the whole cluster sits on one line with the volume bar.
                 Row {
                     anchors.right: parent.right
                     anchors.verticalCenter: parent.verticalCenter
@@ -405,6 +422,7 @@ Rectangle {
                         width: 32
                         height: 32
                         radius: theme.radiusSm
+                        anchors.verticalCenter: parent.verticalCenter
                         color: qcActive ? Qt.rgba(gold.r, gold.g, gold.b, 0.16)
                             : (smallQcArea.containsMouse ? theme.surfaceHover : "transparent")
                         border.width: qcActive ? 1 : 0
@@ -432,6 +450,7 @@ Rectangle {
                     QbzIconButton {
                         name: "cast"
                         active: QbzPlayer.npCastActive
+                        anchors.verticalCenter: parent.verticalCenter
                         onClicked: QbzCast.openPicker()
                     }
                     // Audio settings — opens the Normalization + Gapless
@@ -450,17 +469,20 @@ Rectangle {
                         id: smallAudioBtn
                         name: "settings-2"
                         active: false
+                        anchors.verticalCenter: parent.verticalCenter
                         onClicked: smallAudioMenu.openBelowRight(smallAudioBtn)
                     }
                     QbzIconButton {
                         id: smallViewBtn
                         name: "layout-grid"
                         active: smallViewMenu.opened
+                        anchors.verticalCenter: parent.verticalCenter
                         onClicked: smallViewMenu.openBelowRight(smallViewBtn)
                     }
                     QbzIconButton {
                         name: "mic-vocal"
                         active: QbzShell.lyricsOpen
+                        anchors.verticalCenter: parent.verticalCenter
                         onClicked: QbzShell.toggleLyrics()
                     }
 
@@ -472,6 +494,7 @@ Rectangle {
                         name: QbzPlayer.npMuted ? "volume-x" : "volume-2"
                         btnEnabled: !root.volLocked
                         active: QbzPlayer.npMuted
+                        anchors.verticalCenter: parent.verticalCenter
                         onClicked: QbzPlayer.toggleMute()
                     }
                     // WIDE: the shared QbzSlider (PlayerBarSmall mounts the
@@ -495,6 +518,7 @@ Rectangle {
                     QbzIconButton {
                         name: "list-ordered"
                         active: QbzShell.queueOpen
+                        anchors.verticalCenter: parent.verticalCenter
                         onClicked: QbzShell.toggleQueue()
                     }
                 }
