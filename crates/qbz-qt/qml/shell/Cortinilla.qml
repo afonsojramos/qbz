@@ -347,7 +347,7 @@ Item {
                             font.weight: theme.weightSemibold
                             verticalAlignment: Text.AlignVCenter
                         }
-                        CortRow { row: root.hasTop ? root.doc.top : ({}) }
+                        CortRow { row: root.hasTop ? root.doc.top : ({}); blockPadding: 6 }
                     }
 
                     // Sections.
@@ -407,6 +407,7 @@ Item {
                                 delegate: CortRow {
                                     required property var modelData
                                     row: modelData
+                                    blockPadding: 6
                                 }
                             }
                         }
@@ -429,11 +430,19 @@ Item {
     // --- One result row (CortinillaResultRow) ------------------------------
     component CortRow: Rectangle {
         property var row: ({})
-        // A QML Column's padding does NOT size its children, so `parent.width`
-        // made every row 12px wider than its block. clip hid the overflow, but
-        // the highlight ran flush to the right edge while staying inset 6px on
-        // the left — asymmetric. Subtract the padding explicitly.
-        width: parent ? parent.width - (parent.leftPadding || 0) - (parent.rightPadding || 0) : 0
+        // A QML Column's padding does NOT size its children, so a plain
+        // `parent.width` made every row 12px wider than its block: clip hid
+        // the overflow, but the highlight ran flush to the right edge while
+        // staying inset 6px on the left — asymmetric.
+        //
+        // The padding is passed IN rather than read off `parent`. Reading it
+        // through the parent chain works at runtime but is invisible to
+        // qmllint (`parent` is typed QQuickItem, which has no leftPadding),
+        // so a wrong mount would fail silently at runtime instead of loudly
+        // in the audit — and parent-chain bindings are a documented trap in
+        // this port.
+        property int blockPadding: 0
+        width: parent ? parent.width - 2 * blockPadding : 0
         height: 56
         radius: theme.radiusSm
         readonly property bool active: QbzSearch.cortinillaSelectedIndex === (row.flatIndex ?? -2)
