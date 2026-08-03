@@ -256,14 +256,17 @@ impl qbz_immersive::QbzImmersive {
         apply_open(self.as_mut(), next);
     }
 
-    /// NPB ViewModeMenu path (§3.3): FIRST setView(current view_mode, 0,
-    /// current split_panel) (persists per §3.2 when "remember"), THEN
-    /// open=true — the §3.1 restore on the open edge then lands the
-    /// remembered view-mode/split with mode 0. Net: the menu ALWAYS opens on
-    /// Album Reactive with the remembered view-mode/split.
+    /// NPB ViewModeMenu path (§3.3, round-2 corrected): writes mode=0
+    /// DIRECTLY to the property (NO persist — Slint's `set_mode(0)` fires
+    /// no view-sig because ImmersiveView is unmounted while closed), then
+    /// open=true. The §3.1 restore on the open edge then decides: under
+    /// "remember" the remembered triple wins verbatim (even mode 6 — that
+    /// IS Slint: main.rs:11726 + 10296-10337); under a pinned pref §3.1
+    /// forces the pin anyway. Routing this through setView would persist
+    /// the construction defaults over the remembered triple on a fresh
+    /// boot and destroy the feature.
     pub fn open_from_menu(mut self: Pin<&mut Self>) {
-        let (vm, sp) = (self.view_mode, self.split_panel);
-        self.as_mut().set_view(vm, 0, sp);
+        self.as_mut().set_mode(0);
         apply_open(self.as_mut(), true);
     }
 
