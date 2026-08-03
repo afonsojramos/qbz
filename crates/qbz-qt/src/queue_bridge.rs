@@ -38,6 +38,15 @@ pub mod qbz_queue {
         // + pagination + #442 section markers). Supersedes `queueModel`.
         #[qproperty(QString, queue_json)]
 
+        // --- Immersive coverflow (2026-08-02 immersive-port contract §4.4) --
+        // `{"index":i32,"tracks":[{id,title,artist,artUrl}]}` over the FULL
+        // flat queue ([history oldest-first, NOW, upcoming]); `index` = flat
+        // position of NOW (= history.len). The tracks array is rebuilt only
+        // on id-sequence change; a pure advance moves only `index`. The
+        // immersive Queue badge + coverflow read THIS, never the paged
+        // `queue_json`. Full-shape default, never "{}" (trap 15).
+        #[qproperty(QString, coverflow_json)]
+
         // --- Sleep timer (queue footer) ------------------------------------
         // Kept OUT of `queue_json`: the countdown reformats every second and
         // the document is re-parsed by three QML files on every change, so
@@ -63,6 +72,12 @@ pub mod qbz_queue {
         /// Row actions.
         #[qinvokable]
         fn queue_play_upcoming(self: Pin<&mut QbzQueue>, index: i32);
+        /// Immersive coverflow / up-next rows: play by QUEUE-WIDE 0-based
+        /// index into the UNFILTERED upcoming list (§4.4). `queuePlayUpcoming`
+        /// is PAGE-LOCAL (resolved through the filtered/paginated VIEW) —
+        /// never use it from immersive (trap 23).
+        #[qinvokable]
+        fn queue_play_upcoming_flat(self: Pin<&mut QbzQueue>, index: i32);
         #[qinvokable]
         fn queue_remove_upcoming(self: Pin<&mut QbzQueue>, index: i32);
         #[qinvokable]
@@ -113,6 +128,7 @@ type QListQVariant = QList<QVariant>;
 pub struct QbzQueueRust {
     queue_model: QListQVariant,
     queue_json: QString,
+    coverflow_json: QString,
     sleep_active: bool,
     sleep_remaining: QString,
 }
@@ -122,6 +138,9 @@ impl Default for QbzQueueRust {
         Self {
             queue_model: QListQVariant::default(),
             queue_json: QString::from("{}"),
+            // Full-shape default (trap 15): QML reads `.tracks.length` in the
+            // pre-publish frame.
+            coverflow_json: QString::from(r#"{"index":0,"tracks":[]}"#),
             sleep_active: false,
             sleep_remaining: QString::default(),
         }
@@ -159,6 +178,10 @@ impl qbz_queue::QbzQueue {
 
     pub fn queue_play_upcoming(self: Pin<&mut Self>, index: i32) {
         crate::queue_play_upcoming(index);
+    }
+
+    pub fn queue_play_upcoming_flat(self: Pin<&mut Self>, index: i32) {
+        crate::queue_play_upcoming_flat(index);
     }
 
     pub fn queue_remove_upcoming(self: Pin<&mut Self>, index: i32) {

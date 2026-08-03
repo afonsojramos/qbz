@@ -117,6 +117,12 @@ ApplicationWindow {
         QbzQueue.boot()
         QbzHome.boot()
         QbzViz.boot()
+        // Immersive mode (2026-08-02 immersive-port contract, block B1).
+        // Booted right after QbzViz: the overlay's open funnel drives the
+        // viz two-source enable (§4.2), and ambient_qt publishes glow_color/
+        // atmosphere_url to this singleton on every track change — a missing
+        // boot line would drop those publishes silently (see above).
+        QbzImmersive.boot()
         QbzLocal.boot()
         QbzLibrary.boot()
         QbzAlbum.boot()

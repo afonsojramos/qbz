@@ -11,9 +11,9 @@
 //!   while connected). There is no QConnect service in this port yet, so the
 //!   local core path is the only one; when the service lands, `move_track`
 //!   grows that arm BEFORE `core().move_track`.
-//! - Coverflow: the reference also feeds the immersive coverflow's flat model
-//!   from this same refresh. The immersive view does not exist here
-//!   (PARITY-DEBT #31), so there is nothing to feed.
+//!
+//! The immersive coverflow's flat model (the old second owed port) is now
+//! fed by `publish_coverflow` below (immersive-port contract §4.4).
 //!
 //! Row favorite seeds from the phase-5 library feed (Slint uses fav_cache —
 //! same truth).
@@ -213,6 +213,112 @@ fn paginate(total: usize, requested_page: usize) -> (usize, usize, usize, usize)
     (page, page_count, start, end)
 }
 
+// ---------------------------------------------------------------------------
+// Immersive coverflow (contract §4.4) — the FLAT full-queue model
+// ---------------------------------------------------------------------------
+
+/// One coverflow entry. Only the four fields the immersive panels read
+/// (`{id, title, artist, artUrl}`) — NOT a full QueueRow: the flat model is
+/// rebuilt only on id-sequence change and QML resolves covers via
+/// `artwork_qt` from `artUrl`.
+#[derive(Clone, Serialize)]
+struct CoverflowTrack {
+    id: String,
+    title: String,
+    artist: String,
+    #[serde(rename = "artUrl")]
+    art_url: String,
+}
+
+impl CoverflowTrack {
+    fn from_track(t: &QueueTrack) -> Self {
+        Self {
+            id: t.id.to_string(),
+            title: display_title(t),
+            artist: t.artist.clone(),
+            art_url: t.artwork_url.clone().unwrap_or_default(),
+        }
+    }
+}
+
+/// The flat model + NOW index, 1:1 with the Slint builder
+/// (`crates/qbz/src/queue.rs:296-321`, semantics `state.slint:4854-4885`):
+/// `[history.reversed (oldest..newest), NOW-PLAYING?, upcoming...]`.
+/// `history` arrives MOST-RECENT-FIRST (core order), so it is reversed for
+/// the oldest-first flat order. The index is `history.len()` in both arms:
+/// with a current track it is NOW's slot (state.slint:4878-4881); without
+/// one it points at the first upcoming (Slint queue.rs:315-318).
+fn coverflow_flat(
+    history: &[QueueTrack],
+    current: Option<&QueueTrack>,
+    upcoming: &[QueueTrack],
+) -> (Vec<CoverflowTrack>, usize) {
+    let mut flat: Vec<CoverflowTrack> = Vec::with_capacity(history.len() + 1 + upcoming.len());
+    flat.extend(history.iter().rev().map(CoverflowTrack::from_track));
+    let index = flat.len();
+    if let Some(t) = current {
+        flat.push(CoverflowTrack::from_track(t));
+    }
+    flat.extend(upcoming.iter().map(CoverflowTrack::from_track));
+    (flat, index)
+}
+
+/// Order-sensitive rolling fingerprint of the flat id-sequence (Slint
+/// queue.rs:328-336): equal => pure advance/jump => the tracks array is
+/// REUSED and only `index` moves; different => rebuild. Hashing the ordered
+/// ids (not a set) catches shuffle/reorder.
+fn coverflow_seq_hash(flat: &[CoverflowTrack]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    flat.len().hash(&mut h);
+    for t in flat {
+        t.id.hash(&mut h);
+    }
+    h.finish()
+}
+
+/// (seq hash, serialized tracks array) — the array is rebuilt ONLY on
+/// id-sequence change (state.slint:4854-4885 semantics).
+static COVERFLOW_CACHE: Mutex<Option<(u64, String)>> = Mutex::new(None);
+/// Last coverflow document handed to Qt — same equality-guarded publish
+/// discipline as `LAST_JSON` below (:395-419 precedent).
+static LAST_COVERFLOW_JSON: Mutex<String> = Mutex::new(String::new());
+
+/// Build + publish the coverflow document (`{"index":i32,"tracks":[...]}`).
+/// Runs on EVERY publish BEFORE the queueJson dedup: a change past the
+/// current page can leave queueJson byte-identical (same page rows, same
+/// totals) while the flat model moved.
+fn publish_coverflow(state: &qbz_models::QueueState) {
+    let (flat, index) = coverflow_flat(
+        &state.history,
+        state.current_track.as_ref(),
+        &state.upcoming,
+    );
+    let seq = coverflow_seq_hash(&flat);
+    let tracks_json = {
+        let mut cache = COVERFLOW_CACHE.lock().unwrap();
+        match cache.as_ref() {
+            Some((h, json)) if *h == seq => json.clone(),
+            _ => {
+                let json = serde_json::to_string(&flat).unwrap_or_else(|_| "[]".into());
+                *cache = Some((seq, json.clone()));
+                json
+            }
+        }
+    };
+    let doc = format!("{{\"index\":{index},\"tracks\":{tracks_json}}}");
+    // Identical document -> no Qt hop, no QML re-parse (LAST_JSON precedent).
+    let mut last = LAST_COVERFLOW_JSON.lock().unwrap();
+    if *last == doc {
+        return;
+    }
+    last.clear();
+    last.push_str(&doc);
+    crate::queue_bridge::ui(move |mut b| {
+        b.as_mut().set_coverflow_json(QString::from(doc.as_str()));
+    });
+}
+
 /// Queue-wide upcoming indices of the rows the panel is CURRENTLY showing, in
 /// display order (search filter + pagination applied) — the hoisted port of
 /// `crates/qbz/src/queue.rs::resolve_upcoming_index`, resolved once per action
@@ -393,6 +499,9 @@ pub async fn publish(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
         .filter_map(|r| canonical_u64(&r.id))
         .collect();
     let json = serde_json::to_string(&doc).unwrap_or_else(|_| "{}".into());
+    // The coverflow doc publishes on EVERY publish, BEFORE the queueJson
+    // dedup below — see publish_coverflow for why.
+    publish_coverflow(&state);
     // Identical document -> no Qt hop, no QML re-parse, no artwork re-dispatch.
     // The compare/store and the Qt post stay under ONE lock so two concurrent
     // publishes cannot post out of order and strand a stale document behind an
@@ -442,6 +551,18 @@ pub async fn play_upcoming(runtime: &Arc<AppRuntime<LoggingAdapter>>, page_index
     };
     if let Some(track) = runtime.core().play_upcoming_at(upcoming_index).await {
         crate::playback_qt::play_queue_track_public(runtime, track.id).await;
+    }
+}
+
+/// QUEUE-WIDE 0-based index into the UNFILTERED upcoming list (contract
+/// §4.4) — the immersive coverflow side cards and up-next rows call this.
+/// Unlike `play_upcoming` above it bypasses the page/search VIEW entirely,
+/// so it resolves the right track even when the desktop panel was left
+/// filtered or paged (state.slint:4896-4900 `play-coverflow-upcoming`).
+pub async fn play_upcoming_flat(runtime: &Arc<AppRuntime<LoggingAdapter>>, upcoming_index: usize) {
+    match runtime.core().play_upcoming_at(upcoming_index).await {
+        Some(track) => crate::playback_qt::play_queue_track_public(runtime, track.id).await,
+        None => log::warn!("[qbz-qt] queue: play_upcoming_flat {upcoming_index} out of range"),
     }
 }
 
@@ -717,4 +838,115 @@ pub async fn toggle_favorite(
         crate::emit_library_favorite(kind, id, value);
     }
     publish(runtime).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn track(id: u64, title: &str) -> QueueTrack {
+        // Only the fields the coverflow reads matter; the rest are inert.
+        // (QueueTrack has no Default impl — every field is spelled out.)
+        QueueTrack {
+            id,
+            title: title.to_string(),
+            version: None,
+            artist: format!("artist-{id}"),
+            album: String::new(),
+            album_version: None,
+            duration_secs: 0,
+            artwork_url: Some(format!("https://img/{id}.jpg")),
+            hires: false,
+            bit_depth: None,
+            sample_rate: None,
+            is_local: false,
+            album_id: None,
+            artist_id: None,
+            streamable: true,
+            source: None,
+            parental_warning: false,
+            source_item_id_hint: None,
+            context_kind: None,
+            context_id: None,
+        }
+    }
+
+    /// §4.4 JSON shape: {index, tracks:[{id,title,artist,artUrl}]} over the
+    /// FULL flat queue, history OLDEST-first.
+    #[test]
+    fn coverflow_doc_shape_and_flat_order() {
+        let history = vec![track(3, "h-new"), track(2, "h-mid"), track(1, "h-old")]; // core: most-recent-first
+        let current = track(4, "now");
+        let upcoming = vec![track(5, "up-0"), track(6, "up-1")];
+        let (flat, index) = coverflow_flat(&history, Some(&current), &upcoming);
+
+        // Flat = [h-old, h-mid, h-new, NOW, up-0, up-1]; NOW at history.len.
+        let ids: Vec<&str> = flat.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, ["1", "2", "3", "4", "5", "6"]);
+        assert_eq!(index, 3);
+
+        let doc = format!(
+            "{{\"index\":{index},\"tracks\":{}}}",
+            serde_json::to_string(&flat).unwrap()
+        );
+        let v: serde_json::Value = serde_json::from_str(&doc).unwrap();
+        assert_eq!(v["index"], 3);
+        let rows = v["tracks"].as_array().unwrap();
+        assert_eq!(rows.len(), 6);
+        assert_eq!(rows[3]["id"], "4");
+        assert_eq!(rows[3]["title"], "now");
+        assert_eq!(rows[3]["artist"], "artist-4");
+        assert_eq!(rows[3]["artUrl"], "https://img/4.jpg");
+        // Exactly the four contract fields, nothing else.
+        assert_eq!(rows[3].as_object().unwrap().len(), 4);
+    }
+
+    /// NOW index with no current track: history.len (the first upcoming
+    /// slot), 0 when the whole queue is empty (Slint queue.rs:315-318).
+    #[test]
+    fn coverflow_index_without_current() {
+        let history = vec![track(2, "b"), track(1, "a")];
+        let upcoming = vec![track(3, "c")];
+        let (flat, index) = coverflow_flat(&history, None, &upcoming);
+        let ids: Vec<&str> = flat.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, ["1", "2", "3"]); // no NOW slot
+        assert_eq!(index, 2);
+
+        let (flat, index) = coverflow_flat(&[], None, &[]);
+        assert!(flat.is_empty());
+        assert_eq!(index, 0);
+    }
+
+    /// Id-sequence gate: a pure advance keeps the flat id-sequence (tracks
+    /// array reused, only `index` moves); any membership/order change
+    /// rebuilds.
+    #[test]
+    fn coverflow_seq_hash_gates_the_rebuild() {
+        let h1 = vec![track(2, "b"), track(1, "a")]; // most-recent-first
+        let cur = track(3, "c");
+        let up = vec![track(4, "d")];
+        let (flat1, idx1) = coverflow_flat(&h1, Some(&cur), &up);
+        let hash1 = coverflow_seq_hash(&flat1);
+        assert_eq!(idx1, 2);
+
+        // PURE ADVANCE materialized: track 3 moved to history, 4 is NOW —
+        // the FLAT id-sequence is IDENTICAL ([1,2,3,4]), so the gate skips
+        // the tracks rebuild and only `index` moves (state.slint:4857-4864).
+        let h2 = vec![track(3, "c"), track(2, "b"), track(1, "a")];
+        let cur2 = track(4, "d");
+        let (flat2, idx2) = coverflow_flat(&h2, Some(&cur2), &[]);
+        assert_eq!(coverflow_seq_hash(&flat2), hash1);
+        assert_eq!(idx2, 3);
+        assert_ne!(idx2, idx1);
+
+        // Membership change (enqueue): different sequence -> rebuild.
+        let up_added = vec![track(4, "d"), track(5, "e")];
+        let (flat3, _) = coverflow_flat(&h1, Some(&cur), &up_added);
+        assert_ne!(coverflow_seq_hash(&flat3), hash1);
+
+        // Reorder with identical membership: also a rebuild (order-sensitive).
+        let up_swap = vec![track(5, "e"), track(4, "d")];
+        let (flat4, _) = coverflow_flat(&h1, Some(&cur), &up_swap);
+        assert_ne!(coverflow_seq_hash(&flat4), coverflow_seq_hash(&flat3));
+    }
 }

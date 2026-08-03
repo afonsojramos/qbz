@@ -177,6 +177,47 @@ fn hex(c: (u8, u8, u8)) -> String {
     format!("#{:02x}{:02x}{:02x}", c.0, c.1, c.2)
 }
 
+/// AlbumReactive glow color (immersive-port contract §4.3) — 1:1 port of
+/// `crates/qbz/src/immersive.rs:63-88`: the most-saturated NON-EXTREME
+/// (luminance 50..220) sample of the 8x8 tiny, fallback (100, 100, 255) ≡
+/// the `#6464ff59` default. NOTE: its lightness/saturation are NOT
+/// `rgb_to_hsl` above — the Slint glow uses its own lum = (max+min)/2 on the
+/// 0..255 scale with the two-arm saturation below; keep them separate.
+/// Returns RGB; the alpha (0x59) is applied at the publish site.
+fn glow_color(tiny: &image::RgbaImage) -> (u8, u8, u8) {
+    let mut best_sat = 0.0f32;
+    let mut best = (100u8, 100u8, 255u8);
+
+    for px in tiny.pixels() {
+        let r = px[0] as f32;
+        let g = px[1] as f32;
+        let b = px[2] as f32;
+        let max = r.max(g).max(b);
+        let min = r.min(g).min(b);
+        let lum = (max + min) / 2.0;
+        let sat = if (max - min).abs() < f32::EPSILON {
+            0.0
+        } else if lum > 127.0 {
+            (max - min) / (510.0 - max - min).max(1.0)
+        } else {
+            (max - min) / (max + min).max(1.0)
+        };
+        if lum > 50.0 && lum < 220.0 && sat > best_sat {
+            best_sat = sat;
+            best = (px[0], px[1], px[2]);
+        }
+    }
+
+    best
+}
+
+/// Qt publishes of the glow: Qt colors parse as `#AARRGGBB`, the Slint glow
+/// is RRGGBBAA with alpha 0x59 (`#6464ff59` style) — converted HERE, once,
+/// at the source, so QML never sees the Slint byte order.
+fn glow_hex_qt(c: (u8, u8, u8)) -> String {
+    format!("#59{:02x}{:02x}{:02x}", c.0, c.1, c.2)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -231,6 +272,54 @@ mod tests {
         assert!(dist < 30.0, "mono cover: secondary hue {sh} vs primary {ph}");
         assert!(sl < 0.45, "mono cover: secondary should be deeper (L={sl})");
     }
+
+    // --- glow_color (contract §4.3; port fidelity vs immersive.rs:63-88) ---
+
+    fn img8_from(pixels: &[(u8, u8, u8)]) -> image::RgbaImage {
+        let mut img = image::RgbaImage::new(8, 8);
+        for (i, px) in img.pixels_mut().enumerate() {
+            let (r, g, b) = pixels[i % pixels.len()];
+            *px = image::Rgba([r, g, b, 255]);
+        }
+        img
+    }
+
+    #[test]
+    fn glow_picks_the_most_saturated_non_extreme_sample() {
+        // Hand-computed against the Slint formula (lum = (max+min)/2 on the
+        // 0..255 scale; sat two-arm at lum > 127):
+        //   A (200,30,30):  lum=115  in range, sat=(170)/(230)=0.739  <- max
+        //   B (60,200,60):  lum=130  in range, sat=(140)/(510-260)=0.56
+        //   C (240,230,230): lum=235 EXCLUDED (> 220) despite saturation
+        //   D (20,25,20):   lum=22.5 EXCLUDED (< 50)
+        //   grey:           sat=0
+        let img = img8_from(&[
+            (200, 30, 30),
+            (60, 200, 60),
+            (240, 230, 230),
+            (20, 25, 20),
+            (128, 128, 128),
+        ]);
+        assert_eq!(glow_color(&img), (200, 30, 30));
+    }
+
+    #[test]
+    fn glow_falls_back_when_nothing_qualifies() {
+        // All-grey 8x8: sat 0 everywhere -> the (100,100,255) fallback ≡ the
+        // #6464ff59 default.
+        let img = img8_from(&[(128, 128, 128)]);
+        assert_eq!(glow_color(&img), (100, 100, 255));
+        // Only extreme-luminance chroma (too bright / too dark): also fallback.
+        let img = img8_from(&[(250, 240, 240), (10, 15, 10)]);
+        assert_eq!(glow_color(&img), (100, 100, 255));
+    }
+
+    #[test]
+    fn glow_hex_is_qt_aarrggbb_with_the_slint_alpha() {
+        // Slint RRGGBBAA alpha 0x59 -> Qt #AARRGGBB.
+        assert_eq!(glow_hex_qt((100, 100, 255)), "#596464ff");
+        assert_eq!(glow_hex_qt((200, 30, 30)), "#59c81e1e");
+    }
 }
 
 
@@ -257,26 +346,48 @@ pub fn update_for_artwork(artwork_url: &str) {
         let triad = tokio::task::spawn_blocking(move || {
             let bytes = std::fs::read(&path).ok()?;
             let img = image::load_from_memory(&bytes).ok()?;
+            let rgba = img.to_rgba8();
             let tiny = image::imageops::resize(
-                &img.to_rgba8(),
+                &rgba,
                 16,
                 16,
                 image::imageops::FilterType::Triangle,
             );
             let (primary, secondary) = spectrum_colors(&tiny);
             let accent = lyrics_accent_color(&tiny);
-            Some((hex(primary), hex(secondary), hex(accent)))
+            // Immersive (contract §4.3): the SAME decode feeds the 8x8 glow
+            // sample and the atmosphere asset — both inside this
+            // spawn_blocking, never on the Qt thread
+            // (atmosphere_qt.rs:126-127).
+            let tiny8 = image::imageops::resize(
+                &rgba,
+                8,
+                8,
+                image::imageops::FilterType::Triangle,
+            );
+            let glow = glow_hex_qt(glow_color(&tiny8));
+            let atmosphere = crate::atmosphere_qt::for_cover_blocking(&path);
+            Some((hex(primary), hex(secondary), hex(accent), glow, atmosphere))
         })
         .await
         .ok()
         .flatten();
-        if let Some((primary, secondary, accent)) = triad {
+        if let Some((primary, secondary, accent, glow, atmosphere)) = triad {
             log::info!("[qbz-qt] ambient palette: {primary} / {secondary} / {accent}");
             crate::shell_bridge::ui(move |mut b| {
                 b.as_mut().set_ambient_primary(QString::from(primary.as_str()));
                 b.as_mut()
                     .set_ambient_secondary(QString::from(secondary.as_str()));
                 b.as_mut().set_ambient_accent(QString::from(accent.as_str()));
+            });
+            // Publish ONLY on success; on failure (or a missing atmosphere)
+            // the previous values stay — never cleared on track change (the
+            // flicker fix, playback.rs:2344-2351 semantics; contract §4.3).
+            crate::immersive_bridge::ui(move |mut x| {
+                x.as_mut().set_glow_color(QString::from(glow.as_str()));
+                if let Some(url) = atmosphere {
+                    x.as_mut().set_atmosphere_url(QString::from(url.as_str()));
+                }
             });
         }
     });

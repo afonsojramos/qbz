@@ -26,6 +26,10 @@ mod player_bridge;
 mod queue_bridge;
 mod home_bridge;
 mod viz_bridge;
+// Immersive mode (2026-08-02 immersive-port contract, block B1): the
+// QbzImmersive singleton (§3) — open funnel + view persistence + the §3.4
+// search surface. The QML overlay lands in B2.
+mod immersive_bridge;
 mod local_bridge;
 mod library_bridge;
 mod album_bridge;
@@ -1060,6 +1064,13 @@ pub(crate) fn queue_set_search(query: String) {
 pub(crate) fn queue_play_upcoming(index: i32) {
     let runtime = app();
     spawn(async move { queue_qt::play_upcoming(&runtime, index.max(0) as usize).await });
+}
+
+/// Immersive coverflow / up-next rows: QUEUE-WIDE 0-based upcoming index
+/// (contract §4.4) — bypasses the queue panel's page/search VIEW.
+pub(crate) fn queue_play_upcoming_flat(index: i32) {
+    let runtime = app();
+    spawn(async move { queue_qt::play_upcoming_flat(&runtime, index.max(0) as usize).await });
 }
 
 pub(crate) fn queue_remove_upcoming(index: i32) {

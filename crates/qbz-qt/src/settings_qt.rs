@@ -893,6 +893,22 @@ pub fn pref_str(key: &str, default: &str) -> String {
         .unwrap_or_else(|| default.to_string())
 }
 
+/// i32 reader — same additive single-key discipline as `pref_bool`/`pref_str`.
+/// Needed for keys the SLINT app writes as JSON numbers (its typed ui_prefs
+/// struct declares them i32, e.g. the immersive remember-last triple), which
+/// `pref_str` (string-only) cannot see.
+pub fn pref_i32(key: &str, default: i32) -> i32 {
+    let Some(path) = prefs_path() else {
+        return default;
+    };
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|v| v.get(key).and_then(serde_json::Value::as_i64))
+        .map(|n| n as i32)
+        .unwrap_or(default)
+}
+
 /// Additive single-key patch of ui_prefs.json — THE writer every other pref
 /// setter in this file funnels through, so they all inherit `update_prefs`'
 /// atomic rename and its refusal to rebuild an unparsable document.
