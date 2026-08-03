@@ -1774,6 +1774,10 @@ fn republish_artist(artist_id: String) {
 // ============================ Search (phase 15) ===========================
 
 pub(crate) fn search_live(query: String) {
+    // The live query is published FIRST, before the offline bail and before
+    // anything async: it is what Enter and "View more" submit, and it must
+    // describe what the user has typed, never what last finished loading.
+    search_bridge::set_cortinilla_query(query.trim().to_string());
     if offline_fwd::engine().status().is_offline() {
         // Qobuz-only surface (the local cortinilla sections are not
         // ported — search_qt.rs POC-NOTE): nothing to show offline.

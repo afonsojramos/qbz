@@ -916,14 +916,18 @@ pub async fn view_more(runtime: &Arc<AppRuntime<LoggingAdapter>>, kind: &str) {
         "playlist" => 4,
         _ => 0,
     };
-    let q = LAST_CORT.lock().unwrap().as_ref().map(|d| d.query.clone()).unwrap_or_default();
+    // The LIVE query, not the last successfully loaded payload's: a fetch can
+    // still be in flight (and `dismiss` is not a cancellation point), so
+    // LAST_CORT lags whatever the user has actually typed.
+    let q = crate::search_bridge::cortinilla_query();
     set_cortinilla_open(false);
     submit(runtime, &q, Some(tab)).await;
 }
 
 /// The Enter affordance with no keyboard selection: full search, All tab.
 pub async fn search_all_action(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
-    let q = LAST_CORT.lock().unwrap().as_ref().map(|d| d.query.clone()).unwrap_or_default();
+    // See `view_more`: the live query, never LAST_CORT's.
+    let q = crate::search_bridge::cortinilla_query();
     set_cortinilla_open(false);
     submit(runtime, &q, Some(0)).await;
 }

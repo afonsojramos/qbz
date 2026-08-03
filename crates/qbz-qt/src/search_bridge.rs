@@ -119,7 +119,7 @@ pub mod qbz_search {
 }
 
 use core::pin::Pin;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 use cxx_qt::CxxQtThread;
 use cxx_qt::Threading as _;
@@ -153,6 +153,37 @@ impl Default for QbzSearchRust {
             intelligent_search: crate::search_qt::intelligent_search_pref(),
         }
     }
+}
+
+/// Rust-side mirror of the `cortinillaQuery` property.
+///
+/// The two `async fn`s that need the live query (`search_qt::view_more` and
+/// `::search_all_action`) run on tokio, where reading a Qt property is not
+/// possible without a round trip. Both are written by ONE function
+/// ([`set_cortinilla_query`]) so they cannot diverge — the same discipline
+/// `search_qt.rs`'s `CORT_OPEN` mirror documents for `cortinillaOpen`.
+static CORT_QUERY: Mutex<String> = Mutex::new(String::new());
+
+/// Publish the live header query — property AND mirror, in that order.
+///
+/// Called SYNCHRONOUSLY from the invokable path, ahead of the debounce and
+/// ahead of any fetch, so a query the user has typed is readable the instant
+/// it exists. Slint's twin is `SearchState.cortinilla-query`, set at
+/// `qbz/src/main.rs:9647` before its debounce starts.
+pub(crate) fn set_cortinilla_query(q: String) {
+    *CORT_QUERY.lock().unwrap_or_else(|e| e.into_inner()) = q.clone();
+    ui(move |mut b| {
+        b.as_mut().set_cortinilla_query(QString::from(q.as_str()));
+    });
+}
+
+/// The live header query as last published. Empty before the first keystroke
+/// and after a clear.
+pub(crate) fn cortinilla_query() -> String {
+    CORT_QUERY
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
 }
 
 static QT_THREAD: OnceLock<CxxQtThread<QbzSearch>> = OnceLock::new();

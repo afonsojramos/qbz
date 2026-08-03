@@ -19,7 +19,12 @@ import "../theme"
 Item {
     id: root
     anchors.fill: parent
-    visible: QbzSearch.cortinillaOpen
+    // Open AND the live query long enough to have meaningful results — the
+    // same >= 2 gate the controller applies, so a 1-char query never flashes
+    // a half-empty panel (Cortinilla.slint:190-191). cortinillaQuery is
+    // published synchronously per keystroke, so this tracks what the user
+    // has typed rather than what last finished loading.
+    visible: QbzSearch.cortinillaOpen && QbzSearch.cortinillaQuery.length >= 2
 
     // The host HeaderBar (for clearSearch on row activation).
     property var headerBar: null
@@ -206,7 +211,12 @@ Item {
                         Text {
                             x: 14
                             anchors.verticalCenter: parent.verticalCenter
-                            text: QbzSession.tr("No results for", QbzSession.trRev) + " “" + (root.doc.query || "") + "”"
+                            // The LIVE query, matching the reference
+                            // (Cortinilla.slint:373 reads
+                            // SearchState.cortinilla-query, not the payload's
+                            // echo) — otherwise the empty state quotes the
+                            // previous query while the user reads it.
+                            text: QbzSession.tr("No results for", QbzSession.trRev) + " “" + QbzSearch.cortinillaQuery + "”"
                             color: theme.textMuted
                             font.pixelSize: 12
                         }
