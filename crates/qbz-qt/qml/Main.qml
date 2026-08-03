@@ -112,6 +112,10 @@ ApplicationWindow {
         // badge/devices publishes it makes must find the Qt-thread hop
         // already registered or they are dropped silently.
         QbzQConnect.boot()
+        // Hotkeys layer (2026-08-03 hotkeys-port contract, block B1): boot
+        // after QbzSession like every domain singleton. The B2 dispatcher
+        // (AppShell-root Keys.onPressed) is the only other QML side.
+        QbzHotkeys.boot()
         QbzShell.boot()
         QbzPlayer.boot()
         QbzQueue.boot()

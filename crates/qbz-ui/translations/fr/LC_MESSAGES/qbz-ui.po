@@ -4945,3 +4945,70 @@ msgstr "Impossible de créer la playlist"
 # whose first menu entry is "Open album"; a playlist cell overrides the NOUN.
 msgid "Open playlist"
 msgstr "Ouvrir la playlist"
+
+# Hotkeys layer (2026-08-03 hotkeys-port contract §5) — the keyboard-shortcut
+# action labels + category names for the cheatsheet and the customize editor.
+# Slint's Rust-side labels were never extracted (the port inherits the gap);
+# this block fixes it for both frontends. en is EXCLUDED on purpose
+# (sparse-override convention, qbz-i18n/src/lib.rs:120-125).
+
+msgid "Play / Pause"
+msgstr "Lecture / Pause"
+
+msgid "Go Back"
+msgstr "Retour"
+
+msgid "Go Forward"
+msgstr "Avancer"
+
+msgid "Toggle Sidebar"
+msgstr "Afficher/masquer la barre latérale"
+
+msgid "Immersive Mode"
+msgstr "Mode immersif"
+
+msgid "Close / Dismiss"
+msgstr "Fermer / Ignorer"
+
+msgid "Show Shortcuts"
+msgstr "Afficher les raccourcis"
+
+msgid "Toggle Mini Player"
+msgstr "Afficher/masquer le mini-lecteur"
+
+msgid "Seek Forward (5s)"
+msgstr "Avancer de 5 s"
+
+msgid "Seek Back (5s)"
+msgstr "Reculer de 5 s"
+
+msgid "Seek Forward (10s)"
+msgstr "Avancer de 10 s"
+
+msgid "Seek Back (10s)"
+msgstr "Reculer de 10 s"
+
+msgid "Micro View"
+msgstr "Vue micro"
+
+msgid "Compact View"
+msgstr "Vue compacte"
+
+msgid "Artwork View"
+msgstr "Vue pochette"
+
+msgid "Queue View"
+msgstr "Vue file d'attente"
+
+msgid "Lyrics View"
+msgstr "Vue paroles"
+
+msgid "Navigation"
+msgstr "Navigation"
+
+msgid "Interface"
+msgstr "Interface"
+
+msgid "Mini Player"
+msgstr "Mini-lecteur"
+

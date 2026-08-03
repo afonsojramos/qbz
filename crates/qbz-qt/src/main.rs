@@ -33,6 +33,9 @@ mod immersive_bridge;
 // Immersive Suggestions (the same contract, block B4, §4.5): the
 // QbzSuggestions singleton — the one genuinely absent domain.
 mod suggestions_bridge;
+// Hotkeys layer (2026-08-03 hotkeys-port contract, block B1): the
+// QbzHotkeys singleton — the QML dispatcher's Rust brain (§1.1 pipeline).
+mod hotkeys_bridge;
 mod local_bridge;
 mod library_bridge;
 mod album_bridge;
@@ -178,6 +181,12 @@ mod search_qt;
 // block B4): the loader + action arms behind QbzSuggestions. Plain module —
 // no #[cxx_qt::bridge], so it must NOT appear in build.rs's rust_files.
 mod suggestions_qt;
+// Hotkeys layer PURE core (2026-08-03 hotkeys-port contract §3, block B1):
+// the 23-action table, the shortcut grammar, the ui_prefs.json `keybindings`
+// store, capture, the groups builder and the §1.2 Escape stack — the byte-
+// faithful port of the Slint crates/qbz/src/keybindings.rs. Plain module —
+// no #[cxx_qt::bridge], so it must NOT appear in build.rs's rust_files.
+mod hotkeys_qt;
 mod settings_qt;
 mod sidebar_qt;
 mod sleep_timer_qt;

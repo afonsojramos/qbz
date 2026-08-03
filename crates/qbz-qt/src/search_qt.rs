@@ -689,12 +689,25 @@ fn is_current_cort_version(v: u64) -> bool {
 }
 
 fn set_cortinilla_open(open: bool) {
+    CORT_OPEN.store(open, Ordering::SeqCst);
     crate::ui(move |mut b| {
         b.as_mut().set_cortinilla_open(open);
         if !open {
             b.as_mut().set_selected_index(-1);
         }
     });
+}
+
+/// Rust-side mirror of `QbzBridge.cortinillaOpen` (the property itself lives
+/// on ANOTHER singleton, unreachable from hotkeys_bridge). Every write already
+/// funnels through `set_cortinilla_open` above — QML never writes the property
+/// directly (grep `cortinillaOpen =` in qml/: no hits) — so the mirror is
+/// exact. Read by the hotkeys pipeline's (B) dropdown-steal and the §1.2
+/// Escape stack (2026-08-03 hotkeys-port contract §1.1/§1.2).
+static CORT_OPEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn cortinilla_open() -> bool {
+    CORT_OPEN.load(Ordering::SeqCst)
 }
 
 fn set_selected(index: i32, scroll_y: f32) {
@@ -991,6 +1004,19 @@ static IMM_VERSION: AtomicU64 = AtomicU64::new(0);
 /// pattern, :682).
 static IMM_SEL: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
 
+/// Rust-side mirror of `QbzImmersive.immSearchOpen` — same pattern as
+/// CORT_OPEN above: every write goes through one of the four
+/// `set_imm_search_open` sites below and QML never writes the property
+/// directly. Read by the hotkeys pipeline's (B) dropdown-steal
+/// (2026-08-03 hotkeys-port contract §1.1(B): `QbzImmersive.open &&
+/// QbzImmersive.immSearchOpen` wins over the desktop cortinilla).
+static IMM_SEARCH_OPEN: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+pub fn imm_search_open() -> bool {
+    IMM_SEARCH_OPEN.load(Ordering::SeqCst)
+}
+
 fn next_imm_version() -> u64 {
     IMM_VERSION.fetch_add(1, Ordering::SeqCst) + 1
 }
@@ -1256,6 +1282,7 @@ pub fn imm_live(overlay_open: bool, query: String) {
         // the dropdown so a backspaced query leaves no stale one open.
         next_imm_version();
         IMM_SEL.store(-1, Ordering::SeqCst);
+        IMM_SEARCH_OPEN.store(false, Ordering::SeqCst);
         crate::immersive_bridge::ui(|mut b| {
             b.as_mut().set_imm_search_open(false);
         });
@@ -1267,6 +1294,7 @@ pub fn imm_live(overlay_open: bool, query: String) {
     // (main.rs:10403-10407). Arrow nav fires no keystroke through here, so it
     // is unaffected.
     IMM_SEL.store(-1, Ordering::SeqCst);
+    IMM_SEARCH_OPEN.store(true, Ordering::SeqCst);
     crate::immersive_bridge::ui(|mut b| {
         b.as_mut().set_imm_search_open(true);
         b.as_mut().set_imm_search_loading(true);
@@ -1442,6 +1470,7 @@ fn imm_scroll_y(data: &CortinillaData, flat_index: i32) -> f64 {
 /// the selection.
 pub fn imm_dismiss() {
     IMM_SEL.store(-1, Ordering::SeqCst);
+    IMM_SEARCH_OPEN.store(false, Ordering::SeqCst);
     crate::immersive_bridge::ui(|mut b| {
         b.as_mut().set_imm_search_open(false);
         b.as_mut().set_imm_search_selected_index(-1);
@@ -1516,6 +1545,7 @@ pub fn imm_row_activated(flat_index: i32) {
     // would re-invoke the dropdown when focus returns to the field
     // (main.rs:10595-10599).
     IMM_SEL.store(-1, Ordering::SeqCst);
+    IMM_SEARCH_OPEN.store(false, Ordering::SeqCst);
     crate::immersive_bridge::ui(|mut b| {
         b.as_mut().set_imm_search_open(false);
         b.as_mut().set_imm_search_selected_index(-1);

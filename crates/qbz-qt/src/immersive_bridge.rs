@@ -188,6 +188,31 @@ pub(crate) fn ui(f: impl FnOnce(Pin<&mut QbzImmersive>) + Send + 'static) {
     }
 }
 
+/// Rust-side mirror of the `open` property, written inside `apply_open` — the
+/// funnel EVERY write passes through (the custom-WRITE `set_open`, contract
+/// §3/D3) — so it is exact. Read by the hotkeys pipeline: the (B)
+/// dropdown-steal condition and the §1.2 Escape stack / the
+/// `Context::Immersive` binding gate (2026-08-03 hotkeys-port contract),
+/// which run on ANOTHER singleton and cannot reach this QObject's properties.
+static OPEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub(crate) fn is_open() -> bool {
+    OPEN.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Cross-singleton `toggle()` — the hotkeys `ui.focusMode` dispatch
+/// (keybindings.rs:538-545 semantics ride the QbzImmersive invokable itself).
+pub(crate) fn toggle() {
+    ui(|imm| imm.toggle());
+}
+
+/// Cross-singleton close — the hotkeys §1.2 Escape-stack arm 5. Rides the
+/// SAME `set_open` funnel the QML exit paths use (the false edge parks the
+/// viz tap, §3.3a/§4.2).
+pub(crate) fn close() {
+    ui(|imm| imm.set_open(false));
+}
+
 /// §3.1 pinned map: a pinned default always lands on `view_mode=0` + the
 /// matching FOCUS `mode` (never WaveBed). `None` = "remember"/unknown — the
 /// caller restores the persisted triple / does nothing respectively.
@@ -213,6 +238,7 @@ fn apply_open(mut this: Pin<&mut QbzImmersive>, value: bool) {
     }
     this.as_mut().rust_mut().open = value;
     this.as_mut().open_changed();
+    OPEN.store(value, std::sync::atomic::Ordering::SeqCst);
     if value {
         // §3.1 apply-default-view — runs on EVERY false→true open edge, from
         // both entries. Restore writes go DIRECTLY to the properties, NOT

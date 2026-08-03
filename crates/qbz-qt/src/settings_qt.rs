@@ -909,6 +909,20 @@ pub fn pref_i32(key: &str, default: i32) -> i32 {
         .unwrap_or(default)
 }
 
+/// Whole-value reader — same additive single-key discipline as
+/// `pref_bool`/`pref_str`/`pref_i32`, for keys whose value is a NESTED
+/// document rather than a scalar. Added for the hotkeys layer's `keybindings`
+/// map (2026-08-03 hotkeys-port contract §3.2): a JSON object of action id ->
+/// shortcut, co-owned with the Slint app, which `hotkeys_qt` reads whole and
+/// writes back through the same `save_pref` single-key patch.
+pub fn pref_json(key: &str) -> Option<serde_json::Value> {
+    let path = prefs_path()?;
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|v| v.get(key).cloned())
+}
+
 /// Additive single-key patch of ui_prefs.json — THE writer every other pref
 /// setter in this file funnels through, so they all inherit `update_prefs`'
 /// atomic rename and its refusal to rebuild an unparsable document.

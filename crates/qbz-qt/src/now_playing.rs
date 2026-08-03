@@ -234,6 +234,15 @@ pub fn repeat_mode() -> i32 {
     with_model(|m| m.repeat_mode).0
 }
 
+/// (elapsed_secs, duration_secs) of the current track — the read the hotkeys
+/// seek math (2026-08-03 hotkeys-port contract §1.3) makes off the Slint
+/// `NowPlayingState` (`keybindings.rs:572-581`: `position_secs` /
+/// `duration_secs`, then `clamp(pos ± d, 0, dur) / dur`). The 1 Hz poll-pump
+/// base is the Slint base (immersive contract D14).
+pub(crate) fn position() -> (i32, i32) {
+    with_model(|m| (m.elapsed_secs, m.duration_secs)).0
+}
+
 /// (artist_id, title) of the current track — the read the immersive
 /// Suggestions loader makes off the Slint `NowPlayingState`
 /// (`main.rs:16699-16702`: the panel only has the track id, the seed artist

@@ -489,6 +489,17 @@ pub(crate) fn ui(f: impl FnOnce(Pin<&mut QbzShell>) + Send + 'static) {
     }
 }
 
+/// Rust-side mirror of the `queue_open` property — `toggle_queue` below is
+/// the ONLY writer (the NPB button and the queue panel's close both call it;
+/// QML never writes the property directly). Read by the hotkeys §1.2 Escape
+/// stack arm 7 (2026-08-03 hotkeys-port contract), which runs on the
+/// QbzHotkeys singleton and cannot reach this QObject's properties.
+static QUEUE_OPEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn queue_open() -> bool {
+    QUEUE_OPEN.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 impl qbz_shell::QbzShell {
     pub fn boot(self: Pin<&mut Self>) {
         if QT_THREAD.set(self.qt_thread()).is_err() {
@@ -513,6 +524,7 @@ impl qbz_shell::QbzShell {
 
     pub fn toggle_queue(mut self: Pin<&mut Self>) {
         let next = !self.queue_open();
+        QUEUE_OPEN.store(next, std::sync::atomic::Ordering::SeqCst);
         self.as_mut().set_queue_open(next);
     }
 
