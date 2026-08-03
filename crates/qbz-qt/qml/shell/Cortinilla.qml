@@ -32,7 +32,18 @@ Item {
 
     QbzTheme { id: theme }
 
-    readonly property var doc: parseDoc()
+    // The document is applied IMPERATIVELY, not bound, so the scroll offset
+    // survives a republish. `cortinillaJson` is republished wholesale when
+    // the artwork pass lands (~1.5s after the rows), and a bound Repeater
+    // model would be a full model reset: every delegate destroyed and
+    // rebuilt, contentHeight momentarily 0, and StopAtBounds clamping
+    // contentY to 0 — the user is yanked back to the top mid-read. This is
+    // the port's own documented cure (MyQbzGridView.applyItems).
+    property var doc: ({})
+    property var sections: []
+    readonly property bool hasTop: doc.top !== undefined && doc.top !== null
+    readonly property bool empty: !hasTop && sections.length === 0 && !QbzSearch.cortinillaLoading
+
     function parseDoc() {
         try {
             return JSON.parse(QbzSearch.cortinillaJson)
@@ -40,9 +51,26 @@ Item {
             return ({})
         }
     }
-    readonly property var sections: doc.sections || []
-    readonly property bool hasTop: doc.top !== undefined && doc.top !== null && (doc.top.id || "") !== ""
-    readonly property bool empty: !hasTop && sections.length === 0 && !QbzSearch.cortinillaLoading
+
+    property real _restoreY: 0
+    function applyDoc() {
+        root._restoreY = bodyFlick.contentY
+        root.doc = parseDoc()
+        root.sections = root.doc.sections || []
+        // NOT forceLayout(): that is a QQuickItemView method (ListView /
+        // GridView), and this is a plain Flickable + Column. The Column
+        // re-layouts on the polish pass, so contentHeight is still the OLD
+        // value here and clamping against it would be wrong. Restore once
+        // layout has settled instead; Qt.callLater coalesces, so a burst of
+        // republishes costs one restore.
+        Qt.callLater(root._restoreScroll)
+    }
+    function _restoreScroll() {
+        var maxY = Math.max(0, bodyFlick.contentHeight - bodyFlick.height)
+        bodyFlick.contentY = Math.max(0, Math.min(root._restoreY, maxY))
+    }
+
+    Component.onCompleted: root.applyDoc()
 
     // The centered header search box width (HeaderBar's responsive rule) —
     // the click-through gaps below leave it free.
@@ -66,12 +94,26 @@ Item {
         root.height - theme.headerHeight - 6 - root.npbHeight - 16 - 12
 
     // --- Idle auto-close (4.5s without hover/activity, Cortinilla.slint) --
+    // panelHovered can LATCH: if the panel goes invisible while the pointer
+    // is over it, the MouseArea never reports containsMouse=false, so the
+    // idle timer stays paused forever on the next open. The reference resets
+    // it on every open/close for exactly this reason.
     property bool panelHovered: false
+    onVisibleChanged: root.panelHovered = false
+    // OWNER DIVERGENCE from the reference (2026-08-03): hovering the panel
+    // must not let it close under the cursor, but a cursor left there BY
+    // ACCIDENT must not hold it open forever either. So hover does not stop
+    // the countdown, it stretches it to 30s. The reference pauses the timer
+    // outright, which fails the second half.
+    //
+    // Assigning `interval` on a running Timer restarts it, so entering the
+    // panel gives a full 30s and leaving it gives a full 4.5s — which is
+    // exactly the wanted behaviour, not an accident.
     Timer {
         id: idleClose
-        interval: 4500
+        interval: root.panelHovered ? 30000 : 4500
         repeat: false
-        running: root.visible && !root.panelHovered
+        running: root.visible
         onTriggered: QbzSearch.cortinillaDismiss()
     }
     Connections {
@@ -80,6 +122,7 @@ Item {
         // keystroke probe is the QUERY, not the payload: the reference
         // restarts per keystroke, and now that the debounce lives in Rust a
         // burst of typing publishes one payload but many queries.
+        function onCortinillaJsonChanged() { root.applyDoc() }
         function onCortinillaQueryChanged() { if (root.visible && !root.panelHovered) idleClose.restart() }
         function onCortinillaSelectedIndexChanged() { if (root.visible && !root.panelHovered) idleClose.restart() }
         // Keyboard scroll-into-view: the controller publishes the selected
@@ -169,11 +212,23 @@ Item {
         border.color: theme.borderMuted
         clip: true
 
+        // Hover detection for the idle stretch. A HoverHandler, NOT the
+        // MouseArea this replaces: that MouseArea was declared first, so the
+        // Flickable and every row's own MouseArea sat ON TOP of it and took
+        // the hover events, and `containsMouse` stayed false for most of the
+        // panel's surface — which is why hovering did not hold the dropdown
+        // open. A HoverHandler reports for its item's whole area regardless
+        // of what is stacked above it.
+        HoverHandler {
+            id: panelHover
+            onHoveredChanged: root.panelHovered = hovered
+        }
+        // Swallow clicks that land on the panel background so they do not
+        // fall through to the dismiss scrims underneath.
         MouseArea {
-            // Hover surface for the idle-close pause; clicks stay inside.
             anchors.fill: parent
-            hoverEnabled: true
-            onContainsMouseChanged: root.panelHovered = containsMouse
+            acceptedButtons: Qt.AllButtons
+            onClicked: {}
         }
 
         Flickable {
@@ -299,7 +354,16 @@ Item {
                     Repeater {
                         model: root.sections
                         delegate: Column {
+                            id: sectionCol
                             required property var modelData
+                            // Named alias: the inner Repeater below also has
+                            // a `modelData`, and which one an unqualified
+                            // reference resolves to depends on whether the
+                            // inner delegate declares required properties.
+                            // It happens to work today; one added `required`
+                            // would silently flip every row to render its
+                            // SECTION instead. Both are named explicitly now.
+                            readonly property var section: modelData
                             width: bodyColumn.width
                             leftPadding: 6
                             rightPadding: 6
@@ -339,8 +403,11 @@ Item {
                                 }
                             }
                             Repeater {
-                                model: modelData.rows
-                                delegate: CortRow { row: modelData }
+                                model: sectionCol.section.rows
+                                delegate: CortRow {
+                                    required property var modelData
+                                    row: modelData
+                                }
                             }
                         }
                     }
@@ -424,8 +491,15 @@ Item {
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
             onClicked: {
+                // Guard the i32 boundary: an undefined flatIndex coerces to
+                // 0 on the way into Rust, which is the TOP RESULT's index —
+                // a malformed row would activate the wrong thing instead of
+                // doing nothing. The highlight above already guards with
+                // `?? -2`; this is the same guard on the action.
+                var fi = row.flatIndex
+                if (fi === undefined || fi === null) return
                 if (root.headerBar) root.headerBar.clearSearch()
-                QbzSearch.cortinillaRowClicked(row.flatIndex)
+                QbzSearch.cortinillaRowClicked(fi)
             }
         }
     }

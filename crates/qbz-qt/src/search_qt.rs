@@ -663,6 +663,11 @@ fn assign_flat_indices(data: &mut CortinillaData) {
 // Cortinilla controller state
 // ---------------------------------------------------------------------------
 
+/// Every lock on this takes `unwrap_or_else(|e| e.into_inner())`, not
+/// `unwrap()`: `row_clicked` and `move_selection` run on the Qt GUI thread
+/// (they are invokable bodies), so a poisoned lock there would take the whole
+/// UI down. The guarded value is a plain snapshot — a panic mid-write leaves
+/// it stale at worst, never inconsistent.
 static LAST_CORT: Mutex<Option<CortinillaData>> = Mutex::new(None);
 static CORT_VERSION: AtomicU64 = AtomicU64::new(0);
 /// The keyboard-selected flat index mirrored from the bridge property (so
@@ -790,7 +795,7 @@ pub async fn live(runtime: &Arc<AppRuntime<LoggingAdapter>>, query: &str) {
         }
     }
     let missing = attach_urls(urls);
-    *LAST_CORT.lock().unwrap() = Some(data.clone());
+    *LAST_CORT.lock().unwrap_or_else(|e| e.into_inner()) = Some(data.clone());
     crate::search_bridge::ui(move |mut b| {
         if is_current_cort_version(version) {
             let json = serde_json::to_string(&data).unwrap_or_else(|_| "{}".into());
@@ -804,7 +809,7 @@ pub async fn live(runtime: &Arc<AppRuntime<LoggingAdapter>>, query: &str) {
             if !is_current_cort_version(version) {
                 return;
             }
-            let mut data = LAST_CORT.lock().unwrap().clone();
+            let mut data = LAST_CORT.lock().unwrap_or_else(|e| e.into_inner()).clone();
             if let Some(data) = &mut data {
                 let mut urls: Vec<(String, &mut String)> = Vec::new();
                 if let Some(top) = &mut data.top {
@@ -817,7 +822,7 @@ pub async fn live(runtime: &Arc<AppRuntime<LoggingAdapter>>, query: &str) {
                 }
                 let _ = attach_urls(urls);
                 let data = data.clone();
-                *LAST_CORT.lock().unwrap() = Some(data.clone());
+                *LAST_CORT.lock().unwrap_or_else(|e| e.into_inner()) = Some(data.clone());
                 crate::search_bridge::ui(move |mut b| {
                     let json = serde_json::to_string(&data).unwrap_or_else(|_| "{}".into());
                     b.as_mut().set_cortinilla_json(QString::from(json.as_str()));
@@ -841,7 +846,7 @@ pub fn dismiss() {
 /// semantics: Down from -1 -> first, Up from first -> -1, clamp both ends).
 pub fn move_selection(delta: i32) {
     let current = CURRENT_SEL.load(Ordering::SeqCst);
-    let snap = LAST_CORT.lock().unwrap().clone();
+    let snap = LAST_CORT.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let Some(data) = snap else { return };
     let mut order: Vec<i32> = Vec::new();
     if let Some(top) = &data.top {
@@ -908,7 +913,7 @@ fn flat_index_content_y(data: &CortinillaData, flat_index: i32) -> f64 {
 /// kind (album -> album view, artist -> artist view, track -> play,
 /// playlist -> inert POC-NOTE). The QML clears the input + closes itself.
 pub fn row_clicked(flat_index: i32) {
-    let snap = LAST_CORT.lock().unwrap().clone();
+    let snap = LAST_CORT.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let Some(data) = snap else { return };
     let row = data
         .top
