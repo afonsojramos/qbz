@@ -65,9 +65,15 @@ pub mod qbz_search {
 
         // --- Intelligent Search kill switch --------------------------------
         /// `ui_prefs.intelligent_search` mirror. Live-flippable, no restart.
-        /// The LIVE path is the Settings > Appearance row
-        /// (`settings_qt.rs` -> `search_qt::set_enabled`); there is no
-        /// app-menu surface in either frontend.
+        ///
+        /// The ONE live path is the Settings > Appearance row
+        /// (`AppearanceSettings.qml` -> `settings_qt.rs` -> the pref +
+        /// `search_qt::set_enabled`), which reads its checked state from
+        /// `settingsJson`, NOT from this property. There is no app-menu
+        /// surface in either frontend — the Slint's only surface is
+        /// `AppearanceSettings.slint` too. The property is kept because it
+        /// is the domain's canonical state; its `toggle` invokable was
+        /// deleted (zero QML callers, contract DEAD-1).
         #[qproperty(bool, intelligent_search)]
 
         type QbzSearch = super::QbzSearchRust;
@@ -107,11 +113,6 @@ pub mod qbz_search {
         /// searchType filter radios (0 = none, 1..5 = the chips).
         #[qinvokable]
         fn search_filter_changed(self: Pin<&mut QbzSearch>, index: i32);
-        /// Intelligent-search toggle. NOTE: this has zero QML callers — the
-        /// live path is the Settings row. Deleted in C1 (contract DEAD-1);
-        /// moved here first so every intermediate commit compiles.
-        #[qinvokable]
-        fn toggle_intelligent_search(self: Pin<&mut QbzSearch>);
     }
 
     impl cxx_qt::Threading for QbzSearch {}
@@ -211,9 +212,5 @@ impl qbz_search::QbzSearch {
 
     pub fn search_filter_changed(self: Pin<&mut Self>, index: i32) {
         crate::search_filter_changed(index);
-    }
-
-    pub fn toggle_intelligent_search(self: Pin<&mut Self>) {
-        crate::toggle_intelligent_search();
     }
 }

@@ -120,24 +120,12 @@ pub fn intelligent_search_pref() -> bool {
     crate::settings_qt::pref_bool("intelligent_search", true)
 }
 
-/// Flip + persist the pref and flip the live kill switch; returns the new value.
-///
-/// The read and the write share ONE document (`toggle_pref_bool`): reading the
-/// old value through `intelligent_search_pref` first would answer a torn read
-/// with the default `true` and then commit `false` over a user who already had
-/// it off. When nothing could be written the live switch is left alone too —
-/// the two must not diverge.
-pub fn toggle_intelligent_search() -> bool {
-    let Some(next) = crate::settings_qt::toggle_pref_bool("intelligent_search", true) else {
-        let current = intelligent_search_pref();
-        log::warn!(
-            "[qbz-qt] intelligent_search toggle skipped (prefs unreadable) — staying {current}"
-        );
-        return current;
-    };
-    set_enabled(next);
-    next
-}
+// `toggle_intelligent_search` lived here and was DELETED (contract DEAD-1):
+// its only caller was a bridge invokable with zero QML callers, so the whole
+// chain was unreachable. The live path is the Settings > Appearance row,
+// which goes through `settings_qt`'s key dispatch to `set_enabled` below.
+// Its torn-read guard is not lost — `settings_qt::toggle_pref_bool` still
+// owns that behaviour for every other toggle row.
 
 // ---------------------------------------------------------------------------
 // Row types (search.rs AlbumRow / TrackRowData / ArtistRow / PlaylistRow,

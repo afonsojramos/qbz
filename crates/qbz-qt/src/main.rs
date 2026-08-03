@@ -1811,14 +1811,6 @@ pub(crate) fn search_filter_changed(index: i32) {
     spawn(async move { search_qt::filter_changed(&runtime, index).await });
 }
 
-/// App-menu intelligent-search toggle: persist the pref + flip the live
-/// kill switch + update the menu state. Live, no restart.
-pub(crate) fn toggle_intelligent_search() {
-    let next = search_qt::toggle_intelligent_search();
-    log::info!("[qbz-qt] intelligent_search -> {next}");
-    search_bridge::ui(move |mut b| b.as_mut().set_intelligent_search(next));
-}
-
 // ============================ Settings (phase 10) =========================
 
 /// Publish the settings snapshot (settings_qt.rs SettingsDoc) onto
