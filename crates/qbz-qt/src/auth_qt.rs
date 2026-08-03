@@ -409,10 +409,10 @@ where
 /// STILL ASYMMETRIC (an `init_for_user` above with no teardown here, because
 /// the module exposes none — each needs its own file changed, so it is not
 /// done from this side): `local_plex`, `library_qt::init_local_favorites`,
-/// `sidebar_qt::init_pinned`, `search_qt::init`, `playlist_qt::set_user_id`.
-/// The reference DOES tear the last three down (`pinned::teardown`,
-/// `local_favorites::teardown`, `search_service::teardown` —
-/// `qbz/src/auth.rs:349-352`).
+/// `sidebar_qt::init_pinned`, `playlist_qt::set_user_id`. The reference DOES
+/// tear the first three down (`pinned::teardown`,
+/// `local_favorites::teardown` — `qbz/src/auth.rs:349-352`).
+/// `search_qt::teardown` was the fourth and is now WIRED below.
 pub async fn logout<A>(runtime: &Arc<AppRuntime<A>>) -> Result<(), String>
 where
     A: FrontendAdapter + Send + Sync + 'static,
@@ -420,6 +420,10 @@ where
     let _ = qbz_credentials::clear_oauth_token();
     let _ = runtime.core().logout().await;
     crate::fav_cache_qt::teardown();
+    // Intelligent Search: the LEARNED ranking is per-user. Without this the
+    // next account inherits a stranger's most-clicked results as its promoted
+    // top result, and keeps writing into their buckets.
+    crate::search_qt::teardown();
     // MyQBZ: grids + branding/view-prefs binding, then the detail page's
     // caches and the two modal documents.
     crate::myqbz_qt::teardown();

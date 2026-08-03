@@ -87,6 +87,24 @@ pub fn is_enabled() -> bool {
     with_service(false, |s| s.enabled())
 }
 
+/// Drop the per-user search service on logout.
+///
+/// Without this the NEXT account inherits the previous one's learned ranking:
+/// `top_for_query` would promote a stranger's most-clicked result, and the
+/// interaction store would keep accumulating under their bucket. The reference
+/// tears it down for the same reason.
+///
+/// The version counters and payload snapshots are cleared with it, so a load
+/// still in flight at logout cannot publish into the next session.
+pub fn teardown() {
+    if let Ok(mut guard) = SERVICE.lock() {
+        *guard = None;
+    }
+    next_cort_version();
+    *LAST_CORT.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    *LAST_CORT_LOCAL.lock().unwrap_or_else(|e| e.into_inner()) = Vec::new();
+}
+
 pub fn set_enabled(on: bool) {
     with_service((), |s| s.set_enabled(on));
 }
@@ -755,9 +773,16 @@ pub async fn live(runtime: &Arc<AppRuntime<LoggingAdapter>>, query: &str) {
         return;
     }
     if !is_enabled() {
-        // Module OFF: the reference live-navigates to the results page
-        // instead (300 ms debounce). Not wired here yet — Enter still
-        // reaches the page via submit().
+        // Module OFF is a SWAP, not a removal: the reference live-navigates
+        // to the full results page on a 300 ms debounce instead of showing a
+        // dropdown. Returning here made the kill switch remove a capability
+        // rather than exchange it — typing did nothing at all until Enter.
+        let version = next_cort_version();
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        if !is_current_cort_version(version) {
+            return;
+        }
+        submit(runtime, &q, None).await;
         return;
     }
     set_selected(-1, 0.0);
