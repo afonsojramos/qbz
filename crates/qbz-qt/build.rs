@@ -140,10 +140,21 @@ fn main() {
                 "qml/shell/QconnectDevModal.qml",
                 // Immersive mode (2026-08-02 immersive-port contract §2) —
                 // its own module directory like views/local/ and
-                // views/playlistmanager/. B2 ships the root overlay + the
-                // header band; B3-B5 add the remaining 17 files here.
+                // views/playlistmanager/. B2 shipped the root overlay + the
+                // header band; B3 adds the atmosphere underlay, the five
+                // FOCUS panels and the song card / track meta / equalizer;
+                // B4-B5 add the remaining 8 files here.
+                "qml/immersive/AlbumReactivePanel.qml",
+                "qml/immersive/CoverflowPanel.qml",
+                "qml/immersive/EqualizerBars.qml",
+                "qml/immersive/ImmersiveAtmosphere.qml",
                 "qml/immersive/ImmersiveHeader.qml",
+                "qml/immersive/ImmersiveSongCard.qml",
+                "qml/immersive/ImmersiveTrackMeta.qml",
                 "qml/immersive/ImmersiveView.qml",
+                "qml/immersive/SpectrumPanel.qml",
+                "qml/immersive/StaticPanel.qml",
+                "qml/immersive/WaveBedPanel.qml",
                 "qml/theme/QbzIcon.qml",
                 "qml/theme/QbzScrollBar.qml",
                 "qml/theme/QbzSpinner.qml",

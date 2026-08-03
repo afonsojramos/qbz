@@ -3,20 +3,27 @@
 // AppShell AFTER QbzToast and BEFORE ArtPreviewOverlay/QbzTooltip (§5.1
 // declaration-order z convention).
 //
-// BLOCK B2 SCOPE: the overlay shell only — root + click-blocker + chrome +
-// auto-hide + exit paths 2-4 + the fullscreen guard + seek arrows. Panels are
-// STUB Rectangles (labeled with the mode name); B3 replaces the FOCUS stubs,
-// B4 the SPLIT stubs, B5 adds the player bar + search cortinilla (layer 7 is
-// therefore absent, per contract §12 B2).
+// BLOCK B2+B3 SCOPE: the overlay shell (root + click-blocker + chrome +
+// auto-hide + exit paths 2-4 + the fullscreen guard + seek arrows) PLUS the
+// B3 panels: the ImmersiveAtmosphere underlay (layer 2), the five FOCUS
+// panels (Album Reactive / Static / Coverflow / Spectrum / Wave Bed) and the
+// layer-4 ImmersiveSongCard. Lyrics (mode 4) and Queue (mode 5) stay STUBS
+// until B4; the SPLIT stubs stay until B4 (ImmersiveTrackMeta is already
+// wired under splitArtStub, §6.7); B5 adds the player bar + search
+// cortinilla (layer 7 is therefore absent, per contract §12 B2).
 //
 // Layer order bottom->top (§5.1):
 //   1. root color #0a0a0b, clip (:1199-1200)
-//   2. FULL-COVERAGE click-blocker MouseArea (load-bearing — without it
+//   2. ImmersiveAtmosphere — ALWAYS the underlay (the Slint shader-mode==0
+//      gate is constant in v1, ruling 1; :1313-1321)
+//   2b. FULL-COVERAGE click-blocker MouseArea (load-bearing — without it
 //      clicks pass through to the desktop header search field, the dock's
 //      spectrum band and the viz eye toggle; port of the Slint root
 //      TouchArea :1283-1286). Stacked BELOW panels + chrome.
-//   3. Panel stubs (FOCUS per viewMode==0 && mode==N; SPLIT per viewMode==1)
-//   6. ImmersiveHeader band (layers 4/5 — SongCard / PlayerBar — are B3/B5)
+//   3. FOCUS panels (viewMode==0 && mode==N) / SPLIT stubs (viewMode==1)
+//   4. ImmersiveSongCard (viewMode==0 && mode==6 && npHasTrack — trap 19;
+//      does NOT fade with the chrome, :1602-1605)
+//   6. ImmersiveHeader band (layer 5 — the PlayerBar — is B5)
 
 import QtQuick
 import com.blitzfc.qbz
@@ -91,7 +98,22 @@ Item {
         color: "#0a0a0b"
     }
 
-    // --- Layer 2: the click-blocker (§5.1, load-bearing) -------------------
+    // --- Layer 2: the atmosphere underlay (§5.1, :1313-1321) ----------------
+    // ALWAYS the underlay in v1 (the Slint shader-mode==0 gate is constant,
+    // ruling 1). Source = the host-generated 128x128 atmosphere PNG, fallback
+    // the plain cover; dim 0.15. `animated` binds npPlaying (:1321); the
+    // && open arm stops the drift clock while the overlay is closed (the
+    // Slint view is UNMOUNTED then — same zero cost). Spectrum/WaveBed paint
+    // opaque #000 over it — intended (§5.1).
+    ImmersiveAtmosphere {
+        anchors.fill: parent
+        source: QbzImmersive.atmosphereUrl
+        fallbackSource: QbzPlayer.npArtworkPath
+        animated: QbzPlayer.npPlaying && QbzImmersive.open
+        dim: 0.15
+    }
+
+    // --- Layer 2b: the click-blocker (§5.1, load-bearing) ------------------
     MouseArea {
         anchors.fill: parent
         acceptedButtons: Qt.AllButtons
@@ -154,21 +176,37 @@ Item {
         }
     }
 
-    // --- Layer 3: panel stubs (B2; B3/B4 replace them) ----------------------
-    // FOCUS: one stub per mode, gated viewMode==0 && mode==N. The §5.5 entry
-    // loads wire at panel mount for the singletons that exist in B2: Queue ->
-    // QbzQueue.queuePanelOpened() (both the FOCUS Queue stub and the SPLIT
-    // Queue stub); Lyrics -> nothing (Qt fetches lyrics automatically per
-    // track, §5.5).
+    // --- Layer 3: the FOCUS panels (B3) + the remaining stubs (B4) ---------
+    // FOCUS: one panel per mode, gated viewMode==0 && mode==N, full-viewport
+    // — the B2 stubs' 24/64/132 insets are replaced by each panel's own
+    // Slint-internal reserves (pad-top 52/70, the 132px player clearance;
+    // §6.1/§6.2). Lyrics (mode 4) and Queue (mode 5) stay stub Rectangles
+    // until B4; the Queue stub keeps its §5.5 entry load
+    // (QbzQueue.queuePanelOpened) so the B2 header-menu wiring still works.
+    AlbumReactivePanel {
+        anchors.fill: parent
+        visible: QbzImmersive.viewMode === 0 && QbzImmersive.mode === 0
+    }
+    StaticPanel {
+        anchors.fill: parent
+        visible: QbzImmersive.viewMode === 0 && QbzImmersive.mode === 1
+    }
+    CoverflowPanel {
+        anchors.fill: parent
+        visible: QbzImmersive.viewMode === 0 && QbzImmersive.mode === 2
+    }
+    SpectrumPanel {
+        anchors.fill: parent
+        visible: QbzImmersive.viewMode === 0 && QbzImmersive.mode === 3
+    }
+    WaveBedPanel {
+        anchors.fill: parent
+        visible: QbzImmersive.viewMode === 0 && QbzImmersive.mode === 6
+    }
     Repeater {
         model: [
-            { "m": 0, "label": QbzSession.tr("Album Reactive", QbzSession.trRev) },
-            { "m": 1, "label": QbzSession.tr("Static", QbzSession.trRev) },
-            { "m": 2, "label": QbzSession.tr("Coverflow", QbzSession.trRev) },
-            { "m": 3, "label": QbzSession.tr("Spectrum", QbzSession.trRev) },
             { "m": 4, "label": QbzSession.tr("Lyrics", QbzSession.trRev) },
             { "m": 5, "label": QbzSession.tr("Queue", QbzSession.trRev) },
-            { "m": 6, "label": QbzSession.tr("Wave Bed", QbzSession.trRev) },
         ]
         delegate: Rectangle {
             required property var modelData
@@ -214,6 +252,15 @@ Item {
             border.width: 1
             border.color: "#2effffff"
         }
+        // B3 seam (§6.7): the real 50/50 SPLIT left column lands in B4
+        // (§5.6/D1); ImmersiveTrackMeta is already wired under the artwork
+        // placeholder so the SPLIT gate renders something real.
+        ImmersiveTrackMeta {
+            anchors.top: splitArtStub.bottom
+            anchors.topMargin: 20
+            anchors.left: splitArtStub.left
+            width: splitArtStub.width
+        }
         Repeater {
             model: [
                 { "sp": 0, "label": QbzSession.tr("Lyrics", QbzSession.trRev) },
@@ -253,6 +300,19 @@ Item {
                 }
             }
         }
+    }
+
+    // --- Layer 4: ImmersiveSongCard (§5.1, :1602-1605) ----------------------
+    // Visible ONLY viewMode==0 && mode==6 && npHasTrack (trap 19);
+    // bottom-right 24px insets; NON-interactive; does NOT fade with the
+    // auto-hide chrome (no opacity binding here — that is deliberate).
+    ImmersiveSongCard {
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        anchors.rightMargin: 24
+        anchors.bottomMargin: 24
+        visible: QbzImmersive.viewMode === 0 && QbzImmersive.mode === 6
+            && QbzPlayer.npHasTrack
     }
 
     // §5.5: TrackInfo RELOADS on track change while its panel is mounted
