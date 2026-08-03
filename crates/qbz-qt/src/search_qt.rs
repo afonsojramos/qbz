@@ -924,6 +924,686 @@ pub async fn search_all_action(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
 }
 
 // ---------------------------------------------------------------------------
+// Immersive search controller (contract §3.4 — port of main.rs:10359-10752)
+// ---------------------------------------------------------------------------
+//
+// The Slint immersive search is a SEPARATE Rust controller from the desktop
+// cortinilla: it publishes on `QbzImmersive.immSearch*` (NEVER on
+// `QbzBridge.cortinilla*` — the desktop Cortinilla self-gates on
+// `cortinillaOpen`, which must stay false while immersive is open), it loads
+// Artists/Albums/Playlists ONLY (no tracks, NO top-result hero), and a row
+// activation ACTS ON PLAYBACK per the `immersive_search_action` pref instead
+// of navigating — immersive has no navigation (main.rs:10362-10365), so
+// `search_qt::row_clicked`'s `crate::open_album/open_artist` dispatch is the
+// exact behavior Slint rejects and is NOT reused here.
+//
+// The 220 ms debounce + the >=2-char gate + the version guard live HERE in
+// Rust (Slint-faithful, trap 17 — the desktop cortinilla's QML debounce in
+// HeaderBar.qml is NOT reused); the QML field calls `QbzImmersive.searchLive`
+// per keystroke.
+
+/// Per-category caps for the IMMERSIVE cortinilla (search.rs:609-611).
+const IMMERSIVE_CAP_ARTISTS: usize = 2;
+const IMMERSIVE_CAP_ALBUMS: usize = 5;
+const IMMERSIVE_CAP_PLAYLISTS: usize = 2;
+
+/// Per-section caps for the LOCAL album section (search.rs LocalCaps,
+/// :709-737). The NORMAL profile (online + signed in) keeps the on-device
+/// block compact; the EXPANDED profile (offline OR an unauthenticated
+/// session, so the dropdown is local-dominated) widens it. Only the `albums`
+/// cap feeds the immersive UI (immersive shows local ALBUMS only); artists/
+/// tracks are carried verbatim so `fetch_limit` stays the reference's
+/// formula.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct LocalCaps {
+    albums: usize,
+    artists: usize,
+    tracks: usize,
+}
+
+impl LocalCaps {
+    /// Normal profile (Qobuz present): compact on-device block.
+    const NORMAL: LocalCaps = LocalCaps { albums: 3, artists: 2, tracks: 3 };
+    /// Expanded profile (offline / not signed in → wider on-device block).
+    const EXPANDED: LocalCaps = LocalCaps { albums: 8, artists: 4, tracks: 8 };
+
+    /// search.rs:731-737 — `expand` is offline OR an unauthenticated session.
+    fn for_session(expand: bool) -> LocalCaps {
+        if expand { Self::EXPANDED } else { Self::NORMAL }
+    }
+
+    /// How many raw local TRACK rows to fetch so the grouped album section
+    /// can be filled: albums are DERIVED by grouping tracks, so a single
+    /// album can swallow many rows — over-fetch well beyond the shown cap
+    /// (search.rs:741-746).
+    fn fetch_limit(self) -> u64 {
+        ((self.albums.max(self.tracks) * 12) + 40) as u64
+    }
+}
+
+/// Immersive controller state — an OWN version counter (1:1
+/// `next_immersive_search_version`, main.rs:10415) and an own snapshot, fully
+/// disjoint from the desktop cortinilla's CORT_VERSION / LAST_CORT.
+static LAST_IMM: Mutex<Option<CortinillaData>> = Mutex::new(None);
+static IMM_VERSION: AtomicU64 = AtomicU64::new(0);
+/// The keyboard-selected flat index mirrored from the bridge property (so
+/// `imm_move_selection` needs no QML round-trip — the desktop CURRENT_SEL
+/// pattern, :682).
+static IMM_SEL: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
+
+fn next_imm_version() -> u64 {
+    IMM_VERSION.fetch_add(1, Ordering::SeqCst) + 1
+}
+fn is_current_imm_version(v: u64) -> bool {
+    IMM_VERSION.load(Ordering::SeqCst) == v
+}
+
+/// search.rs `map_search_all_to_immersive` (:617-706): sections **Artists,
+/// Albums, Playlists IN THAT ORDER**, caps 2/5/2, **NO track rows, NO top
+/// result** (immersive has no navigation — selecting acts on the queue). The
+/// desktop mapper (`map_search_all_to_cortinilla`) builds a top result +
+/// track rows + wrong caps and is NOT reused. Intra-category order still
+/// applies the learned ranking before truncation (search.rs `take`).
+fn map_search_all_to_immersive(query: &str, results: &SearchAllResults) -> CortinillaData {
+    let to_artist_row = |a: &Artist| CortRow {
+        kind: "artist".into(),
+        id: a.id.to_string(),
+        source: "qobuz".into(),
+        title: a.name.clone(),
+        subtitle: map_artist(a).subtitle,
+        art_url: a
+            .image
+            .as_ref()
+            .and_then(|i| i.best().cloned())
+            .unwrap_or_default(),
+        ..Default::default()
+    };
+    let to_album_row = |al: &Album| {
+        let m = map_album(al);
+        CortRow {
+            kind: "album".into(),
+            id: m.id,
+            source: "qobuz".into(),
+            title: m.title,
+            subtitle: m.artist,
+            art_url: m.art_url,
+            ..Default::default()
+        }
+    };
+    let to_playlist_row = |p: &Playlist| {
+        let m = map_playlist(p);
+        CortRow {
+            kind: "playlist".into(),
+            id: m.id,
+            source: "qobuz".into(),
+            title: m.title,
+            subtitle: m.subtitle,
+            art_url: m.art_url,
+            ..Default::default()
+        }
+    };
+
+    let mut artist_rows: Vec<CortRow> = results.artists.items.iter().map(&to_artist_row).collect();
+    let mut album_rows: Vec<CortRow> = results.albums.items.iter().map(&to_album_row).collect();
+    let mut playlist_rows: Vec<CortRow> =
+        results.playlists.items.iter().map(&to_playlist_row).collect();
+    // Intra-category order applies the learned ranking BEFORE truncation
+    // (search.rs `take`); the caps themselves live in the assembly seam.
+    rank_within(query, "artist", &mut artist_rows, |r| r.id.clone());
+    rank_within(query, "album", &mut album_rows, |r| r.id.clone());
+    rank_within(query, "playlist", &mut playlist_rows, |r| r.id.clone());
+
+    assemble_immersive_sections(
+        query,
+        artist_rows,
+        album_rows,
+        playlist_rows,
+        (results.artists.total, results.albums.total, results.playlists.total),
+    )
+}
+
+/// Section assembly, factored out of `map_search_all_to_immersive` so the
+/// caps/order/flat-index contract is unit-testable without a SearchAllResults
+/// fixture: caps Artists 2 / Albums 5 / Playlists 2 (search.rs:609-611),
+/// sections Artists, Albums, Playlists IN THAT ORDER (search.rs:690-692),
+/// empty sections dropped, `top: None`, flat indices from 1
+/// (`assign_flat_indices`'s no-top arm, :664). Callers pass RANKED,
+/// UNCAPPED rows; the caps are applied here.
+fn assemble_immersive_sections(
+    query: &str,
+    mut artist_rows: Vec<CortRow>,
+    mut album_rows: Vec<CortRow>,
+    mut playlist_rows: Vec<CortRow>,
+    totals: (u32, u32, u32),
+) -> CortinillaData {
+    artist_rows.truncate(IMMERSIVE_CAP_ARTISTS);
+    album_rows.truncate(IMMERSIVE_CAP_ALBUMS);
+    playlist_rows.truncate(IMMERSIVE_CAP_PLAYLISTS);
+    let mut sections: Vec<CortSection> = Vec::new();
+    let mut push = |title: &str, kind: &str, rows: Vec<CortRow>, total: u32| {
+        if !rows.is_empty() {
+            sections.push(CortSection {
+                title: title.to_string(),
+                kind: kind.to_string(),
+                has_more: total as usize > rows.len(),
+                rows,
+            });
+        }
+    };
+    push(&qbz_i18n::t("Artists"), "artist", artist_rows, totals.0);
+    push(&qbz_i18n::t("Albums"), "album", album_rows, totals.1);
+    push(&qbz_i18n::t("Playlists"), "playlist", playlist_rows, totals.2);
+
+    let mut data = CortinillaData {
+        query: query.to_string(),
+        top: None,
+        sections,
+    };
+    assign_flat_indices(&mut data);
+    data
+}
+
+/// The canonical "artist" attributed to a local track for grouping: the
+/// album-artist tag when present, else the track performer
+/// (search.rs:762-767).
+fn local_album_artist(t: &qbz_library::LocalTrack) -> String {
+    t.album_artist
+        .clone()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| t.artist.clone())
+}
+
+/// Group local TRACK rows into local ALBUM cortinilla rows (`source =
+/// "local"`, `kind = "album"`) — NEW PORT of search.rs
+/// `derive_local_album_rows` (:774-805); the desktop controller never ported
+/// local cortinilla sections (POC-NOTE, :25-28). Grouped by
+/// `album_group_key` in first-seen order (the DB returns rows by match
+/// relevance); `id` is the group key (the dispatch table's local arms play/
+/// enqueue by group key). Returns the capped rows plus whether more distinct
+/// albums existed than shown.
+fn derive_local_album_rows(rows: &[qbz_library::LocalTrack], cap: usize) -> (Vec<CortRow>, bool) {
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut out: Vec<CortRow> = Vec::new();
+    let mut total = 0usize;
+    for t in rows {
+        let key = t.album_group_key.clone();
+        if key.is_empty() || !seen.insert(key.clone()) {
+            continue;
+        }
+        total += 1;
+        if out.len() >= cap {
+            continue; // keep counting for an honest has_more
+        }
+        let title = if t.album_group_title.is_empty() {
+            t.album.clone()
+        } else {
+            t.album_group_title.clone()
+        };
+        // Artwork routing (the one departure from the Slint row builder, which
+        // stores the RAW path and lets its artwork dispatcher route by
+        // scheme): a local fs cover is handed to QML directly as a file://
+        // url; a Plex/http cover rides the SHARED attach_urls +
+        // download_missing flow like the Qobuz rows (artwork_qt::classify
+        // owns the taxonomy — `cached_path`/`download_missing` re-classify
+        // the raw path, so the cache entry is shared with the Local Library
+        // grid).
+        let (art_url, art_path) = match t.artwork_path.as_deref().filter(|p| !p.is_empty()) {
+            Some(p) => match crate::artwork_qt::classify(p) {
+                crate::artwork_qt::ArtUrl::LocalFile(_) => {
+                    (String::new(), crate::artwork_qt::file_url(p))
+                }
+                crate::artwork_qt::ArtUrl::Empty => (String::new(), String::new()),
+                // Plex / http: fetchable — the shared pipeline resolves it.
+                _ => (p.to_string(), String::new()),
+            },
+            None => (String::new(), String::new()),
+        };
+        out.push(CortRow {
+            kind: "album".into(),
+            id: key,
+            source: "local".into(),
+            title,
+            subtitle: local_album_artist(t),
+            art_url,
+            art_path,
+            flat_index: 0,
+        });
+    }
+    let has_more = total > out.len();
+    (out, has_more)
+}
+
+/// Append the local ALBUM section to an immersive payload (search.rs
+/// `append_immersive_local_albums`, :930-953): LAST, after every Qobuz
+/// section, section kind `local-album`. No "View more" in immersive, so
+/// `has_more` is carried but unused. Re-runs `assign_flat_indices` so the
+/// local rows get contiguous flat indices after the Qobuz sections. No-op
+/// when `rows` is empty.
+fn append_immersive_local_albums(
+    data: &mut CortinillaData,
+    rows: &[qbz_library::LocalTrack],
+    cap: usize,
+) {
+    if rows.is_empty() {
+        return;
+    }
+    let (album_rows, has_more) = derive_local_album_rows(rows, cap);
+    if album_rows.is_empty() {
+        return;
+    }
+    data.sections.push(CortSection {
+        title: qbz_i18n::t("Albums on Local Library"),
+        kind: "local-album".to_string(),
+        rows: album_rows,
+        has_more,
+    });
+    assign_flat_indices(data);
+}
+
+/// Fetch up to `limit` local-library tracks matching `query`, off the UI
+/// thread (search.rs `load_cortinilla_local` with `gated = false`, :955-1011
+/// — the immersive search is governed by its OWN "search action" enable,
+/// independent of the main cortinilla's intelligent-search toggle). Raw
+/// materials: `with_db` + `db.search_with_filter_page` + the Plex prepend
+/// (pattern local_albums.rs:255-278).
+async fn load_imm_local(query: String, limit: u64) -> Vec<qbz_library::LocalTrack> {
+    tokio::task::spawn_blocking(move || {
+        let mut rows = crate::local_state::with_db(|db| {
+            // "default" sort: the cortinilla has no sort control; keep the
+            // historical album-grouped order (search.rs:965-968). The
+            // exclude_network_folders=false arm is the crate-wide documented
+            // GAP (myqbz_builder_qt.rs:29-31 — the Qt port has no
+            // exclude_network_folders_now twin).
+            db.search_with_filter_page(query.trim(), 0, limit, true, false, "default")
+        })
+        .unwrap_or_default();
+        // Plex is part of the user's Local Library, so the cortinilla
+        // includes it too — PREPENDED so Plex content is visible without
+        // scrolling past a full local page (search.rs:975-1002).
+        if crate::local_plex::is_enabled() {
+            let mut merged = crate::local_plex::search_tracks(&query);
+            merged.append(&mut rows);
+            rows = merged;
+        }
+        rows
+    })
+    .await
+    .unwrap_or_default()
+}
+
+/// `QbzImmersive.searchLive` (the immersive `on_live`, main.rs:10376-10472):
+/// gate -> 2-char gate -> open + reset -> debounced version-guarded load.
+/// `overlay_open` is read by the bridge invokable (the property lives on the
+/// Qt thread); everything else is re-read FRESH here.
+pub fn imm_live(overlay_open: bool, query: String) {
+    // Gate: only while the immersive overlay is open AND the configured
+    // action is not "disabled" (the action doubles as the enable switch,
+    // main.rs:10380-10386). The pref is re-read on EVERY keystroke — it can
+    // change in Settings while immersive is open (main.rs:10384). disabled ⇒
+    // no-op: imm_search_open NEVER flips true.
+    if !overlay_open {
+        return;
+    }
+    if crate::settings_qt::pref_str("immersive_search_action", "replace") == "disabled" {
+        return;
+    }
+    let q = query.trim().to_string();
+    // chars().count(): grapheme-ish length so a 2-char multibyte query (CJK)
+    // is not rejected (main.rs:10390).
+    if q.chars().count() < 2 {
+        // Below the threshold — cancel the pending debounce (the version bump
+        // makes the sleeping task stale, main.rs:10392's timer stop) and close
+        // the dropdown so a backspaced query leaves no stale one open.
+        next_imm_version();
+        IMM_SEL.store(-1, Ordering::SeqCst);
+        crate::immersive_bridge::ui(|mut b| {
+            b.as_mut().set_imm_search_open(false);
+        });
+        return;
+    }
+
+    // Open + loading; ALWAYS reset selection + scroll on every refine —
+    // never leave a stale "active row" from a prior query
+    // (main.rs:10403-10407). Arrow nav fires no keystroke through here, so it
+    // is unaffected.
+    IMM_SEL.store(-1, Ordering::SeqCst);
+    crate::immersive_bridge::ui(|mut b| {
+        b.as_mut().set_imm_search_open(true);
+        b.as_mut().set_imm_search_loading(true);
+        b.as_mut().set_imm_search_selected_index(-1);
+        b.as_mut().set_imm_search_scroll_y(0.0);
+    });
+    // Offline OR an unauthenticated session → widen the on-device album cap
+    // (main.rs:10409-10414 reads OfflineState.offline || offline_session).
+    let status = crate::offline_fwd::engine().status();
+    let expand_local = status.is_offline() || status.offline_session;
+    let version = next_imm_version();
+    let runtime = crate::app();
+    crate::spawn(async move {
+        // 220 ms RUST debounce (main.rs:10422-10471): a newer keystroke bumps
+        // the version, and this task exits without loading when it wakes.
+        tokio::time::sleep(std::time::Duration::from_millis(220)).await;
+        if !is_current_imm_version(version) {
+            return;
+        }
+        imm_load(&runtime, q, expand_local, version).await;
+    });
+}
+
+/// The debounced load (search.rs `load_immersive_search`, :1153-1199): Qobuz
+/// catalog + local albums CONCURRENTLY; a Qobuz failure degrades to a
+/// local-only dropdown instead of discarding everything.
+async fn imm_load(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    q: String,
+    expand_local: bool,
+    version: u64,
+) {
+    // Blacklist filtering happens INSIDE search_all (`search.rs:1112-1115`),
+    // same as the desktop live path (:735).
+    let (bl, abl) = blacklist_snapshots();
+    let caps = LocalCaps::for_session(expand_local);
+    let q_local = q.clone();
+    let limit = caps.fetch_limit();
+    let (results, local_rows) = tokio::join!(
+        runtime.core().search_all(&q, &bl, &abl),
+        load_imm_local(q_local, limit),
+    );
+    let mut data = match results {
+        Ok(r) => map_search_all_to_immersive(&q, &r),
+        Err(e) => {
+            // Qobuz failed (offline / API error). The on-device rows resolved
+            // independently, so still build a dropdown from JUST the local
+            // section (search.rs:1186-1193). An empty local set then yields an
+            // empty payload (the overlay shows only "No results for …").
+            log::error!("[qbz-qt] immersive search load failed: {e}");
+            CortinillaData {
+                query: q.clone(),
+                top: None,
+                sections: Vec::new(),
+            }
+        }
+    };
+    append_immersive_local_albums(&mut data, &local_rows, caps.albums);
+
+    // Artwork: disk hits inline; misses (Qobuz CDN + Plex thumbs) download in
+    // the background and republish the SAME payload, version-guarded
+    // (:461-481,:755-801).
+    let mut urls: Vec<(String, &mut String)> = Vec::new();
+    for section in &mut data.sections {
+        for row in &mut section.rows {
+            urls.push((row.art_url.clone(), &mut row.art_path));
+        }
+    }
+    let missing = attach_urls(urls);
+    *LAST_IMM.lock().unwrap() = Some(data.clone());
+    crate::immersive_bridge::ui(move |mut b| {
+        if is_current_imm_version(version) {
+            let json = serde_json::to_string(&data).unwrap_or_else(|_| "{}".into());
+            b.as_mut().set_imm_search_json(QString::from(json.as_str()));
+            b.as_mut().set_imm_search_loading(false);
+        }
+    });
+    if !missing.is_empty() {
+        crate::spawn(async move {
+            crate::artwork_qt::download_missing(missing).await;
+            if !is_current_imm_version(version) {
+                return;
+            }
+            let mut snap = LAST_IMM.lock().unwrap().clone();
+            if let Some(data) = &mut snap {
+                let mut urls: Vec<(String, &mut String)> = Vec::new();
+                for section in &mut data.sections {
+                    for row in &mut section.rows {
+                        urls.push((row.art_url.clone(), &mut row.art_path));
+                    }
+                }
+                let _ = attach_urls(urls);
+                let data = data.clone();
+                *LAST_IMM.lock().unwrap() = Some(data.clone());
+                crate::immersive_bridge::ui(move |mut b| {
+                    let json = serde_json::to_string(&data).unwrap_or_else(|_| "{}".into());
+                    b.as_mut().set_imm_search_json(QString::from(json.as_str()));
+                });
+            }
+        });
+    }
+}
+
+/// Arrow-key move (the immersive `on_move_selection`, main.rs:10506-10548).
+/// The immersive payload has NO top result, so the navigable order is built
+/// from section rows only (flat indices start at 1). Both ends clamp — NO
+/// wrap.
+pub fn imm_move_selection(delta: i32) {
+    let current = IMM_SEL.load(Ordering::SeqCst);
+    let snap = LAST_IMM.lock().unwrap().clone();
+    let Some(data) = snap else { return };
+    let order: Vec<i32> = data
+        .sections
+        .iter()
+        .flat_map(|s| s.rows.iter().map(|r| r.flat_index))
+        .collect();
+    if order.is_empty() {
+        return;
+    }
+    let new_index = imm_next_selection(&order, current, delta);
+    // Content-top y of the selected row so the overlay scrolls it into view
+    // (main.rs:10520-10548). The immersive cortinilla has NO top-result
+    // block: each section block = padTop 4 + header 24, rows are 56. These
+    // constants MUST match ImmersiveSearchCortinilla.qml's layout.
+    let scroll_y = imm_scroll_y(&data, new_index);
+    IMM_SEL.store(new_index, Ordering::SeqCst);
+    crate::immersive_bridge::ui(move |mut b| {
+        b.as_mut().set_imm_search_selected_index(new_index);
+        b.as_mut().set_imm_search_scroll_y(scroll_y);
+    });
+}
+
+/// The clamp, verbatim (main.rs:10524-10540): Down from -1 lands on the
+/// first row, Up from the first row returns to -1, both ends clamp.
+fn imm_next_selection(order: &[i32], current: i32, delta: i32) -> i32 {
+    let pos = order.iter().position(|&fi| fi == current);
+    if delta > 0 {
+        match pos {
+            None => order[0],
+            Some(p) if p + 1 < order.len() => order[p + 1],
+            Some(_) => order[order.len() - 1],
+        }
+    } else {
+        match pos {
+            None => -1,
+            Some(0) => -1,
+            Some(p) => order[p - 1],
+        }
+    }
+}
+
+/// Content-space top-y of a flat index under the no-top-result layout:
+/// per-section 28 (padTop 4 + header 24) + 56 per row (main.rs:10530-10547).
+/// -1 (and any unknown index) scrolls to the top.
+fn imm_scroll_y(data: &CortinillaData, flat_index: i32) -> f64 {
+    if flat_index < 0 {
+        return 0.0;
+    }
+    let mut y = 0.0f64;
+    for section in &data.sections {
+        y += 28.0; // padTop 4 + header 24
+        for row in &section.rows {
+            if row.flat_index == flat_index {
+                return y;
+            }
+            y += 56.0; // row height
+        }
+    }
+    0.0
+}
+
+/// `QbzImmersive.dismissSearch` (main.rs:10552-10564): clears the dropdown +
+/// the selection.
+pub fn imm_dismiss() {
+    IMM_SEL.store(-1, Ordering::SeqCst);
+    crate::immersive_bridge::ui(|mut b| {
+        b.as_mut().set_imm_search_open(false);
+        b.as_mut().set_imm_search_selected_index(-1);
+    });
+}
+
+/// The round-2-verified dispatch decision (contract §3.4), factored pure so
+/// the whole table is unit-testable. `action` is the FRESH pref value
+/// ("replace" | "next" | "queue" — "disabled" is guarded by the caller).
+#[derive(Debug, Clone, PartialEq)]
+enum ImmDispatch {
+    /// local_playback::play_album(rt, key, None, false)
+    LocalPlay,
+    /// local_playback::enqueue(rt, "album", key, mode) — it re-fetches +
+    /// cover-fills itself; do NOT hand-roll the fetch_album_tracks_blocking +
+    /// fill_missing_covers pair (contract §3.4).
+    LocalEnqueue(String),
+    /// playback_qt::play_album
+    PlayAlbum,
+    /// playlist_qt::play_playlist_by_id
+    PlayPlaylist,
+    /// playback_qt::play_artist
+    PlayArtist,
+    /// playback_qt::enqueue_album(rt, id, mode)
+    EnqueueAlbum(String),
+    /// playlist_qt::enqueue_playlist_by_id(rt, id, mode)
+    EnqueuePlaylist(String),
+    /// playback_qt::enqueue_artist_top_by_id(rt, id, mode)
+    EnqueueArtistTop(String),
+    None,
+}
+
+/// (row.source, row.kind, action) -> the playback target. Local album rows
+/// branch BEFORE the Qobuz match — a local album's id is a group key, not a
+/// numeric Qobuz id (main.rs:10614-10621).
+fn imm_dispatch(source: &str, kind: &str, action: &str) -> ImmDispatch {
+    if source == "local" {
+        return match action {
+            "replace" => ImmDispatch::LocalPlay,
+            "next" | "queue" => ImmDispatch::LocalEnqueue(action.to_string()),
+            _ => ImmDispatch::None,
+        };
+    }
+    match (kind, action) {
+        ("album", "replace") => ImmDispatch::PlayAlbum,
+        ("playlist", "replace") => ImmDispatch::PlayPlaylist,
+        ("artist", "replace") => ImmDispatch::PlayArtist,
+        ("album", mode @ ("next" | "queue")) => ImmDispatch::EnqueueAlbum(mode.to_string()),
+        ("playlist", mode @ ("next" | "queue")) => ImmDispatch::EnqueuePlaylist(mode.to_string()),
+        ("artist", mode @ ("next" | "queue")) => ImmDispatch::EnqueueArtistTop(mode.to_string()),
+        _ => ImmDispatch::None,
+    }
+}
+
+/// `QbzImmersive.searchRowActivated` (main.rs:10579-10751): resolve the flat
+/// index against the controller snapshot, close the dropdown + clear the
+/// field (the user STAYS in immersive — no navigation), then dispatch to
+/// playback per the FRESH pref.
+pub fn imm_row_activated(flat_index: i32) {
+    let snap = LAST_IMM.lock().unwrap().clone();
+    let Some(data) = snap else { return };
+    let row = data
+        .sections
+        .iter()
+        .flat_map(|s| s.rows.iter())
+        .find(|r| r.flat_index == flat_index)
+        .cloned();
+    let Some(row) = row else { return };
+
+    // Close the dropdown (STAY in immersive) AND clear the field, mirroring
+    // the main cortinilla: once a result is activated, a lingering query
+    // would re-invoke the dropdown when focus returns to the field
+    // (main.rs:10595-10599).
+    IMM_SEL.store(-1, Ordering::SeqCst);
+    crate::immersive_bridge::ui(|mut b| {
+        b.as_mut().set_imm_search_open(false);
+        b.as_mut().set_imm_search_selected_index(-1);
+        b.as_mut().set_search_input_text(QString::from(""));
+    });
+
+    // Read the configured action FRESH (it can change in Settings while
+    // immersive is open — main.rs:10601-10608). "disabled" is also gated
+    // upstream in imm_live, but guard here too in case the dropdown was
+    // already open when it flipped.
+    let action = crate::settings_qt::pref_str("immersive_search_action", "replace");
+    if action == "disabled" {
+        return;
+    }
+
+    let runtime = crate::app();
+    match imm_dispatch(&row.source, &row.kind, &action) {
+        ImmDispatch::LocalPlay => {
+            let key = row.id.clone();
+            crate::spawn(async move {
+                crate::local_playback::play_album(&runtime, key, None, false).await;
+            });
+        }
+        ImmDispatch::LocalEnqueue(mode) => {
+            let key = row.id.clone();
+            crate::spawn(async move {
+                crate::local_playback::enqueue(&runtime, "album".to_string(), key, mode).await;
+            });
+        }
+        ImmDispatch::PlayAlbum => {
+            let id = row.id.clone();
+            crate::spawn(async move {
+                if let Err(e) = crate::playback_qt::play_album(&runtime, &id).await {
+                    log::error!("[qbz-qt] immersive search play_album {id}: {e}");
+                }
+            });
+        }
+        ImmDispatch::PlayPlaylist => {
+            if let Ok(pid) = row.id.parse::<u64>() {
+                crate::spawn(async move {
+                    if let Err(e) = crate::playlist_qt::play_playlist_by_id(&runtime, pid).await {
+                        log::error!("[qbz-qt] immersive search play_playlist {pid}: {e}");
+                    }
+                });
+            }
+        }
+        ImmDispatch::PlayArtist => {
+            let id = row.id.clone();
+            crate::spawn(async move {
+                if let Err(e) = crate::playback_qt::play_artist(&runtime, &id).await {
+                    log::error!("[qbz-qt] immersive search play_artist {id}: {e}");
+                }
+            });
+        }
+        ImmDispatch::EnqueueAlbum(mode) => {
+            let id = row.id.clone();
+            crate::spawn(async move {
+                if let Err(e) = crate::playback_qt::enqueue_album(&runtime, &id, &mode).await {
+                    log::error!("[qbz-qt] immersive search enqueue_album {id} ({mode}): {e}");
+                }
+            });
+        }
+        ImmDispatch::EnqueuePlaylist(mode) => {
+            if let Ok(pid) = row.id.parse::<u64>() {
+                crate::spawn(async move {
+                    if let Err(e) =
+                        crate::playlist_qt::enqueue_playlist_by_id(&runtime, pid, &mode).await
+                    {
+                        log::error!("[qbz-qt] immersive search enqueue_playlist {pid} ({mode}): {e}");
+                    }
+                });
+            }
+        }
+        ImmDispatch::EnqueueArtistTop(mode) => {
+            let id = row.id.clone();
+            crate::spawn(async move {
+                if let Err(e) =
+                    crate::playback_qt::enqueue_artist_top_by_id(&runtime, &id, &mode).await
+                {
+                    log::error!("[qbz-qt] immersive search enqueue_artist_top {id} ({mode}): {e}");
+                }
+            });
+        }
+        ImmDispatch::None => {}
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Results page
 // ---------------------------------------------------------------------------
 
@@ -1571,5 +2251,139 @@ mod tests {
         assert_eq!(tier(Some(24)), "hires");
         assert_eq!(tier(Some(16)), "cd");
         assert_eq!(tier(None), "");
+    }
+
+    // ---------------------------------------------------------------------
+    // Immersive search controller (§3.4)
+    // ---------------------------------------------------------------------
+
+    fn imm_row(kind: &str, id: &str, source: &str) -> CortRow {
+        CortRow {
+            kind: kind.into(),
+            id: id.into(),
+            source: source.into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn immersive_sections_order_caps_and_flat_indices() {
+        // Contract §3.4 / search.rs:609-611,690-692: Artists, Albums,
+        // Playlists IN THAT ORDER; caps 2/5/2; NO top result; NO track rows;
+        // flat indices from 1 (main.rs:10491-10499).
+        let artists: Vec<CortRow> = (0..4).map(|i| imm_row("artist", &format!("ar{i}"), "qobuz")).collect();
+        let albums: Vec<CortRow> = (0..7).map(|i| imm_row("album", &format!("al{i}"), "qobuz")).collect();
+        let playlists: Vec<CortRow> = (0..3).map(|i| imm_row("playlist", &format!("pl{i}"), "qobuz")).collect();
+        let data = assemble_immersive_sections("q", artists, albums, playlists, (4, 7, 3));
+
+        assert!(data.top.is_none(), "the immersive payload has NO top result");
+        let kinds: Vec<&str> = data.sections.iter().map(|s| s.kind.as_str()).collect();
+        assert_eq!(kinds, ["artist", "album", "playlist"], "section order is Artists/Albums/Playlists");
+        assert_eq!(data.sections[0].rows.len(), 2, "artists cap 2");
+        assert_eq!(data.sections[1].rows.len(), 5, "albums cap 5");
+        assert_eq!(data.sections[2].rows.len(), 2, "playlists cap 2");
+        assert!(data.sections.iter().all(|s| s.has_more), "totals exceed every cap");
+        // Flat indices run from 1, contiguous across sections.
+        let flats: Vec<i32> = data
+            .sections
+            .iter()
+            .flat_map(|s| s.rows.iter().map(|r| r.flat_index))
+            .collect();
+        assert_eq!(flats, (1..=9).collect::<Vec<i32>>());
+        assert!(data.sections.iter().flat_map(|s| s.rows.iter()).all(|r| r.kind != "track"));
+    }
+
+    #[test]
+    fn immersive_sections_drop_empty_sections() {
+        let data = assemble_immersive_sections(
+            "q",
+            vec![],
+            vec![imm_row("album", "a1", "qobuz")],
+            vec![],
+            (0, 1, 0),
+        );
+        assert_eq!(data.sections.len(), 1);
+        assert_eq!(data.sections[0].kind, "album");
+        assert!(!data.sections[0].has_more);
+        assert_eq!(data.sections[0].rows[0].flat_index, 1);
+    }
+
+    #[test]
+    fn immersive_dispatch_table_matches_the_contract() {
+        // Contract §3.4 round-2-verified mapping (main.rs:10614-10749).
+        // Local album rows branch BEFORE the Qobuz match (the id is a group
+        // key, not a numeric Qobuz id).
+        assert_eq!(imm_dispatch("local", "album", "replace"), ImmDispatch::LocalPlay);
+        assert_eq!(imm_dispatch("local", "album", "next"), ImmDispatch::LocalEnqueue("next".into()));
+        assert_eq!(imm_dispatch("local", "album", "queue"), ImmDispatch::LocalEnqueue("queue".into()));
+        // Qobuz replace arms.
+        assert_eq!(imm_dispatch("qobuz", "album", "replace"), ImmDispatch::PlayAlbum);
+        assert_eq!(imm_dispatch("qobuz", "playlist", "replace"), ImmDispatch::PlayPlaylist);
+        assert_eq!(imm_dispatch("qobuz", "artist", "replace"), ImmDispatch::PlayArtist);
+        // Qobuz next/queue arms (mode carried verbatim).
+        assert_eq!(imm_dispatch("qobuz", "album", "next"), ImmDispatch::EnqueueAlbum("next".into()));
+        assert_eq!(imm_dispatch("qobuz", "album", "queue"), ImmDispatch::EnqueueAlbum("queue".into()));
+        assert_eq!(imm_dispatch("qobuz", "playlist", "next"), ImmDispatch::EnqueuePlaylist("next".into()));
+        assert_eq!(imm_dispatch("qobuz", "playlist", "queue"), ImmDispatch::EnqueuePlaylist("queue".into()));
+        assert_eq!(imm_dispatch("qobuz", "artist", "next"), ImmDispatch::EnqueueArtistTop("next".into()));
+        assert_eq!(imm_dispatch("qobuz", "artist", "queue"), ImmDispatch::EnqueueArtistTop("queue".into()));
+        // Unknown combinations are inert (no track rows exist in the payload;
+        // an unknown action does nothing).
+        assert_eq!(imm_dispatch("qobuz", "track", "replace"), ImmDispatch::None);
+        assert_eq!(imm_dispatch("qobuz", "album", "later"), ImmDispatch::None);
+        assert_eq!(imm_dispatch("local", "album", "later"), ImmDispatch::None);
+    }
+
+    #[test]
+    fn immersive_selection_clamps_both_ends_no_wrap() {
+        // main.rs:10524-10540: Down from -1 -> first row; Up from the first
+        // row -> -1; both ends clamp (no wrap).
+        let order = vec![1, 2, 3, 4];
+        assert_eq!(imm_next_selection(&order, -1, 1), 1, "Down from -1 lands on the first row");
+        assert_eq!(imm_next_selection(&order, -1, -1), -1, "Up from -1 stays at -1");
+        assert_eq!(imm_next_selection(&order, 1, -1), -1, "Up from the first row returns to -1");
+        assert_eq!(imm_next_selection(&order, 1, 1), 2);
+        assert_eq!(imm_next_selection(&order, 4, 1), 4, "Down on the last row clamps (no wrap)");
+        assert_eq!(imm_next_selection(&order, 3, -1), 2);
+    }
+
+    #[test]
+    fn immersive_scroll_arithmetic_matches_the_no_top_layout() {
+        // main.rs:10530-10547: per-section padTop 4 + header 24 (= 28), 56
+        // per row, NO top-result block. Section 1 has 2 rows, section 2 has 1.
+        let mut data = CortinillaData {
+            query: "q".into(),
+            top: None,
+            sections: vec![
+                CortSection {
+                    title: "Artists".into(),
+                    kind: "artist".into(),
+                    has_more: false,
+                    rows: vec![imm_row("artist", "1", "qobuz"), imm_row("artist", "2", "qobuz")],
+                },
+                CortSection {
+                    title: "Albums".into(),
+                    kind: "album".into(),
+                    has_more: false,
+                    rows: vec![imm_row("album", "3", "qobuz")],
+                },
+            ],
+        };
+        assign_flat_indices(&mut data);
+        assert_eq!(imm_scroll_y(&data, -1), 0.0, "no selection scrolls to the top");
+        assert_eq!(imm_scroll_y(&data, 1), 28.0, "first section header block");
+        assert_eq!(imm_scroll_y(&data, 2), 84.0, "28 + one 56px row");
+        assert_eq!(imm_scroll_y(&data, 3), 168.0, "28 + 2*56 + the second section's 28");
+        assert_eq!(imm_scroll_y(&data, 99), 0.0, "unknown index falls to 0");
+    }
+
+    #[test]
+    fn local_caps_profiles_and_fetch_limit() {
+        // search.rs:717-746: normal 3/2/3, expanded 8/4/8; fetch_limit =
+        // max(albums, tracks) * 12 + 40.
+        assert_eq!(LocalCaps::for_session(false), LocalCaps { albums: 3, artists: 2, tracks: 3 });
+        assert_eq!(LocalCaps::for_session(true), LocalCaps { albums: 8, artists: 4, tracks: 8 });
+        assert_eq!(LocalCaps::NORMAL.fetch_limit(), 76);
+        assert_eq!(LocalCaps::EXPANDED.fetch_limit(), 136);
     }
 }

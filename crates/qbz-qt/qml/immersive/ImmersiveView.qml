@@ -3,16 +3,16 @@
 // AppShell AFTER QbzToast and BEFORE ArtPreviewOverlay/QbzTooltip (§5.1
 // declaration-order z convention).
 //
-// BLOCK B2+B3+B4 SCOPE: the overlay shell (root + click-blocker + chrome +
+// BLOCK B2+B3+B4+B5 SCOPE: the overlay shell (root + click-blocker + chrome +
 // auto-hide + exit paths 2-4 + the fullscreen guard + seek arrows) PLUS the
 // B3 panels (the ImmersiveAtmosphere underlay, the five FOCUS panels Album
 // Reactive / Static / Coverflow / Spectrum / Wave Bed, the layer-4
 // ImmersiveSongCard) PLUS the B4 panels: FOCUS Lyrics (mode 4,
 // LyricsFocusPanel) and Queue (mode 5, QueueTabsPanel), and the full §5.6
 // SPLIT layout (50/50: artwork + ImmersiveTrackMeta LEFT, the Lyrics /
-// TrackInfo / Suggestions / Queue panels RIGHT) with the §5.5 entry loads.
-// B5 adds the player bar + search cortinilla (layer 7 is therefore absent,
-// per contract §12 B2).
+// TrackInfo / Suggestions / Queue panels RIGHT) with the §5.5 entry loads —
+// PLUS the B5 layer-5 ImmersivePlayerBar (TinyBar/VolumeBar, §5.7/§5.8) and
+// the B5 layer-7 ImmersiveSearchCortinilla (§3.4).
 //
 // Layer order bottom->top (§5.1):
 //   1. root color #0a0a0b, clip (:1199-1200)
@@ -25,7 +25,10 @@
 //   3. FOCUS panels (viewMode==0 && mode==N) / the SPLIT layout (viewMode==1)
 //   4. ImmersiveSongCard (viewMode==0 && mode==6 && npHasTrack — trap 19;
 //      does NOT fade with the chrome, :1602-1605)
-//   6. ImmersiveHeader band (layer 5 — the PlayerBar — is B5)
+//   5. ImmersivePlayerBar (B5, :1607-1616) — centered, y = height-90-24,
+//      fades with the chrome like the header
+//   6. ImmersiveHeader band
+//   7. ImmersiveSearchCortinilla (B5, :1695-1705) — topmost
 
 import QtQuick
 import QtQuick.Effects
@@ -517,6 +520,20 @@ Item {
         event.accepted = true
     }
 
+    // --- Layer 5: the player bar (§5.7, :1607-1616) -------------------------
+    // Centered, y = height-90-24; fades with the auto-hide chrome on the
+    // SAME binding as the header (300ms), inert while hidden.
+    ImmersivePlayerBar {
+        id: playerBar
+        anchors.horizontalCenter: parent.horizontalCenter
+        y: root.height - 90 - 24
+        viewportWidth: root.width
+        opacity: root.chromeVisible ? 1 : 0
+        Behavior on opacity { NumberAnimation { duration: 300 } }
+        enabled: opacity > 0
+        onWakeRequested: root.wake()
+    }
+
     // --- Layer 6: the header band (§5.2) --------------------------------------
     ImmersiveHeader {
         id: header
@@ -530,5 +547,15 @@ Item {
         opacity: root.chromeVisible ? 1 : 0
         Behavior on opacity { NumberAnimation { duration: 300 } }
         enabled: opacity > 0
+    }
+
+    // --- Layer 7: the search cortinilla (§3.4, :1695-1705) -------------------
+    // TOPMOST: above the header band and the player bar. Self-gated on
+    // QbzImmersive.immSearchOpen && query >= 2 chars; NOT chrome-faded (its
+    // open flag is exactly what suppresses the auto-hide, trap 10). The
+    // accent follows the atmosphere so the keyboard-active row matches.
+    ImmersiveSearchCortinilla {
+        anchors.fill: parent
+        accent: QbzShell.ambientAccent
     }
 }

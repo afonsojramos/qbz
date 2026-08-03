@@ -51,7 +51,7 @@ use std::sync::{Arc, RwLock};
 use qbz_app::shell::AppRuntime;
 use qbz_core::LoggingAdapter;
 use cxx_qt_lib::QString;
-use qbz_models::{Quality, QueueTrack, RepeatMode};
+use qbz_models::{PageArtistTrack, Quality, QueueTrack, RepeatMode};
 
 /// The request tier for every play. Persisted in ui_prefs.json ("streaming_quality")
 /// and applied here from Settings > Audio (settings_qt). Default "hires_plus".
@@ -538,32 +538,20 @@ pub(crate) async fn fetch_album_queue(
     Ok(tracks)
 }
 
-/// Artist-card play (ArtistGridCard overlay / menu, phase 16) — playback.rs
-/// `play_artist` 1:1: fetch the artist page ONCE, play the Popular tracks;
-/// when the artist has none, fall back to the STUDIO discography (release
-/// buckets album/epSingle/ep/single in page order, deduped), concatenating
-/// each album's tracks and skipping albums that fail (a bulk play must not
-/// abort on one unavailable album).
-pub async fn play_artist(runtime: &Arc<AppRuntime<LoggingAdapter>>, artist_id: &str) -> Result<(), String> {
-    const STUDIO_TYPES: &[&str] = &["album", "epSingle", "ep", "single"];
-    let id: u64 = artist_id
-        .parse()
-        .map_err(|_| format!("invalid artist id: {artist_id}"))?;
-    let page = runtime
-        .core()
-        .get_artist_page(id, None)
-        .await
-        .map_err(|e| format!("get_artist_page {artist_id} failed: {e}"))?;
-    let artist_name = page.name.display.clone();
-
-    // 1) Popular tracks — the primary behavior.
-    let top: Vec<QueueTrack> = page
-        .top_tracks
-        .unwrap_or_default()
+/// The /artist/page top-tracks -> QueueTrack mapping shared by `play_artist`
+/// and the immersive search's (artist, next|queue) dispatch (contract
+/// 2026-08-02-immersive-port §3.4: `enqueue_artist_top_by_id` = get_artist_page
+/// -> top_tracks mapped like play_artist -> enqueue_track_list_mode).
+/// make_top_track_queue semantics: /artist/page tracks carry a thinner
+/// audio_info than /album/get tracks; fields fall back.
+fn artist_top_queue_tracks(
+    top_tracks: &[PageArtistTrack],
+    artist_id: &str,
+    artist_name: &str,
+) -> Vec<QueueTrack> {
+    top_tracks
         .iter()
         .map(|track| {
-            // make_top_track_queue: /artist/page tracks carry a thinner
-            // audio_info than /album/get tracks; fields fall back.
             let audio = track.audio_info.as_ref();
             let album = track.album.as_ref();
             let album_id = album.map(|a| a.id.clone());
@@ -576,7 +564,7 @@ pub async fn play_artist(runtime: &Arc<AppRuntime<LoggingAdapter>>, artist_id: &
                     .as_ref()
                     .map(|a| a.name.display.clone())
                     .filter(|n| !n.is_empty())
-                    .unwrap_or_else(|| artist_name.clone()),
+                    .unwrap_or_else(|| artist_name.to_string()),
                 album: album.map(|a| a.title.clone()).unwrap_or_default(),
                 album_version: None,
                 duration_secs: track.duration.unwrap_or(0) as u64,
@@ -604,7 +592,30 @@ pub async fn play_artist(runtime: &Arc<AppRuntime<LoggingAdapter>>, artist_id: &
                 context_id: Some(artist_id.to_string()),
             }
         })
-        .collect();
+        .collect()
+}
+
+/// Artist-card play (ArtistGridCard overlay / menu, phase 16) — playback.rs
+/// `play_artist` 1:1: fetch the artist page ONCE, play the Popular tracks;
+/// when the artist has none, fall back to the STUDIO discography (release
+/// buckets album/epSingle/ep/single in page order, deduped), concatenating
+/// each album's tracks and skipping albums that fail (a bulk play must not
+/// abort on one unavailable album).
+pub async fn play_artist(runtime: &Arc<AppRuntime<LoggingAdapter>>, artist_id: &str) -> Result<(), String> {
+    const STUDIO_TYPES: &[&str] = &["album", "epSingle", "ep", "single"];
+    let id: u64 = artist_id
+        .parse()
+        .map_err(|_| format!("invalid artist id: {artist_id}"))?;
+    let page = runtime
+        .core()
+        .get_artist_page(id, None)
+        .await
+        .map_err(|e| format!("get_artist_page {artist_id} failed: {e}"))?;
+    let artist_name = page.name.display.clone();
+
+    // 1) Popular tracks — the primary behavior.
+    let top: Vec<QueueTrack> =
+        artist_top_queue_tracks(page.top_tracks.as_deref().unwrap_or(&[]), artist_id, &artist_name);
     if !top.is_empty() {
         let first_id = top[0].id;
         set_queue_stamped(runtime, top, Some(0), PlayContext::artist(artist_id)).await;
@@ -1067,6 +1078,38 @@ pub async fn enqueue_artist_top_mode(
 ) -> Result<(), String> {
     let (queue, _) = crate::artist_qt::top_queue(None);
     enqueue_track_list_mode(runtime, queue, mode).await
+}
+
+/// Immersive search (artist, next|queue) dispatch (contract
+/// 2026-08-02-immersive-port §3.4, round-2-verified mapping): fetch the
+/// artist page BY ID and enqueue its top tracks through the shared mode
+/// funnel. NEW additive helper — the existing `enqueue_artist_top_mode`
+/// reads the ArtistView stash (`artist_qt::top_queue`) and is BANNED from
+/// immersive: there is no artist view under the overlay, so the stash would
+/// be stale or empty. Unlike `play_artist` there is no discography fallback
+/// — the Slint arm (`main.rs:10732-10749`) also enqueues top tracks ONLY.
+pub async fn enqueue_artist_top_by_id(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    artist_id: &str,
+    mode: &str,
+) -> Result<(), String> {
+    let id: u64 = artist_id
+        .parse()
+        .map_err(|_| format!("invalid artist id: {artist_id}"))?;
+    let page = runtime
+        .core()
+        .get_artist_page(id, None)
+        .await
+        .map_err(|e| format!("get_artist_page {artist_id} failed: {e}"))?;
+    let tracks = artist_top_queue_tracks(
+        page.top_tracks.as_deref().unwrap_or(&[]),
+        artist_id,
+        &page.name.display,
+    );
+    if tracks.is_empty() {
+        return Err(format!("artist {artist_id} has no top tracks"));
+    }
+    enqueue_track_list_mode(runtime, tracks, mode).await
 }
 
 /// One track from an album context into the queue ("Play next" / "Add to

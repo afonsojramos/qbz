@@ -15,10 +15,13 @@
 //! guard timer). The false→true edge runs §3.1 apply-default-view; both edges
 //! drive the viz two-source enable (§3.3a/§4.2).
 //!
-//! The §3.4 search surface is a BRIDGE SURFACE ONLY in B1: `search_live`
-//! mirrors the text, `dismiss_search` clears open+selection, move/activate
-//! are no-ops. The controller (debounce, ≥2-char gate, version-guarded load,
-//! dispatch table) lands in B5 (`search_qt.rs`).
+//! The §3.4 search surface is wired to the immersive search controller in
+//! `search_qt.rs` (B5): `search_live` mirrors the text AND runs the gate ->
+//! 2-char gate -> 220 ms debounce -> version-guarded load pipeline;
+//! `search_move_selection` clamps the keyboard selection; `search_row_activated`
+//! runs the (kind x action) playback dispatch table; `dismiss_search` clears
+//! open+selection. The controller publishes ONLY on this bridge's immSearch*
+//! properties — never on QbzBridge.cortinilla* (contract §3.4).
 
 use std::pin::Pin;
 use std::sync::OnceLock;
@@ -70,10 +73,11 @@ pub mod qbz_immersive {
         // fresh asset is ready — NEVER cleared on track change (the flicker
         // fix, playback.rs:2344-2351 semantics; §4.3).
         #[qproperty(QString, atmosphere_url)]
-        // --- Immersive search surface (§3.4; controller lands in B5) -------
+        // --- Immersive search surface (§3.4; controller: search_qt.rs) -----
         #[qproperty(bool, imm_search_open)]
-        // Sections Albums/Artists/Playlists (+ local albums offline) — NO
-        // track rows, NO top result. Full-shape default, never "{}".
+        // Sections Artists/Albums/Playlists IN THAT ORDER (+ a local-album
+        // section, always fetched) — NO track rows, NO top result. Full-shape
+        // default, never "{}".
         #[qproperty(QString, imm_search_json)]
         #[qproperty(bool, imm_search_loading)]
         // -1 = no selection (Down from -1 selects the first row; no wrap).
@@ -104,14 +108,17 @@ pub mod qbz_immersive {
         #[qinvokable]
         fn set_view(self: Pin<&mut QbzImmersive>, view_mode: i32, mode: i32, split_panel: i32);
 
-        /// §3.4 search surface — B1: mirrors text into search_input_text and
-        /// nothing else (the controller lands in B5).
+        /// §3.4 search surface: mirrors the text into search_input_text AND
+        /// runs the immersive controller (pref gate, >=2-char gate, 220 ms
+        /// debounce, version-guarded load — search_qt::imm_live).
         #[qinvokable]
         fn search_live(self: Pin<&mut QbzImmersive>, text: QString);
-        /// §3.4 search surface — B1: NO-OP (B5 implements the clamp/scroll).
+        /// §3.4: arrows clamp both ends, Down from -1 -> first row, no wrap
+        /// (search_qt::imm_move_selection + the 56/24/4 scroll arithmetic).
         #[qinvokable]
         fn search_move_selection(self: Pin<&mut QbzImmersive>, delta: i32);
-        /// §3.4 search surface — B1: NO-OP (B5 implements the dispatch table).
+        /// §3.4: the per-row-kind x action playback dispatch table — the user
+        /// STAYS in immersive, the field clears (search_qt::imm_row_activated).
         #[qinvokable]
         fn search_row_activated(self: Pin<&mut QbzImmersive>, flat_index: i32);
         /// §3.4: clears imm_search_open + the selection.
@@ -232,6 +239,11 @@ fn apply_open(mut this: Pin<&mut QbzImmersive>, value: bool) {
         }
         // Unknown key: Slint's `_ => {}` — leave the current view alone.
         crate::viz_qt::immersive_opened();
+        // §3.4 open-edge hygiene: a stale-true desktop cortinillaOpen is
+        // possible in theory — close it deterministically (the Rust
+        // equivalent of QbzBridge.cortinillaDismiss, bridge.rs:359-361; the
+        // desktop Cortinilla must never float under the immersive overlay).
+        crate::search_qt::dismiss();
     } else {
         crate::viz_qt::immersive_closed();
     }
@@ -296,26 +308,32 @@ impl qbz_immersive::QbzImmersive {
         }
     }
 
-    /// §3.4 surface — B1: mirror the text only. The 220 ms debounce, the
-    /// ≥2-char gate, the pref re-read and the version-guarded load all land
-    /// with the B5 controller in search_qt.rs.
+    /// §3.4 live entry: mirror the text (two-way with the field), then hand
+    /// the query to the immersive controller. The controller re-reads the
+    /// `immersive_search_action` pref FRESH per keystroke and gates on it; the
+    /// overlay-open gate reads THIS object's property (the qinvokable already
+    /// runs on the Qt thread).
     pub fn search_live(mut self: Pin<&mut Self>, text: QString) {
-        self.as_mut().set_search_input_text(text);
+        self.as_mut().set_search_input_text(text.clone());
+        crate::search_qt::imm_live(self.open, text.to_string());
     }
 
-    /// §3.4 surface — B1 NO-OP: B5 implements the arrow clamp (Down from -1
-    /// selects the first row, Up from the first row returns to -1, no wrap)
-    /// and the 56/24/4 scroll-y arithmetic.
-    pub fn search_move_selection(self: Pin<&mut Self>, _delta: i32) {}
+    /// §3.4 arrow move — the controller's clamp (Down from -1 selects the
+    /// first row, Up from the first row returns to -1, no wrap) + the 56/24/4
+    /// scroll-y arithmetic (main.rs:10506-10548).
+    pub fn search_move_selection(self: Pin<&mut Self>, delta: i32) {
+        crate::search_qt::imm_move_selection(delta);
+    }
 
-    /// §3.4 surface — B1 NO-OP: B5 implements the per-row-kind × action
-    /// dispatch table (album/artist/playlist × replace/next/queue).
-    pub fn search_row_activated(self: Pin<&mut Self>, _flat_index: i32) {}
+    /// §3.4 row activation — the controller's (kind x action) playback
+    /// dispatch table (main.rs:10579-10751).
+    pub fn search_row_activated(self: Pin<&mut Self>, flat_index: i32) {
+        crate::search_qt::imm_row_activated(flat_index);
+    }
 
     /// §3.4 dismiss: clears the dropdown + the selection (main.rs:10552-10564).
-    pub fn dismiss_search(mut self: Pin<&mut Self>) {
-        self.as_mut().set_imm_search_open(false);
-        self.as_mut().set_imm_search_selected_index(-1);
+    pub fn dismiss_search(self: Pin<&mut Self>) {
+        crate::search_qt::imm_dismiss();
     }
 }
 
