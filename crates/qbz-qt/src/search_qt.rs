@@ -17,15 +17,16 @@
 //! - **Intelligent Search service** (the 2.0.0 opt-out module): the same
 //!   headless `qbz_app::settings::search_service::SearchService` the Slint
 //!   wraps — bound per session (`init`, next to the pinned store), kill
-//!   switch from `ui_prefs.intelligent_search`, cache `store` on every live
-//!   load, `record` on row activation, `rank_within` before truncation,
-//!   `top_for_query` for the promoted row.
+//!   switch from `ui_prefs.intelligent_search`, `record` on row activation,
+//!   `rank_within` before truncation, `top_for_query` for the promoted row.
+//!   The RESULT cache (CAPA A) is deliberately not written: nothing has ever
+//!   read it (see the note on the deleted `store` below).
 //!
-//! POC-NOTEs:
-//! - The LOCAL "on this device" cortinilla sections (library_db + Plex
-//!   search, `load_cortinilla`/`append_local_sections`) are NOT ported —
-//!   the POC's cortinilla/page are Qobuz-only. Offline, the Qobuz call
-//!   fails and both surfaces show their empty states.
+//! Notes:
+//! - The LOCAL "on this device" sections ARE ported (`search_local.rs`):
+//!   albums / artists / tracks, appended last, Plex unioned in, fetched
+//!   CONCURRENTLY with the Qobuz half so an offline or slow Qobuz still
+//!   yields a local-only dropdown. The results PAGE is still Qobuz-only.
 //! - Artist "following" flags are resolved from `fav_cache_qt` (the ported
 //!   favourite-id cache) — they used to be hard-`false`, which made a search
 //!   hit on a followed artist draw "Follow" and un-follow them on click.
@@ -90,9 +91,17 @@ pub fn set_enabled(on: bool) {
     with_service((), |s| s.set_enabled(on));
 }
 
-fn store(query: &str, results: &SearchAllResults) {
-    with_service_mut(|s| s.store(query, results));
-}
+// `store` — DELETED. It persisted into the Intelligent Search result cache
+// (CAPA A), which NOTHING has ever read: `SearchService::cached` has zero
+// non-test callers in either frontend, and `git log -S` shows the read side
+// was never wired in any commit. So every keystroke paid a full serialize +
+// fs::write of a multi-megabyte artist store, on the calling thread, inside
+// the mutex the UI thread contends for — to feed a file nobody opens.
+// Removing the writer cannot change any rendered output.
+//
+// The same deletion on the Slint side is commit S1a on branch S; this is the
+// Qt half, landed here so the Qt binary stops paying it immediately instead
+// of waiting for a merge.
 
 fn record(query: &str, kind: &str, id: &str, action: InteractionAction) {
     with_service_mut(|s| s.record_interaction(query, kind, id, action));
@@ -669,6 +678,15 @@ pub(crate) fn assign_flat_indices(data: &mut CortinillaData) {
 /// UI down. The guarded value is a plain snapshot — a panic mid-write leaves
 /// it stale at worst, never inconsistent.
 static LAST_CORT: Mutex<Option<CortinillaData>> = Mutex::new(None);
+
+/// The RAW local rows behind the payload above, written in lockstep with it.
+///
+/// The click router needs the concrete `LocalTrack` to play, and it cannot
+/// re-resolve one from the row id: a local ARTIST row has no id at all, and a
+/// local ALBUM row's id is a group key, not a track. So the fetched vector is
+/// kept and the router indexes into it. Same poison-tolerant lock discipline
+/// as `LAST_CORT` — `row_clicked` runs on the Qt GUI thread.
+static LAST_CORT_LOCAL: Mutex<Vec<qbz_library::LocalTrack>> = Mutex::new(Vec::new());
 static CORT_VERSION: AtomicU64 = AtomicU64::new(0);
 /// The keyboard-selected flat index mirrored from the bridge property (so
 /// `move_selection` needs no QML round-trip).
@@ -737,14 +755,21 @@ pub async fn live(runtime: &Arc<AppRuntime<LoggingAdapter>>, query: &str) {
         return;
     }
     if !is_enabled() {
-        // Module OFF: the Slint live-navigates to the results page instead
-        // (300ms debounce). The POC keeps the cortinilla-only surface:
-        // Enter still reaches the page via submit(). POC-NOTE.
+        // Module OFF: the reference live-navigates to the results page
+        // instead (300 ms debounce). Not wired here yet — Enter still
+        // reaches the page via submit().
         return;
     }
     set_selected(-1, 0.0);
     set_cortinilla_open(true);
     let version = next_cort_version();
+    // Offline OR an unauthenticated session widens the on-device caps: with
+    // no Qobuz half the dropdown IS the local library, so a compact 3/2/3
+    // block would waste the panel. Read on the synchronous side, before the
+    // debounce, so it describes the session at the keystroke.
+    let status = crate::offline_fwd::engine().status();
+    let expand_local = status.is_offline() || status.offline_session;
+    let caps = crate::search_local::LocalCaps::for_session(expand_local);
     // Query echo + loading flag ride the cortinillaLoading property and a
     // minimal payload (skeleton rows are pure QML).
     crate::search_bridge::ui(move |mut b| {
@@ -762,27 +787,44 @@ pub async fn live(runtime: &Arc<AppRuntime<LoggingAdapter>>, query: &str) {
     }
 
     let t = std::time::Instant::now();
-    // Blacklist filtering happens INSIDE search_all (`search.rs:1112-1115`).
+    // Blacklist filtering happens INSIDE search_all.
     let (bl, abl) = blacklist_snapshots();
-    let results = runtime.core().search_all(&q, &bl, &abl).await;
-    let results = match results {
-        Ok(r) => r,
+    // CONCURRENT: the on-device query must not wait on the network, and the
+    // network must not wait on SQLite. A slow or unreachable Qobuz still
+    // yields a local-only dropdown, which is the whole point offline.
+    let (results, local_rows) = tokio::join!(
+        runtime.core().search_all(&q, &bl, &abl),
+        crate::search_local::load_cortinilla_local(q.clone(), caps.fetch_limit(), true),
+    );
+    // A Qobuz failure DEGRADES to a local-only payload instead of discarding
+    // everything — the reference's loader has no `?` and cannot return Err.
+    // Returning here (which is what this used to do) is what made the whole
+    // dropdown disappear the moment the network hiccuped.
+    let mut data = match results {
+        Ok(r) => {
+            log::info!(
+                "[qbz-qt][perf] cortinilla query \"{q}\" -> results: {:?}",
+                t.elapsed(),
+            );
+            map_search_all_to_cortinilla(&q, &r)
+        }
         Err(e) => {
-            log::error!("[qbz-qt] cortinilla load failed: {e}");
-            crate::search_bridge::ui(move |mut b| {
-                if is_current_cort_version(version) {
-                    b.as_mut().set_cortinilla_loading(false);
-                }
-            });
-            return;
+            log::warn!("[qbz-qt] cortinilla: Qobuz half failed ({e}) — local-only payload");
+            CortinillaData {
+                query: q.clone(),
+                top: None,
+                sections: Vec::new(),
+            }
         }
     };
-    log::info!(
-        "[qbz-qt][perf] cortinilla query \"{q}\" -> results: {:?}",
-        t.elapsed(),
-    );
-    store(&q, &results);
-    let mut data = map_search_all_to_cortinilla(&q, &results);
+    // The on-device sections go LAST, after every Qobuz category, and the
+    // append re-runs assign_flat_indices so their rows get contiguous flat
+    // indices after the Qobuz ones.
+    crate::search_local::append_local_sections(&mut data, &local_rows, caps);
+    // The RAW rows, kept in lockstep with the payload: the click router plays
+    // the concrete LocalTrack from this snapshot rather than re-resolving an
+    // id, because local artist rows have no id at all.
+    *LAST_CORT_LOCAL.lock().unwrap_or_else(|e| e.into_inner()) = local_rows;
     // Artwork: disk hits inline; misses download in the background and
     // republish the SAME payload (version-guarded).
     let mut urls: Vec<(String, &mut String)> = Vec::new();

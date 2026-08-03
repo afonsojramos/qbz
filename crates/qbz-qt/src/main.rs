@@ -1781,19 +1781,20 @@ pub(crate) fn search_live(query: String) {
     // anything async: it is what Enter and "View more" submit, and it must
     // describe what the user has typed, never what last finished loading.
     search_bridge::set_cortinilla_query(query.trim().to_string());
-    if offline_fwd::engine().status().is_offline() {
-        // Qobuz-only surface (the local cortinilla sections are not
-        // ported — search_qt.rs POC-NOTE): nothing to show offline.
-        return;
-    }
+    // NO offline early return. The cortinilla has on-device sections now, so
+    // offline is precisely when it earns its keep: the Qobuz half fails, the
+    // local half answers, and `live()` degrades to a local-only payload with
+    // WIDENED caps. Returning here made the dropdown dead exactly where the
+    // user has nothing else.
     let runtime = app();
     spawn(async move { search_qt::live(&runtime, &query).await });
 }
 
 pub(crate) fn search_submit(query: String) {
-    if offline_fwd::engine().status().is_offline() {
-        return;
-    }
+    // No offline early return either: `submit` publishes the results page,
+    // and its Err arm already preserves the query and renders the page's own
+    // empty state. Returning left the PREVIOUS page on screen, so pressing
+    // Enter offline looked like the app had ignored the keystroke.
     let runtime = app();
     spawn(async move { search_qt::submit(&runtime, &query, None).await });
 }
