@@ -39,6 +39,9 @@ mod hotkeys_bridge;
 // Search domain (2026-08-03 cortinilla-parity contract, commit C0): the
 // QbzSearch singleton, extracted from the QbzBridge god-object.
 mod search_bridge;
+// Local-library half of the cortinilla (same contract, commit C6): the pure
+// + blocking mappers shared by the desktop and immersive dropdowns.
+mod search_local;
 mod local_bridge;
 mod library_bridge;
 mod album_bridge;
