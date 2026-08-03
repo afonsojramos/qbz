@@ -375,7 +375,12 @@ pub async fn play_current_if_local(runtime: &Runtime, track_id: u64) -> bool {
 
 /// Set the queue to `tracks` and start `start` (playback.rs
 /// `play_local_tracks_now`: `set_queue` then the AUDIBLE step).
-async fn play_rows(runtime: &Runtime, tracks: Vec<LocalTrack>, start: usize, shuffle: bool) {
+pub(crate) async fn play_rows(
+    runtime: &Runtime,
+    tracks: Vec<LocalTrack>,
+    start: usize,
+    shuffle: bool,
+) {
     if tracks.is_empty() {
         return;
     }

@@ -952,8 +952,13 @@ fn flat_index_content_y(data: &CortinillaData, flat_index: i32) -> f64 {
 }
 
 /// Click / Enter on a row: record the interaction (Capa B) and dispatch by
-/// kind (album -> album view, artist -> artist view, track -> play,
-/// playlist -> inert POC-NOTE). The QML clears the input + closes itself.
+/// kind. Qobuz rows go to the catalog views; LOCAL rows go to the local seams
+/// (album by group key, artist BY NAME, track from the snapshot). The QML
+/// clears the input and closes itself.
+///
+/// Local rows are deliberately NOT recorded into the learned ranking: their
+/// ids are in a different space from the catalog's, and a local artist row
+/// has no id at all, so a bucket keyed on them could never be matched again.
 pub fn row_clicked(flat_index: i32) {
     let snap = LAST_CORT.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let Some(data) = snap else { return };
@@ -973,6 +978,22 @@ pub fn row_clicked(flat_index: i32) {
         };
         record(&data.query, &row.kind, &row.id, action);
     }
+    // LOCAL rows route through the local seams, never the Qobuz ones: their
+    // ids live in a different space entirely (an album id is a group key, an
+    // artist row has NO id, a track id is a library row id). Handing any of
+    // them to the catalog routes would 404 or, worse, open someone else's
+    // album that happens to share the number.
+    if row.source == "local" {
+        match row.kind.as_str() {
+            // The group key opens the local album view directly.
+            "album" => crate::local_bridge::open_album_by_id(row.id),
+            // BY NAME — local artists have no id (search_local.rs).
+            "artist" => crate::local_album_actions::open_artist_by_name(row.title),
+            "track" => play_local_row(&row.id),
+            _ => {}
+        }
+        return;
+    }
     match row.kind.as_str() {
         "album" => crate::open_album(row.id),
         "artist" => crate::open_artist(row.id),
@@ -981,9 +1002,38 @@ pub fn row_clicked(flat_index: i32) {
                 crate::play_track(id);
             }
         }
-        // playlist: no playlist view in the POC (POC-NOTE — inert).
+        "playlist" => crate::open_playlist(row.id),
         _ => {}
     }
+}
+
+/// Play a local cortinilla track row from the per-query snapshot.
+///
+/// The row id is NOT re-resolved against the database: the snapshot is the
+/// exact vector the payload was built from, so playing from it guarantees the
+/// queue matches what the user is looking at — including the Plex rows that
+/// were prepended, which a fresh lookup by id would not reproduce in order.
+///
+/// The queue is the WHOLE fetched vector (76 rows normally, 136 expanded)
+/// starting at the clicked row, which is the reference's behaviour: the
+/// dropdown shows three of them, but activating one gives you a real queue
+/// rather than a single orphan track.
+fn play_local_row(row_id: &str) {
+    let rows = LAST_CORT_LOCAL
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    // STRICT position: if the clicked row is not in the snapshot, do nothing.
+    // Falling back to 0 would silently play a DIFFERENT track than the one
+    // under the cursor, which is worse than not responding.
+    let Some(start) = rows.iter().position(|t| t.id.to_string() == row_id) else {
+        log::warn!("[qbz-qt] cortinilla: local row {row_id} not in the snapshot — ignored");
+        return;
+    };
+    let runtime = crate::app();
+    crate::spawn(async move {
+        crate::local_playback::play_rows(&runtime, rows, start, false).await;
+    });
 }
 
 /// "View more" on a section: full search page on the matching tab
