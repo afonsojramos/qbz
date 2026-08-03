@@ -193,15 +193,24 @@ Item {
                 // --- Loading skeleton (no cached instant-paint — one clean
                 // apply, Cortinilla.slint) -------------------------------
                 Column {
+                    id: skeleton
                     visible: QbzSearch.cortinillaLoading
                     width: parent.width
                     topPadding: 4
                     property bool pulse: false
+                    // ONE host Timer flipping ONE bool for all five rows —
+                    // never a per-delegate animation. Under reduce-motion it
+                    // drops to a ~8fps coarse tick, which is what the
+                    // reference switches its pulse's time source to
+                    // (Cortinilla.slint:128-131). That file records why: this
+                    // pulse was the main cost of opening the cortinilla on
+                    // weak GPUs, because every frame was a full-window
+                    // repaint.
                     Timer {
-                        interval: 700
-                        running: parent.visible
+                        interval: QbzShell.reduceMotion ? 2000 : 700
+                        running: skeleton.visible
                         repeat: true
-                        onTriggered: parent.pulse = !parent.pulse
+                        onTriggered: skeleton.pulse = !skeleton.pulse
                     }
                     Repeater {
                         model: 5
@@ -215,7 +224,7 @@ Item {
                                 height: 40
                                 radius: 4
                                 color: theme.surfaceElevated
-                                opacity: parent.parent.pulse ? 0.48 : 0.16
+                                opacity: skeleton.pulse ? 0.48 : 0.16
                                 Behavior on opacity { NumberAnimation { duration: 650; easing.type: Easing.InOutQuad } }
                             }
                             Column {
@@ -227,7 +236,7 @@ Item {
                                     height: 11
                                     radius: 3
                                     color: theme.surfaceElevated
-                                    opacity: parent.parent.parent.pulse ? 0.48 : 0.16
+                                    opacity: skeleton.pulse ? 0.48 : 0.16
                                     Behavior on opacity { NumberAnimation { duration: 650; easing.type: Easing.InOutQuad } }
                                 }
                                 Rectangle {
@@ -235,7 +244,7 @@ Item {
                                     height: 9
                                     radius: 3
                                     color: theme.surfaceElevated
-                                    opacity: parent.parent.parent.pulse ? 0.48 : 0.16
+                                    opacity: skeleton.pulse ? 0.48 : 0.16
                                     Behavior on opacity { NumberAnimation { duration: 650; easing.type: Easing.InOutQuad } }
                                 }
                             }

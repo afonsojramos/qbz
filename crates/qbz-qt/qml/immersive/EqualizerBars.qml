@@ -16,7 +16,10 @@
 // (Svelte keyframes 0/100% -> 0.3, 50% -> 1.0). The loop runs only while
 // the item is visible — every mount site gates visibility on npPlaying
 // (ImmersiveTrackInfo.slint:85,:100), so a paused player animates nothing.
-// Slint's reduce-motion coarse clock has NO Qt twin (D11) — not ported.
+// Reduce-motion: the seam EXISTS now — `QbzShell.reduceMotion`, built by the
+// cortinilla-parity contract (§5.g). This surface is simply not a consumer
+// yet; wiring it is a one-liner (throttle the tick when it is true) and its
+// own change, not a side effect of someone else's commit.
 
 import QtQuick
 

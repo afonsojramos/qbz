@@ -135,6 +135,19 @@ pub mod qbz_shell {
         // "ambient"). Live — toggling applies immediately (pure QML
         // layering). Combined in QML with npHasTrack for the D4 no-track
         // rule.
+        /// Reduce-motion: throttle every continuous animation to a coarse
+        /// tick instead of the display rate.
+        ///
+        /// DERIVED, never a user preference — the reference computes it as
+        /// `kiosk_profile || !use_gpu_renderer`
+        /// (`qbz-nix/crates/qbz/src/main.rs:8597`) and there is no Settings
+        /// row for it in either frontend. Do not add one: the play-indicator
+        /// animation toggle is a *preference* and is a different thing.
+        ///
+        /// Built by the cortinilla-parity contract (§5.g, ruling R10) so the
+        /// KIOSK port can consume it rather than having to invent it. See
+        /// `set_reduce_motion` for the two halves and why one is dormant.
+        #[qproperty(bool, reduce_motion)]
         #[qproperty(i32, ambient_mode)]
         // Album-art triad (ambient_qt.rs), pushed on track change.
         #[qproperty(QString, ambient_primary)]
@@ -399,6 +412,7 @@ pub struct QbzShellRust {
     window_maximized: bool,
     window_min_width: f32,
     window_min_height: f32,
+    reduce_motion: bool,
     ambient_mode: i32,
     ambient_primary: QString,
     ambient_secondary: QString,
@@ -460,6 +474,7 @@ impl Default for QbzShellRust {
             window_maximized: crate::settings_qt::window_maximized(),
             window_min_width: crate::settings_qt::WINDOW_MIN_WIDTH,
             window_min_height: crate::settings_qt::WINDOW_MIN_HEIGHT,
+            reduce_motion: reduce_motion_at_boot(),
             ambient_mode: crate::settings_qt::app_background_mode(),
             // The Slint ImmersiveState default triad (pre-artwork colors).
             ambient_primary: QString::from("#00dcc8"),
@@ -526,6 +541,30 @@ static QT_THREAD: OnceLock<CxxQtThread<QbzShell>> = OnceLock::new();
 
 /// Queue a shell-bridge mutation onto the Qt event loop (no-op before
 /// boot registers the thread).
+/// Kiosk profile — NOT PORTED YET. The kiosk contract
+/// (`qbz-nix-docs/qt-frontend/2026-08-02-kiosk-port/00-CONTRACT.md:244`)
+/// mandates "FORCED reduce-motion while in kiosk", so when that lands it
+/// replaces this literal with the real profile flag and the seam is already
+/// tested. One line, on their side.
+const KIOSK_PROFILE_ACTIVE: bool = false;
+
+/// The boot value of [`reduce_motion`].
+///
+/// The reference is `kiosk_profile || !use_gpu_renderer`. Only the FIRST half
+/// is wired here, deliberately:
+///
+/// The renderer-tier half has no honest source in this port. The tier is a
+/// QML-side fact (`GraphicsInfo.api`), not a Rust one, and this port runs on
+/// the GPU in every real session (OpenGL RHI, measured 2026-07-29). The one
+/// place where a tier probe WOULD report software is the offscreen smoke,
+/// which forces it by definition — so wiring it would turn reduce-motion on
+/// exactly where it means nothing and stay off everywhere it would matter.
+/// If a genuine software-tier session ever appears (a remote desktop, a
+/// llvmpipe box), that is when the second half earns its probe.
+fn reduce_motion_at_boot() -> bool {
+    KIOSK_PROFILE_ACTIVE
+}
+
 pub(crate) fn ui(f: impl FnOnce(Pin<&mut QbzShell>) + Send + 'static) {
     if let Some(thread) = QT_THREAD.get() {
         let _ = thread.queue(f);
