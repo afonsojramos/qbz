@@ -61,8 +61,11 @@ Item {
     }
     Connections {
         target: QbzSearch
-        // Activity restarts the countdown (keystroke or arrow move).
-        function onCortinillaJsonChanged() { if (root.visible && !root.panelHovered) idleClose.restart() }
+        // Activity restarts the countdown (keystroke or arrow move). The
+        // keystroke probe is the QUERY, not the payload: the reference
+        // restarts per keystroke, and now that the debounce lives in Rust a
+        // burst of typing publishes one payload but many queries.
+        function onCortinillaQueryChanged() { if (root.visible && !root.panelHovered) idleClose.restart() }
         function onCortinillaSelectedIndexChanged() { if (root.visible && !root.panelHovered) idleClose.restart() }
         // Keyboard scroll-into-view: the controller publishes the selected
         // row's content-space top-y; nudge the Flickable so it is visible.

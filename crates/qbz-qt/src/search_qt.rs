@@ -706,9 +706,24 @@ fn set_selected(index: i32, scroll_y: f64) {
     });
 }
 
-/// The live header query changed (QML debounced at 220ms, >= 2 chars —
-/// mirrors the Slint CORTINILLA_DEBOUNCE + the chars().count() gate).
-/// Opens the dropdown, resets the keyboard selection, and loads.
+/// The live header query changed — called on EVERY keystroke (>= 2 chars),
+/// not on a QML timer.
+///
+/// Two halves, and the split is load-bearing:
+///
+/// - **Synchronous half** — everything up to the sleep below. It runs on the
+///   first poll of the spawned task, i.e. at the keystroke: gates, selection
+///   reset, open, version bump, loading flag. This is what makes the panel and
+///   its skeleton appear while the user is still typing, which is the
+///   reference's behaviour (`qbz/src/main.rs:9641-9648` opens and raises
+///   before starting the timer at `:9673`).
+/// - **Debounced half** — after a 220 ms sleep (CORTINILLA_DEBOUNCE). A newer
+///   keystroke has bumped the version by then, so the superseded task exits
+///   without loading. Same shape as the immersive arm (`imm_live`).
+///
+/// `cortinillaLoading` has exactly ONE owner in the synchronous half and is
+/// written exactly once more at the publish. Never in both halves for the
+/// same keystroke.
 pub async fn live(runtime: &Arc<AppRuntime<LoggingAdapter>>, query: &str) {
     let q = query.trim().to_string();
     if q.chars().count() < 2 {
@@ -730,6 +745,16 @@ pub async fn live(runtime: &Arc<AppRuntime<LoggingAdapter>>, query: &str) {
     crate::search_bridge::ui(move |mut b| {
         b.as_mut().set_cortinilla_loading(true);
     });
+
+    // ---- end of the synchronous half; the debounce starts here ----------
+    // 220 ms (CORTINILLA_DEBOUNCE): one load per pause, not one per
+    // keystroke. A newer keystroke bumps CORT_VERSION while this sleeps, so
+    // the superseded task wakes, fails the guard and exits without touching
+    // the network — the same idiom `imm_live` uses.
+    tokio::time::sleep(std::time::Duration::from_millis(220)).await;
+    if !is_current_cort_version(version) {
+        return;
+    }
 
     let t = std::time::Instant::now();
     // Blacklist filtering happens INSIDE search_all (`search.rs:1112-1115`).
@@ -805,6 +830,11 @@ pub async fn live(runtime: &Arc<AppRuntime<LoggingAdapter>>, query: &str) {
 /// Dismiss (Esc / click-outside / idle / page change).
 pub fn dismiss() {
     set_cortinilla_open(false);
+    // Dismiss is a CANCELLATION POINT. Without the bump an in-flight load
+    // survives the Esc and still publishes into a closed dropdown — and it
+    // also rewrites LAST_CORT, which used to be what Enter submitted. The
+    // bump makes every task in flight fail its version guard and exit.
+    next_cort_version();
 }
 
 /// Arrow-key move (delta -1 up / +1 down; the Slint on_cortinilla_move_selection

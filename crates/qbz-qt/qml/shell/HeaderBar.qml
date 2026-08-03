@@ -15,8 +15,12 @@
 //
 // The search field gives up 60px whenever the nav is in the header, and
 // re-centers with a 220ms animation (HeaderBar.slint:569).
-// Center: the search field, absolutely centered on the window (VISUAL
-// replica — the cortinilla/live-search is out of scope; POC-NOTE).
+// Center: the search field, absolutely centered on the window. It owns the
+// live-search input path: the >= 2-char gate and the dismiss below it, the
+// arrow/Enter/Escape rules, the ↵ affordance and clearSearch(). The 220ms
+// debounce is NOT here — it lives in Rust (search_qt::live), so the panel
+// opens on the first keystroke instead of 220ms after the last one. The
+// dropdown itself is shell/Cortinilla.qml.
 // Right: the tri-state offline status badge with its flyout (recovery
 // "Sign in" wired to QbzSession.recoveryLogin) and the app menu (user block
 // + Keyboard Shortcuts + Documentation + Log Out + Close. Still missing vs
@@ -665,22 +669,19 @@ Rectangle {
             verticalAlignment: Text.AlignVCenter
             horizontalAlignment: text === "" && !activeFocus ? Text.AlignHCenter : Text.AlignLeft
             clip: true
+            // No QML debounce: the 220ms CORTINILLA_DEBOUNCE lives in Rust
+            // now (search_qt::live). Debouncing the whole invokable here
+            // meant the panel and its skeleton only appeared 220ms after the
+            // LAST keystroke, so continuous typing showed nothing at all;
+            // the reference opens on the FIRST keystroke >= 2 chars and
+            // debounces only the LOAD. Rust's version guard is what discards
+            // the superseded loads.
             onTextEdited: {
                 if (text.trim().length < 2) {
-                    liveDebounce.stop()
                     QbzSearch.cortinillaDismiss()
                 } else {
-                    liveDebounce.restart()
+                    QbzSearch.searchLive(text)
                 }
-            }
-
-            // 220ms live debounce (CORTINILLA_DEBOUNCE — one load per pause,
-            // not one per keystroke).
-            Timer {
-                id: liveDebounce
-                interval: 220
-                repeat: false
-                onTriggered: QbzSearch.searchLive(searchInput.text)
             }
 
             // The Enter rule (HeaderBar.slint on-enter): cortinilla open +
