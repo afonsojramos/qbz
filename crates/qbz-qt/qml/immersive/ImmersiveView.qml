@@ -3,14 +3,16 @@
 // AppShell AFTER QbzToast and BEFORE ArtPreviewOverlay/QbzTooltip (§5.1
 // declaration-order z convention).
 //
-// BLOCK B2+B3 SCOPE: the overlay shell (root + click-blocker + chrome +
+// BLOCK B2+B3+B4 SCOPE: the overlay shell (root + click-blocker + chrome +
 // auto-hide + exit paths 2-4 + the fullscreen guard + seek arrows) PLUS the
-// B3 panels: the ImmersiveAtmosphere underlay (layer 2), the five FOCUS
-// panels (Album Reactive / Static / Coverflow / Spectrum / Wave Bed) and the
-// layer-4 ImmersiveSongCard. Lyrics (mode 4) and Queue (mode 5) stay STUBS
-// until B4; the SPLIT stubs stay until B4 (ImmersiveTrackMeta is already
-// wired under splitArtStub, §6.7); B5 adds the player bar + search
-// cortinilla (layer 7 is therefore absent, per contract §12 B2).
+// B3 panels (the ImmersiveAtmosphere underlay, the five FOCUS panels Album
+// Reactive / Static / Coverflow / Spectrum / Wave Bed, the layer-4
+// ImmersiveSongCard) PLUS the B4 panels: FOCUS Lyrics (mode 4,
+// LyricsFocusPanel) and Queue (mode 5, QueueTabsPanel), and the full §5.6
+// SPLIT layout (50/50: artwork + ImmersiveTrackMeta LEFT, the Lyrics /
+// TrackInfo / Suggestions / Queue panels RIGHT) with the §5.5 entry loads.
+// B5 adds the player bar + search cortinilla (layer 7 is therefore absent,
+// per contract §12 B2).
 //
 // Layer order bottom->top (§5.1):
 //   1. root color #0a0a0b, clip (:1199-1200)
@@ -20,14 +22,17 @@
 //      clicks pass through to the desktop header search field, the dock's
 //      spectrum band and the viz eye toggle; port of the Slint root
 //      TouchArea :1283-1286). Stacked BELOW panels + chrome.
-//   3. FOCUS panels (viewMode==0 && mode==N) / SPLIT stubs (viewMode==1)
+//   3. FOCUS panels (viewMode==0 && mode==N) / the SPLIT layout (viewMode==1)
 //   4. ImmersiveSongCard (viewMode==0 && mode==6 && npHasTrack — trap 19;
 //      does NOT fade with the chrome, :1602-1605)
 //   6. ImmersiveHeader band (layer 5 — the PlayerBar — is B5)
 
 import QtQuick
+import QtQuick.Effects
+import QtQuick.Window
 import com.blitzfc.qbz
 import "../controls"
+import "../shell"
 import "../theme"
 
 Item {
@@ -176,13 +181,10 @@ Item {
         }
     }
 
-    // --- Layer 3: the FOCUS panels (B3) + the remaining stubs (B4) ---------
+    // --- Layer 3: the FOCUS panels (B3 + B4) --------------------------------
     // FOCUS: one panel per mode, gated viewMode==0 && mode==N, full-viewport
-    // — the B2 stubs' 24/64/132 insets are replaced by each panel's own
-    // Slint-internal reserves (pad-top 52/70, the 132px player clearance;
-    // §6.1/§6.2). Lyrics (mode 4) and Queue (mode 5) stay stub Rectangles
-    // until B4; the Queue stub keeps its §5.5 entry load
-    // (QbzQueue.queuePanelOpened) so the B2 header-menu wiring still works.
+    // — each panel carries its own Slint-internal reserves (pad-top 52/70,
+    // the 132px player clearance; §6.1/§6.2/§6.6).
     AlbumReactivePanel {
         anchors.fill: parent
         visible: QbzImmersive.viewMode === 0 && QbzImmersive.mode === 0
@@ -203,100 +205,244 @@ Item {
         anchors.fill: parent
         visible: QbzImmersive.viewMode === 0 && QbzImmersive.mode === 6
     }
-    Repeater {
-        model: [
-            { "m": 4, "label": QbzSession.tr("Lyrics", QbzSession.trRev) },
-            { "m": 5, "label": QbzSession.tr("Queue", QbzSession.trRev) },
-        ]
-        delegate: Rectangle {
-            required property var modelData
-            anchors.fill: parent
-            anchors.leftMargin: 24
-            anchors.rightMargin: 24
-            anchors.topMargin: 64
-            anchors.bottomMargin: 132
-            visible: QbzImmersive.viewMode === 0 && QbzImmersive.mode === modelData.m
-            radius: 12
-            color: "#0dffffff"
-            border.width: 1
-            border.color: "#2effffff"
-            Text {
-                anchors.centerIn: parent
-                text: modelData.label
-                color: "#80ffffff"
-                font.pixelSize: 15
-            }
-            onVisibleChanged: if (visible && modelData.m === 5)
-                QbzQueue.queuePanelOpened()
+    // FOCUS Lyrics (mode 4, B4 §6.6): the giant-line variant. It shares the
+    // immersive LyricsSyncEngine with the split lyrics mount (trap 22 — the
+    // gate covers BOTH lyric surfaces and nothing else). No entry load: Qt
+    // fetches lyrics automatically per track (§5.5).
+    LyricsFocusPanel {
+        anchors.fill: parent
+        visible: QbzImmersive.viewMode === 0 && QbzImmersive.mode === 4
+        lines: root.immLyricsLines
+        synced: root.immLyricsSynced
+        status: root.immLyricsStatus
+        sync: immLyricsEngine
+    }
+    // FOCUS Queue (mode 5, B4 §6.5): the same QueueTabsPanel as the split
+    // placement, full-screen (centered: false -> min(vw-96, 720) column).
+    QueueTabsPanel {
+        anchors.fill: parent
+        visible: QbzImmersive.viewMode === 0 && QbzImmersive.mode === 5
+        centered: false
+    }
+
+    // --- The shared immersive lyrics engine + document (§6.6, trap 22) ------
+    // ONE LyricsSyncEngine for BOTH immersive lyric surfaces (FOCUS mode 4
+    // AND SPLIT panel 0); the gate is the §6.6 formula verbatim
+    // (lyrics_sync.rs:214-217 parity). The QbzLyrics doc fields are parsed
+    // once here and handed to both mounts.
+    readonly property var immLyricsDoc: {
+        try {
+            return JSON.parse(QbzLyrics.docJson)
+        } catch (e) {
+            return ({})
+        }
+    }
+    readonly property var immLyricsLines: root.immLyricsDoc.lines !== undefined
+        && root.immLyricsDoc.lines !== null ? root.immLyricsDoc.lines : []
+    readonly property bool immLyricsSynced: root.immLyricsDoc.synced === true
+    readonly property int immLyricsStatus: root.immLyricsDoc.status !== undefined
+        ? root.immLyricsDoc.status : 0
+
+    LyricsSyncEngine {
+        id: immLyricsEngine
+        gateOpen: QbzImmersive.open
+            && ((QbzImmersive.viewMode === 0 && QbzImmersive.mode === 4)
+                || (QbzImmersive.viewMode === 1 && QbzImmersive.splitPanel === 0))
+    }
+    // Every doc commit resets the ladder and re-lands on the right line (the
+    // LyricsPanel.qml:60-66 idiom — the Slint kick() on commit/panel open).
+    Connections {
+        target: QbzLyrics
+        function onDocJsonChanged() {
+            immLyricsEngine.reset()
+            immLyricsEngine.kick()
         }
     }
 
-    // SPLIT (viewMode==1): left artwork placeholder + right plate with one
-    // stub per splitPanel. The real 50/50 layout lands in B4 (§5.6/D1).
+    // --- Layer 3 (viewMode==1): the SPLIT layout (§5.6/D1) -------------------
+    // HorizontalLayout padding-top 56 bottom 132 sides 56 spacing 48
+    // (:1423-1427); LEFT column EXPLICIT width (root.width - 160)/2 — the
+    // shipped Slint is a true 50/50 (:1435,:1516; the stale "55/45"/"11:9"
+    // comments at :1406-1410,:1503-1510 are wrong, D1). Artwork + the B3
+    // ImmersiveTrackMeta LEFT; the active data panel RIGHT, on a pad-20
+    // clipped plate with NO glass backing (owner removed it,
+    // :1484-1487,:1517-1518).
     Item {
+        id: splitRoot
         anchors.fill: parent
-        anchors.leftMargin: 24
-        anchors.rightMargin: 24
-        anchors.topMargin: 64
-        anchors.bottomMargin: 132
         visible: QbzImmersive.viewMode === 1
 
-        Rectangle {
-            id: splitArtStub
-            anchors.left: parent.left
-            anchors.verticalCenter: parent.verticalCenter
-            width: Math.max(240, Math.min(parent.width / 2 - 24, parent.height - 200))
-            height: width
-            radius: 12
-            color: "#0dffffff"
-            border.width: 1
-            border.color: "#2effffff"
-        }
-        // B3 seam (§6.7): the real 50/50 SPLIT left column lands in B4
-        // (§5.6/D1); ImmersiveTrackMeta is already wired under the artwork
-        // placeholder so the SPLIT gate renders something real.
-        ImmersiveTrackMeta {
-            anchors.top: splitArtStub.bottom
-            anchors.topMargin: 20
-            anchors.left: splitArtStub.left
-            width: splitArtStub.width
-        }
-        Repeater {
-            model: [
-                { "sp": 0, "label": QbzSession.tr("Lyrics", QbzSession.trRev) },
-                { "sp": 1, "label": QbzSession.tr("Track Info", QbzSession.trRev) },
-                { "sp": 2, "label": QbzSession.tr("Suggestions", QbzSession.trRev) },
-                { "sp": 3, "label": QbzSession.tr("Queue", QbzSession.trRev) },
-            ]
-            delegate: Rectangle {
-                required property var modelData
-                anchors.left: splitArtStub.right
-                anchors.leftMargin: 48
-                anchors.right: parent.right
-                anchors.top: parent.top
-                anchors.bottom: parent.bottom
-                visible: QbzImmersive.viewMode === 1
-                    && QbzImmersive.splitPanel === modelData.sp
-                radius: 12
-                color: "#0dffffff"
-                border.width: 1
-                border.color: "#2effffff"
-                Text {
-                    anchors.centerIn: parent
-                    text: modelData.label
-                    color: "#80ffffff"
-                    font.pixelSize: 15
+        // col-h: the column height below the header/player clearance
+        // (:1415). colW: the explicit half (:1435).
+        readonly property real colW: (root.width - 160) / 2
+        readonly property real colH: root.height - 56 - 132
+
+        Row {
+            anchors.fill: parent
+            anchors.topMargin: 56
+            anchors.bottomMargin: 132
+            anchors.leftMargin: 56
+            anchors.rightMargin: 56
+            spacing: 48
+
+            // LEFT (50%): artwork + the shared metadata block, centered in
+            // its half (:1433-1501), spacing 28.
+            Item {
+                id: leftCol
+                width: splitRoot.colW
+                height: parent.height
+
+                // Native source resolution (physical px) of the active
+                // cover, so the art is never UPSCALED beyond its own size
+                // (:1449-1452) — the AlbumReactivePanel.qml artProbe idiom
+                // (a hidden probe Image on the same file:// cache path; the
+                // shared image cache makes the second decode free).
+                Image {
+                    id: splitArtProbe
+                    visible: false
+                    source: QbzPlayer.npArtworkPath
                 }
-                onVisibleChanged: {
-                    if (!visible)
-                        return
-                    if (modelData.sp === 3)
-                        QbzQueue.queuePanelOpened()
-                    else if (modelData.sp === 1)
-                        QbzAlbum.openTrackInfo(QbzPlayer.npTrackId)
-                    // sp==2 Suggestions: entry load lands in B4 with the
-                    // QbzSuggestions singleton (contract §12 cross-block rule:
-                    // no QML may reference QbzSuggestions before B4).
+                readonly property real srcNative: splitArtProbe.status === Image.Ready
+                    ? splitArtProbe.implicitWidth : 0
+                // max(240, min(colW, colH-200, native)) (:1453-1455).
+                readonly property real artSize: Math.max(240,
+                    Math.min(splitRoot.colW, splitRoot.colH - 200, leftCol.srcNative))
+
+                Column {
+                    anchors.centerIn: parent
+                    width: parent.width
+                    spacing: 28
+
+                    // Artwork square, radius 12, shadow 40/#00000099/12
+                    // (:1458-1476).
+                    Item {
+                        width: parent.width
+                        height: leftCol.artSize
+
+                        // Static drop shadow, offset-y 12 — the
+                        // CoverflowPanel MultiEffect idiom (blur 40 of
+                        // blurMax 64); no shaders -> a plain offset rect.
+                        Rectangle {
+                            x: (parent.width - leftCol.artSize) / 2
+                            y: 12
+                            width: leftCol.artSize
+                            height: leftCol.artSize
+                            radius: 12
+                            color: "#99000000"
+                            layer.enabled: !root._noShaders
+                            layer.effect: MultiEffect {
+                                blurEnabled: true
+                                blurMax: 64
+                                blur: 0.625 // 40/64
+                            }
+                        }
+                        // Neutral placeholder while the cover is unresolved.
+                        Rectangle {
+                            visible: QbzPlayer.npArtworkPath === ""
+                            x: (parent.width - leftCol.artSize) / 2
+                            width: leftCol.artSize
+                            height: leftCol.artSize
+                            radius: 12
+                            color: "#14ffffff"
+                        }
+                        RoundedImage {
+                            x: (parent.width - leftCol.artSize) / 2
+                            width: leftCol.artSize
+                            height: leftCol.artSize
+                            visible: QbzPlayer.npArtworkPath !== ""
+                            radius: 12
+                            source: QbzPlayer.npArtworkPath
+                        }
+                    }
+
+                    // The shared metadata block (:1484-1500). The Slint
+                    // meta-plate is padding-only (the glass fill was removed
+                    // by the owner) — 22px side gutters so the elided rows
+                    // have a real width to truncate against.
+                    ImmersiveTrackMeta {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        width: parent.width - 44
+                        equalizerTint: "#7c3aed"
+                    }
+                }
+            }
+
+            // RIGHT (50%): the active split panel on a clipped plate, NO
+            // glass backing (:1511-1596). The panel's inner box is inset by
+            // the 20px pad on all sides (:1522-1527).
+            Item {
+                width: splitRoot.colW
+                height: parent.height
+                clip: true
+
+                Item {
+                    anchors.fill: parent
+                    anchors.margins: 20
+                    clip: true
+
+                    // splitPanel 0: the shared lyrics lines view with the
+                    // §6.6 immersive knobs EXACT (:1528-1549). The sizes are
+                    // computed from the WINDOW width, not the column
+                    // (:1533-1537). Slint's show-attribution: false has NO
+                    // Qt twin (LyricsLinesView.qml has no such property and
+                    // no attribution row — D13, nothing to set).
+                    LyricsLinesView {
+                        anchors.fill: parent
+                        visible: QbzImmersive.splitPanel === 0
+                        lines: root.immLyricsLines
+                        synced: root.immLyricsSynced
+                        showTranslation: QbzLyrics.showTranslation
+                        sync: immLyricsEngine
+                        sidePadding: 8
+                        lineGap: Math.round(Math.max(16,
+                            Math.min(root.width * 0.014, 26)))
+                        sizeInactive: Math.round(Math.max(24,
+                            Math.min(root.width * 0.018, 34)))
+                        sizeActive: Math.round(Math.max(28,
+                            Math.min(root.width * 0.022, 42)))
+                        dimmingMode: QbzLyrics.dimmingMode
+                        autoFollow: true
+                        uppercase: QbzLyrics.uppercase
+                        fontIndex: QbzLyrics.fontIndex
+                        // Solid white active line in immersive
+                        // (data-panels.md §2, :1548).
+                        activeColor: "#ffffff"
+                        onSeekRequested: function (timeMs) {
+                            if (QbzPlayer.npDurationSecs > 0)
+                                QbzPlayer.seek(timeMs / 1000 / QbzPlayer.npDurationSecs)
+                        }
+                    }
+
+                    // splitPanel 1: the inline Track Info credits panel
+                    // (§6.3). Entry load at mount + reload on track change
+                    // below (:1557-1560, §5.5).
+                    TrackInfoPanel {
+                        anchors.fill: parent
+                        visible: QbzImmersive.splitPanel === 1
+                        onVisibleChanged: if (visible)
+                            QbzAlbum.openTrackInfo(QbzPlayer.npTrackId)
+                    }
+
+                    // splitPanel 2: the live Suggestions panel (§6.4). Entry
+                    // load at mount + reload on track change below
+                    // (:1574-1577, §5.5).
+                    SuggestionsPanel {
+                        anchors.fill: parent
+                        visible: QbzImmersive.splitPanel === 2
+                        onVisibleChanged: if (visible)
+                            QbzSuggestions.load(QbzPlayer.npTrackId)
+                    }
+
+                    // splitPanel 3: the Queue + History panel, centered in
+                    // the right half (§6.5; same component as the focus
+                    // mount, centered: true fills the slot). The panel
+                    // self-fires queuePanelOpened() when it becomes visible
+                    // (:253-255).
+                    QueueTabsPanel {
+                        anchors.fill: parent
+                        visible: QbzImmersive.splitPanel === 3
+                        centered: true
+                    }
                 }
             }
         }
@@ -315,16 +461,26 @@ Item {
             && QbzPlayer.npHasTrack
     }
 
-    // §5.5: TrackInfo RELOADS on track change while its panel is mounted
-    // (:1557-1560). The Suggestions twin of this reload is B4.
+    // §5.5: TrackInfo + Suggestions RELOAD on track change while their panel
+    // is mounted (:1557-1560, :1574-1577 — the Slint `changed live-track-id`
+    // watchers; the dedup guard lives in the Rust loaders).
     Connections {
         target: QbzPlayer
         function onNpTrackIdChanged() {
-            if (root.visible && QbzImmersive.viewMode === 1
-                    && QbzImmersive.splitPanel === 1)
+            if (!root.visible || QbzImmersive.viewMode !== 1)
+                return
+            if (QbzImmersive.splitPanel === 1)
                 QbzAlbum.openTrackInfo(QbzPlayer.npTrackId)
+            else if (QbzImmersive.splitPanel === 2)
+                QbzSuggestions.load(QbzPlayer.npTrackId)
         }
     }
+
+    // No-shader renderer detection, verbatim from SpectrumBand.qml (the
+    // SPLIT artwork drop shadow is a MultiEffect blur; no shaders -> plain
+    // offset rect).
+    readonly property bool _noShaders: GraphicsInfo.api === GraphicsInfo.Software
+        || GraphicsInfo.api === GraphicsInfo.Null
 
     // --- Exit paths 3 + seek arrows (§5.4, §7) -------------------------------
     // Escape on the root: dismisses the search cortinilla FIRST when open

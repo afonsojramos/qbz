@@ -6,9 +6,9 @@
 //   LEFT    — the view-menu trigger (44x36 glass) + a 256px QbzContextMenu
 //             popup with the FOCUS and SPLIT groups in SLINT ORDER. Every row
 //             fires QbzImmersive.setView(...); the data-panel rows also fire
-//             their §5.5 entry load (Queue / Track Info in B2 — Suggestions is
-//             B4 with its singleton, Lyrics needs nothing: Qt fetches lyrics
-//             automatically per track, §5.5).
+//             their §5.5 entry load (Queue / Track Info / Suggestions —
+//             Lyrics needs nothing: Qt fetches lyrics automatically per
+//             track, §5.5).
 //   CENTER  — the QbzLineEdit-based search field, absolutely centered,
 //             min(band.width, 420) wide. The cortinilla itself ships in B5;
 //             the Rust search invokables are the inert B1 surface until then
@@ -76,11 +76,11 @@ Item {
 
         // One row model entry: vm 0 = FOCUS (mode m), vm 1 = SPLIT (panel sp).
         // `entry` names the §5.5 entry load fired alongside setView:
-        //   "queue"     -> QbzQueue.queuePanelOpened()
-        //   "trackinfo" -> QbzAlbum.openTrackInfo(QbzPlayer.npTrackId)
-        //   ""          -> none (Lyrics rows: Qt fetches lyrics automatically
-        //                  per track, §5.5; Suggestions: setView ONLY in B2 —
-        //                  B4 wires QbzSuggestions.load with its singleton).
+        //   "queue"       -> QbzQueue.queuePanelOpened()
+        //   "trackinfo"   -> QbzAlbum.openTrackInfo(QbzPlayer.npTrackId)
+        //   "suggestions" -> QbzSuggestions.load(QbzPlayer.npTrackId) (B4)
+        //   ""            -> none (Lyrics rows: Qt fetches lyrics
+        //                    automatically per track, §5.5).
         function fireRow(row) {
             QbzImmersive.setView(
                 row.vm === 0 ? 0 : 1,
@@ -90,6 +90,8 @@ Item {
                 QbzQueue.queuePanelOpened()
             else if (row.entry === "trackinfo")
                 QbzAlbum.openTrackInfo(QbzPlayer.npTrackId)
+            else if (row.entry === "suggestions")
+                QbzSuggestions.load(QbzPlayer.npTrackId)
             viewMenu.close()
         }
 
@@ -192,7 +194,7 @@ Item {
                   "label": QbzSession.tr("Lyrics", QbzSession.trRev) },
                 { "vm": 1, "m": -1, "sp": 1, "entry": "trackinfo",
                   "label": QbzSession.tr("Track Info", QbzSession.trRev) },
-                { "vm": 1, "m": -1, "sp": 2, "entry": "",
+                { "vm": 1, "m": -1, "sp": 2, "entry": "suggestions",
                   "label": QbzSession.tr("Suggestions", QbzSession.trRev) },
                 { "vm": 1, "m": -1, "sp": 3, "entry": "queue",
                   "label": QbzSession.tr("Queue", QbzSession.trRev) },

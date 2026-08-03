@@ -51,7 +51,7 @@ fn main() {
             // (myqbz_qt.rs, blacklist_qt.rs, toast_qt.rs, …) are plain
             // modules and must NOT be listed — only files that declare a
             // #[cxx_qt::bridge] mod belong in this array.
-            rust_files: &["src/bridge.rs", "src/session_bridge.rs", "src/shell_bridge.rs", "src/player_bridge.rs", "src/queue_bridge.rs", "src/home_bridge.rs", "src/viz_bridge.rs", "src/immersive_bridge.rs", "src/local_bridge.rs", "src/library_bridge.rs", "src/album_bridge.rs", "src/artist_bridge.rs", "src/lyrics_qt.rs", "src/icon_tint_qt.rs", "src/cast_bridge.rs", "src/myqbz_bridge.rs", "src/myqbz_add_bridge.rs", "src/disco_bridge.rs", "src/blacklist_bridge.rs", "src/playlist_picker_bridge.rs", "src/playlist_manager_bridge.rs", "src/playlist_import_bridge.rs", "src/folder_edit_bridge.rs", "src/playlist_edit_bridge.rs", "src/qconnect_bridge.rs"],
+            rust_files: &["src/bridge.rs", "src/session_bridge.rs", "src/shell_bridge.rs", "src/player_bridge.rs", "src/queue_bridge.rs", "src/home_bridge.rs", "src/viz_bridge.rs", "src/immersive_bridge.rs", "src/suggestions_bridge.rs", "src/local_bridge.rs", "src/library_bridge.rs", "src/album_bridge.rs", "src/artist_bridge.rs", "src/lyrics_qt.rs", "src/icon_tint_qt.rs", "src/cast_bridge.rs", "src/myqbz_bridge.rs", "src/myqbz_add_bridge.rs", "src/disco_bridge.rs", "src/blacklist_bridge.rs", "src/playlist_picker_bridge.rs", "src/playlist_manager_bridge.rs", "src/playlist_import_bridge.rs", "src/folder_edit_bridge.rs", "src/playlist_edit_bridge.rs", "src/qconnect_bridge.rs"],
             qml_files: &[
                 "qml/LoginScreen.qml",
                 "qml/Main.qml",
@@ -143,7 +143,9 @@ fn main() {
                 // views/playlistmanager/. B2 shipped the root overlay + the
                 // header band; B3 adds the atmosphere underlay, the five
                 // FOCUS panels and the song card / track meta / equalizer;
-                // B4-B5 add the remaining 8 files here.
+                // B4 adds the SPLIT panels (lyrics split mount lives in
+                // ImmersiveView) + the two remaining FOCUS panels; B5 adds
+                // the player bar + the search cortinilla.
                 "qml/immersive/AlbumReactivePanel.qml",
                 "qml/immersive/CoverflowPanel.qml",
                 "qml/immersive/EqualizerBars.qml",
@@ -152,8 +154,12 @@ fn main() {
                 "qml/immersive/ImmersiveSongCard.qml",
                 "qml/immersive/ImmersiveTrackMeta.qml",
                 "qml/immersive/ImmersiveView.qml",
+                "qml/immersive/LyricsFocusPanel.qml",
+                "qml/immersive/QueueTabsPanel.qml",
                 "qml/immersive/SpectrumPanel.qml",
                 "qml/immersive/StaticPanel.qml",
+                "qml/immersive/SuggestionsPanel.qml",
+                "qml/immersive/TrackInfoPanel.qml",
                 "qml/immersive/WaveBedPanel.qml",
                 "qml/theme/QbzIcon.qml",
                 "qml/theme/QbzScrollBar.qml",

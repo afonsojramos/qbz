@@ -30,6 +30,9 @@ mod viz_bridge;
 // QbzImmersive singleton (§3) — open funnel + view persistence + the §3.4
 // search surface. The QML overlay lands in B2.
 mod immersive_bridge;
+// Immersive Suggestions (the same contract, block B4, §4.5): the
+// QbzSuggestions singleton — the one genuinely absent domain.
+mod suggestions_bridge;
 mod local_bridge;
 mod library_bridge;
 mod album_bridge;
@@ -171,6 +174,10 @@ mod playlist_edit_qt;
 mod playlist_qt;
 mod queue_qt;
 mod search_qt;
+// Immersive Suggestions controller (2026-08-02 immersive-port contract §4.5,
+// block B4): the loader + action arms behind QbzSuggestions. Plain module —
+// no #[cxx_qt::bridge], so it must NOT appear in build.rs's rust_files.
+mod suggestions_qt;
 mod settings_qt;
 mod sidebar_qt;
 mod sleep_timer_qt;

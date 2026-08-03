@@ -234,6 +234,14 @@ pub fn repeat_mode() -> i32 {
     with_model(|m| m.repeat_mode).0
 }
 
+/// (artist_id, title) of the current track — the read the immersive
+/// Suggestions loader makes off the Slint `NowPlayingState`
+/// (`main.rs:16699-16702`: the panel only has the track id, the seed artist
+/// and name come from here). Empty strings when idle.
+pub(crate) fn seed_meta() -> (String, String) {
+    with_model(|m| (m.artist_id.clone(), m.title.clone())).0
+}
+
 pub fn set_playing(playing: bool) {
     mutate(|m| m.playing = playing);
 }

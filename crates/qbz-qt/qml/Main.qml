@@ -123,6 +123,11 @@ ApplicationWindow {
         // atmosphere_url to this singleton on every track change — a missing
         // boot line would drop those publishes silently (see above).
         QbzImmersive.boot()
+        // Immersive Suggestions (the same contract, block B4 §4.5) — booted
+        // WITH its bridge: every publish the suggestions loader makes rides
+        // this hop, so a missing line is the forever-"{}" silent no-op the
+        // comment below warns about (trap 2).
+        QbzSuggestions.boot()
         QbzLocal.boot()
         QbzLibrary.boot()
         QbzAlbum.boot()
