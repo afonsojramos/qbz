@@ -4,11 +4,11 @@
 // pointer and would kill typing in the header field, the exact reason the
 // Slint uses a plain Rectangle too).
 //
-// Payload: QbzBridge.cortinillaJson (search_qt.rs CortinillaData: query /
+// Payload: QbzSearch.cortinillaJson (search_qt.rs CortinillaData: query /
 // top / sections with controller flat indices). Keyboard selection rides
 // selectedIndex + cortinillaScrollY (content-space top-y of the selected
 // row — scrolled into view here). Row activation bubbles to the
-// QbzBridge.cortinilla* invokables; the field clear goes through
+// QbzSearch.cortinilla* invokables; the field clear goes through
 // root.header.clearSearch().
 
 import QtQuick
@@ -19,7 +19,7 @@ import "../theme"
 Item {
     id: root
     anchors.fill: parent
-    visible: QbzBridge.cortinillaOpen
+    visible: QbzSearch.cortinillaOpen
 
     // The host HeaderBar (for clearSearch on row activation).
     property var headerBar: null
@@ -29,14 +29,14 @@ Item {
     readonly property var doc: parseDoc()
     function parseDoc() {
         try {
-            return JSON.parse(QbzBridge.cortinillaJson)
+            return JSON.parse(QbzSearch.cortinillaJson)
         } catch (e) {
             return ({})
         }
     }
     readonly property var sections: doc.sections || []
     readonly property bool hasTop: doc.top !== undefined && doc.top !== null && (doc.top.id || "") !== ""
-    readonly property bool empty: !hasTop && sections.length === 0 && !QbzBridge.cortinillaLoading
+    readonly property bool empty: !hasTop && sections.length === 0 && !QbzSearch.cortinillaLoading
 
     // The centered header search box width (HeaderBar's responsive rule) —
     // the click-through gaps below leave it free.
@@ -52,17 +52,17 @@ Item {
         interval: 4500
         repeat: false
         running: root.visible && !root.panelHovered
-        onTriggered: QbzBridge.cortinillaDismiss()
+        onTriggered: QbzSearch.cortinillaDismiss()
     }
     Connections {
-        target: QbzBridge
+        target: QbzSearch
         // Activity restarts the countdown (keystroke or arrow move).
         function onCortinillaJsonChanged() { if (root.visible && !root.panelHovered) idleClose.restart() }
-        function onSelectedIndexChanged() { if (root.visible && !root.panelHovered) idleClose.restart() }
+        function onCortinillaSelectedIndexChanged() { if (root.visible && !root.panelHovered) idleClose.restart() }
         // Keyboard scroll-into-view: the controller publishes the selected
         // row's content-space top-y; nudge the Flickable so it is visible.
         function onCortinillaScrollYChanged() {
-            var y = QbzBridge.cortinillaScrollY
+            var y = QbzSearch.cortinillaScrollY
             if (y < bodyFlick.contentY) {
                 bodyFlick.contentY = Math.max(0, y)
             } else if (y + 56 > bodyFlick.contentY + bodyFlick.height) {
@@ -74,7 +74,7 @@ Item {
     Connections {
         target: QbzShell
         // A page change dismisses (AppShell's tracked-view close hook).
-        function onCurrentViewChanged() { QbzBridge.cortinillaDismiss() }
+        function onCurrentViewChanged() { QbzSearch.cortinillaDismiss() }
     }
 
     // --- Click-outside scrims (any click outside the panel dismisses) ----
@@ -85,7 +85,7 @@ Item {
         y: 42
         width: root.width
         height: root.height - 42
-        onClicked: QbzBridge.cortinillaDismiss()
+        onClicked: QbzSearch.cortinillaDismiss()
     }
     // 2) header strip LEFT of the search box.
     MouseArea {
@@ -94,7 +94,7 @@ Item {
         y: 0
         width: (root.width - root.searchBoxWidth) / 2
         height: 42
-        onClicked: QbzBridge.cortinillaDismiss()
+        onClicked: QbzSearch.cortinillaDismiss()
     }
     // 3) header strip RIGHT of the search box.
     MouseArea {
@@ -103,7 +103,7 @@ Item {
         y: 0
         width: root.width - x
         height: 42
-        onClicked: QbzBridge.cortinillaDismiss()
+        onClicked: QbzSearch.cortinillaDismiss()
     }
 
     // --- The panel ----------------------------------------------------------
@@ -143,7 +143,7 @@ Item {
                 // --- Loading skeleton (no cached instant-paint — one clean
                 // apply, Cortinilla.slint) -------------------------------
                 Column {
-                    visible: QbzBridge.cortinillaLoading
+                    visible: QbzSearch.cortinillaLoading
                     width: parent.width
                     topPadding: 4
                     property bool pulse: false
@@ -195,7 +195,7 @@ Item {
 
                 // --- Loaded content ----------------------------------------
                 Column {
-                    visible: !QbzBridge.cortinillaLoading
+                    visible: !QbzSearch.cortinillaLoading
                     width: parent.width
 
                     // No results.
@@ -269,7 +269,7 @@ Item {
                                         cursorShape: Qt.PointingHandCursor
                                         onClicked: {
                                             if (root.headerBar) root.headerBar.clearSearch()
-                                            QbzBridge.cortinillaViewMore(modelData.kind)
+                                            QbzSearch.cortinillaViewMore(modelData.kind)
                                         }
                                     }
                                 }
@@ -298,7 +298,7 @@ Item {
         width: parent ? parent.width : 0
         height: 56
         radius: theme.radiusSm
-        readonly property bool active: QbzBridge.selectedIndex === (row.flatIndex ?? -2)
+        readonly property bool active: QbzSearch.cortinillaSelectedIndex === (row.flatIndex ?? -2)
         color: (active || rowArea.containsMouse) ? theme.surfaceHover : "transparent"
 
         // Accent bar on the keyboard-active row (distinct from plain hover).
@@ -354,7 +354,7 @@ Item {
             cursorShape: Qt.PointingHandCursor
             onClicked: {
                 if (root.headerBar) root.headerBar.clearSearch()
-                QbzBridge.cortinillaRowClicked(row.flatIndex)
+                QbzSearch.cortinillaRowClicked(row.flatIndex)
             }
         }
     }

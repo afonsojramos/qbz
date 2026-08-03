@@ -116,6 +116,14 @@ ApplicationWindow {
         // after QbzSession like every domain singleton. The B2 dispatcher
         // (AppShell-root Keys.onPressed) is the only other QML side.
         QbzHotkeys.boot()
+        // Search (2026-08-03 cortinilla-parity contract, commit C0): the
+        // domain extracted from QbzBridge. Its position among the other
+        // domain singletons is not load-bearing — every boot() here runs
+        // before the first key or click — but the LINE is: boot() is what
+        // registers the Qt-thread hop, and without it `search_bridge::ui()`
+        // is a silent no-op, so the dropdown would never repaint and
+        // nothing would be logged (TRACK-RULES, singleton boot order).
+        QbzSearch.boot()
         QbzShell.boot()
         QbzPlayer.boot()
         QbzQueue.boot()

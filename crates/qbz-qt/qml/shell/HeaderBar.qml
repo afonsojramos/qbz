@@ -613,7 +613,7 @@ Rectangle {
     // the row / full search, Esc dismisses. The × clears + closes.
     function clearSearch() {
         searchInput.text = ""
-        QbzBridge.cortinillaDismiss()
+        QbzSearch.cortinillaDismiss()
     }
 
     // nav.search / Ctrl+f (2026-08-03 hotkeys-port contract §4.3, divergence
@@ -668,7 +668,7 @@ Rectangle {
             onTextEdited: {
                 if (text.trim().length < 2) {
                     liveDebounce.stop()
-                    QbzBridge.cortinillaDismiss()
+                    QbzSearch.cortinillaDismiss()
                 } else {
                     liveDebounce.restart()
                 }
@@ -680,7 +680,7 @@ Rectangle {
                 id: liveDebounce
                 interval: 220
                 repeat: false
-                onTriggered: QbzBridge.searchLive(searchInput.text)
+                onTriggered: QbzSearch.searchLive(searchInput.text)
             }
 
             // The Enter rule (HeaderBar.slint on-enter): cortinilla open +
@@ -688,34 +688,34 @@ Rectangle {
             // search; closed -> plain submit (also Search > All).
             Keys.onPressed: function (event) {
                 if (event.key === Qt.Key_Down) {
-                    if (QbzBridge.cortinillaOpen) {
-                        QbzBridge.cortinillaMoveSelection(1)
+                    if (QbzSearch.cortinillaOpen) {
+                        QbzSearch.cortinillaMoveSelection(1)
                         event.accepted = true
                     }
                 } else if (event.key === Qt.Key_Up) {
-                    if (QbzBridge.cortinillaOpen) {
-                        QbzBridge.cortinillaMoveSelection(-1)
+                    if (QbzSearch.cortinillaOpen) {
+                        QbzSearch.cortinillaMoveSelection(-1)
                         event.accepted = true
                     }
                 } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-                    if (QbzBridge.cortinillaOpen) {
-                        if (QbzBridge.selectedIndex >= 0) {
+                    if (QbzSearch.cortinillaOpen) {
+                        if (QbzSearch.cortinillaSelectedIndex >= 0) {
                             root.clearSearch()
-                            QbzBridge.cortinillaRowClicked(QbzBridge.selectedIndex)
+                            QbzSearch.cortinillaRowClicked(QbzSearch.cortinillaSelectedIndex)
                         } else {
                             root.clearSearch()
-                            QbzBridge.cortinillaSearchAll()
+                            QbzSearch.cortinillaSearchAll()
                         }
                     } else {
                         // Capture BEFORE clearing (clearSearch wipes the input).
                         var q = searchInput.text
                         root.clearSearch()
-                        QbzBridge.searchSubmit(q)
+                        QbzSearch.searchSubmit(q)
                     }
                     event.accepted = true
                 } else if (event.key === Qt.Key_Escape) {
-                    if (QbzBridge.cortinillaOpen) {
-                        QbzBridge.cortinillaDismiss()
+                    if (QbzSearch.cortinillaOpen) {
+                        QbzSearch.cortinillaDismiss()
                         event.accepted = true
                     }
                 }
@@ -740,7 +740,7 @@ Rectangle {
         // open (Slint: it lives in the box, opposite the magnifier), else
         // the × clear.
         Text {
-            visible: QbzBridge.cortinillaOpen
+            visible: QbzSearch.cortinillaOpen
             anchors.right: parent.right
             anchors.rightMargin: 10
             height: parent.height
@@ -750,7 +750,7 @@ Rectangle {
             verticalAlignment: Text.AlignVCenter
         }
         Rectangle {
-            visible: !QbzBridge.cortinillaOpen && searchInput.text !== ""
+            visible: !QbzSearch.cortinillaOpen && searchInput.text !== ""
             anchors.right: parent.right
             anchors.rightMargin: 5
             width: 22

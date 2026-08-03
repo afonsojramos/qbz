@@ -1,5 +1,5 @@
 // Search results view — the QML port of search/SearchResultsView.slint
-// (phase 15). One JSON document (QbzBridge.searchJson, search_qt.rs
+// (phase 15). One JSON document (QbzSearch.searchJson, search_qt.rs
 // SearchPageDoc: query/tab/loading/filterIndex + the four category lists,
 // totals, the most-popular hero, the carousel-only artists list).
 //
@@ -65,7 +65,7 @@ Rectangle {
     readonly property var doc: parseDoc()
     function parseDoc() {
         try {
-            return JSON.parse(QbzBridge.searchJson)
+            return JSON.parse(QbzSearch.searchJson)
         } catch (e) {
             return ({})
         }
@@ -190,7 +190,7 @@ Rectangle {
         root.fadeTab = t
         root.fadeFrom = root.moreFrom
         moreSettle.restart()
-        QbzBridge.searchLoadMore(t)
+        QbzSearch.searchLoadMore(t)
     }
     // `morePending` clears only when the tab's array GROWS — and search_qt::
     // load_more never republishes on a failed fetch (main.rs just logs), nor
@@ -404,11 +404,11 @@ Rectangle {
                 anchors.rightMargin: 32
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: 16
-                FilterRadio { label: QbzSession.tr("Main Artist", QbzSession.trRev); selected: root.filterIndex === 1; onPicked: QbzBridge.searchFilterChanged(1) }
-                FilterRadio { label: QbzSession.tr("Performer", QbzSession.trRev); selected: root.filterIndex === 2; onPicked: QbzBridge.searchFilterChanged(2) }
-                FilterRadio { label: QbzSession.tr("Composer", QbzSession.trRev); selected: root.filterIndex === 3; onPicked: QbzBridge.searchFilterChanged(3) }
-                FilterRadio { label: QbzSession.tr("Label", QbzSession.trRev); selected: root.filterIndex === 4; onPicked: QbzBridge.searchFilterChanged(4) }
-                FilterRadio { label: QbzSession.tr("Release Name", QbzSession.trRev); selected: root.filterIndex === 5; onPicked: QbzBridge.searchFilterChanged(5) }
+                FilterRadio { label: QbzSession.tr("Main Artist", QbzSession.trRev); selected: root.filterIndex === 1; onPicked: QbzSearch.searchFilterChanged(1) }
+                FilterRadio { label: QbzSession.tr("Performer", QbzSession.trRev); selected: root.filterIndex === 2; onPicked: QbzSearch.searchFilterChanged(2) }
+                FilterRadio { label: QbzSession.tr("Composer", QbzSession.trRev); selected: root.filterIndex === 3; onPicked: QbzSearch.searchFilterChanged(3) }
+                FilterRadio { label: QbzSession.tr("Label", QbzSession.trRev); selected: root.filterIndex === 4; onPicked: QbzSearch.searchFilterChanged(4) }
+                FilterRadio { label: QbzSession.tr("Release Name", QbzSession.trRev); selected: root.filterIndex === 5; onPicked: QbzSearch.searchFilterChanged(5) }
                 Rectangle {
                     visible: root.filterIndex !== 0
                     width: 24
@@ -422,7 +422,7 @@ Rectangle {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: QbzBridge.searchFilterChanged(0)
+                        onClicked: QbzSearch.searchFilterChanged(0)
                     }
                 }
             }
@@ -460,7 +460,7 @@ Rectangle {
                                 anchors.fill: parent
                                 hoverEnabled: true
                                 cursorShape: Qt.PointingHandCursor
-                                onClicked: QbzBridge.searchTabChanged(modelData.t)
+                                onClicked: QbzSearch.searchTabChanged(modelData.t)
                             }
                         }
                         Rectangle {
@@ -583,7 +583,7 @@ Rectangle {
                                 showViewAll: true
                                 viewAllAccent: true
                                 showChevrons: false
-                                onViewAllClicked: QbzBridge.searchTabChanged(3)
+                                onViewAllClicked: QbzSearch.searchTabChanged(3)
                             }
                             ListView {
                                 width: parent.width
@@ -612,7 +612,7 @@ Rectangle {
                             showViewAll: true
                                 viewAllAccent: true
                                 showChevrons: false
-                            onViewAllClicked: QbzBridge.searchTabChanged(3)
+                            onViewAllClicked: QbzSearch.searchTabChanged(3)
                         }
                         ListView {
                             width: parent.width
@@ -641,7 +641,7 @@ Rectangle {
                             showViewAll: true
                                 viewAllAccent: true
                                 showChevrons: false
-                            onViewAllClicked: QbzBridge.searchTabChanged(1)
+                            onViewAllClicked: QbzSearch.searchTabChanged(1)
                         }
                         ListView {
                             width: parent.width
@@ -772,7 +772,7 @@ Rectangle {
                             showViewAll: root.tab === 0 && (root.doc.tracksTotal || 0) > root.previewCap
                             viewAllAccent: true
                             showChevrons: false
-                            onViewAllClicked: QbzBridge.searchTabChanged(2)
+                            onViewAllClicked: QbzSearch.searchTabChanged(2)
                         }
                         Repeater {
                             model: root.tab === 2 ? root.tracks : root.tracks.slice(0, root.previewCap)
@@ -911,7 +911,7 @@ Rectangle {
                             showViewAll: true
                                 viewAllAccent: true
                                 showChevrons: false
-                            onViewAllClicked: QbzBridge.searchTabChanged(4)
+                            onViewAllClicked: QbzSearch.searchTabChanged(4)
                         }
                         ListView {
                             width: parent.width

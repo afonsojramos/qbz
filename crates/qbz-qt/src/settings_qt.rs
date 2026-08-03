@@ -1806,7 +1806,7 @@ pub async fn settings_bool(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &str,
             // effect immediately — two switches, one setting, different
             // behaviour.
             crate::search_qt::set_enabled(value);
-            crate::ui(move |mut b| b.as_mut().set_intelligent_search(value));
+            crate::search_bridge::ui(move |mut b| b.as_mut().set_intelligent_search(value));
             Ok(Apply::None)
         }
         // Section-nav placement (Slint ShellState.nav-in-sidebar /

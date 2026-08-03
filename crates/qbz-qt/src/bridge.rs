@@ -46,20 +46,12 @@ pub mod qbz_bridge {
         // for the same reason (SettingsView.slint:121-200).
         #[qproperty(i32, settings_section)]
 
-        // --- Search (phase 15) ---------------------------------------------
-        // Cortinilla (live dropdown): open/loading flags, ONE JSON payload
-        // (search_qt.rs CortinillaData: query/top/sections with controller
-        // flat indices), keyboard selection + its content-space scroll y.
-        #[qproperty(bool, cortinilla_open)]
-        #[qproperty(bool, cortinilla_loading)]
-        #[qproperty(QString, cortinilla_json)]
-        #[qproperty(i32, selected_index)]
-        #[qproperty(f32, cortinilla_scroll_y)]
-        // Results page: ONE JSON document (search_qt.rs SearchPageDoc).
-        #[qproperty(QString, search_json)]
-        // The intelligent-search kill switch (ui_prefs pref state — the
-        // app-menu check; live-flippable, no restart).
-        #[qproperty(bool, intelligent_search)]
+        // --- Search: MOVED (cortinilla-parity contract C0) -----------------
+        // cortinilla_* + search_json + intelligent_search -> QbzSearch
+        // (search_bridge.rs). `selected_index` was RENAMED on the way out to
+        // `cortinilla_selected_index` (it is cortinilla-only state, and the
+        // bare name on an app-wide singleton is a collision hazard), and
+        // `cortinilla_scroll_y` went f32 -> f64 to match the immersive twin.
 
         // --- Playlist view (phase 17) --------------------------------------
         // ONE JSON document (playlist_qt.rs PlaylistDoc: header + track
@@ -124,41 +116,10 @@ pub mod qbz_bridge {
         #[qinvokable]
         fn integrations_action(self: Pin<&mut QbzBridge>, action: QString);
 
-        // --- Search (phase 15) ---------------------------------------------
-        /// Header field keystrokes (QML-debounced 220ms, >= 2 chars): drive
-        /// the cortinilla live query.
-        #[qinvokable]
-        fn search_live(self: Pin<&mut QbzBridge>, query: QString);
-        /// Enter with the cortinilla closed: full results page (All tab).
-        #[qinvokable]
-        fn search_submit(self: Pin<&mut QbzBridge>, query: QString);
-        /// Cortinilla: Esc / click-outside / idle-close / page change.
-        #[qinvokable]
-        fn cortinilla_dismiss(self: Pin<&mut QbzBridge>);
-        /// Arrow keys: delta -1 (up) / +1 (down) through the flat list.
-        #[qinvokable]
-        fn cortinilla_move_selection(self: Pin<&mut QbzBridge>, delta: i32);
-        /// Row click or Enter on the keyboard-selected row.
-        #[qinvokable]
-        fn cortinilla_row_clicked(self: Pin<&mut QbzBridge>, index: i32);
-        /// Section "View more" (kind: album | track | artist | playlist).
-        #[qinvokable]
-        fn cortinilla_view_more(self: Pin<&mut QbzBridge>, kind: QString);
-        /// The Enter affordance with no keyboard selection: Search > All.
-        #[qinvokable]
-        fn cortinilla_search_all(self: Pin<&mut QbzBridge>);
-        /// Results page: the five-tab strip.
-        #[qinvokable]
-        fn search_tab_changed(self: Pin<&mut QbzBridge>, tab: i32);
-        /// Per-type tab "Load more".
-        #[qinvokable]
-        fn search_load_more(self: Pin<&mut QbzBridge>, tab: i32);
-        /// searchType filter radios (0 = none, 1..5 = the chips).
-        #[qinvokable]
-        fn search_filter_changed(self: Pin<&mut QbzBridge>, index: i32);
-        /// App-menu intelligent-search toggle (the 2.0.0 opt-out module).
-        #[qinvokable]
-        fn toggle_intelligent_search(self: Pin<&mut QbzBridge>);
+        // --- Search: MOVED (cortinilla-parity contract C0) -----------------
+        // search_live / search_submit / cortinilla_* / search_tab_changed /
+        // search_load_more / search_filter_changed / toggle_intelligent_search
+        // -> QbzSearch (search_bridge.rs).
 
         // --- Playlist view (phase 17) --------------------------------------
         /// Sidebar playlist row / playlist card click: open the detail view.
@@ -268,13 +229,6 @@ use cxx_qt_lib::QString;
 pub struct QbzBridgeRust {
     settings_json: QString,
     settings_section: i32,
-    cortinilla_open: bool,
-    cortinilla_loading: bool,
-    cortinilla_json: QString,
-    selected_index: i32,
-    cortinilla_scroll_y: f32,
-    search_json: QString,
-    intelligent_search: bool,
     playlist_json: QString,
     genre_filter_json: QString,
     discover_config_json: QString,
@@ -286,13 +240,6 @@ impl Default for QbzBridgeRust {
             settings_json: QString::from("{}"),
             // 0 = Audio, the section Settings opens on.
             settings_section: 0,
-            cortinilla_open: false,
-            cortinilla_loading: false,
-            cortinilla_json: QString::from("{}"),
-            selected_index: -1,
-            cortinilla_scroll_y: 0.0,
-            search_json: QString::from("{}"),
-            intelligent_search: crate::search_qt::intelligent_search_pref(),
             playlist_json: QString::from("{}"),
             // Seeded from the PERSISTED selection (no network): a remembered
             // filter colors both genre buttons and narrows the Library feed
@@ -346,50 +293,6 @@ impl qbz_bridge::QbzBridge {
 
     pub fn refresh_devices(self: Pin<&mut Self>) {
         crate::refresh_devices();
-    }
-
-    pub fn search_live(self: Pin<&mut Self>, query: QString) {
-        crate::search_live(query.to_string());
-    }
-
-    pub fn search_submit(self: Pin<&mut Self>, query: QString) {
-        crate::search_submit(query.to_string());
-    }
-
-    pub fn cortinilla_dismiss(self: Pin<&mut Self>) {
-        crate::search_qt::dismiss();
-    }
-
-    pub fn cortinilla_move_selection(self: Pin<&mut Self>, delta: i32) {
-        crate::search_qt::move_selection(delta);
-    }
-
-    pub fn cortinilla_row_clicked(self: Pin<&mut Self>, index: i32) {
-        crate::search_qt::row_clicked(index);
-    }
-
-    pub fn cortinilla_view_more(self: Pin<&mut Self>, kind: QString) {
-        crate::cortinilla_view_more(kind.to_string());
-    }
-
-    pub fn cortinilla_search_all(self: Pin<&mut Self>) {
-        crate::cortinilla_search_all();
-    }
-
-    pub fn search_tab_changed(self: Pin<&mut Self>, tab: i32) {
-        crate::search_qt::tab_changed(tab);
-    }
-
-    pub fn search_load_more(self: Pin<&mut Self>, tab: i32) {
-        crate::search_load_more(tab);
-    }
-
-    pub fn search_filter_changed(self: Pin<&mut Self>, index: i32) {
-        crate::search_filter_changed(index);
-    }
-
-    pub fn toggle_intelligent_search(self: Pin<&mut Self>) {
-        crate::toggle_intelligent_search();
     }
 
     pub fn open_playlist(self: Pin<&mut Self>, playlist_id: QString) {

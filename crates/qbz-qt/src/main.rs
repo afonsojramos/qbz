@@ -36,6 +36,9 @@ mod suggestions_bridge;
 // Hotkeys layer (2026-08-03 hotkeys-port contract, block B1): the
 // QbzHotkeys singleton — the QML dispatcher's Rust brain (§1.1 pipeline).
 mod hotkeys_bridge;
+// Search domain (2026-08-03 cortinilla-parity contract, commit C0): the
+// QbzSearch singleton, extracted from the QbzBridge god-object.
+mod search_bridge;
 mod local_bridge;
 mod library_bridge;
 mod album_bridge;
@@ -1813,7 +1816,7 @@ pub(crate) fn search_filter_changed(index: i32) {
 pub(crate) fn toggle_intelligent_search() {
     let next = search_qt::toggle_intelligent_search();
     log::info!("[qbz-qt] intelligent_search -> {next}");
-    ui(move |mut b| b.as_mut().set_intelligent_search(next));
+    search_bridge::ui(move |mut b| b.as_mut().set_intelligent_search(next));
 }
 
 // ============================ Settings (phase 10) =========================

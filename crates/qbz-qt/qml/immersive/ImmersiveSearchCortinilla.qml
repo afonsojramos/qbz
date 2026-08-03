@@ -9,7 +9,7 @@
 // translucent panel, white-alpha text) instead of the app theme tokens;
 // sections ONLY (Artists / Albums / Playlists — NO top-result hero, NO
 // "View more", NO track rows); reads QbzImmersive.immSearch* (never
-// QbzBridge.cortinilla*); NO idle auto-close (Slint has no such timer) and
+// QbzSearch.cortinilla*); NO idle auto-close (Slint has no such timer) and
 // no view-change dismiss — the immersive host never navigates.
 //
 // Data: QbzImmersive.immSearchJson (search_qt.rs CortinillaData: query /

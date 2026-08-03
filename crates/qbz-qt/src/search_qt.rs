@@ -690,10 +690,10 @@ fn is_current_cort_version(v: u64) -> bool {
 
 fn set_cortinilla_open(open: bool) {
     CORT_OPEN.store(open, Ordering::SeqCst);
-    crate::ui(move |mut b| {
+    crate::search_bridge::ui(move |mut b| {
         b.as_mut().set_cortinilla_open(open);
         if !open {
-            b.as_mut().set_selected_index(-1);
+            b.as_mut().set_cortinilla_selected_index(-1);
         }
     });
 }
@@ -710,10 +710,10 @@ pub fn cortinilla_open() -> bool {
     CORT_OPEN.load(Ordering::SeqCst)
 }
 
-fn set_selected(index: i32, scroll_y: f32) {
+fn set_selected(index: i32, scroll_y: f64) {
     CURRENT_SEL.store(index, Ordering::SeqCst);
-    crate::ui(move |mut b| {
-        b.as_mut().set_selected_index(index);
+    crate::search_bridge::ui(move |mut b| {
+        b.as_mut().set_cortinilla_selected_index(index);
         b.as_mut().set_cortinilla_scroll_y(scroll_y);
     });
 }
@@ -739,7 +739,7 @@ pub async fn live(runtime: &Arc<AppRuntime<LoggingAdapter>>, query: &str) {
     let version = next_cort_version();
     // Query echo + loading flag ride the cortinillaLoading property and a
     // minimal payload (skeleton rows are pure QML).
-    crate::ui(move |mut b| {
+    crate::search_bridge::ui(move |mut b| {
         b.as_mut().set_cortinilla_loading(true);
     });
 
@@ -751,7 +751,7 @@ pub async fn live(runtime: &Arc<AppRuntime<LoggingAdapter>>, query: &str) {
         Ok(r) => r,
         Err(e) => {
             log::error!("[qbz-qt] cortinilla load failed: {e}");
-            crate::ui(move |mut b| {
+            crate::search_bridge::ui(move |mut b| {
                 if is_current_cort_version(version) {
                     b.as_mut().set_cortinilla_loading(false);
                 }
@@ -778,7 +778,7 @@ pub async fn live(runtime: &Arc<AppRuntime<LoggingAdapter>>, query: &str) {
     }
     let missing = attach_urls(urls);
     *LAST_CORT.lock().unwrap() = Some(data.clone());
-    crate::ui(move |mut b| {
+    crate::search_bridge::ui(move |mut b| {
         if is_current_cort_version(version) {
             let json = serde_json::to_string(&data).unwrap_or_else(|_| "{}".into());
             b.as_mut().set_cortinilla_json(QString::from(json.as_str()));
@@ -805,7 +805,7 @@ pub async fn live(runtime: &Arc<AppRuntime<LoggingAdapter>>, query: &str) {
                 let _ = attach_urls(urls);
                 let data = data.clone();
                 *LAST_CORT.lock().unwrap() = Some(data.clone());
-                crate::ui(move |mut b| {
+                crate::search_bridge::ui(move |mut b| {
                     let json = serde_json::to_string(&data).unwrap_or_else(|_| "{}".into());
                     b.as_mut().set_cortinilla_json(QString::from(json.as_str()));
                 });
@@ -859,8 +859,12 @@ pub fn move_selection(delta: i32) {
     set_selected(new_index, scroll_y);
 }
 
-fn flat_index_content_y(data: &CortinillaData, flat_index: i32) -> f32 {
-    let mut y = 6.0f32;
+fn flat_index_content_y(data: &CortinillaData, flat_index: i32) -> f64 {
+    // NOTE: the `6.0` base is WRONG — it mirrors a 6 px padding that is a
+    // Flickable VIEWPORT margin in the QML, not content space, so every row
+    // is reported 6 px low (contract row E4 / D-BUG-3). C0 is a pure move:
+    // the base is corrected to 0.0 in C4, together with its unit test.
+    let mut y = 6.0f64;
     if let Some(top) = &data.top {
         if top.flat_index == flat_index {
             return y + 4.0 + 22.0;
@@ -1818,7 +1822,7 @@ pub(crate) fn apply_favorite_change(kind: &str, id: &str, favorite: bool) {
 
 fn publish_page(doc: &SearchPageDoc) {
     let json = serde_json::to_string(doc).unwrap_or_else(|_| "{}".into());
-    crate::ui(move |mut b| {
+    crate::search_bridge::ui(move |mut b| {
         b.as_mut().set_search_json(QString::from(json.as_str()));
     });
 }
