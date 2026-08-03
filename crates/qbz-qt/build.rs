@@ -133,6 +133,12 @@ fn main() {
                 "qml/shell/SidebarNowPlayingDock.qml",
                 "qml/shell/AudioSettingsMenu.qml",
                 "qml/shell/ViewModeMenu.qml",
+                // Hotkeys (2026-08-03 hotkeys-port contract §4.4/§4.5, block
+                // B3): the read-only cheatsheet + the editable customize
+                // editor, both self-gated on QbzHotkeys and mounted in
+                // AppShell with the global overlays.
+                "qml/shell/KeyboardShortcutsModal.qml",
+                "qml/shell/CustomizeShortcutsModal.qml",
                 // Qobuz Connect (2026-08-01 contract §2): the ONE shared
                 // device flyout both bars mount + the diagnostics modal
                 // AppShell mounts last.

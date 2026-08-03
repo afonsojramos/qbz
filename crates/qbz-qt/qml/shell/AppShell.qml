@@ -694,6 +694,20 @@ Rectangle {
     PlaylistEditModal {
         anchors.fill: parent
     }
+    // The hotkeys pair (2026-08-03 hotkeys-port contract §4.4/§4.5, block
+    // B3): the read-only cheatsheet (`?` / the HeaderBar menu row) and the
+    // editable customize editor. Same declaration-order convention as their
+    // neighbours — Slint mounts them with the global modals too
+    // (AppShell.slint:908-917, after the other modals, BEFORE the immersive
+    // overlay and the toast — so both keep painting above, byte-parity).
+    // Both self-gate on QbzHotkeys.cheatsheetOpen / .customizeOpen, so while
+    // closed each is an invisible, non-interactive Item.
+    KeyboardShortcutsModal {
+        anchors.fill: parent
+    }
+    CustomizeShortcutsModal {
+        anchors.fill: parent
+    }
     QbzToast {
         anchors.fill: parent
     }
