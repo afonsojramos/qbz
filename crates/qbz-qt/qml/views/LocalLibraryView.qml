@@ -190,9 +190,32 @@ Rectangle {
         selectedArtist = pending
         QbzLocal.clearPendingArtist()
     }
+
+    // A TAB route from the cortinilla's local "View more" links. Same shape
+    // as consumePendingArtist above: the property change is the trigger, so
+    // it must be released after it is applied or the same link cannot fire
+    // twice in a row.
+    function consumePendingRoute() {
+        var raw = QbzLocal.localPendingRoute
+        if (raw === "") return
+        var route
+        try { route = JSON.parse(raw) } catch (e) { QbzLocal.clearPendingRoute(); return }
+        if (route.tab) activeTab = route.tab
+        // The query pre-filters the TRACKS tab only; the albums and artists
+        // tabs have no search box of their own.
+        if (route.tab === "tracks" && route.query) {
+            // Set the view's own search state too, not just the query, or the
+            // box would render empty while the list is filtered.
+            root.tracksSearch = route.query
+            QbzLocal.tracksSearch(route.query)
+        }
+        QbzLocal.clearPendingRoute()
+    }
+
     Connections {
         target: QbzLocal
         function onLocalPendingArtistChanged() { root.consumePendingArtist() }
+        function onLocalPendingRouteChanged() { root.consumePendingRoute() }
     }
 
     // Mount: load the default tab. Tab switches load on demand (each tab is
@@ -200,6 +223,7 @@ Rectangle {
     Component.onCompleted: {
         QbzLocal.loadTab(root.activeTab)
         consumePendingArtist()
+        consumePendingRoute()
     }
     onActiveTabChanged: {
         QbzLocal.loadTab(activeTab)

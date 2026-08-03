@@ -348,6 +348,30 @@ pub fn clear_pending_artist() {
     ui(|mut b| b.as_mut().set_local_pending_artist(QString::from("")));
 }
 
+/// Route the Local Library view to a TAB, optionally pre-filtered.
+///
+/// Used by the cortinilla's local "View more" links: those leave the search
+/// surface entirely and land the user on the matching Local Library tab,
+/// rather than on a Qobuz results page that has no local content at all.
+///
+/// The tab is QML-owned state (there is no `local_tab` property on this
+/// bridge), so this is a pending route the view consumes, exactly like
+/// `local_pending_artist` above. `query` is applied only by the tracks tab —
+/// the albums and artists tabs have no search box of their own.
+pub fn set_pending_route(tab: &str, query: &str) {
+    let json = serde_json::json!({ "tab": tab, "query": query }).to_string();
+    ui(move |mut b| {
+        b.as_mut()
+            .set_local_pending_route(QString::from(json.as_str()));
+    });
+}
+
+/// The view applied the pending route — release it so the same route can fire
+/// twice in a row.
+pub fn clear_pending_route() {
+    ui(|mut b| b.as_mut().set_local_pending_route(QString::from("")));
+}
+
 /// Mirror `AppearanceState.local-library-track-artwork` (ui_prefs.json,
 /// default OFF — per-row covers on a 16K-track list are the freeze surface)
 /// onto the bridge so the Local Library view can gate its track artwork.

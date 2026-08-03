@@ -99,6 +99,13 @@ pub mod qbz_local {
         /// Artist NAME route from the routed local album page into the Artists
         /// tab (local/Plex artists carry no catalog id). "" once consumed.
         #[qproperty(QString, local_pending_artist)]
+        /// A pending ROUTE into this view: which tab to show, and an optional
+        /// query to pre-filter it with. Set by the cortinilla's local "View
+        /// more" links, consumed by LocalLibraryView on mount and on change,
+        /// then cleared — the property CHANGE is the trigger, so it has to be
+        /// released or the same route cannot fire twice in a row. JSON:
+        /// {"tab":"albums|artists|tracks","query":"..."}.
+        #[qproperty(QString, local_pending_route)]
         // --- Ephemeral folder (an ad-hoc folder outside the index) ---------
         /// A session is open: the Folders tab shows the ephemeral pane.
         #[qproperty(bool, local_ephemeral_active)]
@@ -202,6 +209,9 @@ pub mod qbz_local {
         /// The view consumed the pending artist-name route.
         #[qinvokable]
         fn clear_pending_artist(self: Pin<&mut QbzLocal>);
+        /// The view applied the pending route — release it.
+        #[qinvokable]
+        fn clear_pending_route(self: Pin<&mut QbzLocal>);
         /// "Go to artist" on a local/Plex album — a NAME route, not an id.
         #[qinvokable]
         fn open_artist_by_name(self: Pin<&mut QbzLocal>, name: QString);
@@ -346,6 +356,7 @@ pub struct QbzLocalRust {
     local_album_json: QString,
     local_track_artwork: bool,
     local_pending_artist: QString,
+    local_pending_route: QString,
     local_ephemeral_active: bool,
     local_ephemeral_loading: bool,
     local_ephemeral_json: QString,
@@ -385,6 +396,7 @@ impl Default for QbzLocalRust {
             local_album_json: QString::from(""),
             local_track_artwork: false,
             local_pending_artist: QString::default(),
+            local_pending_route: QString::default(),
             local_ephemeral_active: false,
             local_ephemeral_loading: false,
             local_ephemeral_json: QString::from(""),
@@ -744,6 +756,10 @@ impl qbz_local::QbzLocal {
 
     pub fn clear_pending_artist(self: Pin<&mut Self>) {
         crate::local_album_actions::clear_pending_artist();
+    }
+
+    pub fn clear_pending_route(self: Pin<&mut Self>) {
+        crate::local_album_actions::clear_pending_route();
     }
 
     pub fn open_artist_by_name(self: Pin<&mut Self>, name: QString) {

@@ -1039,6 +1039,25 @@ fn play_local_row(row_id: &str) {
 /// "View more" on a section: full search page on the matching tab
 /// (album -> 1, track -> 2, artist -> 3, playlist -> 4).
 pub async fn view_more(runtime: &Arc<AppRuntime<LoggingAdapter>>, kind: &str) {
+    // The three LOCAL sections leave the search surface entirely: their
+    // "View more" opens the matching Local Library tab, because the Qobuz
+    // results page has no on-device content to show and landing there would
+    // read as the link having done nothing.
+    let local_tab = match kind {
+        "local-album" => Some("albums"),
+        "local-artist" => Some("artists"),
+        "local" => Some("tracks"),
+        _ => None,
+    };
+    if let Some(tab) = local_tab {
+        let q = crate::search_bridge::cortinilla_query();
+        set_cortinilla_open(false);
+        // The query pre-filters the TRACKS tab only — albums and artists have
+        // no search box of their own, so passing it there would be a lie.
+        crate::local_album_actions::set_pending_route(tab, if tab == "tracks" { &q } else { "" });
+        crate::navigate_to("local");
+        return;
+    }
     let tab = match kind {
         "album" => 1,
         "track" => 2,
