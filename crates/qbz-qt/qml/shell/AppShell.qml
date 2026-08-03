@@ -15,6 +15,7 @@
 import QtQuick
 import com.blitzfc.qbz
 import "../controls"
+import "../immersive"
 import "../theme"
 
 Rectangle {
@@ -612,6 +613,18 @@ Rectangle {
         anchors.fill: parent
     }
     QbzToast {
+        anchors.fill: parent
+    }
+
+    // Immersive mode root overlay (2026-08-02 immersive-port contract §5.1):
+    // plain Item, LAST-child class like its Slint twin (a Popup would grab
+    // the pointer and kill typing in the immersive search field — the
+    // cortinilla doctrine, Cortinilla.qml:1-5). Self-gates on
+    // QbzImmersive.open, so while closed it is an invisible, non-interactive
+    // Item. Sits AFTER QbzToast and BEFORE ArtPreviewOverlay/QbzTooltip so
+    // those two keep painting above it; covering the content pane's rounded
+    // corners is correct for a window-level overlay (:555-563 above).
+    ImmersiveView {
         anchors.fill: parent
     }
 

@@ -138,6 +138,12 @@ fn main() {
                 // AppShell mounts last.
                 "qml/shell/QconnectFlyout.qml",
                 "qml/shell/QconnectDevModal.qml",
+                // Immersive mode (2026-08-02 immersive-port contract §2) —
+                // its own module directory like views/local/ and
+                // views/playlistmanager/. B2 ships the root overlay + the
+                // header band; B3-B5 add the remaining 17 files here.
+                "qml/immersive/ImmersiveHeader.qml",
+                "qml/immersive/ImmersiveView.qml",
                 "qml/theme/QbzIcon.qml",
                 "qml/theme/QbzScrollBar.qml",
                 "qml/theme/QbzSpinner.qml",

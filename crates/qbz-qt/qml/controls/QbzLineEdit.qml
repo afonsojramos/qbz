@@ -96,6 +96,13 @@ Rectangle {
         input.focus = false
     }
 
+    // Immersive-port contract D16 (2026-08-02, additive one-liner): the ONE
+    // read-only seam into the inner TextInput's focus. The immersive header
+    // gates Shift+I and the seek arrows on this ("inert while any text input
+    // has focus", §5.4) — the input itself stays deliberately unexposed
+    // (:186). No behavior change for existing consumers.
+    readonly property bool fieldActive: input.activeFocus
+
     /// Focus the field from OUTSIDE the control — what a modal needs on open.
     ///
     /// The deferred Timer below already existed, but it was driven only by

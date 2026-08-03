@@ -1,8 +1,8 @@
 // Now-Playing-view mode menu (PlayerBar.slint layout-menu, phase 18) —
 // one QbzContextMenu shared by the full PlayerBar and the Small bar:
 // New / Classic / Small / Large (with the current mode checked), then the
-// inert window-mode rows (Miniplayer / Immersive / Kiosk — the Slint has
-// them; the POC has no such surfaces, POC-NOTE).
+// window-mode rows. Immersive is LIVE (2026-08-02 immersive-port §7, B2);
+// Miniplayer / Kiosk stay inert (kiosk goes live in the kiosk contract §8).
 
 import QtQuick
 import QtQuick.Controls
@@ -81,8 +81,8 @@ QbzContextMenu {
         }
     }
 
-    // Divider + the window-mode rows (Miniplayer / Immersive / Kiosk —
-    // present in the Slint menu; inert in the POC (no such surfaces).
+    // Divider + the window-mode rows (Miniplayer / Immersive / Kiosk).
+    // Immersive is live (below); the other two stay inert.
     Item {
         width: parent ? parent.width : 0
         height: 7
@@ -95,18 +95,24 @@ QbzContextMenu {
         }
     }
     Repeater {
+        // Window-mode rows. `live` flips per-row inside the shared delegate
+        // (2026-08-02 immersive-port §7): only the Immersive row is wired in
+        // B2 — it loses the 0.45 dim and gains the openFromMenu click.
+        // Miniplayer + Kiosk stay inert (kiosk goes live in the
+        // 2026-08-02-kiosk-port contract §8 — do not touch it).
         model: [
-            { "label": QbzSession.tr("Miniplayer", QbzSession.trRev), "icon": "picture-in-picture-2" },
-            { "label": QbzSession.tr("Immersive", QbzSession.trRev), "icon": "maximize-2" },
-            { "label": QbzSession.tr("Kiosk mode", QbzSession.trRev), "icon": "hard-drive" },
+            { "label": QbzSession.tr("Miniplayer", QbzSession.trRev), "icon": "picture-in-picture-2", "live": false },
+            { "label": QbzSession.tr("Immersive", QbzSession.trRev), "icon": "maximize-2", "live": true },
+            { "label": QbzSession.tr("Kiosk mode", QbzSession.trRev), "icon": "hard-drive", "live": false },
         ]
         delegate: Rectangle {
             required property var modelData
             width: parent ? parent.width : 0
             height: 33
             radius: 5
-            opacity: 0.45
-            color: "transparent"
+            opacity: modelData.live ? 1.0 : 0.45
+            color: (modelData.live && modeArea.containsMouse)
+                   ? theme.surfaceHover : "transparent"
             Row {
                 anchors.fill: parent
                 anchors.leftMargin: 8
@@ -120,7 +126,17 @@ QbzContextMenu {
                     verticalAlignment: Text.AlignVCenter
                 }
             }
-            // Inert (POC-NOTE): no miniplayer/immersive/kiosk surfaces.
+            MouseArea {
+                id: modeArea
+                anchors.fill: parent
+                enabled: modelData.live
+                hoverEnabled: true
+                cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                onClicked: {
+                    root.close()
+                    QbzImmersive.openFromMenu()
+                }
+            }
         }
     }
 }
