@@ -13,6 +13,7 @@
 
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Effects
 import com.blitzfc.qbz
 import "../theme"
 
@@ -45,10 +46,24 @@ Item {
 
     // The centered header search box width (HeaderBar's responsive rule) —
     // the click-through gaps below leave it free.
-    readonly property int searchBoxWidth: root.width < 960 ? 179 : 256
+    // Must track HeaderBar's own rule EXACTLY (HeaderBar.qml:642), including
+    // the 60px the field gives up when the section nav sits in the header —
+    // the scrims below leave this span free, and a span 60px too wide leaves
+    // a 30px dead strip on each side of the field that neither dismisses the
+    // panel nor reaches the input.
+    readonly property int searchBoxWidth:
+        (root.width < 960 ? 179 : 256) - (QbzShell.navInSidebar ? 0 : 60)
     readonly property int panelWidth: 320
-    // Cap so the panel NEVER covers the now-playing bar (Cortinilla.slint).
-    readonly property int scrollCap: root.height - 42 - 6 - 42 - 16 - 12
+    // Cap so the panel NEVER covers the now-playing bar
+    // (Cortinilla.slint:263-275). The bar term is NPB-MODE AWARE: mode 2 is
+    // the small bar, every other mode is the large one. A hardcoded 42 here
+    // let the panel run up to 70px into a 112px bar — latent while the
+    // Qobuz-only panel held <= 14 rows, reachable the moment the local
+    // sections make it scroll.
+    readonly property int npbHeight:
+        QbzShell.npbMode === 2 ? theme.npbSmallHeight : theme.npbLargeHeight
+    readonly property int scrollCap:
+        root.height - theme.headerHeight - 6 - root.npbHeight - 16 - 12
 
     // --- Idle auto-close (4.5s without hover/activity, Cortinilla.slint) --
     property bool panelHovered: false
@@ -90,9 +105,9 @@ Item {
     MouseArea {
         visible: root.visible
         x: 0
-        y: 42
+        y: theme.headerHeight
         width: root.width
-        height: root.height - 42
+        height: root.height - theme.headerHeight
         onClicked: QbzSearch.cortinillaDismiss()
     }
     // 2) header strip LEFT of the search box.
@@ -101,7 +116,7 @@ Item {
         x: 0
         y: 0
         width: (root.width - root.searchBoxWidth) / 2
-        height: 42
+        height: theme.headerHeight
         onClicked: QbzSearch.cortinillaDismiss()
     }
     // 3) header strip RIGHT of the search box.
@@ -110,15 +125,42 @@ Item {
         x: (root.width + root.searchBoxWidth) / 2
         y: 0
         width: root.width - x
-        height: 42
+        height: theme.headerHeight
         onClicked: QbzSearch.cortinillaDismiss()
     }
 
     // --- The panel ----------------------------------------------------------
+    // Drop shadow (Cortinilla.slint:314-316: blur 24, offset-y 6,
+    // Theme.card-shadow). Same idiom as the immersive twin
+    // (ImmersiveSearchCortinilla.qml): a mirror Rectangle behind the panel,
+    // blurred by MultiEffect, skipped when there are no shaders. This port
+    // runs on the GPU (OpenGL RHI, measured), but the offscreen smoke forces
+    // software, so the guard is real rather than defensive.
+    //
+    // NOTE: NavFlyout.qml still has no shadow and says so; adding one there
+    // is its own parity pass, not this contract's. The two dropdowns will
+    // look slightly different until that lands.
+    readonly property bool noShaders: GraphicsInfo.api === GraphicsInfo.Software
+        || GraphicsInfo.api === GraphicsInfo.Null
+    Rectangle {
+        visible: root.visible && !root.noShaders
+        x: panel.x
+        y: panel.y + 6
+        width: panel.width
+        height: panel.height
+        radius: panel.radius
+        color: theme.cardShadow
+        layer.enabled: true
+        layer.effect: MultiEffect {
+            blurEnabled: true
+            blurMax: 48
+            blur: 0.5 // 24/48
+        }
+    }
     Rectangle {
         id: panel
         x: (root.width - root.panelWidth) / 2
-        y: 42 + 6
+        y: theme.headerHeight + 6
         width: root.panelWidth
         height: Math.min(bodyColumn.height + 12, root.scrollCap + 12)
         radius: theme.radiusSm
@@ -299,6 +341,9 @@ Item {
 
         QbzScrollBar {
             target: bodyFlick
+            // 10px gutter, not the primitive's default 14 — the reference
+            // overrides it the same way (Cortinilla.slint:471).
+            width: 10
             anchors.right: parent.right
             anchors.top: parent.top
             anchors.bottom: parent.bottom
@@ -308,7 +353,11 @@ Item {
     // --- One result row (CortinillaResultRow) ------------------------------
     component CortRow: Rectangle {
         property var row: ({})
-        width: parent ? parent.width : 0
+        // A QML Column's padding does NOT size its children, so `parent.width`
+        // made every row 12px wider than its block. clip hid the overflow, but
+        // the highlight ran flush to the right edge while staying inset 6px on
+        // the left — asymmetric. Subtract the padding explicitly.
+        width: parent ? parent.width - (parent.leftPadding || 0) - (parent.rightPadding || 0) : 0
         height: 56
         radius: theme.radiusSm
         readonly property bool active: QbzSearch.cortinillaSelectedIndex === (row.flatIndex ?? -2)

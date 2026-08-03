@@ -745,7 +745,7 @@ Rectangle {
             anchors.right: parent.right
             anchors.rightMargin: 10
             height: parent.height
-            text: "⏎ " + QbzSession.tr("Enter", QbzSession.trRev)
+            text: "↵  " + QbzSession.tr("Enter", QbzSession.trRev)
             color: theme.textMuted
             font.pixelSize: 12
             verticalAlignment: Text.AlignVCenter

@@ -494,8 +494,12 @@ Rectangle {
         ambientOn: root.ambientOn
     }
 
-    // Search cortinilla (phase 15): the live-search dropdown overlay, LAST
-    // child so it renders above every surface (Cortinilla.slint's mount).
+    // Search cortinilla (phase 15): the live-search dropdown overlay.
+    // Declared here, ABOVE the shell but BELOW the four siblings that follow
+    // (toast host, immersive, art preview, tooltip) — declaration order is
+    // z-order. It is NOT the last child, and does not need to be: immersive
+    // dismisses the cortinilla on open, and the other three are transient
+    // layers that are meant to sit above it.
     Cortinilla {
         anchors.fill: parent
         headerBar: header

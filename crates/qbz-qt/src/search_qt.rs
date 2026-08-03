@@ -878,11 +878,14 @@ pub fn move_selection(delta: i32) {
 }
 
 fn flat_index_content_y(data: &CortinillaData, flat_index: i32) -> f64 {
-    // NOTE: the `6.0` base is WRONG — it mirrors a 6 px padding that is a
-    // Flickable VIEWPORT margin in the QML, not content space, so every row
-    // is reported 6 px low (contract row E4 / D-BUG-3). C0 is a pure move:
-    // the base is corrected to 0.0 in C4, together with its unit test.
-    let mut y = 6.0f64;
+    // Base 0.0, NOT 6.0. The panel's 6px top padding is a Flickable VIEWPORT
+    // margin (`anchors.topMargin`), which shrinks the visible window rather
+    // than shifting the content, so content-space y starts at zero. With a
+    // 6.0 base every row was reported 6px low: the scroll-into-view handler
+    // over-scrolled by 6px going down and clipped the row's top going up.
+    // The immersive twin, written later against the same layout, already
+    // starts at 0.0 — this brings the desktop arm in line.
+    let mut y = 0.0f64;
     if let Some(top) = &data.top {
         if top.flat_index == flat_index {
             return y + 4.0 + 22.0;
@@ -2401,6 +2404,77 @@ mod tests {
         assert_eq!(imm_next_selection(&order, 1, 1), 2);
         assert_eq!(imm_next_selection(&order, 4, 1), 4, "Down on the last row clamps (no wrap)");
         assert_eq!(imm_next_selection(&order, 3, -1), 2);
+    }
+
+    #[test]
+    fn desktop_scroll_arithmetic_starts_at_zero_and_matches_the_layout() {
+        // The DESKTOP layout (Cortinilla.qml): base 0 — the panel's 6px top
+        // padding is a Flickable viewport margin, not content space. Then
+        // top-result block = padTop 4 + label 22 + row 56 = 82, and per
+        // section padTop 4 + header 24 = 28, 56 per row.
+        //
+        // This test exists because the base was 6.0 and nothing caught it:
+        // the immersive twin had this test, the desktop arm did not.
+        let mut data = CortinillaData {
+            query: "q".into(),
+            top: Some(imm_row("album", "top", "qobuz")),
+            sections: vec![
+                CortSection {
+                    title: "Albums".into(),
+                    kind: "album".into(),
+                    has_more: false,
+                    rows: vec![imm_row("album", "1", "qobuz"), imm_row("album", "2", "qobuz")],
+                },
+                CortSection {
+                    title: "Artists".into(),
+                    kind: "artist".into(),
+                    has_more: false,
+                    rows: vec![imm_row("artist", "3", "qobuz")],
+                },
+            ],
+        };
+        assign_flat_indices(&mut data);
+        assert_eq!(
+            flat_index_content_y(&data, 0),
+            26.0,
+            "the top result sits at 4 + 22 — NOT 32, which is what the 6px \
+             viewport margin used to add"
+        );
+        assert_eq!(
+            flat_index_content_y(&data, 1),
+            110.0,
+            "first section row: 82 (top block) + 28 (section head)"
+        );
+        assert_eq!(flat_index_content_y(&data, 2), 166.0, "110 + one 56px row");
+        assert_eq!(
+            flat_index_content_y(&data, 3),
+            250.0,
+            "82 + 28 + 2*56 + the second section's 28"
+        );
+        assert_eq!(
+            flat_index_content_y(&data, 99),
+            0.0,
+            "an unknown index falls to the top"
+        );
+    }
+
+    #[test]
+    fn desktop_scroll_arithmetic_without_a_top_result() {
+        // No top-result block: the first section row starts at 28, so the
+        // 6px base would have been visible here as 34.
+        let mut data = CortinillaData {
+            query: "q".into(),
+            top: None,
+            sections: vec![CortSection {
+                title: "Albums".into(),
+                kind: "album".into(),
+                has_more: false,
+                rows: vec![imm_row("album", "1", "qobuz")],
+            }],
+        };
+        assign_flat_indices(&mut data);
+        // Flat indices still START AT 1 with no top result (C7 convention).
+        assert_eq!(flat_index_content_y(&data, 1), 28.0);
     }
 
     #[test]
