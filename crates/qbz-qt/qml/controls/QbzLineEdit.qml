@@ -97,10 +97,12 @@ Rectangle {
     }
 
     // Immersive-port contract D16 (2026-08-02, additive one-liner): the ONE
-    // read-only seam into the inner TextInput's focus. The immersive header
-    // gates Shift+I and the seek arrows on this ("inert while any text input
-    // has focus", §5.4) — the input itself stays deliberately unexposed
-    // (:186). No behavior change for existing consumers.
+    // read-only seam into the inner TextInput's focus. The immersive root
+    // reads it as `textInputActive` (ImmersiveView.qml); the Shift+I /
+    // seek-arrow gates it used to feed are GONE, replaced by the hotkeys
+    // dispatcher's central text-input gate (2026-08-03 hotkeys-port §1.4.4)
+    // — the input itself stays deliberately unexposed (:186). No behavior
+    // change for existing consumers.
     readonly property bool fieldActive: input.activeFocus
 
     /// Focus the field from OUTSIDE the control — what a modal needs on open.

@@ -430,17 +430,12 @@ ApplicationWindow {
 
 
 
-    // Immersive toggle (2026-08-02 immersive-port contract §5.4 exit path 4 /
-    // §7): lives on the ApplicationWindow so it works open AND closed. The
-    // text-input gate (port of main.rs:1371-1375) makes it INERT while any
-    // text input has focus — with the immersive search field focused,
-    // Shift+I types "I". The FIRST `Shortcut {}` in the tree (BlacklistManagerView.qml:29
-    // confirms none existed), so no conflicts.
-    Shortcut {
-        sequence: "Shift+I"
-        enabled: !(window.activeFocusItem instanceof TextInput)
-        onActivated: QbzImmersive.toggle()
-    }
+    // The immersive toggle Shortcut is GONE (2026-08-03 hotkeys-port §1.3):
+    // Shift+I now fires as the REBINDABLE ui.focusMode action through the
+    // AppShell dispatcher (QbzHotkeys.keyPressed), whose central text-input
+    // gate replaces the `enabled:` expression this block carried.
+    // NavGestureLayer.qml owns mouse Back/Forward; no other Shortcut item
+    // exists in the tree (trap 11).
 
     Loader {
         id: screenLoader

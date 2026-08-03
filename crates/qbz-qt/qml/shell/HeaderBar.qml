@@ -19,8 +19,8 @@
 // replica — the cortinilla/live-search is out of scope; POC-NOTE).
 // Right: the tri-state offline status badge with its flyout (recovery
 // "Sign in" wired to QbzSession.recoveryLogin) and the app menu (user block
-// + Documentation + Log Out + Close. Still missing vs Slint, each needing a
-// surface the port does not have yet: Open Music Link, Keyboard Shortcuts,
+// + Keyboard Shortcuts + Documentation + Log Out + Close. Still missing vs
+// Slint, each needing a surface the port does not have yet: Open Music Link,
 // Report an Issue, What's New, About QBZ.
 //
 // POC-NOTE: the custom window-chrome parts (drag surface, drawn
@@ -616,6 +616,18 @@ Rectangle {
         QbzBridge.cortinillaDismiss()
     }
 
+    // nav.search / Ctrl+f (2026-08-03 hotkeys-port contract §4.3, divergence
+    // K6): QbzHotkeys emits focusSearchRequested, the AppShell Connections
+    // calls this. EXCEEDS Slint, whose focus_search only flipped
+    // cortinilla_open — with an empty query the only visible effect was the
+    // "↵ Enter" hint (the panel is gated on ≥2 chars; the "the field grabs
+    // focus on open" comment at keybindings.rs:533-536 is stale). Here the
+    // field lands focused and ready to type, which is what Ctrl+f means in
+    // every other app.
+    function focusSearch() {
+        searchInput.forceActiveFocus()
+    }
+
     Rectangle {
         id: searchBox
         x: (root.width - width) / 2
@@ -1097,6 +1109,17 @@ Rectangle {
                 onClicked: {
                     appMenu.close()
                     QbzShell.navigateTo("settings")
+                }
+            }
+            // Slint order (HeaderBar.slint:1175-1212): Settings, Open Music
+            // Link, Keyboard Shortcuts, Documentation… The Open Music Link
+            // row stays ABSENT (the LinkResolver is not ported, K3).
+            AppMenuItem {
+                name: "keyboard"
+                label: QbzSession.tr("Keyboard Shortcuts", QbzSession.trRev)
+                onClicked: {
+                    appMenu.close()
+                    QbzHotkeys.openCheatsheet()
                 }
             }
             AppMenuItem {

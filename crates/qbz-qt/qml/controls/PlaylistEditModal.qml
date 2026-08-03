@@ -120,6 +120,23 @@ Item {
         }
     }
 
+    // §1.4.3 (2026-08-03 hotkeys-port contract): the FocusScope grabs focus
+    // on open and Qt strands it on the now-invisible scope at close, which
+    // kills the AppShell key dispatcher until the next click. Restore the
+    // shell root — the dispatcher's fallback focus item — on the close edge.
+    onEditOpenChanged: if (!root.editOpen) root._restoreShellFocus()
+
+    function _restoreShellFocus() {
+        var p = root
+        while (p.parent) {
+            if (p.parent.isQbzShellRoot === true) {
+                p.parent.forceActiveFocus()
+                return
+            }
+            p = p.parent
+        }
+    }
+
     function submit() {
         if (root.canSave)
             QbzPlaylistEdit.save(root.draftName, root.draftDescription,

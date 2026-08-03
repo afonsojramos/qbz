@@ -602,6 +602,28 @@ Rectangle {
         root.albumsSelected = ({})
     }
 
+    // --- Ctrl+A / Escape hotkeys interface (2026-08-03 hotkeys-port §4.6) --
+    // The duck-typed seam the AppShell router calls on QbzShell's
+    // selectAllRequested / exitMultiSelectRequested. Only the tracks and
+    // albums tabs have multi-select here; on any other tab selectAll() is a
+    // deliberate no-op (the capability reporter still counts this view, so
+    // Ctrl+A consumes without visible effect on the All/Artists/Playlists
+    // tabs — those have no selection model to fill).
+    readonly property bool multiSelectOn: root.tracksMultiSelect || root.albumsMultiSelect
+    function selectAll() {
+        if (root.activeTab === "tracks") {
+            if (!root.tracksMultiSelect) root.setTracksMultiSelect(true)
+            root.tracksBulkAction("select-all")
+        } else if (root.activeTab === "albums") {
+            if (!root.albumsMultiSelect) root.setAlbumsMultiSelect(true)
+            root.albumsBulkAction("select-all")
+        }
+    }
+    function exitMultiSelectMode() {
+        if (root.tracksMultiSelect) root.setTracksMultiSelect(false)
+        if (root.albumsMultiSelect) root.setAlbumsMultiSelect(false)
+    }
+
     // --------------------- windowed artwork -----------------------------
     // Report the mounted window as artKeys; prune far-away covers.
     function reportWindow(visibleArray, first, last) {

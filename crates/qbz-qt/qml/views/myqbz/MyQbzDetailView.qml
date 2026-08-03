@@ -197,6 +197,19 @@ Rectangle {
     readonly property string viewMode: doc.viewMode || "list"
     readonly property bool selectMode: doc.selectMode === true
     readonly property int selectedCount: doc.selectedCount || 0
+
+    // --- Escape hotkeys interface (2026-08-03 hotkeys-port §4.6), EXIT-ONLY.
+    // The selection lives in RUST (myqbz_detail_qt.rs positions) and its bulk
+    // bar carries no select-all arm, so this view deliberately exposes NO
+    // selectAll() — the AppShell capability reporter reads that as
+    // "Ctrl+A does not apply here". Escape-exit is available:
+    // detailToggleSelectMode off ALSO clears the selection
+    // (myqbz_detail_qt.rs:1902-1917).
+    readonly property bool multiSelectOn: root.selectMode
+    function exitMultiSelectMode() {
+        if (root.selectMode) QbzMyQbz.detailToggleSelectMode()
+    }
+
     readonly property int filterCount: doc.filterCount || 0
     readonly property bool hasAnyFilter: doc.hasAnyFilter === true
 

@@ -20,9 +20,10 @@
 //!        (`activeFocusItem instanceof TextInput || TextEdit`, §1.4.4) and
 //!        passed in; zero per-field probes (scoping's stated goal);
 //!   (C2) Ctrl+A select-all — separate non-rebindable branch (§4.6, trap 8);
-//!        the Qt select-all seam is B2, so the stub reports "no surface
-//!        accepted" and the arm falls through to (D), exactly the Slint
-//!        `select_all_active_surface` false case (main.rs:1381-1386);
+//!        consumes ONLY when a multi-select-capable view is mounted (the
+//!        Slint `select_all_active_surface` false case falls through to (D),
+//!        main.rs:1381-1386); the QbzShell.selectAllActive() seam routes the
+//!        select-all through QML (the selection state is in-view QML JS);
 //!   (D)  the binding lookup → dispatch to the §2 targets.
 //!
 //! The synchronous-return invokable is the app's core idiom
@@ -125,6 +126,16 @@ pub mod qbz_hotkeys {
         /// language bump (§3.4/F12) and after every store mutation.
         #[qinvokable]
         fn refresh(self: Pin<&mut QbzHotkeys>);
+
+        /// nav.search (Ctrl+f) — divergence K6 / contract §4.3: the AppShell
+        /// Connections listens and calls HeaderBar.focusSearch()
+        /// (`searchInput.forceActiveFocus()`, HeaderBar.qml:644). EXCEEDS
+        /// Slint, whose `focus_search` only flipped `cortinilla_open` — with
+        /// an empty query the only visible effect was the Enter hint and the
+        /// "the field grabs focus on open" comment at keybindings.rs:533-536
+        /// is stale.
+        #[qsignal]
+        fn focus_search_requested(self: Pin<&mut QbzHotkeys>);
     }
 
     impl cxx_qt::Threading for QbzHotkeys {}
@@ -191,25 +202,20 @@ fn clear_capture(mut this: Pin<&mut QbzHotkeys>) {
     this.as_mut().set_conflict_label(QString::from(""));
 }
 
-/// nav.search (Ctrl+f) — B2 SEAM (divergence K6, contract §4.3): Slint's
-/// `focus_search` only flips `cortinilla_open` (keybindings.rs:533-536 — the
-/// "the field grabs focus on open" comment is stale), with no visible effect
-/// on an empty query. The Qt decision EXCEEDS Slint: a QML `focusSearch()`
-/// hook on HeaderBar (`searchInput.forceActiveFocus()`), which lands with the
-/// B2 dispatcher. B1 named stub.
-fn focus_search() {
-    log::debug!("[qbz-qt] hotkeys: nav.search — the HeaderBar focusSearch() hook lands in B2 (K6)");
-}
-
-/// (C2) Ctrl+A select-all — B2 SEAM (contract §4.6, trap 8). Round-1 finding:
-/// NO select-all or multi-select-exit invokable exists in Qt (selection state
-/// is in-view QML JS; `library_bulk.rs:8`); B2 adds `QbzShell.selectAllActive()`
-/// + the duck-typed view interface. The stub reports "no surface accepted",
+/// (C2) Ctrl+A select-all — the §4.6 seam (contract, trap 8). Round-1
+/// finding: NO select-all invokable existed in Qt (selection state is
+/// in-view QML JS; `library_bulk.rs:8`), so the bridge bounces to QML:
+/// `QbzShell.selectAllActive()` emits a signal the AppShell router forwards
+/// to the mounted view's duck-typed `selectAll()`. Consumes ONLY when a
+/// capable view is mounted — the QML-reported `multiSelectCapable` mirror —
 /// so the arm falls through to (D) exactly like the Slint
 /// `select_all_active_surface` false case.
 fn select_all_active() -> bool {
-    log::debug!("[qbz-qt] hotkeys: Ctrl+A — the QbzShell.selectAllActive() seam lands in B2 (§4.6)");
-    false
+    if !crate::shell_bridge::multi_select_capable() {
+        return false;
+    }
+    crate::shell_bridge::ui(|s| s.select_all_active());
+    true
 }
 
 /// §1.3 seek math, verbatim from keybindings.rs:572-581:
@@ -328,7 +334,7 @@ impl qbz_hotkeys::QbzHotkeys {
             "playback.prev" => crate::transport_previous(),
             "nav.back" => crate::nav_qt::back(),
             "nav.forward" => crate::nav_qt::forward(),
-            "nav.search" => focus_search(), // B2 QML seam (K6) — named stub
+            "nav.search" => self.as_mut().focus_search_requested(), // K6 QML seam
             "nav.settings" => crate::navigate_to("settings"),
             "ui.sidebar" => crate::shell_bridge::ui(|s| s.cycle_sidebar()),
             "ui.focusMode" => crate::immersive_bridge::toggle(),
@@ -371,9 +377,10 @@ impl qbz_hotkeys::QbzHotkeys {
             cheatsheet_open: *self.cheatsheet_open(),
             cortinilla_open: crate::search_qt::cortinilla_open(),
             immersive_open: crate::immersive_bridge::is_open(),
-            // §4.6 seam: no Qt multi-select exit invokable exists yet (B2
-            // adds QbzShell.exitMultiSelect + the view reporters).
-            multi_select_active: false,
+            // §4.6 seam: the QML-reported mirror (a view's multiSelectOn
+            // flag is up). The exit rides QbzShell.exitMultiSelect(), which
+            // bounces to the mounted view's exitMultiSelectMode().
+            multi_select_active: crate::shell_bridge::multi_select_active(),
             queue_open: crate::shell_bridge::queue_open(),
         };
         match crate::hotkeys_qt::escape_target(&state) {
@@ -382,7 +389,7 @@ impl qbz_hotkeys::QbzHotkeys {
             EscapeTarget::Cortinilla => crate::search_qt::dismiss(),
             EscapeTarget::Immersive => crate::immersive_bridge::close(),
             EscapeTarget::MultiSelect => {
-                log::debug!("[qbz-qt] hotkeys: multi-select exit ABSENT — the §4.6 seam lands in B2");
+                crate::shell_bridge::ui(|s| s.exit_multi_select());
             }
             EscapeTarget::Queue => crate::shell_bridge::ui(|s| s.toggle_queue()),
             EscapeTarget::LinkResolver | EscapeTarget::None => {}

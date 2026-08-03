@@ -74,6 +74,23 @@ Item {
     }
     function close() {
         root._open = false
+        root._restoreShellFocus()
+    }
+    // §1.4.3 (2026-08-03 hotkeys-port contract): keyScope GRABS focus on open
+    // and Qt strands activeFocus on the now-invisible item at close, which
+    // kills the AppShell key dispatcher until the next click. Restore the
+    // shell root — the dispatcher's fallback focus item — on every close
+    // path. Duck-walk, because this modal mounts under several parents (the
+    // Blacklist manager, FolderModals, MyQBZ delete).
+    function _restoreShellFocus() {
+        var p = root
+        while (p.parent) {
+            if (p.parent.isQbzShellRoot === true) {
+                p.parent.forceActiveFocus()
+                return
+            }
+            p = p.parent
+        }
     }
     function _cancel() {
         root.close()

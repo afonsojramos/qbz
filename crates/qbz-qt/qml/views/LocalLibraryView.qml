@@ -720,6 +720,28 @@ Rectangle {
         QbzLocal.bulkAction("track", JSON.stringify(Object.keys(tracksSelected)), action)
     }
 
+    // --- Ctrl+A / Escape hotkeys interface (2026-08-03 hotkeys-port §4.6) --
+    // The duck-typed seam the AppShell router calls. Only the albums and
+    // tracks tabs have multi-select (the folder tree rail's select mode is
+    // Rust-side with no select-all arm — not covered); on the artists /
+    // folders tabs selectAll() is a deliberate no-op.
+    readonly property bool multiSelectOn: root.albumsMultiSelect || root.tracksMultiSelect
+    function selectAll() {
+        if (root.activeTab === "albums") {
+            if (!root.albumsMultiSelect) root.albumsMultiSelect = true
+            root.albumsBulkAction("select-all")
+        } else if (root.activeTab === "tracks") {
+            if (!root.tracksMultiSelect) root.tracksMultiSelect = true
+            root.tracksBulkAction("select-all")
+        }
+    }
+    function exitMultiSelectMode() {
+        // Same "leaving drops the selection" contract the toggle buttons
+        // carry (toggleAlbumsMultiSelect / toggleTracksMultiSelect).
+        if (root.albumsMultiSelect) { root.albumsMultiSelect = false; root.albumsSelected = ({}) }
+        if (root.tracksMultiSelect) { root.tracksMultiSelect = false; root.tracksSelected = ({}) }
+    }
+
     function toggleTreeSelectMode() {
         treeSelectMode = !treeSelectMode
         QbzLocal.treeSetSelectMode(treeSelectMode)

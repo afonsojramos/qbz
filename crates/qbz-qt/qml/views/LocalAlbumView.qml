@@ -131,6 +131,19 @@ Rectangle {
         QbzLocal.bulkAction("track", JSON.stringify(selectedIdsInOrder()), action)
     }
 
+    // --- Ctrl+A / Escape hotkeys interface (2026-08-03 hotkeys-port §4.6) --
+    // The duck-typed seam the AppShell router calls.
+    readonly property bool multiSelectOn: root.multiSelect
+    function selectAll() {
+        if (!root.multiSelect) root.multiSelect = true
+        root.bulkAction("select-all")
+    }
+    function exitMultiSelectMode() {
+        // Same "leaving drops the selection" contract the toolbar toggle
+        // carries (:371-373).
+        if (root.multiSelect) { root.multiSelect = false; root.selected = ({}) }
+    }
+
     // Disc divider before the first row of each disc on a multi-disc album
     // (0 = flat list, as the Slint's disc-header-number).
     function discHeader(i) {

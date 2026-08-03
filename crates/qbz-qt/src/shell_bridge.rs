@@ -191,6 +191,20 @@ pub mod qbz_shell {
         #[qproperty(f32, art_preview_x)]
         #[qproperty(f32, art_preview_y)]
 
+        // --- Multi-select seam (2026-08-03 hotkeys-port contract §4.6) ----
+        // QML-REPORTED — selection state is in-view QML JS
+        // (`library_bulk.rs:8`: "select-all / clear never reach Rust"), so the
+        // AppShell reporter Bindings write these: a view implementing the
+        // duck-typed `selectAll()` is mounted (capable) / a view's
+        // `multiSelectOn` flag is up (active). CUSTOM WRITE (the
+        // `QbzImmersive.open` funnel precedent) so the Rust-side AtomicBool
+        // mirrors stay exact for the cross-singleton hotkeys reads — the
+        // Ctrl+A consumption predicate and the §1.2 Escape stack arm 6 run
+        // on the QbzHotkeys singleton and cannot reach this QObject's
+        // properties.
+        #[qproperty(bool, multi_select_active, READ, WRITE = set_multi_select_active, NOTIFY)]
+        #[qproperty(bool, multi_select_capable, READ, WRITE = set_multi_select_capable, NOTIFY)]
+
         type QbzShell = super::QbzShellRust;
 
         /// Registers this object's Qt-thread hop (Main.qml boots EVERY
@@ -322,6 +336,31 @@ pub mod qbz_shell {
         /// Release: add the dragged track(s) to the over-playlist target.
         #[qinvokable]
         fn drag_end(self: Pin<&mut QbzShell>);
+
+        // --- Multi-select seam (§4.6) --------------------------------------
+        /// The hotkeys (C2) Ctrl+A arm / the §1.2 Escape-stack arm 6. Rust
+        /// cannot reach the content-view Loader (AppShell.qml), so both
+        /// bounce to QML as a signal; the AppShell router forwards to the
+        /// mounted view's duck-typed `selectAll()` /
+        /// `exitMultiSelectMode()`.
+        #[qinvokable]
+        fn select_all_active(self: Pin<&mut QbzShell>);
+        #[qinvokable]
+        fn exit_multi_select(self: Pin<&mut QbzShell>);
+        #[qsignal]
+        fn select_all_requested(self: Pin<&mut QbzShell>);
+        #[qsignal]
+        fn exit_multi_select_requested(self: Pin<&mut QbzShell>);
+    }
+
+    // The custom WRITE targets of the §4.6 seam properties. NOT qinvokables —
+    // QML reaches them by writing `QbzShell.multiSelectActive` /
+    // `multiSelectCapable`, never by name (the `QbzImmersive.open` cxx-qt
+    // custom-setter pattern: the property's auto setter is replaced by this
+    // method, which owns the store + notify + mirror).
+    unsafe extern "RustQt" {
+        fn set_multi_select_active(self: Pin<&mut QbzShell>, value: bool);
+        fn set_multi_select_capable(self: Pin<&mut QbzShell>, value: bool);
     }
 
     impl cxx_qt::Threading for QbzShell {}
@@ -379,6 +418,8 @@ pub struct QbzShellRust {
     art_preview_show: bool,
     art_preview_x: f32,
     art_preview_y: f32,
+    multi_select_active: bool,
+    multi_select_capable: bool,
 }
 
 impl Default for QbzShellRust {
@@ -444,6 +485,8 @@ impl Default for QbzShellRust {
             art_preview_show: false,
             art_preview_x: 0.0,
             art_preview_y: 0.0,
+            multi_select_active: false,
+            multi_select_capable: false,
         }
     }
 }
@@ -498,6 +541,26 @@ static QUEUE_OPEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool
 
 pub fn queue_open() -> bool {
     QUEUE_OPEN.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Rust-side mirrors of the §4.6 multi-select properties, written inside the
+/// custom-WRITE setters below — the funnel EVERY write passes through (QML
+/// reporter Bindings included), so they are exact (the QUEUE_OPEN
+/// precedent). Read by the hotkeys pipeline: the (C2) Ctrl+A consumption
+/// predicate and the §1.2 Escape stack arm 6 (2026-08-03 hotkeys-port
+/// contract), which run on ANOTHER singleton and cannot reach this QObject's
+/// properties.
+static MULTI_SELECT_ACTIVE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+static MULTI_SELECT_CAPABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+pub fn multi_select_active() -> bool {
+    MULTI_SELECT_ACTIVE.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+pub fn multi_select_capable() -> bool {
+    MULTI_SELECT_CAPABLE.load(std::sync::atomic::Ordering::SeqCst)
 }
 
 impl qbz_shell::QbzShell {
@@ -625,6 +688,42 @@ impl qbz_shell::QbzShell {
 
     pub fn drag_end(self: Pin<&mut Self>) {
         crate::drag_end();
+    }
+
+    /// The custom WRITE targets of the §4.6 seam properties — the funnel
+    /// every QML reporter-Binding write passes through (the
+    /// `QbzImmersive.open` precedent), keeping the cross-singleton mirrors
+    /// exact.
+    pub fn set_multi_select_active(mut self: Pin<&mut Self>, value: bool) {
+        use cxx_qt::CxxQtType as _;
+        if self.multi_select_active == value {
+            return;
+        }
+        self.as_mut().rust_mut().multi_select_active = value;
+        self.as_mut().multi_select_active_changed();
+        MULTI_SELECT_ACTIVE.store(value, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    pub fn set_multi_select_capable(mut self: Pin<&mut Self>, value: bool) {
+        use cxx_qt::CxxQtType as _;
+        if self.multi_select_capable == value {
+            return;
+        }
+        self.as_mut().rust_mut().multi_select_capable = value;
+        self.as_mut().multi_select_capable_changed();
+        MULTI_SELECT_CAPABLE.store(value, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// §4.6: Ctrl+A select-all — bounce to the AppShell router, which
+    /// forwards to the mounted view's duck-typed `selectAll()`.
+    pub fn select_all_active(mut self: Pin<&mut Self>) {
+        self.as_mut().select_all_requested();
+    }
+
+    /// §4.6 / §1.2 Escape stack arm 6: exit the mounted view's multi-select
+    /// mode via its duck-typed `exitMultiSelectMode()`.
+    pub fn exit_multi_select(mut self: Pin<&mut Self>) {
+        self.as_mut().exit_multi_select_requested();
     }
     pub fn open_external_url(self: Pin<&mut Self>, url: QString) {
         let url = url.to_string();

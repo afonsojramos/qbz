@@ -199,6 +199,7 @@ const MASTERS: &[(&str, &str)] = &[
     ("import", include_str!("../qml/assets/icons/primary/import.svg")),
     ("infinity", include_str!("../qml/assets/icons/primary/infinity.svg")),
     ("info", include_str!("../qml/assets/icons/primary/info.svg")),
+    ("keyboard", include_str!("../qml/assets/icons/primary/keyboard.svg")),
     ("layers", include_str!("../qml/assets/icons/primary/layers.svg")),
     ("layout-grid", include_str!("../qml/assets/icons/primary/layout-grid.svg")),
     ("library", include_str!("../qml/assets/icons/primary/library.svg")),

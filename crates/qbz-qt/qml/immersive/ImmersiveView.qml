@@ -4,7 +4,8 @@
 // declaration-order z convention).
 //
 // BLOCK B2+B3+B4+B5 SCOPE: the overlay shell (root + click-blocker + chrome +
-// auto-hide + exit paths 2-4 + the fullscreen guard + seek arrows) PLUS the
+// auto-hide + exit paths 2-4 + the fullscreen guard; the seek arrows later
+// moved to the hotkeys dispatcher — 2026-08-03 hotkeys-port §1.3) PLUS the
 // B3 panels (the ImmersiveAtmosphere underlay, the five FOCUS panels Album
 // Reactive / Static / Coverflow / Spectrum / Wave Bed, the layer-4
 // ImmersiveSongCard) PLUS the B4 panels: FOCUS Lyrics (mode 4,
@@ -46,14 +47,16 @@ Item {
     // through QbzImmersive's open setter (§3/D3) — this item only reacts.
     visible: QbzImmersive.open
     clip: true
-    // focus: true while open so the root's Keys handlers (Escape, seek
-    // arrows) are live; the 30ms grab timer below re-asserts it after mount
-    // (:1259-1267).
+    // focus: true while open so the root's Keys handler (Escape) is live;
+    // the 30ms grab timer below re-asserts it after mount (:1259-1267).
     focus: QbzImmersive.open
 
-    // §5.4 text-input gate: Shift+I + the seek arrows are inert while ANY
-    // text input has focus. The immersive surface's own input is the header
-    // search field (D16 seam).
+    // §5.4 text-input gate (kept per 2026-08-03 hotkeys-port §1.3 — the
+    // seek arrows and the Shift+I Shortcut it used to feed are GONE,
+    // absorbed into the dispatcher's rebindable focus.seek*/ui.focusMode
+    // actions; the central gate in QbzHotkeys.keyPressed now does their
+    // job. Retained as the immersive surface's own "a text input is
+    // focused" flag).
     readonly property bool textInputActive: header.searchActive
 
     // --- §5.4 fullscreen / shell guard ------------------------------------
@@ -80,13 +83,21 @@ Item {
                     w.visibility = Window.Windowed
                 // Focus hygiene (measured 2026-08-02 over RFB): when the
                 // overlay hides while its search field holds activeFocus, Qt
-                // leaves activeFocus STRANDED on the now-invisible TextInput —
-                // Main.qml's Shift+I gate (activeFocusItem instanceof
-                // TextInput) and the seek-arrow textInputActive gate then stay
-                // inert forever. Hand focus to the window content root so the
-                // gates see a non-text item again.
-                if (w !== null)
-                    w.contentItem.forceActiveFocus()
+                // leaves activeFocus STRANDED on the now-invisible TextInput
+                // — the AppShell dispatcher's text-input gate would read
+                // that dead field as focused and swallow every hotkey.
+                // Hand focus to the SHELL ROOT (K8, 2026-08-03 hotkeys-port
+                // §1.4.2 — NOT contentItem): the shell root is the
+                // dispatcher's fallback focus item, so the pipeline keeps
+                // receiving keys with no click in between.
+                var p = root
+                while (p.parent) {
+                    if (p.parent.isQbzShellRoot === true) {
+                        p.parent.forceActiveFocus()
+                        break
+                    }
+                    p = p.parent
+                }
             }
         }
     }
@@ -485,7 +496,7 @@ Item {
     readonly property bool _noShaders: GraphicsInfo.api === GraphicsInfo.Software
         || GraphicsInfo.api === GraphicsInfo.Null
 
-    // --- Exit paths 3 + seek arrows (§5.4, §7) -------------------------------
+    // --- Exit paths 3 (§5.4, §7) -------------------------------------------
     // Escape on the root: dismisses the search cortinilla FIRST when open
     // (§3.4), exits immersive otherwise. The search field's own Escape
     // declines and propagates here (ImmersiveHeader.qml comment).
@@ -496,29 +507,12 @@ Item {
             QbzImmersive.open = false
         event.accepted = true
     }
-    // Seek arrows (§7, keybindings.rs:107-110,572-581): ArrowRight/Left ±5s,
-    // Shift+ArrowRight/Left ±10s. Target clamps to DURATION (not
-    // npSeekableMax — that clamp belongs to the B5 TinyBar only, trap 9).
-    // Position base is the 1Hz npElapsedSecs (D14, resolved). Inert while a
-    // text input has focus (§5.4) — the gate is load-bearing because key
-    // events PROPAGATE from the focused field up to this root.
-    Keys.onPressed: function (event) {
-        if (root.textInputActive)
-            return
-        var d = 0
-        if (event.key === Qt.Key_Right)
-            d = (event.modifiers & Qt.ShiftModifier) ? 10 : 5
-        else if (event.key === Qt.Key_Left)
-            d = -((event.modifiers & Qt.ShiftModifier) ? 10 : 5)
-        else
-            return
-        if (QbzPlayer.npDurationSecs > 0) {
-            var target = Math.max(0, Math.min(QbzPlayer.npDurationSecs,
-                                              QbzPlayer.npElapsedSecs + d))
-            QbzPlayer.seek(target / QbzPlayer.npDurationSecs)
-        }
-        event.accepted = true
-    }
+    // The seek arrows are GONE (2026-08-03 hotkeys-port §1.3): ±5s/±10s now
+    // fire as the REBINDABLE focus.seekForward/Back/Long actions through the
+    // AppShell dispatcher, with the Context::Immersive gate and the central
+    // text-input gate (QbzHotkeys.keyPressed, same §1.3 math). Kept here per
+    // the same section: the Escape handler above, `textInputActive`, and the
+    // cortinilla arrows (ImmersiveHeader).
 
     // --- Layer 5: the player bar (§5.7, :1607-1616) -------------------------
     // Centered, y = height-90-24; fades with the auto-hide chrome on the

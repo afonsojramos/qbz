@@ -58,6 +58,88 @@ Rectangle {
     // The host ApplicationWindow (custom chrome: drag / maximize / resize).
     property var hostWindow: null
 
+    // §1.4.1 + §4.1 (2026-08-03 hotkeys-port contract): the shell root is
+    // BOTH the dispatcher host and the fallback focus item — Qt delivers key
+    // events only to activeFocusItem and propagates up its parent chain, and
+    // the shell tree had ZERO focus items, so without this a fresh launch
+    // has activeFocusItem == null and the pipeline receives NOTHING until
+    // the first click (the round-1 BLOCKER; H0 is the RFB proof). The
+    // marker lets a modal anywhere in the tree walk up and re-focus this
+    // root on close (§1.4.2/§1.4.3).
+    focus: true
+    readonly property bool isQbzShellRoot: true
+
+    // The assert half of §1.4.1: declarative `focus: true` alone did NOT
+    // survive the splash -> shell Loader swap in a WM-less (VNC) session —
+    // activeFocusItem stayed null and the dispatcher received nothing
+    // until the first click (measured 2026-08-03, RFB H0 first pass). Grab
+    // once at mount; every other lifecycle arm (immersive close, modal
+    // closes) hands focus BACK here.
+    Component.onCompleted: root.forceActiveFocus()
+
+    // THE ONE key entry (§1.1 route (b), divergence K1): NOTHING is handled
+    // locally. The ordered pipeline (capture steal, search-dropdown Up/Down
+    // steal, central text-input gate, Ctrl+A, binding dispatch, the §1.2
+    // Escape stack) lives in Rust behind QbzHotkeys.keyPressed; the QML side
+    // only computes the gate (§1.4.4). Null activeFocusItem passes the gate
+    // (the semantically right case). Every existing Keys. handler accepts
+    // only what it owns, and all buttons are MouseArea-based and can never
+    // take keyboard focus — verified non-conflicts (§4.1).
+    Keys.onPressed: function (event) {
+        var w = root.Window.window
+        var afi = w !== null ? w.activeFocusItem : null
+        var textInputFocused = (afi instanceof TextInput) || (afi instanceof TextEdit)
+        event.accepted = QbzHotkeys.keyPressed(event.key, event.modifiers,
+                                               event.text, textInputFocused)
+    }
+
+    // --- Hotkeys routers (§4.3 / §4.6) -------------------------------------
+    // nav.search (Ctrl+f, divergence K6 — EXCEEDS Slint, whose focus_search
+    // only flipped cortinilla_open with no visible effect on an empty
+    // query): the Rust dispatch emits this signal and the field lands
+    // focused and ready to type.
+    Connections {
+        target: QbzHotkeys
+        function onFocusSearchRequested() { header.focusSearch() }
+    }
+
+    // The §4.6 Ctrl+A + multi-select Escape-exit seam. Selection state is
+    // in-view QML JS (library_bulk.rs:8: "select-all / clear never reach
+    // Rust"), so the QbzShell signals route to the mounted view's
+    // duck-typed interface: selectAll() / exitMultiSelectMode() /
+    // multiSelectOn. Implemented by LibraryView, LocalLibraryView and
+    // LocalAlbumView (MyQbzDetailView is EXIT-ONLY — its selection lives in
+    // Rust with no select-all arm); views without multi-select (Artist,
+    // Playlist, Mix, Label, Offline) match nothing — PARITY-DEBT (K4).
+    Connections {
+        target: QbzShell
+        function onSelectAllRequested() {
+            if (viewLoader.item !== null && typeof viewLoader.item.selectAll === "function")
+                viewLoader.item.selectAll()
+        }
+        function onExitMultiSelectRequested() {
+            if (viewLoader.item !== null && typeof viewLoader.item.exitMultiSelectMode === "function")
+                viewLoader.item.exitMultiSelectMode()
+        }
+    }
+    // The reporters: their QbzShell mirrors feed the Rust Ctrl+A
+    // consumption predicate (capable) and the §1.2 Escape stack arm 6
+    // (active). Duck-typed, so a view without the interface reports
+    // capable=false and Ctrl+A falls through to the binding lookup (the
+    // Slint select_all_active_surface false case).
+    Binding {
+        target: QbzShell
+        property: "multiSelectCapable"
+        value: viewLoader.item !== null && typeof viewLoader.item.selectAll === "function"
+        restoreMode: Binding.RestoreNone
+    }
+    Binding {
+        target: QbzShell
+        property: "multiSelectActive"
+        value: viewLoader.item !== null && viewLoader.item.multiSelectOn === true
+        restoreMode: Binding.RestoreNone
+    }
+
     QbzTheme { id: theme }
 
     HeaderBar {

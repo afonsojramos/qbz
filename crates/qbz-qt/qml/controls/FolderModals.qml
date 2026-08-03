@@ -78,6 +78,21 @@ Item {
     visible: root.createOpen || root.editOpen
     enabled: root.visible
 
+    // §1.4.3 (2026-08-03 hotkeys-port contract): both FocusScopes grab focus
+    // on open and Qt strands it on the now-invisible scope at close, which
+    // kills the AppShell key dispatcher until the next click. Restore the
+    // shell root — the dispatcher's fallback focus item — on the close edge.
+    function _restoreShellFocus() {
+        var p = root
+        while (p.parent) {
+            if (p.parent.isQbzShellRoot === true) {
+                p.parent.forceActiveFocus()
+                return
+            }
+            p = p.parent
+        }
+    }
+
     // ==================================================================
     // PANEL 1 — Create folder (CreateFolderModal.slint)
     // ==================================================================
@@ -90,6 +105,8 @@ Item {
             root.draftCreateName = ""
             createScope.forceActiveFocus()
             createField.focusField()
+        } else {
+            root._restoreShellFocus()
         }
     }
 
@@ -237,6 +254,8 @@ Item {
         // A sub-modal must never outlive its host panel.
         if (!root.editOpen)
             deleteConfirm.close()
+        if (!root.editOpen)
+            root._restoreShellFocus()
     }
 
     FocusScope {

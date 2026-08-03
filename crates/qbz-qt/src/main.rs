@@ -1708,6 +1708,10 @@ pub(crate) fn apply_language(code: String) {
         let next = b.as_ref().tr_rev() + 1;
         b.as_mut().set_tr_rev(next);
     });
+    // §3.4/F12 (2026-08-03 hotkeys-port): the hotkeys groups document's
+    // action labels are Rust-translated (`qbz_i18n::t`), so they cannot
+    // re-translate through trRev — recompute on the same bump.
+    hotkeys_bridge::ui(|h| h.refresh());
     reload_home();
     reload_library();
     publish_settings();
