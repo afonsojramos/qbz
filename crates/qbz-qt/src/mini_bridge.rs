@@ -95,6 +95,32 @@ pub mod qbz_mini {
         #[qinvokable]
         fn exit(self: Pin<&mut QbzMini>);
 
+        /// Close the whole APP from the mini (contract A-12, §4.6). Exits the
+        /// mini first, then routes to the ONE close choreography by emitting
+        /// `close_app_requested` below.
+        #[qinvokable]
+        fn close_app(self: Pin<&mut QbzMini>);
+
+        /// `close_app`'s second half: `Main.qml` answers with
+        /// `window.closeOrHide(null)`, so the mini's red X honours
+        /// close-to-tray exactly like every other exit.
+        ///
+        /// **This signal is an ADDITION to the contract's §2.2 must-add list**,
+        /// and it is logged as one. A-12 says `close_app` "routes to the ONE
+        /// close choreography (§5.7)", but that choreography is a QML function
+        /// on `Main.qml`'s root: `QbzMini` had no signals at all, the mini's
+        /// QML tree holds no reference to the main window (`MiniWindow.qml`
+        /// passes `hostWindow: root`, i.e. the MINI), and none of `QbzTray`'s
+        /// four signals is a "close requested" — routing through
+        /// `quit_requested` would bypass close-to-tray outright. The only
+        /// alternative that adds no symbol is deciding hide-vs-quit in Rust,
+        /// which would put a SECOND copy of the close predicate in the tree
+        /// (the first is QML's `trayLive && closeToTray`) — the
+        /// two-functions-that-should-mirror-each-other smell LESSONS L5 names.
+        /// One signal keeps exactly one copy of the predicate.
+        #[qsignal]
+        fn close_app_requested(self: Pin<&mut QbzMini>);
+
         /// The MINI window's own key dispatcher (contract A-15, §4.9), 1:1 with
         /// the reference's `dispatch_mini`
         /// (`crates/qbz/src/keybindings.rs:623-648`). **No
@@ -321,6 +347,19 @@ impl qbz_mini::QbzMini {
     /// Contract A-8 — exit.
     pub fn exit(self: Pin<&mut Self>) {
         exit_now(self);
+    }
+
+    /// Contract A-12 — close the APP from the mini's red X.
+    ///
+    /// The order is the reference's (`crates/qbz/src/miniplayer.rs:235-251`):
+    /// leave the mini FIRST — which, through `Main.qml`'s `onOpenChanged`,
+    /// hides the mini and brings the main window back — and only then ask for
+    /// the close, because "the window becomes user-visible when close-to-tray
+    /// keeps the app alive" (`:244-246`). `open_changed()` emits synchronously,
+    /// so the main window is already up by the time the signal below is queued.
+    pub fn close_app(mut self: Pin<&mut Self>) {
+        exit_now(self.as_mut());
+        self.close_app_requested();
     }
 
     /// Contract A-15 — the mini's key dispatcher, the table at §4.9.

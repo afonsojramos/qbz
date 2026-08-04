@@ -27,9 +27,12 @@
 // Slint, each needing a surface the port does not have yet: Open Music Link,
 // Report an Issue, What's New, About QBZ.
 //
-// POC-NOTE: the custom window-chrome parts (drag surface, drawn
-// min/max/close WindowControls) are skipped — the POC keeps NATIVE window
-// decorations.
+// The custom window chrome IS built (the note claiming it was skipped was a
+// fossil): the header itself is the drag surface (`startSystemMove()` below),
+// and the drawn min/max/close WindowControls Row renders whenever
+// `use_system_title_bar` is OFF. Native decorations are the OTHER arm of that
+// same pref, not the port's ceiling. Close routes through Main.qml's
+// closeOrHide, so it honours close-to-tray like every other exit.
 //
 // FILE LENGTH (>500): this is ONE bar with one placement state machine —
 // `navInSidebar` x `navHeaderCompact` x the three sidebar widths decide which
@@ -992,17 +995,22 @@ Rectangle {
                 id: wcCloseArea
                 anchors.fill: parent
                 hoverEnabled: true
-                // POC-NOTE: the Slint app hides-to-tray on close; the POC
-                // has no tray — close quits.
-                onClicked: Qt.quit()
+                // Close-to-tray lives in ONE place — Main.qml's closeOrHide
+                // (2026-08-03 miniplayer/tray contract, A-26 / §5.7) — which
+                // hides to the tray while QbzTray.trayLive && QbzTray.closeToTray
+                // and quits otherwise. A drawn button delivers no close EVENT
+                // (Qt.quit() never raises `closing` either), hence the null.
+                onClicked: if (root.hostWindow) root.hostWindow.closeOrHide(null)
             }
         }
     }
 
-    // --- App menu (user block + Settings + Log Out + Close) ---------------
-    // POC-NOTE: the Slint menu also carries Open Music Link / Keyboard
-    // Shortcuts / Documentation / Report an Issue / What's New / About QBZ
-    // — omitted here (no views/dialogs to open yet).
+    // --- App menu (user block + Settings + Keyboard Shortcuts +
+    // Documentation + Log Out + Close) -------------------------------------
+    // Still missing against the Slint menu, each needing a surface this port
+    // does not have yet: Open Music Link, Report an Issue, What's New,
+    // About QBZ. (The older note here also listed Keyboard Shortcuts and
+    // Documentation, which have since landed.)
     Popup {
         id: appMenu
         x: root.width - 234 - theme.spacingMd
@@ -1142,9 +1150,15 @@ Rectangle {
             AppMenuItem {
                 name: "x"
                 label: QbzSession.tr("Close", QbzSession.trRev)
-                // POC-NOTE: the Slint app hides to tray / follows the
-                // platform close behavior; the POC just quits.
-                onClicked: Qt.quit()
+                // The same ONE close choreography as the drawn X above
+                // (A-26, §5.7). appMenu.close() FIRST, like the Log Out row:
+                // when close-to-tray only HIDES the window, a popup left open
+                // comes back up with it on the next show.
+                onClicked: {
+                    appMenu.close()
+                    if (root.hostWindow)
+                        root.hostWindow.closeOrHide(null)
+                }
             }
         }
     }

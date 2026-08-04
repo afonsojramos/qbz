@@ -16,7 +16,6 @@
 // - The Custom-theme editor (seed-from-current, the dark-polarity toggle and
 //   the base-token swatch grid): the port applies custom_theme.json read-only
 //   and has no ColorPicker primitive.
-// - "Hide Dock icon when closed to menu bar" (macOS-only in the Slint too).
 // - The commented-out Slint blocks (immersive background / panels / FPS,
 //   window-title template) stay out, 1:1 the owner's cut.
 
@@ -412,8 +411,13 @@ Column {
     SettingsDivider { }
     SettingsSpacer { }
 
-    // ========================== SYSTEM TRAY ==============================
-    GroupHeader { text: QbzSession.tr("SYSTEM TRAY", QbzSession.trRev) }
+    // ==================== SYSTEM TRAY  (macOS: MENU BAR) =================
+    // The header swaps on the platform, 1:1 with AppearanceSettings.slint:884.
+    GroupHeader {
+        text: root.doc.isMacos === true
+              ? QbzSession.tr("MENU BAR", QbzSession.trRev)
+              : QbzSession.tr("SYSTEM TRAY", QbzSession.trRev)
+    }
     SettingRow {
         label: QbzSession.tr("Enable tray icon", QbzSession.trRev)
         description: QbzSession.tr("Show icon in system tray (requires restart)", QbzSession.trRev)
@@ -422,14 +426,44 @@ Column {
             onToggled: function (v) { QbzBridge.settingsBool("tray-enable", v) }
         }
     }
+    // A separate "Minimize to tray" toggle is deliberately absent, 1:1 with
+    // AppearanceSettings.slint:897-903: redirecting the window-manager minimize
+    // button to the tray means owning that button, and Wayland forbids a client
+    // from intercepting the compositor's minimize. The reference HIDES the
+    // option rather than showing it disabled, and this row reads "Close to
+    // tray". The setting still round-trips through the store (the
+    // "tray-minimize-to-tray" write arm, src/settings_qt.rs) so a Qt session
+    // cannot drop a value the Slint build wrote.
     SettingRow {
         label: QbzSession.tr("Close to tray", QbzSession.trRev)
-        description: QbzSession.tr("Keep playing in the tray instead of quitting when you close the window", QbzSession.trRev)
+        // macOS says "menu bar"; the LABEL stays "Close to tray" on both
+        // platforms (AppearanceSettings.slint:905-908).
+        description: root.doc.isMacos === true
+                     ? QbzSession.tr("Keep playing in the menu bar instead of quitting when you close the window", QbzSession.trRev)
+                     : QbzSession.tr("Keep playing in the tray instead of quitting when you close the window", QbzSession.trRev)
         rowEnabled: root.doc.trayEnable === true
         QbzToggle {
             enabled: root.doc.trayEnable === true
             checked: root.doc.trayCloseToTray === true
             onToggled: function (v) { QbzBridge.settingsBool("tray-close-to-tray", v) }
+        }
+    }
+    // macOS only: switch the activation policy to .accessory while closed to
+    // the menu bar (no Dock icon). Off = Spotify-style, keep the Dock icon.
+    // `visible` is inherited Item.visible and the parent is a Column, which
+    // skips invisible children — so on Linux this leaves no gap at all. The
+    // enable condition is DOUBLED on the row and on the toggle because
+    // SettingRow's `rowEnabled` only dims its own label column
+    // (controls/SettingRow.qml:26); it does not reach the control.
+    SettingRow {
+        visible: root.doc.isMacos === true
+        label: QbzSession.tr("Hide Dock icon when closed to menu bar", QbzSession.trRev)
+        description: QbzSession.tr("Run as a menu-bar-only app while the window is closed. Off keeps the Dock icon (like Spotify)", QbzSession.trRev)
+        rowEnabled: root.doc.trayEnable === true && root.doc.trayCloseToTray === true
+        QbzToggle {
+            enabled: root.doc.trayEnable === true && root.doc.trayCloseToTray === true
+            checked: root.doc.trayMacHideDock === true
+            onToggled: function (v) { QbzBridge.settingsBool("tray-mac-hide-dock", v) }
         }
     }
     SettingRow {

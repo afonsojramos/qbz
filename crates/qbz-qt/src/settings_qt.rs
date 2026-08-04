@@ -1275,6 +1275,33 @@ pub struct SettingsDoc {
     pub tray_enable: bool,
     #[serde(rename = "trayCloseToTray")]
     pub tray_close_to_tray: bool,
+    /// STORAGE ONLY — there is no Settings row and no reader (owner ruling K5).
+    /// The Slint sheet documents why the reference hides the toggle rather than
+    /// showing it disabled (`crates/qbz-ui/ui/settings/AppearanceSettings.slint:897-903`):
+    /// redirecting the window-manager minimize button to the tray means owning
+    /// that button, and Wayland forbids a client from intercepting the
+    /// compositor's minimize.
+    ///
+    /// **Nothing in QML writes this key** (`grep -rn 'tray-minimize-to-tray' qml/`
+    /// → 0), and that is the point of K5, not an oversight: the field carries
+    /// the value into the settings DOCUMENT so a reader can see it, and the
+    /// write arm exists so the key becomes reachable the day a row is added
+    /// without a second edit. It is NOT protecting the value from loss — the
+    /// per-user store is written by `qbz-app`, not by this document, so a Qt
+    /// session could not drop what the Slint build wrote in any case.
+    #[serde(rename = "trayMinimizeToTray")]
+    pub tray_minimize_to_tray: bool,
+    /// macOS only: while closed to the menu bar, switch the activation policy to
+    /// `.accessory` (no Dock icon). Off keeps the Dock icon, Spotify-style. The
+    /// row is `visible: isMacos`, so on Linux it renders nothing at all.
+    #[serde(rename = "trayMacHideDock")]
+    pub tray_mac_hide_dock: bool,
+    /// Platform flag for the three macOS-shaped bits of the SYSTEM TRAY group:
+    /// the "MENU BAR" header swap, the Close-to-tray description arm and the
+    /// Hide-Dock row's `visible`. Compile-time, exactly like the Slint's
+    /// `AppearanceState.is-macos`.
+    #[serde(rename = "isMacos")]
+    pub is_macos: bool,
     #[serde(rename = "trayIconThemes")]
     pub tray_icon_themes: Vec<String>,
     #[serde(rename = "trayIconThemeIndex")]
@@ -1665,6 +1692,19 @@ pub async fn publish_snapshot() {
                 .get_settings()
                 .map(|t| t.close_to_tray)
                 .unwrap_or(true),
+            // Both shared defaults are `false` (`qbz-app/src/settings/tray.rs:59-63`),
+            // so unlike the two reads above these fall back to `false` — the
+            // fallback must match the struct's own default, which is the whole
+            // point of the S1 fix directly above.
+            tray_minimize_to_tray: tray()
+                .get_settings()
+                .map(|t| t.minimize_to_tray)
+                .unwrap_or(false),
+            tray_mac_hide_dock: tray()
+                .get_settings()
+                .map(|t| t.mac_hide_dock)
+                .unwrap_or(false),
+            is_macos: cfg!(target_os = "macos"),
             tray_icon_themes: TRAY_ICON_LABELS
                 .iter()
                 .map(|l| qbz_i18n::t(l))
@@ -1930,8 +1970,34 @@ pub async fn settings_bool(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &str,
             .set_enable_tray(value)
             .map_err(|e| e.to_string())
             .map(|_| Apply::None),
-        "tray-close-to-tray" => tray()
-            .set_close_to_tray(value)
+        "tray-close-to-tray" => {
+            let persisted = tray().set_close_to_tray(value).map_err(|e| e.to_string());
+            // A-21b(c), and the FIFTH live-update row of §5.6. Without this the
+            // `QbzTray.closeToTray` property never leaves the value it was
+            // seeded with and the toggle is COSMETIC until the next launch —
+            // the "renders and persists and drives nothing" defect this whole
+            // diff exists to end. The line above is the storage; this is the
+            // running app, and after it the very next close behaves the new way.
+            //
+            // Gated on the persist: a failed write (no active session) must not
+            // tell the running app a value the store does not hold.
+            if persisted.is_ok() {
+                crate::tray_bridge::ui(move |mut t| {
+                    t.as_mut().set_close_to_tray(value);
+                });
+            }
+            persisted.map(|_| Apply::None)
+        }
+        // STORAGE ONLY (owner ruling K5): no Settings row, no reader. The value
+        // round-trips through the per-user store the Slint build shares instead
+        // of a Qt session dropping it — see the doc field for why the reference
+        // hides the toggle.
+        "tray-minimize-to-tray" => tray()
+            .set_minimize_to_tray(value)
+            .map_err(|e| e.to_string())
+            .map(|_| Apply::None),
+        "tray-mac-hide-dock" => tray()
+            .set_mac_hide_dock(value)
             .map_err(|e| e.to_string())
             .map(|_| Apply::None),
         // --- Integrations (phase 19) --------------------------------------

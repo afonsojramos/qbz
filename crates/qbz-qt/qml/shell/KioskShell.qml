@@ -372,7 +372,15 @@ Rectangle {
                         id: wcCloseArea
                         anchors.fill: wcClose
                         hoverEnabled: true
-                        onClicked: Qt.quit()
+                        // The FIFTH exit. §5.7 of the 2026-08-03 miniplayer/
+                        // tray contract enumerates four; this shell grew its
+                        // own drawn X after that contract was written, and an
+                        // exit still calling Qt.quit() directly is precisely
+                        // the half-port the enumeration exists to prevent. Same
+                        // choreography as the desktop chrome: Main.qml's
+                        // closeOrHide hides to the tray while QbzTray.trayLive
+                        // && QbzTray.closeToTray and quits otherwise.
+                        onClicked: if (root.hostWindow) root.hostWindow.closeOrHide(null)
                     }
                 }
             }

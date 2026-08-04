@@ -200,8 +200,8 @@ ApplicationWindow {
         // Same reason, and it bites harder here: the tray's clicks reach QML
         // ONLY through this bridge's signals, so an unbooted QbzTray is a tray
         // whose every click does nothing, with zero evidence in the log
-        // (contract §15 trap 27). The handlers for those signals arrive with
-        // B6, together with the window verbs they call.
+        // (contract §15 trap 27). The Connections that answer those four
+        // signals are below, beside the window verbs they call.
         QbzTray.boot()
 
         // Seed the maximized latch ONCE, imperatively — see its declaration for
@@ -447,20 +447,131 @@ ApplicationWindow {
         geometrySaveTimer.restart()
     }
 
-    // Two shutdown paths, because the header's close button calls Qt.quit()
-    // (shell/HeaderBar.qml) which never raises `closing`, while a WM close or
-    // Alt+F4 does. Both end up in the same dirty check, so the duplicate is
-    // free — and either way a resize in the last 400ms still lands, including
-    // the taskbar close of a minimized window (that is what the exit variant
-    // and the floating cache are for).
-    onClosing: window.persistWindowGeometryOnExit()
+    // The WM close / Alt+F4 exit, routed into the ONE close choreography
+    // (A-26, below). It is the ONLY exit that delivers a close EVENT, and
+    // `closeOrHide` refuses that event before hiding — §3.1 measured that
+    // QGuiApplicationPrivate::maybeLastWindowClosed is reached from exactly two
+    // sites, both inside QWindow::event and both gated on the accepted flag, so
+    // hiding never arms Qt's quit check but an ACCEPTED close does.
+    //
+    // `onAboutToQuit` is still not a duplicate of it: `Qt.quit()` never raises
+    // `closing` (§15 trap 26), so the quit arm of `closeOrHide`, the tray's
+    // `quit_requested` handler and any teardown that skips QML reach the
+    // geometry flush only through here. Where both do run the second write is
+    // free (Rust's >0.5px dirty check drops it), and either way a resize in the
+    // last 400ms still lands, including the taskbar close of a minimized window
+    // (that is what the exit variant and the floating cache are for).
+    onClosing: function (close) { window.closeOrHide(close) }
     Connections {
         target: Qt.application
         function onAboutToQuit() { window.persistWindowGeometryOnExit() }
     }
 
+    // --- Close-to-tray, and the ONE visibility owner (contract B6) ---------
+    //
+    // THE INVARIANT (§5.8.1, §13-D18, AC-24, stage-0 S0-4): the main window is
+    // hidden and shown ONLY by these two functions, and they are the ONLY
+    // callers of QbzTray.setWindowShown. The reference has a real desync
+    // exactly here — the miniplayer's enter()/exit() call m.hide()/m.show()
+    // directly (crates/qbz/src/miniplayer.rs:186, :207) instead of
+    // tray::hide_window/show_window, so WINDOW_SHOWN goes stale and, while the
+    // mini is up, the first tray left-click hides an already-hidden window and
+    // the second brings the MAIN window back beside the live mini (#559/#618).
+    // A bare window.hide()/window.show() anywhere in this file re-opens that
+    // hole; the miniplayer handler below calls these verbs for that reason.
+    //
+    // ⚠ ONE WRITER THE S0-4 GREP CANNOT SEE, named here so a green grep is not
+    // read as more than it proves: the drawn MINIMIZE buttons call
+    // `hostWindow.showMinimized()` (shell/HeaderBar.qml, shell/KioskShell.qml)
+    // and deliberately do NOT report. That is correct — a minimized window is
+    // still SHOWN, not hidden-to-tray, and owner ruling K5 keeps that button an
+    // unconditional WM minimize. The consequence is real and inherited from the
+    // reference, which tracks the same flag the same way: with the window
+    // ICONIFIED, `WINDOW_SHOWN` is still true, so the next tray left-click
+    // takes the hide arm rather than restoring. `showFromTray()` below at least
+    // un-iconifies, so the SECOND click genuinely brings it back.
+    function hideToTray() {
+        // Both reference close arms flush the session BEFORE hiding, "even when
+        // only hiding — the process may be killed from the tray / shell without
+        // a real quit afterwards" (crates/qbz/src/main.rs:23255-23256). The Qt
+        // port has no session_persist module, so the geometry flush is the
+        // whole of what is owed. On a miniplayer enter it is harmless: it
+        // writes the size the exit is about to restore.
+        window.persistWindowGeometryOnExit()
+        window.hide()
+        QbzTray.setWindowShown(false)
+    }
+    function showFromTray() {
+        window.show()
+        // Un-iconify. Qt's hide() preserves windowStates, unlike the
+        // reference's surface destruction (crates/qbz/src/tray/mod.rs:253-265),
+        // so a window that was MINIMIZED before it was hidden comes back
+        // minimized — visible in the taskbar, invisible on screen, which reads
+        // as "the tray did nothing". Restoring to the maximized latch rather
+        // than to Windowed keeps a maximized session maximized.
+        if (window.visibility === Window.Minimized)
+            window.visibility = window.maximizedLatch ? Window.Maximized
+                                                      : Window.Windowed
+        // raise() + requestActivate() is §13-D12, carried by the VERB so no
+        // call site has to remember it: the reference's tray::show_window
+        // focuses (crates/qbz/src/tray/mod.rs:226-229) while its miniplayer
+        // exit() does not, and the port focuses on both paths.
+        window.raise()
+        window.requestActivate()
+        QbzTray.setWindowShown(true)
+    }
 
+    // THE ONE close choreography (A-26, §5.7). Five exits reach it: this
+    // window's onClosing above, the drawn X and the app-menu Close row in
+    // shell/HeaderBar.qml, the kiosk shell's own drawn X in
+    // shell/KioskShell.qml, and the miniplayer's closeApp through the
+    // QbzMini.closeAppRequested handler below.
+    //
+    // The predicate is BOTH conditions, ported verbatim from
+    // crates/qbz/src/main.rs:23253 — `tray_settings::get().close_to_tray &&
+    // tray::handle().is_some()`. TRAY OFF => CLOSE QUITS: `handle()` is None
+    // when the tray is disabled, suppressed under gamescope or failed to
+    // initialise, and gating on the setting alone would strand the process with
+    // no window and no way back on a desktop with no SNI host (§15 trap 22).
+    //
+    // `closeEvent` is the QQuickCloseEvent on the one path that carries one and
+    // null on the other four.
+    function closeOrHide(closeEvent) {
+        if (QbzTray.trayLive && QbzTray.closeToTray) {
+            if (closeEvent)
+                closeEvent.accepted = false
+            window.hideToTray()
+            return
+        }
+        window.persistWindowGeometryOnExit()
+        Qt.quit()
+    }
 
+    // The tray's four signals (src/tray_bridge.rs:87-100). Rust owns no window
+    // (§2.3), so every tray click hops ksni thread -> tray_qt verb ->
+    // tray_bridge::ui() -> qsignal -> here, and this block is where it finally
+    // reaches one.
+    Connections {
+        target: QbzTray
+        function onWindowShowRequested() { window.showFromTray() }
+        function onWindowHideRequested() { window.hideToTray() }
+        // The tray's left-click degenerates to present() while the mini is open
+        // (§5.8.2, §13-D21): raise the MINI, and do NOT bring the main window up
+        // beside it. No setWindowShown — the mini is not the main window, and
+        // the flag still honestly says the main one is hidden.
+        function onMiniPresentRequested() {
+            var mini = window.ensureMiniWindow()
+            if (mini !== null) {
+                mini.show()
+                mini.raise()
+                mini.requestActivate()
+            }
+        }
+        function onQuitRequested() {
+            window.persistWindowGeometryOnExit()
+            Qt.quit()
+        }
+    }
 
     // --- The miniplayer window (2026-08-03 miniplayer/tray contract, B2) ---
     //
@@ -492,12 +603,18 @@ ApplicationWindow {
     // §4.6's step ordering and the only place either window is shown or hidden
     // for the miniplayer.
     //
-    // Step 7 of enter() ("m.hide() LAST, avoid a blank flash") and its exit
-    // twin are window.hideToTray() / window.showFromTray() (A-25), which land
-    // with block B6 — so on this commit the mini opens with the main window
-    // still visible behind it. That is §14.2's stated ordering constraint, not
-    // a defect: a bare window.hide() here would be a second visibility owner
-    // and §5.8.1's invariant (stage-0 S0-4) forbids it.
+    // Step 7 of enter() is "hide the main window only after the mini is visible
+    // (avoid a blank flash)" (crates/qbz/src/miniplayer.rs:185-187), so
+    // hideToTray() runs LAST here and showFromTray() runs after the mini is
+    // down. They are the A-25 verbs, never a bare hide()/show(): the mini IS
+    // where the reference's WINDOW_SHOWN desync comes from, and reporting
+    // shown=false/true from these two paths is what makes the tray toggle
+    // honest (§13-D18, stage-0 S0-4).
+    //
+    // Re-entering while already open forces an openChanged (mini_bridge.rs's
+    // enter_now), so this runs again and raises the mini; hideToTray() on an
+    // already-hidden window is a no-op plus one geometry write Rust's dirty
+    // check drops.
     Connections {
         target: QbzMini
         function onOpenChanged() {
@@ -508,10 +625,21 @@ ApplicationWindow {
                     mini.raise()
                     mini.requestActivate()
                 }
+                window.hideToTray()
             } else if (window.miniWindow !== null) {
                 window.miniWindow.hide()
+                window.showFromTray()
             }
         }
+        // The mini's own close verb (A-12). QbzMini.closeApp() exits the mini
+        // FIRST — which runs the handler above and brings the main window back
+        // — and only then emits this, so the app's ONE close choreography
+        // decides between hide-to-tray and quit. The brief show-then-hide is
+        // 1:1 with the reference: miniplayer.rs:235-251 hides the mini, shows
+        // the main window and restores its geometry before calling
+        // invoke_close_app, because "the window becomes user-visible when
+        // close-to-tray keeps the app alive" (:244-246).
+        function onCloseAppRequested() { window.closeOrHide(null) }
     }
 
     // The immersive toggle Shortcut is GONE (2026-08-03 hotkeys-port §1.3):
