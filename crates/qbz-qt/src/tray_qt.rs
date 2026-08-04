@@ -183,8 +183,12 @@ pub(crate) fn handle() -> Option<&'static TrayHandle> {
 /// reference's own `tray::set_mac_dock_hidden` (`tray/mod.rs:285-291`).
 #[cfg(target_os = "macos")]
 pub(crate) fn set_mac_dock_hidden(hidden: bool) {
-    use objc2::MainThreadMarker;
+    // `MainThreadMarker` lives in objc2-FOUNDATION in the 0.2/0.5 generation,
+    // not at the objc2 root — that is where it moved later. The reference
+    // imports it from exactly here (crates/qbz/src/tray/macos.rs:38), and a
+    // Mac build caught the wrong path on the first try.
     use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
+    use objc2_foundation::MainThreadMarker;
 
     let Some(mtm) = MainThreadMarker::new() else {
         log::warn!("[tray] dock policy skipped: not on the AppKit main thread");

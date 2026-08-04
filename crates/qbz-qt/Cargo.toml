@@ -172,7 +172,13 @@ cxx-qt-build = "0.7"
 # behind cfg, so `cargo build` cannot see it. First real check is a macOS
 # build — the Mac mini (192.168.0.69) is where that happens.
 [target.'cfg(target_os = "macos")'.dependencies]
-objc2 = "0.5"
+# `MainThreadMarker` — in THIS generation it is exported by objc2-foundation,
+# not by the objc2 root (objc2-foundation-0.2.2/src/lib.rs:152, ungated). The
+# reference imports it from the same place. There is no direct `objc2`
+# dependency because nothing here names a type from it.
+objc2-foundation = { version = "0.2", default-features = false, features = [
+    "std",
+] }
 objc2-app-kit = { version = "0.2", default-features = false, features = [
     "std",
     # NSApplication: the class and `setActivationPolicy`.
