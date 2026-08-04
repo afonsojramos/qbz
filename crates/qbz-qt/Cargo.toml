@@ -178,6 +178,12 @@ cxx-qt-build = "0.7"
 # dependency because nothing here names a type from it.
 objc2-foundation = { version = "0.2", default-features = false, features = [
     "std",
+    # NSThread gates `MainThreadMarker::new()` itself
+    # (objc2-foundation-0.2.2/src/thread.rs:210-213) — without it the type
+    # exists but only the UNSAFE `new_unchecked` does, which is not what this
+    # wants: the whole point is to ASK whether we are on the AppKit main
+    # thread and no-op if not. Caught by the Mac build; invisible on Linux.
+    "NSThread",
 ] }
 objc2-app-kit = { version = "0.2", default-features = false, features = [
     "std",
