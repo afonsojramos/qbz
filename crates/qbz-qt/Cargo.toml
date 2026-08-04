@@ -26,6 +26,11 @@ cxx-qt-lib = { version = "0.7", features = ["qt_full"] }
 
 tokio = { workspace = true }
 log = { workspace = true }
+# Hard-exit watchdog (main.rs arm_hard_exit_watchdog): `_exit` terminates
+# without running the atexit chain — a hang inside Qt's atexit destructors is
+# one of the wedges the watchdog exists to cut short. Already in the lock as
+# a transitive dep of half the tree; this only makes it direct.
+libc = "0.2"
 rand = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

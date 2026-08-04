@@ -469,13 +469,29 @@ pub(crate) fn set_window_shown(shown: bool) {
 }
 
 /// Quit the whole app from a tray action (any thread) → `Main.qml`'s
-/// `persistWindowGeometryOnExit(); Qt.quit()`.
+/// `persistWindowGeometryOnExit(); Qt.exit(0)`.
+///
+/// `Qt.exit(0)`, NEVER `Qt.quit()` — the difference IS the 2026-08-04 bug the
+/// owner reported three times ("Quit QBZ closes the window, not the app"):
+/// `Qt.quit()` delivers `QEvent::Quit`, whose `QGuiApplication` handler first
+/// tries to close every top-level window and silently CANCELS the quit when
+/// any window refuses its close event — which Main.qml's close-to-tray arm
+/// does whenever `trayLive && closeToTray`, and MiniWindow.qml does
+/// unconditionally. So with close-to-tray on, "Quit" degenerated into
+/// hide-to-tray (window gone, process alive — reproduced under
+/// `QT_QPA_PLATFORM=vnc`, see `arm_hard_exit_watchdog`'s header). `Qt.exit`
+/// stops the event loops directly; no window gets a vote.
+///
+/// The watchdog is armed HERE, before the hop, because this is the moment of
+/// user intent: if the queued signal is dropped (bridge unbooted, loop
+/// wedged) or anything downstream hangs, the process still dies within 5s.
 ///
 /// The reference flushes the session first (`session_persist::save_on_exit()`,
 /// `tray/mod.rs:300`); the Qt port has no `session_persist` module, so the
 /// geometry flush is the whole of what is owed (§5.7).
 pub(crate) fn quit() {
     log::info!("[tray] quit requested");
+    crate::arm_hard_exit_watchdog("tray quit");
     crate::tray_bridge::ui(|mut t| {
         t.as_mut().quit_requested();
     });

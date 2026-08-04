@@ -2325,6 +2325,67 @@ fn apply_renderer_preference() {
     }
 }
 
+// ============================ Shutdown guarantee ==========================
+
+/// One-shot latch for [`arm_hard_exit_watchdog`].
+static HARD_EXIT_ARMED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Hard-exit watchdog — the guarantee that QUITTING ALWAYS ENDS THE PROCESS.
+///
+/// Owner-reported three times (2026-08-04): "Quit QBZ" closed the window and
+/// left the process alive, with no way out but `kill`. Root cause, reproduced
+/// under `QT_QPA_PLATFORM=vnc` the same day: in Qt 6, `Qt.quit()` delivers
+/// `QEvent::Quit`, and `QGuiApplication::event` first tries to CLOSE every
+/// top-level window — any window refusing its close event silently CANCELS
+/// the whole quit (qtbase `QGuiApplicationPrivate::tryCloseAllWindows`). Two
+/// windows here refuse: Main.qml's close-to-tray arm (whenever
+/// `trayLive && closeToTray`) and MiniWindow.qml's `onClosing`
+/// (unconditionally — its close means "exit the mini", never "quit the app").
+/// The log signature of the bug: `[tray] quit requested` and the QML
+/// handler's `Qt.quit()` both fire, and `event loop exited` never appears.
+///
+/// The FIX is that every quit path now calls `Qt.exit(0)`, which exits the
+/// event loops directly with no window veto. THIS watchdog is the backstop
+/// behind it: armed at the moment quit is REQUESTED (and again, idempotently,
+/// when the loop exits), it hard-terminates the process if any later stage —
+/// signal delivery, QML, the loop itself, the cast shutdown, a Qt/QML/Wayland
+/// destructor, an atexit handler — wedges.
+///
+/// `libc::_exit` on purpose: `std::process::exit` runs libc `exit()`, whose
+/// atexit chain is where Qt's `Q_GLOBAL_STATIC` destructors live — a hang
+/// there is one of the wedges being guarded against — and `abort()` would
+/// SIGABRT/core-dump a healthy shutdown.
+///
+/// SAFE BY DESIGN, not by luck: everything the app owes the user is already
+/// on disk before any quit path arms this — the geometry flushes in the QML
+/// quit handlers BEFORE `Qt.exit(0)`, prefs/settings persist on change, and
+/// the stores write at mutation time. Skipping C++ teardown loses nothing the
+/// user can observe. Do NOT "clean this up" into a graceful join or remove
+/// the `_exit`: an app the owner cannot close is the bug this ends, and it
+/// already survived one round of fixes.
+pub(crate) fn arm_hard_exit_watchdog(source: &'static str) {
+    use std::sync::atomic::Ordering;
+    if HARD_EXIT_ARMED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    log::info!("[shutdown] hard-exit watchdog armed ({source}); force-exit in 5s if shutdown wedges");
+    let _ = std::thread::Builder::new()
+        .name("qbz-exit-watchdog".into())
+        .spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            log::error!(
+                "[shutdown] quit did not complete within 5s of {source}; forcing _exit(0). \
+                 The last '[shutdown]' line above this one names the statement that wedged. \
+                 (All user state was persisted before the quit was requested.)"
+            );
+            log::logger().flush();
+            // SAFETY: `_exit` terminates the process immediately, without
+            // running atexit handlers or destructors — that is the point;
+            // see the header above.
+            unsafe { libc::_exit(0) };
+        });
+}
+
 fn main() {
     qbz_log::install("info");
     // i18n (phase 20): honor the persisted ui_prefs language; "auto"/missing
@@ -2382,6 +2443,11 @@ fn main() {
         // user cannot do anything but wait, so NOTHING on this path may block
         // without a bound.
         log::info!("[qbz-qt] event loop exited; shutting down");
+        // The backstop for everything below AND for Qt's own teardown (engine
+        // + QGuiApplication destructors, atexit chain): if any of it wedges,
+        // the watchdog `_exit(0)`s the process. Idempotent — the quit paths
+        // arm it earlier, at the moment quit was requested.
+        arm_hard_exit_watchdog("event-loop exit");
         // Same reason as logout: leaving the app must stop the renderer.
         //
         // BOUNDED. This is a `block_on` on the main thread after the UI is
@@ -2410,4 +2476,16 @@ fn main() {
         }
         log::info!("[qbz-qt] shutdown complete");
     }
+    // Explicit, INSTRUMENTED drops (2026-08-04 quit incident). Rust would run
+    // these same two destructors implicitly in this same order — the point of
+    // spelling them out is the log lines: if a Qt/QML/Wayland destructor ever
+    // wedges again, the LAST line printed names the exact statement, instead
+    // of a silent ghost process nobody can diagnose. The watchdog armed above
+    // still ends the process either way. KEEP these lines — they are cheap,
+    // and this bug already cost multiple rounds.
+    log::info!("[shutdown] dropping the QML engine");
+    drop(engine);
+    log::info!("[shutdown] engine down; dropping QGuiApplication");
+    drop(app);
+    log::info!("[shutdown] QGuiApplication down; returning from main");
 }

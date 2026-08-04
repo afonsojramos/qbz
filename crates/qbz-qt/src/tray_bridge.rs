@@ -82,6 +82,21 @@ pub mod qbz_tray {
         #[qinvokable]
         fn set_window_shown(self: Pin<&mut QbzTray>, shown: bool);
 
+        /// `closeOrHide`'s evidence line (2026-08-04): logs the two predicate
+        /// operands and the arm taken, RUST-side, so it lands in qbz.log —
+        /// QML's console.log only reaches stderr. One line that settles every
+        /// future "toggling Close to tray changes nothing" report: it shows
+        /// exactly what `trayLive` and `closeToTray` held at close time.
+        #[qinvokable]
+        fn close_decision(self: Pin<&mut QbzTray>, hiding: bool);
+
+        /// Arms the hard-exit watchdog from the QML quit arm — the quit paths
+        /// that do NOT pass through `tray_qt::quit` (window close / app-menu
+        /// Close / kiosk X / mini closeApp, all with close-to-tray off).
+        /// Idempotent; see `main.rs::arm_hard_exit_watchdog`.
+        #[qinvokable]
+        fn arm_quit_watchdog(self: Pin<&mut QbzTray>);
+
         /// Show + raise + focus the main window -> `Main.qml`'s
         /// `showFromTray()`.
         #[qsignal]
@@ -95,7 +110,10 @@ pub mod qbz_tray {
         #[qsignal]
         fn mini_present_requested(self: Pin<&mut QbzTray>);
         /// Quit the app -> `Main.qml`'s
-        /// `persistWindowGeometryOnExit(); Qt.quit()`.
+        /// `persistWindowGeometryOnExit(); Qt.exit(0)`. `Qt.exit`, not
+        /// `Qt.quit` — a `Qt.quit()` is vetoable by any window's close
+        /// handler and that veto is the 2026-08-04 "Quit closes the window,
+        /// not the app" bug (see `tray_qt::quit`).
         #[qsignal]
         fn quit_requested(self: Pin<&mut QbzTray>);
     }
@@ -167,5 +185,22 @@ impl qbz_tray::QbzTray {
     /// D18's report-back. Flag only — it never touches a window.
     pub fn set_window_shown(self: Pin<&mut Self>, shown: bool) {
         crate::tray_qt::set_window_shown(shown);
+    }
+
+    /// The close-choreography evidence line — see the declaration above. The
+    /// two operands are read off THIS object, i.e. the exact values QML's
+    /// predicate evaluated, so the line cannot disagree with the decision.
+    pub fn close_decision(self: Pin<&mut Self>, hiding: bool) {
+        log::info!(
+            "[tray] closeOrHide: tray_live={} close_to_tray={} -> {}",
+            self.as_ref().tray_live(),
+            self.as_ref().close_to_tray(),
+            if hiding { "hide to tray" } else { "quit" }
+        );
+    }
+
+    /// See the declaration above and `main.rs::arm_hard_exit_watchdog`.
+    pub fn arm_quit_watchdog(self: Pin<&mut Self>) {
+        crate::arm_hard_exit_watchdog("QML quit arm");
     }
 }

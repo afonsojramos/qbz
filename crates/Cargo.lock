@@ -6622,6 +6622,7 @@ dependencies = [
  "futures-util",
  "image",
  "ksni",
+ "libc",
  "log",
  "open",
  "qbz-app",

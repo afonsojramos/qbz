@@ -454,7 +454,8 @@ ApplicationWindow {
     // sites, both inside QWindow::event and both gated on the accepted flag, so
     // hiding never arms Qt's quit check but an ACCEPTED close does.
     //
-    // `onAboutToQuit` is still not a duplicate of it: `Qt.quit()` never raises
+    // `onAboutToQuit` is still not a duplicate of it: neither `Qt.exit(0)`
+    // (what every quit arm calls since 2026-08-04) nor `Qt.quit()` raises
     // `closing` (§15 trap 26), so the quit arm of `closeOrHide`, the tray's
     // `quit_requested` handler and any teardown that skips QML reach the
     // geometry flush only through here. Where both do run the second write is
@@ -537,14 +538,35 @@ ApplicationWindow {
     // `closeEvent` is the QQuickCloseEvent on the one path that carries one and
     // null on the other four.
     function closeOrHide(closeEvent) {
-        if (QbzTray.trayLive && QbzTray.closeToTray) {
+        var hide = QbzTray.trayLive && QbzTray.closeToTray
+        // The evidence line (2026-08-04): logged RUST-side so it lands in
+        // qbz.log — console.log only reaches stderr, which owner reports
+        // never carry. It prints both operands and the arm taken, which is
+        // the whole diagnosis of any future "Close to tray does nothing".
+        QbzTray.closeDecision(hide)
+        if (hide) {
             if (closeEvent)
                 closeEvent.accepted = false
             window.hideToTray()
             return
         }
+        // QUIT — via Qt.exit(0), NEVER Qt.quit(). Qt.quit() delivers
+        // QEvent::Quit, and QGuiApplication's handler first closes every
+        // top-level window, silently CANCELING the whole quit if any window
+        // refuses its close — this very function's hide arm refuses whenever
+        // the tray is live with close-to-tray on, and MiniWindow.qml's
+        // onClosing refuses unconditionally (its close means "exit the
+        // mini"). That veto is how "Quit QBZ" hid the window and left the
+        // process running (owner-reported three times; reproduced under VNC
+        // 2026-08-04: quit requested + Qt.quit() both logged, event loop
+        // still alive 25s later). Qt.exit() stops the event loops directly:
+        // no close events, no veto. Geometry is flushed explicitly below,
+        // and onAboutToQuit still runs when exec() returns.
+        if (closeEvent)
+            closeEvent.accepted = true
+        QbzTray.armQuitWatchdog()
         window.persistWindowGeometryOnExit()
-        Qt.quit()
+        Qt.exit(0)
     }
 
     // The tray's four signals (src/tray_bridge.rs:87-100). Rust owns no window
@@ -582,8 +604,15 @@ ApplicationWindow {
         function onQuitRequested() {
             console.log("[qml] tray -> quit: persisting geometry")
             window.persistWindowGeometryOnExit()
-            console.log("[qml] tray -> quit: calling Qt.quit()")
-            Qt.quit()
+            console.log("[qml] tray -> quit: calling Qt.exit(0)")
+            // Qt.exit(0), NEVER Qt.quit() — see closeOrHide's quit arm: a
+            // Qt.quit() here is vetoable by any window's onClosing (the
+            // close-to-tray arm, the mini's unconditional refuse), and that
+            // veto is exactly how the tray Quit hid the window and left the
+            // process alive (2026-08-04, three owner reports). The hard-exit
+            // watchdog for this path was armed Rust-side in tray_qt::quit(),
+            // before the signal was even emitted.
+            Qt.exit(0)
         }
     }
 
