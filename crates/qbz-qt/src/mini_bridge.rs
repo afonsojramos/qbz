@@ -58,13 +58,6 @@ pub mod qbz_mini {
         // The static artwork-derived card background (`mini_background_blur`).
         // Written by `toggle_background_blur` (contract A-10).
         #[qproperty(bool, background_blur)]
-        // K1 / contract A-5, and it is NEW WORK rather than a port: the Slint
-        // miniplayer has three comments promising always-on-top and zero code
-        // implementing it (§4.8). Seeded from `mini_always_on_top`, DEFAULT
-        // TRUE, and consumed by `MiniWindow.qml`'s `flags` expression as
-        // `| (QbzMini.alwaysOnTop ? Qt.WindowStaysOnTopHint : 0)`. Written by
-        // `toggle_always_on_top` (contract A-11).
-        #[qproperty(bool, always_on_top)]
         // The navigable queue: the current track first, then the FULL
         // unfiltered upcoming list. Built by `mini_qt::mini_queue_doc` and
         // published from the ONE queue funnel (`queue_qt::publish`), never from
@@ -108,13 +101,6 @@ pub mod qbz_mini {
         #[qinvokable]
         fn toggle_background_blur(self: Pin<&mut QbzMini>);
 
-        /// Flip + persist always-on-top (contract A-11, K1). The capsule's
-        /// `a-pin` button is its only caller. Reassigning `flags` on a MAPPED
-        /// window is the one runtime risk §4.8 names (U-6); the pref persists
-        /// either way, so the next open honours it even if a platform were to
-        /// refuse the live change.
-        #[qinvokable]
-        fn toggle_always_on_top(self: Pin<&mut QbzMini>);
 
         /// Persist the expanded window size (contract A-14). Qt has no
         /// `WindowEvent::Resized`, so `MiniWindow.qml`'s 400 ms debounce calls
@@ -194,7 +180,6 @@ pub struct QbzMiniRust {
     open: bool,
     surface: i32,
     background_blur: bool,
-    always_on_top: bool,
     mini_queue_json: QString,
     mini_width: f32,
     mini_height: f32,
@@ -210,7 +195,6 @@ impl Default for QbzMiniRust {
             open: false,
             surface: crate::mini_qt::initial_surface(),
             background_blur: crate::mini_qt::initial_background_blur(),
-            always_on_top: crate::mini_qt::initial_always_on_top(),
             mini_queue_json: QString::from(crate::mini_qt::MINI_QUEUE_EMPTY),
             mini_width: crate::mini_qt::initial_width(),
             mini_height: crate::mini_qt::initial_height(),
@@ -402,17 +386,6 @@ impl qbz_mini::QbzMini {
         crate::mini_qt::save_background_blur(value);
     }
 
-    /// Contract A-11 / K1 — the capsule's `a-pin` toggle.
-    ///
-    /// The reference has no counterpart to copy: §4.8's two probes found three
-    /// COMMENTS promising the affordance and no code. Flipping this property
-    /// re-evaluates `MiniWindow.qml`'s `flags` binding, which is where the
-    /// `Qt.WindowStaysOnTopHint` term actually lives.
-    pub fn toggle_always_on_top(mut self: Pin<&mut Self>) {
-        let value = !self.always_on_top;
-        self.as_mut().set_always_on_top(value);
-        crate::mini_qt::save_always_on_top(value);
-    }
 
     /// Contract A-14 — the debounced resize persist.
     ///

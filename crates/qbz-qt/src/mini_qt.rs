@@ -32,21 +32,11 @@ const KEY_WIDTH: &str = "mini_width";
 const KEY_HEIGHT: &str = "mini_height";
 const KEY_BACKGROUND_BLUR: &str = "mini_background_blur";
 const KEY_DEFAULT_VIEW: &str = "mini_default_view";
-/// K1 / contract §4.7 — the ONE key in this table with no Slint reader.
-/// Always-on-top does not exist in the reference (§4.8: three comments promise
-/// it, zero code implements it), so this key is written and read by the Qt side
-/// alone. It still goes through `save_pref`'s additive single-key patch like
-/// every other one, because the DOCUMENT is co-owned even where the key is not.
-const KEY_ALWAYS_ON_TOP: &str = "mini_always_on_top";
 
 /// Defaults, from `crates/qbz/src/ui_prefs.rs:677-688`.
 const DEFAULT_SURFACE: i32 = 2;
 const DEFAULT_WIDTH: f32 = 380.0;
 const DEFAULT_HEIGHT: f32 = 540.0;
-/// K1: always-on-top ships DEFAULT ON (contract §4.7's last row). A miniplayer
-/// that sinks behind the browser is the class-defining complaint, and the
-/// reference's own comments describe pinning as intended behaviour.
-const DEFAULT_ALWAYS_ON_TOP: bool = true;
 
 /// Resize-persistence guards and floors (`miniplayer.rs:455`, `:459`, `:461-462`).
 /// **Note the two different numbers**: 320 is the mid-transition-frame filter,
@@ -240,10 +230,6 @@ pub(crate) fn initial_background_blur() -> bool {
     crate::settings_qt::pref_bool(KEY_BACKGROUND_BLUR, false)
 }
 
-/// K1 — the seed for `QbzMini.always_on_top` (contract A-5).
-pub(crate) fn initial_always_on_top() -> bool {
-    crate::settings_qt::pref_bool(KEY_ALWAYS_ON_TOP, DEFAULT_ALWAYS_ON_TOP)
-}
 
 pub(crate) fn initial_width() -> f32 {
     crate::settings_qt::pref_f32(KEY_WIDTH, DEFAULT_WIDTH)
@@ -264,11 +250,6 @@ pub(crate) fn save_surface(surface: i32) {
 /// Persist the card backdrop toggle (`QbzMini.toggle_background_blur`, A-10).
 pub(crate) fn save_background_blur(value: bool) {
     crate::settings_qt::save_pref(KEY_BACKGROUND_BLUR, serde_json::Value::Bool(value));
-}
-
-/// Persist the pin (`QbzMini.toggle_always_on_top`, A-11 / K1).
-pub(crate) fn save_always_on_top(value: bool) {
-    crate::settings_qt::save_pref(KEY_ALWAYS_ON_TOP, serde_json::Value::Bool(value));
 }
 
 /// Persist the expanded geometry, ALREADY clamped by `geometry_to_persist`.

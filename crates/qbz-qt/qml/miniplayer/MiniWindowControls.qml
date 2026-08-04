@@ -187,13 +187,19 @@ Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                     onClicked: QbzMini.exit()
                 }
-                // K1. The pin the reference's own comments promise.
-                CapBtn {
-                    name: "pin"
-                    active: QbzMini.alwaysOnTop
-                    anchors.verticalCenter: parent.verticalCenter
-                    onClicked: QbzMini.toggleAlwaysOnTop()
-                }
+                // NO PIN. Owner ruling K1 shipped always-on-top as NEW work
+                // (the reference promises it in three comments and implements
+                // it nowhere), and the owner smoked it on real Plasma Wayland
+                // on 2026-08-04: `Qt.WindowStaysOnTopHint` did not keep the
+                // window above others. Their call was explicit — "si no
+                // podemos conseguir el keep on top, entonces mejor quitar el
+                // botón" — so the button, the property, the invokable and the
+                // pref are gone rather than left as a control that lies.
+                //
+                // The mechanism, so nobody re-adds it blind: on Wayland a
+                // client cannot raise itself above other clients. There is no
+                // "stay on top" in the core protocol; it needs a compositor
+                // policy or a KWin window rule. Qt has nothing to send.
                 CapBtn {
                     name: "layers"
                     active: QbzMini.backgroundBlur

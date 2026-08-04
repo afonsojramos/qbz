@@ -1617,7 +1617,22 @@ pub async fn seek_frac(runtime: &Arc<AppRuntime<LoggingAdapter>>, frac: f32) {
     let target = (frac.clamp(0.0, 1.0) * event.duration as f32) as u64;
     if let Err(e) = runtime.core().seek(target) {
         log::warn!("[qbz-qt] seek failed: {e}");
+        return;
     }
+    // Tell the desktop where we jumped to. Without this the MPRIS position is
+    // only ever refreshed on the play/pause edge, so a widget extrapolates
+    // from a base that is now wrong by the whole seek distance — the owner
+    // measured ~40 s of lag on 2026-08-04 after seeking forward.
+    //
+    // The shared crate exposes no `Seeked` emitter (`types.rs`), and
+    // `set_playback` already carries a position, so the honest fix inside the
+    // current API is to re-assert the state at the new position. The SHIPPING
+    // Slint build has the same gap and the same cure would apply there — that
+    // is a shared-crate conversation, not this one.
+    crate::media_controls_qt::push_playback_state(
+        runtime.core().player().get_playback_event().is_playing,
+        target,
+    );
 }
 
 pub async fn set_volume(runtime: &Arc<AppRuntime<LoggingAdapter>>, volume: f32) {

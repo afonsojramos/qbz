@@ -349,12 +349,23 @@ Rectangle {
 
                     // The capsule, with the EXTRA 8 px inset the full/compact
                     // mount does not have (:364).
+                    //
+                    // Vertically centred on the CARD, not on this 17 px header
+                    // — owner call, 2026-08-04. The reference centres it on the
+                    // header, but in micro the header is a 17 px strip at the
+                    // TOP of a 45 px card while the capsule is 26 px tall, so
+                    // the reference's own arithmetic leaves it overflowing
+                    // upward and visibly high. `root` is the footer, which in
+                    // micro IS the whole card (§13-D10), so its centre is the
+                    // card's centre. Anchoring across the parent boundary is
+                    // safe here and NOT the §8 rule-1 hazard: `root` is an id,
+                    // not a `parent.<something>` walk.
                     Loader {
                         z: 1
                         active: root.windowHovered
                         anchors.right: parent.right
                         anchors.rightMargin: 8
-                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.verticalCenter: root.verticalCenter
                         sourceComponent: Component {
                             MiniWindowControls {
                                 activeSurface: QbzMini.surface

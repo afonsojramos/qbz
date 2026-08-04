@@ -37,23 +37,13 @@ Window {
     // — owner ruling K1, §13-D15, and it DEFAULTS ON.
     //
     // The AOT term is NEW WORK rather than a port: §4.8's two probes found
-    // three comments in the reference promising the affordance
-    // (state.slint:4497, miniplayer.rs:170-171, MiniWindowControls.slint:2) and
-    // no code anywhere that sets it. The property is seeded from
-    // `mini_always_on_top` at bridge construction and toggled by the capsule's
-    // pin button.
-    //
-    // ⚠ THE ONE RUNTIME RISK, and it is §16 U-6: reassigning `flags` on a
-    // MAPPED window can make Qt destroy and recreate the platform window, which
-    // on Wayland loses the compositor-chosen position. §4.8 pre-specifies the
-    // fallback rather than leaving it to be improvised — evaluate the flags at
-    // enter() only and keep the pref and the button state — and the fallback is
-    // NOT taken: driven over RFB, toggling the pin left the window's geometry,
-    // its contents and its input focus untouched (no flicker, no jump, no
-    // re-created surface). A real compositor is still the owner's smoke item;
-    // the pref persists either way, so the next open honours it regardless.
+    // NO always-on-top term. It shipped under owner ruling K1 and was
+    // REMOVED on 2026-08-04 after the owner smoked it on real Plasma Wayland:
+    // the hint did nothing. A Wayland client cannot raise itself above other
+    // clients — there is no such request in the core protocol; it takes a
+    // compositor policy or a KWin rule, and Qt has nothing to send. The owner
+    // chose removal over a button that lies.
     flags: Qt.Window | Qt.FramelessWindowHint
-           | (QbzMini.alwaysOnTop ? Qt.WindowStaysOnTopHint : 0)
 
     // Literal, never translated (app.slint:283 uses a plain string, not @tr).
     title: "QBZ Mini Player"
@@ -97,47 +87,44 @@ Window {
     // The expanded size is the PERSISTED one, exposed by the bridge because
     // Rust cannot reach a QQuickWindow (A-6b). The reference reads the same two
     // prefs on every geometry apply (miniplayer.rs:404).
-    readonly property int winWidth: root.expanded ? Math.max(QbzMini.miniWidth, 340) : 380
+    // THE SIZE IS FIXED PER SURFACE, and min == max so the window manager
+    // cannot change it. Owner ruling, 2026-08-04, from a real failure: a
+    // Plasma tiling shortcut (Win+arrow) resized the mini to HALF THE SCREEN,
+    // the debounced persist wrote 1720 px into the shared ui_prefs.json, and
+    // every expanded surface opened giant from then on with no way back —
+    // the mini has no resize grips, so nothing in the app could undo it.
+    //
+    // Their ask was exact: force the sizes even when the OS says otherwise,
+    // but stay sensitive to POSITION. min == max does precisely that: a
+    // compositor may still move the window, and a tiling request that would
+    // resize it is refused.
+    //
+    // This drops the reference's user-resizable expanded mini, and with it
+    // the persisted pair (contract A-6b / AC-15). No loss in practice: this
+    // port never gave the mini a resize handle, so the only thing that could
+    // ever write those prefs was the WM — i.e. the bug. `QbzMini.miniWidth`
+    // and `miniHeight` are therefore no longer read here; the runaway values
+    // an earlier session persisted are ignored and self-heal.
+    readonly property int winWidth: 380
     readonly property int winHeight: root.expanded
-                                     ? Math.max(QbzMini.miniHeight, 420)
+                                     ? 540
                                      : (root.surfaceId === 0 ? 57 : 178)
-    // The ONLY floor that moves. Min WIDTH is 340 in every surface
-    // (miniplayer.rs:408-411).
-    readonly property int winMinHeight: root.expanded ? 420 : (root.surfaceId === 0 ? 57 : 170)
 
     width: root.winWidth
     height: root.winHeight
-    minimumWidth: 340
-    minimumHeight: root.winMinHeight
+    minimumWidth: root.winWidth
+    maximumWidth: root.winWidth
+    minimumHeight: root.winHeight
+    maximumHeight: root.winHeight
 
-    // --- The geometry persist (§4.7, A-14, §13-D14) ------------------------
-    // Qt has no `WindowEvent::Resized`, so the resize handler is this debounce.
-    // The template is the main window's own (qml/Main.qml:377-385), and the
-    // 400 ms interval is the same.
-    //
-    // It is DEBOUNCED because the alternative is what the reference does: a
-    // whole-file ui_prefs.json load + save per qualifying resize event, with no
-    // dirty check (`crates/qbz/src/miniplayer.rs:460-463`), which in Qt would
-    // be blocking file IO on the GUI thread inside a resize drag (§7-M10).
-    //
-    // It needs NO arming latch of its own, unlike Main.qml's 1200 ms one: the
-    // two guards inside `mini_qt::geometry_to_persist` already reject exactly
-    // the frames a latch would — `surface >= 2` drops micro and compact, whose
-    // sizes are constants, and `height >= 320` drops the mid-transition frames
-    // a surface switch produces (a 178 px compact frame is precisely what that
-    // filter is for). Note the filter is 320 and the stored floor is 420 — two
-    // different numbers, both behavioural (§15 trap 17).
-    Timer {
-        id: geometrySaveTimer
-        interval: 400
-        repeat: false
-        // A Timer has no `parent` (§8 rule 2, §15 trap 29) — the window is
-        // reached through its own id.
-        onTriggered: QbzMini.saveGeometry(root.width, root.height)
-    }
+    // NO GEOMETRY PERSIST. The size is fixed above and the WM cannot change
+    // it, so there is nothing left to debounce and save — and the persist is
+    // exactly what turned one stray tiling shortcut into a permanently giant
+    // mini. `QbzMini.saveGeometry` and `mini_qt::geometry_to_persist` stay in
+    // the tree with their unit test (UT-3): they are the correct rule for the
+    // day a real resize handle exists, and deleting a tested guard to re-derive
+    // it later is how this class of bug comes back.
 
-    onWidthChanged: geometrySaveTimer.restart()
-    onHeightChanged: geometrySaveTimer.restart()
 
     // A compositor close (Alt+F4, a panel's close entry) behaves EXACTLY like
     // the capsule's expand button — §13-D13, and it closes a hole the reference
@@ -147,13 +134,6 @@ Window {
     // (§3.1), so `accepted = false` is load-bearing twice.
     onClosing: function (close) {
         close.accepted = false
-        // Flush a pending resize (§4.7). Only when one is actually pending —
-        // an unconditional call would put a prefs write on every close, and the
-        // bridge's own dirty check would then be the only thing stopping it.
-        if (geometrySaveTimer.running) {
-            geometrySaveTimer.stop()
-            QbzMini.saveGeometry(root.width, root.height)
-        }
         QbzMini.exit()
     }
 
