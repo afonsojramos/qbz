@@ -190,6 +190,12 @@ ApplicationWindow {
         // importer makes (the whole progress panel, the log, the summary) is
         // dropped on the floor with nothing logged on either side.
         QbzPlaylistImport.boot()
+        // Miniplayer (2026-08-03 miniplayer/tray contract, block B1). Booted
+        // like every other domain singleton, after QbzSession: `boot()` is what
+        // registers the Qt-thread hop, and without it `mini_bridge::ui()` is a
+        // SILENT no-op — the mini queue document would never reach QML and
+        // nothing would be logged on either side.
+        QbzMini.boot()
 
         // Seed the maximized latch ONCE, imperatively — see its declaration for
         // why it must not be a binding on the bridge property.

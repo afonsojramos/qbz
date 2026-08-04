@@ -112,15 +112,17 @@ static VIEW: Mutex<ViewState> = Mutex::new(ViewState {
     page: 0,
 });
 
-/// queue.rs `display_title` (version suffix).
-fn display_title(track: &QueueTrack) -> String {
+/// queue.rs `display_title` (version suffix). `pub(crate)` for `mini_qt`'s row
+/// projection, which must not grow a private copy of it.
+pub(crate) fn display_title(track: &QueueTrack) -> String {
     match track.version.as_deref().filter(|v| !v.is_empty()) {
         Some(version) => format!("{} ({version})", track.title),
         None => track.title.clone(),
     }
 }
 
-fn fmt_duration(secs: u64) -> String {
+/// `pub(crate)` for the same reason as `display_title`.
+pub(crate) fn fmt_duration(secs: u64) -> String {
     format!("{}:{:02}", secs / 60, secs % 60)
 }
 
@@ -319,6 +321,49 @@ fn publish_coverflow(state: &qbz_models::QueueState) {
     });
 }
 
+/// Last miniplayer queue document handed to Qt — the mini's OWN
+/// identical-document guard, same discipline as `LAST_COVERFLOW_JSON` above.
+/// The mini queue surface is scrollable, and a post that carries an unchanged
+/// document resets its scroll for nothing (miniplayer/tray contract §7-M9).
+///
+/// **Correcting §7-M9's stated reason, which does not hold in this tree:** it
+/// says the mini is fed by "a pump that ticks every second". `publish` is not
+/// per-tick — its three call sites inside `start_poll_loop` are all edge-gated
+/// (`playback_qt.rs`: the peer-track-id edge, the track-id edge, and the
+/// stop-after arm), plus the explicit mutation sites. So the guard earns its
+/// place on the mutation path (a reorder or a remove that leaves the mini
+/// document identical), not on a 1 Hz republish that does not exist.
+///
+/// **Known asymmetry with its sibling, stated rather than hidden (§8.1):**
+/// `publish_coverflow` has `COVERFLOW_CACHE` and skips the serialize itself
+/// when the queue sequence is unchanged; this one serializes first and compares
+/// after. Accepted here because `publish` is edge-triggered, so the cost is one
+/// build per real queue change, not per frame. If `publish` ever becomes
+/// unconditional, this is the function that needs the cache.
+static LAST_MINI_QUEUE_JSON: Mutex<String> = Mutex::new(String::new());
+
+/// Build + publish the miniplayer's navigable queue document
+/// (`{"currentId":"…","rows":[…]}` — `mini_qt::mini_queue_doc`).
+///
+/// Its own function rather than an inline block, because the guard's early
+/// `return` aborts whatever encloses it: inlined into `publish`, an unchanged
+/// mini document would skip the panel's own post below and silently freeze the
+/// queue panel. Runs on EVERY publish BEFORE the queueJson dedup, for the same
+/// reason `publish_coverflow` does — a change past the current page can leave
+/// queueJson byte-identical while the mini model moved.
+fn publish_mini_queue(state: &qbz_models::QueueState) {
+    let doc = crate::mini_qt::mini_queue_doc(state);
+    let mut last = LAST_MINI_QUEUE_JSON.lock().unwrap();
+    if *last == doc {
+        return;
+    }
+    last.clear();
+    last.push_str(&doc);
+    crate::mini_bridge::ui(move |mut b| {
+        b.as_mut().set_mini_queue_json(QString::from(doc.as_str()));
+    });
+}
+
 /// Queue-wide upcoming indices of the rows the panel is CURRENTLY showing, in
 /// display order (search filter + pagination applied) — the hoisted port of
 /// `crates/qbz/src/queue.rs::resolve_upcoming_index`, resolved once per action
@@ -502,6 +547,9 @@ pub async fn publish(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
     // The coverflow doc publishes on EVERY publish, BEFORE the queueJson
     // dedup below — see publish_coverflow for why.
     publish_coverflow(&state);
+    // The miniplayer's navigable model rides the same funnel and the same
+    // before-the-dedup placement, with its own guard (see publish_mini_queue).
+    publish_mini_queue(&state);
     // Identical document -> no Qt hop, no QML re-parse, no artwork re-dispatch.
     // The compare/store and the Qt post stay under ONE lock so two concurrent
     // publishes cannot post out of order and strand a stale document behind an

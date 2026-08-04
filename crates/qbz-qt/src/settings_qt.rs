@@ -923,13 +923,29 @@ pub fn pref_json(key: &str) -> Option<serde_json::Value> {
         .and_then(|v| v.get(key).cloned())
 }
 
-/// Additive single-key patch of ui_prefs.json — THE writer every other pref
-/// setter in this file funnels through, so they all inherit `update_prefs`'
-/// atomic rename and its refusal to rebuild an unparsable document.
+/// f32 reader WITH a default — same additive single-key discipline as
+/// `pref_bool`/`pref_str`/`pref_i32`. Added for the miniplayer geometry keys
+/// (`mini_width`/`mini_height`), which the Slint app declares as f32 and
+/// therefore writes as JSON numbers (`crates/qbz/src/ui_prefs.rs:556-559`).
+/// `read_pref_f32` below returns an `Option` and has no default, so folding a
+/// default into each call site would be the third private copy of one read the
+/// accessor block exists to prevent (see that function's own comment).
+pub fn pref_f32(key: &str, default: f32) -> f32 {
+    let Some(path) = prefs_path() else {
+        return default;
+    };
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|v| v.get(key).and_then(serde_json::Value::as_f64))
+        .map(|n| n as f32)
+        .unwrap_or(default)
+}
+
 /// Read one ui_prefs key as an f32. The crate had no public reader — theme_qt
 /// kept a private one — so the volume restore would otherwise have grown a
 /// third private copy of the same read (the exact duplication the write
-/// discipline above exists to prevent).
+/// discipline below exists to prevent).
 pub(crate) fn read_pref_f32(key: &str) -> Option<f32> {
     let path = prefs_path()?;
     let text = std::fs::read_to_string(path).ok()?;
@@ -937,6 +953,9 @@ pub(crate) fn read_pref_f32(key: &str) -> Option<f32> {
     doc.get(key)?.as_f64().map(|v| v as f32)
 }
 
+/// Additive single-key patch of ui_prefs.json — THE writer every other pref
+/// setter in this file funnels through, so they all inherit `update_prefs`'
+/// atomic rename and its refusal to rebuild an unparsable document.
 pub fn save_pref(key: &str, value: serde_json::Value) {
     update_prefs(|doc| {
         doc.insert(key.to_string(), value);

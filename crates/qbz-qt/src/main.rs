@@ -80,6 +80,10 @@ mod qconnect_bridge;
 // QbzKioskNav singleton over the state machine in kiosk_nav_qt.rs. It has
 // no boot() — nothing in Rust ever publishes into it (see its header).
 mod kiosk_nav_bridge;
+// Miniplayer (2026-08-03 miniplayer/tray contract, block B1): the QbzMini
+// singleton — the port of the Slint MiniPlayerState global. Its controller
+// half is `mini_qt` below, which is a PLAIN module.
+mod mini_bridge;
 mod kiosk_nav_qt;
 // The kiosk profile itself (the same contract, §8): env/pref resolution, the
 // live Kiosk <-> Desktop toggle, and the boot decisions that follow from it.
@@ -220,6 +224,11 @@ mod qconnect_transport_qt;
 // §11.5 wiring (init_service + spawns) lives in `on_session_entered` below.
 mod qconnect_event_sink_qt;
 mod qconnect_qt;
+// Miniplayer controller (the same contract, block B1, §4.4.1/§4.7): the queue
+// projection, the prefs seeds and the row/geometry arithmetic behind QbzMini.
+// Plain module — it declares no #[cxx_qt::bridge], so it must NOT appear in
+// build.rs's rust_files.
+mod mini_qt;
 
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, OnceLock};
