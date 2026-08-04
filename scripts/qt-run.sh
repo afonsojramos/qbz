@@ -123,7 +123,7 @@ if [[ "${DEBUG:-0}" == 1 ]]; then
 else
   PROFILE=release; PROFILE_ARGS=(--release)
 fi
-BIN="crates/target/${PROFILE}/qbz-qt"
+BIN="crates/target/${PROFILE}/qbz"
 
 # --- ONE BUILD AT A TIME, BOX-WIDE ------------------------------------------
 # Not paranoia: a Slint `qbz-ui` rustc in another worktree peaks 20-30 GB on a

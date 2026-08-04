@@ -28,7 +28,7 @@ cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/.."
 
 UNAME_S="$(uname -s)"
 PROFILE=$([[ "${DEBUG:-0}" == 1 ]] && echo debug || echo release)
-BIN="crates/target/${PROFILE}/qbz-qt"
+BIN="crates/target/${PROFILE}/qbz"
 INTERVAL="${INTERVAL:-2}"
 
 [[ -x "${BIN}" ]] || { echo "[qt-diag] no binary at ${BIN} — build first (./scripts/qt-run.sh NORUN=1)" >&2; exit 1; }

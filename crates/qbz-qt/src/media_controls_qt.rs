@@ -141,6 +141,18 @@ pub(crate) fn push_now_playing(track: &qbz_models::QueueTrack, title: &str, albu
             // for local/plex (`qbz-media-controls/src/types.rs:30-36`).
             url: qbz_media_controls::xesam_url_for(track.source.as_deref(), track.id),
         });
+        // One line per real track edge. It exists because "Plasma sees
+        // nothing" has two very different causes — the player never
+        // registered, or it registered and no metadata was ever pushed — and
+        // without this the log cannot tell them apart. A desktop applet
+        // generally hides a player that is Stopped with empty metadata, so
+        // the FIRST push is the interesting event, not the hundredth.
+        log::info!(
+            "[mpris] metadata pushed: {} — {} ({}s)",
+            title,
+            track.artist,
+            track.duration_secs
+        );
     }
     mc.set_playback(
         qbz_media_controls::PlaybackStatus::Playing,

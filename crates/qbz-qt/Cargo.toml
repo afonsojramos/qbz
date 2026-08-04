@@ -6,7 +6,17 @@ edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "qbz-qt"
+# The SHIPPED name is `qbz` (owner, 2026-08-04). The package stays
+# `qbz-qt`, so `cargo build -p qbz-qt` is unchanged; only the artifact
+# moves to target/<profile>/qbz.
+#
+# ⚠ `crates/qbz` (the Slint binary) declares the SAME bin name and
+# shares this workspace's target dir, so both write
+# target/<profile>/qbz and the last build wins. That is survivable only
+# because the Slint binary is never built in this worktree (the qbz-ui
+# 20-30 GB wall). If it ever is, whoever built last owns the file — and
+# a smoke against "the wrong qbz" is silent.
+name = "qbz"
 path = "src/main.rs"
 
 [dependencies]
