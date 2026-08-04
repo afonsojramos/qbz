@@ -148,6 +148,18 @@ pub mod qbz_shell {
         /// KIOSK port can consume it rather than having to invent it. See
         /// `set_reduce_motion` for the two halves and why one is dormant.
         #[qproperty(bool, reduce_motion)]
+        /// Is the kiosk touch shell the one currently mounted?
+        ///
+        /// The Qt counterpart of `ShellState.kiosk-profile`
+        /// (`qbz-ui/ui/state.slint:4054`). Seeded from the resolved profile at
+        /// construction and rewritten by the live toggle
+        /// (`kiosk_profile_qt::toggle`), which is the ONLY writer.
+        ///
+        /// QML reads it for the chrome that differs in kiosk: the view menu's
+        /// "Kiosk mode"/"Desktop mode" label, and the small bar's flyout,
+        /// which in kiosk collapses to the profile row alone
+        /// (`shell/PlayerBarSmall.slint:772,780,788,796,811,819,826,847,983`).
+        #[qproperty(bool, kiosk_profile)]
         #[qproperty(i32, ambient_mode)]
         // Album-art triad (ambient_qt.rs), pushed on track change.
         #[qproperty(QString, ambient_primary)]
@@ -413,6 +425,7 @@ pub struct QbzShellRust {
     window_min_width: f32,
     window_min_height: f32,
     reduce_motion: bool,
+    kiosk_profile: bool,
     ambient_mode: i32,
     ambient_primary: QString,
     ambient_secondary: QString,
@@ -475,6 +488,7 @@ impl Default for QbzShellRust {
             window_min_width: crate::settings_qt::WINDOW_MIN_WIDTH,
             window_min_height: crate::settings_qt::WINDOW_MIN_HEIGHT,
             reduce_motion: reduce_motion_at_boot(),
+            kiosk_profile: crate::kiosk_profile_qt::active(),
             ambient_mode: crate::settings_qt::app_background_mode(),
             // The Slint ImmersiveState default triad (pre-artwork colors).
             ambient_primary: QString::from("#00dcc8"),
@@ -541,13 +555,6 @@ static QT_THREAD: OnceLock<CxxQtThread<QbzShell>> = OnceLock::new();
 
 /// Queue a shell-bridge mutation onto the Qt event loop (no-op before
 /// boot registers the thread).
-/// Kiosk profile — NOT PORTED YET. The kiosk contract
-/// (`qbz-nix-docs/qt-frontend/2026-08-02-kiosk-port/00-CONTRACT.md:244`)
-/// mandates "FORCED reduce-motion while in kiosk", so when that lands it
-/// replaces this literal with the real profile flag and the seam is already
-/// tested. One line, on their side.
-const KIOSK_PROFILE_ACTIVE: bool = false;
-
 /// The boot value of [`reduce_motion`].
 ///
 /// The reference is `kiosk_profile || !use_gpu_renderer`. Only the FIRST half
@@ -561,8 +568,13 @@ const KIOSK_PROFILE_ACTIVE: bool = false;
 /// exactly where it means nothing and stay off everywhere it would matter.
 /// If a genuine software-tier session ever appears (a remote desktop, a
 /// llvmpipe box), that is when the second half earns its probe.
+///
+/// The kiosk half is now live (2026-08-02 kiosk-port contract §8.3):
+/// `kiosk_profile_qt::active()` is latched by `init_at_boot()` before the
+/// bridge is constructed, and the live toggle republishes both this and
+/// `kiosk_profile` together.
 fn reduce_motion_at_boot() -> bool {
-    KIOSK_PROFILE_ACTIVE
+    crate::kiosk_profile_qt::active()
 }
 
 pub(crate) fn ui(f: impl FnOnce(Pin<&mut QbzShell>) + Send + 'static) {

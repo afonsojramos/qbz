@@ -96,14 +96,24 @@ QbzContextMenu {
     }
     Repeater {
         // Window-mode rows. `live` flips per-row inside the shared delegate
-        // (2026-08-02 immersive-port §7): only the Immersive row is wired in
-        // B2 — it loses the 0.45 dim and gains the openFromMenu click.
-        // Miniplayer + Kiosk stay inert (kiosk goes live in the
-        // 2026-08-02-kiosk-port contract §8 — do not touch it).
+        // (2026-08-02 immersive-port §7); Immersive went live in that
+        // contract's B2, Kiosk in the 2026-08-02-kiosk-port §8.1. Miniplayer
+        // remains the one inert row (sanctioned, kiosk contract §9.2).
+        //
+        // Each row carries its own `action` because the delegate's MouseArea
+        // used to call QbzImmersive.openFromMenu() unconditionally: flipping
+        // any other row's `live` would have made it open Immersive.
+        //
+        // The Kiosk label mirrors the profile, 1:1 with the reference
+        // (`shell/PlayerBar.slint:797`): in kiosk it reads "Desktop mode",
+        // because the row is the way back out.
         model: [
-            { "label": QbzSession.tr("Miniplayer", QbzSession.trRev), "icon": "picture-in-picture-2", "live": false },
-            { "label": QbzSession.tr("Immersive", QbzSession.trRev), "icon": "maximize-2", "live": true },
-            { "label": QbzSession.tr("Kiosk mode", QbzSession.trRev), "icon": "hard-drive", "live": false },
+            { "label": QbzSession.tr("Miniplayer", QbzSession.trRev), "icon": "picture-in-picture-2", "live": false, "action": "miniplayer" },
+            { "label": QbzSession.tr("Immersive", QbzSession.trRev), "icon": "maximize-2", "live": true, "action": "immersive" },
+            { "label": QbzShell.kioskProfile
+                       ? QbzSession.tr("Desktop mode", QbzSession.trRev)
+                       : QbzSession.tr("Kiosk mode", QbzSession.trRev),
+              "icon": "hard-drive", "live": true, "action": "kiosk" },
         ]
         delegate: Rectangle {
             required property var modelData
@@ -134,7 +144,12 @@ QbzContextMenu {
                 cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
                 onClicked: {
                     root.close()
-                    QbzImmersive.openFromMenu()
+                    if (modelData.action === "immersive")
+                        QbzImmersive.openFromMenu()
+                    else if (modelData.action === "kiosk")
+                        QbzSession.toggleProfile()
+                    // "miniplayer" has live: false, so `enabled` above keeps
+                    // this handler unreachable for it.
                 }
             }
         }

@@ -449,9 +449,17 @@ ApplicationWindow {
         id: screenLoader
         anchors.fill: parent
         active: QbzSession.screen !== "splash"
+        // "kiosk" is a SIBLING of "shell", not a mode inside it — the same
+        // shape as the reference (app.slint:38's AppScreen enum, with the two
+        // shells as sibling mounts at :145 and :205). Both read the same
+        // bridges, so the live toggle swaps them with nothing torn down.
+        // An unknown id falls through to "" and the Loader goes blank, which
+        // is the documented failure mode for a missing route (nav_qt.rs:14-16)
+        // and is what a missing KioskShell.qml would look like.
         source: QbzSession.screen === "login"
                 ? "LoginScreen.qml"
-                : (QbzSession.screen === "shell" ? "shell/AppShell.qml" : "")
+                : (QbzSession.screen === "shell" ? "shell/AppShell.qml"
+                   : (QbzSession.screen === "kiosk" ? "shell/KioskShell.qml" : ""))
         // Hand the host window down for drag/maximize/resize (custom chrome).
         onLoaded: if (screenLoader.item) screenLoader.item.hostWindow = window
     }

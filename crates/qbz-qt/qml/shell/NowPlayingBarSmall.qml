@@ -477,7 +477,18 @@ Rectangle {
                         name: "layout-grid"
                         active: smallViewMenu.opened
                         anchors.verticalCenter: parent.verticalCenter
-                        onClicked: smallViewMenu.openBelowRight(smallViewBtn)
+                        // In kiosk the button IS the toggle, skipping the menu
+                        // (`shell/PlayerBarSmall.slint:746-750`). Every other
+                        // row of that flyout is gated `!kiosk-profile` in the
+                        // reference, so in kiosk it would carry a single row —
+                        // which the fixed-height popup floats high above the
+                        // button (the reason given at `:741-745`).
+                        onClicked: {
+                            if (QbzShell.kioskProfile)
+                                QbzSession.toggleProfile()
+                            else
+                                smallViewMenu.openBelowRight(smallViewBtn)
+                        }
                     }
                     QbzIconButton {
                         name: "mic-vocal"

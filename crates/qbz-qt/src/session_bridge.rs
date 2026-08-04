@@ -24,7 +24,14 @@ pub mod qbz_session {
         #[qobject]
         #[qml_element]
         #[qml_singleton]
-        // "splash" | "login" | "shell"
+        // "splash" | "login" | "shell" | "kiosk"
+        //
+        // "kiosk" is the small-panel touch shell — a SIBLING of "shell", not a
+        // mode inside it, exactly as the reference models it
+        // (`qbz-ui/ui/app.slint:38`: `enum AppScreen { splash, login, shell,
+        // kiosk }`, with the two shells as sibling mounts at `:145` and
+        // `:205`). Every `*State` global survives the swap untouched, which is
+        // what lets the live toggle keep playback running.
         #[qproperty(QString, screen)]
         // Login narration: 0 idle / 1 waiting-for-browser / 2 authenticating.
         #[qproperty(i32, login_phase)]
@@ -76,6 +83,12 @@ pub mod qbz_session {
         /// Shell logout: back to the login screen.
         #[qinvokable]
         fn logout(self: Pin<&mut QbzSession>);
+        /// Kiosk <-> Desktop live toggle (2026-08-02 kiosk-port contract
+        /// §8.1). Persists the profile, flips `QbzShell.kioskProfile` and
+        /// swaps `screen` between "kiosk" and "shell" — the shells share every
+        /// bridge, so nothing is torn down and playback keeps running.
+        #[qinvokable]
+        fn toggle_profile(self: Pin<&mut QbzSession>);
 
         /// i18n lookup against the shared gettext catalog (qbz-i18n), so the
         /// QML texts reuse the EXISTING .po translations via the same msgids
@@ -201,6 +214,10 @@ impl qbz_session::QbzSession {
 
     pub fn logout(self: Pin<&mut Self>) {
         crate::do_logout();
+    }
+
+    pub fn toggle_profile(self: Pin<&mut Self>) {
+        crate::kiosk_profile_qt::toggle();
     }
 
     pub fn tr(&self, msgid: QString, rev: i32) -> QString {

@@ -19,7 +19,14 @@
 //! `artistreleases`, `settings`, `search`, `playlist`, `discoverbrowse`,
 //! `playlistbrowse`, `recentalbums`, `mostplayedalbums`, `label`,
 //! `labelreleases`, `mix`, `mixtapes`, `collections`, `mixtapedetail`,
-//! `discobuilder`, `blacklist`, `playlistmanager`.
+//! `discobuilder`, `blacklist`, `playlistmanager`, `nowplaying`.
+//!
+//! `nowplaying` is KIOSK-ONLY (2026-08-02 kiosk-port contract §3): it is the
+//! NavRail's fifth tile and the route the kiosk's full-screen player lives on.
+//! The desktop shell has no equivalent — its transport is the persistent bar —
+//! so `ContentRouter.qml` mounts it only in kiosk mode. It needs no arm in
+//! `crate::navigate_to`: the view reads the queue and player bridges, both of
+//! which are already live.
 
 use std::sync::Mutex;
 

@@ -81,6 +81,9 @@ mod qconnect_bridge;
 // no boot() — nothing in Rust ever publishes into it (see its header).
 mod kiosk_nav_bridge;
 mod kiosk_nav_qt;
+// The kiosk profile itself (the same contract, §8): env/pref resolution, the
+// live Kiosk <-> Desktop toggle, and the boot decisions that follow from it.
+mod kiosk_profile_qt;
 mod artwork_qt;
 mod atmosphere_qt;
 mod bridge;
@@ -482,7 +485,11 @@ fn enter_shell(session: auth_qt::SessionInfo) {
         b.as_mut().set_login_error(QString::from(""));
         b.as_mut().set_restore_error(QString::from(""));
         b.as_mut().set_login_phase(0);
-        b.as_mut().set_screen(QString::from("shell"));
+        // Kiosk profile (2026-08-02 kiosk-port contract §8.2): the post-login
+        // screen is the kiosk touch shell when the profile is active. The Qt
+        // spelling of `resolved_shell_screen()` (Slint main.rs:7869-7876).
+        b.as_mut()
+            .set_screen(QString::from(kiosk_profile_qt::shell_screen()));
     });
 }
 
@@ -556,7 +563,9 @@ pub(crate) fn start_offline() {
                     b.as_mut().set_login_error(QString::from(""));
                     b.as_mut().set_restore_error(QString::from(""));
                     b.as_mut().set_login_phase(0);
-                    b.as_mut().set_screen(QString::from("shell"));
+                    // Same profile resolution as the login path (§8.2).
+                    b.as_mut()
+                        .set_screen(QString::from(kiosk_profile_qt::shell_screen()));
                 });
             }
             Err(e) => {
@@ -2274,6 +2283,13 @@ fn main() {
     } else {
         boot_lang.as_str()
     });
+    // Kiosk profile (2026-08-02 kiosk-port contract §8.2/§8.3): QBZ_PROFILE
+    // wins, else the persisted ui_prefs.profile key. Resolved HERE, before the
+    // bridges are constructed, because QbzShell seeds both `kiosk_profile` and
+    // `reduce_motion` from it at construction (shell_bridge.rs) and the
+    // post-login screen writes read it (:489, :565).
+    kiosk_profile_qt::init_at_boot();
+
     // rustls process-level CryptoProvider (aws-lc-rs) — required before any
     // reqwest call, same as the Slint and daemon binaries.
     qbz_app::ensure_crypto_provider();
