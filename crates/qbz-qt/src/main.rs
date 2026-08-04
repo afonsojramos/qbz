@@ -42,6 +42,8 @@ mod search_bridge;
 // Local-library half of the cortinilla (same contract, commit C6): the pure
 // + blocking mappers shared by the desktop and immersive dropdowns.
 mod search_local;
+// Instant cached paint for the cortinilla (contract C11, rulings R1+R6).
+mod search_cache_qt;
 mod local_bridge;
 mod library_bridge;
 mod album_bridge;

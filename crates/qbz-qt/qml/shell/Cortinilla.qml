@@ -245,8 +245,13 @@ Item {
                 id: bodyColumn
                 width: bodyFlick.width
 
-                // --- Loading skeleton (no cached instant-paint — one clean
-                // apply, Cortinilla.slint) -------------------------------
+                // --- Loading skeleton --------------------------------
+                // Shown on a cache MISS. There IS a cached instant paint now
+                // (rulings R1/R6, default on, ui_prefs opt-out
+                // `cortinilla_instant_paint`): on a hit the controller sends
+                // the cached rows and loading=false together, so this block
+                // never appears. It stays fully implemented as the opt-out
+                // target and the cold path — it is not dead code.
                 Column {
                     id: skeleton
                     visible: QbzSearch.cortinillaLoading

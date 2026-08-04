@@ -167,6 +167,7 @@ where
         crate::sidebar_qt::init_pinned(&dir);
         // Phase 15: intelligent-search service (cortinilla cache+ranking).
         crate::search_qt::init(&dir, crate::search_qt::intelligent_search_pref());
+        crate::search_cache_qt::init();
         // Phase 17: playlist is_owner math.
         crate::playlist_qt::set_user_id(user_id);
         bind_per_user_stores(&dir, user_id);
@@ -301,6 +302,7 @@ where
                 // Phase 15: intelligent-search service (cortinilla
                 // cache+ranking).
                 crate::search_qt::init(&dir, crate::search_qt::intelligent_search_pref());
+        crate::search_cache_qt::init();
                 // Phase 17: playlist is_owner math.
                 crate::playlist_qt::set_user_id(user_id);
                 bind_per_user_stores(&dir, user_id);
@@ -377,6 +379,7 @@ where
         crate::sidebar_qt::init_pinned(&dir);
         // Phase 15: intelligent-search service (cortinilla cache+ranking).
         crate::search_qt::init(&dir, crate::search_qt::intelligent_search_pref());
+        crate::search_cache_qt::init();
         // Phase 17: playlist is_owner math.
         crate::playlist_qt::set_user_id(user_id);
         // NOT optional on the offline path — see the helper's doc comment for

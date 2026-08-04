@@ -100,6 +100,7 @@ pub fn teardown() {
     if let Ok(mut guard) = SERVICE.lock() {
         *guard = None;
     }
+    crate::search_cache_qt::teardown();
     next_cort_version();
     *LAST_CORT.lock().unwrap_or_else(|e| e.into_inner()) = None;
     *LAST_CORT_LOCAL.lock().unwrap_or_else(|e| e.into_inner()) = Vec::new();
@@ -795,11 +796,30 @@ pub async fn live(runtime: &Arc<AppRuntime<LoggingAdapter>>, query: &str) {
     let status = crate::offline_fwd::engine().status();
     let expand_local = status.is_offline() || status.offline_session;
     let caps = crate::search_local::LocalCaps::for_session(expand_local);
-    // Query echo + loading flag ride the cortinillaLoading property and a
-    // minimal payload (skeleton rows are pure QML).
-    crate::search_bridge::ui(move |mut b| {
-        b.as_mut().set_cortinilla_loading(true);
-    });
+
+    // ---- the instant-paint probe (rulings R1 + R6) ----------------------
+    // Synchronous, before the debounce, so what the user sees at t~0 is
+    // decided here and cannot race the 220 ms sleep below.
+    //
+    // `cortinillaLoading` has exactly ONE owner: this block. On a HIT the
+    // cached rows and `loading = false` go out in the SAME ui() closure, so
+    // the skeleton never appears; on a miss the skeleton is raised. It is
+    // written once more at the publish, and nowhere else.
+    let shown: Option<CortinillaData> = crate::search_cache_qt::get(&q);
+    match &shown {
+        Some(cached) => {
+            let json = serde_json::to_string(cached).unwrap_or_else(|_| "{}".into());
+            crate::search_bridge::ui(move |mut b| {
+                b.as_mut().set_cortinilla_json(QString::from(json.as_str()));
+                b.as_mut().set_cortinilla_loading(false);
+            });
+        }
+        None => {
+            crate::search_bridge::ui(move |mut b| {
+                b.as_mut().set_cortinilla_loading(true);
+            });
+        }
+    }
 
     // ---- end of the synchronous half; the debounce starts here ----------
     // 220 ms (CORTINILLA_DEBOUNCE): one load per pause, not one per
@@ -863,13 +883,31 @@ pub async fn live(runtime: &Arc<AppRuntime<LoggingAdapter>>, query: &str) {
     }
     let missing = attach_urls(urls);
     *LAST_CORT.lock().unwrap_or_else(|e| e.into_inner()) = Some(data.clone());
+    // WRITE POINT 1 of exactly two — AFTER pass-1 artwork resolution. Writing
+    // any earlier caches rows with empty art_path, and the QML draws art_path
+    // only: a hit would paint cover-less rows AND the gate below would fire on
+    // every hit, which is the repaint this whole thing exists to avoid.
+    crate::search_cache_qt::put(&q, &data);
+    // THE EQUALITY GATE. If the instant paint already showed this exact
+    // payload, there is nothing to repaint — and NOT repainting is the whole
+    // difference between this and the version that glitched. `loading` is
+    // still cleared, because a cache miss raised the skeleton.
+    let unchanged = shown.as_ref() == Some(&data);
+    if unchanged {
+        log::debug!("[qbz-qt] cortinilla: fresh payload == instant paint, no repaint");
+    }
     crate::search_bridge::ui(move |mut b| {
         if is_current_cort_version(version) {
-            let json = serde_json::to_string(&data).unwrap_or_else(|_| "{}".into());
-            b.as_mut().set_cortinilla_json(QString::from(json.as_str()));
+            if !unchanged {
+                let json = serde_json::to_string(&data).unwrap_or_else(|_| "{}".into());
+                b.as_mut().set_cortinilla_json(QString::from(json.as_str()));
+            }
             b.as_mut().set_cortinilla_loading(false);
         }
     });
+    // The query is moved into the artwork task so write point 2 can key the
+    // refreshed entry the same way write point 1 did.
+    let q_art = q.clone();
     if !missing.is_empty() {
         crate::spawn(async move {
             crate::artwork_qt::download_missing(missing).await;
@@ -888,6 +926,11 @@ pub async fn live(runtime: &Arc<AppRuntime<LoggingAdapter>>, query: &str) {
                     }
                 }
                 let _ = attach_urls(urls);
+                // WRITE POINT 2 of two: refresh the entry with the downloaded
+                // covers. Without this the NEXT hit would instant-paint the
+                // pass-1 payload, whose art_paths differ from the settled
+                // ones, and the gate would fire a repaint forever.
+                crate::search_cache_qt::put(&q_art, data);
                 let data = data.clone();
                 *LAST_CORT.lock().unwrap_or_else(|e| e.into_inner()) = Some(data.clone());
                 crate::search_bridge::ui(move |mut b| {

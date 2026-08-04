@@ -170,19 +170,29 @@ Item {
                 id: bodyColumn
                 width: bodyFlick.width
 
-                // --- Loading skeleton (4 rows; skeleton-only, no cached
-                // instant-paint — the desktop Cortinilla.qml:143-194 idiom,
-                // glass-white boxes like ImmersiveSkeletonRow) --------------
+                // --- Loading skeleton (4 rows, glass-white boxes like
+                // ImmersiveSkeletonRow). Skeleton-only HERE: the instant
+                // cached paint landed on the DESKTOP cortinilla only. The
+                // immersive dropdown is a different surface with a much
+                // smaller payload, so it was left out deliberately rather
+                // than forgotten. ------------------------------------------
                 Column {
+                    id: immSkeleton
                     visible: QbzImmersive.immSearchLoading
                     width: parent.width
                     topPadding: 4
                     property bool pulse: false
+                    // Referenced BY ID, not through `parent`. A Timer derives
+                    // from QtObject, which has no `parent` property, so an
+                    // unqualified `parent` here resolved up the scope chain
+                    // and out of this block entirely — the timer ran forever
+                    // and `pulse` never changed, so the skeleton never
+                    // pulsed. Same fix as the desktop twin.
                     Timer {
-                        interval: 700
-                        running: parent.visible
+                        interval: QbzShell.reduceMotion ? 2000 : 700
+                        running: immSkeleton.visible
                         repeat: true
-                        onTriggered: parent.pulse = !parent.pulse
+                        onTriggered: immSkeleton.pulse = !immSkeleton.pulse
                     }
                     Repeater {
                         model: 4
@@ -196,7 +206,7 @@ Item {
                                 height: 40
                                 radius: 4
                                 color: "#ffffff"
-                                opacity: parent.parent.pulse ? 0.32 : 0.08
+                                opacity: immSkeleton.pulse ? 0.32 : 0.08
                                 Behavior on opacity { NumberAnimation { duration: 650; easing.type: Easing.InOutQuad } }
                             }
                             Column {
@@ -208,7 +218,7 @@ Item {
                                     height: 11
                                     radius: 3
                                     color: "#ffffff"
-                                    opacity: parent.parent.parent.pulse ? 0.32 : 0.08
+                                    opacity: immSkeleton.pulse ? 0.32 : 0.08
                                     Behavior on opacity { NumberAnimation { duration: 650; easing.type: Easing.InOutQuad } }
                                 }
                                 Rectangle {
@@ -216,7 +226,7 @@ Item {
                                     height: 9
                                     radius: 3
                                     color: "#ffffff"
-                                    opacity: parent.parent.parent.pulse ? 0.32 : 0.08
+                                    opacity: immSkeleton.pulse ? 0.32 : 0.08
                                     Behavior on opacity { NumberAnimation { duration: 650; easing.type: Easing.InOutQuad } }
                                 }
                             }

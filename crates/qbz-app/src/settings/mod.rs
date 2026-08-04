@@ -7,6 +7,7 @@ pub mod favorites;
 pub mod favorites_cache;
 pub mod graphics;
 pub mod local_favorites;
+pub mod payload_cache;
 pub mod pinned_items;
 pub mod playback;
 pub mod plex;

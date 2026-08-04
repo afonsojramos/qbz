@@ -79,6 +79,11 @@ pub(crate) fn publish_plex_state() {
 
 /// Reload every browse document in place (after a sync / connect / toggle).
 pub(crate) fn reload_browse() {
+    // The cortinilla's instant-paint cache embeds LOCAL rows and their artwork
+    // paths, so anything that reaches here has just made those rows possibly
+    // wrong. This is the single chokepoint for local-library mutations, which
+    // is why the invalidation lives here rather than at each call site.
+    crate::search_cache_qt::invalidate();
     load_albums();
     load_artists();
     load_tracks(true);
