@@ -8,9 +8,12 @@
 // AppShell.slint:358-390. The recovery affordance and logout live in the
 // header (offline badge flyout + app menu), like the Slint shell.
 //
-// POC-NOTE: the artwork-derived ambient background (AppearanceState
-// "Ambient"/"Blurred art" modes) is not implemented — the Slint default
-// is Off, which is what this static dark treatment matches.
+// The artwork-derived ambient background IS implemented: AmbientField is
+// mounted below, `ambientOn` derives from QbzShell.ambientMode, and the
+// content frame swaps to surface-main @ 0.22 with a hairline while it runs.
+// (The POC-NOTE that used to sit here said the opposite. It was a fossil —
+// corrected in passing per LESSONS-2026-08-03 L10, which asks that the ones
+// a diff touches be fixed rather than propagated.)
 
 import QtQuick
 import com.blitzfc.qbz
