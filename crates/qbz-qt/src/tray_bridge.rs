@@ -183,8 +183,27 @@ impl qbz_tray::QbzTray {
     }
 
     /// D18's report-back. Flag only — it never touches a window.
+    ///
+    /// It IS, however, the one place that knows the main window just became
+    /// hidden or visible, and it is called from exactly two sites
+    /// (`hideToTray` / `showFromTray`), so the macOS Dock-icon policy hangs
+    /// here rather than growing a third visibility owner.
+    ///
+    /// Hiding drops the Dock icon only when the user asked for it; showing
+    /// ALWAYS restores it, with no setting check — a user who turns the option
+    /// off while the app sits in the menu bar must still get their icon back,
+    /// and restoring an icon that is already there is free.
     pub fn set_window_shown(self: Pin<&mut Self>, shown: bool) {
         crate::tray_qt::set_window_shown(shown);
+        if shown {
+            crate::tray_qt::set_mac_dock_hidden(false);
+        } else if crate::settings_qt::tray()
+            .get_settings()
+            .map(|t| t.mac_hide_dock)
+            .unwrap_or(false)
+        {
+            crate::tray_qt::set_mac_dock_hidden(true);
+        }
     }
 
     /// The close-choreography evidence line — see the declaration above. The

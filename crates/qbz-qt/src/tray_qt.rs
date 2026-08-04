@@ -166,6 +166,44 @@ pub(crate) fn handle() -> Option<&'static TrayHandle> {
     TRAY.get()
 }
 
+/// Apply the macOS Dock-icon activation policy: `.accessory` hides the icon
+/// (menu-bar-only), `.regular` keeps it. No-op off macOS.
+///
+/// This is the Spotify behaviour the owner asked for on 2026-08-04: closing
+/// puts the app in the menu bar and DROPS the Dock icon when the setting is
+/// on, while a plain minimize still goes to the Dock like any app. Only the
+/// close path calls this; minimize is untouched by design.
+///
+/// **Main thread only.** Its one caller is `QbzTray::set_window_shown`, a
+/// `#[qinvokable]` — those run on the Qt GUI thread, which on macOS IS the
+/// AppKit main thread, so `MainThreadMarker::new()` succeeds there. It returns
+/// `None` and no-ops anywhere else rather than panicking.
+///
+/// Port of `crates/qbz/src/tray/macos.rs:320-331`, reached through the
+/// reference's own `tray::set_mac_dock_hidden` (`tray/mod.rs:285-291`).
+#[cfg(target_os = "macos")]
+pub(crate) fn set_mac_dock_hidden(hidden: bool) {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
+
+    let Some(mtm) = MainThreadMarker::new() else {
+        log::warn!("[tray] dock policy skipped: not on the AppKit main thread");
+        return;
+    };
+    let app = NSApplication::sharedApplication(mtm);
+    app.setActivationPolicy(if hidden {
+        NSApplicationActivationPolicy::Accessory
+    } else {
+        NSApplicationActivationPolicy::Regular
+    });
+    log::info!("[tray] dock icon {}", if hidden { "hidden" } else { "shown" });
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn set_mac_dock_hidden(hidden: bool) {
+    let _ = hidden;
+}
+
 /// The close-to-tray predicate, ported verbatim from the reference's
 /// `tray_settings::get().close_to_tray && tray::handle().is_some()`
 /// (`crates/qbz/src/main.rs:23253`, WM arm `:23276`). QML evaluates the same

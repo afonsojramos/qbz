@@ -157,3 +157,35 @@ ksni = { version = "0.3", default-features = false, features = ["blocking", "asy
 
 [build-dependencies]
 cxx-qt-build = "0.7"
+
+# macOS only: the Dock-icon activation policy behind the "Hide Dock icon when
+# closed to menu bar" setting (Spotify behaviour — close puts the app in the
+# menu bar and drops the Dock icon; minimize still goes to the Dock).
+#
+# objc2 0.5 / objc2-app-kit 0.2 are pinned to the SAME generation the Slint
+# crate uses (crates/qbz/Cargo.toml:166-172). That matters even though this
+# crate has no winit: mixing objc2 generations in one binary registers
+# duplicate objc classes, which is the failure the reference documents at
+# length. Only the two items `set_mac_dock_hidden` names are enabled.
+#
+# ⚠ NOT COMPILED OR TESTED HERE. This tree builds on Linux; the macOS arm is
+# behind cfg, so `cargo build` cannot see it. First real check is a macOS
+# build — the Mac mini (192.168.0.69) is where that happens.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.5"
+objc2-app-kit = { version = "0.2", default-features = false, features = [
+    "std",
+    # NSApplication: the class and `setActivationPolicy`.
+    "NSApplication",
+    # NSResponder: `sharedApplication` is behind `cfg(feature = "NSResponder")`
+    # (objc2-app-kit-0.2.2/src/generated/NSApplication.rs:326-329) — it is
+    # NSApplication's superclass, and the NSApplication feature does NOT pull
+    # it.
+    "NSResponder",
+    # NSRunningApplication: where `NSApplicationActivationPolicy` actually
+    # lives (…/src/generated/NSRunningApplication.rs:33-35), NOT in
+    # NSApplication.rs as the name suggests. Verified by reading the crate
+    # rather than by compiling — this arm cannot be built on Linux, and the
+    # reference's own proven set (crates/qbz/Cargo.toml) lists the same three.
+    "NSRunningApplication",
+] }
