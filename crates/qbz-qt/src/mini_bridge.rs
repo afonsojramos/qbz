@@ -58,6 +58,13 @@ pub mod qbz_mini {
         // The static artwork-derived card background (`mini_background_blur`).
         // Written by `toggle_background_blur` (contract A-10).
         #[qproperty(bool, background_blur)]
+        // K1 / contract A-5, and it is NEW WORK rather than a port: the Slint
+        // miniplayer has three comments promising always-on-top and zero code
+        // implementing it (§4.8). Seeded from `mini_always_on_top`, DEFAULT
+        // TRUE, and consumed by `MiniWindow.qml`'s `flags` expression as
+        // `| (QbzMini.alwaysOnTop ? Qt.WindowStaysOnTopHint : 0)`. Written by
+        // `toggle_always_on_top` (contract A-11).
+        #[qproperty(bool, always_on_top)]
         // The navigable queue: the current track first, then the FULL
         // unfiltered upcoming list. Built by `mini_qt::mini_queue_doc` and
         // published from the ONE queue funnel (`queue_qt::publish`), never from
@@ -94,6 +101,28 @@ pub mod qbz_mini {
         /// (§13-D13).
         #[qinvokable]
         fn exit(self: Pin<&mut QbzMini>);
+
+        /// Flip + persist the card backdrop (contract A-10). The capsule's
+        /// `a-bg` button is its only caller; the whole render path already
+        /// exists in `MiniShell.qml` gated on this one property.
+        #[qinvokable]
+        fn toggle_background_blur(self: Pin<&mut QbzMini>);
+
+        /// Flip + persist always-on-top (contract A-11, K1). The capsule's
+        /// `a-pin` button is its only caller. Reassigning `flags` on a MAPPED
+        /// window is the one runtime risk §4.8 names (U-6); the pref persists
+        /// either way, so the next open honours it even if a platform were to
+        /// refuse the live change.
+        #[qinvokable]
+        fn toggle_always_on_top(self: Pin<&mut QbzMini>);
+
+        /// Persist the expanded window size (contract A-14). Qt has no
+        /// `WindowEvent::Resized`, so `MiniWindow.qml`'s 400 ms debounce calls
+        /// in. The §4.7 guards live in `mini_qt::geometry_to_persist` — the
+        /// surface is read from THIS object rather than passed, so no call site
+        /// can disagree with the property the window is sized from.
+        #[qinvokable]
+        fn save_geometry(self: Pin<&mut QbzMini>, width: f32, height: f32);
 
         /// Close the whole APP from the mini (contract A-12, §4.6). Exits the
         /// mini first, then routes to the ONE close choreography by emitting
@@ -154,6 +183,7 @@ pub struct QbzMiniRust {
     open: bool,
     surface: i32,
     background_blur: bool,
+    always_on_top: bool,
     mini_queue_json: QString,
     mini_width: f32,
     mini_height: f32,
@@ -169,6 +199,7 @@ impl Default for QbzMiniRust {
             open: false,
             surface: crate::mini_qt::initial_surface(),
             background_blur: crate::mini_qt::initial_background_blur(),
+            always_on_top: crate::mini_qt::initial_always_on_top(),
             mini_queue_json: QString::from(crate::mini_qt::MINI_QUEUE_EMPTY),
             mini_width: crate::mini_qt::initial_width(),
             mini_height: crate::mini_qt::initial_height(),
@@ -349,6 +380,64 @@ impl qbz_mini::QbzMini {
         exit_now(self);
     }
 
+    /// Contract A-10 — the capsule's `a-bg` toggle.
+    ///
+    /// Read-flip-write through the GENERATED setter, so the change
+    /// notification QML's backdrop gate depends on is emitted for free
+    /// (`miniplayer.rs:328-330` does the same two steps).
+    pub fn toggle_background_blur(mut self: Pin<&mut Self>) {
+        let value = !self.background_blur;
+        self.as_mut().set_background_blur(value);
+        crate::mini_qt::save_background_blur(value);
+    }
+
+    /// Contract A-11 / K1 — the capsule's `a-pin` toggle.
+    ///
+    /// The reference has no counterpart to copy: §4.8's two probes found three
+    /// COMMENTS promising the affordance and no code. Flipping this property
+    /// re-evaluates `MiniWindow.qml`'s `flags` binding, which is where the
+    /// `Qt.WindowStaysOnTopHint` term actually lives.
+    pub fn toggle_always_on_top(mut self: Pin<&mut Self>) {
+        let value = !self.always_on_top;
+        self.as_mut().set_always_on_top(value);
+        crate::mini_qt::save_always_on_top(value);
+    }
+
+    /// Contract A-14 — the debounced resize persist.
+    ///
+    /// Three things happen here and the ORDER matters. The §4.7 guards decide
+    /// first (`surface >= 2` AND `height >= 320`, two different numbers from
+    /// the 420 floor — §15 trap 17); then a dirty check drops the write when
+    /// the clamped pair already matches what this object holds, which is what
+    /// makes the write-back below safe; then the clamped pair goes to BOTH the
+    /// A-6b properties and the prefs document.
+    ///
+    /// The write-back is A-14's own requirement: the window is sized from
+    /// `miniWidth`/`miniHeight`, so a condensed -> expanded switch inside one
+    /// session restores the size the user last dragged without re-reading the
+    /// file. It also closes the loop it appears to open — the properties feed
+    /// the window's size binding, which feeds the debounce, which calls back in
+    /// here with the same numbers and stops at the dirty check.
+    ///
+    /// The reference has NO dirty check and does a whole-file load+save per
+    /// qualifying resize event (`miniplayer.rs:455-463`) — §13-D14 — where its
+    /// own main window carries one for exactly this reason
+    /// (`crates/qbz/src/main.rs:1392-1393`).
+    pub fn save_geometry(mut self: Pin<&mut Self>, width: f32, height: f32) {
+        let Some((w, h)) = crate::mini_qt::geometry_to_persist(self.surface, width, height) else {
+            return;
+        };
+        // Sub-pixel equality, the same shape as the main window's `> 0.5`
+        // guard: the WM emits many no-op geometry events and each miss here is
+        // a blocking JSON read+write on the GUI thread (§7-M10).
+        if (self.mini_width - w).abs() < 0.5 && (self.mini_height - h).abs() < 0.5 {
+            return;
+        }
+        self.as_mut().set_mini_width(w);
+        self.as_mut().set_mini_height(h);
+        crate::mini_qt::save_geometry(w, h);
+    }
+
     /// Contract A-12 — close the APP from the mini's red X.
     ///
     /// The order is the reference's (`crates/qbz/src/miniplayer.rs:235-251`):
@@ -385,14 +474,16 @@ impl qbz_mini::QbzMini {
         // `QbzMini.surface = n` uses, so the keyboard path cannot skip the
         // persist or the surface-3 queue kick.
         //
-        // `clamp_to_implemented` is the TEMPORARY guard that keeps `1`, `4` and
-        // `5` from landing the user on a blank card while the micro footer
-        // (B3) and the queue + lyrics surfaces (B4) do not exist yet. It is
-        // deleted by those blocks — see the function's own doc. The keys stay
-        // BOUND rather than being removed from the table, because the table is
-        // the user's rebindable one and the cheatsheet already lists all five.
+        // `clamp_to_implemented` is the TEMPORARY guard that keeps a key from
+        // landing the user on a blank card while its surface does not exist
+        // yet. **B3 has taken its own entry out**: the micro card IS the footer
+        // this block landed, so `mini.micro` writes 0 unclamped. Only `4` and
+        // `5` are still clamped, and B4 deletes the function with them — see
+        // the function's own doc. The keys stay BOUND rather than being removed
+        // from the table, because the table is the user's rebindable one and
+        // the cheatsheet already lists all five.
         match action.id {
-            "mini.micro" => apply_surface(self, crate::mini_qt::clamp_to_implemented(0)),
+            "mini.micro" => apply_surface(self, 0),
             "mini.compact" => apply_surface(self, 1),
             "mini.artwork" => apply_surface(self, 2),
             "mini.queue" => apply_surface(self, crate::mini_qt::clamp_to_implemented(3)),

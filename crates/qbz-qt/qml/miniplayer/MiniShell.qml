@@ -24,9 +24,22 @@ Rectangle {
     QbzTheme { id: theme }
 
     // §8 rule 3: the window, handed down explicitly by MiniWindow. Consumed by
-    // the footer's drag handle and the hover capsule (B3), which call
+    // the footer's drag handle and the hover capsule, which call
     // startSystemMove() on it rather than walking a parent chain.
     property var hostWindow: null
+
+    // §13-D4 — the reference feeds `MiniPlayerState.window-hovered` from winit
+    // CursorMoved/CursorLeft (`crates/qbz/src/miniplayer.rs:420-429`) because a
+    // borderless Slint card has no reliable root hover; `state.slint:4506`
+    // names "or a root TouchArea" as the alternative and Qt takes that branch.
+    // A HoverHandler, NOT a MouseArea: a MouseArea would lose containsMouse the
+    // moment the pointer crossed onto any button in the footer, which is
+    // exactly the measured failure the tree records at
+    // qml/immersive/SuggestionsPanel.qml:316-325 and
+    // qml/shell/Cortinilla.qml:215-222. This drives the capsule's conditional
+    // mount, so getting it wrong means the capsule vanishes under the cursor
+    // that is reaching for it.
+    HoverHandler { id: cardHover }
 
     // --- Cached per-mode values (§7-M2) ------------------------------------
     // The reference computes each of these ONCE into a named property
@@ -160,7 +173,7 @@ Rectangle {
         // track, the card is the flat scrim over #050506.
         Rectangle {
             anchors.fill: parent
-            color: "#050506bf"
+            color: "#bf050506"  // #050506bf in Slint; Qt is #AARRGGBB
         }
     }
 
@@ -186,9 +199,9 @@ Rectangle {
     // minus the footer, which is how §4.2's "surface-area H" column is
     // reproduced: 102 at compact, 448 at the 540-tall expanded default.
     //
-    // MiniFooter mounts under it and arrives with B3; the space it will occupy
-    // is reserved here, by footerHeight, because that reservation is what makes
-    // the surface geometry above it correct in the first place.
+    // MiniFooter mounts under it; the space it occupies is reserved here, by
+    // footerHeight, because that reservation is what makes the surface geometry
+    // above it correct in the first place.
     Item {
         id: surfaceArea
         anchors.left: parent.left
@@ -216,5 +229,23 @@ Rectangle {
                 MiniArtworkSurface { npExplicit: root.npExplicit }
             }
         }
+    }
+
+    // --- The footer (MiniShell.slint:59-63) --------------------------------
+    // In micro it IS the card: `surfaceArea` is invisible at surface 0 and this
+    // fills all 45 px. Its `mode` is the INVERTED number (§15 trap 2), computed
+    // once above.
+    //
+    // Declared AFTER surfaceArea so the hover capsule — which overflows the
+    // 17 px micro header by 4.5 px in each direction — paints above it.
+    MiniFooter {
+        id: footer
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        height: root.footerHeight
+        mode: root.footerMode
+        hostWindow: root.hostWindow
+        windowHovered: cardHover.hovered
     }
 }

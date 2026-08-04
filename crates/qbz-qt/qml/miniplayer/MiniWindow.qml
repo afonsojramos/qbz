@@ -33,14 +33,27 @@ Window {
     // step of enter() (§4.6). Explicitly null, never inherited.
     transientParent: null
 
-    // Borderless, 1:1 with `no-frame: true` (app.slint:293).
+    // Borderless, 1:1 with `no-frame: true` (app.slint:293), plus always-on-top
+    // — owner ruling K1, §13-D15, and it DEFAULTS ON.
     //
-    // Always-on-top is owner ruling K1 and defaults ON, but its property
-    // (QbzMini.alwaysOnTop, A-5) and the pin button that toggles it are block
-    // B3's; B3 adds the `| (QbzMini.alwaysOnTop ? Qt.WindowStaysOnTopHint : 0)`
-    // term to this expression. Naming a property that does not exist would be
-    // the L1 failure this contract's symbol rule exists to prevent.
+    // The AOT term is NEW WORK rather than a port: §4.8's two probes found
+    // three comments in the reference promising the affordance
+    // (state.slint:4497, miniplayer.rs:170-171, MiniWindowControls.slint:2) and
+    // no code anywhere that sets it. The property is seeded from
+    // `mini_always_on_top` at bridge construction and toggled by the capsule's
+    // pin button.
+    //
+    // ⚠ THE ONE RUNTIME RISK, and it is §16 U-6: reassigning `flags` on a
+    // MAPPED window can make Qt destroy and recreate the platform window, which
+    // on Wayland loses the compositor-chosen position. §4.8 pre-specifies the
+    // fallback rather than leaving it to be improvised — evaluate the flags at
+    // enter() only and keep the pref and the button state — and the fallback is
+    // NOT taken: driven over RFB, toggling the pin left the window's geometry,
+    // its contents and its input focus untouched (no flicker, no jump, no
+    // re-created surface). A real compositor is still the owner's smoke item;
+    // the pref persists either way, so the next open honours it regardless.
     flags: Qt.Window | Qt.FramelessWindowHint
+           | (QbzMini.alwaysOnTop ? Qt.WindowStaysOnTopHint : 0)
 
     // Literal, never translated (app.slint:283 uses a plain string, not @tr).
     title: "QBZ Mini Player"
@@ -97,6 +110,35 @@ Window {
     minimumWidth: 340
     minimumHeight: root.winMinHeight
 
+    // --- The geometry persist (§4.7, A-14, §13-D14) ------------------------
+    // Qt has no `WindowEvent::Resized`, so the resize handler is this debounce.
+    // The template is the main window's own (qml/Main.qml:377-385), and the
+    // 400 ms interval is the same.
+    //
+    // It is DEBOUNCED because the alternative is what the reference does: a
+    // whole-file ui_prefs.json load + save per qualifying resize event, with no
+    // dirty check (`crates/qbz/src/miniplayer.rs:460-463`), which in Qt would
+    // be blocking file IO on the GUI thread inside a resize drag (§7-M10).
+    //
+    // It needs NO arming latch of its own, unlike Main.qml's 1200 ms one: the
+    // two guards inside `mini_qt::geometry_to_persist` already reject exactly
+    // the frames a latch would — `surface >= 2` drops micro and compact, whose
+    // sizes are constants, and `height >= 320` drops the mid-transition frames
+    // a surface switch produces (a 178 px compact frame is precisely what that
+    // filter is for). Note the filter is 320 and the stored floor is 420 — two
+    // different numbers, both behavioural (§15 trap 17).
+    Timer {
+        id: geometrySaveTimer
+        interval: 400
+        repeat: false
+        // A Timer has no `parent` (§8 rule 2, §15 trap 29) — the window is
+        // reached through its own id.
+        onTriggered: QbzMini.saveGeometry(root.width, root.height)
+    }
+
+    onWidthChanged: geometrySaveTimer.restart()
+    onHeightChanged: geometrySaveTimer.restart()
+
     // A compositor close (Alt+F4, a panel's close entry) behaves EXACTLY like
     // the capsule's expand button — §13-D13, and it closes a hole the reference
     // has: Slint has no on_close_requested on the mini, so its default
@@ -105,6 +147,13 @@ Window {
     // (§3.1), so `accepted = false` is load-bearing twice.
     onClosing: function (close) {
         close.accepted = false
+        // Flush a pending resize (§4.7). Only when one is actually pending —
+        // an unconditional call would put a prefs write on every close, and the
+        // bridge's own dirty check would then be the only thing stopping it.
+        if (geometrySaveTimer.running) {
+            geometrySaveTimer.stop()
+            QbzMini.saveGeometry(root.width, root.height)
+        }
         QbzMini.exit()
     }
 

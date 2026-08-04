@@ -155,6 +155,7 @@ pub struct QbzIconTintRust {
 #[rustfmt::skip]
 const MASTERS: &[(&str, &str)] = &[
     ("add-to-list", include_str!("../qml/assets/icons/primary/add-to-list.svg")),
+    ("align-start-vertical", include_str!("../qml/assets/icons/primary/align-start-vertical.svg")),
     ("arrow-up-down", include_str!("../qml/assets/icons/primary/arrow-up-down.svg")),
     ("audio-lines", include_str!("../qml/assets/icons/primary/audio-lines.svg")),
     ("award", include_str!("../qml/assets/icons/primary/award.svg")),
@@ -224,6 +225,7 @@ const MASTERS: &[(&str, &str)] = &[
     ("monitor", include_str!("../qml/assets/icons/primary/monitor.svg")),
     ("monitor-speaker", include_str!("../qml/assets/icons/primary/monitor-speaker.svg")),
     ("moon", include_str!("../qml/assets/icons/primary/moon.svg")),
+    ("move", include_str!("../qml/assets/icons/primary/move.svg")),
     ("mp3", include_str!("../qml/assets/icons/primary/mp3.svg")),
     ("music-library-2", include_str!("../qml/assets/icons/primary/music-library-2.svg")),
     ("music", include_str!("../qml/assets/icons/primary/music.svg")),
@@ -256,6 +258,7 @@ const MASTERS: &[(&str, &str)] = &[
     ("sliders-horizontal", include_str!("../qml/assets/icons/primary/sliders-horizontal.svg")),
     ("smartphone", include_str!("../qml/assets/icons/primary/smartphone.svg")),
     ("speaker", include_str!("../qml/assets/icons/primary/speaker.svg")),
+    ("square", include_str!("../qml/assets/icons/primary/square.svg")),
     ("square-check-big", include_str!("../qml/assets/icons/primary/square-check-big.svg")),
     ("star", include_str!("../qml/assets/icons/primary/star.svg")),
     ("sun-moon", include_str!("../qml/assets/icons/primary/sun-moon.svg")),

@@ -316,14 +316,21 @@ fn main() {
                 // Miniplayer (2026-08-03 miniplayer/tray-port contract §3.4) —
                 // its own module directory, like immersive/ and kiosk/. B2
                 // ships the window, the card shell and the two DISPLAY
-                // surfaces; B3 adds the footer + capsule, B4 the queue and
-                // lyrics surfaces.
+                // surfaces; B3 the footer, its four primitives and the hover
+                // capsule; B4 the queue and lyrics surfaces.
                 "qml/miniplayer/MiniWindow.qml",
                 "qml/miniplayer/MiniShell.qml",
                 "qml/miniplayer/MiniExplicitBadge.qml",
                 "qml/miniplayer/MiniCoverArt.qml",
                 "qml/miniplayer/MiniCompactSurface.qml",
                 "qml/miniplayer/MiniArtworkSurface.qml",
+                "qml/miniplayer/MiniFooter.qml",
+                "qml/miniplayer/MiniWindowControls.qml",
+                "qml/miniplayer/MiniSeek.qml",
+                "qml/miniplayer/MiniTransport.qml",
+                "qml/miniplayer/MiniVolume.qml",
+                "qml/miniplayer/TBtn.qml",
+                "qml/miniplayer/CapBtn.qml",
             ],
             qrc_files: &qrc_refs,
             ..Default::default()

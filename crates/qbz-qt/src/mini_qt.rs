@@ -32,11 +32,21 @@ const KEY_WIDTH: &str = "mini_width";
 const KEY_HEIGHT: &str = "mini_height";
 const KEY_BACKGROUND_BLUR: &str = "mini_background_blur";
 const KEY_DEFAULT_VIEW: &str = "mini_default_view";
+/// K1 / contract §4.7 — the ONE key in this table with no Slint reader.
+/// Always-on-top does not exist in the reference (§4.8: three comments promise
+/// it, zero code implements it), so this key is written and read by the Qt side
+/// alone. It still goes through `save_pref`'s additive single-key patch like
+/// every other one, because the DOCUMENT is co-owned even where the key is not.
+const KEY_ALWAYS_ON_TOP: &str = "mini_always_on_top";
 
 /// Defaults, from `crates/qbz/src/ui_prefs.rs:677-688`.
 const DEFAULT_SURFACE: i32 = 2;
 const DEFAULT_WIDTH: f32 = 380.0;
 const DEFAULT_HEIGHT: f32 = 540.0;
+/// K1: always-on-top ships DEFAULT ON (contract §4.7's last row). A miniplayer
+/// that sinks behind the browser is the class-defining complaint, and the
+/// reference's own comments describe pinning as intended behaviour.
+const DEFAULT_ALWAYS_ON_TOP: bool = true;
 
 /// Resize-persistence guards and floors (`miniplayer.rs:455`, `:459`, `:461-462`).
 /// **Note the two different numbers**: 320 is the mid-transition-frame filter,
@@ -175,9 +185,9 @@ pub(crate) fn queue_row_target(has_current: bool, row: i32) -> MiniRowTarget {
 /// Port of `miniplayer.rs:455-463`: persist only while an EXPANDED surface is
 /// shown (micro/compact sizes are constants), ignore sub-320 heights (a
 /// mid-transition frame), and clamp what is stored to 340 x 420.
-// Consumed by `QbzMini.save_geometry` (contract row A-14), which lands with the
-// window's resize debounce rather than with this projection.
-#[allow(dead_code)]
+///
+/// Consumed by `QbzMini.save_geometry` (contract row A-14), which arrived with
+/// block B3's 400 ms resize debounce in `MiniWindow.qml`.
 pub(crate) fn geometry_to_persist(surface: i32, width: f32, height: f32) -> Option<(f32, f32)> {
     if surface < EXPANDED_SURFACE_FLOOR || height < TRANSITION_HEIGHT_FILTER {
         return None;
@@ -232,15 +242,25 @@ pub(crate) fn initial_surface() -> i32 {
 /// surface: B3 drops 0 from the list, B4 drops 3 and 4, and the last one to go
 /// deletes this function. The keyboard arms in `mini_bridge::key_pressed` are
 /// clamped by the same rule and lose it the same way.
+///
+/// **B3 has dropped 0**: the micro card IS `MiniFooter.qml` in mode 2, so
+/// surface 0 now renders and its keyboard arm (`mini.micro`) is unclamped.
+/// Only 3 (queue) and 4 (lyrics) remain, and B4 deletes this function with
+/// them.
 pub(crate) fn clamp_to_implemented(surface: i32) -> i32 {
     match surface {
-        1 | 2 => surface,
+        0 | 1 | 2 => surface,
         _ => DEFAULT_SURFACE,
     }
 }
 
 pub(crate) fn initial_background_blur() -> bool {
     crate::settings_qt::pref_bool(KEY_BACKGROUND_BLUR, false)
+}
+
+/// K1 — the seed for `QbzMini.always_on_top` (contract A-5).
+pub(crate) fn initial_always_on_top() -> bool {
+    crate::settings_qt::pref_bool(KEY_ALWAYS_ON_TOP, DEFAULT_ALWAYS_ON_TOP)
 }
 
 pub(crate) fn initial_width() -> f32 {
@@ -257,6 +277,29 @@ pub(crate) fn initial_height() -> f32 {
 /// load.
 pub(crate) fn save_surface(surface: i32) {
     crate::settings_qt::save_pref(KEY_SURFACE, serde_json::Value::Number(surface.into()));
+}
+
+/// Persist the card backdrop toggle (`QbzMini.toggle_background_blur`, A-10).
+pub(crate) fn save_background_blur(value: bool) {
+    crate::settings_qt::save_pref(KEY_BACKGROUND_BLUR, serde_json::Value::Bool(value));
+}
+
+/// Persist the pin (`QbzMini.toggle_always_on_top`, A-11 / K1).
+pub(crate) fn save_always_on_top(value: bool) {
+    crate::settings_qt::save_pref(KEY_ALWAYS_ON_TOP, serde_json::Value::Bool(value));
+}
+
+/// Persist the expanded geometry, ALREADY clamped by `geometry_to_persist`.
+///
+/// Two single-key patches, not one struct write: `ui_prefs.json` is co-owned
+/// with the shipping Slint app and `save_pref` is the additive path (§15 trap
+/// 16). The reference writes the same two keys from its resize handler
+/// (`miniplayer.rs:460-463`) — with a whole-file load+save per event, which is
+/// exactly what the 400 ms debounce in `MiniWindow.qml` exists to keep off the
+/// Qt GUI thread (§7-M10, §13-D14).
+pub(crate) fn save_geometry(width: f32, height: f32) {
+    crate::settings_qt::save_pref(KEY_WIDTH, serde_json::json!(width));
+    crate::settings_qt::save_pref(KEY_HEIGHT, serde_json::json!(height));
 }
 
 #[cfg(test)]
@@ -378,6 +421,21 @@ mod tests {
         // floor (420) is NOT the transition filter (320).
         assert_eq!(geometry_to_persist(2, 300.0, 400.0), Some((340.0, 420.0)));
         assert_eq!(geometry_to_persist(4, 500.0, 700.0), Some((500.0, 700.0)));
+    }
+
+    /// The temporary clamp's own boundary, asserted so the block that removes
+    /// an entry cannot forget the arm it owns. B3 landed the micro footer, so
+    /// 0 passes; 3 and 4 still fall back to the artwork surface until B4.
+    #[test]
+    fn clamp_admits_every_implemented_surface() {
+        assert_eq!(clamp_to_implemented(0), 0);
+        assert_eq!(clamp_to_implemented(1), 1);
+        assert_eq!(clamp_to_implemented(2), 2);
+        assert_eq!(clamp_to_implemented(3), DEFAULT_SURFACE);
+        assert_eq!(clamp_to_implemented(4), DEFAULT_SURFACE);
+        // Out-of-range values from a co-owned prefs document, too.
+        assert_eq!(clamp_to_implemented(-1), DEFAULT_SURFACE);
+        assert_eq!(clamp_to_implemented(9), DEFAULT_SURFACE);
     }
 
     #[test]
