@@ -65,11 +65,18 @@ Rectangle {
     readonly property var forYouSections: root.parseSections(QbzHome.forYouSectionsJson)
 
     // KioskDiscover.slint:146-150.
-    readonly property var activeSections: root.activeTab === "editorPicks"
-        ? root.editorSections
-        : root.activeTab === "forYou"
-            ? root.forYouSections
-            : root.homeSections
+    //
+    // A FUNCTION behind the property, because `publishNav()` is called from
+    // `onActiveTabChanged` and must not read the property there — see the
+    // note on publishNav below.
+    function sectionsFor(tab) {
+        return tab === "editorPicks"
+            ? root.editorSections
+            : tab === "forYou"
+                ? root.forYouSections
+                : root.homeSections
+    }
+    readonly property var activeSections: root.sectionsFor(root.activeTab)
 
     /// Does this descriptor render a shelf? Two terms, and the For You gate.
     ///
@@ -95,8 +102,18 @@ Rectangle {
     // that render nothing — that is precisely what the skip cascade exists for.
     // The index clamp lives inside publishNav (src/kiosk_nav_qt.rs:266-274).
     readonly property int navSectionCount: root.activeSections.length
+    // Derives the count from `activeTab` AT CALL TIME rather than reading
+    // `navSectionCount`, and that is load-bearing. `onActiveTabChanged` below
+    // is connected to the very notify that dirties `activeSections` — and
+    // through it `navSectionCount` — and the handler runs BEFORE the dependent
+    // bindings re-evaluate, so a read of `navSectionCount` from inside it
+    // carries the PREVIOUS tab's descriptor count (undefined on the creation
+    // pass, which makes `count` NaN). `publish()` CLAMPS `index` into the
+    // count it is handed (src/kiosk_nav_qt.rs:266-274), so a wrong count is a
+    // wrong focus ring, not a cosmetic slip. Same hazard, same remedy, as
+    // KioskArtist.qml:102-110 and the note at Main.qml:233-247.
     function publishNav() {
-        QbzKioskNav.publishNav(3, 1, 3 + root.navSectionCount, true)
+        QbzKioskNav.publishNav(3, 1, 3 + root.sectionsFor(root.activeTab).length, true)
     }
     Component.onCompleted: root.publishNav()
     onNavSectionCountChanged: root.publishNav()

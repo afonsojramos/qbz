@@ -123,21 +123,37 @@ Rectangle {
     // Nav geometry (KioskSearch.slint:103-135). The clamp Slint writes by hand
     // at :122 lives inside the model's own publish (kiosk_nav_qt.rs:266-274).
     // ---------------------------------------------------------------------
+    //
+    // Re-derives BOTH the tab and the row counts from `root.doc` rather than
+    // reading `tab` / `albums` / `tracks` / `artists` / `playlists`, and that
+    // is load-bearing. `onTabChanged` below fires on a document commit, and
+    // the five list properties are siblings of `tab` under that same document
+    // — a handler runs BEFORE the dependent bindings re-evaluate, so read from
+    // there they carry the PREVIOUS document (the measured KioskArtist.qml
+    // defect, commit ea26d743a, and the same remedy KioskNowPlaying.qml:213-219
+    // already applies to its cover dispatch). A pure tab switch republishes the
+    // SAME five arrays, so `navLenProbe` does not move and `onTabChanged` is
+    // then the ONLY publish — there is no second pass to correct it, and
+    // `publish()` CLAMPS `index` into whatever count it is handed
+    // (src/kiosk_nav_qt.rs:266-274). Reading the SOURCE document is safe: it is
+    // the value that changed.
     function publishNav() {
+        var d = root.doc
+        var tab = d.tab || 0
         var columns = 1
         var count = 5
-        if (root.tab === 1) {
+        if (tab === 1) {
             columns = 6
-            count = 5 + root.albums.length
-        } else if (root.tab === 2) {
+            count = 5 + (d.albums || []).length
+        } else if (tab === 2) {
             columns = 1
-            count = 5 + root.tracks.length
-        } else if (root.tab === 3) {
+            count = 5 + (d.tracks || []).length
+        } else if (tab === 3) {
             columns = 7
-            count = 5 + root.artists.length
-        } else if (root.tab === 4) {
+            count = 5 + (d.artists || []).length
+        } else if (tab === 4) {
             columns = 6
-            count = 5 + root.playlists.length
+            count = 5 + (d.playlists || []).length
         }
         QbzKioskNav.publishNav(5, columns, count, false)
     }

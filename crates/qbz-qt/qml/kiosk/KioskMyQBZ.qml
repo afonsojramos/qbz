@@ -54,11 +54,11 @@ Rectangle {
     // ONE guarded parse per document. A raw JSON.parse inside a binding throws
     // on the pre-publish frame and takes the whole view down
     // (MyQbzGridView.qml:91-93).
-    readonly property var doc: root.parseDoc()
-    function parseDoc() {
+    readonly property var doc: root.docFor(root.onCollections)
+    function docFor(collections) {
         try {
-            return JSON.parse(root.onCollections ? QbzMyQbz.collectionsJson
-                                                 : QbzMyQbz.mixtapesJson)
+            return JSON.parse(collections ? QbzMyQbz.collectionsJson
+                                          : QbzMyQbz.mixtapesJson)
         } catch (e) {
             return ({})
         }
@@ -66,8 +66,19 @@ Rectangle {
     readonly property var cards: root.doc.cards || []
 
     // ---- Nav geometry publish: 2 tabs + the active list, 6 columns.
+    //
+    // Re-derives the card count from `onCollections` AT CALL TIME rather than
+    // reading `cards`, and that is load-bearing. `onOnCollectionsChanged`
+    // below is connected to the very notify that dirties `doc` — and through
+    // it `cards` — and the handler runs BEFORE the dependent bindings
+    // re-evaluate, so a read of `root.cards` from inside it counts the
+    // PREVIOUS route's document. `publish()` CLAMPS `index` into the count it
+    // is handed (src/kiosk_nav_qt.rs:266-274), so the wrong count parks the
+    // focus ring on the wrong row. Same hazard, same remedy, as
+    // KioskArtist.qml:102-110 and the note at Main.qml:233-247.
     function publishNav() {
-        QbzKioskNav.publishNav(2, 6, 2 + root.cards.length, false)
+        var d = root.docFor(root.onCollections)
+        QbzKioskNav.publishNav(2, 6, 2 + (d.cards || []).length, false)
     }
 
     Component.onCompleted: root.publishNav()

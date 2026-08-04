@@ -341,7 +341,20 @@ Flickable {
                     target: QbzKioskNav
 
                     function onIndexChanged() {
-                        shelfSlot.skipIfUnrendered()
+                        // DEFERRED, exactly as KioskDiscover.qml:339 defers its
+                        // twin, and that is load-bearing. skipIfUnrendered()
+                        // reads `QbzKioskNav.dir`, which the bridge pushes in
+                        // the SAME sync() pass as `index` but LATER in the field
+                        // order (kiosk_nav_bridge.rs: index 2nd, dir 9th), so
+                        // cxx-qt has already emitted indexChanged while `dir`
+                        // still carries the PREVIOUS move. Run inline, the first
+                        // Down of a session read dir === 0 and refused to skip —
+                        // parking the ring on a shelf whose height is 0 — and a
+                        // direction reversal read the old sign and skipped back
+                        // the way it came. Same hazard, same remedy, as the note
+                        // at Main.qml:233-247: never read a value that is still
+                        // in flight inside the handler that fired for it.
+                        Qt.callLater(shelfSlot.skipIfUnrendered)
                         Qt.callLater(shelfSlot.scrollShelfIntoView)
                     }
 

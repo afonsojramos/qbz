@@ -145,20 +145,42 @@ impl QbzKioskNav {
     /// Copy the model onto the qproperties. cxx-qt's setters only emit their
     /// NOTIFY when the value actually changes, so calling this after every
     /// mutation costs nothing for the fields that did not move.
+    ///
+    /// **The ORDER is load-bearing.** Each setter emits its NOTIFY
+    /// synchronously, so a QML handler on one property runs while the fields
+    /// written after it still hold their PREVIOUS values. The two properties
+    /// consumers react to are `index` (focus moved) and `activate_seq` (Enter),
+    /// and what those handlers need to read is the CONTEXT of the move — which
+    /// zone, which direction, how big the space is. So every context field is
+    /// written FIRST and those two LAST.
+    ///
+    /// This is not hypothetical: with `dir` written after `index`, the shelf
+    /// skip-cascade in `KioskArtist.qml` read `dir == 0` on the first Down of a
+    /// a session and refused to skip, parking the focus ring on a shelf of zero
+    /// height; a direction reversal read the old sign and skipped back the way
+    /// it came.
+    ///
+    /// The QML side does NOT rely on this alone — the skip handlers also defer
+    /// through `Qt.callLater`, which additionally covers Qt's own binding
+    /// re-evaluation order (the hazard written up at `qml/Main.qml:233-247`).
+    /// Two independent guards, because this class of bug is invisible to every
+    /// static check and shows up as a focus ring that lands somewhere silly.
     fn sync(mut self: Pin<&mut Self>) {
         let m = self.model.clone();
+        // --- context first ---
         let zone = QString::from(m.zone.as_str());
         if *self.zone() != zone {
             self.as_mut().set_zone(zone);
         }
-        self.as_mut().set_index(m.index);
         self.as_mut().set_columns(m.columns);
         self.as_mut().set_count(m.count);
-        self.as_mut().set_nav_active(m.nav_active);
         self.as_mut().set_tabs(m.tabs);
         self.as_mut().set_shelves(m.shelves);
-        self.as_mut().set_hmove(m.hmove);
         self.as_mut().set_dir(m.dir);
+        self.as_mut().set_hmove(m.hmove);
+        self.as_mut().set_nav_active(m.nav_active);
+        // --- the two consumers react to, last ---
+        self.as_mut().set_index(m.index);
         self.as_mut().set_activate_seq(m.activate_seq);
     }
 
