@@ -1,8 +1,13 @@
 // QbzEmptyState — the plain centered empty state (title + optional icon /
-// body / action), consolidated in phase 22 from HomeView.RecentPlaceholder,
-// QueuePanel's empty queue, SearchView's no-results and Cortinilla's
-// no-results. Slint has no shared EmptyState either (per-surface inline) —
-// this is a POC-only consolidation; arms: `iconName` ("" = none), `title`,
+// body / action), consolidated in phase 22 from HomeView.RecentPlaceholder
+// and QueuePanel's empty queue.
+//
+// NOT used by SearchView or Cortinilla, contrary to what this header used to
+// claim: both draw their own no-results line inline, because the cortinilla's
+// is a single 28px row inside a dropdown rather than a centred block. Slint
+// has no shared EmptyState either (per-surface inline).
+//
+// Arms: `iconName` ("" = none), `title`,
 // `body` ("" = hidden), `actionLabel` + `actionClicked()` ("" = no action).
 
 import QtQuick

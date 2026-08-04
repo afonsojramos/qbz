@@ -800,13 +800,14 @@ Rectangle {
                                 // itemType/source).
                                 //
                                 // SOURCE: the results page has ONE source.
-                                // `search_qt::TrackRow` (:171) carries no
-                                // source word because every row is mapped from
-                                // a Qobuz `Track` (`map_track`, :320-336) and
-                                // the local "on this device" sections are not
-                                // ported (search_qt.rs:24-27) — the cortinilla
-                                // rows, which CAN be local, carry their own
-                                // `source` field and are a different document.
+                                // `search_qt::TrackRow` carries no source
+                                // word because every row on THIS page is
+                                // mapped from a Qobuz `Track` (`map_track`):
+                                // the results page is still Qobuz-only. The
+                                // CORTINILLA is not — it has on-device
+                                // sections now — but its rows carry their own
+                                // `source` field and are a different document
+                                // entirely.
                                 // `item.id` is a Qobuz catalog id by
                                 // construction, not by assumption here.
                                 onMixtapeRequested: QbzMyQbzAdd.open(JSON.stringify([{
