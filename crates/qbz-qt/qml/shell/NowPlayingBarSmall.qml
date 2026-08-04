@@ -490,7 +490,13 @@ Rectangle {
                                 smallViewMenu.openBelowRight(smallViewBtn)
                         }
                     }
+                    // HIDDEN in kiosk (PlayerBarSmall.slint:846 gates the
+                    // whole block on `!ShellState.kiosk-profile`). The kiosk
+                    // shell mounts no lyrics side panel, so the button would
+                    // toggle a surface that does not exist -- an inert
+                    // affordance, which the kiosk contract forbids (§9.2).
                     QbzIconButton {
+                        visible: !QbzShell.kioskProfile
                         name: "mic-vocal"
                         active: QbzShell.lyricsOpen
                         anchors.verticalCenter: parent.verticalCenter
@@ -525,8 +531,13 @@ Rectangle {
 
                     Item { width: 4; height: 1 }
 
-                    // Queue panel toggle.
+                    // Queue panel toggle. HIDDEN in kiosk for the same
+                    // reason as the lyrics button above
+                    // (PlayerBarSmall.slint:983) -- the kiosk reaches its
+                    // queue through the Now Playing view's Up Next tab, and
+                    // the side panel is never mounted.
                     QbzIconButton {
+                        visible: !QbzShell.kioskProfile
                         name: "list-ordered"
                         active: QbzShell.queueOpen
                         anchors.verticalCenter: parent.verticalCenter

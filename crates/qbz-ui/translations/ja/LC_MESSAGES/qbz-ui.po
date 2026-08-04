@@ -5008,3 +5008,11 @@ msgstr "ラジオ"
 
 msgid "Up Next"
 msgstr "次に再生"
+
+# Kiosk <-> Desktop profile toggle (view-mode menu)
+
+msgid "Kiosk mode"
+msgstr "キオスクモード"
+
+msgid "Desktop mode"
+msgstr "デスクトップモード"

@@ -233,6 +233,26 @@ fn pinned_view(default_key: &str) -> Option<(i32, i32)> {
 /// the §3.3a viz keep-alive on both edges.
 fn apply_open(mut this: Pin<&mut QbzImmersive>, value: bool) {
     use cxx_qt::CxxQtType as _;
+    // The KIOSK shell has no Immersive surface yet: its mount
+    // (`qml/shell/KioskShell.qml`) is the sanctioned empty Loader of the
+    // 2026-08-02 kiosk-port contract (§4.6 / ruling R2), waiting for the
+    // Immersive task. Opening over it produces a reachable DEAD STATE — the
+    // kiosk root rejects every arrow, Enter and Esc while `open` is true
+    // (§7.11), so the whole zone model freezes against a surface that renders
+    // nothing.
+    //
+    // The visualizer TILE already declines to open it for exactly this reason.
+    // The guard belongs HERE rather than at that call site because this is the
+    // funnel every entry passes through, and Shift+I — the rebindable
+    // `ui.focusMode` action, which reaches the dispatcher from the kiosk root
+    // like any other non-nav key — proved the tile is not the only door.
+    //
+    // Refuse to OPEN, never to close: a session that somehow got in must
+    // always be able to get out.
+    if value && crate::kiosk_profile_qt::active() {
+        log::debug!("[qbz-qt] immersive open refused: the kiosk shell has no immersive surface");
+        return;
+    }
     if this.open == value {
         return;
     }

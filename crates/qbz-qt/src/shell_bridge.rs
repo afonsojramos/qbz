@@ -160,6 +160,22 @@ pub mod qbz_shell {
         /// which in kiosk collapses to the profile row alone
         /// (`shell/PlayerBarSmall.slint:772,780,788,796,811,819,826,847,983`).
         #[qproperty(bool, kiosk_profile)]
+        /// Should the window map FULLSCREEN at boot?
+        ///
+        /// True only when the kiosk profile is active AND
+        /// `QBZ_KIOSK_FULLSCREEN` is set — an appliance image sets it so the
+        /// panel owns the whole screen (`qbz/src/main.rs:8607-8617`).
+        ///
+        /// Deliberately NOT derived from the persisted profile alone: a user
+        /// who toggles kiosk on the desktop and restarts would be TRAPPED,
+        /// because the kiosk shell has no titlebar control and neither Esc nor
+        /// F11 leave fullscreen (incident 2026-07-11). Windowed by default
+        /// keeps the OS titlebar reachable.
+        ///
+        /// Seeded at construction and never rewritten: `Main.qml`'s
+        /// `visibility` binding must be correct on the FIRST mapped frame, and
+        /// a later push would arrive after the window is already on screen.
+        #[qproperty(bool, kiosk_fullscreen_boot)]
         #[qproperty(i32, ambient_mode)]
         // Album-art triad (ambient_qt.rs), pushed on track change.
         #[qproperty(QString, ambient_primary)]
@@ -426,6 +442,7 @@ pub struct QbzShellRust {
     window_min_height: f32,
     reduce_motion: bool,
     kiosk_profile: bool,
+    kiosk_fullscreen_boot: bool,
     ambient_mode: i32,
     ambient_primary: QString,
     ambient_secondary: QString,
@@ -489,6 +506,8 @@ impl Default for QbzShellRust {
             window_min_height: crate::settings_qt::WINDOW_MIN_HEIGHT,
             reduce_motion: reduce_motion_at_boot(),
             kiosk_profile: crate::kiosk_profile_qt::active(),
+            kiosk_fullscreen_boot: crate::kiosk_profile_qt::active()
+                && crate::kiosk_profile_qt::fullscreen_at_boot(),
             ambient_mode: crate::settings_qt::app_background_mode(),
             // The Slint ImmersiveState default triad (pre-artwork colors).
             ambient_primary: QString::from("#00dcc8"),

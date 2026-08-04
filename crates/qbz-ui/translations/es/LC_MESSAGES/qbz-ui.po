@@ -5031,3 +5031,11 @@ msgstr "Radio"
 
 msgid "Up Next"
 msgstr "A continuación"
+
+# Kiosk <-> Desktop profile toggle (view-mode menu)
+
+msgid "Kiosk mode"
+msgstr "Modo kiosco"
+
+msgid "Desktop mode"
+msgstr "Modo escritorio"

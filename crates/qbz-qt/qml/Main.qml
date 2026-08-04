@@ -78,7 +78,18 @@ ApplicationWindow {
     // user toggles — which is the wanted behaviour, not a leak.
     // Windowed (not AutomaticVisibility) on the false branch: a fresh window
     // must land in its natural state, matching "only ever re-apply a true".
-    visibility: QbzShell.windowMaximized ? Window.Maximized : Window.Windowed
+    // The kiosk appliance arm comes FIRST and is one-shot by construction:
+    // `kioskFullscreenBoot` is seeded at bridge construction from
+    // `QBZ_PROFILE=kiosk` AND `QBZ_KIOSK_FULLSCREEN`, and nothing ever writes
+    // it, so this can never re-evaluate and trap a desktop session
+    // (incident 2026-07-11: the kiosk shell has no titlebar control and
+    // neither Esc nor F11 leave fullscreen). Declarative for the same reason
+    // the maximized arm is: QQuickWindowQmlImpl defers the show until
+    // componentComplete, so this is part of the first mapped frame instead of
+    // a visible jump afterwards.
+    visibility: QbzShell.kioskFullscreenBoot
+                ? Window.FullScreen
+                : (QbzShell.windowMaximized ? Window.Maximized : Window.Windowed)
     title: "QBZ"
     // Custom chrome (phase 7/12): frameless but OPAQUE — the phase-7
     // translucent window was a misread: the Slint MAIN window keeps an

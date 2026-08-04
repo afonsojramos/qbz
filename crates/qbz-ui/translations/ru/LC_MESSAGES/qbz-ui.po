@@ -5040,3 +5040,11 @@ msgstr "Радио"
 
 msgid "Up Next"
 msgstr "Далее"
+
+# Kiosk <-> Desktop profile toggle (view-mode menu)
+
+msgid "Kiosk mode"
+msgstr "Режим киоска"
+
+msgid "Desktop mode"
+msgstr "Режим рабочего стола"
