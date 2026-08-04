@@ -76,6 +76,11 @@ mod playlist_import_bridge;
 // singleton — the QML surface of the facade/sink controllers below
 // (qconnect_qt.rs / qconnect_event_sink_qt.rs).
 mod qconnect_bridge;
+// Kiosk zone navigation (2026-08-02 kiosk-port contract §7): the
+// QbzKioskNav singleton over the state machine in kiosk_nav_qt.rs. It has
+// no boot() — nothing in Rust ever publishes into it (see its header).
+mod kiosk_nav_bridge;
+mod kiosk_nav_qt;
 mod artwork_qt;
 mod atmosphere_qt;
 mod bridge;
