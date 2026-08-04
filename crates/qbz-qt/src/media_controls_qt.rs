@@ -191,6 +191,23 @@ pub(crate) fn push_playback_state(is_playing: bool, position_secs: u64) {
     mc.set_playback(status, Some(Duration::from_secs(position_secs)));
 }
 
+/// Keep the reported position current, once per playback tick.
+///
+/// MPRIS `Position` is READ ON DEMAND — the spec keeps it out of
+/// `PropertiesChanged` — so the backend serves whatever it last stored, and
+/// before this it only stored one at a track start and at a play/pause edge.
+/// A desktop widget therefore showed a value that could be minutes stale:
+/// measured 2026-08-04 with QBZ at 4:03 and Plasma's widget stuck at 0:14.
+///
+/// `set_position` stores and emits nothing, so this is a channel send per
+/// second and never a bus signal — it does not become the per-tick work
+/// §7-M12 refuses.
+pub(crate) fn push_position(position_secs: u64) {
+    if let Some(mc) = handle() {
+        mc.set_position(Duration::from_secs(position_secs));
+    }
+}
+
 /// Compare-and-record the metadata de-dupe key. `true` when `key` differs from
 /// the last pushed value (→ caller pushes now), recording it as the new
 /// last-pushed value. A poisoned lock falls back to pushing.

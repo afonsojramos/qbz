@@ -2255,6 +2255,9 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                 cache,
                 track_id != 0,
             );
+            // The desktop's copy of the same number. Read-on-demand, so it has
+            // to be kept fresh rather than signalled — see push_position.
+            crate::media_controls_qt::push_position(position);
 
             // DELIVERED stream params -> the downgrade arrow + tooltip cause.
             // Deduped inside, so a steady stream costs no Qt-thread hop.

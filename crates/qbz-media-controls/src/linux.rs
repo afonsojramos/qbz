@@ -54,6 +54,10 @@ enum Update {
         position: Option<Time>,
     },
     Volume(Volume),
+    /// Position ONLY — stores, emits nothing. MPRIS excludes `Position` from
+    /// `PropertiesChanged` by design, so there is no signal to send; the point
+    /// is purely that the next on-demand read is not stale.
+    Position(Time),
 }
 
 /// The cloneable handle returned to the app. Pushing state is a non-blocking
@@ -76,6 +80,12 @@ impl MediaIntegration for LinuxHandle {
 
     fn set_volume(&self, vol: f64) {
         let _ = self.tx.try_send(Update::Volume(vol.clamp(0.0, 1.0)));
+    }
+
+    fn set_position(&self, position: std::time::Duration) {
+        let _ = self
+            .tx
+            .try_send(Update::Position(Time::from_micros(position.as_micros() as i64)));
     }
 }
 
@@ -283,6 +293,9 @@ async fn apply(server: &Server<QbzMpris>, state: &Arc<Mutex<State>>, update: Upd
         Update::Volume(v) => {
             state.lock().unwrap().volume = v;
             let _ = server.properties_changed([Property::Volume(v)]).await;
+        }
+        Update::Position(p) => {
+            state.lock().unwrap().position = p;
         }
     }
 }

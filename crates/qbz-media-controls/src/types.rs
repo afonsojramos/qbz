@@ -70,4 +70,25 @@ pub trait MediaIntegration: Send + Sync {
     fn set_metadata(&self, meta: &TrackMeta);
     fn set_playback(&self, status: PlaybackStatus, position: Option<Duration>);
     fn set_volume(&self, vol: f64);
+
+    /// Keep the reported playback POSITION current.
+    ///
+    /// MPRIS `Position` is a read-on-demand property — the spec explicitly
+    /// excludes it from `PropertiesChanged`, so a client reads it when it
+    /// wants it and otherwise extrapolates. That makes a stored snapshot the
+    /// wrong shape unless somebody keeps it fresh: before this existed, the
+    /// Linux backend only moved its stored position when `set_playback`
+    /// carried one — at a track start and at a play/pause edge — so a desktop
+    /// widget would sit on a value minutes stale. Measured 2026-08-04: QBZ at
+    /// 4:03, Plasma's widget frozen at 0:14.
+    ///
+    /// Callers push this on their existing playback tick. It stores and emits
+    /// NOTHING, so it is cheap enough to call once a second and cannot spam
+    /// the bus.
+    ///
+    /// Defaulted to a no-op so a backend that has no notion of position (and
+    /// any future one) needs no change.
+    fn set_position(&self, position: Duration) {
+        let _ = position;
+    }
 }
