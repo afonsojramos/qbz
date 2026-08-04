@@ -142,6 +142,30 @@ Rectangle {
 
     color: QbzMini.backgroundBlur ? "#d906070a" : theme.surfaceCard  // #06070ad9 in Slint; Qt is #AARRGGBB
 
+    /// The CARD's corner radius, handed down by MiniShell.
+    ///
+    /// The footer must round its own corners, because the card CANNOT round
+    /// them for it: `qml/theme/RoundedImage.qml:3-6` records as measured fact
+    /// on this Qt build that a Rectangle with `radius` + `clip: true` does NOT
+    /// clip its children to the curve — "the child paints square over the
+    /// rounded fill". This footer is an opaque Rectangle anchored to the card's
+    /// bottom edge, so without this it paints square corners straight over the
+    /// card's rounded ones. That is exactly what the owner photographed against
+    /// a white background on 2026-08-04: every surface rounded on top and
+    /// SQUARE at the bottom, and the micro card — where the footer IS the whole
+    /// card — square on all four.
+    ///
+    /// Per-corner radii need Qt 6.7+; this tree builds against 6.11.
+    property real cardRadius: 0
+
+    // In micro the footer is the entire card, so all four corners are its own.
+    // In full and compact it owns the bottom two and the surface area above it
+    // owns nothing (that Item is transparent and paints no corner).
+    topLeftRadius: root.mode === 2 ? root.cardRadius : 0
+    topRightRadius: root.mode === 2 ? root.cardRadius : 0
+    bottomLeftRadius: root.cardRadius
+    bottomRightRadius: root.cardRadius
+
     // ======================================================================
     // FULL / COMPACT (:263-329)
     // ======================================================================

@@ -273,6 +273,7 @@ Rectangle {
         anchors.bottom: parent.bottom
         height: root.footerHeight
         mode: root.footerMode
+        cardRadius: root.radius
         hostWindow: root.hostWindow
         windowHovered: cardHover.hovered
     }
