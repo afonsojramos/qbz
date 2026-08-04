@@ -99,12 +99,23 @@ Flickable {
     // The portrait plus every section's cards — INCLUDING the sections this
     // view does not render, because a later publish pass can fill one and make
     // it renderable, and nothing downstream reports a url that was never sent.
+    // Reads `artist` and derives the sections HERE rather than reading the
+    // `sections` property, and that is load-bearing. `onArtistChanged` below
+    // is connected to the very notify that dirties `sections`, and the handler
+    // runs BEFORE the dependent binding is re-evaluated — so a read of
+    // `root.sections` from inside it saw `undefined` and threw
+    // `Cannot read property 'length' of undefined` on every mount, skipping
+    // the first artwork dispatch. Same hazard, same remedy, as the note at
+    // Main.qml:233-247: compute from the value at call time instead of reading
+    // a cached derived property.
     function collectArtwork() {
         var urls = []
-        if (root.artist && root.artist.artUrl)
-            urls.push(root.artist.artUrl)
-        for (var s = 0; s < root.sections.length; s++) {
-            var cards = root.sections[s].cards || []
+        var a = root.artist
+        if (a && a.artUrl)
+            urls.push(a.artUrl)
+        var sections = (a && a.releaseSections) ? a.releaseSections : []
+        for (var s = 0; s < sections.length; s++) {
+            var cards = sections[s].cards || []
             for (var c = 0; c < cards.length; c++)
                 if (cards[c].artUrl)
                     urls.push(cards[c].artUrl)
