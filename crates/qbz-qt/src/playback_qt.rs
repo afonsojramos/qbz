@@ -1739,6 +1739,16 @@ pub(crate) async fn refresh_now_playing(runtime: &Arc<AppRuntime<LoggingAdapter>
             b.as_mut().set_np_track_id(QString::from(""));
         });
         crate::lyrics_qt::publish_idle();
+        // Tray tooltip: the no-track arm. 1:1 with the reference, where
+        // `clear_track()` (crates/qbz/src/playback.rs:1918) and `set_track(…)`
+        // (`:2160`) are the two arms of ONE publisher,
+        // `refresh_now_playing_meta` (`:1895`) — this function is its Qt
+        // analogue, and BOTH pushes live here. Silent no-op with no tray.
+        // Clearing also drops `is_playing`, so the middle-click hint cannot go
+        // stale.
+        if let Some(t) = crate::tray_qt::handle() {
+            t.clear_track();
+        }
         return;
     };
     let title = match track.version.as_deref().filter(|v| !v.is_empty()) {
@@ -1754,6 +1764,22 @@ pub(crate) async fn refresh_now_playing(runtime: &Arc<AppRuntime<LoggingAdapter>
         track.artist,
         track.duration_secs,
     );
+    // Tray tooltip: the has-track arm (§5.6). Edge-triggered — this publisher
+    // runs on a track change, never per tick (§7-M12).
+    //
+    // The three strings are exactly the reference's
+    // (crates/qbz/src/playback.rs:2163-2165): the VERSIONED title, the artist,
+    // and the CLEAN album — `track.album`, NOT the release-variant
+    // `album_display` built below, which `playback.rs:1937` / `:1941-1948`
+    // deliberately keeps as a separate value.
+    //
+    // It goes in THIS function and not in the poll loop's de-duped track edge:
+    // `refresh_now_playing` has 23 call sites across nine modules, so binding
+    // the tooltip to the poll loop would leave it stale on every QConnect
+    // handoff, cast event and click-to-play (§15 trap 34).
+    if let Some(t) = crate::tray_qt::handle() {
+        t.set_track(title.clone(), track.artist.clone(), track.album.clone());
+    }
     let (tier, label) = quality_badge(&track);
     let album_id = track.album_id.clone().unwrap_or_default();
     // Album with its release variant appended ("Octavarium (2009 Remaster)"),
@@ -2395,8 +2421,19 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                     // returns to the top early and must NOT run
                     // `seen_position = position` (the reset above is the
                     // point). Dropping the Discord push here would leave the
-                    // presence saying "playing" after the timer stopped us.
+                    // presence saying "playing" after the timer stopped us. The
+                    // tray tooltip's middle-click hint has the identical
+                    // problem — it would keep saying "Middle-click to pause"
+                    // after the stop-after timer fired — so its push is a
+                    // sibling here, exactly as in the reference, where tray
+                    // (playback.rs:5719-5722) and Discord (`:5734`) share one
+                    // `if`. THIS IS ONE OF TWO `is_playing != was_playing`
+                    // BLOCKS; a push in only one is the silent half-port
+                    // (§5.6, AC-27).
                     if is_playing != was_playing {
+                        if let Some(t) = crate::tray_qt::handle() {
+                            t.set_playing(is_playing);
+                        }
                         crate::integrations_qt::discord_push(&runtime);
                     }
                     was_playing = is_playing;
@@ -2420,7 +2457,15 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
             }
 
             seen_position = position;
+            // Reflect play/pause into the tray tooltip on the TRANSITION only,
+            // so the "Middle-click to pause/play" hint stays correct without
+            // spamming the updater channel every tick (§7-M12). The second of
+            // the two `is_playing != was_playing` blocks — see the sibling in
+            // the stop-after arm above.
             if is_playing != was_playing {
+                if let Some(t) = crate::tray_qt::handle() {
+                    t.set_playing(is_playing);
+                }
                 crate::integrations_qt::discord_push(&runtime);
             }
             was_playing = is_playing;

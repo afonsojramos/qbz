@@ -967,7 +967,18 @@ pub fn save_pref(key: &str, value: serde_json::Value) {
 // file the Slint tray_settings.rs glue writes).
 static TRAY: OnceLock<qbz_app::settings::tray::TraySettingsState> = OnceLock::new();
 
-fn tray() -> &'static qbz_app::settings::tray::TraySettingsState {
+/// `pub(crate)` for the tray port (contract A-36): `on_session_entered` reads
+/// `enable_tray` + `tray_icon_theme` here to build `tray_qt::init`'s two
+/// arguments, and `tray_bridge`'s seed reads `close_to_tray`. Every caller was
+/// inside this module until then. **No signature change, no `pub`, no
+/// re-export** — and duplicating the accessor instead would be the
+/// third-private-copy this block exists to prevent.
+///
+/// Binds ONCE per process and does not rebind on a user switch — a deliberate,
+/// labelled divergence (§13-D20, ticket T-1): `USER_DIR` is itself a
+/// whole-shell `OnceLock` that also feeds the pinned store and discover prefs,
+/// so a tray-only rebind would fix one of three and hide the other two.
+pub(crate) fn tray() -> &'static qbz_app::settings::tray::TraySettingsState {
     TRAY.get_or_init(|| {
         let state = qbz_app::settings::tray::TraySettingsState::new_empty();
         if let Some(dir) = crate::sidebar_qt::user_dir() {
@@ -1640,10 +1651,20 @@ pub async fn publish_snapshot() {
             gpu_powers: gpu_power_choice().0,
             gpu_power_index: gpu_power_choice().1,
             tray_enable: tray().get_settings().map(|t| t.enable_tray).unwrap_or(true),
+            // S1: the shared default is `close_to_tray: true`
+            // (`qbz-app/src/settings/tray.rs:61`), and the Slint glue reads it
+            // with `unwrap_or_default()` on the struct
+            // (`crates/qbz/src/tray_settings.rs:54-56`). This line used to fall
+            // back to `false`, which was cosmetic while nothing consumed it and
+            // becomes BEHAVIOURAL with the tray: with no store bound, the
+            // user's very first close would quit instead of hiding. The
+            // adjacent `tray_enable` read above already uses `.unwrap_or(true)`
+            // against `tray.rs:59` — the disagreement between two sibling reads
+            // of one store was the smell.
             tray_close_to_tray: tray()
                 .get_settings()
                 .map(|t| t.close_to_tray)
-                .unwrap_or(false),
+                .unwrap_or(true),
             tray_icon_themes: TRAY_ICON_LABELS
                 .iter()
                 .map(|l| qbz_i18n::t(l))
@@ -2172,6 +2193,15 @@ pub async fn settings_select(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &st
             };
             if let Err(e) = tray().set_tray_icon_theme(v) {
                 log::error!("[qbz-qt] persist tray icon theme failed: {e}");
+            }
+            // Re-theme the RUNNING tray icon live, no restart — the fourth of
+            // §5.6's live-update rows (reference: `crates/qbz/src/main.rs:11258-11264`).
+            // The push re-decodes the pixmaps on the updater thread and emits
+            // the SNI `NewIcon` signal, so panels re-fetch in place. A silent
+            // no-op when no tray is live, which is the whole point of routing
+            // through `handle()`.
+            if let Some(t) = crate::tray_qt::handle() {
+                t.set_icon_theme(v.to_string());
             }
         }
         "auto-theme-source" => {

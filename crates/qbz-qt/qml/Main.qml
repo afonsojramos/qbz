@@ -196,6 +196,12 @@ ApplicationWindow {
         // SILENT no-op — the mini queue document would never reach QML and
         // nothing would be logged on either side.
         QbzMini.boot()
+        // Same reason, and it bites harder here: the tray's clicks reach QML
+        // ONLY through this bridge's signals, so an unbooted QbzTray is a tray
+        // whose every click does nothing, with zero evidence in the log
+        // (contract §15 trap 27). The handlers for those signals arrive with
+        // B6, together with the window verbs they call.
+        QbzTray.boot()
 
         // Seed the maximized latch ONCE, imperatively — see its declaration for
         // why it must not be a binding on the bridge property.

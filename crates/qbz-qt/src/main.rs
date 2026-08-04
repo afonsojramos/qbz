@@ -84,6 +84,10 @@ mod kiosk_nav_bridge;
 // singleton — the port of the Slint MiniPlayerState global. Its controller
 // half is `mini_qt` below, which is a PLAIN module.
 mod mini_bridge;
+// System tray (the same contract, block B5): the QbzTray singleton — the
+// window verbs' Qt-thread hop. Its controllers are `tray_qt` (portable) and
+// `tray_linux` (the ksni item), both PLAIN modules below.
+mod tray_bridge;
 mod kiosk_nav_qt;
 // The kiosk profile itself (the same contract, §8): env/pref resolution, the
 // live Kiosk <-> Desktop toggle, and the boot decisions that follow from it.
@@ -229,6 +233,14 @@ mod qconnect_qt;
 // Plain module — it declares no #[cxx_qt::bridge], so it must NOT appear in
 // build.rs's rust_files.
 mod mini_qt;
+// Tray controllers (the same contract, block B5, §5). `tray_qt` is portable
+// and holds the gates, the debounce and the transport verbs; `tray_linux` is
+// the ksni StatusNotifierItem and carries no inner cfg, so the gate is on the
+// mod line (the shape of `crates/qbz/src/tray/mod.rs:26-27`). Owner ruling K2
+// keeps macOS and Windows out — neither has a tray in either frontend.
+mod tray_qt;
+#[cfg(target_os = "linux")]
+mod tray_linux;
 
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -422,6 +434,24 @@ fn on_session_entered() {
     // ListenBrainz opt-ins and starts the scrobble-queue flush watcher.
     // Strictly opt-in — every one of them is inert until the user connects it.
     integrations_qt::start(&app());
+    // System tray (Linux only, ksni — owner ruling K2), the port of
+    // `init_shell_for_user`'s `tray::init` call (`crates/qbz/src/main.rs:257-263`).
+    // Suppressed under gamescope by the same predicate the reference uses
+    // (`:262`): an extra mapped surface can steal the compositor's
+    // focused-window pick on the Deck. This function is MULTI-ENTRY (login,
+    // session restore, "Start offline"), and `init`'s three gates are what make
+    // that safe — the one-shot is checked AFTER the enabled gate, so a disabled
+    // first call does not burn it and a later recovery login can still arm the
+    // tray. THIS is also the first `settings_qt::tray()` call in the process,
+    // by design: it runs after the per-user store binds, where the bridge's
+    // construction-time seed would have latched an empty one.
+    {
+        let tray = settings_qt::tray().get_settings().unwrap_or_default();
+        tray_qt::init(
+            tray.tray_icon_theme.clone(),
+            tray.enable_tray && !tray_qt::in_gamescope(),
+        );
+    }
     // Phase 7: the sidebar playlist tree.
     load_sidebar_once();
     // Refresh the favourite-id cache from the network. The disk seed already

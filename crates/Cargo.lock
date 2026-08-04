@@ -6621,6 +6621,7 @@ dependencies = [
  "dirs 5.0.1",
  "futures-util",
  "image",
+ "ksni",
  "log",
  "open",
  "qbz-app",

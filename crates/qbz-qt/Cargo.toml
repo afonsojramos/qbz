@@ -105,5 +105,24 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png"]
 # xdg-portal path is the Wayland-correct one and needs no extra system libs.
 rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "async-std"] }
 
+# Linux system tray via StatusNotifierItem (src/tray_linux.rs). Linux only —
+# owner ruling K2: `crates/qbz/src/tray/macos.rs` exists because Slint's winit
+# backend already bundles `muda`; under Qt that premise is gone, so macOS would
+# be a NEW implementation, not a port. Windows has no tray in either tree.
+#
+# The comment below is copied verbatim from the reference
+# (crates/qbz/Cargo.toml:139-143) because the feature set is not negotiable:
+#
+# default-features = false: ksni's default is "tokio", which flips the shared
+# zbus 5 executor to tokio graph-wide (breaks accesskit/atspi plain-thread
+# connections — see the rfd comment above). We only use the blocking API on
+# worker threads; async-io self-drives the connection from any context.
+#
+# ksni 0.3.4 is already in the workspace lock (pulled by crates/qbz), so this
+# adds no new lock entry. Feature unification is per-crate-graph, not
+# per-target: ANY dependency that turns on zbus/tokio poisons the whole binary.
+[target.'cfg(target_os = "linux")'.dependencies]
+ksni = { version = "0.3", default-features = false, features = ["blocking", "async-io"] }
+
 [build-dependencies]
 cxx-qt-build = "0.7"
