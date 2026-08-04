@@ -244,11 +244,33 @@ impl NavModel {
     /// What a mounted view calls whenever its tab or its data changes — the
     /// Qt spelling of the `KioskNavState.tabs/columns/count/shelves = …`
     /// blocks each Kiosk view runs (e.g. `KioskLibrary.slint:67-86`).
+    ///
+    /// Every one of those blocks ends in the same clamp
+    /// (`KioskLibrary.slint:86` and its seven siblings):
+    ///
+    /// ```slint
+    /// KioskNavState.index = Math.max(0, Math.min(KioskNavState.index, KioskNavState.count - 1));
+    /// ```
+    ///
+    /// It is not optional: without it, switching from a tab with 100 items to
+    /// one with 3 leaves `index` at 90, no item matches, and the focus ring
+    /// simply vanishes.
+    ///
+    /// **D7 — the clamp is scoped to the content zone.** Slint applies it
+    /// unconditionally, so a publish that lands while the focus is on the RAIL
+    /// (7 tiles, indices 0-6) rewrites the rail's cursor to the content view's
+    /// `count - 1`. That is reachable in an ordinary session: park on the rail,
+    /// let an in-flight fetch resolve, and the highlighted tile jumps. `index`
+    /// is one field shared by three zones, so the clamp only makes sense for
+    /// the zone it was computed for.
     pub fn publish(&mut self, tabs: i32, columns: i32, count: i32, shelves: bool) {
         self.tabs = tabs.max(0);
         self.columns = columns.max(1);
         self.count = count.max(0);
         self.shelves = shelves;
+        if self.zone == Zone::Content {
+            self.index = self.index.clamp(0, (self.count - 1).max(0));
+        }
     }
 
     /// The shelf consumer's half of the `hmove` pulse
@@ -489,6 +511,46 @@ mod tests {
         m.bump_activate();
         assert_eq!(m.activate_seq, before + 2);
         assert!(m.nav_active);
+    }
+
+    #[test]
+    fn a_republish_clamps_the_index_into_the_new_data() {
+        let mut m = library(); // 5 tabs, 6 columns, 12 albums -> count 17
+        m.down();
+        for _ in 0..4 {
+            m.right();
+        }
+        assert_eq!(m.index, 9);
+        // The user switches to a tab with 3 items.
+        m.publish(5, 6, 5 + 3, false);
+        assert_eq!(m.index, 7, "clamped to count - 1, so an item still owns it");
+        assert!(m.index < m.count);
+    }
+
+    #[test]
+    fn a_publish_with_no_items_parks_on_the_first_tab() {
+        let mut m = library();
+        m.down(); // into the grid
+        m.publish(5, 6, 0, false);
+        assert_eq!(m.index, 0, "max(0, -1)");
+    }
+
+    /// D7. Slint clamps unconditionally, so a publish arriving while the focus
+    /// sits on the rail rewrites the RAIL's cursor to the content view's
+    /// `count - 1`.
+    #[test]
+    fn a_publish_never_disturbs_the_rail_cursor() {
+        let mut m = library();
+        m.up(); // -> rail
+        for _ in 0..3 {
+            m.right();
+        }
+        assert_eq!(m.zone, Zone::Rail);
+        assert_eq!(m.index, 3, "the MyQBZ tile");
+        // An in-flight fetch resolves and the mounted view republishes.
+        m.publish(5, 6, 5 + 1, false);
+        assert_eq!(m.index, 3, "still the MyQBZ tile");
+        assert_eq!(m.zone, Zone::Rail);
     }
 
     #[test]

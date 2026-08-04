@@ -4997,3 +4997,14 @@ msgstr "インターフェース"
 msgid "Mini Player"
 msgstr "ミニプレーヤー"
 
+
+# Kiosk shell (2026-08-02 kiosk-port contract)
+
+msgid "Cover"
+msgstr "カバー"
+
+msgid "Radio"
+msgstr "ラジオ"
+
+msgid "Up Next"
+msgstr "次に再生"

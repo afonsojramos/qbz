@@ -5020,3 +5020,14 @@ msgstr "Interfaz"
 msgid "Mini Player"
 msgstr "Mini reproductor"
 
+
+# Kiosk shell (2026-08-02 kiosk-port contract)
+
+msgid "Cover"
+msgstr "Portada"
+
+msgid "Radio"
+msgstr "Radio"
+
+msgid "Up Next"
+msgstr "A continuación"

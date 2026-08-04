@@ -5012,3 +5012,14 @@ msgstr "Oberfläche"
 msgid "Mini Player"
 msgstr "Mini-Player"
 
+
+# Kiosk shell (2026-08-02 kiosk-port contract)
+
+msgid "Cover"
+msgstr "Cover"
+
+msgid "Radio"
+msgstr "Radio"
+
+msgid "Up Next"
+msgstr "Als Nächstes"

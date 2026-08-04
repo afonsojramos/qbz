@@ -114,12 +114,14 @@ Rectangle {
     Connections {
         target: QbzShell
         function onSelectAllRequested() {
-            if (viewLoader.item !== null && typeof viewLoader.item.selectAll === "function")
-                viewLoader.item.selectAll()
+            if (contentRouter.currentItem !== null
+                    && typeof contentRouter.currentItem.selectAll === "function")
+                contentRouter.currentItem.selectAll()
         }
         function onExitMultiSelectRequested() {
-            if (viewLoader.item !== null && typeof viewLoader.item.exitMultiSelectMode === "function")
-                viewLoader.item.exitMultiSelectMode()
+            if (contentRouter.currentItem !== null
+                    && typeof contentRouter.currentItem.exitMultiSelectMode === "function")
+                contentRouter.currentItem.exitMultiSelectMode()
         }
     }
     // The reporters: their QbzShell mirrors feed the Rust Ctrl+A
@@ -130,13 +132,15 @@ Rectangle {
     Binding {
         target: QbzShell
         property: "multiSelectCapable"
-        value: viewLoader.item !== null && typeof viewLoader.item.selectAll === "function"
+        value: contentRouter.currentItem !== null
+               && typeof contentRouter.currentItem.selectAll === "function"
         restoreMode: Binding.RestoreNone
     }
     Binding {
         target: QbzShell
         property: "multiSelectActive"
-        value: viewLoader.item !== null && viewLoader.item.multiSelectOn === true
+        value: contentRouter.currentItem !== null
+               && contentRouter.currentItem.multiSelectOn === true
         restoreMode: Binding.RestoreNone
     }
 
@@ -245,83 +249,21 @@ Rectangle {
         border.color: theme.frostBorder
         clip: true
 
-        Loader {
-            id: viewLoader
+        // The view-mount chain — every route arm, every hard-won comment and
+        // the MyQBZ `kind` discriminator now live in ContentRouter.qml, which
+        // the KIOSK shell mounts too (kiosk-port contract §4.2 / D3). The
+        // Slint kiosk copies AppShell's mount block verbatim and calls that
+        // copy debt in its own header (KioskShell.slint:10-17); this is the
+        // named fix, so the two shells cannot drift.
+        //
+        // `kiosk` defaults false, i.e. this instance routes every id to the
+        // desktop view it always did. Reached from elsewhere in this document
+        // through `contentRouter.currentItem` (the multi-select seam above) —
+        // a QML `id` does not cross documents, so `viewLoader` is no longer
+        // nameable here and that public property is the replacement.
+        ContentRouter {
+            id: contentRouter
             anchors.fill: parent
-            source: QbzShell.currentView === "home" ? "../views/HomeView.qml"
-                : QbzShell.currentView === "library" ? "../views/LibraryView.qml"
-                : QbzShell.currentView === "local" ? "../views/LocalLibraryView.qml"
-                : QbzShell.currentView === "localalbum" ? "../views/LocalAlbumView.qml"
-                : QbzShell.currentView === "album" ? "../views/AlbumView.qml"
-                : QbzShell.currentView === "artist" ? "../views/ArtistView.qml"
-                : QbzShell.currentView === "settings" ? "../settings/SettingsView.qml"
-                : QbzShell.currentView === "search" ? "../views/SearchView.qml"
-                : QbzShell.currentView === "playlist" ? "../views/PlaylistView.qml"
-                : QbzShell.currentView === "discoverbrowse" ? "../views/DiscoverBrowseView.qml"
-                : QbzShell.currentView === "playlistbrowse" ? "../views/PlaylistBrowseView.qml"
-                : QbzShell.currentView === "recentalbums" ? "../views/PlayHistoryView.qml"
-                : QbzShell.currentView === "mostplayedalbums" ? "../views/PlayHistoryView.qml"
-                : QbzShell.currentView === "label" ? "../views/LabelView.qml"
-                : QbzShell.currentView === "labelreleases" ? "../views/LabelReleasesView.qml"
-                // Artist page > a release section > "See discography", and the
-                // album page's "From the same artist" View all. Same two-file
-                // contract as the rest of this chain (nav_qt.rs:9-16):
-                // artist_releases_qt::open records the id, this arm mounts it.
-                // Forgetting the arm is NOT a crash — the ternary falls through
-                // to "" and the pane goes blank with nothing logged, i.e. the
-                // dead "See discography" in a new costume.
-                : QbzShell.currentView === "artistreleases" ? "../views/ArtistReleasesView.qml"
-                // For You > Qobuz Mixes. The whole chain existed —
-                // HomeView's tile -> QbzHome.openMix -> foryou_qt -> nav_qt
-                // records the "mix" view — and MixView.qml is written and
-                // registered in build.rs, but this arm was missing, so every
-                // mix tile navigated to a view nobody mounted and the content
-                // pane simply went blank (back recovered, which is why it read
-                // as "nothing happens" rather than a crash).
-                : QbzShell.currentView === "mix" ? "../views/MixView.qml"
-                // MyQBZ. Mixtapes and Collections are ONE file — the two
-                // pages differ only in their filter row and their empty
-                // state, so MyQbzGridView carries a `kind` discriminator
-                // (see the Binding below, which is how it gets set).
-                : QbzShell.currentView === "mixtapes"
-                  || QbzShell.currentView === "collections" ? "../views/myqbz/MyQbzGridView.qml"
-                : QbzShell.currentView === "mixtapedetail" ? "../views/myqbz/MyQbzDetailView.qml"
-                : QbzShell.currentView === "discobuilder" ? "../views/myqbz/DiscoBuilderView.qml"
-                // Settings > Blacklist > Manage. Not reachable from the
-                // sidebar — blacklist_qt::open_manager records the route.
-                : QbzShell.currentView === "blacklist" ? "../views/BlacklistManagerView.qml"
-                // Sidebar > Playlists ⋯ > Manage playlists. Not a sidebar
-                // section — playlist_manager_qt::navigate() records the route.
-                // The route is a TWO-FILE contract (nav_qt.rs:9-16): the caller
-                // records the id, this arm mounts it, and the failure mode for a
-                // missing arm is a BLANK content pane, logged nowhere.
-                : QbzShell.currentView === "playlistmanager" ? "../views/PlaylistManagerView.qml" : ""
-        }
-
-        // MyQbzGridView serves BOTH the "mixtapes" and "collections" routes
-        // and needs to know which. A Loader cannot pass properties through a
-        // declarative `source:` ternary, and the view's own default is
-        // "mixtape" — so without this the Collections route would render the
-        // Mixtapes page, permanently, with nothing logged.
-        //
-        // A Binding rather than `onLoaded`/`setSource`: it applies the moment
-        // `item` exists (the Loader creates it synchronously, so still before
-        // the first render pass), it re-applies if the route flips
-        // mixtapes <-> collections while the same instance is mounted, and it
-        // keeps the whole router declarative. Same shape as the seeded-field
-        // pattern at controls/QbzLineEdit.qml:174-179.
-        //
-        // RestoreNone: the target is DESTROYED on unload, and the default
-        // RestoreBindingOrValue would try to write the old value back into a
-        // dying object.
-        Binding {
-            target: viewLoader.item
-            property: "kind"
-            value: QbzShell.currentView === "collections" ? "collection" : "mixtape"
-            when: viewLoader.item !== null
-                  && (QbzShell.currentView === "mixtapes"
-                      || QbzShell.currentView === "collections")
-            restoreMode: Binding.RestoreNone
         }
     }
 
