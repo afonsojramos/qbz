@@ -551,10 +551,22 @@ ApplicationWindow {
     // (§2.3), so every tray click hops ksni thread -> tray_qt verb ->
     // tray_bridge::ui() -> qsignal -> here, and this block is where it finally
     // reaches one.
+    // Each handler logs ONE line, and that is not debug litter: this hop is the
+    // only part of the tray that Rust cannot see. `tray_qt` logs when it SENDS
+    // (e.g. "[tray] quit requested"), so without a line on this side a report of
+    // "the tray does nothing" cannot distinguish "the click never left ksni"
+    // from "the signal arrived and QML did nothing with it" — which is exactly
+    // the ambiguity that cost a diagnosis on 2026-08-04.
     Connections {
         target: QbzTray
-        function onWindowShowRequested() { window.showFromTray() }
-        function onWindowHideRequested() { window.hideToTray() }
+        function onWindowShowRequested() {
+            console.log("[qml] tray -> showFromTray")
+            window.showFromTray()
+        }
+        function onWindowHideRequested() {
+            console.log("[qml] tray -> hideToTray")
+            window.hideToTray()
+        }
         // The tray's left-click degenerates to present() while the mini is open
         // (§5.8.2, §13-D21): raise the MINI, and do NOT bring the main window up
         // beside it. No setWindowShown — the mini is not the main window, and
@@ -568,7 +580,9 @@ ApplicationWindow {
             }
         }
         function onQuitRequested() {
+            console.log("[qml] tray -> quit: persisting geometry")
             window.persistWindowGeometryOnExit()
+            console.log("[qml] tray -> quit: calling Qt.quit()")
             Qt.quit()
         }
     }

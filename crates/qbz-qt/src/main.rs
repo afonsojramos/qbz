@@ -2365,9 +2365,36 @@ fn main() {
 
     if let Some(app) = app.as_mut() {
         app.exec();
+        // The event loop is gone: from here on the process has no UI and the
+        // user cannot do anything but wait, so NOTHING on this path may block
+        // without a bound.
+        log::info!("[qbz-qt] event loop exited; shutting down");
         // Same reason as logout: leaving the app must stop the renderer.
+        //
+        // BOUNDED. This is a `block_on` on the main thread after the UI is
+        // already gone, and it awaits a tokio `Mutex` that the cast poll task
+        // also takes (`cast_qt.rs:1111`, aborted only AFTER the lock is
+        // acquired). If anything holds that lock, the process survives with no
+        // window, no tray response and no way out but `kill -9` — which is
+        // exactly what an owner hit on 2026-08-04. A cast device that keeps
+        // playing for two seconds longer is a far smaller failure than an app
+        // that cannot be closed, so the timeout wins the tie.
         if let Some(rt) = TOKIO.get() {
-            rt.block_on(async { cast_qt::service().shutdown().await });
+            let stopped = rt.block_on(async {
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(2),
+                    cast_qt::service().shutdown(),
+                )
+                .await
+                .is_ok()
+            });
+            if !stopped {
+                log::warn!(
+                    "[qbz-qt] cast shutdown did not finish within 2s; exiting anyway \
+                     (a cast device may keep playing until it times out)"
+                );
+            }
         }
+        log::info!("[qbz-qt] shutdown complete");
     }
 }
