@@ -81,6 +81,32 @@ pub mod qbz_mini {
         /// bridge never errors, it just never repaints.
         #[qinvokable]
         fn boot(self: Pin<&mut QbzMini>);
+
+        /// Enter the miniplayer (contract A-8, §4.6's `enter()`). Suppressed
+        /// under gamescope — the guard lives HERE so the view-menu row and the
+        /// `ui.miniPlayer` hotkey share one predicate (§4.10.1).
+        #[qinvokable]
+        fn enter(self: Pin<&mut QbzMini>);
+
+        /// Leave the miniplayer (contract A-8, §4.6's `exit()`). Also the
+        /// destination of the mini's `Escape` / `Shift+M` and of its
+        /// `onClosing` — a compositor close behaves like the expand button
+        /// (§13-D13).
+        #[qinvokable]
+        fn exit(self: Pin<&mut QbzMini>);
+
+        /// The MINI window's own key dispatcher (contract A-15, §4.9), 1:1 with
+        /// the reference's `dispatch_mini`
+        /// (`crates/qbz/src/keybindings.rs:623-648`). **No
+        /// `text_input_focused` argument** — the mini has no text fields, and
+        /// `dispatch_mini` has no text-input guard either. `true` = consumed.
+        #[qinvokable]
+        fn key_pressed(
+            self: Pin<&mut QbzMini>,
+            key: i32,
+            modifiers: i32,
+            text: QString,
+        ) -> bool;
     }
 
     // The custom WRITE targets. NOT qinvokables — QML reaches them by writing
@@ -202,6 +228,72 @@ fn refresh_queue() {
     crate::spawn(async move { crate::queue_qt::publish(&runtime).await });
 }
 
+/// `enter()`'s body as a free fn, so the invokable and the `ui()`-hopped
+/// `toggle()` below reach the SAME code instead of two copies that can drift.
+///
+/// The reference's `enter()` (`crates/qbz/src/miniplayer.rs:154-188`) is seven
+/// ordered steps; five of them have no Qt counterpart. Creation + seeding is
+/// QML's `createObject` plus this bridge's construction-time seeds (steps 1-2),
+/// `ensure_lyrics_engine` is DROPPED (§3.2 — the mini mounts its own engine),
+/// `force_full_mirror` and `spawn_queue_refresh` are DROPPED because the
+/// singletons the mini reads are the ones the shell reads and are already
+/// current. What remains is the flag — and QML's `onOpenChanged` does the rest.
+///
+/// Step 7, `m.hide()` LAST, is `window.hideToTray()` (A-25) and lands with B6;
+/// until then the main window stays visible behind the mini. Open-coding a bare
+/// `window.hide()` here would create a second visibility owner, which §5.8.1's
+/// invariant and stage-0 S0-4 forbid.
+fn enter_now(mut this: Pin<&mut QbzMini>) {
+    if crate::tray_qt::in_gamescope() {
+        // 1:1 with the reference's two suppressed entry points
+        // (`crates/qbz/src/main.rs:11732-11733`, `keybindings.rs:548-552`): an
+        // extra mapped window can steal gamescope's focused-window pick.
+        log::info!("[qbz-qt] miniplayer: entry suppressed under gamescope");
+        return;
+    }
+    if this.open {
+        // Already up: `apply_open` would early-return on the unchanged value,
+        // no `openChanged` would fire, and QML's handler — the ONLY place the
+        // window is shown or raised — would never run. The reference's
+        // `enter()` re-applies geometry and `show()`s unconditionally
+        // (`miniplayer.rs:154-188`), so re-entering RAISES. Forcing the notify
+        // is how a Rust-side verb reaches a QML-owned window; it is also the
+        // shape `present()` wants.
+        this.as_mut().open_changed();
+        return;
+    }
+    apply_open(this, true);
+}
+
+/// `exit()`'s body as a free fn — see `enter_now` for why.
+///
+/// The reference sets `OPEN = false` FIRST so any in-flight work bails
+/// (`miniplayer.rs:191-215`); `apply_open` stores the mirror before it notifies,
+/// so that ordering is preserved. Restoring the force-opened lyrics panel is
+/// DROPPED with the hack that needed it (§3.2). `m.show()` is
+/// `window.showFromTray()` (A-25) and lands with B6, for the same
+/// one-visibility-owner reason `enter_now` states.
+fn exit_now(this: Pin<&mut QbzMini>) {
+    apply_open(this, false);
+}
+
+/// The `ui.miniPlayer` hotkey's verb — the reference's `toggle_miniplayer()`
+/// (`crates/qbz/src/keybindings.rs:547-558`) minus its gamescope guard, which
+/// lives in `enter_now` so both entry points share ONE predicate (§4.10.1).
+///
+/// Hopped through `ui()` because the caller is `hotkeys_bridge`'s `run_action`,
+/// which runs on ANOTHER QObject and cannot reach this one's properties — the
+/// same reason the `OPEN` mirror exists.
+pub(crate) fn toggle() {
+    ui(|mini| {
+        if is_open() {
+            exit_now(mini);
+        } else {
+            enter_now(mini);
+        }
+    });
+}
+
 impl qbz_mini::QbzMini {
     pub fn boot(self: Pin<&mut Self>) {
         if QT_THREAD.set(self.qt_thread()).is_err() {
@@ -219,5 +311,63 @@ impl qbz_mini::QbzMini {
     /// surface 3.
     pub fn set_surface(self: Pin<&mut Self>, surface: i32) {
         apply_surface(self, surface);
+    }
+
+    /// Contract A-8 — enter.
+    pub fn enter(self: Pin<&mut Self>) {
+        enter_now(self);
+    }
+
+    /// Contract A-8 — exit.
+    pub fn exit(self: Pin<&mut Self>) {
+        exit_now(self);
+    }
+
+    /// Contract A-15 — the mini's key dispatcher, the table at §4.9.
+    ///
+    /// Resolution goes through `hotkeys_qt::action_for_mini_key` (A-16), which
+    /// reads the user's ACTIVE bindings, so a rebound `mini.queue` works here
+    /// exactly as the reference's `dispatch_mini` intends (`keybindings.rs:631`).
+    /// A matched action consumes (`:647`); anything else propagates (`:645`).
+    pub fn key_pressed(
+        self: Pin<&mut Self>,
+        key: i32,
+        modifiers: i32,
+        text: QString,
+    ) -> bool {
+        let text = text.to_string();
+        let overrides = crate::hotkeys_qt::load_overrides();
+        let Some(action) =
+            crate::hotkeys_qt::action_for_mini_key(&overrides, key, modifiers, &text)
+        else {
+            return false;
+        };
+        // The surface writes go through `apply_surface`, the same funnel
+        // `QbzMini.surface = n` uses, so the keyboard path cannot skip the
+        // persist or the surface-3 queue kick.
+        //
+        // `clamp_to_implemented` is the TEMPORARY guard that keeps `1`, `4` and
+        // `5` from landing the user on a blank card while the micro footer
+        // (B3) and the queue + lyrics surfaces (B4) do not exist yet. It is
+        // deleted by those blocks — see the function's own doc. The keys stay
+        // BOUND rather than being removed from the table, because the table is
+        // the user's rebindable one and the cheatsheet already lists all five.
+        match action.id {
+            "mini.micro" => apply_surface(self, crate::mini_qt::clamp_to_implemented(0)),
+            "mini.compact" => apply_surface(self, 1),
+            "mini.artwork" => apply_surface(self, 2),
+            "mini.queue" => apply_surface(self, crate::mini_qt::clamp_to_implemented(3)),
+            "mini.lyrics" => apply_surface(self, crate::mini_qt::clamp_to_implemented(4)),
+            // Both leave the mini — 1:1 with `keybindings.rs:641`, where the
+            // two ids share one arm.
+            "ui.miniPlayer" | "ui.escape" => exit_now(self),
+            "playback.toggle" => crate::transport_toggle_play(),
+            "playback.next" => crate::transport_next(),
+            "playback.prev" => crate::transport_previous(),
+            // Nothing else is bound on the mini (§4.9): no arrow navigation,
+            // no volume keys, no seek keys.
+            _ => return false,
+        }
+        true
     }
 }

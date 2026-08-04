@@ -115,9 +115,11 @@ pub enum Context {
     None,
     /// Only while the immersive overlay is open (seek shortcuts).
     Immersive,
-    /// Only while the miniplayer window is active (surface 1-5). Dispatched on
-    /// the mini window's own hook, never on the main window (§6 — multi-window
-    /// readiness, documented seam, NOT implemented).
+    /// Only while the miniplayer window is active (surfaces 0-4). Dispatched
+    /// on the mini window's own hook — `QbzMini.keyPressed` through
+    /// `action_for_mini_key` below — and NEVER on the main window, whose
+    /// `action_for_key` still answers `Context::Mini => None` (there is a test
+    /// on that arm). The two functions are siblings, not one widened gate.
     Mini,
 }
 
@@ -574,6 +576,37 @@ pub fn action_for_key(
     }
 }
 
+/// Resolve a key event over the MINI window's context — a SIBLING of
+/// `action_for_key`, never a widening of it (2026-08-03 miniplayer/tray
+/// contract A-16, §4.9).
+///
+/// `Context::Mini` and `Context::None` fire here; `Context::Immersive` does
+/// not, because the immersive overlay lives on the main window, which is hidden
+/// while the mini is up. This mirrors the reference's split: `dispatch_mini`
+/// (`crates/qbz/src/keybindings.rs:623-648`) resolves over the same ACTIVE
+/// bindings — user overrides respected — and its table is exactly the mini + the
+/// three global playback rows.
+///
+/// **`action_for_key`'s `Context::Mini => None` arm (`:572`) does NOT change.**
+/// The main window must keep rejecting mini actions and the test at
+/// `immersive_actions_are_gated_on_the_overlay_and_mini_never_fires` asserts it.
+pub fn action_for_mini_key(
+    overrides: &BTreeMap<String, String>,
+    key: i32,
+    modifiers: i32,
+    text: &str,
+) -> Option<&'static ActionDef> {
+    let (ctrl, alt, shift) = mods_from_qt(modifiers);
+    let token = token_from_qt_key(key, modifiers, text)?;
+    let shortcut = shortcut_from_parts(ctrl, alt, shift, &token)?;
+    let bindings = active_bindings_with(overrides);
+    let action = action_for_shortcut(&shortcut, &bindings)?;
+    match action.context {
+        Context::Immersive => None,
+        _ => Some(action),
+    }
+}
+
 /// The (C2) Ctrl+A predicate, EXACTLY the Slint one (contract §4.6 / trap 8):
 /// `ctrl && token.eq_ignore_ascii_case("a")` — other modifiers are NOT
 /// excluded, so Ctrl+Shift+A and Ctrl+Alt+A also trigger.
@@ -934,6 +967,25 @@ mod tests {
         // A global action resolves regardless.
         let a = action_for_key(&overrides, QT_KEY_SPACE, 0, " ", false).unwrap();
         assert_eq!(a.id, "playback.toggle");
+    }
+
+    /// A-16's sibling gate: the mini window is the mirror image of the main
+    /// one. Written beside its twin above ON PURPOSE — the pair is what proves
+    /// the widening was NOT applied to the shared arm.
+    #[test]
+    fn the_mini_gate_is_the_mirror_of_the_main_one() {
+        let overrides = no_overrides();
+        // "1" is mini.micro — it fires HERE and nowhere else.
+        let a = action_for_mini_key(&overrides, QT_KEY_0 + 1, 0, "1").unwrap();
+        assert_eq!(a.id, "mini.micro");
+        // …and it is still refused on the main window (the arm was not widened).
+        assert!(action_for_key(&overrides, QT_KEY_0 + 1, 0, "1", false).is_none());
+        // A global action resolves on both.
+        let a = action_for_mini_key(&overrides, QT_KEY_SPACE, 0, " ").unwrap();
+        assert_eq!(a.id, "playback.toggle");
+        // Immersive-context actions never fire on the mini: the overlay lives
+        // on the main window, which is hidden while the mini is up.
+        assert!(action_for_mini_key(&overrides, QT_KEY_RIGHT, 0, "").is_none());
     }
 
     #[test]

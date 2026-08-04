@@ -322,11 +322,13 @@ impl qbz_hotkeys::QbzHotkeys {
     }
 
     /// The §2 dispatch table (keybindings.rs:502-531 `run_action`). true =
-    /// consumed. The no-op seams are CONTRACTUAL (K3, trap 10): ui.openLink
-    /// (LinkResolver not ported, HeaderBar.qml:23 — activates when it lands),
-    /// ui.miniPlayer (no Qt miniplayer, §6 multi-window-ready), and the
-    /// mini.* rows (no-op on the main window — kept in the table for
-    /// binding-file compat + the cheatsheet).
+    /// consumed. ONE no-op seam is left and it is CONTRACTUAL (K3, trap 10):
+    /// ui.openLink (LinkResolver not ported, HeaderBar.qml:23 — activates when
+    /// it lands). The mini.* rows still no-op here — they belong to the mini
+    /// window's own dispatcher (mini_bridge::key_pressed) and are kept in this
+    /// table for binding-file compat + the cheatsheet. **ui.miniPlayer is no
+    /// longer a seam**: it toggles the Qt miniplayer (2026-08-03
+    /// miniplayer/tray contract §4.9 seam 2).
     fn run_action(mut self: Pin<&mut Self>, id: &str) -> bool {
         match id {
             "playback.toggle" => crate::transport_toggle_play(),
@@ -349,9 +351,11 @@ impl qbz_hotkeys::QbzHotkeys {
             "ui.openLink" => {
                 log::debug!("[qbz-qt] hotkeys: ui.openLink — no-op seam, LinkResolver not ported (K3)");
             }
-            "ui.miniPlayer" => {
-                log::debug!("[qbz-qt] hotkeys: ui.miniPlayer — no-op seam, no Qt miniplayer (K3/§6)");
-            }
+            // Shift+M — the reference's `toggle_miniplayer()`
+            // (keybindings.rs:547-558). Its gamescope guard is NOT repeated
+            // here: it lives in `QbzMini::enter`, so this hotkey and the view
+            // menu's row share ONE predicate (contract §4.10.1).
+            "ui.miniPlayer" => crate::mini_bridge::toggle(),
             "focus.seekForward" => seek_relative(5),
             "focus.seekBack" => seek_relative(-5),
             "focus.seekForwardLong" => seek_relative(10),

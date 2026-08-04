@@ -11,6 +11,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Window
 import com.blitzfc.qbz
+import "miniplayer"
 import "theme"
 
 ApplicationWindow {
@@ -460,6 +461,58 @@ ApplicationWindow {
 
 
 
+
+    // --- The miniplayer window (2026-08-03 miniplayer/tray contract, B2) ---
+    //
+    // LAZY, with a STRONG reference. Declaring the mini inline would build its
+    // whole subtree at startup; a Component + createObject(null) is the Qt
+    // shape of the reference's ensure_window() (crates/qbz/src/miniplayer.rs:
+    // 121-151), and `miniWindow` is its MINI_STRONG thread-local (:40 "Strong
+    // handle keeps the window alive", set :149, NEVER cleared — exit() and
+    // close_app() only hide()). A null-parent createObject with no strong
+    // reference is JS-GC eligible (contract §16 U-3), and this property is what
+    // makes it not.
+    //
+    // Created on first ENTER, never on boot: the QML tree of a window that has
+    // never been opened costs nothing.
+    property var miniWindow: null
+    Component {
+        id: miniWindowComponent
+        MiniWindow {}
+    }
+    function ensureMiniWindow() {
+        if (window.miniWindow === null)
+            window.miniWindow = miniWindowComponent.createObject(null)
+        return window.miniWindow
+    }
+
+    // `QbzMini.open` is the ONE mini lifecycle flag (contract A-2): Rust's
+    // enter/exit funnel writes it, stores the AtomicBool mirror the hotkeys
+    // pipeline reads, and THEN notifies — so this handler is the QML half of
+    // §4.6's step ordering and the only place either window is shown or hidden
+    // for the miniplayer.
+    //
+    // Step 7 of enter() ("m.hide() LAST, avoid a blank flash") and its exit
+    // twin are window.hideToTray() / window.showFromTray() (A-25), which land
+    // with block B6 — so on this commit the mini opens with the main window
+    // still visible behind it. That is §14.2's stated ordering constraint, not
+    // a defect: a bare window.hide() here would be a second visibility owner
+    // and §5.8.1's invariant (stage-0 S0-4) forbids it.
+    Connections {
+        target: QbzMini
+        function onOpenChanged() {
+            if (QbzMini.open) {
+                var mini = window.ensureMiniWindow()
+                if (mini !== null) {
+                    mini.show()
+                    mini.raise()
+                    mini.requestActivate()
+                }
+            } else if (window.miniWindow !== null) {
+                window.miniWindow.hide()
+            }
+        }
+    }
 
     // The immersive toggle Shortcut is GONE (2026-08-03 hotkeys-port §1.3):
     // Shift+I now fires as the REBINDABLE ui.focusMode action through the

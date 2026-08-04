@@ -313,6 +313,17 @@ fn main() {
                 "qml/views/playlistmanager/PmToolbar.qml",
                 "qml/views/playlistmanager/PmTreeFolderRow.qml",
                 "qml/views/playlistmanager/PmTreePlaylistRow.qml",
+                // Miniplayer (2026-08-03 miniplayer/tray-port contract §3.4) —
+                // its own module directory, like immersive/ and kiosk/. B2
+                // ships the window, the card shell and the two DISPLAY
+                // surfaces; B3 adds the footer + capsule, B4 the queue and
+                // lyrics surfaces.
+                "qml/miniplayer/MiniWindow.qml",
+                "qml/miniplayer/MiniShell.qml",
+                "qml/miniplayer/MiniExplicitBadge.qml",
+                "qml/miniplayer/MiniCoverArt.qml",
+                "qml/miniplayer/MiniCompactSurface.qml",
+                "qml/miniplayer/MiniArtworkSurface.qml",
             ],
             qrc_files: &qrc_refs,
             ..Default::default()

@@ -210,10 +210,33 @@ fn surface_for_default_view(default_view: &str, last_surface: i32) -> i32 {
 }
 
 pub(crate) fn initial_surface() -> i32 {
-    surface_for_default_view(
+    clamp_to_implemented(surface_for_default_view(
         &crate::settings_qt::pref_str(KEY_DEFAULT_VIEW, "remember"),
         crate::settings_qt::pref_i32(KEY_SURFACE, DEFAULT_SURFACE),
-    )
+    ))
+}
+
+/// TEMPORARY, and it deletes itself: surfaces 0 (micro), 3 (queue) and 4
+/// (lyrics) have no content yet — the footer that IS the micro card is block
+/// B3's, and the queue and lyrics surfaces are B4's.
+///
+/// This matters because `mini_surface` and `mini_default_view` live in the
+/// ui_prefs.json **co-owned with the shipping Slint app**. A user whose Slint
+/// miniplayer was last on Queue, or whose default view is "micro", would open
+/// the Qt mini onto a blank rounded box with no footer and no capsule — i.e.
+/// no visible way out but Escape. Falling back to the artwork surface (the
+/// reference's own default, `ui_prefs.rs`'s `mini_surface: 2`) is the honest
+/// behaviour until the surfaces exist.
+///
+/// **Removal is part of B3 and B4**, in the same commit that lands each
+/// surface: B3 drops 0 from the list, B4 drops 3 and 4, and the last one to go
+/// deletes this function. The keyboard arms in `mini_bridge::key_pressed` are
+/// clamped by the same rule and lose it the same way.
+pub(crate) fn clamp_to_implemented(surface: i32) -> i32 {
+    match surface {
+        1 | 2 => surface,
+        _ => DEFAULT_SURFACE,
+    }
 }
 
 pub(crate) fn initial_background_blur() -> bool {
