@@ -20,7 +20,7 @@ use std::sync::{
 use mpris_server::zbus::{self, fdo};
 use mpris_server::{
     LoopStatus, Metadata, PlaybackRate, PlaybackStatus as MprisStatus, PlayerInterface, Property,
-    RootInterface, Server, Time, TrackId, Volume,
+    RootInterface, Server, Signal, Time, TrackId, Volume,
 };
 
 use crate::inhibit::SleepInhibitor;
@@ -58,6 +58,11 @@ enum Update {
     /// `PropertiesChanged` by design, so there is no signal to send; the point
     /// is purely that the next on-demand read is not stale.
     Position(Time),
+    /// A DISCONTINUOUS jump. Stores like `Position` and additionally emits the
+    /// `Seeked` signal, which is the ONE thing that tells an already-open
+    /// client to stop extrapolating and re-read. Without it a widget keeps
+    /// counting from wherever it was until it happens to poll again.
+    Seeked(Time),
 }
 
 /// The cloneable handle returned to the app. Pushing state is a non-blocking
@@ -86,6 +91,12 @@ impl MediaIntegration for LinuxHandle {
         let _ = self
             .tx
             .try_send(Update::Position(Time::from_micros(position.as_micros() as i64)));
+    }
+
+    fn seeked(&self, position: std::time::Duration) {
+        let _ = self
+            .tx
+            .try_send(Update::Seeked(Time::from_micros(position.as_micros() as i64)));
     }
 }
 
@@ -296,6 +307,10 @@ async fn apply(server: &Server<QbzMpris>, state: &Arc<Mutex<State>>, update: Upd
         }
         Update::Position(p) => {
             state.lock().unwrap().position = p;
+        }
+        Update::Seeked(p) => {
+            state.lock().unwrap().position = p;
+            let _ = server.emit(Signal::Seeked { position: p }).await;
         }
     }
 }

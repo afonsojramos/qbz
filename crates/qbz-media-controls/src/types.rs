@@ -91,4 +91,18 @@ pub trait MediaIntegration: Send + Sync {
     fn set_position(&self, position: Duration) {
         let _ = position;
     }
+
+    /// Report a DISCONTINUOUS jump — a user seek, not the ordinary advance of
+    /// playback.
+    ///
+    /// This is the one thing that reaches a client which is already open and
+    /// extrapolating: `Seeked` tells it to stop and re-read. Keeping the
+    /// stored position fresh (above) fixes what a client sees when it OPENS;
+    /// this fixes what it sees while it is already watching.
+    ///
+    /// Defaulted to `set_position`, so a backend without the signal still gets
+    /// the value right on the next read.
+    fn seeked(&self, position: Duration) {
+        self.set_position(position);
+    }
 }

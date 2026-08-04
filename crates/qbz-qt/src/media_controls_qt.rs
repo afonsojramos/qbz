@@ -208,6 +208,20 @@ pub(crate) fn push_position(position_secs: u64) {
     }
 }
 
+/// Report a user SEEK — a discontinuous jump, not the ordinary advance.
+///
+/// `push_position` fixes what a client sees when it OPENS; this is what
+/// reaches one that is ALREADY open. The owner's observation is what made the
+/// distinction concrete: *"el contador del seekbar del widget solo empieza a
+/// contar hasta que lo abro"* — the widget extrapolates from the value it read
+/// at open and never looks again, so only the `Seeked` signal can tell it the
+/// ground moved.
+pub(crate) fn push_seeked(position_secs: u64) {
+    if let Some(mc) = handle() {
+        mc.seeked(Duration::from_secs(position_secs));
+    }
+}
+
 /// Compare-and-record the metadata de-dupe key. `true` when `key` differs from
 /// the last pushed value (→ caller pushes now), recording it as the new
 /// last-pushed value. A poisoned lock falls back to pushing.
