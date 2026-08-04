@@ -148,17 +148,27 @@ impl QbzKioskNav {
     ///
     /// **The ORDER is load-bearing.** Each setter emits its NOTIFY
     /// synchronously, so a QML handler on one property runs while the fields
-    /// written after it still hold their PREVIOUS values. The two properties
-    /// consumers react to are `index` (focus moved) and `activate_seq` (Enter),
-    /// and what those handlers need to read is the CONTEXT of the move — which
-    /// zone, which direction, how big the space is. So every context field is
-    /// written FIRST and those two LAST.
+    /// written after it still hold their PREVIOUS values.
     ///
-    /// This is not hypothetical: with `dir` written after `index`, the shelf
-    /// skip-cascade in `KioskArtist.qml` read `dir == 0` on the first Down of a
-    /// a session and refused to skip, parking the focus ring on a shelf of zero
-    /// height; a direction reversal read the old sign and skipped back the way
-    /// it came.
+    /// THREE properties are consumer-facing — the ones a view has a handler on:
+    /// `hmove` (shelf pulse), `index` (focus moved) and `activate_seq` (Enter).
+    /// Everything else is CONTEXT those handlers read: which zone, which
+    /// direction, how big the space is, and **whether the ring is live at all**.
+    /// So context is written first and the three last.
+    ///
+    /// Both halves of that rule were learned the hard way, one after the other:
+    ///
+    /// * With `dir` after `index`, the shelf skip-cascade in `KioskArtist.qml`
+    ///   read `dir == 0` on the first Down of a session and refused to skip,
+    ///   parking the ring on a shelf of zero height; a direction reversal read
+    ///   the old sign and skipped back the way it came.
+    /// * Then, fixing that, `nav_active` was moved BELOW `hmove` — and the
+    ///   first arrow key of a session sets both in one model call, so
+    ///   `hmoveChanged` fired while `nav_active` was still false, no shelf
+    ///   consumed the pulse, and — because cxx-qt's generated setters are
+    ///   change-gated — `hmove` then stayed at 1 and every subsequent Right
+    ///   emitted NOTHING. Left/Right dead on the kiosk's landing page. Caught
+    ///   by an adversarial reviewer reading the diff, not by any test.
     ///
     /// The QML side does NOT rely on this alone — the skip handlers also defer
     /// through `Qt.callLater`, which additionally covers Qt's own binding
@@ -167,7 +177,7 @@ impl QbzKioskNav {
     /// static check and shows up as a focus ring that lands somewhere silly.
     fn sync(mut self: Pin<&mut Self>) {
         let m = self.model.clone();
-        // --- context first ---
+        // --- context: everything a consumer's handler needs to READ ---
         let zone = QString::from(m.zone.as_str());
         if *self.zone() != zone {
             self.as_mut().set_zone(zone);
@@ -177,20 +187,39 @@ impl QbzKioskNav {
         self.as_mut().set_tabs(m.tabs);
         self.as_mut().set_shelves(m.shelves);
         self.as_mut().set_dir(m.dir);
-        self.as_mut().set_hmove(m.hmove);
         self.as_mut().set_nav_active(m.nav_active);
-        // --- the two consumers react to, last ---
+        // --- the three consumers have handlers ON, last ---
+        self.as_mut().set_hmove(m.hmove);
         self.as_mut().set_index(m.index);
         self.as_mut().set_activate_seq(m.activate_seq);
     }
 
+    /// Re-arm the shelf pulse before publishing a new one.
+    ///
+    /// `hmove` is the one property whose VALUE is not its meaning — the
+    /// meaning is the edge. It is cleared only by a consumer calling
+    /// `takeHmove()`, so if nobody consumed the last one (no shelf focused,
+    /// the ring not live yet, a skipped shelf) the model still holds it. The
+    /// next Right would then write the same `1` over the same `1`, and
+    /// cxx-qt's generated setter is CHANGE-GATED — it returns without emitting
+    /// — so the key would be silently dead until the user happened to press
+    /// the other direction.
+    ///
+    /// Forcing the property to 0 first guarantees a real 0 → ±1 transition
+    /// every time, whatever the consumers did or did not do.
+    fn rearm_hmove(mut self: Pin<&mut Self>) {
+        self.as_mut().set_hmove(0);
+    }
+
     pub fn nav_left(mut self: Pin<&mut Self>) {
         self.as_mut().rust_mut().model.left();
+        self.as_mut().rearm_hmove();
         self.sync();
     }
 
     pub fn nav_right(mut self: Pin<&mut Self>) {
         self.as_mut().rust_mut().model.right();
+        self.as_mut().rearm_hmove();
         self.sync();
     }
 
