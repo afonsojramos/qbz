@@ -144,10 +144,6 @@ pub(crate) fn derive_local_album_rows(
         if key.is_empty() || !seen.insert(key.clone()) {
             continue;
         }
-        total += 1;
-        if out.len() >= cap {
-            continue; // keep counting for an honest has_more
-        }
         let title = if t.album_group_title.is_empty() {
             t.album.clone()
         } else {
@@ -158,8 +154,16 @@ pub(crate) fn derive_local_album_rows(
         // section lists records whose title and artist have nothing to do with
         // the query — the section would be lying about what it is showing, and
         // the Qobuz Albums section beside it does not behave that way.
+        //
+        // This runs BEFORE `total` is bumped, so `has_more` counts MATCHING
+        // groups only. Counting the rejected ones would light up "View more"
+        // over a destination that has nothing extra to show.
         if !group_matches(&needle, &[&title, &local_album_artist(t)]) {
             continue;
+        }
+        total += 1;
+        if out.len() >= cap {
+            continue; // keep counting for an honest has_more
         }
         let (art_url, art_path) = local_art_split(t.artwork_path.as_deref());
         out.push(CortRow {
@@ -480,6 +484,30 @@ mod tests {
         assert_eq!(row.title, "Iroquois Dawn");
         assert_eq!(row.kind, "track");
         assert_eq!(row.source, "local");
+    }
+
+    /// has_more must describe the MATCHING set. Counting rejected groups
+    /// would light up "View more" over a destination with nothing extra.
+    #[test]
+    fn has_more_counts_only_matching_groups() {
+        let rows = vec![
+            track("Iron Song", "Iron Maiden", "Iron Album"),
+            // Six non-matching groups: without the fix these inflate `total`
+            // and has_more comes back true over a single matching album.
+            track("Iroquois", "A", "AA"),
+            track("Iroquois", "B", "BB"),
+            track("Iroquois", "C", "CC"),
+            track("Iroquois", "D", "DD"),
+            track("Iroquois", "E", "EE"),
+            track("Iroquois", "F", "FF"),
+        ];
+        let (albums, has_more) = derive_local_album_rows(&rows, 3, "Iro");
+        assert_eq!(albums.len(), 1, "only one album group matches");
+        assert!(!has_more, "one match under a cap of 3 leaves nothing more");
+
+        let (artists, artists_more) = derive_local_artist_rows(&rows, 3, "Iro");
+        assert_eq!(artists.len(), 1);
+        assert!(!artists_more);
     }
 
     #[test]
