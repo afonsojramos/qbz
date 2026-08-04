@@ -828,6 +828,10 @@ pub(crate) fn sidebar_artwork_window(urls_json: String) {
 
 /// Open the album detail view: push the nav entry, then fetch + publish.
 pub(crate) fn open_album(album_id: String) {
+    // Learn from results-page interactions too, not only from the
+    // cortinilla. Self-gated on the Search view being current, so every other
+    // caller of this router is unaffected.
+    search_qt::record_page_interaction("album", &album_id, search_qt::InteractionAction::Open);
     // A LOCAL or Plex album id is a group key or a path, never a Qobuz catalog
     // id. Sending one to /album/get returns 404 and the view lands empty — the
     // mixed Library "All" feed hands both kinds to the same card, so the routing
@@ -869,6 +873,10 @@ pub(crate) fn open_album(album_id: String) {
 
 /// Open the artist detail view: push the nav entry, then fetch + publish.
 pub(crate) fn open_artist(artist_id: String) {
+    // Learn from results-page interactions too, not only from the
+    // cortinilla. Self-gated on the Search view being current, so every other
+    // caller of this router is unaffected.
+    search_qt::record_page_interaction("artist", &artist_id, search_qt::InteractionAction::Open);
     if offline_fwd::engine().status().is_offline() {
         return;
     }
@@ -1217,6 +1225,7 @@ pub(crate) fn enqueue_artist_top() {
 
 /// Track-row click (Library tracks): one-track queue through the core.
 pub(crate) fn play_track(track_id: u64) {
+    search_qt::record_page_interaction("track", &track_id.to_string(), search_qt::InteractionAction::Play);
     let runtime = app();
     spawn(async move {
         if let Err(e) = playback_qt::play_single_track(&runtime, track_id).await {
@@ -1229,6 +1238,10 @@ pub(crate) fn play_track(track_id: u64) {
 
 /// Open the playlist detail view (sidebar row / playlist card click).
 pub(crate) fn open_playlist(playlist_id: String) {
+    // Learn from results-page interactions too, not only from the
+    // cortinilla. Self-gated on the Search view being current, so every other
+    // caller of this router is unaffected.
+    search_qt::record_page_interaction("playlist", &playlist_id, search_qt::InteractionAction::Open);
     // LOCAL playlists (`local:<uuid>`) route to their own loader and open
     // REGARDLESS of connectivity. They are the whole feature for people using
     // QBZ as a player without Qobuz — refusing them while offline would gate

@@ -109,6 +109,19 @@ pub(crate) fn local_art_split(path: Option<&str>) -> (String, String) {
     }
 }
 
+/// Does any of `fields` contain the (already lowercased) needle?
+///
+/// Mirrors what the SQL does — a case-insensitive substring — so the derived
+/// sections agree with the query that produced the rows. An empty needle
+/// matches everything, which keeps the function honest for callers that do not
+/// filter.
+fn group_matches(needle: &str, fields: &[&str]) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    fields.iter().any(|f| f.to_lowercase().contains(needle))
+}
+
 /// Group local TRACK rows into local ALBUM rows (`source = "local"`,
 /// `kind = "album"`).
 ///
@@ -120,7 +133,9 @@ pub(crate) fn local_art_split(path: Option<&str>) -> (String, String) {
 pub(crate) fn derive_local_album_rows(
     rows: &[qbz_library::LocalTrack],
     cap: usize,
+    query: &str,
 ) -> (Vec<CortRow>, bool) {
+    let needle = query.trim().to_lowercase();
     let mut seen: HashSet<String> = HashSet::new();
     let mut out: Vec<CortRow> = Vec::new();
     let mut total = 0usize;
@@ -138,6 +153,14 @@ pub(crate) fn derive_local_album_rows(
         } else {
             t.album_group_title.clone()
         };
+        // The SQL matches at TRACK level (title OR artist OR album), so a
+        // track-title hit drags its whole album in. Without this the Albums
+        // section lists records whose title and artist have nothing to do with
+        // the query — the section would be lying about what it is showing, and
+        // the Qobuz Albums section beside it does not behave that way.
+        if !group_matches(&needle, &[&title, &local_album_artist(t)]) {
+            continue;
+        }
         let (art_url, art_path) = local_art_split(t.artwork_path.as_deref());
         out.push(CortRow {
             kind: "album".into(),
@@ -168,13 +191,21 @@ pub(crate) fn derive_local_album_rows(
 pub(crate) fn derive_local_artist_rows(
     rows: &[qbz_library::LocalTrack],
     cap: usize,
+    query: &str,
 ) -> (Vec<CortRow>, bool) {
+    let needle = query.trim().to_lowercase();
     let mut seen: HashSet<String> = HashSet::new();
     let mut out: Vec<CortRow> = Vec::new();
     let mut total = 0usize;
     for t in rows {
         let name = local_album_artist(t);
         if name.is_empty() || !seen.insert(name.to_lowercase()) {
+            continue;
+        }
+        // Same reason as the album section: an artist whose NAME does not
+        // match has no business in an Artists list, however one of their
+        // tracks got matched.
+        if !group_matches(&needle, &[&name]) {
             continue;
         }
         total += 1;
@@ -247,11 +278,12 @@ pub(crate) fn append_local_sections(
     data: &mut CortinillaData,
     rows: &[qbz_library::LocalTrack],
     caps: LocalCaps,
+    query: &str,
 ) {
     if rows.is_empty() {
         return;
     }
-    let (album_rows, albums_more) = derive_local_album_rows(rows, caps.albums);
+    let (album_rows, albums_more) = derive_local_album_rows(rows, caps.albums, query);
     if !album_rows.is_empty() {
         data.sections.push(CortSection {
             title: qbz_i18n::t("Albums on Local Library"),
@@ -260,7 +292,7 @@ pub(crate) fn append_local_sections(
             has_more: albums_more,
         });
     }
-    let (artist_rows, artists_more) = derive_local_artist_rows(rows, caps.artists);
+    let (artist_rows, artists_more) = derive_local_artist_rows(rows, caps.artists, query);
     if !artist_rows.is_empty() {
         data.sections.push(CortSection {
             title: qbz_i18n::t("Artists on Local Library"),
@@ -293,11 +325,12 @@ pub(crate) fn append_immersive_local_albums(
     data: &mut CortinillaData,
     rows: &[qbz_library::LocalTrack],
     cap: usize,
+    query: &str,
 ) {
     if rows.is_empty() {
         return;
     }
-    let (album_rows, has_more) = derive_local_album_rows(rows, cap);
+    let (album_rows, has_more) = derive_local_album_rows(rows, cap, query);
     if album_rows.is_empty() {
         return;
     }
@@ -392,4 +425,67 @@ pub(crate) async fn load_cortinilla_local(
         t.elapsed()
     );
     rows
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn track(title: &str, artist: &str, album: &str) -> qbz_library::LocalTrack {
+        let mut t = qbz_library::LocalTrack::default();
+        t.title = title.into();
+        t.artist = artist.into();
+        t.album = album.into();
+        t.album_group_key = format!("{artist}|{album}");
+        t.album_group_title = album.into();
+        t
+    }
+
+    /// The owner's real report: searching "Iro" showed Cynic and Die Toten
+    /// Hosen under "Artists on Local Library", and their records under
+    /// "Albums on Local Library". Neither name contains "iro" - a TRACK of
+    /// theirs matched, and the derivation dragged the whole group in.
+    #[test]
+    fn derived_sections_only_keep_groups_that_match_the_query() {
+        let rows = vec![
+            // Matches on the TRACK title only. Must NOT produce an album or
+            // artist row: neither "Cynic" nor "Uroboric Forms" contains "iro".
+            track("Iroquois Dawn", "Cynic", "Uroboric Forms"),
+            // Matches on the ARTIST name -> belongs in both derived sections.
+            track("Run to the Hills", "Iron Maiden", "The Number of the Beast"),
+            // Matches on the ALBUM title -> album row yes, artist row no.
+            track("Some Song", "El Consorcio", "Iron Canciones"),
+        ];
+
+        let (albums, _) = derive_local_album_rows(&rows, 10, "Iro");
+        let album_titles: Vec<&str> = albums.iter().map(|r| r.title.as_str()).collect();
+        assert!(
+            !album_titles.contains(&"Uroboric Forms"),
+            "a track-title match must not pull its album in: {album_titles:?}"
+        );
+        assert!(album_titles.contains(&"The Number of the Beast"), "album-artist match");
+        assert!(album_titles.contains(&"Iron Canciones"), "album-title match");
+
+        let (artists, _) = derive_local_artist_rows(&rows, 10, "Iro");
+        let names: Vec<&str> = artists.iter().map(|r| r.title.as_str()).collect();
+        assert_eq!(names, vec!["Iron Maiden"], "only NAME matches belong here");
+    }
+
+    /// The TRACKS section is unaffected - a track that matched on its title is
+    /// exactly what that section is for.
+    #[test]
+    fn track_rows_are_not_filtered_by_the_group_rule() {
+        let t = track("Iroquois Dawn", "Cynic", "Uroboric Forms");
+        let row = map_local_track_to_cort_row(&t);
+        assert_eq!(row.title, "Iroquois Dawn");
+        assert_eq!(row.kind, "track");
+        assert_eq!(row.source, "local");
+    }
+
+    #[test]
+    fn an_empty_query_filters_nothing() {
+        let rows = vec![track("A", "B", "C")];
+        let (albums, _) = derive_local_album_rows(&rows, 10, "");
+        assert_eq!(albums.len(), 1, "an empty needle must not empty the section");
+    }
 }

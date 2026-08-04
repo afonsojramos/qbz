@@ -44,7 +44,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use cxx_qt_lib::QString;
-use qbz_app::settings::search_service::{InteractionAction, SearchService};
+pub(crate) use qbz_app::settings::search_service::InteractionAction;
+use qbz_app::settings::search_service::SearchService;
 use qbz_app::shell::AppRuntime;
 use qbz_core::LoggingAdapter;
 use qbz_models::{Album, Artist, MostPopularItem, Playlist, SearchAllResults, Track};
@@ -865,7 +866,7 @@ pub async fn live(runtime: &Arc<AppRuntime<LoggingAdapter>>, query: &str) {
     // The on-device sections go LAST, after every Qobuz category, and the
     // append re-runs assign_flat_indices so their rows get contiguous flat
     // indices after the Qobuz ones.
-    crate::search_local::append_local_sections(&mut data, &local_rows, caps);
+    crate::search_local::append_local_sections(&mut data, &local_rows, caps, &q);
     // The RAW rows, kept in lockstep with the payload: the click router plays
     // the concrete LocalTrack from this snapshot rather than re-resolving an
     // id, because local artist rows have no id at all.
@@ -1044,7 +1045,7 @@ pub fn row_clicked(flat_index: i32) {
         } else {
             InteractionAction::Open
         };
-        record(&data.query, &row.kind, &row.id, action);
+        record(&attribution_query(&data.query), &row.kind, &row.id, action);
     }
     // LOCAL rows route through the local seams, never the Qobuz ones: their
     // ids live in a different space entirely (an album id is a group key, an
@@ -1073,6 +1074,77 @@ pub fn row_clicked(flat_index: i32) {
         "playlist" => crate::open_playlist(row.id),
         _ => {}
     }
+}
+
+/// Record an interaction made on the SEARCH RESULTS PAGE.
+///
+/// The port had exactly ONE record site — the cortinilla row click — so
+/// anything the user did on the results page taught the ranking nothing. That
+/// is a bigger hole than it sounds, because it breaks the case the whole
+/// feature exists for:
+///
+///   Search "one metallica" -> the right track is first -> click. Learned.
+///   Search "one" -> Qobuz buries it among hundreds of "One"s, so it is not
+///   in the dropdown -> "View more" -> click it on the page -> NOTHING is
+///   learned, so the next "one" is just as bad.
+///
+/// With this, that page click teaches the bucket "one", and the next "one"
+/// gets the track pulled to the front by `rank_within` before truncation, or
+/// promoted outright as the top result by `top_for_query`.
+///
+/// Gated exactly like the reference (`record_search_interaction`): only while
+/// the SEARCH view is current, only while the module is enabled, only with a
+/// non-empty query. The query is the PAGE's, which is the committed one by
+/// definition — the user pressed Enter or followed a "View more" to get here.
+///
+/// LOCAL entities never reach this path: local rows do not appear on the
+/// results page, and their ids are a different space.
+pub(crate) fn record_page_interaction(kind: &str, id: &str, action: InteractionAction) {
+    if crate::nav_qt::current_view() != "search" {
+        return;
+    }
+    if !is_enabled() {
+        return;
+    }
+    let query = PAGE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .map(|p| p.doc.query.clone())
+        .unwrap_or_default();
+    if query.trim().is_empty() {
+        return;
+    }
+    record(&query, kind, id, action);
+}
+
+/// Which query a click should be LEARNED against.
+///
+/// The payload's query is what produced the rows on screen, but it can lag
+/// what the user has typed: they keep typing while the previous payload is
+/// still shown, then click. Attributing to the payload teaches a bucket named
+/// after a half-typed word — `annen` learning from a click the user made while
+/// typing `annenmaykantereit`. On the owner's real store, 25 of 143 buckets
+/// are typing prefixes like that, and none of them will ever be typed again as
+/// a whole query, so the score is simply lost.
+///
+/// The rule is deliberately narrow: promote to the live query ONLY when the
+/// payload's query is a STRICT PREFIX of it. Anything else — the user cleared
+/// the box, typed something unrelated, or narrowed rather than extended — is
+/// attributed as before. A broader rule would start moving interactions
+/// between unrelated buckets, which is worse than the problem.
+fn attribution_query(payload_query: &str) -> String {
+    let live = crate::search_bridge::cortinilla_query();
+    let live_key = live.trim();
+    if !live_key.is_empty()
+        && live_key.len() > payload_query.len()
+        && live_key
+            .to_lowercase()
+            .starts_with(&payload_query.to_lowercase())
+    {
+        return live_key.to_string();
+    }
+    payload_query.to_string()
 }
 
 /// Play a local cortinilla track row from the per-query snapshot.
@@ -1403,7 +1475,7 @@ async fn imm_load(
             }
         }
     };
-    crate::search_local::append_immersive_local_albums(&mut data, &local_rows, caps.albums);
+    crate::search_local::append_immersive_local_albums(&mut data, &local_rows, caps.albums, &q);
 
     // Artwork: disk hits inline; misses (Qobuz CDN + Plex thumbs) download in
     // the background and republish the SAME payload, version-guarded
