@@ -266,14 +266,34 @@ Rectangle {
     //
     // Declared AFTER surfaceArea so the hover capsule — which overflows the
     // 17 px micro header by 4.5 px in each direction — paints above it.
+    // INSET BY THE BORDER WIDTH on the three edges it touches, and that is a
+    // measured fix, not a hunch: Qt draws a Rectangle's border INSIDE its
+    // bounds, so the card's visible fill is already 1 px in on each side —
+    // while a child anchored to the card's outer edges paints straight over
+    // the hairline. Measured on the owner's 2026-08-04 screenshot: the artwork
+    // and meta rows span 366 px, the seek and transport rows 368 px, so the
+    // footer reached 1 px further out on each side and cut the card's outline
+    // exactly where it began. Micro was the one mode that looked right because
+    // there the footer IS the card (§13-D10) and there are no two layers to
+    // misalign.
+    //
+    // Its corner radius shrinks by the same amount so the curve nests INSIDE
+    // the card's curve instead of racing it.
+    //
+    // No gap opens above it: `surfaceArea` still ends at `height -
+    // footerHeight`, so the inset footer's top edge sits 1 px higher and the
+    // two overlap rather than part.
     MiniFooter {
         id: footer
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
+        anchors.leftMargin: root.border.width
+        anchors.rightMargin: root.border.width
+        anchors.bottomMargin: root.border.width
         height: root.footerHeight
         mode: root.footerMode
-        cardRadius: root.radius
+        cardRadius: root.radius - root.border.width
         hostWindow: root.hostWindow
         windowHovered: cardHover.hovered
     }
