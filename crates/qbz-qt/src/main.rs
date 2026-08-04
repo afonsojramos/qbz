@@ -241,6 +241,13 @@ mod mini_qt;
 mod tray_qt;
 #[cfg(target_os = "linux")]
 mod tray_linux;
+// MPRIS / media keys (owner ruling K3, REVERSED by the owner on 2026-08-04
+// after smoking the tray: "no aparece por ejemplo en el widget de now playing
+// de KDE Plasma"). Plasma reads MPRIS, so this is what makes the desktop see
+// QBZ at all. Portable module over the shared `qbz-media-controls` crate,
+// exactly like the Slint and qbzd consumers; the crate does its own cfg
+// gating, so this mod line is not platform-gated.
+mod media_controls_qt;
 
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -452,6 +459,12 @@ fn on_session_entered() {
             tray.enable_tray && !tray_qt::in_gamescope(),
         );
     }
+    // MPRIS, beside the tray exactly as the reference puts media_controls
+    // beside tray::init (`crates/qbz/src/main.rs:257` then `:268`). No enable
+    // flag and no gamescope predicate — the reference has neither, and a
+    // desktop that cannot see the player is the complaint this closes.
+    // Idempotent, so the multi-entry nature of this function is safe.
+    media_controls_qt::init();
     // Phase 7: the sidebar playlist tree.
     load_sidebar_once();
     // Refresh the favourite-id cache from the network. The disk seed already

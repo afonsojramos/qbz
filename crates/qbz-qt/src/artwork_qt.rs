@@ -279,6 +279,26 @@ pub fn cached_path(url: &str) -> String {
     }
 }
 
+/// The cached file for a FETCHABLE cover (http/https, and Plex thumbs once
+/// tokenized) as a RAW filesystem path — `None` when it is not on disk.
+///
+/// The remote arm of [`cached_path`] without its `file_url` step. It exists
+/// because a consumer that needs a DIFFERENT URI form cannot un-escape what
+/// `file_url` produced: `media_controls_qt` builds `mpris:artUrl` through
+/// `qbz_models::ArtworkRef::to_mpris_url` (full percent-encoding via
+/// `url::Url::from_file_path`), and `file_url` escapes only `%`, `#` and `?`.
+/// Same synchronous, no-download contract as [`cached_path`]: memo first, then
+/// one SQLite hit, and a zero-byte entry counts as a miss.
+///
+/// Local classes deliberately return `None` — they were never in the disk
+/// cache to begin with, and their caller already has the path.
+pub fn cached_raw_path(url: &str) -> Option<PathBuf> {
+    match classify(url) {
+        ArtUrl::Http(fetch) | ArtUrl::Plex(fetch) => disk_path(url, &fetch),
+        ArtUrl::Empty | ArtUrl::PlexUnconfigured | ArtUrl::LocalFile(_) => None,
+    }
+}
+
 /// Fill `art_path` from the disk cache for every card that already has one.
 /// Returns the urls still missing (deduped, non-empty).
 pub fn attach_cached(sections: &mut [HomeSection]) -> Vec<String> {

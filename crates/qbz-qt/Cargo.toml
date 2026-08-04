@@ -70,6 +70,22 @@ qbz-theme = { path = "../qbz-theme" }
 qbz-integrations = { path = "../qbz-integrations" }
 # Last.fm "similar albums" row on the album page (external_reco_qt.rs).
 qbz-external-reco = { path = "../qbz-external-reco" }
+# System media controls — MPRIS on Linux (what makes the KDE Plasma / GNOME
+# now-playing widget and the hardware media keys see QBZ), SMTC/MediaRemote
+# elsewhere. Driven by src/media_controls_qt.rs.
+#
+# Plain, NOT target-gated, and with no features — the same line both other
+# consumers use (crates/qbz/Cargo.toml:80, crates/qbzd/Cargo.toml:22). The
+# crate carries its own cfg arms internally (qbz-media-controls/src/lib.rs:36-53)
+# and is already a workspace member (crates/Cargo.toml:32), so this adds no
+# lock entry.
+#
+# Its Linux backend rides mpris-server -> zbus 4 with its own current-thread
+# tokio runtime, which is a DIFFERENT major from the zbus 5 that ksni / ashpd /
+# rfd use with async-io. That is the only reason the two coexist in one
+# process; the rule in the ksni comment below applies here too — never enable a
+# `tokio` feature on any D-Bus dependency.
+qbz-media-controls = { path = "../qbz-media-controls" }
 # Qobuz Connect (2026-08-01 Qt-port contract): the shared session/renderer
 # orchestration and the WS transport, consumed VERBATIM — backend untouchable,
 # same edges as the Slint crate (crates/qbz/Cargo.toml:87-88). Driven by

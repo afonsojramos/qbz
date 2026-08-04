@@ -6636,6 +6636,7 @@ dependencies = [
  "qbz-library",
  "qbz-log",
  "qbz-lyrics",
+ "qbz-media-controls",
  "qbz-mixtape",
  "qbz-models",
  "qbz-offline-cache",

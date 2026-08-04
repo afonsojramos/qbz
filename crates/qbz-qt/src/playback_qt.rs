@@ -1749,6 +1749,13 @@ pub(crate) async fn refresh_now_playing(runtime: &Arc<AppRuntime<LoggingAdapter>
         if let Some(t) = crate::tray_qt::handle() {
             t.clear_track();
         }
+        // OS media controls: the no-track arm, a SIBLING of the tray clear
+        // above and in the reference's order — dedupe reset, tray, MPRIS
+        // (crates/qbz/src/playback.rs:1913-1922). Tells the Plasma/GNOME widget
+        // we stopped and resets the metadata dedupe, so replaying the SAME
+        // track after a stop pushes its metadata again. Silent no-op when the
+        // integration never started.
+        crate::media_controls_qt::clear_now_playing();
         return;
     };
     let title = match track.version.as_deref().filter(|v| !v.is_empty()) {
@@ -1793,6 +1800,22 @@ pub(crate) async fn refresh_now_playing(runtime: &Arc<AppRuntime<LoggingAdapter>
         Some(v) => format!("{} ({v})", track.album),
         None => track.album.clone(),
     };
+    // OS media controls: the has-track arm, the second SIBLING of the tray push
+    // above (crates/qbz/src/playback.rs:2208-2223). This is what the KDE Plasma
+    // now-playing widget, GNOME's media section and playerctl read.
+    //
+    // It sits HERE, after `album_display` is built and BEFORE `title` is moved
+    // into the NowPlayingModel meta below, because MPRIS wants the pair the
+    // reference sends: the VERSIONED title and the release-variant album — not
+    // the clean `track.album` the tray tooltip takes (`:2213` vs `:2164`).
+    //
+    // Metadata is de-duped on (track id, resolved art) INSIDE the callee: this
+    // publisher re-runs on resume/seek/republish from 23 call sites, so an
+    // unconditional push would re-emit PropertiesChanged for identical values.
+    // The playback push is unconditional and optimistic (Playing at 0) exactly
+    // as in the reference — the poll loop's play/pause edge corrects it if the
+    // stream never opens.
+    crate::media_controls_qt::push_now_playing(&track, &title, &album_display);
     // "Playing from" origin for the song-card layers glyph, re-derived from the
     // CURRENT track's own stamp on EVERY change (never a stale global) —
     // playback.rs:1953-1965. A track with no container origin falls back to its
@@ -2434,6 +2457,15 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                         if let Some(t) = crate::tray_qt::handle() {
                             t.set_playing(is_playing);
                         }
+                        // OS media controls, inserted between the tray and
+                        // Discord exactly as in the reference, whose single
+                        // block is tray (playback.rs:5720-5722), MPRIS
+                        // (`:5723-5730`), Discord (`:5734`). Carries the live
+                        // position, so this transition is also the only thing
+                        // that moves the widget's Position — nothing per tick.
+                        // SIBLING OF THE BLOCK AT THE LOOP TAIL: a push in only
+                        // one of the two is the silent half-port.
+                        crate::media_controls_qt::push_playback_state(is_playing, position);
                         crate::integrations_qt::discord_push(&runtime);
                     }
                     was_playing = is_playing;
@@ -2466,6 +2498,10 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                 if let Some(t) = crate::tray_qt::handle() {
                     t.set_playing(is_playing);
                 }
+                // OS media controls — the SECOND of the two blocks, see the
+                // sibling in the stop-after arm above. Same order as the
+                // reference: tray, MPRIS, Discord.
+                crate::media_controls_qt::push_playback_state(is_playing, position);
                 crate::integrations_qt::discord_push(&runtime);
             }
             was_playing = is_playing;
