@@ -251,6 +251,21 @@ pub(crate) fn seed_meta() -> (String, String) {
     with_model(|m| (m.artist_id.clone(), m.title.clone())).0
 }
 
+/// The transport flag as PUBLISHED — `QbzPlayer.npPlaying`'s own source, and
+/// therefore the exact Qt twin of the Slint `NowPlayingState.playing` the
+/// miniplayer's row-0 arm reads (`crates/qbz/src/miniplayer.rs:381-385`:
+/// *"Index 0 = the current track -> resume if paused (no restart)"*).
+///
+/// Read here rather than off `player().state.is_playing()` on purpose: this
+/// model is fed by the cast publisher (`cast_qt.rs:1173`) and the QConnect
+/// mirror as well as by the local poll (`set_position` above), so it stays
+/// true while the deck is a cast device and the local engine is idle. The
+/// engine-level read would report "paused" there and turn a row-0 click into
+/// a PAUSE of the cast session.
+pub(crate) fn playing() -> bool {
+    with_model(|m| m.playing).0
+}
+
 pub fn set_playing(playing: bool) {
     mutate(|m| m.playing = playing);
 }

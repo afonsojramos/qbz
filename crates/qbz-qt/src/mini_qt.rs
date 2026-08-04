@@ -138,9 +138,9 @@ pub(crate) fn mini_queue_doc(state: &QueueState) -> String {
 /// What a mini queue row activation resolves to, once the remote-first ladder
 /// has declined it. Kept separate from the invokable so the mapping is
 /// testable without a runtime (UT-2 is the lock on the §4.4.3 fix).
-// Consumed by `QbzMini.queue_play` (contract row A-13), which lands with the
-// queue surface rather than with this projection.
-#[allow(dead_code)]
+///
+/// Consumed by `QbzMini.queue_play` (contract row A-13), which landed with the
+/// queue surface in block B4.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum MiniRowTarget {
     /// Row 0 WITH a current track: resume if paused, never restart
@@ -160,8 +160,8 @@ pub(crate) enum MiniRowTarget {
 /// unconditionally — so with no current track, clicking row 0 (which IS
 /// `upcoming[0]`) merely toggles play. Here the shift is driven by whether the
 /// document actually carries a current row.
-// Same consumer as `MiniRowTarget` (contract row A-13).
-#[allow(dead_code)]
+///
+/// Same consumer as `MiniRowTarget` (contract row A-13).
 pub(crate) fn queue_row_target(has_current: bool, row: i32) -> MiniRowTarget {
     if has_current {
         if row == 0 {
@@ -219,39 +219,21 @@ fn surface_for_default_view(default_view: &str, last_surface: i32) -> i32 {
     }
 }
 
+/// The opening surface, UNCLAMPED — every one of the five renders.
+///
+/// This used to run through a `clamp_to_implemented` guard, because
+/// `mini_surface` and `mini_default_view` live in the ui_prefs.json co-owned
+/// with the shipping Slint app: a user whose Slint miniplayer was last on
+/// Queue would have opened the Qt mini onto a blank card. B3 landed the micro
+/// footer and B4 the queue and lyrics surfaces, so the clamp had no entries
+/// left and went with them — as its own doc required of the last block to
+/// remove one. **Do not reintroduce it**: a fallback here would now silently
+/// override the user's persisted surface.
 pub(crate) fn initial_surface() -> i32 {
-    clamp_to_implemented(surface_for_default_view(
+    surface_for_default_view(
         &crate::settings_qt::pref_str(KEY_DEFAULT_VIEW, "remember"),
         crate::settings_qt::pref_i32(KEY_SURFACE, DEFAULT_SURFACE),
-    ))
-}
-
-/// TEMPORARY, and it deletes itself: surfaces 0 (micro), 3 (queue) and 4
-/// (lyrics) have no content yet — the footer that IS the micro card is block
-/// B3's, and the queue and lyrics surfaces are B4's.
-///
-/// This matters because `mini_surface` and `mini_default_view` live in the
-/// ui_prefs.json **co-owned with the shipping Slint app**. A user whose Slint
-/// miniplayer was last on Queue, or whose default view is "micro", would open
-/// the Qt mini onto a blank rounded box with no footer and no capsule — i.e.
-/// no visible way out but Escape. Falling back to the artwork surface (the
-/// reference's own default, `ui_prefs.rs`'s `mini_surface: 2`) is the honest
-/// behaviour until the surfaces exist.
-///
-/// **Removal is part of B3 and B4**, in the same commit that lands each
-/// surface: B3 drops 0 from the list, B4 drops 3 and 4, and the last one to go
-/// deletes this function. The keyboard arms in `mini_bridge::key_pressed` are
-/// clamped by the same rule and lose it the same way.
-///
-/// **B3 has dropped 0**: the micro card IS `MiniFooter.qml` in mode 2, so
-/// surface 0 now renders and its keyboard arm (`mini.micro`) is unclamped.
-/// Only 3 (queue) and 4 (lyrics) remain, and B4 deletes this function with
-/// them.
-pub(crate) fn clamp_to_implemented(surface: i32) -> i32 {
-    match surface {
-        0 | 1 | 2 => surface,
-        _ => DEFAULT_SURFACE,
-    }
+    )
 }
 
 pub(crate) fn initial_background_blur() -> bool {
@@ -421,21 +403,6 @@ mod tests {
         // floor (420) is NOT the transition filter (320).
         assert_eq!(geometry_to_persist(2, 300.0, 400.0), Some((340.0, 420.0)));
         assert_eq!(geometry_to_persist(4, 500.0, 700.0), Some((500.0, 700.0)));
-    }
-
-    /// The temporary clamp's own boundary, asserted so the block that removes
-    /// an entry cannot forget the arm it owns. B3 landed the micro footer, so
-    /// 0 passes; 3 and 4 still fall back to the artwork surface until B4.
-    #[test]
-    fn clamp_admits_every_implemented_surface() {
-        assert_eq!(clamp_to_implemented(0), 0);
-        assert_eq!(clamp_to_implemented(1), 1);
-        assert_eq!(clamp_to_implemented(2), 2);
-        assert_eq!(clamp_to_implemented(3), DEFAULT_SURFACE);
-        assert_eq!(clamp_to_implemented(4), DEFAULT_SURFACE);
-        // Out-of-range values from a co-owned prefs document, too.
-        assert_eq!(clamp_to_implemented(-1), DEFAULT_SURFACE);
-        assert_eq!(clamp_to_implemented(9), DEFAULT_SURFACE);
     }
 
     #[test]

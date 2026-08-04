@@ -124,6 +124,17 @@ pub mod qbz_mini {
         #[qinvokable]
         fn save_geometry(self: Pin<&mut QbzMini>, width: f32, height: f32);
 
+        /// Activate a queue-surface row (contract A-13, §4.4.3). `row` indexes
+        /// `mini_queue_json.rows` — the DISPLAY list, whose first entry is the
+        /// current track only when there IS one.
+        ///
+        /// Remote-first, and `Err` RETURNS (§15 trap 9); row 0 resumes ONLY
+        /// when the document carries a current track (the off-by-one the
+        /// reference has and this port fixes); everything else is an index
+        /// into the UNFILTERED upcoming list (§15 trap 10).
+        #[qinvokable]
+        fn queue_play(self: Pin<&mut QbzMini>, row: i32);
+
         /// Close the whole APP from the mini (contract A-12, §4.6). Exits the
         /// mini first, then routes to the ONE close choreography by emitting
         /// `close_app_requested` below.
@@ -438,6 +449,94 @@ impl qbz_mini::QbzMini {
         crate::mini_qt::save_geometry(w, h);
     }
 
+    /// Contract A-13 — a queue-surface row was clicked.
+    ///
+    /// Both numbers this needs come out of the document THIS object already
+    /// holds: no second `get_queue_state_full()`, no second poll (§7-M1). The
+    /// resolution is deliberately synchronous and on the Qt thread — it is a
+    /// JSON read of a string the bridge owns, and the reference resolves its
+    /// own row on the UI thread for the same reason (`miniplayer.rs:345-363`).
+    ///
+    /// THE ORDER, which is the whole of §4.4.3 and §8.1's third row:
+    ///
+    /// 1. `currentId != ""` decides whether row 0 IS the current track. The
+    ///    reference assumes it always is (`miniplayer.rs:379-388`) while its
+    ///    own model pushes that row only `if let Some(t)` — so with no current
+    ///    track, clicking row 0 merely toggles play there. `queue_row_target`
+    ///    is the fix and UT-2 is its lock.
+    /// 2. The row's id is resolved and parsed BEFORE anything is dispatched,
+    ///    because the remote ladder needs the track id and a bad row must cost
+    ///    nothing. A non-numeric id returns silently, 1:1 with `:361-363`.
+    /// 3. The subtraction (`row - 1`) happens AFTER the current-track test,
+    ///    never before.
+    ///
+    /// Then, on the runtime: the remote-first ladder, in its three-arm form.
+    /// `Ok(true)` the peer took it; `Ok(false)` fall through to local; **`Err`
+    /// logs and RETURNS** — an error means the peer's state is unknown and
+    /// starting local audio would double-play (§15 trap 9). The idiom is
+    /// `queue_qt::reorder_upcoming`'s (`src/queue_qt.rs:679-687`).
+    pub fn queue_play(self: Pin<&mut Self>, row: i32) {
+        if row < 0 {
+            return;
+        }
+        let doc: serde_json::Value = match serde_json::from_str(&self.mini_queue_json.to_string()) {
+            Ok(doc) => doc,
+            Err(e) => {
+                log::warn!("[qbz-qt] mini: queue document unreadable: {e}");
+                return;
+            }
+        };
+        let has_current = doc
+            .get("currentId")
+            .and_then(|v| v.as_str())
+            .is_some_and(|id| !id.is_empty());
+        // Bounds check on the DISPLAY list, exactly where the reference makes
+        // it (`miniplayer.rs:352-358` checks against `row_count()`).
+        let Some(id) = doc
+            .get("rows")
+            .and_then(|rows| rows.get(row as usize))
+            .and_then(|r| r.get("id"))
+            .and_then(|v| v.as_str())
+        else {
+            log::warn!("[qbz-qt] mini: queue row {row} out of range");
+            return;
+        };
+        let Ok(track_id) = id.parse::<u64>() else {
+            // Silent, 1:1 with the reference: a non-numeric id has no local
+            // fallback to take (`miniplayer.rs:361-363`).
+            return;
+        };
+        let target = crate::mini_qt::queue_row_target(has_current, row);
+        let runtime = crate::app();
+        crate::spawn(async move {
+            if let Some(svc) = crate::qconnect_qt::service() {
+                match svc.play_remote_renderer_track_if_active(track_id).await {
+                    Ok(true) => return,  // handled by the peer
+                    Ok(false) => {}      // not applicable -> local path
+                    Err(e) => {
+                        log::warn!("[qbz-qt] mini: queue play remote handoff: {e}");
+                        return; // connected but errored -> do NOT play locally
+                    }
+                }
+            }
+            match target {
+                // "resume if paused (no restart)" — never a seek, never a
+                // re-open of the same stream. Clicking the row that is already
+                // playing is a no-op.
+                crate::mini_qt::MiniRowTarget::Resume => {
+                    if !crate::now_playing::playing() {
+                        crate::transport_toggle_play();
+                    }
+                }
+                // The UNFILTERED upcoming domain — `play_upcoming_flat`, never
+                // the page-local `play_upcoming` (§15 trap 10 / trap 23).
+                crate::mini_qt::MiniRowTarget::Upcoming(index) => {
+                    crate::queue_qt::play_upcoming_flat(&runtime, index.max(0) as usize).await;
+                }
+            }
+        });
+    }
+
     /// Contract A-12 — close the APP from the mini's red X.
     ///
     /// The order is the reference's (`crates/qbz/src/miniplayer.rs:235-251`):
@@ -474,20 +573,16 @@ impl qbz_mini::QbzMini {
         // `QbzMini.surface = n` uses, so the keyboard path cannot skip the
         // persist or the surface-3 queue kick.
         //
-        // `clamp_to_implemented` is the TEMPORARY guard that keeps a key from
-        // landing the user on a blank card while its surface does not exist
-        // yet. **B3 has taken its own entry out**: the micro card IS the footer
-        // this block landed, so `mini.micro` writes 0 unclamped. Only `4` and
-        // `5` are still clamped, and B4 deletes the function with them — see
-        // the function's own doc. The keys stay BOUND rather than being removed
-        // from the table, because the table is the user's rebindable one and
-        // the cheatsheet already lists all five.
+        // All five arms are UNCLAMPED. The `clamp_to_implemented` guard that
+        // used to wrap `3` and `4` existed only while their surfaces were
+        // unwritten; B4 landed both and deleted it, so a key now lands exactly
+        // where the user's binding says.
         match action.id {
             "mini.micro" => apply_surface(self, 0),
             "mini.compact" => apply_surface(self, 1),
             "mini.artwork" => apply_surface(self, 2),
-            "mini.queue" => apply_surface(self, crate::mini_qt::clamp_to_implemented(3)),
-            "mini.lyrics" => apply_surface(self, crate::mini_qt::clamp_to_implemented(4)),
+            "mini.queue" => apply_surface(self, 3),
+            "mini.lyrics" => apply_surface(self, 4),
             // Both leave the mini — 1:1 with `keybindings.rs:641`, where the
             // two ids share one arm.
             "ui.miniPlayer" | "ui.escape" => exit_now(self),

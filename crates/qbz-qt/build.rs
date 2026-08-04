@@ -324,6 +324,8 @@ fn main() {
                 "qml/miniplayer/MiniCoverArt.qml",
                 "qml/miniplayer/MiniCompactSurface.qml",
                 "qml/miniplayer/MiniArtworkSurface.qml",
+                "qml/miniplayer/MiniQueueSurface.qml",
+                "qml/miniplayer/MiniLyricsSurface.qml",
                 "qml/miniplayer/MiniFooter.qml",
                 "qml/miniplayer/MiniWindowControls.qml",
                 "qml/miniplayer/MiniSeek.qml",

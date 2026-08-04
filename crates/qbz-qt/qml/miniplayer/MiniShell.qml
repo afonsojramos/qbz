@@ -213,8 +213,12 @@ Rectangle {
 
         // The router: one gated Loader per surface, each with its own INLINE
         // component (§8 rule 4 — not one Loader with a `source` string, whose
-        // item is an untyped QObject). MiniQueueSurface (3) and
-        // MiniLyricsSurface (4) join it in B4.
+        // item is an untyped QObject).
+        //
+        // Only the two DISPLAY surfaces take npExplicit. The queue rows carry
+        // their own `explicit` flag per row (mini_qt.rs's MiniQueueRow) and the
+        // lyrics surface renders no badge at all, so handing either of them the
+        // now-playing flag would be a property nothing reads.
         Loader {
             anchors.fill: parent
             active: root.surfaceId === 1
@@ -227,6 +231,30 @@ Rectangle {
             active: root.surfaceId === 2
             sourceComponent: Component {
                 MiniArtworkSurface { npExplicit: root.npExplicit }
+            }
+        }
+        // Both of these carry `QbzMini.open` in their gate, and that term is
+        // not decoration. The mini window is created ONCE and never destroyed
+        // (Main.qml only hides it), so a Loader gated on `surfaceId` ALONE
+        // keeps its surface mounted after the user leaves the mini — and both
+        // of these surfaces re-parse a whole JSON document on every publish.
+        // A user who opened the mini once on the queue surface would then pay
+        // a full parse of a 2,000-track document on the GUI thread on every
+        // enqueue and every skip, for the rest of the session, with the mini
+        // nowhere on screen. §7-M1's hazard is stated in exactly those words:
+        // work that continues "including while the mini is closed".
+        Loader {
+            anchors.fill: parent
+            active: QbzMini.open && root.surfaceId === 3
+            sourceComponent: Component {
+                MiniQueueSurface { }
+            }
+        }
+        Loader {
+            anchors.fill: parent
+            active: QbzMini.open && root.surfaceId === 4
+            sourceComponent: Component {
+                MiniLyricsSurface { }
             }
         }
     }
