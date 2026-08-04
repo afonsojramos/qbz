@@ -784,14 +784,30 @@ mod tests {
         );
     }
 
+    /// `format_display` is PLATFORM-DEPENDENT (`:285-303`): macOS renders the
+    /// modifier glyphs `⌘ ⌥ ⇧` joined by a space, everywhere else the words
+    /// joined by `" + "`. The assertions therefore have to branch too — a
+    /// single hard-coded expectation is a test that can only pass on one
+    /// platform, and this one failed the first time the suite was ever run on
+    /// the Mac mini (2026-08-04), long after the code it covers was correct.
+    ///
+    /// The modifier-free cases are the same on both and stay unbranched: they
+    /// are what actually pins the glyph TABLE, which is what the test is named
+    /// for.
     #[test]
     fn format_display_uses_the_glyph_table() {
-        assert_eq!(format_display("Ctrl+ArrowRight"), "Ctrl + ▶");
-        assert_eq!(format_display("Shift+S"), "Shift + S");
+        if cfg!(target_os = "macos") {
+            assert_eq!(format_display("Ctrl+ArrowRight"), "⌘ ▶");
+            assert_eq!(format_display("Shift+S"), "⇧ S");
+            assert_eq!(format_display("Alt+ArrowLeft"), "⌥ ◀");
+        } else {
+            assert_eq!(format_display("Ctrl+ArrowRight"), "Ctrl + ▶");
+            assert_eq!(format_display("Shift+S"), "Shift + S");
+            assert_eq!(format_display("Alt+ArrowLeft"), "Alt + ◀");
+        }
         assert_eq!(format_display("?"), "?");
         assert_eq!(format_display("Space"), "Space");
         assert_eq!(format_display("Escape"), "Esc");
-        assert_eq!(format_display("Alt+ArrowLeft"), "Alt + ◀");
         assert_eq!(format_display(""), "");
     }
 
