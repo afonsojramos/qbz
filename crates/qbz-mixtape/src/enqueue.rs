@@ -333,6 +333,7 @@ pub async fn resolve_qobuz_playlist(
 /// Routes the `plex:`-prefixed keys to the Plex cache; everything else is a
 /// true local album resolved against the passed `&LibraryDatabase`. Both
 /// branches are synchronous — no `&LibraryDatabase` is held across an `.await`.
+#[cfg(feature = "local")]
 pub fn resolve_local_album(
     db: &qbz_library::LibraryDatabase,
     group_key: &str,
@@ -341,13 +342,23 @@ pub fn resolve_local_album(
     // rows live in the Plex cache DB (plex_cache_tracks), not local_tracks,
     // so route them to the Plex cache fetcher instead of db.get_album_tracks.
     if group_key.starts_with("plex:") {
+        #[cfg(feature = "plex")]
         return resolve_plex_album_tracks(group_key);
+        // Refused rather than looked up in local_tracks: a Plex key is not a
+        // local album group, and resolving it there would silently return the
+        // wrong tracks or none at all.
+        #[cfg(not(feature = "plex"))]
+        return Err(format!(
+            "plex album {} cannot be resolved: this build has no Plex support",
+            group_key
+        ));
     }
 
     resolve_local_album_tracks(db, group_key)
 }
 
 /// Resolve a true local album group (no `plex:` prefix) against the library DB.
+#[cfg(feature = "local")]
 pub fn resolve_local_album_tracks(
     db: &qbz_library::LibraryDatabase,
     group_key: &str,
@@ -364,6 +375,7 @@ pub fn resolve_local_album_tracks(
 }
 
 /// Resolve a `plex:`-prefixed album key against the shared Plex cache.
+#[cfg(feature = "plex")]
 pub fn resolve_plex_album_tracks(group_key: &str) -> Result<Vec<CoreQueueTrack>, String> {
     let tracks = qbz_plex::plex_cache_get_album_tracks(group_key.to_string())
         .map_err(|e| format!("plex cache get_album_tracks({}) failed: {}", group_key, e))?;
@@ -378,6 +390,7 @@ pub fn resolve_plex_album_tracks(group_key: &str) -> Result<Vec<CoreQueueTrack>,
 
 // ── Local track (synchronous) ──
 
+#[cfg(feature = "local")]
 pub fn resolve_local_track(
     db: &qbz_library::LibraryDatabase,
     track_id: i64,
@@ -402,6 +415,7 @@ pub fn resolve_local_track(
 /// - Album    → [`resolve_local_album`] (handles the `plex:` prefix internally)
 /// - Track    → parse `source_item_id` to `i64` (`invalid local track id`) → [`resolve_local_track`]
 /// - Playlist → hard error `local playlists not supported in this release`
+#[cfg(feature = "local")]
 pub fn resolve_local_item(
     db: &qbz_library::LibraryDatabase,
     item: &MixtapeCollectionItem,
@@ -476,6 +490,7 @@ pub fn track_to_queue_track_from_api(track: &ApiTrack) -> CoreQueueTrack {
 /// (`v2_plex_play_track` with `ratingKey: String(track.id)`) resolves to the
 /// same Plex object. source="plex" lets playback route to the Plex branch
 /// instead of the local-file branch.
+#[cfg(feature = "plex")]
 pub fn plex_cached_track_to_queue_track(track: &qbz_plex::PlexCachedTrack) -> CoreQueueTrack {
     let id: u64 = track.rating_key.parse().unwrap_or(track.id);
     let sample_rate_khz = if track.sample_rate > 0 {
@@ -510,6 +525,7 @@ pub fn plex_cached_track_to_queue_track(track: &qbz_plex::PlexCachedTrack) -> Co
 /// Map a `LocalTrack` to a `CoreQueueTrack`.
 /// `is_local = true`, `source = "local"`, `sample_rate` is converted from Hz
 /// to kHz to match the Qobuz convention used elsewhere in the queue display.
+#[cfg(feature = "local")]
 pub fn local_track_to_queue_track(track: &qbz_library::LocalTrack) -> CoreQueueTrack {
     // Artwork: local tracks store a file path; expose it as a `file://` URL
     // so the frontend's <img> can load it. Falls back to None when absent.
@@ -622,6 +638,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "local")]
     #[test]
     fn resolve_local_item_playlist_is_unsupported() {
         // The (Playlist, Local) hard error is a load-bearing contract (spec §5.4/§10);
@@ -632,6 +649,7 @@ mod tests {
         assert_eq!(err, "local playlists not supported in this release");
     }
 
+    #[cfg(feature = "local")]
     #[test]
     fn resolve_local_item_track_rejects_non_numeric_id() {
         let db = qbz_library::LibraryDatabase::open(std::path::Path::new(":memory:")).unwrap();
