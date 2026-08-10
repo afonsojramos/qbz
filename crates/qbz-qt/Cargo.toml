@@ -172,6 +172,13 @@ cxx-qt-build = "0.7"
 # behind cfg, so `cargo build` cannot see it. First real check is a macOS
 # build — the Mac mini (192.168.0.69) is where that happens.
 [target.'cfg(target_os = "macos")'.dependencies]
+# DIRECT objc2, added 2026-08-05 for the menu-bar tray: `declare_class!`,
+# `msg_send_id!`, `sel!`, `ClassType`, `DeclaredClass`, `mutability` and
+# `rc::Retained` all live at the objc2 root. Pinned to 0.5, the SAME
+# generation objc2-app-kit 0.2 targets — mixing generations in one binary
+# registers duplicate objc classes, which is the failure the reference
+# documents at length (qbz/Cargo.toml:150-156).
+objc2 = "0.5"
 # `MainThreadMarker` — in THIS generation it is exported by objc2-foundation,
 # not by the objc2 root (objc2-foundation-0.2.2/src/lib.rs:152, ungated). The
 # reference imports it from the same place. There is no direct `objc2`
@@ -200,4 +207,34 @@ objc2-app-kit = { version = "0.2", default-features = false, features = [
     # rather than by compiling — this arm cannot be built on Linux, and the
     # reference's own proven set (crates/qbz/Cargo.toml) lists the same three.
     "NSRunningApplication",
+    # --- macos_chrome.rs (traffic-light centring) -------------------------
+    # Every one of these was read out of objc2-app-kit-0.2.2's own sources
+    # before being added, because this arm cannot be compiled on Linux:
+    #   NSWindow — `NSApplication::mainWindow` is gated on it
+    #     (generated/NSApplication.rs:355), and it carries `frame` +
+    #     `standardWindowButton`. The style-mask / titlebar setters it also
+    #     carries are NO LONGER USED: expanding the client area is Qt's job
+    #     via the 6.9 window flags (see Main.qml), because QCocoaWindow
+    #     recomputes and reassigns the mask behind us.
+    #   NSButton + NSControl + NSView — `standardWindowButton` is gated on
+    #     ALL THREE at once (generated/NSWindow.rs:1181), not just NSButton;
+    #     NSControl is NSButton's superclass and NSView is NSControl's.
+    #     NSView also provides the geometry the centring measures with
+    #     (bounds / frame / setFrame / superview / isFlipped /
+    #     convertRect_toView).
+    "NSWindow",
+    "NSButton",
+    "NSControl",
+    "NSView",
+    # --- tray_macos.rs (the menu-bar NSStatusItem) ------------------------
+    # Exactly the set the reference proves on a Mac (qbz/Cargo.toml:172-188);
+    # NSStatusBarButton is separate from NSStatusItem, and NSEvent is what
+    # `handle_status_click` reads to tell a right-click from a left-click.
+    "NSStatusBar",
+    "NSStatusItem",
+    "NSStatusBarButton",
+    "NSMenu",
+    "NSMenuItem",
+    "NSImage",
+    "NSEvent",
 ] }

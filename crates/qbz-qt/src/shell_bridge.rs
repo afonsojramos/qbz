@@ -112,6 +112,39 @@ pub mod qbz_shell {
         // The PERSISTED pref as it stands NOW (the app-menu check state;
         // flips live when the user toggles, applies on the next launch).
         #[qproperty(bool, system_title_bar_pref)]
+        // Hide the custom title bar: kills the drawn cluster AND the drag
+        // surface (Slint `chrome-drag-enabled`, HeaderBar.slint:594-596).
+        // LIVE, unlike `system_title_bar` — nothing negotiates with the
+        // compositor here, it is pure in-app layering.
+        #[qproperty(bool, hide_title_bar)]
+        // The drawn cluster's visibility and side (Slint
+        // `show-window-controls` / `wc-position-index`, HeaderBar.slint:
+        // 597-609). Both LIVE: the reference re-anchors from these same
+        // properties with no restart, which is why its Rust arm is
+        // persist-only (main.rs:11265-11271) — Slint's settings view writes
+        // the shared state object directly. Qt has no such shared object, so
+        // the push has to come from here or the row goes dead.
+        #[qproperty(bool, show_window_controls)]
+        #[qproperty(bool, wc_on_left)]
+        // Put the playing track in the OS window title (app.slint:44). LIVE.
+        #[qproperty(bool, window_title_show)]
+        // Flip the two-finger swipe mapping for users who run WITHOUT
+        // natural scrolling (Slint `invert-swipe-navigation`,
+        // AppShell.slint:298-312). LIVE — the gesture layer reads it per
+        // gesture, nothing is cached.
+        #[qproperty(bool, invert_swipe_navigation)]
+        // macOS keeps the NATIVE traffic lights (the overlay window
+        // attributes), so the drawn cluster is never mounted there and the
+        // header reserves a left inset for the lights instead — Slint
+        // `AppearanceState.is-macos`, HeaderBar.slint:598 and :605-607.
+        #[qproperty(bool, is_macos)]
+        // The RENDERER group is Linux-only in the reference: macOS is always
+        // Skia/Metal and Windows negotiates its own backend, so the selector
+        // would offer choices that change nothing there
+        // (`main.rs:318` seeds `renderer-setting-visible` from the same
+        // `cfg!`, and AppearanceSettings.slint:1011-1043 gates the whole
+        // group AND the Preferred-GPU row on it).
+        #[qproperty(bool, is_linux)]
 
         // --- Main-window geometry -----------------------------------------
         // The restored LOGICAL size + maximized flag from the shared
@@ -295,6 +328,17 @@ pub mod qbz_shell {
         #[qinvokable]
         fn large_cycle_spectrum(self: Pin<&mut QbzShell>);
 
+        /// macOS only (a no-op elsewhere): apply the overlay window
+        /// attributes and vertically centre the native traffic lights in the
+        /// header. Called from `Main.qml` on the first rendered frame —
+        /// AppKit has no main window before that, and the call is idempotent
+        /// so a retry costs nothing. See `macos_chrome.rs`.
+        /// Returns TRUE once the chrome is actually applied; the caller
+        /// retries while it is false (AppKit has no main window on the first
+        /// rendered frame).
+        #[qinvokable]
+        fn apply_mac_chrome(self: Pin<&mut QbzShell>) -> bool;
+
         // --- Theme (phase 19) ---------------------------------------------
         /// Appearance > Theme row: persist the picked slug + republish
         /// `themeJson` (live switch).
@@ -435,6 +479,13 @@ pub struct QbzShellRust {
     sidebar_folder_popup_json: QString,
     system_title_bar: bool,
     system_title_bar_pref: bool,
+    hide_title_bar: bool,
+    show_window_controls: bool,
+    wc_on_left: bool,
+    window_title_show: bool,
+    invert_swipe_navigation: bool,
+    is_macos: bool,
+    is_linux: bool,
     window_width: f32,
     window_height: f32,
     window_maximized: bool,
@@ -499,6 +550,15 @@ impl Default for QbzShellRust {
             ),
             system_title_bar: crate::settings_qt::use_system_title_bar(),
             system_title_bar_pref: crate::settings_qt::use_system_title_bar(),
+            hide_title_bar: crate::settings_qt::hide_title_bar(),
+            show_window_controls: crate::settings_qt::show_window_controls(),
+            wc_on_left: crate::settings_qt::wc_on_left(),
+            window_title_show: crate::settings_qt::window_title_show(),
+            invert_swipe_navigation: crate::settings_qt::invert_swipe_navigation(),
+            // Compile-time, not a pref: the reference sets `is-macos` from
+            // the same `cfg!` (main.rs seeds AppearanceState at startup).
+            is_macos: cfg!(target_os = "macos"),
+            is_linux: cfg!(target_os = "linux"),
             window_width,
             window_height,
             window_maximized: crate::settings_qt::window_maximized(),
@@ -687,6 +747,10 @@ impl qbz_shell::QbzShell {
 
     pub fn large_cycle_spectrum(self: Pin<&mut Self>) {
         crate::large_cycle_spectrum();
+    }
+
+    pub fn apply_mac_chrome(self: Pin<&mut Self>) -> bool {
+        crate::macos_chrome::apply_and_center()
     }
 
     pub fn theme_set(self: Pin<&mut Self>, slug: QString) {

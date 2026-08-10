@@ -301,6 +301,21 @@ Column {
         }
     }
 
+    // OWNER RULING 2026-08-05, and a DELIBERATE divergence from the
+    // reference: Slint hides the whole TITLE BAR and WINDOW CONTROLS groups on
+    // macOS (AppearanceSettings.slint:723-800). The owner wants the SWITCH
+    // there — system title bar vs the QBZ header with the native traffic
+    // lights overlaid on it — so only the two rows that genuinely cannot work
+    // on macOS are hidden:
+    //
+    //   Hide title bar          — frameless with no controls at all; it would
+    //                             take the traffic lights with it, and it is a
+    //                             tiling-WM affordance by its own description.
+    //   Window controls position — places the DRAWN cluster, which macOS never
+    //                             draws; AppKit owns where the lights sit.
+    //
+    // "Show window controls" stays: it gates whether the cluster is drawn at
+    // all, which is a meaningful answer on every platform.
     SettingsSpacer { }
     SettingsDivider { }
     SettingsSpacer { }
@@ -316,6 +331,7 @@ Column {
         }
     }
     SettingRow {
+        visible: !QbzShell.isMacos
         label: QbzSession.tr("Hide title bar", QbzSession.trRev)
         description: QbzSession.tr("Frameless window without window controls or header drag (for tiling window manager users)", QbzSession.trRev)
         rowEnabled: root.doc.useSystemTitleBar !== true
@@ -326,13 +342,19 @@ Column {
         }
     }
 
-    SettingsSpacer { }
-    SettingsDivider { }
-    SettingsSpacer { }
+    // The whole group is macOS-hidden now: both of its rows are, so leaving
+    // the header and separators behind printed an empty titled group.
+    SettingsSpacer { visible: !QbzShell.isMacos }
+    SettingsDivider { visible: !QbzShell.isMacos }
+    SettingsSpacer { visible: !QbzShell.isMacos }
 
     // ======================= WINDOW CONTROLS =============================
-    GroupHeader { text: QbzSession.tr("WINDOW CONTROLS", QbzSession.trRev) }
+    GroupHeader {
+        visible: !QbzShell.isMacos
+        text: QbzSession.tr("WINDOW CONTROLS", QbzSession.trRev)
+    }
     SettingRow {
+        visible: !QbzShell.isMacos
         label: QbzSession.tr("Window controls position", QbzSession.trRev)
         description: QbzSession.tr("Place the window control buttons on the left or right side of the title bar", QbzSession.trRev)
         rowEnabled: !root.tbLocked
@@ -345,6 +367,11 @@ Column {
         }
     }
     SettingRow {
+        // Also hidden on macOS (owner, 2026-08-05, after seeing it there):
+        // it gates the DRAWN cluster, which macOS never draws, and its own
+        // description offers a window-manager rationale that has no meaning
+        // on a Mac. Three rows hidden there now, not two.
+        visible: !QbzShell.isMacos
         label: QbzSession.tr("Show window controls", QbzSession.trRev)
         description: QbzSession.tr("Show minimize, maximize, and close buttons in the title bar. Disable if your window manager handles these.", QbzSession.trRev)
         rowEnabled: !root.tbLocked
@@ -477,13 +504,26 @@ Column {
         }
     }
 
-    SettingsSpacer { }
-    SettingsDivider { }
-    SettingsSpacer { }
+    // The group's own separator is gated too, or the panel ends on a divider
+    // with nothing under it (the reference gates its three spacer/divider
+    // elements the same way, AppearanceSettings.slint:1015-1017).
+    SettingsSpacer { visible: QbzShell.isLinux }
+    SettingsDivider { visible: QbzShell.isLinux }
+    SettingsSpacer { visible: QbzShell.isLinux }
 
     // =========================== RENDERER ================================
-    GroupHeader { text: QbzSession.tr("RENDERER", QbzSession.trRev) }
+    // Linux only, 1:1 with the reference: every element of this group —
+    // including the Preferred-GPU row below — is gated on
+    // `renderer-setting-visible`, which main.rs:318 seeds from
+    // `cfg!(target_os = "linux")`. macOS is always Skia/Metal and Windows
+    // negotiates its own backend, so off Linux the selector offered choices
+    // that changed nothing (AppearanceSettings.slint:1011-1043).
+    GroupHeader {
+        visible: QbzShell.isLinux
+        text: QbzSession.tr("RENDERER", QbzSession.trRev)
+    }
     SettingRow {
+        visible: QbzShell.isLinux
         label: QbzSession.tr("Rendering backend", QbzSession.trRev)
         description: QbzSession.tr("Auto picks the best renderer for your graphics hardware. Only change this if the app feels slow or renders incorrectly (requires restart)", QbzSession.trRev)
         QbzSelect {
@@ -494,6 +534,7 @@ Column {
         }
     }
     SettingRow {
+        visible: QbzShell.isLinux
         label: QbzSession.tr("Preferred GPU", QbzSession.trRev)
         description: QbzSession.tr("Which GPU renders the app. On a hybrid laptop, picking the discrete GPU moves the dynamic-background load off the integrated one (cooler, but more power). Auto is recommended (requires restart)", QbzSession.trRev)
         QbzSelect {

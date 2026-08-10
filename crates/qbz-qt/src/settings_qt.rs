@@ -392,15 +392,28 @@ fn save_streaming_quality(key: &str) {
 // takes effect on the next launch (restart semantics, 1:1 Slint).
 // ---------------------------------------------------------------------------
 
+/// PER-OS default, and it has to be: Linux keeps the system decorations,
+/// macOS defaults to the overlay (custom) mode where the native traffic
+/// lights float over the QBZ header.
+///
+/// This port hard-coded `true` on every platform. Because `ui_prefs.json` is
+/// SHARED with the Slint build, that did not just break Qt's own macOS
+/// chrome — once the key was written it also flipped the Slint binary to the
+/// system title bar, since an explicit value overrides its per-OS default.
+/// 1:1 with `crates/qbz/src/ui_prefs.rs:645-647`.
+fn default_use_system_title_bar() -> bool {
+    !cfg!(target_os = "macos")
+}
+
 pub fn use_system_title_bar() -> bool {
     let Some(path) = prefs_path() else {
-        return true;
+        return default_use_system_title_bar();
     };
     std::fs::read_to_string(path)
         .ok()
         .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
         .and_then(|v| v.get("use_system_title_bar").and_then(|q| q.as_bool()))
-        .unwrap_or(true)
+        .unwrap_or_else(default_use_system_title_bar)
 }
 
 /// Flip + persist the pref; returns the new value (for the menu state).
@@ -410,13 +423,58 @@ pub fn use_system_title_bar() -> bool {
 /// menu is told the pref is unchanged rather than being handed a flip the file
 /// never got.
 pub fn toggle_system_title_bar() -> bool {
-    toggle_pref_bool("use_system_title_bar", true).unwrap_or_else(|| {
+    toggle_pref_bool("use_system_title_bar", default_use_system_title_bar()).unwrap_or_else(|| {
         let current = use_system_title_bar();
         log::warn!(
             "[qbz-qt] use_system_title_bar toggle skipped (prefs unreadable) — staying {current}"
         );
         current
     })
+}
+
+/// Hide the custom title bar entirely: no drawn controls and — the part that
+/// is easy to miss — NO DRAG SURFACE. The reference reads it into
+/// `chrome-drag-enabled` (`qbz-ui/ui/shell/HeaderBar.slint:594-596`), which
+/// gates the press-to-move TouchArea and, through `chrome-controls`, the
+/// drawn cluster as well. Only meaningful while the custom chrome is active;
+/// the Appearance row disables itself under the system title bar.
+///
+/// Until 2026-08-04 this pref was written by the Settings row and read by
+/// nobody in this port — the owner's "renders, persists, drives nothing".
+pub fn hide_title_bar() -> bool {
+    pref_bool("hide_title_bar", false)
+}
+
+/// Flip the two-finger swipe mapping (fingers right = back by default, the
+/// natural-scrolling convention). For users running WITHOUT natural
+/// scrolling — Slint `AppearanceState.invert-swipe-navigation`.
+pub fn invert_swipe_navigation() -> bool {
+    pref_bool("invert_swipe_navigation", false)
+}
+
+/// Put the playing track in the OS window title. The format is FIXED
+/// ("{track} - {artist} | qbz", `qbz-ui/ui/app.slint:44`); the reference's
+/// template row is commented out there and this port cut it too.
+pub fn window_title_show() -> bool {
+    pref_bool("window_title_show", false)
+}
+
+/// Draw the in-app min/max/close cluster at all (Slint
+/// `AppearanceState.show-window-controls`, consumed at
+/// `HeaderBar.slint:599`). "Disable if your window manager handles these."
+pub fn show_window_controls() -> bool {
+    pref_bool("show_window_controls", true)
+}
+
+/// Cluster on the LEFT instead of the right. The pref carries the STRING
+/// ("left" | "right"); the settings document carries the index into
+/// [`WC_POSITION_VALUES`], so the two representations meet here.
+///
+/// Left placement is not just a different x: the reference also flips the
+/// button ORDER to the macOS one (close · max · min vs min · max · close —
+/// `qbz-ui/ui/shell/WindowControls.slint:41-79`).
+pub fn wc_on_left() -> bool {
+    pref_str("wc_position", "right") == "left"
 }
 
 // ---------------------------------------------------------------------------
@@ -1924,6 +1982,8 @@ pub async fn settings_bool(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &str,
         }
         "invert-swipe-navigation" => {
             save_pref("invert_swipe_navigation", serde_json::json!(value));
+            // LIVE — NavGestureLayer reads it per gesture.
+            crate::shell_bridge::ui(move |mut b| b.as_mut().set_invert_swipe_navigation(value));
             Ok(Apply::None)
         }
         "in-app-toasts" => {
@@ -1936,6 +1996,8 @@ pub async fn settings_bool(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &str,
         }
         "window-title-show" => {
             save_pref("window_title_show", serde_json::json!(value));
+            // LIVE — Main.qml's `title` binding re-evaluates (app.slint:44).
+            crate::shell_bridge::ui(move |mut b| b.as_mut().set_window_title_show(value));
             Ok(Apply::None)
         }
         "use-system-title-bar" => {
@@ -1948,10 +2010,15 @@ pub async fn settings_bool(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &str,
         }
         "hide-title-bar" => {
             save_pref("hide_title_bar", serde_json::json!(value));
+            // LIVE (no restart): this one only layers in-app — it drops the
+            // drawn cluster AND the drag surface, per the reference's
+            // `chrome-drag-enabled` (HeaderBar.slint:594-596).
+            crate::shell_bridge::ui(move |mut b| b.as_mut().set_hide_title_bar(value));
             Ok(Apply::None)
         }
         "show-window-controls" => {
             save_pref("show_window_controls", serde_json::json!(value));
+            crate::shell_bridge::ui(move |mut b| b.as_mut().set_show_window_controls(value));
             Ok(Apply::None)
         }
         "show-volume-steppers" => {
@@ -2225,6 +2292,12 @@ pub async fn settings_select(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &st
                 return;
             };
             save_pref("wc_position", serde_json::json!(v));
+            // LIVE — HeaderBar re-anchors the cluster and flips its order.
+            // The reference gets this for free (its settings view writes the
+            // shared AppearanceState directly, main.rs:11265-11271 is
+            // persist-only); here the push is the whole wiring.
+            let on_left = *v == "left";
+            crate::shell_bridge::ui(move |mut b| b.as_mut().set_wc_on_left(on_left));
         }
         "mini-default-view" => {
             let Some(v) = MINI_VIEW_VALUES.get(index) else {
@@ -2276,6 +2349,14 @@ pub async fn settings_select(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &st
                 return;
             };
             save_pref("auto_theme_source", serde_json::json!(v));
+            // Regenerate NOW if the auto theme is the one on screen. The
+            // reference regenerates on activation, on source change, on image
+            // pick and on the explicit button (auto_theme.rs header); this is
+            // the "on source change" arm, and without it the row persisted a
+            // source that only took effect on the next launch.
+            if crate::theme_qt::current_slug() == "auto" {
+                crate::theme_qt::publish_theme();
+            }
         }
         other => log::warn!("[qbz-qt] unknown settings select key: {other}"),
     }

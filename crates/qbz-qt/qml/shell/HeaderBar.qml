@@ -69,6 +69,40 @@ Rectangle {
 
     QbzTheme { id: theme }
 
+    // --- Custom-chrome gating, 1:1 with HeaderBar.slint:594-609 -----------
+    // Three prefs decide what the header owns. They were all persisted and
+    // all ignored until 2026-08-04.
+    //
+    //   chromeDragEnabled — the header IS the title bar: press-to-move and
+    //                       double-click-to-maximize. Off under the system
+    //                       title bar (the native chrome owns it) and off
+    //                       when the user asked for no title bar at all.
+    //   chromeControls    — additionally draw min/max/close. Never on macOS:
+    //                       there the NATIVE traffic lights float over this
+    //                       bar (see chromeLeftInset) and a drawn cluster
+    //                       would be a second set of buttons.
+    readonly property bool chromeDragEnabled:
+        !QbzShell.systemTitleBar && !QbzShell.hideTitleBar
+    readonly property bool chromeControls:
+        root.chromeDragEnabled && !QbzShell.isMacos && QbzShell.showWindowControls
+    readonly property bool wcOnLeft: QbzShell.wcOnLeft
+    // 3 x 34px buttons + 2 x 2px spacing (WindowControls.slint).
+    readonly property int wcClusterWidth: 106
+    // Left inset for the leading nav: the native traffic-light band on macOS,
+    // or the drawn cluster when it sits left (HeaderBar.slint:605-607).
+    //
+    // On macOS this now ASKS Qt instead of hard-coding 78. With
+    // `ExpandedClientAreaHint` the client area covers the region the titlebar
+    // controls occupy, and `SafeArea.margins` reports exactly how much of it
+    // is unsafe — the traffic-light band, in the window's real metrics rather
+    // than the reference's estimate. The 78 stays only as the floor for the
+    // case where the margin reads 0 (nothing to lose, and it is the number
+    // the Slint build has used all along).
+    readonly property int chromeLeftInset:
+        QbzShell.isMacos && !QbzShell.systemTitleBar
+            ? Math.max(root.SafeArea.margins.left, 78)
+            : (root.chromeControls && root.wcOnLeft ? root.wcClusterWidth + 6 : 0)
+
     // The section-nav dropdown (catalog + panel + open/close behaviour).
     // Zero-size and NOT inside any Row — its origin must stay this root's
     // origin, because the trigger coordinates are mapped into it. The panel
@@ -84,8 +118,9 @@ Rectangle {
     MouseArea {
         anchors.fill: parent
         // Inert under the system titlebar (the native chrome owns
-        // drag/double-click) — phase 12 titlebar toggle.
-        enabled: !QbzShell.systemTitleBar
+        // drag/double-click) and when the title bar is hidden outright —
+        // HeaderBar.slint's `chrome-drag-enabled`.
+        enabled: root.chromeDragEnabled
         property bool dragStarted: false
         onPressed: dragStarted = false
         onPositionChanged: {
@@ -250,7 +285,9 @@ Rectangle {
     // --- Left controls ---------------------------------------------------
     Row {
         id: leftControls
-        x: theme.spacingMd
+        // HeaderBar.slint:825 — `Spacing.md + chrome-left-inset`, so the nav
+        // clears the traffic lights (macOS) or the left-placed cluster.
+        x: theme.spacingMd + root.chromeLeftInset
         y: (root.height - height) / 2
         height: 36
         spacing: 6
@@ -782,8 +819,16 @@ Rectangle {
     // --- Right controls: status badge + app menu --------------------------
     Row {
         id: rightControls
-        // Shifts left of the drawn window controls (3x34 + 2x2 = 106px).
-        x: root.width - width - theme.spacingMd + 2 - (QbzShell.systemTitleBar ? 0 : 110)
+        // Shifts left of the drawn window controls (3x34 + 2x2 = 106px) — but
+        // ONLY when that cluster is actually drawn AND on the right. It used
+        // to key off `systemTitleBar` alone, so macOS (which never draws the
+        // cluster) reserved 110px of empty space at the right edge, and a
+        // LEFT-placed cluster reserved it on the wrong side. The reference
+        // gates the same padding on its `lin-chrome` predicate — the drawn
+        // cluster's own condition, not the titlebar mode
+        // (KioskShell.slint:245-248).
+        x: root.width - width - theme.spacingMd + 2
+           - (root.chromeControls && !root.wcOnLeft ? 110 : 0)
         y: (root.height - height) / 2
         height: 36
         spacing: 4
@@ -923,11 +968,27 @@ Rectangle {
         }
     }
 
-    // --- Drawn window controls (WindowControls.slint, right placement:
-    // minimize · maximize · close; close gets the danger-red hover) ------
+    // --- Drawn window controls (WindowControls.slint) ---------------------
+    // Children are declared in the RIGHT order (minimize · maximize · close,
+    // the Windows/KDE one; close gets the danger-red hover). Left placement
+    // takes the corner the traffic lights use on macOS and flips to THEIR
+    // order — close · maximize · minimize (WindowControls.slint:41-79).
+    //
+    // The flip is `layoutDirection`, not a reordered copy of the three
+    // buttons: a Row laying out right-to-left puts the first child at the
+    // right edge, so min·max·close reads close·max·min on screen. The
+    // reference needs two mirrored `if` blocks because Slint has no such
+    // property; duplicating them here would be duplicating the hover, the
+    // icon swap and the close choreography three times over.
+    //
+    // `y` is deliberately untouched by the placement: the cluster stays
+    // vertically centred on the header in BOTH positions (owner requirement,
+    // and 1:1 with the reference — both of its blocks set the same
+    // `y: (height - preferred-height) / 2`).
     Row {
-        visible: !QbzShell.systemTitleBar
-        x: root.width - width - 8
+        visible: root.chromeControls
+        layoutDirection: root.wcOnLeft ? Qt.RightToLeft : Qt.LeftToRight
+        x: root.wcOnLeft ? 8 : root.width - width - 8
         y: (root.height - height) / 2
         height: 26
         spacing: 2

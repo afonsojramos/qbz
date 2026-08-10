@@ -157,12 +157,16 @@ MouseArea {
         // Qt and Slint share this sign convention — both add the delta to
         // the content/viewport offset — so the mapping ports 1:1.
         //
-        // The Slint build lets users who run without natural scrolling flip
-        // this with AppearanceState.invert-swipe-navigation. That pref has
-        // no counterpart on QbzShell yet, so this port hard-codes the
-        // pref's DEFAULT (false / not inverted). No settings row is drawn
-        // for it: a toggle with nothing behind it would be a no-op control.
-        if (gestures.swipeAccum < 0) {
+        // Users who run WITHOUT natural scrolling flip the mapping with
+        // `invert-swipe-navigation` (Slint AppearanceState). The Appearance
+        // row for it has always been drawn; until 2026-08-04 this file
+        // hard-coded the pref's default and carried a comment claiming no
+        // row existed — the toggle really was a no-op, just not for the
+        // reason the comment gave.
+        const back = QbzShell.invertSwipeNavigation
+            ? gestures.swipeAccum > 0
+            : gestures.swipeAccum < 0
+        if (back) {
             if (QbzShell.canBack)
                 QbzShell.navigateBack()
         } else {

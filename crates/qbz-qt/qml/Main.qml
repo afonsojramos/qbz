@@ -91,7 +91,14 @@ ApplicationWindow {
     visibility: QbzShell.kioskFullscreenBoot
                 ? Window.FullScreen
                 : (QbzShell.windowMaximized ? Window.Maximized : Window.Windowed)
-    title: "QBZ"
+    // "Show track in window title" (Appearance). 1:1 with app.slint:44 —
+    // FIXED format, no template, and it falls back to the plain app name
+    // whenever the setting is off or nothing is loaded. Reactive: the
+    // binding re-evaluates on every track change and on the toggle itself
+    // (settings_qt pushes `windowTitleShow` live).
+    title: QbzShell.windowTitleShow && QbzPlayer.npHasTrack
+        ? QbzPlayer.npTitle + " - " + QbzPlayer.npArtist + " | qbz"
+        : "QBZ"
     // Custom chrome (phase 7/12): frameless but OPAQUE — the phase-7
     // translucent window was a misread: the Slint MAIN window keeps an
     // OPAQUE swapchain (only the miniplayer blends; crates/qbz/src/main.rs
@@ -101,7 +108,66 @@ ApplicationWindow {
     // with square corners and a square 1px hairline frame. The system
     // titlebar is the `use_system_title_bar` pref (ui_prefs.json; applied
     // at startup, restart semantics like Slint).
-    flags: QbzShell.systemTitleBar ? Qt.Window : (Qt.Window | Qt.FramelessWindowHint)
+    // Three different windows, one per platform/mode:
+    //
+    //   system title bar   → a plain Qt.Window, the OS decorates it.
+    //   macOS custom       → Qt.ExpandedClientAreaHint | Qt.NoTitleBarBackgroundHint.
+    //   Linux/Windows      → frameless, and we draw the cluster ourselves.
+    //
+    // The macOS arm is FIRST-CLASS QT API (6.9+, and both machines run
+    // 6.11.1), not a hand-rolled AppKit poke: `ExpandedClientAreaHint`
+    // expands the client area into the region the titlebar controls occupy,
+    // `NoTitleBarBackgroundHint` drops the titlebar's background — and the
+    // native traffic lights STAY. Content then reaches y=0 and the QBZ header
+    // sits under them.
+    //
+    // The previous attempt set `titlebarAppearsTransparent` +
+    // `titleVisibility` + `NSWindowStyleMaskFullSizeContentView` on the
+    // NSWindow from Rust, and could not win: `QCocoaWindow::windowStyleMask()`
+    // RECOMPUTES the mask from Qt's own flags and reassigns it on
+    // `setWindowFlags()`, on fullscreen enter/exit, and via `setWindowState()`
+    // — preserving only the fullscreen and unified-toolbar bits, never
+    // FullSizeContentView. The `visibility` binding below is itself a
+    // `setWindowState()`, so the bit was wiped moments after being set. That
+    // is why the log kept saying "traffic lights centred" while the owner kept
+    // seeing a stock title bar. (Qt forum "Unable to get transparent title bar
+    // in macOS since Qt 6.4", QTBUG-134797.)
+    //
+    // Frameless is NOT an option on macOS: it removes the traffic lights with
+    // the frame, and the reference never draws its own there
+    // ("Linux only — macOS keeps the native traffic lights",
+    // WindowControls.slint:1-2).
+    flags: QbzShell.systemTitleBar
+        ? Qt.Window
+        : (QbzShell.isMacos
+            ? (Qt.Window | Qt.ExpandedClientAreaHint | Qt.NoTitleBarBackgroundHint)
+            : (Qt.Window | Qt.FramelessWindowHint))
+
+    // THE OTHER HALF OF ExpandedClientAreaHint, and the piece that made the
+    // flag look broken when it was not.
+    //
+    // Since 6.9 "ApplicationWindow will automatically add padding to the
+    // contentItem for any safe area margins reported by the window", so that
+    // "the contentItem stays inside the safe area of the window, while the
+    // background item covers the entire window" (Qt Quick Controls docs).
+    //
+    // On macOS with the expanded client area that safe area IS the titlebar
+    // band. So the window background dutifully covered the whole frame while
+    // `screenLoader` — anchored to the contentItem — was pushed ~28pt down.
+    // The result reads on screen as a stock title bar with the QBZ header
+    // below it, which is precisely what the owner kept reporting while the
+    // AppKit side measured perfect (styleMask 0x800f, titlebar transparent,
+    // contentH == windowH == 1328).
+    //
+    // QBZ draws its own chrome edge to edge on every platform — the header at
+    // the top, the player bar at the bottom, the sidebar at the left — so it
+    // takes the safe area over from Qt entirely. `HeaderBar.chromeLeftInset`
+    // is where that responsibility is discharged: it reads
+    // `SafeArea.margins.left` to clear the traffic lights.
+    topPadding: 0
+    bottomPadding: 0
+    leftPadding: 0
+    rightPadding: 0
     color: "#1a1a1a"
 
     FontLoader { id: interRegular; source: "assets/fonts/Inter_18pt-Regular.ttf" }
@@ -117,6 +183,22 @@ ApplicationWindow {
     // Phase 23: every domain singleton boots (registers its Qt-thread
     // hop; QbzSession.boot additionally fires the app boot sequence).
     Component.onCompleted: {
+        // DIAGNOSTIC (macOS chrome): the Rust side reports what AppKit ended
+        // up with; this reports what QML asked for. Together they pin the
+        // failure to either "the request was wrong" or "Qt ignored it".
+        if (QbzShell.isMacos) {
+            console.log("[macos-chrome] QML flags=" + window.flags
+                + " systemTitleBar=" + QbzShell.systemTitleBar
+                + " expected=" + (Qt.Window | Qt.ExpandedClientAreaHint
+                                  | Qt.NoTitleBarBackgroundHint)
+                // What Qt reports as unsafe, so we know whether
+                // HeaderBar.chromeLeftInset is using Qt's own number or
+                // falling back to the reference's 78px floor.
+                + " safeArea(t/l/r/b)=" + window.SafeArea.margins.top
+                + "/" + window.SafeArea.margins.left
+                + "/" + window.SafeArea.margins.right
+                + "/" + window.SafeArea.margins.bottom)
+        }
         QbzSession.boot()
         // Qobuz Connect (2026-08-01 contract §2/§8). Booted right after
         // QbzSession because QbzSession.boot fires the whole app boot
@@ -221,6 +303,52 @@ ApplicationWindow {
         var latchedH = window.bootScreenHeight
         window.bootScreenWidth = latchedW
         window.bootScreenHeight = latchedH
+    }
+
+    // --- macOS chrome ----------------------------------------------------
+    // The overlay attributes + centring the native traffic lights against the
+    // 42px header. NOT in Component.onCompleted: it reaches the NSWindow
+    // through `-[NSApplication mainWindow]`, which is nil until AppKit has
+    // actually shown and keyed the window, and completion runs before that.
+    // The first rendered frame is the earliest point where it is guaranteed.
+    //
+    // RETRIED UNTIL IT REPORTS SUCCESS. The first version latched "applied"
+    // before calling, on `afterRendering`. That looked safe — the Rust side is
+    // idempotent, so latching only avoided per-frame work — but AppKit has no
+    // `mainWindow` yet at the first rendered frame, so the one attempt failed,
+    // the latch stuck, and the chrome never applied. On the owner's Mac the
+    // whole thing degraded to "stock title bar, plus a 78px inset reserved for
+    // traffic lights that were in another bar", and the log said it exactly
+    // once: `[macos-chrome] no main window yet`.
+    //
+    // A Timer rather than `afterRendering`: this must keep trying for a
+    // moment, and the frame signal would run the AppKit maths at the display
+    // rate to do it (the "changes less often than the frame rate" mistake this
+    // port already paid for in VizSettle). ~5 s of 200 ms attempts is far more
+    // than a window needs to become key, and it stops on the first success.
+    Timer {
+        id: macChromeTimer
+        interval: 200
+        repeat: true
+        running: QbzShell.isMacos
+        property int attempts: 0
+        onTriggered: {
+            attempts++
+            if (QbzShell.applyMacChrome()) {
+                running = false
+                // NO geometry nudge here. An earlier version did a 1px
+                // height round trip to force Qt to re-derive its content
+                // rect — obsolete now that the expanded client area comes
+                // from Qt's own flags, and actively wrong: `height` is a
+                // BINDING (the restore clamp above), and assigning it from
+                // imperative JS destroys that binding. This file warns about
+                // exactly that trap a few lines further down, about the
+                // maximized latch.
+            } else if (attempts >= 25) {
+                running = false
+                console.warn("[macos-chrome] gave up after " + attempts + " attempts")
+            }
+        }
     }
 
     // --- Geometry persistence -------------------------------------------
@@ -395,6 +523,22 @@ ApplicationWindow {
         var vis = window.visibility
         if (window.transientVisibility(vis))
             return
+        // AppKit RE-LAYS OUT the titlebar on fullscreen enter/exit and on the
+        // maximize round trip, re-parking the traffic lights at their stock
+        // 28pt-bar position. The reference records that drift and lives with
+        // it ("the centre can drift until the next launch",
+        // crates/qbz/src/macos_chrome.rs); Qt hands us this edge for free, so
+        // re-centre instead of shipping it. Placed AFTER the transient
+        // early-return on purpose — a minimize is not a re-layout, and while
+        // the window is hidden AppKit has no main/key window, so the retry
+        // loop would spin for its full 5s finding nothing.
+        //
+        // `applyMacChrome` is idempotent: already-centred lights return on the
+        // half-point test without touching a frame.
+        if (QbzShell.isMacos && !QbzShell.systemTitleBar) {
+            macChromeTimer.attempts = 0
+            macChromeTimer.restart()
+        }
         // FLUSH BEFORE LATCHING. Leaving Windowed for Maximized/FullScreen with
         // a drag still in the debounce used to lose that drag outright: the
         // handler latched the new state and restarted the SAME timer, so when

@@ -77,12 +77,31 @@ fn custom_colors() -> ThemeColors {
     qbz_theme::theme_from_base(&base)
 }
 
+/// Build the generator's source from the persisted pref — 1:1 with the
+/// reference's `auto_theme::source_from_prefs` (`crates/qbz/src/auto_theme.rs:
+/// 20-26`), including the "anything unknown means System" fallback.
+///
+/// This port used to hard-code `AutoSource::System`, which left the
+/// Appearance "Source" row (System Colors / Wallpaper Sync / Custom Image)
+/// selectable, persisted, and completely inert: picking Wallpaper Sync
+/// regenerated the SAME system palette.
+fn auto_source() -> qbz_theme::AutoSource {
+    match crate::settings_qt::pref_str("auto_theme_source", "system").as_str() {
+        "wallpaper" => qbz_theme::AutoSource::Wallpaper,
+        "image" => {
+            qbz_theme::AutoSource::Image(crate::settings_qt::pref_str("auto_theme_image_path", ""))
+        }
+        _ => qbz_theme::AutoSource::System,
+    }
+}
+
 fn auto_colors() -> ThemeColors {
-    match qbz_theme::generate_auto_theme(&qbz_theme::AutoSource::System) {
+    match qbz_theme::generate_auto_theme(&auto_source()) {
         Ok(c) => c,
         Err(e) => {
-            // Headless / no DE portal: keep the row selectable but fall back
-            // to the default dark tokens (POC-NOTE).
+            // Headless / no DE portal, or a picked image that has since been
+            // moved: keep the row selectable and fall back to the default
+            // dark tokens.
             log::warn!("[qbz-qt] auto theme generation failed ({e}); falling back to OLED");
             qbz_theme::palette(qbz_theme::default_theme_id())
         }

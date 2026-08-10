@@ -5,10 +5,19 @@
 //! The ksni half lives in `tray_linux.rs` (A-20); the QObject QML talks to is
 //! `tray_bridge.rs` (A-21).
 //!
-//! **Linux only (owner ruling K2).** `tray/macos.rs` exists in the Slint tree
-//! only because Slint's winit backend already bundles `muda`; under Qt that
-//! premise is gone, so macOS would be a NEW implementation, not a port
-//! (contract §13-D6). Windows has no tray in either tree.
+//! Linux (ksni, `tray_linux.rs`) and macOS (`NSStatusItem`, `tray_macos.rs`).
+//! Windows has no tray in either tree.
+//!
+//! RETIRED 2026-08-05 — the note that used to sit here said macOS "would be a
+//! NEW implementation, not a port", because the reference only hand-rolls its
+//! menu-bar item to dodge the `muda` that Slint's winit backend bundles, and
+//! Qt has no such conflict. The premise was right and the conclusion was
+//! backwards: `tray/macos.rs` avoids muda entirely, depends on nothing winit
+//! provides, and ported here almost verbatim (it got SHORTER — its
+//! `CTX`/`slint::Weak` plumbing has no counterpart on this side). The cost of
+//! believing it: the owner's macOS smoke found the tray icon missing and
+//! close-to-tray quitting the app, which is the one absence wearing two
+//! faces.
 //!
 //! ## Three things about this module are not style choices
 //!
@@ -105,11 +114,20 @@ pub(crate) fn compose_tooltip(np: Option<&NowPlaying>, is_playing: bool) -> (Str
 /// Cross-thread handle to the live tray. Cloneable; mutators forward to the
 /// platform backend (ksni on Linux) and are no-ops when the tray is disabled or
 /// on a platform without a live-update path.
-/// 1:1 with `crates/qbz/src/tray/mod.rs:52-102`, minus the macOS arm (K2).
+/// 1:1 with `crates/qbz/src/tray/mod.rs:52-102`, macOS arm included since
+/// 2026-08-05.
+///
+/// The macOS side carries no per-handle state: its `NSStatusItem` lives in a
+/// main-thread `thread_local` (it is `!Send`), so the flag only records that a
+/// tray EXISTS. That is the load-bearing part — `handle().is_some()` is what
+/// `should_hide_on_close` consults, and it is why an absent macOS tray made
+/// close-to-tray quit instead of hiding.
 #[derive(Clone, Default)]
 pub(crate) struct TrayHandle {
     #[cfg(target_os = "linux")]
     linux: Option<crate::tray_linux::LinuxTrayHandle>,
+    #[cfg(target_os = "macos")]
+    macos: bool,
 }
 
 impl TrayHandle {
@@ -146,7 +164,13 @@ impl TrayHandle {
             h.set_icon_theme(theme);
             return;
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(target_os = "macos")]
+        if self.macos {
+            // Main-thread only — the status item is a thread_local there.
+            crate::tray_bridge::ui(move |_b| crate::tray_macos::set_icon_theme(&theme));
+            return;
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         let _ = theme;
     }
 }
@@ -325,7 +349,28 @@ pub(crate) fn init(theme_override: String, enabled: bool) {
             .expect("spawn tray init thread");
     }
 
-    #[cfg(not(target_os = "linux"))]
+    // macOS: the NSStatusItem must be built on the AppKit main thread, and
+    // `init` runs on the tokio runtime — so it is queued through the tray
+    // bridge, whose Qt GUI thread IS the AppKit main thread. (The Linux arm
+    // above needs the opposite: a thread OUTSIDE tokio, because ksni blocks.)
+    #[cfg(target_os = "macos")]
+    {
+        crate::tray_bridge::ui(move |_b| {
+            let ok = crate::tray_macos::create(&theme_override);
+            // Same two arms as Linux: `TRAY` and `tray_live` are set together,
+            // and a failure must publish `false` or close-to-tray hides the
+            // window into a tray that is not there.
+            if ok {
+                let _ = TRAY.set(TrayHandle { macos: true });
+                push_tray_live(true);
+            } else {
+                log::error!("[tray] macOS menu-bar item could not be created");
+                push_tray_live(false);
+            }
+        });
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         let _ = theme_override;
         log::info!("[tray] no tray backend on this platform");

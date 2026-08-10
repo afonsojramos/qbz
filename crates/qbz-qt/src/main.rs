@@ -241,6 +241,16 @@ mod mini_qt;
 mod tray_qt;
 #[cfg(target_os = "linux")]
 mod tray_linux;
+// macOS menu-bar tray (NSStatusItem), ported 2026-08-05. The K2 ruling that
+// kept macOS out was reasoned from a premise that reads the reference
+// backwards — see the module header.
+#[cfg(target_os = "macos")]
+mod tray_macos;
+// macOS custom chrome: the overlay window attributes + centring the native
+// traffic lights in the 42px header. Portable module (a no-op stub off
+// macOS) rather than a gated `mod` line, so the QbzShell invokable that
+// calls it needs no cfg of its own.
+mod macos_chrome;
 // MPRIS / media keys (owner ruling K3, REVERSED by the owner on 2026-08-04
 // after smoking the tray: "no aparece por ejemplo en el widget de now playing
 // de KDE Plasma"). Plasma reads MPRIS, so this is what makes the desktop see
