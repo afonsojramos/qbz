@@ -1015,6 +1015,21 @@ pub struct SharedState {
     /// can detect that a queued `PlayStreaming` was superseded by a newer play
     /// and stop waiting on its initial buffer instead of blocking ~60s (#591).
     play_generation: Arc<AtomicU64>,
+    /// Handle of the live CMAF segment feeder — the background task that
+    /// keeps downloading the currently-streaming track after playback has
+    /// started. Stored so a superseding play intent can stop the download
+    /// the user just abandoned (`cancel_stream_feeder`) and so the abandoned
+    /// buffer can be sealed once the new source is in place
+    /// (`seal_stream_feeder`).
+    stream_feeder: Arc<std::sync::Mutex<Option<StreamFeederSlot>>>,
+}
+
+/// A registered live segment feeder: which track it feeds, how to cancel
+/// its download, and the writer into its playback buffer.
+struct StreamFeederSlot {
+    track_id: u64,
+    cancel_tx: tokio::sync::watch::Sender<bool>,
+    writer: BufferWriter,
 }
 
 impl Default for SharedState {
@@ -1046,6 +1061,7 @@ impl SharedState {
             buffer_progress: Arc::new(AtomicU32::new(0)),
             bit_perfect_mode: Arc::new(AtomicU8::new(0)),
             play_generation: Arc::new(AtomicU64::new(0)),
+            stream_feeder: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -1117,6 +1133,75 @@ impl SharedState {
     /// uses this to abandon buffer waits for superseded plays (#591).
     pub(crate) fn is_current_play(&self, gen: u64) -> bool {
         self.current_play_generation() == gen
+    }
+
+    /// Cancel the in-flight segment feeder's download, if any. Called on
+    /// every new play intent (and on stop) via `Player::begin_play`.
+    ///
+    /// Without this, a superseded track's feeder kept downloading to
+    /// completion: on 2026-08-10 a shuffle&play pressed mid-stream measured
+    /// 5441 ms for the new track's init-segment fetch (vs 423-760 ms on an
+    /// idle link) because the abandoned track's segment loop still held the
+    /// link — the init's connection setup and TTFB queued behind ~15 MB of
+    /// in-flight segment data.
+    ///
+    /// The cancellation is cooperative (a watch flag the feeder selects on
+    /// between and during segment fetches) and deliberately does NOT error
+    /// or complete the abandoned buffer: the outgoing engine keeps playing
+    /// what is already buffered until the audio thread installs the new
+    /// source, which is exactly the hand-off the pre-cancel code had. The
+    /// buffer is sealed by `seal_stream_feeder` once the new source is in.
+    pub(crate) fn cancel_stream_feeder(&self) {
+        let slot = self.stream_feeder.lock().ok().and_then(|s| {
+            s.as_ref()
+                .map(|slot| (slot.track_id, slot.cancel_tx.clone()))
+        });
+        if let Some((track_id, cancel_tx)) = slot {
+            log::info!(
+                "[CMAF-STREAM] Cancelling feeder for superseded track {}",
+                track_id
+            );
+            let _ = cancel_tx.send(true);
+        }
+    }
+
+    /// Seal the abandoned feeder's buffer (`download_complete`) and drop the
+    /// slot. Called when a new source has just been handed to the audio
+    /// thread (and on stop): a reader that ran the old buffer dry and is
+    /// parked on its condvar wakes up and sees EOF instead of blocking
+    /// forever behind a feeder that no longer exists. For a reader still
+    /// working through the buffered remainder this is a no-op — the engine
+    /// has already been swapped by the command just sent.
+    pub(crate) fn seal_stream_feeder(&self) {
+        let slot = self.stream_feeder.lock().ok().and_then(|mut s| s.take());
+        if let Some(slot) = slot {
+            let _ = slot.writer.complete();
+        }
+    }
+
+    /// Register the feeder spawned for `gen`'s stream. The generation check
+    /// runs under the slot lock so a concurrent `begin_play` + cancel cannot
+    /// slip between the check and the store: if this intent was already
+    /// superseded, the new feeder is cancelled instead of registered.
+    pub(crate) fn register_stream_feeder(
+        &self,
+        track_id: u64,
+        cancel_tx: tokio::sync::watch::Sender<bool>,
+        writer: BufferWriter,
+        gen: u64,
+    ) {
+        if let Ok(mut s) = self.stream_feeder.lock() {
+            if !self.is_current_play(gen) {
+                drop(s);
+                let _ = cancel_tx.send(true);
+                return;
+            }
+            *s = Some(StreamFeederSlot {
+                track_id,
+                cancel_tx,
+                writer,
+            });
+        }
     }
 
     pub fn set_stream_quality(&self, sample_rate: u32, bit_depth: u32) {
@@ -2749,7 +2834,7 @@ impl Player {
                                 // GAPLESS LIFECYCLE TRACE (2026-08-10): the `X -> X` self-transition
                                 // survived the PlayStreaming fix, and guessing at the remaining
                                 // path has failed twice. Every set/clear now says who did it.
-                                log::info!("[gapless-trace] clear (PlayDsdNative) pending was {:?}", gapless_pending.as_ref().map(|p| p.track_id));
+                                log::info!("[gapless-trace] clear (PlayDsdDop) pending was {:?}", gapless_pending.as_ref().map(|p| p.track_id));
                                 *gapless_pending = None;
                                 *gapless_request_armed = false;
                                 thread_state.set_gapless_ready(false);
@@ -2860,7 +2945,7 @@ impl Player {
                                 // GAPLESS LIFECYCLE TRACE (2026-08-10): the `X -> X` self-transition
                                 // survived the PlayStreaming fix, and guessing at the remaining
                                 // path has failed twice. Every set/clear now says who did it.
-                                log::info!("[gapless-trace] clear (PlayDsdDop) pending was {:?}", gapless_pending.as_ref().map(|p| p.track_id));
+                                log::info!("[gapless-trace] clear (PlayDsdNative) pending was {:?}", gapless_pending.as_ref().map(|p| p.track_id));
                                 *gapless_pending = None;
                                 *gapless_request_armed = false;
                                 thread_state.set_gapless_ready(false);
@@ -4158,7 +4243,14 @@ impl Player {
     /// previous track (last-writer race on `AudioCommand::Play`), and so the
     /// audio thread can abandon superseded buffer waits (#591).
     fn begin_play(&self) -> u64 {
-        self.state.begin_play()
+        let gen = self.state.begin_play();
+        // The bump comes first so a concurrent `register_stream_feeder` sees
+        // the new generation; then cancel the previous track's feeder —
+        // every caller of `begin_play` is a superseding intent (new play or
+        // stop), so the old download is by definition abandoned work and
+        // only competes with the new track's fetches for the link.
+        self.state.cancel_stream_feeder();
+        gen
     }
 
     /// A passing check is a snapshot, not a lock: a newer intent can still
@@ -4311,6 +4403,8 @@ impl Player {
                 let flac_header = cmaf_info.flac_header;
                 let n_segments = cmaf_info.n_segments;
                 let cache = self.audio_cache.clone();
+                let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+                let slot_writer = buffer_writer.clone();
 
                 tokio::spawn(async move {
                     match Self::cmaf_stream_segments(
@@ -4323,13 +4417,17 @@ impl Player {
                         cache,
                         skip_cache,
                         total_flac_size,
+                        cancel_rx,
                     )
                     .await
                     {
-                        Ok(()) => log::info!(
+                        // `false` = cancelled on supersede; already logged by
+                        // the feeder itself, and it is not a completion.
+                        Ok(true) => log::info!(
                             "[CMAF-STREAM COMPLETE] Track {}",
                             track_id
                         ),
+                        Ok(false) => {}
                         Err(e) => log::error!(
                             "[CMAF-STREAM ERROR] Track {}: {}",
                             track_id,
@@ -4337,6 +4435,10 @@ impl Player {
                         ),
                     }
                 });
+                // Register for cancel-on-supersede: the next `begin_play`
+                // stops this download instead of letting it hold the link.
+                self.state
+                    .register_stream_feeder(track_id, cancel_tx, slot_writer, gen);
 
                 return Ok(());
             }
@@ -4721,6 +4823,10 @@ impl Player {
     /// accumulator is built and the finished track goes straight to the L2
     /// disk cache, streamed out of the playback buffer in chunks (issue
     /// #660).
+    ///
+    /// `cancel_rx` flips to `true` when a newer play intent supersedes this
+    /// stream (see `SharedState::cancel_stream_feeder`). Returns `Ok(true)`
+    /// on real completion, `Ok(false)` when cancelled.
     async fn cmaf_stream_segments(
         url_template: &str,
         n_segments: u8,
@@ -4731,7 +4837,8 @@ impl Player {
         cache: Arc<qbz_cache::AudioCache>,
         skip_cache: bool,
         expected_total_bytes: u64,
-    ) -> Result<(), String> {
+        mut cancel_rx: tokio::sync::watch::Receiver<bool>,
+    ) -> Result<bool, String> {
         struct FailGuard {
             writer: BufferWriter,
             armed: bool,
@@ -4785,15 +4892,36 @@ impl Player {
 
         for seg_idx in 1..=n_segments {
             let seg_url = url_template.replace("$SEGMENT$", &seg_idx.to_string());
-            let seg_data = client
-                .get(&seg_url)
-                .header("User-Agent", "Mozilla/5.0")
-                .send()
-                .await
-                .map_err(|e| format!("CMAF segment {} fetch: {}", seg_idx, e))?
-                .bytes()
-                .await
-                .map_err(|e| format!("CMAF segment {} read: {}", seg_idx, e))?;
+            let fetch = async {
+                client
+                    .get(&seg_url)
+                    .header("User-Agent", "Mozilla/5.0")
+                    .send()
+                    .await
+                    .map_err(|e| format!("CMAF segment {} fetch: {}", seg_idx, e))?
+                    .bytes()
+                    .await
+                    .map_err(|e| format!("CMAF segment {} read: {}", seg_idx, e))
+            };
+            let seg_data = tokio::select! {
+                biased;
+                // Superseded by a newer play (or stop): drop the in-flight
+                // request so the link frees immediately, and leave the
+                // abandoned buffer OPEN (no error, no complete) so the
+                // outgoing engine keeps playing what is already buffered
+                // until the audio thread installs the new source; the new
+                // play seals the buffer after the swap. The partial track is
+                // NOT cached — the user abandoned it.
+                _ = cancel_rx.changed() => {
+                    log::info!(
+                        "[CMAF-STREAM] Track {} feeder cancelled (superseded)",
+                        track_id
+                    );
+                    guard.armed = false;
+                    return Ok(false);
+                }
+                data = fetch => data?,
+            };
 
             let crypto = qbz_cmaf::parse_segment_crypto(&seg_data)
                 .map_err(|e| format!("CMAF segment {} parse: {}", seg_idx, e))?;
@@ -4904,7 +5032,7 @@ impl Player {
             }
         }
 
-        Ok(())
+        Ok(true)
     }
 
     /// Play from raw audio data (for cached tracks)
@@ -4959,6 +5087,10 @@ impl Player {
                     e
                 )
             })?;
+
+        // A new source was just installed: seal the abandoned feeder's
+        // buffer so a parked reader wakes to EOF instead of hanging.
+        self.state.seal_stream_feeder();
 
         log::info!("Player: Playback initiated successfully");
         Ok(())
@@ -5243,6 +5375,10 @@ impl Player {
                 format!("Failed to send streaming play command: {}", e)
             })?;
 
+        // A new source was just installed: seal the abandoned feeder's
+        // buffer so a parked reader wakes to EOF instead of hanging.
+        self.state.seal_stream_feeder();
+
         log::info!("Player: Streaming playback initiated");
         Ok(writer)
     }
@@ -5355,6 +5491,10 @@ impl Player {
                 format!("Failed to send streaming play command: {}", e)
             })?;
 
+        // A new source was just installed: seal the abandoned feeder's
+        // buffer so a parked reader wakes to EOF instead of hanging.
+        self.state.seal_stream_feeder();
+
         log::info!("Player: Dynamic streaming playback initiated");
         Ok(writer)
     }
@@ -5416,6 +5556,9 @@ impl Player {
         // Supersede any in-flight play_track so a slow CMAF/legacy fetch cannot
         // restart audio after the user stopped.
         let _ = self.begin_play();
+        // Nothing will consume the abandoned stream's buffer after this:
+        // seal it so a reader parked on its condvar wakes to EOF.
+        self.state.seal_stream_feeder();
         self.tx
             .send(AudioCommand::Stop)
             .map_err(|e| format!("Failed to send stop command: {}", e))
