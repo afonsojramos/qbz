@@ -90,20 +90,30 @@ Column {
 
     SettingRow {
         label: QbzSession.tr("Add folder", QbzSession.trRev)
-        description: QbzSession.tr("Type or paste the full path of a music folder.", QbzSession.trRev)
+        description: QbzSession.tr("Browse for a music folder, or type the full path.", QbzSession.trRev)
         Row {
             spacing: 8
             QbzLineEdit {
                 id: pathField
-                width: 240
+                width: 190
                 anchors.verticalCenter: parent.verticalCenter
                 placeholder: "/home/you/Music"
                 onEdited: function (v) { root.pendingPath = v }
                 onCommitted: function (v) { root.pendingPath = v }
             }
+            // The native chooser (settings_qt/library.rs pick_and_add_folder).
+            // It adds the folder itself, so there is nothing to clear here —
+            // the typed field is the OTHER route to the same insert, kept
+            // because pasting a path is faster for network mounts.
+            SettingsButton {
+                iconName: "folder"
+                text: QbzSession.tr("Browse...", QbzSession.trRev)
+                onClicked: QbzBridge.settingsString("library-pick-folder", "")
+            }
             SettingsButton {
                 iconName: "folder-plus"
                 text: QbzSession.tr("Add", QbzSession.trRev)
+                enabled: root.pendingPath !== ""
                 onClicked: {
                     QbzBridge.settingsString("library-add-folder", root.pendingPath)
                     root.pendingPath = ""
@@ -281,12 +291,10 @@ Column {
                     verticalAlignment: Text.AlignVCenter
                     elide: Text.ElideRight
                 }
-                // ACTIONS: enable/disable · scan this folder · remove it.
-                // The eye button stands in for the folder EDIT modal's
-                // "Enabled" checkbox (LibFolderEditModal.slint) — the same
-                // backend field (`set_folder_enabled`), surfaced here because
-                // that modal is not ported and a disabled folder would
-                // otherwise be stuck disabled.
+                // ACTIONS: settings · enable/disable · scan this folder ·
+                // remove it. The eye button duplicates the edit modal's
+                // "Enabled" toggle on purpose — it predates the modal and is
+                // one click instead of three for the thing people do most.
                 Row {
                     width: root.actionsW
                     height: parent.height
@@ -309,6 +317,16 @@ Column {
                         anchors.verticalCenter: parent.verticalCenter
                         iconName: folderRow.modelData.enabled ? "eye" : "eye-off"
                         onClicked: QbzBridge.settingsString("library-folder-enabled",
+                            String(folderRow.modelData.id))
+                    }
+                    // The per-folder settings modal (alias, network override
+                    // + fs type, change path). The reference reaches it from
+                    // the same place; this port had no affordance at all
+                    // until the modal landed.
+                    SettingsButton {
+                        anchors.verticalCenter: parent.verticalCenter
+                        iconName: "settings-2"
+                        onClicked: QbzBridge.settingsString("library-folder-edit-open",
                             String(folderRow.modelData.id))
                     }
                 }

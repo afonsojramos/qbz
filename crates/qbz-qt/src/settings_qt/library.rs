@@ -9,13 +9,17 @@
 //! (wired this round) and the `QbzLocal` invokables.
 //!
 //! Deltas vs `settings/LocalLibrarySettings.slint` (reported, not hidden):
-//! - "Add folder" is a PATH FIELD + button, not the native folder chooser:
-//!   the picker helper lives private in `local_ephemeral.rs` and the port has
-//!   no `rfd` dependency. `open_path`-style behaviour, same end state.
 //! - The per-folder EDIT modal (`LibFolderEditModal.slint`: alias + network
 //!   overrides) is not ported, so no edit affordance is shown.
 //! - The Plex PIN flow (generate code / link code / open sign-in) is not
 //!   ported; the manual server-url + token path is what this wires.
+//!
+//! Retired 2026-08-04: "Add folder is a path field because this port has no
+//! `rfd` dependency". It has had one since the MyQBZ round (`Cargo.toml:137`)
+//! and three files were already calling it while this note said otherwise —
+//! the path field now sits beside a real native chooser
+//! ([`pick_and_add_folder`]). Kept as a record because the note was load
+//! bearing: it justified a downgrade for weeks after its premise expired.
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{LazyLock, Mutex};
@@ -71,6 +75,68 @@ pub struct Snapshot {
     /// Inline result of the last add/remove (empty when there is nothing to say).
     pub status: String,
     pub plex: PlexFields,
+    /// The per-folder settings modal (`LibFolderEditModal.slint`). Rides the
+    /// settings document rather than a bridge of its own — it is a surface of
+    /// this panel and every one of its actions already lands in this module.
+    #[serde(rename = "folderEdit")]
+    pub folder_edit: FolderEdit,
+}
+
+/// `LibFolderEditState`. `open == false` is the closed shape, and the FULL
+/// shape is always published (never `{}`) so QML never parses a half-object
+/// in the frame before the first open.
+#[derive(Clone, Default, Serialize)]
+pub struct FolderEdit {
+    pub open: bool,
+    #[serde(rename = "folderId")]
+    pub folder_id: i64,
+    pub path: String,
+    pub alias: String,
+    pub enabled: bool,
+    #[serde(rename = "isNetwork")]
+    pub is_network: bool,
+    /// The user has taken manual control of the network flag — this is the
+    /// field with a real consumer at `qbz-library/src/scan.rs:164`, where it
+    /// suppresses per-scan network re-detection. With no writer (the state
+    /// this port was in until 2026-08-05) a user's classification was
+    /// overwritten by detection on every single scan.
+    #[serde(rename = "userOverrideNetwork")]
+    pub user_override_network: bool,
+    /// Index into the modal's option list; 0 = auto-detect.
+    #[serde(rename = "fsTypeIndex")]
+    pub fs_type_index: i32,
+    pub accessible: bool,
+    #[serde(rename = "checkingAccessible")]
+    pub checking_accessible: bool,
+    /// Unix seconds; 0 = never scanned (QML formats it, locale-aware).
+    #[serde(rename = "lastScan")]
+    pub last_scan: i64,
+}
+
+/// The modal's fs-type option list, in the reference's order
+/// (`LibFolderEditModal.slint:266-278`). Index 0 means "let detection
+/// decide" and is stored as no explicit type.
+const FS_TYPE_VALUES: &[&str] = &[
+    "auto",
+    "cifs",
+    "nfs",
+    "sshfs",
+    "rclone",
+    "webdav",
+    "glusterfs",
+    "ceph",
+    "other",
+];
+
+fn fs_type_index(label: Option<&str>) -> i32 {
+    let Some(label) = label else {
+        return 0;
+    };
+    FS_TYPE_VALUES
+        .iter()
+        .position(|v| v.eq_ignore_ascii_case(label))
+        .map(|i| i as i32)
+        .unwrap_or(0)
 }
 
 // ---------------------------------------------------------------------------
@@ -86,6 +152,20 @@ static CLEANING: AtomicBool = AtomicBool::new(false);
 static CLEANUP_STATUS: LazyLock<Mutex<String>> = LazyLock::new(|| Mutex::new(String::new()));
 static CLEARING: AtomicBool = AtomicBool::new(false);
 static STATUS: LazyLock<Mutex<String>> = LazyLock::new(|| Mutex::new(String::new()));
+
+/// Last known accessibility per NETWORK folder id, filled by
+/// [`spawn_accessibility_probes`].
+///
+/// It exists because the probe cannot run where it used to. `snapshot()` is
+/// called on the settings publish path — every publish, and every 2 s while a
+/// scan is running — and it used to `std::fs::read_dir` each network folder
+/// INLINE. One dead NFS/SMB mount then blocked the whole settings document
+/// behind the kernel's mount timeout, which can be tens of seconds. The
+/// reference never had that: it publishes `accessible: true` optimistically
+/// and updates each row from a spawned probe with a 6 s ceiling
+/// (`crates/qbz/src/local_library_settings.rs:212-236`).
+static ACCESSIBLE: LazyLock<Mutex<std::collections::HashMap<i64, bool>>> =
+    LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
 
 fn set_status(text: String) {
     *STATUS.lock().unwrap_or_else(|e| e.into_inner()) = text;
@@ -127,8 +207,17 @@ pub fn snapshot() -> Snapshot {
         .unwrap_or_default()
         .into_iter()
         .map(|f| {
+            // Cache lookup only — NEVER touch the filesystem here. Unknown
+            // (not probed yet) reads as accessible, so a fresh publish shows
+            // the folder as fine and the probe demotes it a moment later
+            // rather than flashing a false "unavailable" on every open.
             let accessible = if f.is_network {
-                std::fs::read_dir(&f.path).is_ok()
+                ACCESSIBLE
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .get(&f.id)
+                    .copied()
+                    .unwrap_or(true)
             } else {
                 true
             };
@@ -167,12 +256,274 @@ pub fn snapshot() -> Snapshot {
             metadata_write: plex_cfg.metadata_write_enabled,
             collapsed: super::pref_bool("plex_ui_collapsed", false),
         },
+        folder_edit: EDIT.lock().unwrap_or_else(|e| e.into_inner()).clone(),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Per-folder settings modal (LibFolderEditModal)
+// ---------------------------------------------------------------------------
+
+static EDIT: LazyLock<Mutex<FolderEdit>> = LazyLock::new(|| Mutex::new(FolderEdit::default()));
+
+/// Open the modal on one folder: seed it from the DB row, then probe the
+/// mount in the background.
+///
+/// The probe is deliberately NOT awaited before publishing — the modal opens
+/// on the row we already have and the accessibility line resolves under it,
+/// which is the reference's behaviour (`checking-accessible` starts true and
+/// `check_accessible` clears it). Opening behind a dead NFS mount would
+/// otherwise take the kernel's mount timeout.
+pub async fn open_folder_edit(id: i64) {
+    let row = tokio::task::spawn_blocking(move || {
+        crate::local_state::with_db(|db| db.get_folders_with_metadata())
+            .unwrap_or_default()
+            .into_iter()
+            .find(|f| f.id == id)
+    })
+    .await
+    .ok()
+    .flatten();
+    let Some(f) = row else {
+        log::warn!("[qbz-qt] folder edit: id {id} is gone");
+        return;
+    };
+    {
+        let mut st = EDIT.lock().unwrap_or_else(|e| e.into_inner());
+        *st = FolderEdit {
+            open: true,
+            folder_id: f.id,
+            path: f.path.clone(),
+            alias: f.alias.clone().unwrap_or_default(),
+            enabled: f.enabled,
+            is_network: f.is_network,
+            user_override_network: f.user_override_network,
+            fs_type_index: fs_type_index(f.network_fs_type.as_deref()),
+            // Optimistic, like the row list — the probe below corrects it.
+            accessible: true,
+            checking_accessible: true,
+            last_scan: f.last_scan.unwrap_or(0),
+        };
+    }
+    super::publish_snapshot().await;
+
+    let path = f.path.clone();
+    let accessible = probe_path(&path).await;
+    {
+        let mut st = EDIT.lock().unwrap_or_else(|e| e.into_inner());
+        // The user may have closed the modal or opened a DIFFERENT folder
+        // while the probe was out; writing either would show a stale answer.
+        if !st.open || st.folder_id != id {
+            return;
+        }
+        st.accessible = accessible;
+        st.checking_accessible = false;
+    }
+    record_accessible(id, accessible);
+    super::publish_snapshot().await;
+}
+
+/// The shared probe: `exists()` first, then a `read_dir` under a 6 s ceiling,
+/// falling back to `exists()` on timeout (a slow mount that IS there must not
+/// be reported dead).
+async fn probe_path(path: &str) -> bool {
+    if !std::path::Path::new(path).exists() {
+        return false;
+    }
+    let p = path.to_string();
+    let res = tokio::time::timeout(
+        std::time::Duration::from_secs(6),
+        tokio::task::spawn_blocking(move || std::fs::read_dir(&p).is_ok()),
+    )
+    .await;
+    match res {
+        Ok(Ok(ok)) => ok,
+        Ok(Err(_)) => false,
+        Err(_) => std::path::Path::new(path).exists(),
+    }
+}
+
+pub async fn close_folder_edit() {
+    EDIT.lock().unwrap_or_else(|e| e.into_inner()).open = false;
+    super::publish_snapshot().await;
+}
+
+/// Save the modal. `fs_type` is the STRING (the QML maps its index through
+/// the same table); "auto" on a network folder means "re-detect the label
+/// from the path", which is what the reference does at
+/// `local_library_settings.rs:435-439`.
+pub async fn save_folder_edit(
+    id: i64,
+    alias: String,
+    enabled: bool,
+    is_network: bool,
+    fs_type: String,
+    user_override: bool,
+) {
+    let path = EDIT.lock().unwrap_or_else(|e| e.into_inner()).path.clone();
+    let ok = tokio::task::spawn_blocking(move || {
+        let fs_opt: Option<String> = if !is_network {
+            None
+        } else if fs_type == "auto" {
+            qbz_library::network_fs_label(std::path::Path::new(&path))
+        } else {
+            Some(fs_type)
+        };
+        let alias_trimmed = alias.trim().to_string();
+        let alias_opt = if alias_trimmed.is_empty() {
+            None
+        } else {
+            Some(alias_trimmed)
+        };
+        crate::local_state::with_db(|db| {
+            db.update_folder_settings(
+                id,
+                alias_opt.as_deref(),
+                enabled,
+                is_network,
+                fs_opt.as_deref(),
+                user_override,
+            )
+        })
+        .is_some()
+    })
+    .await
+    .unwrap_or(false);
+
+    if !ok {
+        set_status(qbz_i18n::t("Could not save the folder settings."));
+        super::publish_snapshot().await;
+        return;
+    }
+    EDIT.lock().unwrap_or_else(|e| e.into_inner()).open = false;
+    crate::toast_qt::success(qbz_i18n::t("Folder settings saved"));
+    refresh_browse();
+    super::publish_snapshot().await;
+}
+
+/// "Change" next to the path: pick a new location for an EXISTING folder,
+/// keeping its id (and therefore its tracks' folder association).
+///
+/// The DB refuses a path already registered to a different folder, which is
+/// the one failure the reference surfaces by name.
+pub async fn change_folder_path(id: i64) {
+    let Some(dir) = rfd::AsyncFileDialog::new()
+        .set_title(&qbz_i18n::t("Choose a music folder"))
+        .pick_folder()
+        .await
+    else {
+        return;
+    };
+    let new_path = dir.path().to_string_lossy().to_string();
+    let np = new_path.clone();
+    let ok = tokio::task::spawn_blocking(move || {
+        crate::local_state::with_db(|db| db.update_folder_path(id, &np)).is_some()
+    })
+    .await
+    .unwrap_or(false);
+
+    if !ok {
+        crate::toast_qt::error(qbz_i18n::t(
+            "Couldn't change folder location (path may already exist)",
+        ));
+        return;
+    }
+    {
+        let mut st = EDIT.lock().unwrap_or_else(|e| e.into_inner());
+        if st.folder_id == id {
+            st.path = new_path;
+            // The new location has never been scanned under this id.
+            st.last_scan = 0;
+            st.checking_accessible = true;
+        }
+    }
+    super::publish_snapshot().await;
+
+    let path = EDIT.lock().unwrap_or_else(|e| e.into_inner()).path.clone();
+    let accessible = probe_path(&path).await;
+    {
+        let mut st = EDIT.lock().unwrap_or_else(|e| e.into_inner());
+        if st.open && st.folder_id == id {
+            st.accessible = accessible;
+            st.checking_accessible = false;
+        }
+    }
+    refresh_browse();
+    super::publish_snapshot().await;
 }
 
 // ---------------------------------------------------------------------------
 // Folder CRUD
 // ---------------------------------------------------------------------------
+
+/// Probe every NETWORK folder's mount off the publish path and republish if
+/// anything changed.
+///
+/// Shape taken from the reference's `check_accessible`: an `exists()`
+/// shortcut first (cheap, and a missing mount point answers immediately),
+/// then a `read_dir` on the blocking pool under a 6 s timeout. A timeout is
+/// NOT automatically "inaccessible" — it falls back to `exists()`, because a
+/// slow mount that is genuinely there should not be marked dead.
+///
+/// Only republishes when a value actually moved, so the common case (nothing
+/// changed) costs one publish less than an unconditional refresh.
+pub async fn spawn_accessibility_probes() {
+    let folders = tokio::task::spawn_blocking(|| {
+        crate::local_state::with_db(|db| db.get_folders_with_metadata()).unwrap_or_default()
+    })
+    .await
+    .unwrap_or_default();
+
+    let mut changed = false;
+    for f in folders.into_iter().filter(|f| f.is_network) {
+        let path = f.path.clone();
+        if !std::path::Path::new(&path).exists() {
+            changed |= record_accessible(f.id, false);
+            continue;
+        }
+        let p = path.clone();
+        let res = tokio::time::timeout(
+            std::time::Duration::from_secs(6),
+            tokio::task::spawn_blocking(move || std::fs::read_dir(&p).is_ok()),
+        )
+        .await;
+        let accessible = match res {
+            Ok(Ok(ok)) => ok,
+            Ok(Err(_)) => false,
+            Err(_) => std::path::Path::new(&path).exists(),
+        };
+        changed |= record_accessible(f.id, accessible);
+    }
+    if changed {
+        super::publish_snapshot().await;
+    }
+}
+
+/// Store one probe result; `true` when it differs from what was cached.
+fn record_accessible(id: i64, accessible: bool) -> bool {
+    let mut map = ACCESSIBLE.lock().unwrap_or_else(|e| e.into_inner());
+    map.insert(id, accessible) != Some(accessible)
+}
+
+/// The folder BUTTON next to the path field: raise the native chooser and
+/// feed whatever comes back into [`add_folder`], so both routes share one
+/// validation, one network probe and one insert.
+///
+/// The reference does the same thing with the same crate
+/// (`crates/qbz/src/local_library_settings.rs` -> `rfd::AsyncFileDialog`).
+/// This port carried a note claiming it had no `rfd` dependency; it has had
+/// one since the MyQBZ round (`Cargo.toml:137`, rfd 0.15) and three other
+/// files already call it. Cancelling the dialog is a no-op, not an error.
+pub async fn pick_and_add_folder() {
+    let Some(dir) = rfd::AsyncFileDialog::new()
+        .set_title(&qbz_i18n::t("Choose a music folder"))
+        .pick_folder()
+        .await
+    else {
+        return;
+    };
+    add_folder(dir.path().to_string_lossy().to_string()).await;
+}
 
 /// "Add folder": validate the path, detect network-ness, insert.
 pub async fn add_folder(path: String) {
@@ -216,22 +567,37 @@ pub async fn remove_folders(ids: Vec<i64>) {
     if ids.is_empty() {
         return;
     }
-    let _ = tokio::task::spawn_blocking(move || {
+    let keys = tokio::task::spawn_blocking(move || {
         let Some(db) = open_db() else {
-            return;
+            return Vec::new();
         };
         let all = db.get_folders_with_metadata().unwrap_or_default();
+        let mut keys: Vec<String> = Vec::new();
         for id in ids {
             let Some(folder) = all.iter().find(|f| f.id == id) else {
                 continue;
             };
+            // Capture the album keys BEFORE the delete — afterwards the rows
+            // are gone and there is nothing left to match on. 1:1 with the
+            // reference's comment at local_library_settings.rs:341-343.
+            keys.extend(db.album_keys_in_folder(&folder.path).unwrap_or_default());
             if let Err(e) = db.remove_folder_with_tracks(&folder.path) {
                 log::error!("[qbz-qt] remove folder failed: {e}");
                 set_status(qbz_i18n::t("Could not remove that folder."));
             }
         }
+        keys
     })
-    .await;
+    .await
+    .unwrap_or_default();
+    // Recently Played is a SEPARATE store from the library database, so
+    // removing the folder does not touch it. Until 2026-08-04 this port
+    // skipped the prune entirely and the history kept cards that opened onto
+    // deleted tracks.
+    let removed = crate::recently_qt::prune_albums(&keys);
+    if removed > 0 {
+        log::info!("[qbz-qt] pruned {removed} recently-played entries with the removed folder(s)");
+    }
     refresh_browse();
 }
 
@@ -300,10 +666,44 @@ pub fn scan(folder_id: Option<i64>) {
                     PROCESSED.store(processed, Ordering::SeqCst);
                     TOTAL.store(total, Ordering::SeqCst);
                 }
-                ScanEvent::Finished { errors, .. } => {
-                    if !errors.is_empty() {
-                        log::warn!("[qbz-qt] library scan finished with {} errors", errors.len());
+                // The missing-file cleanup phase. The reference puts it in the
+                // SAME slot the per-file name occupies, so the progress line
+                // keeps saying something while no file name is flowing
+                // (local_library_settings.rs:738-743). This port dropped the
+                // variant, so the scan looked stalled on its last filename
+                // for the whole cleanup.
+                ScanEvent::Cleanup => {
+                    *CURRENT_FILE.lock().unwrap_or_else(|e| e.into_inner()) =
+                        qbz_i18n::t("Cleaning up missing files...");
+                }
+                // Terminal. Until 2026-08-04 this only logged, so a scan that
+                // failed or was cancelled looked exactly like one that worked.
+                // Same three outcomes and the same strings as the reference
+                // (:744-775).
+                ScanEvent::Finished { status, errors } => {
+                    let n = errors.len();
+                    match status {
+                        qbz_library::ScanStatus::Complete if n > 0 => {
+                            log::warn!("[qbz-qt] library scan finished with {n} errors");
+                            crate::toast_qt::success(qbz_i18n::tf(
+                                "Scan complete ({} file skipped)",
+                                "Scan complete ({} files skipped)",
+                                n as i64,
+                                &[&n.to_string()],
+                            ));
+                        }
+                        qbz_library::ScanStatus::Complete => {
+                            crate::toast_qt::success(qbz_i18n::t("Scan complete"));
+                        }
+                        qbz_library::ScanStatus::Cancelled => {
+                            crate::toast_qt::success(qbz_i18n::t("Scan cancelled"));
+                        }
+                        _ => {
+                            log::error!("[qbz-qt] library scan failed ({n} errors)");
+                            crate::toast_qt::error(qbz_i18n::t("Scan failed"));
+                        }
                     }
+                    *CURRENT_FILE.lock().unwrap_or_else(|e| e.into_inner()) = String::new();
                 }
                 _ => {}
             };

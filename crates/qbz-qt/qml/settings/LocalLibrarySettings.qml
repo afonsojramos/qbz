@@ -33,6 +33,10 @@ Column {
 
     property var doc: ({})
     readonly property var lib: doc.library || ({})
+    /// The view-level SettingsConfirmHost (see SettingsView.qml). Null in
+    /// previews — every call site guards, so a preview degrades to the old
+    /// unconfirmed behaviour rather than swallowing the click.
+    property var confirmHost: null
 
     QbzTheme { id: theme }
 
@@ -109,7 +113,23 @@ Column {
                 ? QbzSession.tr("Clearing...", QbzSession.trRev)
                 : QbzSession.tr("Clear all", QbzSession.trRev)
             enabled: root.lib.clearing !== true
-            onClicked: QbzBridge.settingsString("library-clear", "")
+            // TWO prompts before anything is dropped — 1:1 with the
+            // reference's two rfd dialogs (local_library_settings.rs:607-626).
+            // This port used to clear the database on the first click.
+            onClicked: {
+                if (!root.confirmHost) {
+                    QbzBridge.settingsString("library-clear", "")
+                    return
+                }
+                root.confirmHost.askTwice(
+                    QbzSession.tr("Clear library database?", QbzSession.trRev),
+                    QbzSession.tr("This removes ALL indexed tracks from the database. Your audio files are NOT deleted. You will need to re-scan your folders afterward.", QbzSession.trRev),
+                    QbzSession.tr("Clear all", QbzSession.trRev),
+                    QbzSession.tr("Are you absolutely sure?", QbzSession.trRev),
+                    QbzSession.tr("This action cannot be undone.", QbzSession.trRev),
+                    QbzSession.tr("Clear all", QbzSession.trRev),
+                    function () { QbzBridge.settingsString("library-clear", "") })
+            }
         }
     }
 
@@ -119,5 +139,6 @@ Column {
     PlexSettings {
         width: parent.width
         doc: root.doc
+        confirmHost: root.confirmHost
     }
 }

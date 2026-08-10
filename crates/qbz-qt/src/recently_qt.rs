@@ -177,6 +177,38 @@ pub(crate) fn load_albums() -> Vec<RecentAlbum> {
     read_store().albums
 }
 
+/// Drop every entry whose `album_id` is in `album_ids`; returns how many
+/// TRACK entries went.
+///
+/// Called when a Local Library folder is removed, so its albums stop
+/// lingering in Recently Played as rows that open onto nothing. Without it
+/// the history keeps pointing at tracks whose database rows are gone —
+/// visible as dead cards, not as an error.
+///
+/// Port of `crates/qbz/src/recently.rs:236-250` with ONE structural
+/// difference: this store derives its album list from the track window
+/// (`derive_albums`), so pruning the tracks is enough and the reference's
+/// second `store.albums.retain` has no counterpart here. The `albums` field
+/// still exists for the legacy migration path, so it is pruned too rather
+/// than left holding stale ids.
+pub(crate) fn prune_albums(album_ids: &[String]) -> usize {
+    if album_ids.is_empty() {
+        return 0;
+    }
+    let mut store = read_store();
+    let tracks_before = store.tracks.len();
+    let albums_before = store.albums.len();
+    store
+        .tracks
+        .retain(|t| !album_ids.iter().any(|k| k == &t.album_id));
+    store.albums.retain(|a| !album_ids.iter().any(|k| k == &a.id));
+    let removed = tracks_before - store.tracks.len();
+    if removed > 0 || albums_before != store.albums.len() {
+        write_store(&store);
+    }
+    removed
+}
+
 /// Record a played track at the front of the track history (dedup by track
 /// id, capped at [`MAX_RECENT`]) and its album at the front of the album
 /// history (dedup by album id, capped at [`MAX_RECENT_ALBUMS`]).

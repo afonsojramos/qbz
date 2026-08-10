@@ -281,6 +281,7 @@ Item {
                             visible: root.section === 4
                             width: parent.width
                             doc: root.doc
+                            confirmHost: confirmHost
                         }
                         BlacklistSettings {
                             visible: root.section === 5
@@ -315,4 +316,16 @@ Item {
             }
         }
     }
+
+    // Danger-zone confirmations for the whole view — declared LAST so
+    // declaration order alone puts it over every panel and the sub-nav.
+    // Panels that need it are handed the reference (see LocalLibrarySettings
+    // / PlexSettings `confirmHost`).
+    SettingsConfirmHost { id: confirmHost }
+
+    // The per-folder settings modal. Same reasoning as the confirm host: it
+    // must overlay the whole view, so it cannot live inside the scrolled
+    // panel that opens it. The reference mounts its counterpart at the
+    // AppShell root for exactly the same reason (LibFolderEditModal.slint:5-8).
+    LibFolderEditModal { doc: root.doc }
 }

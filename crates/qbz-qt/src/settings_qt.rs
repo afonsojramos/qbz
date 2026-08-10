@@ -2399,6 +2399,58 @@ pub async fn settings_string(key: &str, value: String) {
         }
         // --- Local Library -------------------------------------------------
         "library-add-folder" => library::add_folder(value).await,
+        // --- Per-folder settings modal (LibFolderEditModal) ------------------
+        "library-folder-edit-open" => {
+            if let Ok(id) = value.trim().parse::<i64>() {
+                library::open_folder_edit(id).await;
+            }
+            return;
+        }
+        "library-folder-edit-close" => {
+            library::close_folder_edit().await;
+            return;
+        }
+        "library-folder-edit-save" => {
+            // {id, alias, enabled, isNetwork, fsType, userOverrideNetwork}
+            #[derive(serde::Deserialize)]
+            struct SavePayload {
+                id: i64,
+                alias: String,
+                enabled: bool,
+                #[serde(rename = "isNetwork")]
+                is_network: bool,
+                #[serde(rename = "fsType")]
+                fs_type: String,
+                #[serde(rename = "userOverrideNetwork")]
+                user_override_network: bool,
+            }
+            match serde_json::from_str::<SavePayload>(&value) {
+                Ok(p) => {
+                    library::save_folder_edit(
+                        p.id,
+                        p.alias,
+                        p.enabled,
+                        p.is_network,
+                        p.fs_type,
+                        p.user_override_network,
+                    )
+                    .await
+                }
+                Err(e) => log::warn!("[qbz-qt] folder-edit save payload: {e}"),
+            }
+            return;
+        }
+        "library-folder-change-path" => {
+            if let Ok(id) = value.trim().parse::<i64>() {
+                library::change_folder_path(id).await;
+            }
+            return;
+        }
+        "library-pick-folder" => {
+            // Native chooser, then the SAME add path as the typed field —
+            // the picker only supplies the string.
+            library::pick_and_add_folder().await;
+        }
         "library-remove-folders" => {
             let ids: Vec<i64> = serde_json::from_str(&value).unwrap_or_default();
             library::remove_folders(ids).await;
@@ -2411,8 +2463,14 @@ pub async fn settings_string(key: &str, value: String) {
         // "" = every enabled folder; "<id>" = that folder only.
         "library-scan" => library::scan(value.trim().parse::<i64>().ok()),
         "library-scan-stop" => library::stop_scan(),
-        // Panel mount / manual refresh: fall through to the publish below.
-        "refresh" => {}
+        // Panel mount / manual refresh: fall through to the publish below,
+        // then probe the network mounts OFF that path (the publish must not
+        // wait on a dead NFS mount — see library::spawn_accessibility_probes).
+        "refresh" => {
+            publish_snapshot().await;
+            library::spawn_accessibility_probes().await;
+            return;
+        }
         "library-cleanup-missing" => {
             // Publishes its own progress + result.
             library::cleanup_missing().await;
