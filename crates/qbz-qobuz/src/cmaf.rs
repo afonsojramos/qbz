@@ -393,21 +393,38 @@ async fn fetch_bytes_with_retry(
         log_tag,
         FetchError::is_transient,
         |_attempt| async move {
+            // TIMING SPLIT (2026-08-10): the owner measured this same fetch at
+            // 423ms under the Slint binary and 5459ms under Qt — same shared
+            // crate, same machine, same network, and (verified with
+            // `cargo tree -e features`) the same unified reqwest feature set.
+            // `send()` covers DNS + connect + TLS + time-to-headers; `bytes()`
+            // is the body. Splitting them says which half is losing the five
+            // seconds instead of a sixth guess.
+            let t_send = std::time::Instant::now();
             let response = http
                 .get(url)
                 .header("User-Agent", "Mozilla/5.0")
                 .send()
                 .await
                 .map_err(|e| classify_reqwest(&e, "fetch"))?;
+            let send_ms = t_send.elapsed().as_millis();
             let status = response.status();
             if !status.is_success() {
                 return Err(classify_status(status, "fetch"));
             }
-            response
+            let t_body = std::time::Instant::now();
+            let out = response
                 .bytes()
                 .await
                 .map(|b| b.to_vec())
-                .map_err(|e| classify_reqwest(&e, "read"))
+                .map_err(|e| classify_reqwest(&e, "read"));
+            log::info!(
+                "[{}] timing: send(dns+connect+tls+ttfb)={}ms body={}ms",
+                log_tag,
+                send_ms,
+                t_body.elapsed().as_millis()
+            );
+            out
         },
     )
     .await
