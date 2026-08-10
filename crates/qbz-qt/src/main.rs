@@ -1550,6 +1550,10 @@ static DRAGGED: Mutex<Vec<u64>> = Mutex::new(Vec::new());
 /// The claimed drop target (sidebar playlist id) — mirrored Rust-side so
 /// drag_end never reads the bridge off-thread.
 static DRAG_OVER: Mutex<String> = Mutex::new(String::new());
+/// The QUEUE drop target: the upcoming SLOT the row would land on, or -1 for
+/// "not over the queue". Mirrored Rust-side for the same reason `DRAG_OVER`
+/// is — `drag_end` runs off the Qt thread and must not read the bridge.
+static DRAG_OVER_QUEUE: Mutex<i32> = Mutex::new(-1);
 
 pub(crate) fn drag_start(track_id: String, title: String, subtitle: String, x: f32, y: f32) {
     let id = track_id.parse::<u64>().unwrap_or(0);
@@ -1562,6 +1566,7 @@ pub(crate) fn drag_start(track_id: String, title: String, subtitle: String, x: f
         b.as_mut().set_drag_x(x);
         b.as_mut().set_drag_y(y);
         b.as_mut().set_drag_over_playlist_id(QString::default());
+        b.as_mut().set_drag_over_queue_index(-1);
         b.as_mut().set_drag_active(true);
     });
 }
@@ -1581,14 +1586,62 @@ pub(crate) fn drag_set_over(playlist_id: String) {
     });
 }
 
+pub(crate) fn drag_set_over_queue(slot: i32) {
+    *DRAG_OVER_QUEUE.lock().unwrap() = slot;
+    shell_bridge::ui(move |mut b| {
+        b.as_mut().set_drag_over_queue_index(slot);
+    });
+}
+
 pub(crate) fn drag_end() {
     let pid = std::mem::take(&mut *DRAG_OVER.lock().unwrap());
+    let queue_slot = std::mem::replace(&mut *DRAG_OVER_QUEUE.lock().unwrap(), -1);
     shell_bridge::ui(|mut b| {
         b.as_mut().set_drag_active(false);
         b.as_mut().set_drag_over_playlist_id(QString::default());
+        b.as_mut().set_drag_over_queue_index(-1);
     });
     let tracks = std::mem::take(&mut *DRAGGED.lock().unwrap());
     if tracks.is_empty() {
+        return;
+    }
+    // The QUEUE target wins when both are claimed. They cannot both be under
+    // the pointer geometrically, so this only decides a stale claim — and the
+    // queue one is the more recent, since the panel overlays the sidebar.
+    if queue_slot >= 0 {
+        let runtime = app();
+        let ids = tracks;
+        spawn(async move {
+            // Was the queue empty BEFORE any of this landed? Read it up front:
+            // after the first insert it never is, and the answer decides
+            // whether the panel asks about playback (owner ask 2026-08-10).
+            let was_empty = runtime
+                .core()
+                .get_queue_state_full()
+                .await
+                .upcoming
+                .is_empty()
+                && runtime.core().current_track().await.is_none();
+            let mut landed = false;
+            for (n, id) in ids.into_iter().enumerate() {
+                // Multi-drag lands in order: each successive row goes one slot
+                // further down, so a 3-row drag keeps its own ordering instead
+                // of arriving reversed.
+                let slot = queue_slot as usize + n;
+                match queue_qt::insert_dragged_track(&runtime, id, slot).await {
+                    Ok(()) => landed = true,
+                    Err(e) => {
+                        log::error!("[qbz-qt][drag] queue insert of {id} at {slot} failed: {e}")
+                    }
+                }
+            }
+            // ONE prompt for the whole drop, and only when something actually
+            // landed — a drop whose every row failed to resolve must not ask
+            // about playing nothing.
+            if was_empty && landed {
+                queue_qt::set_drop_play_prompt(true);
+            }
+        });
         return;
     }
     let Ok(pid) = pid.parse::<u64>() else {

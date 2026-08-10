@@ -1593,6 +1593,96 @@ impl QtQconnectService {
         true
     }
 
+    /// Controller DROP-AT-POSITION routing: the queue drag-and-drop insert.
+    ///
+    /// Written 2026-08-10 after the owner pushed back on "the peer protocol
+    /// has no insert-at-index, so the position cannot be honoured". That was
+    /// wrong twice over. `CtrlSrvrQueueInsertTracks` carries `insert_after`,
+    /// which is precisely an insert-at-position — it is the same field
+    /// play-next and play-later already steer with, as the comment on
+    /// `play_later_on_peer_if_active` says out loud ("The protocol has no
+    /// 'later' — the position is steered via `insert_after`"). And even
+    /// without it the local queue has no insert-at-index either, and that was
+    /// solved by composing; the peer has `CtrlSrvrQueueReorderTracks` for the
+    /// same composition. There was never a reason to append and shrug.
+    ///
+    /// `slot` is an index into the VISIBLE upcoming list — the same space
+    /// `reorder_upcoming_if_remote` clamps into, and the same one the panel's
+    /// `slotFromPointer` produces — so the anchor is simply the row BEFORE it:
+    ///   slot 0 -> the current track (land first in upcoming)
+    ///   slot k -> `upcoming_qids[k - 1]`
+    ///   past the end -> the last upcoming row (append)
+    ///
+    /// Same admission + echo contract as its two siblings: peer must be the
+    /// active renderer, the track must be Qobuz-castable, and a sent insert is
+    /// recorded so the manual-block tail stays honest.
+    pub async fn insert_at_slot_on_peer_if_active(
+        &self,
+        track_id: u64,
+        source: Option<&str>,
+        slot: usize,
+    ) -> bool {
+        if !self.is_peer_renderer_active().await {
+            return false;
+        }
+        if !self.is_track_castable(track_id, source) {
+            log::info!(
+                "[QConnect] insert_at_slot: track {track_id} not Qobuz-castable; refusing"
+            );
+            crate::toast_qt::error(qbz_i18n::t("Track not castable to Qobuz Connect"));
+            dev_push_event(format!("-> insert_at_slot REFUSED (non-Qobuz track {track_id})"));
+            return true;
+        }
+
+        let insert_after = self
+            .effective_remote_renderer_snapshot()
+            .await
+            .ok()
+            .flatten()
+            .and_then(|(renderer, queue, _session)| {
+                let projection = build_visible_upcoming_projection(&queue, &renderer);
+                let qid = if slot == 0 {
+                    projection.current_track_qid
+                } else {
+                    // Past the end clamps to the last row, which is the
+                    // append anchor.
+                    let idx = (slot - 1).min(projection.upcoming_qids.len().saturating_sub(1));
+                    projection.upcoming_qids.get(idx).copied()
+                };
+                qid.and_then(|q| i64::try_from(q).ok())
+            });
+
+        let mut payload = json!({
+            "track_ids": [track_id as i64],
+            "context_uuid": Uuid::new_v4().to_string(),
+            "autoplay_reset": false,
+            "autoplay_loading": false,
+        });
+        if let Some(insert_after) = insert_after {
+            payload["insert_after"] = json!(insert_after);
+        }
+
+        match self
+            .send_command(QueueCommandType::CtrlSrvrQueueInsertTracks, payload)
+            .await
+        {
+            Ok(_) => {
+                log::info!(
+                    "[QConnect] insert_at_slot: inserted track {track_id} at slot {slot} (after={insert_after:?})"
+                );
+                dev_push_event(format!(
+                    "-> insert_at_slot QueueInsertTracks {track_id} slot={slot} after={insert_after:?}"
+                ));
+                self.note_controller_insert(insert_after, &[track_id]).await;
+            }
+            Err(err) => {
+                log::warn!("[QConnect] insert_at_slot: insert failed: {err}");
+                // Still handled: a peer owns playback; never fall back to local.
+            }
+        }
+        true
+    }
+
     /// Controller play-LATER routing for a MULTI-track batch (#442). Same
     /// all-or-nothing admission as `play_next_batch_on_peer_if_active`; the
     /// whole block lands after the manual-block tail in NATURAL order (the

@@ -945,9 +945,28 @@ Rectangle {
         // Right press opens the SAME menu as ⋯ (rowMenu), at the pointer.
         acceptedButtons: Qt.LeftButton | Qt.RightButton
         cursorShape: (root.clickPlays || root.selectMode) ? Qt.PointingHandCursor : Qt.ArrowCursor
-        // Keep the grab on a reorderable row so the enclosing Flickable
-        // cannot turn a reorder drag into a scroll — see the block above.
-        preventStealing: root.showReorder && root.draggable && !root.selectMode
+        // Keep the grab so the enclosing Flickable cannot turn our drag into a
+        // scroll — see the block above.
+        //
+        // TWO arms, because the two gestures need opposite trades:
+        //
+        //  reorder rows — held from the PRESS. A reorder drag is vertical,
+        //      i.e. the same axis as the scroll, so there is nothing to
+        //      discriminate on and the list gives up drag-scrolling.
+        //  every other row — held from the moment OUR drag arms (`dragging`).
+        //      Until then the press belongs to the Flickable, so vertical
+        //      drag-to-scroll still works; once armed the grab is ours and the
+        //      pointer can leave the row.
+        //
+        // That second arm is the AlbumView bug (owner, 2026-08-10: "el evento
+        // dragging comienza pero muere cuando sale del track row"). Off a
+        // reorderable list this was plain `false`: our drag armed at 6px, the
+        // Flickable stole the grab at `startDragDistance` (~10px) a moment
+        // later, `onCanceled` fired, and the drag died at roughly the row
+        // boundary — never reaching the sidebar. Arming at 6px and claiming
+        // the grab there wins the race by construction, because 6 < 10.
+        preventStealing: (root.showReorder && root.draggable && !root.selectMode)
+                         || root.dragging
         onPressed: function (mouse) {
             if (mouse.button === Qt.RightButton) {
                 // TrackRow.slint:201 — the row menu is suppressed in
@@ -966,9 +985,29 @@ Rectangle {
             if (!pressed || !(pressedButtons & Qt.LeftButton) || !root.draggable
                 || root.selectMode) return
             const g = mapToItem(null, mouse.x, mouse.y)
-            if (!root.dragging
-                && (Math.abs(mouse.x - root.downPos.x) > 6
-                    || Math.abs(mouse.y - root.downPos.y) > 6)) {
+            const dx = mouse.x - root.downPos.x
+            const dy = mouse.y - root.downPos.y
+            // ARMING, and it is axis-aware off a reorderable list.
+            //
+            // A reorder drag is VERTICAL — the same axis as the scroll — so
+            // there is nothing to discriminate on and that arm stays "6px in
+            // any direction" (the list has already given up drag-scrolling
+            // via `preventStealing`, see below).
+            //
+            // Everywhere else the gesture is "carry this row to the sidebar
+            // (or the queue)", which is HORIZONTAL, while drag-to-scroll is
+            // vertical. So they separate cleanly, and both survive: a
+            // vertical press is never claimed and the Flickable scrolls it; a
+            // horizontal one arms here and takes the grab.
+            //
+            // The reference's own note rejects an axis constraint — but it
+            // rejects it FOR REORDER, where it "separates nothing". Here it
+            // separates everything, which is why this arm exists and that one
+            // does not.
+            const armed = root.showReorder
+                ? (Math.abs(dx) > 6 || Math.abs(dy) > 6)
+                : (Math.abs(dx) > 6 && Math.abs(dx) > Math.abs(dy))
+            if (!root.dragging && armed) {
                 root.dragging = true
                 root.bodyDragStarted(root.number)
                 QbzShell.dragStart(root.item.id, root.item.title || "",

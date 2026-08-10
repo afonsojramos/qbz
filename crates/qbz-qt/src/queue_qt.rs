@@ -689,6 +689,108 @@ pub async fn move_track(
     publish(runtime).await;
 }
 
+/// Ask the panel whether to start playing after an empty-queue drop, or clear
+/// the ask. Split from the insert so a MULTI-row drop raises exactly one
+/// prompt, after the last row has landed.
+pub fn set_drop_play_prompt(on: bool) {
+    crate::queue_bridge::ui(move |mut b| b.as_mut().set_drop_play_prompt(on));
+}
+
+/// The prompt's two answers. `true` starts the queue from its first upcoming
+/// row — the same entry point the row's own click uses, so a dropped-then-
+/// played track goes through one path, not two.
+pub fn answer_drop_prompt(play: bool) {
+    set_drop_play_prompt(false);
+    if !play {
+        return;
+    }
+    let runtime = crate::app();
+    crate::spawn(async move { play_upcoming_flat(&runtime, 0).await });
+}
+
+/// Drop a dragged track into the queue AT A POSITION (owner ask 2026-08-10:
+/// "poder draggear hacia el queue, definiendo la posición desde el comienzo").
+///
+/// `to_slot` is a slot in the VISIBLE page of upcoming — the same coordinate
+/// [`move_track`] takes — so search and pagination are honoured for free.
+///
+/// ## Why append-then-move rather than an insert
+///
+/// `QueueManager` has no insert-at-index, and the three adds it does have are
+/// not interchangeable here:
+///   `add_track_next` / `add_track_later` both bump `manual_next_count` and
+///   place the row inside the manual block. Moving it afterwards would leave
+///   that counter describing a track that is no longer there.
+///   `add_track` is the clean one: a plain push onto `tracks` (plus the
+///   shuffle-order push), no counters touched.
+/// So: `add_track` to land at the END of upcoming, then one `move_track` into
+/// place. Both are existing public API — nothing is added to the shared
+/// `qbz-player` crate for this.
+///
+/// `move_track` takes UPCOMING-relative indices in both modes (the shuffle
+/// branch maps them into `shuffle_order`; the plain branch adds
+/// `current_index + 1`), which is why the page mapping below can be handed to
+/// it directly. Moving UP (append -> earlier slot) takes its `Up` arm, so the
+/// row lands exactly at `to_slot`, i.e. before the row that was there.
+pub async fn insert_dragged_track(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    track_id: u64,
+    to_slot: usize,
+) -> Result<(), String> {
+    let qt = crate::playback_qt::stamped(
+        vec![crate::playback_qt::queue_track_for(runtime, track_id).await?],
+        None,
+    )
+    .pop()
+    .expect("one track in, one track out");
+
+    // QConnect CONTROLLER mode (contract §7): the peer owns the queue, so the
+    // insert is routed there — AT THE DROPPED POSITION. `CtrlSrvrQueueInsertTracks`
+    // carries `insert_after`, the same field play-next and play-later steer
+    // with, so the slot survives the routing instead of collapsing to an
+    // append. `slot` is already in the visible-upcoming space the peer
+    // projection uses, so it crosses unchanged.
+    if let Some(svc) = crate::qconnect_qt::service() {
+        if svc
+            .insert_at_slot_on_peer_if_active(track_id, qt.source.as_deref(), to_slot)
+            .await
+        {
+            return Ok(());
+        }
+    }
+
+    // Resolve the drop slot BEFORE the add, while the page still describes the
+    // queue the user was looking at. Past the last visible row means "after
+    // everything on this page".
+    let page_rows = current_page_indices(runtime).await;
+    let to_upcoming = match page_rows.get(to_slot) {
+        Some(&idx) => idx,
+        None => match page_rows.last() {
+            Some(&last) => last + 1,
+            None => 0,
+        },
+    };
+
+    let added_castable = crate::playback_qt::batch_all_qconnect_castable(std::slice::from_ref(&qt));
+    runtime.core().add_track(qt).await;
+
+    // The appended row is the last of upcoming; re-read rather than assume,
+    // because `add_track` lands relative to `tracks` and the upcoming window
+    // depends on `current_index`.
+    let upcoming_len = runtime.core().get_queue_state_full().await.upcoming.len();
+    if upcoming_len == 0 {
+        return Ok(());
+    }
+    let from_upcoming = upcoming_len - 1;
+    if from_upcoming != to_upcoming {
+        runtime.core().move_track(from_upcoming, to_upcoming).await;
+    }
+
+    crate::playback_qt::sync_qconnect_after_add(added_castable).await;
+    publish(runtime).await;
+    Ok(())
+}
+
 /// History replay (queue.rs play_history: a fresh single-track queue).
 pub async fn play_history(runtime: &Arc<AppRuntime<LoggingAdapter>>, index: usize) {
     let state = runtime.core().get_queue_state_full().await;

@@ -262,6 +262,17 @@ pub mod qbz_shell {
         #[qproperty(f32, drag_x)]
         #[qproperty(f32, drag_y)]
         #[qproperty(QString, drag_over_playlist_id)]
+        // The QUEUE drop target: the upcoming-list SLOT the dragged row would
+        // be inserted at, or -1 when the pointer is not over the queue. Two
+        // separate claims rather than one tagged target, because they are
+        // mutually exclusive by geometry (the panel and the sidebar cannot
+        // both be under the pointer) and a slot is an int, not an id — folding
+        // them into one string would mean parsing a discriminator on every
+        // pointer move.
+        //
+        // The panel reads it to draw the insertion line, so it has to be a
+        // property and not just Rust-side state.
+        #[qproperty(i32, drag_over_queue_index)]
         // Floating album-art preview over the now-playing bar's small cover
         // (SongCard.slint:296 + ArtPreviewOverlay.slint). Anchor is in WINDOW
         // coordinates: x = the cover's horizontal centre, y = its top edge.
@@ -465,6 +476,10 @@ pub mod qbz_shell {
         /// A sidebar playlist row claims / releases the drop target.
         #[qinvokable]
         fn drag_set_over(self: Pin<&mut QbzShell>, playlist_id: QString);
+        /// Claim (>= 0) or release (-1) the queue as the drop target, with the
+        /// upcoming SLOT the row would land on.
+        #[qinvokable]
+        fn drag_set_over_queue(self: Pin<&mut QbzShell>, slot: i32);
         /// Release: add the dragged track(s) to the over-playlist target.
         #[qinvokable]
         fn drag_end(self: Pin<&mut QbzShell>);
@@ -558,6 +573,7 @@ pub struct QbzShellRust {
     drag_x: f32,
     drag_y: f32,
     drag_over_playlist_id: QString,
+    drag_over_queue_index: i32,
     art_preview_show: bool,
     art_preview_x: f32,
     art_preview_y: f32,
@@ -639,6 +655,9 @@ impl Default for QbzShellRust {
             drag_x: 0.0,
             drag_y: 0.0,
             drag_over_playlist_id: QString::default(),
+            // -1 = the pointer is not over the queue. NOT 0, which is a valid
+            // slot (drop at the very top of upcoming).
+            drag_over_queue_index: -1,
             art_preview_show: false,
             art_preview_x: 0.0,
             art_preview_y: 0.0,
@@ -904,6 +923,10 @@ impl qbz_shell::QbzShell {
 
     pub fn drag_set_over(self: Pin<&mut Self>, playlist_id: QString) {
         crate::drag_set_over(playlist_id.to_string());
+    }
+
+    pub fn drag_set_over_queue(self: Pin<&mut Self>, slot: i32) {
+        crate::drag_set_over_queue(slot);
     }
 
     pub fn drag_end(self: Pin<&mut Self>) {

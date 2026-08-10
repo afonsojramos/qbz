@@ -136,6 +136,59 @@ Rectangle {
         return n
     }
 
+    // --- EXTERNAL drop: a track dragged in from a list (owner ask
+    // 2026-08-10, "draggear hacia el queue definiendo la posición") ---------
+    //
+    // Distinct from the panel-local reorder above, and deliberately so: that
+    // one moves a row that is ALREADY in the queue and commits through
+    // `queueMoveTrack`; this one inserts a row that is not, and commits
+    // through the SHARED drag (`QbzShell.dragEnd` -> `insert_dragged_track`).
+    // They share only `slotFromPointer`, which is the part that is genuinely
+    // the same question.
+    //
+    // Same self-detection shape as the sidebar's playlist rows: the target
+    // reads the shared window-coord pointer and claims or releases itself,
+    // because the mouse grab belongs to the row being dragged and no hover
+    // event ever reaches us.
+    property bool queueDropHot: false
+    function recomputeQueueDrop() {
+        // Never claim while the panel's OWN reorder is running, or a row being
+        // reordered inside the queue would also read as an insert.
+        if (!QbzShell.dragActive || root.reorderActive || !root.visible) {
+            if (root.queueDropHot) { QbzShell.dragSetOverQueue(-1); root.queueDropHot = false }
+            return
+        }
+        // The hot region is the UP NEXT LIST, not the whole panel. It used to
+        // be `root`, which meant the header, the now-playing card and the
+        // footer buttons all silently accepted a drop — landing it at slot 0
+        // or at the end depending on which side of the rows you happened to
+        // release over. A drop you did not aim is worse than a drop that does
+        // not take.
+        // EMPTY QUEUE is the one case where the whole panel is the target:
+        // the UP NEXT section is not mounted (`upcomingTotal > 0`), so there
+        // are no rows to aim at and the only possible slot is 0. Without this
+        // arm, narrowing the region to the list would have made a drop into
+        // an empty queue impossible — the very case the prompt exists for.
+        const host = upNextSection.visible ? upNextSection : root
+        const tl = host.mapToItem(null, 0, 0)
+        const inside = QbzShell.dragX >= tl.x && QbzShell.dragX <= tl.x + host.width
+            && QbzShell.dragY >= tl.y && QbzShell.dragY <= tl.y + host.height
+        if (!inside) {
+            if (root.queueDropHot) { QbzShell.dragSetOverQueue(-1); root.queueDropHot = false }
+            return
+        }
+        // Re-publish on every move while inside: the slot changes as the
+        // pointer travels, and the insertion line reads it.
+        QbzShell.dragSetOverQueue(root.slotFromPointer(QbzShell.dragY))
+        root.queueDropHot = true
+    }
+    Connections {
+        target: QbzShell
+        function onDragXChanged() { root.recomputeQueueDrop() }
+        function onDragYChanged() { root.recomputeQueueDrop() }
+        function onDragActiveChanged() { root.recomputeQueueDrop() }
+    }
+
     // Commit — QueueSidebar.slint commit-reorder(). `to == from` and
     // `to == from + 1` both drop back onto the SAME gap, so neither reaches
     // the bridge (move_track's from == to early return would swallow them
@@ -600,6 +653,29 @@ Rectangle {
             radius: 1
             color: theme.accent
         }
+        // The SAME two lines for an EXTERNAL drop (a row dragged in from a
+        // track list). Driven by the shared `dragOverQueueIndex` instead of
+        // the panel-local `reorderOver`, and with none of the no-op-slot
+        // suppression: every slot is a real destination for a row that is not
+        // in the queue yet, including the two a reorder would ignore.
+        Rectangle {
+            visible: root.queueDropHot && QbzShell.dragOverQueueIndex === qrRoot.rowIndex
+            y: -1
+            width: parent.width
+            height: 2
+            radius: 1
+            color: theme.accent
+        }
+        Rectangle {
+            visible: root.queueDropHot
+                && QbzShell.dragOverQueueIndex === root.upcoming.length
+                && qrRoot.rowIndex === root.upcoming.length - 1
+            y: parent.height - 1
+            width: parent.width
+            height: 2
+            radius: 1
+            color: theme.accent
+        }
 
         // --- Track info (rows/TrackRow.qml's lazy-Loader idiom) -------------
         // A full Popup tree per delegate would cost 40 of them on a full page,
@@ -812,6 +888,7 @@ Rectangle {
 
                     // UP NEXT section.
                     Column {
+                        id: upNextSection
                         visible: (doc.upcomingTotal || 0) > 0
                         width: parent.width - 20
                         spacing: 8
@@ -1311,6 +1388,81 @@ Rectangle {
             font.pixelSize: 12
             font.weight: theme.weightMedium
             elide: Text.ElideRight
+        }
+    }
+
+    // --- Empty-queue drop prompt (owner ask 2026-08-10) -------------------
+    // A drop is an ADD, never a play — dropping onto a running queue must not
+    // hijack it. But onto an EMPTY queue that leaves the user one click short
+    // of what they meant, so the panel asks. A flyout, not a modal: the
+    // question is low-stakes and belongs to this panel, and a full-window
+    // scrim for "start playing?" would be heavier than the decision.
+    //
+    // Rides the panel's top edge, under the header, and takes no input away
+    // from the list while hidden (`visible` gates the whole item).
+    Rectangle {
+        id: dropPlayPrompt
+        visible: QbzQueue.dropPlayPrompt
+        anchors.top: parent.top
+        anchors.topMargin: 92
+        anchors.horizontalCenter: parent.horizontalCenter
+        width: parent.width - 32
+        height: promptCol.implicitHeight + 24
+        radius: theme.radiusMd
+        color: theme.surfaceElevated
+        border.width: 1
+        border.color: theme.borderSubtle
+        z: 50
+
+        // Swallow clicks so a press on the prompt never reaches a queue row.
+        MouseArea { anchors.fill: parent }
+
+        Column {
+            id: promptCol
+            x: 12
+            y: 12
+            width: parent.width - 24
+            spacing: 10
+            Text {
+                width: parent.width
+                text: QbzSession.tr("Start playing now?", QbzSession.trRev)
+                color: theme.textPrimary
+                font.pixelSize: theme.fontBody
+                font.weight: theme.weightMedium
+                wrapMode: Text.WordWrap
+            }
+            Row {
+                anchors.right: parent.right
+                spacing: 8
+                IconTextButton {
+                    label: QbzSession.tr("Not now", QbzSession.trRev)
+                    hasIcon: false
+                    onClicked: QbzQueue.queueAnswerDropPrompt(false)
+                }
+                // Accent-filled primary, the QbzConfirmModal shape.
+                Rectangle {
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: playLabel.implicitWidth + 28
+                    height: 32
+                    radius: theme.radiusSm
+                    color: playArea.containsMouse ? theme.accentHover : theme.accent
+                    Text {
+                        id: playLabel
+                        anchors.centerIn: parent
+                        text: QbzSession.tr("Play now", QbzSession.trRev)
+                        color: theme.accentGlyphColor
+                        font.pixelSize: 13
+                        font.weight: theme.weightSemibold
+                    }
+                    MouseArea {
+                        id: playArea
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: QbzQueue.queueAnswerDropPrompt(true)
+                    }
+                }
+            }
         }
     }
 }

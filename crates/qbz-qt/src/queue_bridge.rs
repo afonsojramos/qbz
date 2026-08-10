@@ -54,6 +54,17 @@ pub mod qbz_queue {
         // string nothing else reads. Two scalar properties instead — the same
         // split the reference makes with its own `SleepTimerState` global.
         // `sleep_remaining` is pre-formatted in Rust (single source of truth).
+        // "The queue was empty and you just dropped tracks into it — start
+        // playing?" (owner ask 2026-08-10). A drop is an ADD, never a play:
+        // `insert_dragged_track` deliberately does not start playback, because
+        // dropping onto a queue that is already running must not hijack it.
+        // On an EMPTY queue that leaves the user one click short of what they
+        // almost certainly meant, so the panel asks instead of guessing.
+        //
+        // Set only on the empty->filled transition, and cleared by either
+        // answer. A property rather than a signal so a prompt that is up when
+        // the panel remounts is still up afterwards.
+        #[qproperty(bool, drop_play_prompt)]
         #[qproperty(bool, sleep_active)]
         #[qproperty(QString, sleep_remaining)]
 
@@ -72,6 +83,10 @@ pub mod qbz_queue {
         /// Row actions.
         #[qinvokable]
         fn queue_play_upcoming(self: Pin<&mut QbzQueue>, index: i32);
+        /// Answer the empty-queue drop prompt: `true` starts the queue from
+        /// its first row, `false` just dismisses.
+        #[qinvokable]
+        fn queue_answer_drop_prompt(self: Pin<&mut QbzQueue>, play: bool);
         /// Immersive coverflow / up-next rows: play by QUEUE-WIDE 0-based
         /// index into the UNFILTERED upcoming list (§4.4). `queuePlayUpcoming`
         /// is PAGE-LOCAL (resolved through the filtered/paginated VIEW) —
@@ -129,6 +144,7 @@ pub struct QbzQueueRust {
     queue_model: QListQVariant,
     queue_json: QString,
     coverflow_json: QString,
+    drop_play_prompt: bool,
     sleep_active: bool,
     sleep_remaining: QString,
 }
@@ -141,6 +157,7 @@ impl Default for QbzQueueRust {
             // Full-shape default (trap 15): QML reads `.tracks.length` in the
             // pre-publish frame.
             coverflow_json: QString::from(r#"{"index":0,"tracks":[]}"#),
+            drop_play_prompt: false,
             sleep_active: false,
             sleep_remaining: QString::default(),
         }
@@ -174,6 +191,10 @@ impl qbz_queue::QbzQueue {
 
     pub fn queue_set_search(self: Pin<&mut Self>, query: QString) {
         crate::queue_set_search(query.to_string());
+    }
+
+    pub fn queue_answer_drop_prompt(self: Pin<&mut Self>, play: bool) {
+        crate::queue_qt::answer_drop_prompt(play);
     }
 
     pub fn queue_play_upcoming(self: Pin<&mut Self>, index: i32) {

@@ -1306,7 +1306,10 @@ async fn catalog_queue_track(
 /// point outside the Library feed — search rows, the search hero, Home's
 /// Recently-Played-Tracks rail — returned Err here and rendered a control that
 /// did nothing.
-async fn queue_track_for(
+/// `pub(crate)` since 2026-08-10: `queue_qt::insert_dragged_track` resolves a
+/// dragged track id through this same path, so a drop into the queue and an
+/// "Add to queue" menu item cannot disagree about what a row is.
+pub(crate) async fn queue_track_for(
     runtime: &Arc<AppRuntime<LoggingAdapter>>,
     track_id: u64,
 ) -> Result<QueueTrack, String> {
