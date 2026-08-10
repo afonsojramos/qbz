@@ -1657,6 +1657,10 @@ impl Player {
                             *pause_suspend_deadline = None;
                             thread_state.set_dsd_mode(0);
                             // Clear any pending gapless state (new Play supersedes queued gapless)
+                            // GAPLESS LIFECYCLE TRACE (2026-08-10): the `X -> X` self-transition
+                            // survived the PlayStreaming fix, and guessing at the remaining
+                            // path has failed twice. Every set/clear now says who did it.
+                            log::info!("[gapless-trace] clear (Play) pending was {:?}", gapless_pending.as_ref().map(|p| p.track_id));
                             *gapless_pending = None;
                             *gapless_request_armed = false;
                             thread_state.set_gapless_ready(false);
@@ -2153,6 +2157,51 @@ impl Player {
                             start_position_secs
                         );
                             *pause_suspend_deadline = None;
+                            // Clear any pending gapless state — a new
+                            // PlayStreaming supersedes queued gapless, exactly
+                            // as `AudioCommand::Play` does above.
+                            //
+                            // THIS ARM WAS THE ONLY START PATH MISSING IT
+                            // (Play, PlayDsdDop, PlayDsdNative, Stop and Seek
+                            // all clear). The consequences were not local,
+                            // because a pending that outlives its engine is
+                            // both a liar and a lock:
+                            //
+                            //  - It LOCKS. The re-arm test below requires
+                            //    `gapless_pending.is_none()`, so the stale
+                            //    entry silently blocks gapless for the new
+                            //    track — no "approaching end" line is ever
+                            //    logged for it.
+                            //  - It LIES. The transition test is positional
+                            //    (`pos >= dur`), not engine-confirmed, so at
+                            //    the new track's natural end the stale pending
+                            //    fires anyway and swaps `current_track_id` to a
+                            //    track whose samples were appended to an engine
+                            //    that no longer exists. The engine goes empty
+                            //    one tick later.
+                            //  - And the swap BLINDS the frontend: its
+                            //    end-of-track predicate needs
+                            //    `track_id == 0 || track_id == last_track_id`,
+                            //    and the id has already moved — so the queue
+                            //    never advances and playback stops dead with a
+                            //    full queue.
+                            //
+                            // Observed 2026-08-05: `Gapless transition: track
+                            // 371039 -> 269423327` where 269423327 had been
+                            // queued SEVEN MINUTES EARLIER against a different
+                            // track, and `269423306 -> 269423306`, a pending
+                            // that had come to point at itself. Streaming is
+                            // the common path for anything not already cached,
+                            // which is why this reads as "the playlist only
+                            // plays one track".
+                            // GAPLESS LIFECYCLE TRACE (2026-08-10): the `X -> X` self-transition
+                            // survived the PlayStreaming fix, and guessing at the remaining
+                            // path has failed twice. Every set/clear now says who did it.
+                            log::info!("[gapless-trace] clear (PlayStreaming) pending was {:?}", gapless_pending.as_ref().map(|p| p.track_id));
+                            *gapless_pending = None;
+                            *gapless_request_armed = false;
+                            thread_state.set_gapless_ready(false);
+                            thread_state.set_gapless_next_track_id(0);
 
                             // Store streaming source for resume capability
                             // When download completes, we can extract the data for resume
@@ -2697,6 +2746,10 @@ impl Player {
                                     path.display()
                                 );
                                 *pause_suspend_deadline = None;
+                                // GAPLESS LIFECYCLE TRACE (2026-08-10): the `X -> X` self-transition
+                                // survived the PlayStreaming fix, and guessing at the remaining
+                                // path has failed twice. Every set/clear now says who did it.
+                                log::info!("[gapless-trace] clear (PlayDsdNative) pending was {:?}", gapless_pending.as_ref().map(|p| p.track_id));
                                 *gapless_pending = None;
                                 *gapless_request_armed = false;
                                 thread_state.set_gapless_ready(false);
@@ -2804,6 +2857,10 @@ impl Player {
                                     path.display()
                                 );
                                 *pause_suspend_deadline = None;
+                                // GAPLESS LIFECYCLE TRACE (2026-08-10): the `X -> X` self-transition
+                                // survived the PlayStreaming fix, and guessing at the remaining
+                                // path has failed twice. Every set/clear now says who did it.
+                                log::info!("[gapless-trace] clear (PlayDsdDop) pending was {:?}", gapless_pending.as_ref().map(|p| p.track_id));
                                 *gapless_pending = None;
                                 *gapless_request_armed = false;
                                 thread_state.set_gapless_ready(false);
@@ -2994,6 +3051,7 @@ impl Player {
                                         // resumes from current_audio_data (the
                                         // pause-suspend teardown is gated off in
                                         // DoP mode).
+                                        log::info!("[gapless-trace] set (dop) track {track_id}");
                                         *gapless_pending = Some(GaplessPending {
                                             track_id,
                                             duration_secs: duration,
@@ -3193,6 +3251,10 @@ impl Player {
                             *current_streaming_source = None;
                             *current_normalization_gain = None;
                             *current_gain_atomic = None;
+                            // GAPLESS LIFECYCLE TRACE (2026-08-10): the `X -> X` self-transition
+                            // survived the PlayStreaming fix, and guessing at the remaining
+                            // path has failed twice. Every set/clear now says who did it.
+                            log::info!("[gapless-trace] clear (Stop) pending was {:?}", gapless_pending.as_ref().map(|p| p.track_id));
                             *gapless_pending = None;
                             *gapless_request_armed = false;
                             thread_state.set_gapless_ready(false);
@@ -3247,6 +3309,10 @@ impl Player {
                             }
                             *pause_suspend_deadline = None;
                             // Cancel any pending gapless — seek creates a new engine
+                            // GAPLESS LIFECYCLE TRACE (2026-08-10): the `X -> X` self-transition
+                            // survived the PlayStreaming fix, and guessing at the remaining
+                            // path has failed twice. Every set/clear now says who did it.
+                            log::info!("[gapless-trace] clear (Seek) pending was {:?}", gapless_pending.as_ref().map(|p| p.track_id));
                             *gapless_pending = None;
                             *gapless_request_armed = false;
                             thread_state.set_gapless_ready(false);
@@ -3674,6 +3740,7 @@ impl Player {
                             }
 
                             // Store pending gapless data for transition detection
+                            log::info!("[gapless-trace] set (pcm) track {track_id}");
                             *gapless_pending = Some(GaplessPending {
                                 track_id,
                                 duration_secs: actual_duration,
@@ -3850,6 +3917,10 @@ impl Player {
                                         current_normalization_gain = pending.normalization_gain;
                                         thread_state
                                             .set_normalization_gain(pending.normalization_gain);
+                                        // GAPLESS LIFECYCLE TRACE (2026-08-10): the `X -> X` self-transition
+                                        // survived the PlayStreaming fix, and guessing at the remaining
+                                        // path has failed twice. Every set/clear now says who did it.
+                                        log::info!("[gapless-trace] clear (transition-consumed) pending was {:?}", gapless_pending.as_ref().map(|p| p.track_id));
                                         gapless_pending = None;
                                         gapless_request_armed = false;
                                         transition_consumed_pending = true;
@@ -3882,6 +3953,10 @@ impl Player {
                                             current_normalization_gain = pending.normalization_gain;
                                             thread_state
                                                 .set_normalization_gain(pending.normalization_gain);
+                                            // GAPLESS LIFECYCLE TRACE (2026-08-10): the `X -> X` self-transition
+                                            // survived the PlayStreaming fix, and guessing at the remaining
+                                            // path has failed twice. Every set/clear now says who did it.
+                                            log::info!("[gapless-trace] clear (alsa-transition-consumed) pending was {:?}", gapless_pending.as_ref().map(|p| p.track_id));
                                             gapless_pending = None;
                                             gapless_request_armed = false;
                                             transition_consumed_pending = true;
@@ -3944,6 +4019,10 @@ impl Player {
                                         // Clear gapless state on track end
                                         thread_state.set_gapless_ready(false);
                                         thread_state.set_gapless_next_track_id(0);
+                                        // GAPLESS LIFECYCLE TRACE (2026-08-10): the `X -> X` self-transition
+                                        // survived the PlayStreaming fix, and guessing at the remaining
+                                        // path has failed twice. Every set/clear now says who did it.
+                                        log::info!("[gapless-trace] clear (engine-empty) pending was {:?}", gapless_pending.as_ref().map(|p| p.track_id));
                                         gapless_pending = None;
                                         gapless_request_armed = false;
                                     }
