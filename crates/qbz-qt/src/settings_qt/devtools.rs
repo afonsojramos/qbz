@@ -96,16 +96,18 @@ pub fn open_log_file() {
     }
 }
 
-/// Developer > Export settings… — writes `qbz-settings-YYYYMMDD.qbzb` (0600)
-/// with auth EXCLUDED, then reports the path inline.
-pub async fn export_settings() {
-    let text = tokio::task::spawn_blocking(|| {
-        let bundle = match bundle::export(
-            ExportSource::Desktop,
-            &ExportOptions {
-                include_auth: false,
-            },
-        ) {
+/// Developer > Export settings… — writes `qbz-settings-YYYYMMDD.qbzb` (0600),
+/// then reports the path inline.
+///
+/// `include_auth` is the reference's single `--include-auth` gate
+/// (`SettingsExportModal.slint`, one checkbox, default OFF, read in
+/// `crates/qbz/src/settings.rs:1412-1425`). It used to be hard-coded `false`
+/// here, so the Qt build could never produce the bundle the CLI's
+/// `--include-auth` describes — the row said "portable bundle of your
+/// settings" and quietly shipped one that could not sign you in.
+pub async fn export_settings(include_auth: bool) {
+    let text = tokio::task::spawn_blocking(move || {
+        let bundle = match bundle::export(ExportSource::Desktop, &ExportOptions { include_auth }) {
             Ok(b) => b,
             Err(e) => {
                 log::error!("[qbz-qt] settings export failed: {e:?}");

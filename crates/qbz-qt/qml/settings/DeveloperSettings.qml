@@ -68,12 +68,33 @@ Column {
 
     // ====================== SETTINGS PORTABILITY =========================
     GroupHeader { text: QbzSession.tr("SETTINGS PORTABILITY", QbzSession.trRev) }
+    // The `--include-auth` gate. The reference puts it in a modal
+    // (SettingsExportModal.slint) with ONE checkbox, default OFF; this port
+    // exports directly from the row, so the checkbox is a row too.
+    //
+    // DELIBERATELY NOT PERSISTED. The reference's default-OFF is re-asserted
+    // every time its modal opens, so the user re-decides per export. A
+    // persisted toggle would not: switch it on once and every later export
+    // silently carries credentials. `includeAuth` therefore lives here as
+    // session state and resets whenever the panel is left.
+    property bool includeAuth: false
+    onVisibleChanged: if (!visible) root.includeAuth = false
+
+    SettingRow {
+        label: QbzSession.tr("Include sign-in credentials", QbzSession.trRev)
+        description: QbzSession.tr("The bundle will contain your tokens. Anyone who opens the file can sign in as you.", QbzSession.trRev)
+        QbzToggle {
+            checked: root.includeAuth
+            onToggled: function (v) { root.includeAuth = v }
+        }
+    }
     SettingRow {
         label: QbzSession.tr("Export settings…", QbzSession.trRev)
         description: QbzSession.tr("Save a portable bundle of your settings to move to another machine or the qbzd daemon.", QbzSession.trRev)
         SettingsButton {
             text: QbzSession.tr("Export…", QbzSession.trRev)
-            onClicked: QbzBridge.settingsString("export-settings", "")
+            onClicked: QbzBridge.settingsString(
+                "export-settings", root.includeAuth ? "with-auth" : "")
         }
     }
     Text {

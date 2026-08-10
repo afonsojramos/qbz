@@ -2485,7 +2485,9 @@ pub async fn settings_string(key: &str, value: String) {
         "lyrics-cache-clear" => offline::clear_lyrics_cache().await,
         // --- Developer ------------------------------------------------------
         "open-log-file" => devtools::open_log_file(),
-        "export-settings" => devtools::export_settings().await,
+        // The value is the include-auth gate ("with-auth" or empty) — see
+        // DeveloperSettings.qml for why it is session state and not a pref.
+        "export-settings" => devtools::export_settings(value == "with-auth").await,
         other => log::warn!("[qbz-qt] unknown settings string key: {other}"),
     }
     publish_snapshot().await;
