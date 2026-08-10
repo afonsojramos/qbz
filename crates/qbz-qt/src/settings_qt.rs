@@ -2483,6 +2483,10 @@ pub async fn settings_string(key: &str, value: String) {
         "plex-clear-cache" => library::plex_clear_cache().await,
         // --- Offline --------------------------------------------------------
         "lyrics-cache-clear" => offline::clear_lyrics_cache().await,
+        // Offline > "Check now": nudge the connectivity actor. The status it
+        // publishes flows back through offline_fwd's forwarder, so there is
+        // nothing to await and nothing to republish here.
+        "offline-recheck" => crate::offline_fwd::request_recheck(),
         // --- Developer ------------------------------------------------------
         "open-log-file" => devtools::open_log_file(),
         // The value is the include-auth gate ("with-auth" or empty) — see

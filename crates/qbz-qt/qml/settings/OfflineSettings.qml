@@ -55,6 +55,18 @@ Column {
             onToggled: function (v) { QbzBridge.settingsBool("offline-mode-enabled", v) }
         }
     }
+    // Ask the connectivity actor for an immediate probe rather than waiting
+    // for its next scheduled one. Disabled under MANUAL offline (mode 2),
+    // where the answer is a user decision and not a network fact.
+    SettingRow {
+        label: QbzSession.tr("Check connection", QbzSession.trRev)
+        description: QbzSession.tr("Test the connection now instead of waiting for the next automatic check.", QbzSession.trRev)
+        SettingsButton {
+            text: QbzSession.tr("Check now", QbzSession.trRev)
+            enabled: QbzSession.offlineMode !== 2
+            onClicked: QbzBridge.settingsString("offline-recheck", "")
+        }
+    }
 
     SettingsSpacer { }
     SettingsDivider { }

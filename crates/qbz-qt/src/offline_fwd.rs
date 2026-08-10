@@ -57,6 +57,23 @@ pub fn start() {
     }
 }
 
+/// Settings > Offline "Check now": ask the actor for an immediate probe
+/// instead of waiting for its next scheduled one.
+///
+/// The passthrough is the whole gap this closes — `ConnectivityActor::
+/// request_recheck` has been public since the actor landed
+/// (`qbz-app/src/offline_mode/connectivity.rs:471`) and the reference exposes
+/// it the same way (`crates/qbz/src/offline_mode.rs:61-64`); this module just
+/// never handed out its private `OnceLock`.
+///
+/// A no-op before boot, which is when there is nothing to re-check anyway.
+pub fn request_recheck() {
+    match CONNECTIVITY.get() {
+        Some(actor) => actor.request_recheck(),
+        None => log::warn!("[qbz-qt] offline recheck ignored: connectivity actor not started"),
+    }
+}
+
 /// Mirror every engine status change into the bridge properties (the login
 /// affordances + the D2 recovery banner read them). Also seeds
 /// `hasPreviousSession` once; `enter_shell` refreshes it after a successful
