@@ -26,6 +26,20 @@ Column {
     id: root
 
     property var doc: ({})
+    /// The view-level SettingsConfirmHost, handed down by
+    /// LocalLibrarySettings (which is itself handed it by SettingsView).
+    /// Null in previews; every call site falls back to acting directly.
+    property var confirmHost: null
+
+    /// What Connect would actually send: the freshly typed text if there is
+    /// any, else the persisted address. Single-sourced so the warning, the
+    /// button gate and the click all judge the SAME string — judging the
+    /// field while sending the fallback is how a gate ends up decorative.
+    readonly property string effectiveUrl:
+        root.urlInput !== "" ? root.urlInput : (root.plex.serverUrl || "")
+    /// Empty counts as "not yet wrong": no warning before anything is typed.
+    readonly property bool urlIsLocal:
+        root.effectiveUrl === "" || QbzLocal.plexUrlIsLocal(root.effectiveUrl)
     readonly property var plex: (doc.library || ({})).plex || ({})
 
     // In-progress field values (the fields commit on Enter / focus loss; the
@@ -51,6 +65,12 @@ Column {
         if (visible) {
             urlInput = plex.serverUrl || ""
             QbzLocal.refreshPlex()
+        } else {
+            // Drop any outstanding PIN and stop the 2.5 s poll against
+            // plex.tv. The reference cannot do this — Slint has no unmount
+            // hook, so its poll watches the settings section on every tick
+            // and stops itself (plex_auth.rs:505-515). QML just tells us.
+            QbzLocal.plexStopPin()
         }
     }
 
@@ -135,6 +155,75 @@ Column {
                 onCommitted: function (v) { root.urlInput = v }
             }
         }
+
+        // LAN-only inline warning, 1:1 with LocalLibrarySettings.slint:611-616
+        // (same string, same #e0564f, same legal size). Live as the user
+        // types — the reference recomputes `is-local-address` on every gate
+        // refresh, and this calls the same predicate through the bridge.
+        Text {
+            visible: root.effectiveUrl !== "" && !root.urlIsLocal
+            width: parent.width
+            text: QbzSession.tr("Only local network servers are supported.", QbzSession.trRev)
+            color: "#e0564f"
+            font.pixelSize: theme.fontLegal
+            wrapMode: Text.WordWrap
+        }
+        // --- Authorize (PIN) ---------------------------------------------
+        // LocalLibrarySettings.slint:624-635. Gated on the same three things
+        // as the reference: Plex enabled, a LAN address, and no request in
+        // flight. Rust re-checks all three.
+        SettingRow {
+            label: QbzSession.tr("Authorize", QbzSession.trRev)
+            description: QbzSession.tr("Generate a code and sign in to Plex in your browser.", QbzSession.trRev)
+            SettingsButton {
+                text: QbzLocal.pinBusy
+                    ? QbzSession.tr("Working...", QbzSession.trRev)
+                    : QbzSession.tr("Generate code", QbzSession.trRev)
+                enabled: QbzLocal.plexEnabled && root.urlIsLocal && !QbzLocal.pinBusy
+                onClicked: QbzLocal.plexGenerateCode(root.effectiveUrl)
+            }
+        }
+
+        // --- Code block, only while a code is outstanding -----------------
+        // The reference mounts this with `if pin-code != ""`; `visible` is
+        // the QML equivalent and the row collapses with it.
+        SettingRow {
+            visible: (QbzLocal.pinCode || "") !== ""
+            label: QbzSession.tr("Link code", QbzSession.trRev)
+            description: QbzSession.tr("Enter this code at the Plex sign-in page.", QbzSession.trRev)
+            Row {
+                spacing: 8
+                // The code chip: 34px tall, surface-elevated, subtle border,
+                // semibold with 1.5px letter-spacing (slint :645-661).
+                Rectangle {
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: codeText.implicitWidth + 20
+                    height: 34
+                    radius: theme.radiusSm
+                    border.width: 1
+                    border.color: theme.borderSubtle
+                    color: theme.surfaceElevated
+                    Text {
+                        id: codeText
+                        anchors.centerIn: parent
+                        text: QbzLocal.pinCode
+                        color: theme.textPrimary
+                        font.pixelSize: theme.fontBody
+                        font.weight: theme.weightSemibold
+                        font.letterSpacing: 1.5
+                    }
+                }
+                SettingsButton {
+                    text: QbzSession.tr("Copy code", QbzSession.trRev)
+                    onClicked: QbzLocal.plexCopyCode()
+                }
+                SettingsButton {
+                    text: QbzSession.tr("Open Plex sign-in", QbzSession.trRev)
+                    onClicked: QbzLocal.plexOpenAuthUrl()
+                }
+            }
+        }
+
         SettingRow {
             label: QbzSession.tr("Token", QbzSession.trRev)
             description: root.plex.hasToken === true
@@ -149,8 +238,9 @@ Column {
                 onCommitted: function (v) { root.tokenInput = v }
             }
         }
-        // Connect = persist the credentials + sync (plex_connect resolves the
-        // url, refuses anything that is not a LAN address, then runs a sync).
+        // Connect = persist the credentials + sync. `plex_connect` refuses a
+        // non-LAN address BEFORE persisting (local_bridge.rs) — until
+        // 2026-08-04 it did not, and the comment here claimed it did.
         SettingRow {
             label: QbzSession.tr("Connect", QbzSession.trRev)
             description: QbzSession.tr("Saves the address and token, then fetches your libraries.", QbzSession.trRev)
@@ -158,13 +248,31 @@ Column {
                 text: QbzLocal.plexSyncing
                     ? QbzSession.tr("Working...", QbzSession.trRev)
                     : QbzSession.tr("Connect", QbzSession.trRev)
-                enabled: !QbzLocal.plexSyncing
+                // Gated on the address too (LocalLibrarySettings.slint:631
+                // gates its Authorize button the same way). Rust re-checks —
+                // the UI gate is the affordance, not the enforcement.
+                enabled: !QbzLocal.plexSyncing && root.urlIsLocal
                 onClicked: {
                     QbzLocal.plexConnect(root.urlInput !== "" ? root.urlInput
                         : (root.plex.serverUrl || ""), root.tokenInput)
                     root.tokenInput = ""
                     tokenField.text = ""
                 }
+            }
+        }
+
+        // Ping the STORED server (not the typed field) and report what
+        // answered. A successful ping is also the only thing that stamps the
+        // machine id onto the cache — see plex_pin_qt::check_connection.
+        SettingRow {
+            label: QbzSession.tr("Check connection", QbzSession.trRev)
+            description: QbzSession.tr("Ping the saved server and report what answers.", QbzSession.trRev)
+            SettingsButton {
+                text: QbzLocal.plexSyncing
+                    ? QbzSession.tr("Working...", QbzSession.trRev)
+                    : QbzSession.tr("Check now", QbzSession.trRev)
+                enabled: root.plex.hasToken === true && !QbzLocal.plexSyncing
+                onClicked: QbzLocal.plexCheckConnection()
             }
         }
 
@@ -277,7 +385,20 @@ Column {
                 danger: true
                 text: QbzSession.tr("Disconnect", QbzSession.trRev)
                 enabled: root.plex.hasToken === true
-                onClicked: QbzLocal.plexDisconnect()
+                // Confirm first — 1:1 with plex_auth.rs:963-968, including the
+                // strings. Disconnect wipes the credentials AND the cache, and
+                // this port used to do both on the first click.
+                onClicked: {
+                    if (!root.confirmHost) {
+                        QbzLocal.plexDisconnect()
+                        return
+                    }
+                    root.confirmHost.ask(
+                        QbzSession.tr("Disconnect from Plex?", QbzSession.trRev),
+                        QbzSession.tr("This signs out of Plex and clears the locally cached libraries and tracks.", QbzSession.trRev),
+                        QbzSession.tr("Disconnect", QbzSession.trRev),
+                        function () { QbzLocal.plexDisconnect() })
+                }
             }
         }
         SettingRow {
@@ -287,7 +408,18 @@ Column {
                 danger: true
                 text: QbzSession.tr("Clear cache", QbzSession.trRev)
                 enabled: root.plex.hasToken === true
-                onClicked: QbzBridge.settingsString("plex-clear-cache", "")
+                // plex_auth.rs:997-1001 — one prompt, sign-in kept.
+                onClicked: {
+                    if (!root.confirmHost) {
+                        QbzBridge.settingsString("plex-clear-cache", "")
+                        return
+                    }
+                    root.confirmHost.ask(
+                        QbzSession.tr("Clear Plex cache?", QbzSession.trRev),
+                        QbzSession.tr("This removes cached Plex libraries and tracks. Your sign-in is kept.", QbzSession.trRev),
+                        QbzSession.tr("Clear cache", QbzSession.trRev),
+                        function () { QbzBridge.settingsString("plex-clear-cache", "") })
+                }
             }
         }
     }

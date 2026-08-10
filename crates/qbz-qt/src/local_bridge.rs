@@ -133,6 +133,16 @@ pub mod qbz_local {
         /// [{key, title, selected}] — the cached library sections + the
         /// user's selection (Settings > Local Library > Plex).
         #[qproperty(QString, plex_sections_json)]
+        /// --- PIN sign-in (plex_pin_qt.rs) --------------------------------
+        /// The outstanding link code ("" when none). Its presence is what
+        /// mounts the "Link code" row, 1:1 with the reference's
+        /// `if PlexSettingsState.pin-code != ""`
+        /// (LocalLibrarySettings.slint:638).
+        #[qproperty(QString, pin_code)]
+        /// The plex.tv sign-in url for the "Open Plex sign-in" button.
+        #[qproperty(QString, pin_auth_url)]
+        /// The pin/start request is in flight ("Working...").
+        #[qproperty(bool, pin_busy)]
 
         type QbzLocal = super::QbzLocalRust;
 
@@ -311,6 +321,37 @@ pub mod qbz_local {
         /// settings panel changed something out of band).
         #[qinvokable]
         fn refresh_plex(self: Pin<&mut QbzLocal>);
+        /// Is this address on the local network? A PURE predicate over the
+        /// typed text — no state, no IO — so the settings panel can warn and
+        /// gate the Connect button WHILE the user types, which is what the
+        /// reference does (`PlexSettingsState.is-local-address`, computed in
+        /// `plex_auth::refresh_gates` and read at
+        /// `LocalLibrarySettings.slint:612` and `:631`).
+        #[qinvokable]
+        fn plex_url_is_local(self: Pin<&mut QbzLocal>, url: QString) -> bool;
+
+        // --- PIN sign-in (plex_pin_qt.rs) ---------------------------------
+        /// "Generate code": ask plex.tv for a PIN and start polling for the
+        /// authorization. Takes the address from the panel so a freshly typed
+        /// one is used without needing Connect first — the reference does the
+        /// same (`plex_auth.rs:415` reads the field, then persists).
+        #[qinvokable]
+        fn plex_generate_code(self: Pin<&mut QbzLocal>, server_url: QString);
+        /// Open the plex.tv sign-in page in the browser.
+        #[qinvokable]
+        fn plex_open_auth_url(self: Pin<&mut QbzLocal>);
+        /// Copy the outstanding link code to the clipboard.
+        #[qinvokable]
+        fn plex_copy_code(self: Pin<&mut QbzLocal>);
+        /// Drop the outstanding PIN and stop polling. The panel calls this on
+        /// unmount — the reference has to detect that by watching the
+        /// settings section instead, because Slint gives it no unmount hook.
+        #[qinvokable]
+        fn plex_stop_pin(self: Pin<&mut QbzLocal>);
+        /// "Check connection": ping the stored server, report it, and stamp
+        /// the machine id onto the cache.
+        #[qinvokable]
+        fn plex_check_connection(self: Pin<&mut QbzLocal>);
 
         // --- Windowed artwork -------------------------------------------------
         /// The mounted window reports its artKeys; Rust resolves each to a
@@ -366,6 +407,9 @@ pub struct QbzLocalRust {
     plex_last_sync_tracks: i32,
     plex_error: QString,
     plex_sections_json: QString,
+    pin_code: QString,
+    pin_auth_url: QString,
+    pin_busy: bool,
 }
 
 impl Default for QbzLocalRust {
@@ -406,6 +450,9 @@ impl Default for QbzLocalRust {
             plex_last_sync_tracks: -1,
             plex_error: QString::default(),
             plex_sections_json: QString::from("[]"),
+            pin_code: QString::default(),
+            pin_auth_url: QString::default(),
+            pin_busy: false,
         }
     }
 }
@@ -647,9 +694,58 @@ impl qbz_local::QbzLocal {
         });
     }
 
+    pub fn plex_url_is_local(self: Pin<&mut Self>, url: QString) -> bool {
+        plex::is_local_address(&url.to_string())
+    }
+
+    pub fn plex_generate_code(self: Pin<&mut Self>, server_url: QString) {
+        let url = server_url.to_string();
+        crate::spawn(async move { crate::plex_pin_qt::generate_code(url).await });
+    }
+
+    pub fn plex_open_auth_url(self: Pin<&mut Self>) {
+        crate::spawn(async move { crate::plex_pin_qt::open_auth_url().await });
+    }
+
+    pub fn plex_copy_code(self: Pin<&mut Self>) {
+        let code = crate::plex_pin_qt::current_code();
+        if code.is_empty() {
+            return;
+        }
+        crate::share_qt::copy_to_clipboard(code);
+        crate::toast_qt::success(qbz_i18n::t("Code copied"));
+    }
+
+    pub fn plex_stop_pin(self: Pin<&mut Self>) {
+        crate::plex_pin_qt::stop_poll();
+    }
+
+    pub fn plex_check_connection(self: Pin<&mut Self>) {
+        crate::spawn(async move { crate::plex_pin_qt::check_connection().await });
+    }
+
     pub fn plex_connect(self: Pin<&mut Self>, server_url: QString, token: QString) {
         let (url, token) = (server_url.to_string(), token.to_string());
         crate::spawn(async move {
+            // The LAN gate, enforced BEFORE anything is persisted. Until
+            // 2026-08-04 the only thing that produced the error below was an
+            // UNPARSEABLE url: `connect_manual` resolves and stores whatever
+            // parses, and never consulted `is_local_address` (which had
+            // exactly one caller, a read-side gate). So a WAN address was
+            // saved silently and the user was told "Plex is not configured"
+            // by a later gate — the wrong error for the actual mistake.
+            if !plex::is_local_address(&url) {
+                // Reusing the Slint warning's msgid rather than the port's own
+                // "Plex server must be a local network address", which has no
+                // entry in ANY of the eight catalogs and therefore rendered
+                // English for everyone. This one ships translated in all
+                // seven non-English locales (`en` falls back to the msgid).
+                let msg = qbz_i18n::t("Only local network servers are supported.");
+                ui(move |mut b| {
+                    b.as_mut().set_plex_error(QString::from(msg.as_str()));
+                });
+                return;
+            }
             let base = tokio::task::spawn_blocking(move || {
                 plex::set_enabled(true);
                 plex::connect_manual(&url, &token)
@@ -657,9 +753,11 @@ impl qbz_local::QbzLocal {
             .await
             .unwrap_or_default();
             if base.is_empty() {
+                // Unusable input that still is not a LAN violation (an
+                // unparseable url, or a scheme that is not http/https).
                 // Translated Rust-side (qbz_i18n is the same catalog the
                 // Slint build ships); QML shows `plexError` verbatim.
-                let msg = qbz_i18n::t("Plex server must be a local network address");
+                let msg = qbz_i18n::t("Enter a valid server address.");
                 ui(move |mut b| {
                     b.as_mut().set_plex_error(QString::from(msg.as_str()));
                 });

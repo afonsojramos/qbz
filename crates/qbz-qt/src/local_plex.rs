@@ -354,6 +354,48 @@ pub fn set_enabled(value: bool) {
     }
 }
 
+/// The stable per-install identifier plex.tv keys a PIN against. Generated
+/// once and persisted by the shared store; `X-Plex-Client-Identifier` must be
+/// the SAME value on the pin/start and pin/check calls or the check never
+/// sees the authorization.
+pub fn client_id() -> String {
+    ensure_bound();
+    STATE.get_or_create_client_id().unwrap_or_else(|e| {
+        log::error!("[qbz-qt] plex client id failed: {e}");
+        String::new()
+    })
+}
+
+/// Manual-token mode: the user pasted an `X-Plex-Token` instead of signing in
+/// through a PIN. The PIN path clears it on success so the panel goes back to
+/// showing Authorize (`plex_auth.rs:531`).
+pub fn set_manual_token_mode(value: bool) {
+    ensure_bound();
+    if let Err(e) = STATE.set_manual_token_mode(value) {
+        log::error!("[qbz-qt] plex set_manual_token_mode failed: {e}");
+    }
+}
+
+/// Record the server's `machineIdentifier` from a successful ping.
+///
+/// Its READER has been live since the port landed (`local_plex.rs`'s cache
+/// rows carry `server_id`), but the only WRITER was the Slint build's
+/// `ping_inner` — so a Qt-only install stamped `server_id = NULL` on every
+/// cached row. Porting the ping is what closes that.
+pub fn set_machine_id(value: &str) {
+    ensure_bound();
+    if let Err(e) = STATE.set_machine_id(value) {
+        log::error!("[qbz-qt] plex set_machine_id failed: {e}");
+    }
+}
+
+/// The persisted (resolved) base url + token, for callers that need to talk
+/// to the server without going through a fresh connect.
+pub fn credentials() -> (String, String) {
+    let cfg = settings();
+    (cfg.base_url, cfg.token)
+}
+
 // Seam for Settings > Local Library > Plex ("write metadata back to Plex").
 // That settings surface is not ported yet, so nothing calls this today.
 #[allow(dead_code)]

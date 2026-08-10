@@ -121,6 +121,11 @@ mod local_artist_match;
 mod local_rows;
 mod local_state;
 mod local_plex;
+// Plex PIN sign-in (the "Authorize" half of the Plex settings) + the
+// Check-connection ping. Over `qbz_plex`'s existing pin/start, pin/check and
+// ping calls — the protocol was always in the shared crate, only the glue was
+// missing.
+mod plex_pin_qt;
 mod local_albums;
 mod local_tree;
 mod local_artwork;
