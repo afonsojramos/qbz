@@ -1534,6 +1534,12 @@ fn enumerate_devices(backend: AudioBackendType) -> (Vec<DeviceOption>, Vec<Strin
     }
 }
 
+/// The ACTIVE backend's display label, for anything outside this module that
+/// needs to name it in prose (the log viewer's diagnostics bundle header).
+pub fn current_backend_label() -> String {
+    backend_label(audio_settings().backend_type.unwrap_or_default())
+}
+
 fn backend_label(t: AudioBackendType) -> String {
     match t {
         AudioBackendType::PipeWire => "PipeWire".to_string(),

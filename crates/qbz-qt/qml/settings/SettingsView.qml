@@ -227,7 +227,11 @@ Item {
                         name: "cloud-upload"
                         label: QbzSession.tr("Share logs", QbzSession.trRev)
                         active: false
-                        onClicked: QbzBridge.settingsString("open-log-file", "")
+                        // Opens the VIEWER (filter / search / copy / bundle /
+                        // upload), 1:1 with the reference. It used to hand the
+                        // raw file to the desktop's file manager, which is
+                        // what "Open log file" in Developer still does.
+                        onClicked: QbzShell.logOpen()
                     }
                 }
             }

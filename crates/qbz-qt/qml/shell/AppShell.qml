@@ -702,4 +702,11 @@ Rectangle {
     // QbzQConnect.diagOpen, so while closed it is an invisible,
     // non-interactive Item.
     QconnectDevModal { }
+
+    // The log viewer (Settings > "Share logs", and Developer). Mounted at the
+    // AppShell root for the same reason as every other global modal: it is
+    // opened FROM Settings but must not live inside its Flickable. Self-gates
+    // on the document's `open`, so while closed it is an invisible,
+    // non-interactive Item that parses one small JSON string.
+    LogViewerModal { }
 }

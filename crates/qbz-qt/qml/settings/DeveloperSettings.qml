@@ -47,10 +47,20 @@ Column {
         description: (root.dev.logPath || "") !== ""
             ? root.dev.logPath
             : QbzSession.tr("View the in-app log, copy it (secrets redacted), or upload it to share in a GitHub issue.", QbzSession.trRev)
-        SettingsButton {
-            text: QbzSession.tr("Open log file", QbzSession.trRev)
-            enabled: (root.dev.logPath || "") !== ""
-            onClicked: QbzBridge.settingsString("open-log-file", "")
+        Row {
+            spacing: 8
+            // The description above has always promised "view the in-app log,
+            // copy it (secrets redacted), or upload it" — until the viewer
+            // landed, the only button here did none of those three.
+            SettingsButton {
+                text: QbzSession.tr("View logs", QbzSession.trRev)
+                onClicked: QbzShell.logOpen()
+            }
+            SettingsButton {
+                text: QbzSession.tr("Open log file", QbzSession.trRev)
+                enabled: (root.dev.logPath || "") !== ""
+                onClicked: QbzBridge.settingsString("open-log-file", "")
+            }
         }
     }
 

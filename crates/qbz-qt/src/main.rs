@@ -106,6 +106,10 @@ mod genre_filter_qt;
 mod home_qt;
 mod icon_tint_qt;
 mod recently_qt;
+// The in-app log viewer over `qbz_log::ring` — the read surface that turns
+// "Share logs" from an `open::that(path)` handoff into a filterable view with
+// copy / bundle / upload.
+mod log_viewer_qt;
 mod recommendations_qt;
 mod library_db_qt;
 mod library_qt;

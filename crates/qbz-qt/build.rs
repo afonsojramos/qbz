@@ -162,6 +162,7 @@ fn main() {
                 // device flyout both bars mount + the diagnostics modal
                 // AppShell mounts last.
                 "qml/shell/QconnectFlyout.qml",
+                "qml/shell/LogViewerModal.qml",
                 "qml/shell/QconnectDevModal.qml",
                 // Immersive mode (2026-08-02 immersive-port contract §2) —
                 // its own module directory like views/local/ and

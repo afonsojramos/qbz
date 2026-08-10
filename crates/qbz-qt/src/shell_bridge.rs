@@ -83,6 +83,13 @@ pub mod qbz_shell {
         // Dropdown filter: 0 All / 1 Dark / 2 Light (ui_prefs theme_filter).
         #[qproperty(i32, theme_filter)]
 
+        // --- Log viewer (log_viewer_qt.rs) --------------------------------
+        // ONE document: {open, rows[], total, shown, filterLevel, search,
+        // autoTail, uploading, uploadedUrl}. The ring can hold thousands of
+        // lines and the view shows at most 500, so the FILTER runs Rust-side
+        // and only the survivors cross the bridge.
+        #[qproperty(QString, log_viewer_json)]
+
         // --- Lyrics panel (phase 9) ----------------------------------------
         #[qproperty(bool, lyrics_open)]
         // One JSON document (lyrics_qt.rs LyricsDoc: status/lines/synced/
@@ -328,6 +335,46 @@ pub mod qbz_shell {
         #[qinvokable]
         fn large_cycle_spectrum(self: Pin<&mut QbzShell>);
 
+        // --- Log viewer (log_viewer_qt.rs) --------------------------------
+        /// Open / close the viewer. `close` also drops auto-tail, so a closed
+        /// modal never keeps republishing.
+        #[qinvokable]
+        fn log_open(self: Pin<&mut QbzShell>);
+        #[qinvokable]
+        fn log_close(self: Pin<&mut QbzShell>);
+        /// "all" | "error" | "warn" | "info" | "debug" | "trace".
+        #[qinvokable]
+        fn log_set_level(self: Pin<&mut QbzShell>, level: QString);
+        /// Case-insensitive substring over target + message.
+        #[qinvokable]
+        fn log_set_search(self: Pin<&mut QbzShell>, search: QString);
+        /// Re-snapshot the ring now.
+        #[qinvokable]
+        fn log_refresh(self: Pin<&mut QbzShell>);
+        /// Republish once a second while open.
+        #[qinvokable]
+        fn log_set_auto_tail(self: Pin<&mut QbzShell>, on: bool);
+        /// Empty the ring (the in-memory history only — the log FILE is
+        /// untouched, same as the reference).
+        #[qinvokable]
+        fn log_clear(self: Pin<&mut QbzShell>);
+        /// The filtered view, as plain redacted lines.
+        #[qinvokable]
+        fn log_copy_all(self: Pin<&mut QbzShell>);
+        /// The GitHub-ready `<details>` bundle.
+        #[qinvokable]
+        fn log_copy_bundle(self: Pin<&mut QbzShell>);
+        /// Upload the bundle to a public paste; the url lands in the document.
+        #[qinvokable]
+        fn log_upload(self: Pin<&mut QbzShell>);
+        /// Copy the uploaded paste url.
+        #[qinvokable]
+        fn log_copy_url(self: Pin<&mut QbzShell>);
+        /// Hand the log FILE to the desktop (what "Share logs" used to do on
+        /// its own).
+        #[qinvokable]
+        fn log_open_file(self: Pin<&mut QbzShell>);
+
         /// macOS only (a no-op elsewhere): apply the overlay window
         /// attributes and vertically centre the native traffic lights in the
         /// header. Called from `Main.qml` on the first rendered frame —
@@ -471,6 +518,7 @@ pub struct QbzShellRust {
     theme_slug: QString,
     theme_list_json: QString,
     theme_filter: i32,
+    log_viewer_json: QString,
     lyrics_open: bool,
     lyrics_json: QString,
     sidebar_json: QString,
@@ -539,6 +587,7 @@ impl Default for QbzShellRust {
             theme_slug: QString::from(crate::theme_qt::current_slug().as_str()),
             theme_list_json: QString::from(crate::theme_qt::theme_list_json().as_str()),
             theme_filter: crate::theme_qt::theme_filter(),
+            log_viewer_json: QString::from("{}"),
             lyrics_open: false,
             lyrics_json: QString::from("{}"),
             sidebar_json: QString::from("[]"),
@@ -747,6 +796,43 @@ impl qbz_shell::QbzShell {
 
     pub fn large_cycle_spectrum(self: Pin<&mut Self>) {
         crate::large_cycle_spectrum();
+    }
+
+    pub fn log_open(self: Pin<&mut Self>) {
+        crate::log_viewer_qt::open();
+    }
+    pub fn log_close(self: Pin<&mut Self>) {
+        crate::log_viewer_qt::close();
+    }
+    pub fn log_set_level(self: Pin<&mut Self>, level: QString) {
+        crate::log_viewer_qt::set_level(level.to_string());
+    }
+    pub fn log_set_search(self: Pin<&mut Self>, search: QString) {
+        crate::log_viewer_qt::set_search(search.to_string());
+    }
+    pub fn log_refresh(self: Pin<&mut Self>) {
+        crate::log_viewer_qt::publish();
+    }
+    pub fn log_set_auto_tail(self: Pin<&mut Self>, on: bool) {
+        crate::log_viewer_qt::set_auto_tail(on);
+    }
+    pub fn log_clear(self: Pin<&mut Self>) {
+        crate::log_viewer_qt::clear();
+    }
+    pub fn log_copy_all(self: Pin<&mut Self>) {
+        crate::log_viewer_qt::copy_all();
+    }
+    pub fn log_copy_bundle(self: Pin<&mut Self>) {
+        crate::log_viewer_qt::copy_bundle();
+    }
+    pub fn log_upload(self: Pin<&mut Self>) {
+        crate::spawn(async move { crate::log_viewer_qt::upload().await });
+    }
+    pub fn log_copy_url(self: Pin<&mut Self>) {
+        crate::log_viewer_qt::copy_url();
+    }
+    pub fn log_open_file(self: Pin<&mut Self>) {
+        crate::log_viewer_qt::open_log_file();
     }
 
     pub fn apply_mac_chrome(self: Pin<&mut Self>) -> bool {
