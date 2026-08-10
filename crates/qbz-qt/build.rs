@@ -103,6 +103,7 @@ fn main() {
                 "qml/controls/QualityBadge.qml",
                 "qml/controls/QualityMini.qml",
                 "qml/controls/SettingRow.qml",
+                "qml/controls/IconTextButton.qml",
                 "qml/controls/SettingsButton.qml",
                 "qml/controls/SettingsDivider.qml",
                 "qml/controls/SettingsSpacer.qml",
