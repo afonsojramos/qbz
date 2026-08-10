@@ -2388,6 +2388,20 @@ pub(crate) fn arm_hard_exit_watchdog(source: &'static str) {
 
 fn main() {
     qbz_log::install("info");
+    // glibc resolver hardening (2026-08-10): this host's path to its first
+    // resolver drops the SECOND of two parallel DNS queries on one socket,
+    // so every getaddrinfo (which fires A+AAAA in parallel) stalls for the
+    // full 5s RES_TIMEOUT before retrying — measured: init-segment fetches
+    // with send(dns+connect+tls+ttfb)=5449ms, body=0ms after the app idled.
+    // `single-request` serializes A/AAAA (sequential queries survive the
+    // drop: 0.19s vs 8.07s, measured while the drop was active), at the cost
+    // of one extra RTT per fresh lookup. Process-local, honored by glibc at
+    // resolver init — must be set before ANY name resolution, hence first
+    // in main. No-op on musl/BSD/macOS resolvers.
+    if std::env::var_os("RES_OPTIONS").is_none() {
+        std::env::set_var("RES_OPTIONS", "single-request");
+        log::info!("[qbz-qt] RES_OPTIONS=single-request set (parallel A/AAAA drop workaround)");
+    }
     // i18n (phase 20): honor the persisted ui_prefs language; "auto"/missing
     // resolves POSIX env (qbz_i18n::resolve_auto).
     let boot_lang = settings_qt::pref_str("language", "auto");
