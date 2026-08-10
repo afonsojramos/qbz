@@ -2506,8 +2506,12 @@ pub async fn settings_reset(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
     if let Err(e) = with_playback(|s| s.reset_all().map(|_| ())) {
         log::error!("[qbz-qt] playback preferences reset failed: {e}");
     }
-    save_streaming_quality("hires_plus");
-    crate::playback_qt::set_streaming_quality("hires_plus");
+    // Streaming Quality is deliberately NOT reset. It is a UI-only pref that
+    // belongs to neither domain store, and the reference says so out loud
+    // (`crates/qbz/src/settings.rs:1333-1336`: "intentionally left
+    // untouched"). This port used to force it back to `hires_plus`, so a
+    // user on a metered connection who reset their AUDIO settings silently
+    // got hi-res streaming again.
     apply_audio(runtime, Apply::Reinit);
     publish_snapshot().await;
 }
