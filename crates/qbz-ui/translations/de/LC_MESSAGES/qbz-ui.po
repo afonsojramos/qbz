@@ -1419,6 +1419,12 @@ msgstr "Weiter"
 msgid "Play now"
 msgstr "Jetzt abspielen"
 
+msgid "Start playing now?"
+msgstr "Jetzt mit der Wiedergabe beginnen?"
+
+msgid "Not now"
+msgstr "Jetzt nicht"
+
 msgid "Create radio"
 msgstr "Radio erstellen"
 
@@ -1557,6 +1563,12 @@ msgstr "Was zu tun ist, wenn keine Qualitätsstufe für einen Titel verfügbar i
 msgid "Folder settings"
 msgstr "Ordnereinstellungen"
 
+msgid "Folder settings saved"
+msgstr "Ordnereinstellungen gespeichert"
+
+msgid "Could not save the folder settings."
+msgstr "Die Ordnereinstellungen konnten nicht gespeichert werden."
+
 msgid "Folder location"
 msgstr "Ordnerspeicherort"
 
@@ -1623,6 +1635,15 @@ msgstr "Aktiv"
 msgid "LIBRARY FOLDERS"
 msgstr "BIBLIOTHEKSORDNER"
 
+msgid "Browse..."
+msgstr "Durchsuchen..."
+
+msgid "Choose a music folder"
+msgstr "Musikordner auswählen"
+
+msgid "Browse for a music folder, or type the full path."
+msgstr "Nach einem Musikordner suchen oder den vollständigen Pfad eingeben."
+
 msgid "Filter folders..."
 msgstr "Ordner filtern..."
 
@@ -1677,6 +1698,9 @@ msgstr "Serveradresse"
 msgid "Only local network servers are supported."
 msgstr "Es werden nur Server im lokalen Netzwerk unterstützt."
 
+msgid "Enter a valid server address."
+msgstr "Geben Sie eine gültige Serveradresse ein."
+
 msgid "http://127.0.0.1:32400"
 msgstr "http://127.0.0.1:32400"
 
@@ -1703,6 +1727,24 @@ msgstr "Code kopieren"
 
 msgid "Open Plex sign-in"
 msgstr "Plex-Anmeldung öffnen"
+
+msgid "Connected to Plex"
+msgstr "Mit Plex verbunden"
+
+msgid "The code expired. Generate a new one."
+msgstr "Der Code ist abgelaufen. Erzeugen Sie einen neuen."
+
+msgid "Ping the saved server and report what answers."
+msgstr "Den gespeicherten Server anpingen und melden, was antwortet."
+
+msgid "Connected to {}"
+msgstr "Verbunden mit {}"
+
+msgid "Could not reach the Plex server."
+msgstr "Der Plex-Server war nicht erreichbar."
+
+msgid "Plex is not configured."
+msgstr "Plex ist nicht konfiguriert."
 
 msgid "Enter token manually"
 msgstr "Token manuell eingeben"
@@ -1781,6 +1823,15 @@ msgstr "Jetzt pruefen"
 
 msgid "Enable Offline Mode"
 msgstr "Offline-Modus aktivieren"
+
+msgid "Test the connection now instead of waiting for the next automatic check."
+msgstr "Die Verbindung jetzt testen, statt auf die nächste automatische Prüfung zu warten."
+
+msgid "Include sign-in credentials"
+msgstr "Anmeldedaten einschließen"
+
+msgid "The bundle will contain your tokens. Anyone who opens the file can sign in as you."
+msgstr "Das Paket enthält Ihre Tokens. Wer die Datei öffnet, kann sich als Sie anmelden."
 
 msgid "Manually switch to offline mode even with internet."
 msgstr "Auch bei vorhandenem Internet manuell in den Offline-Modus wechseln."
@@ -3984,6 +4035,12 @@ msgstr "Umgebung"
 
 msgid "Logs"
 msgstr "Protokolle"
+
+msgid "View logs"
+msgstr "Protokolle anzeigen"
+
+msgid "Upload failed."
+msgstr "Hochladen fehlgeschlagen."
 
 msgid "All levels"
 msgstr "Alle Ebenen"

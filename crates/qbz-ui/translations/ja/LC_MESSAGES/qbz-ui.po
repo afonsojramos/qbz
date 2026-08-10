@@ -1377,6 +1377,12 @@ msgstr "次へ"
 msgid "Play now"
 msgstr "今すぐ再生"
 
+msgid "Start playing now?"
+msgstr "今すぐ再生を開始しますか？"
+
+msgid "Not now"
+msgstr "今はしない"
+
 msgid "Create radio"
 msgstr "ラジオを作成"
 
@@ -1509,6 +1515,12 @@ msgstr "トラックのすべての音質ティアが利用できないときの
 msgid "Folder settings"
 msgstr "フォルダ設定"
 
+msgid "Folder settings saved"
+msgstr "フォルダー設定を保存しました"
+
+msgid "Could not save the folder settings."
+msgstr "フォルダー設定を保存できませんでした。"
+
 msgid "Folder location"
 msgstr "フォルダの場所"
 
@@ -1575,6 +1587,15 @@ msgstr "有効"
 msgid "LIBRARY FOLDERS"
 msgstr "ライブラリフォルダ"
 
+msgid "Browse..."
+msgstr "参照..."
+
+msgid "Choose a music folder"
+msgstr "音楽フォルダーを選択"
+
+msgid "Browse for a music folder, or type the full path."
+msgstr "音楽フォルダーを参照するか、フルパスを入力してください。"
+
 msgid "Filter folders..."
 msgstr "フォルダを絞り込み..."
 
@@ -1629,6 +1650,9 @@ msgstr "サーバーアドレス"
 msgid "Only local network servers are supported."
 msgstr "ローカルネットワークのサーバーのみ対応しています。"
 
+msgid "Enter a valid server address."
+msgstr "有効なサーバーアドレスを入力してください。"
+
 msgid "http://127.0.0.1:32400"
 msgstr "http://127.0.0.1:32400"
 
@@ -1655,6 +1679,24 @@ msgstr "コードをコピー"
 
 msgid "Open Plex sign-in"
 msgstr "Plexのログインを開く"
+
+msgid "Connected to Plex"
+msgstr "Plex に接続しました"
+
+msgid "The code expired. Generate a new one."
+msgstr "コードの有効期限が切れました。新しいコードを生成してください。"
+
+msgid "Ping the saved server and report what answers."
+msgstr "保存済みのサーバーに ping を送り、応答を表示します。"
+
+msgid "Connected to {}"
+msgstr "{} に接続しました"
+
+msgid "Could not reach the Plex server."
+msgstr "Plex サーバーに接続できませんでした。"
+
+msgid "Plex is not configured."
+msgstr "Plex が設定されていません。"
 
 msgid "Enter token manually"
 msgstr "トークンを手動で入力"
@@ -1733,6 +1775,15 @@ msgstr "今すぐ確認"
 
 msgid "Enable Offline Mode"
 msgstr "オフラインモードを有効にする"
+
+msgid "Test the connection now instead of waiting for the next automatic check."
+msgstr "次の自動確認を待たずに、今すぐ接続をテストします。"
+
+msgid "Include sign-in credentials"
+msgstr "サインイン資格情報を含める"
+
+msgid "The bundle will contain your tokens. Anyone who opens the file can sign in as you."
+msgstr "バンドルにトークンが含まれます。ファイルを開いた人は誰でもあなたとしてサインインできます。"
 
 msgid "Manually switch to offline mode even with internet."
 msgstr "インターネット接続があっても手動でオフラインモードに切り替えます。"
@@ -3822,6 +3873,12 @@ msgstr "環境"
 
 msgid "Logs"
 msgstr "ログ"
+
+msgid "View logs"
+msgstr "ログを表示"
+
+msgid "Upload failed."
+msgstr "アップロードに失敗しました。"
 
 msgid "All levels"
 msgstr "すべてのレベル"
