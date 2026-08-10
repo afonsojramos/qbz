@@ -16,11 +16,6 @@ sha2 = "0.10"
 # RNG for nonces + install UUID generation
 rand = "0.9"
 
-# OS keyring backends: libsecret/secret-service (Linux), Keychain (macOS),
-# DPAPI (Windows). Default features on v3 already pick the right backend
-# per platform; if it fails at runtime we fall through to the KDF path.
-keyring = "3"
-
 # UUID for the persistent install identifier (salt component for fallback)
 uuid = { version = "1", features = ["v4", "serde"] }
 
@@ -36,3 +31,14 @@ log = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
+
+# OS keyring backends: libsecret/secret-service (Linux), Keychain (macOS),
+# DPAPI (Windows). **Desktop only, deliberately.** keyring 3.x compiles no real
+# backend for Android, and none for iOS without its `apple-native` feature — it
+# routes both to an in-memory `mock` whose writes *succeed*. Depending on it
+# there would not fail loudly; it would hand back a master key that never
+# leaves the process, so every blob wrapped in one run is undecryptable in the
+# next. Mobile takes the KDF path, which is derived from a persisted install id
+# and is stable across launches. See `backend.rs`.
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+keyring = "3"
