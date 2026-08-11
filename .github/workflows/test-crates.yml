@@ -103,3 +103,48 @@ jobs:
           if [ -n "$hits" ]; then
             echo "::error::qbzd graph resolves Slint crates:"; echo "$hits"; exit 1
           fi
+
+  # The job above is Linux-only, which is where the platform-sensitive crates
+  # are *least* likely to break: the two bugs this job exists for both shipped
+  # on macOS while Linux was fine.
+  #
+  #   - qbz-secrets picks a keyring backend per platform, and picked an
+  #     in-memory mock on macOS and Windows whose writes silently succeed.
+  #   - qbz-offline-cache resolves bundle paths under an app directory that
+  #     only moves on macOS-derived platforms (iOS reassigns the data
+  #     container; the desktop cache root is stable).
+  #
+  # Deliberately narrow: two crates, no ALSA/JACK/D-Bus, no UI graph, so this
+  # stays a couple of minutes on a runner billed at 10x Linux. Add
+  # `windows-latest` to the matrix if the same class of bug turns up there —
+  # the tests are already platform-agnostic.
+  platform-sensitive:
+    name: cargo test (secrets + offline cache, ${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates -> target
+          shared-key: test-crates-${{ matrix.os }}
+          cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/pre-release' }}
+
+      - name: cargo test
+        env:
+          CARGO_TERM_COLOR: always
+          CARGO_BUILD_JOBS: "3"
+        run: |
+          cargo test --manifest-path crates/Cargo.toml \
+            -p qbz-secrets -p qbz-offline-cache --no-fail-fast
