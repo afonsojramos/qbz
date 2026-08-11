@@ -5105,3 +5105,11 @@ msgstr "Режим киоска"
 
 msgid "Desktop mode"
 msgstr "Режим рабочего стола"
+
+# AlbumView cover menu / lightbox (Qt port, 2026-08-10)
+
+msgid "View cover"
+msgstr "Показать обложку"
+
+msgid "Could not load the image"
+msgstr "Не удалось загрузить изображение"

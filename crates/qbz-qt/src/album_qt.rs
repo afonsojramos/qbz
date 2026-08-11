@@ -20,8 +20,8 @@
 //! Last.fm answer for album A can never paint onto album B.
 //!
 //! POC-NOTEs:
-//! - Booklet download/rasterize, multi-select + bulk bar, DiscHeaderMenu,
-//!   album-info modal, custom covers: out of scope (inert stubs where visible).
+//! - Multi-select + bulk bar and the offline download column: out of scope
+//!   (inert stubs where visible).
 //! - Blacklist filtering on carousels: skipped (store not open).
 //! - The album-header-gradient atmosphere: not wired (appearance pref).
 //! - The Last.fm "similar albums" second suggestions row needs the
@@ -176,6 +176,20 @@ pub struct AlbumHeader {
     /// `isPinned` existed.
     #[serde(rename = "isAlbumBlocked")]
     pub is_album_blocked: bool,
+    /// The header's booklet button: a PDF goody with a usable URL exists
+    /// (Slint `album.rs` `has_booklet`). The URL itself is stashed Rust-side
+    /// by `load_album` for `download_booklet`.
+    #[serde(rename = "hasBooklet")]
+    pub has_booklet: bool,
+    /// A user-picked cover override exists (Slint `custom_artwork` store,
+    /// shared file). The view swaps the header image to `customCoverPath`
+    /// and flips the cover menu's Add/Change/Remove rows.
+    #[serde(rename = "hasCustomCover")]
+    pub has_custom_cover: bool,
+    /// Absolute path of the override ("" when none) — the header image reads
+    /// it as file://, bypassing the url-keyed pipeline.
+    #[serde(rename = "customCoverPath")]
+    pub custom_cover_path: String,
     /// EXTERNAL LINKS sidebar block — deep links into the three music
     /// databases, built from artist + title. These are plain URLs handed to
     /// the system browser on click: nothing is fetched, no account is needed
@@ -571,6 +585,14 @@ pub async fn load_album(runtime: &Arc<AppRuntime<LoggingAdapter>>, album_id: &st
         .filter(|(_, n)| !n.is_empty())
         .collect();
     let title = crate::album_qt::format_album_title(&album.title, album.version.as_deref());
+
+    // Pick the booklet goody: prefer the PDF format id (21), else the first
+    // goody whose url/original_url ends in ".pdf"; `original_url` (full-size)
+    // wins over the thumbnail `url` (Slint `album.rs:307-333`). The URL is
+    // stashed for `download_booklet` — the header only carries the flag.
+    let booklet_url = pick_booklet_url(&album);
+    set_booklet_stash(&title, &booklet_url);
+
     let tracks: Vec<TrackRow> = album
         .tracks
         .as_ref()
@@ -580,6 +602,11 @@ pub async fn load_album(runtime: &Arc<AppRuntime<LoggingAdapter>>, album_id: &st
     // External links are built from the SAME artist/title the header shows.
     let links = external_links(&artist, &title);
     let (lastfm_url, discogs_url, musicbrainz_url) = links.clone().unwrap_or_default();
+
+    // Custom cover override (shared custom_artwork.json store) — seeded on
+    // every build so the header swaps image source and the cover menu flips
+    // its Add/Change/Remove rows.
+    let custom_cover = crate::cover_artwork_qt::album_cover(&album.id).unwrap_or_default();
 
     let header = AlbumHeader {
         show_external_links: links.is_some(),
@@ -620,12 +647,156 @@ pub async fn load_album(runtime: &Arc<AppRuntime<LoggingAdapter>>, album_id: &st
             .map(|l| l.id.to_string())
             .unwrap_or_default(),
         awards,
+        has_booklet: !booklet_url.is_empty(),
+        has_custom_cover: !custom_cover.is_empty(),
+        custom_cover_path: custom_cover,
     };
     Ok(AlbumViewData {
         header,
         tracks,
         ..Default::default()
     })
+}
+
+// ==================== Booklet (Slint booklet.rs port) ======================
+
+/// Booklet download timeout (matches the Slint client, `booklet.rs:19`).
+const BOOKLET_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// (title, url) of the open album's booklet goody — stashed by `load_album`.
+/// The header doc carries only the `hasBooklet` flag; the URL never crosses
+/// the bridge until the user actually asks for the file.
+static BOOKLET_STASH: std::sync::Mutex<(String, String)> =
+    std::sync::Mutex::new((String::new(), String::new()));
+
+fn set_booklet_stash(title: &str, url: &str) {
+    if let Ok(mut s) = BOOKLET_STASH.lock() {
+        *s = (title.to_string(), url.to_string());
+    }
+}
+
+/// album.rs's booklet pick: the PDF format id (21) first, else the first
+/// goody whose url ends in ".pdf"; `original_url` wins over `url`.
+fn pick_booklet_url(album: &Album) -> String {
+    album
+        .goodies
+        .as_deref()
+        .and_then(|goodies| {
+            goodies
+                .iter()
+                .find(|g| g.file_format_id == Some(21))
+                .or_else(|| {
+                    goodies.iter().find(|g| {
+                        let ends_pdf = |s: &str| s.to_lowercase().ends_with(".pdf");
+                        ends_pdf(&g.original_url) || ends_pdf(&g.url)
+                    })
+                })
+        })
+        .map(|g| {
+            if !g.original_url.is_empty() {
+                g.original_url.clone()
+            } else {
+                g.url.clone()
+            }
+        })
+        .unwrap_or_default()
+}
+
+/// Download the open album's booklet PDF to a user-chosen location (Slint
+/// `booklet::download_booklet`): fetch with a 30s client, then a native
+/// save-as dialog seeded `{title}.pdf`. No-op when the open album has none.
+pub fn download_booklet() {
+    let (title, url) = BOOKLET_STASH
+        .lock()
+        .map(|s| s.clone())
+        .unwrap_or_default();
+    if url.is_empty() {
+        return;
+    }
+    let default_name = if title.is_empty() {
+        "booklet.pdf".to_string()
+    } else {
+        format!("{title}.pdf")
+    };
+    crate::spawn(async move {
+        let client = match reqwest::Client::builder().timeout(BOOKLET_TIMEOUT).build() {
+            Ok(c) => c,
+            Err(e) => {
+                log::warn!("[qbz-qt] booklet HTTP client error: {e}");
+                return;
+            }
+        };
+        let bytes = match client
+            .get(&url)
+            .send()
+            .await
+            .and_then(|r| r.error_for_status())
+        {
+            Ok(r) => match r.bytes().await {
+                Ok(b) => b,
+                Err(e) => {
+                    log::warn!("[qbz-qt] booklet read failed: {e}");
+                    return;
+                }
+            },
+            Err(e) => {
+                log::warn!("[qbz-qt] booklet fetch failed: {e}");
+                return;
+            }
+        };
+        let Some(dest) = rfd::AsyncFileDialog::new()
+            .set_file_name(&default_name)
+            .add_filter("PDF", &["pdf"])
+            .save_file()
+            .await
+        else {
+            return;
+        };
+        if let Err(e) = tokio::fs::write(dest.path(), &bytes).await {
+            log::warn!("[qbz-qt] booklet save failed: {e}");
+        }
+    });
+}
+
+// ==================== Add to Mixtape/Collection (header button) ============
+
+/// The cassette button: open the MyQBZ picker with THIS album as the
+/// payload. Slint builds the item from a fresh `/album/get`
+/// (`main.rs:12001-12040`); the picker itself decides which container kinds
+/// accept an album (Mixtapes AND Collections — `myqbz_add_qt::Accepts`).
+pub fn add_to_mixtape(album_id: String) {
+    if album_id.is_empty() {
+        return;
+    }
+    let runtime = crate::app();
+    crate::spawn(async move {
+        let album = match runtime.core().get_album(&album_id).await {
+            Ok(a) => a,
+            Err(e) => {
+                log::warn!("[qbz-qt] album add-to-mixtape fetch failed: {e}");
+                return;
+            }
+        };
+        let item = crate::myqbz_add_qt::AddItem {
+            item_type: "album".into(),
+            source: "qobuz".into(),
+            source_item_id: album.id.clone(),
+            title: format_album_title(&album.title, album.version.as_deref()),
+            subtitle: Some(album.artist.name.clone()).filter(|s| !s.is_empty()),
+            artwork_url: album
+                .image
+                .thumbnail
+                .clone()
+                .or_else(|| album.image.small.clone()),
+            year: album
+                .release_date_original
+                .as_deref()
+                .and_then(|s| s.get(..4))
+                .and_then(|y| y.parse::<i32>().ok()),
+            track_count: album.tracks_count.map(|n| n as i32),
+        };
+        crate::myqbz_add_qt::open_items(vec![item]);
+    });
 }
 
 pub(crate) fn format_album_title(title: &str, version: Option<&str>) -> String {

@@ -5096,3 +5096,11 @@ msgstr "Modo kiosco"
 
 msgid "Desktop mode"
 msgstr "Modo escritorio"
+
+# AlbumView cover menu / lightbox (Qt port, 2026-08-10)
+
+msgid "View cover"
+msgstr "Ver carátula"
+
+msgid "Could not load the image"
+msgstr "No se pudo cargar la imagen"

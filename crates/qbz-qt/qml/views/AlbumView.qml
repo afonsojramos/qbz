@@ -7,9 +7,8 @@
 // heart), label/awards sidebar, and the two bottom carousels ("From the
 // same artist", "Listening suggestions").
 //
-// POC-NOTEs: multi-select + bulk bar, offline download column, booklet,
-// custom-cover menu, album-info modal — out of scope (visible stubs are
-// inert).
+// POC-NOTEs: multi-select + bulk bar and the offline download column —
+// out of scope (visible stubs are inert).
 //
 // Header atmosphere (AlbumPageView.slint:161-189, 221-257): the
 // artwork-tinted band IS wired now, through the shared
@@ -25,6 +24,7 @@ import QtQuick.Controls
 import com.blitzfc.qbz
 import "../controls"
 import "../rows"
+import "../shell"
 import "../theme"
 
 Rectangle {
@@ -488,9 +488,29 @@ Rectangle {
                     clip: true
                     RoundedImage {
                         anchors.fill: parent
-                        source: root.coverMap[header.artUrl] || ""
+                        // A custom cover override (shared custom_artwork
+                        // store) beats the url-keyed pipeline image.
+                        source: (header.customCoverPath || "") !== ""
+                            ? "file://" + header.customCoverPath
+                            : (root.coverMap[header.artUrl] || "")
                         radius: 12
                     }
+                    // Left-click: the lightbox (NEW — Slint's left-click is
+                    // inert). Right-click: the cover menu (Slint
+                    // AlbumPageView.slint:300-370).
+                    MouseArea {
+                        anchors.fill: parent
+                        acceptedButtons: Qt.LeftButton | Qt.RightButton
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: function (mouse) {
+                            if (mouse.button === Qt.RightButton) {
+                                coverMenu.openAtCursor(coverMenuAnchor, mouse.x, mouse.y)
+                            } else {
+                                coverLightbox.openWith(root.bestCoverSource())
+                            }
+                        }
+                    }
+                    Item { id: coverMenuAnchor; anchors.fill: parent }
                 }
 
                 Column {
@@ -568,7 +588,7 @@ Rectangle {
                                 anchors.fill: parent
                                 hoverEnabled: true
                                 cursorShape: Qt.PointingHandCursor
-                                // POC-NOTE: no label view yet.
+                                onClicked: QbzHome.openLabel(header.labelId)
                             }
                         }
                         Text {
@@ -649,29 +669,39 @@ Rectangle {
                                 QbzLibrary.libraryToggleFavorite("album", header.id)
                             }
                         }
-                        // Radio / Mixtape / Album info: no seam on this
-                        // bridge (radio engines, mixtape store, credits
-                        // modal). They stay VISIBLE but DISABLED — the
-                        // .slint's own `enabled: false` treatment (dimmed to
-                        // 0.4, click gated) — rather than rendering as live
-                        // buttons that do nothing on click.
+                        // Radio: the Qobuz /radio/album endpoint, via the
+                        // For-You tile seam (foryou_qt::start_album_radio —
+                        // minimal track objects are enriched before play).
                         QbzCircleAction {
                             name: "radio"
                             overlay: root.hdrOverlay
-                            btnEnabled: false
                             anchors.verticalCenter: parent.verticalCenter
+                            onClicked: QbzHome.startAlbumRadio(header.id)
                         }
+                        // Booklet: only when the album carries a PDF goody
+                        // (AlbumPageView.slint:575-585); downloads via save-as.
+                        QbzCircleAction {
+                            visible: header.hasBooklet === true
+                            name: "book-open"
+                            overlay: root.hdrOverlay
+                            anchors.verticalCenter: parent.verticalCenter
+                            onClicked: QbzAlbum.downloadBooklet()
+                        }
+                        // Mixtape/Collection picker (an album is accepted by
+                        // BOTH kinds — myqbz_add_qt's Accepts engine).
                         QbzCircleAction {
                             name: "cassette-tape"
                             overlay: root.hdrOverlay
-                            btnEnabled: false
                             anchors.verticalCenter: parent.verticalCenter
+                            onClicked: QbzAlbum.addToMixtape(header.id)
                         }
+                        // Album info: the Credits/Review modal
+                        // (AlbumInfoModal.qml, data via album_info_qt.rs).
                         QbzCircleAction {
                             name: "info"
                             overlay: root.hdrOverlay
-                            btnEnabled: false
                             anchors.verticalCenter: parent.verticalCenter
+                            onClicked: albumInfo.openFor(header.id)
                         }
                         QbzCircleAction {
                             id: albumMenuBtn
@@ -1148,9 +1178,91 @@ Rectangle {
         target: pageFlick
     }
 
-    // Album ⋯ menu (AlbumContextMenu subset — card menu + pin + the block
-    // toggle; the .slint's playlist/mixtape/share/offline rows are the parts
-    // still out of scope).
+    // Best available cover source for the lightbox: the custom override
+    // file when set, else the remote best() URL (mega → … → large).
+    function bestCoverSource() {
+        var custom = header.customCoverPath || ""
+        if (custom !== "") return "file://" + custom
+        return header.artUrl || ""
+    }
+
+    // The cover menu's rows, rebuilt per open (Add vs Change+Remove flips
+    // on hasCustomCover; "View cover" is this port's addition).
+    function buildCoverMenuModel() {
+        var rows = []
+        if (header.hasCustomCover === true) {
+            rows.push({ "label": QbzSession.tr("Change cover", QbzSession.trRev), "icon": "image-plus", "action": "add" })
+            rows.push({ "label": QbzSession.tr("Remove cover", QbzSession.trRev), "icon": "trash-2", "action": "remove" })
+        } else {
+            rows.push({ "label": QbzSession.tr("Add cover", QbzSession.trRev), "icon": "image-plus", "action": "add" })
+        }
+        rows.push({ "label": QbzSession.tr("View cover", QbzSession.trRev), "icon": "eye", "action": "view" })
+        rows.push({ "label": QbzSession.tr("Open in browser", QbzSession.trRev), "icon": "external-link", "action": "browser" })
+        rows.push({ "label": QbzSession.tr("Save as…", QbzSession.trRev), "icon": "cloud-download", "action": "save" })
+        return rows
+    }
+
+    // Cover right-click menu (AlbumPageView.slint:300-370) + "View cover",
+    // the lightbox entry that is NEW in this port.
+    QbzContextMenu {
+        id: coverMenu
+        menuWidth: 196
+        // Rebuilt on every open so Add/Change/Remove track the live flag.
+        onAboutToShow: coverMenuRepeater.model = root.buildCoverMenuModel()
+        Repeater {
+            id: coverMenuRepeater
+            model: []
+            delegate: Rectangle {
+                required property var modelData
+                width: parent ? parent.width : 0
+                height: 33
+                radius: 5
+                color: cmiArea.containsMouse ? theme.surfaceHover : "transparent"
+                Row {
+                    anchors.fill: parent
+                    anchors.leftMargin: 8
+                    spacing: 8
+                    QbzIcon { name: modelData.icon; width: 15; height: 15; anchors.verticalCenter: parent.verticalCenter; tintName: "secondary" }
+                    Text {
+                        height: parent.height
+                        width: parent.width - 23
+                        text: modelData.label
+                        color: theme.textSecondary
+                        font.pixelSize: 13
+                        verticalAlignment: Text.AlignVCenter
+                        elide: Text.ElideRight
+                    }
+                }
+                MouseArea {
+                    id: cmiArea
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                        coverMenu.close()
+                        var a = modelData.action
+                        if (a === "add") QbzAlbum.coverAddCustom(header.id)
+                        else if (a === "remove") QbzAlbum.coverRemoveCustom(header.id)
+                        else if (a === "view") coverLightbox.openWith(root.bestCoverSource())
+                        else if (a === "browser") QbzShell.openExternalUrl(header.artUrl)
+                        else if (a === "save") QbzAlbum.coverSaveAs(header.id, header.title, header.artUrl)
+                    }
+                }
+            }
+        }
+    }
+
+    CoverLightbox { id: coverLightbox }
+
+    // Album Info (Credits/Review) modal — mounted by its host view, the
+    // TrackInfoModal pattern (one AlbumView instance exists at a time; the
+    // Popup reparents to the window overlay).
+    AlbumInfoModal { id: albumInfo }
+
+    // Album ⋯ menu (AlbumContextMenu subset — the offline rows stay out:
+    // Qt has no album offline-cache seam. "Play later" as a distinct
+    // block-tail insert has no mode in playback_qt::enqueue_album either
+    // (next / append only), so "Add to queue" covers the append arm).
     QbzContextMenu {
         id: albumMenu
         menuWidth: 196
@@ -1161,6 +1273,10 @@ Rectangle {
                     { "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "action": "queue" },
                     { "label": root.toggleState("album", header.isFavorite) ? QbzSession.tr("Remove from Library", QbzSession.trRev) : QbzSession.tr("Add to Library", QbzSession.trRev), "icon": root.toggleState("album", header.isFavorite) ? "heart-filled" : "heart", "action": "favorite" },
                     { "label": root.toggleState("pin", header.isPinned) ? QbzSession.tr("Unpin", QbzSession.trRev) : QbzSession.tr("Pin", QbzSession.trRev), "icon": root.toggleState("pin", header.isPinned) ? "pin-filled" : "pin", "action": "pin" },
+                    { "label": QbzSession.tr("Add to playlist", QbzSession.trRev), "icon": "list-music", "action": "playlist" },
+                    { "label": QbzSession.tr("Add to mixtape", QbzSession.trRev), "icon": "cassette-tape", "action": "mixtape" },
+                    { "label": QbzSession.tr("Share Qobuz link", QbzSession.trRev), "icon": "link", "action": "share-qobuz" },
+                    { "label": QbzSession.tr("Share Album.link", QbzSession.trRev), "icon": "link", "action": "share-albumlink" },
                 ]
                 delegate: Rectangle {
                     required property var modelData
@@ -1200,6 +1316,21 @@ Rectangle {
                             } else if (a === "pin") {
                                 root.setToggleState("pin", !root.toggleState("pin", header.isPinned))
                                 QbzLibrary.togglePin("album", header.id, header.title, header.artist, header.artUrl)
+                            } else if (a === "playlist") {
+                                // The loaded view's own track ids (Slint
+                                // main.rs:12213 collects AlbumState.tracks).
+                                var ids = []
+                                var ts = root.album.tracks || []
+                                for (var i = 0; i < ts.length; i++) {
+                                    if (/^\d+$/.test(ts[i].id || "")) ids.push(ts[i].id)
+                                }
+                                if (ids.length > 0) QbzPlaylistPicker.openForTracks(JSON.stringify(ids))
+                            } else if (a === "mixtape") {
+                                QbzAlbum.addToMixtape(header.id)
+                            } else if (a === "share-qobuz") {
+                                QbzAlbum.shareQobuzLink(header.id)
+                            } else if (a === "share-albumlink") {
+                                QbzAlbum.shareAlbumLink(header.id)
                             }
                         }
                     }

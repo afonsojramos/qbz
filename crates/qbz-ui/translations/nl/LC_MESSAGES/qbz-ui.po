@@ -5078,3 +5078,11 @@ msgstr "Kioskmodus"
 
 msgid "Desktop mode"
 msgstr "Bureaubladmodus"
+
+# AlbumView cover menu / lightbox (Qt port, 2026-08-10)
+
+msgid "View cover"
+msgstr "Hoes bekijken"
+
+msgid "Could not load the image"
+msgstr "De afbeelding kon niet worden geladen"

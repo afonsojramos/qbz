@@ -42,6 +42,12 @@ pub mod qbz_album_bridge {
         // --- Track Info modal (qml/shell/TrackInfoModal.qml) --------------
         #[qproperty(bool, track_info_loading)]
         #[qproperty(QString, track_info_json)]
+        // --- Album Info modal (qml/shell/AlbumInfoModal.qml) --------------
+        // One JSON document (album_info_qt.rs); loading + error ride their
+        // own properties so the modal can show its skeleton without a parse.
+        #[qproperty(bool, album_info_loading)]
+        #[qproperty(QString, album_info_json)]
+        #[qproperty(QString, album_info_error)]
 
         type QbzAlbum = super::QbzAlbumRust;
 
@@ -57,6 +63,32 @@ pub mod qbz_album_bridge {
         /// Info document (track_info_qt.rs).
         #[qinvokable]
         fn open_track_info(self: Pin<&mut QbzAlbum>, track_id: QString);
+        /// Header cassette button: open the MyQBZ picker with this album as
+        /// the payload (album_qt::add_to_mixtape).
+        #[qinvokable]
+        fn add_to_mixtape(self: Pin<&mut QbzAlbum>, album_id: QString);
+        /// Header booklet button: download the open album's booklet PDF to a
+        /// user-chosen path (album_qt::download_booklet).
+        #[qinvokable]
+        fn download_booklet(self: Pin<&mut QbzAlbum>);
+        /// Cover right-click menu (cover_artwork_qt.rs): pick / clear the
+        /// custom cover override, save the artwork to disk.
+        #[qinvokable]
+        fn cover_add_custom(self: Pin<&mut QbzAlbum>, album_id: QString);
+        #[qinvokable]
+        fn cover_remove_custom(self: Pin<&mut QbzAlbum>, album_id: QString);
+        #[qinvokable]
+        fn cover_save_as(self: Pin<&mut QbzAlbum>, album_id: QString, title: QString, artwork_url: QString);
+        /// ⋯ menu Share rows (share_qt.rs): copy the Qobuz link, or resolve
+        /// UPC -> Deezer -> Album.link and copy that (async, toasts).
+        #[qinvokable]
+        fn share_qobuz_link(self: Pin<&mut QbzAlbum>, album_id: QString);
+        #[qinvokable]
+        fn share_album_link(self: Pin<&mut QbzAlbum>, album_id: QString);
+        /// Header info button: fetch + publish the Album Info (credits /
+        /// review) document (album_info_qt.rs).
+        #[qinvokable]
+        fn open_album_info(self: Pin<&mut QbzAlbum>, album_id: QString);
     }
 
     impl cxx_qt::Threading for QbzAlbum {}
@@ -70,6 +102,9 @@ pub struct QbzAlbumRust {
     album_json: QString,
     track_info_loading: bool,
     track_info_json: QString,
+    album_info_loading: bool,
+    album_info_json: QString,
+    album_info_error: QString,
 }
 
 impl Default for QbzAlbumRust {
@@ -79,6 +114,9 @@ impl Default for QbzAlbumRust {
             album_json: QString::from("{}"),
             track_info_loading: false,
             track_info_json: QString::from("{}"),
+            album_info_loading: false,
+            album_info_json: QString::from("{}"),
+            album_info_error: QString::default(),
         }
     }
 }
@@ -110,5 +148,32 @@ impl qbz_album_bridge::QbzAlbum {
     pub fn open_track_info(self: Pin<&mut Self>, track_id: QString) {
         crate::track_info_qt::open(track_id.to_string());
     }
-
+    pub fn add_to_mixtape(self: Pin<&mut Self>, album_id: QString) {
+        crate::album_qt::add_to_mixtape(album_id.to_string());
+    }
+    pub fn download_booklet(self: Pin<&mut Self>) {
+        crate::album_qt::download_booklet();
+    }
+    pub fn cover_add_custom(self: Pin<&mut Self>, album_id: QString) {
+        crate::cover_artwork_qt::add_custom_cover(album_id.to_string());
+    }
+    pub fn cover_remove_custom(self: Pin<&mut Self>, album_id: QString) {
+        crate::cover_artwork_qt::remove_custom_cover(album_id.to_string());
+    }
+    pub fn cover_save_as(self: Pin<&mut Self>, album_id: QString, title: QString, artwork_url: QString) {
+        crate::cover_artwork_qt::save_cover_as(
+            album_id.to_string(),
+            title.to_string(),
+            artwork_url.to_string(),
+        );
+    }
+    pub fn share_qobuz_link(self: Pin<&mut Self>, album_id: QString) {
+        crate::share_qt::share_album_qobuz(album_id.to_string());
+    }
+    pub fn share_album_link(self: Pin<&mut Self>, album_id: QString) {
+        crate::share_qt::share_album_link(album_id.to_string());
+    }
+    pub fn open_album_info(self: Pin<&mut Self>, album_id: QString) {
+        crate::album_info_qt::open(album_id.to_string());
+    }
 }

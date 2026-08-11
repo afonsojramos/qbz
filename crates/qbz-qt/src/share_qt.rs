@@ -1,16 +1,12 @@
 //! Share links + system clipboard — the Qt port of `crates/qbz/src/share.rs`
 //! (lines 1-70: the URL builders and the clipboard). Driven by the artist
-//! header's ⋯ → Share (`qml/views/ArtistView.qml`, the overflow menu).
+//! header's ⋯ → Share (`qml/views/ArtistView.qml`, the overflow menu) and,
+//! since 2026-08-10, the album page's ⋯ → Share rows.
 //!
-//! **Only the first half of the reference is ported.** `share.rs:72-184`
-//! (`share_http_client`, `deezer_lookup`, `songlink_for_track`,
-//! `albumlink_for_album`, `songlink_url`) resolves Song.link / Album.link for
-//! the TRACK and ALBUM context menus. Artists have no such path anywhere in
-//! the Slint tree — `main.rs:12749` ("artist","share") is two statements, copy
-//! + toast — and this port has no Song.link call site at all, so porting those
-//! resolvers now would be dead async HTTP. The module header of the reference
-//! naming "Song.link" is about track/album only; do not read it as an artist
-//! feature.
+//! The Album.link resolver half (`share.rs:72-184`) is ported for the ALBUM
+//! arm only (`albumlink_for_album` + `deezer_lookup` + the Odesli fallback);
+//! `songlink_for_track` still has no Qt call site — port it with the track
+//! menu that needs it.
 //!
 //! **The `open.` vs `play.` split is deliberate, not a typo.** Track and album
 //! moved to `open.qobuz.com` for #514 (`share.rs:4`, `:14-16`, which records
@@ -169,4 +165,137 @@ pub(crate) fn share_label(label_id: String) {
     }
     copy_to_clipboard(qobuz_label_url(&label_id));
     crate::toast_qt::success(qbz_i18n::t("Link copied"));
+}
+
+// ---------------------------------------------------------------------------
+// Album ⋯ menu Share rows (AlbumContextMenu.slint:120-135)
+// ---------------------------------------------------------------------------
+
+/// Album ⋯ → "Share Qobuz link": `main.rs:12245-12248` — copy + toast.
+pub(crate) fn share_album_qobuz(album_id: String) {
+    if album_id.is_empty() {
+        return;
+    }
+    copy_to_clipboard(qobuz_album_url(&album_id));
+    crate::toast_qt::success(qbz_i18n::t("Link copied"));
+}
+
+/// Album ⋯ → "Share Album.link" (`main.rs:12249-12280`): fetch the album for
+/// its UPC, resolve UPC -> Deezer -> album.link, copy + toast. The Odesli
+/// API cannot resolve Qobuz URLs (#514: 400 could_not_resolve_entity), so
+/// the UPC path is the working one; songlink_url is the last-resort fallback.
+pub(crate) fn share_album_link(album_id: String) {
+    if album_id.is_empty() {
+        return;
+    }
+    crate::toast_qt::info(qbz_i18n::t("Fetching Album.link..."));
+    crate::spawn(async move {
+        let upc = crate::app()
+            .core()
+            .get_album(&album_id)
+            .await
+            .ok()
+            .and_then(|a| a.upc);
+        match albumlink_for_album(&album_id, upc.as_deref()).await {
+            Some(url) => {
+                copy_to_clipboard(url);
+                crate::toast_qt::success(qbz_i18n::t("Link copied"));
+            }
+            None => {
+                log::warn!("[qbz-qt] Album.link resolution failed for {album_id}");
+                crate::toast_qt::error(qbz_i18n::t("Failed to copy link"));
+            }
+        }
+    });
+}
+
+/// Shared HTTP client settings for the share resolvers (Tauri parity:
+/// 10 s request / 5 s connect timeouts).
+fn share_http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .connect_timeout(std::time::Duration::from_secs(5))
+        .build()
+        .unwrap_or_default()
+}
+
+/// Resolve an ISRC/UPC code to a Deezer catalog id. `path` is
+/// `track/isrc:{code}` or `album/upc:{code}`. Deezer answers misses with
+/// HTTP 200 + an `{"error": ...}` body, so both shapes are checked.
+async fn deezer_lookup(path: &str) -> Option<u64> {
+    let url = format!("https://api.deezer.com/2.0/{path}");
+    let resp = match share_http_client().get(&url).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            log::warn!("[qbz-qt] deezer lookup {path}: request failed: {e}");
+            return None;
+        }
+    };
+    if !resp.status().is_success() {
+        log::warn!("[qbz-qt] deezer lookup {path}: HTTP {}", resp.status());
+        return None;
+    }
+    let body: serde_json::Value = match resp.json().await {
+        Ok(v) => v,
+        Err(e) => {
+            log::warn!("[qbz-qt] deezer lookup {path}: bad JSON: {e}");
+            return None;
+        }
+    };
+    if let Some(err) = body.get("error") {
+        log::info!("[qbz-qt] deezer lookup {path}: no match ({err})");
+        return None;
+    }
+    body.get("id").and_then(|v| v.as_u64())
+}
+
+/// Album.link page URL for an album — UPC-first via Deezer (#514). Qobuz
+/// UPCs often carry a leading zero (13-digit EAN) while Deezer stores the
+/// 12-digit form and does NOT match zero-padded input (verified), so a
+/// trimmed retry is attempted.
+pub async fn albumlink_for_album(album_id: &str, upc: Option<&str>) -> Option<String> {
+    if let Some(code) = upc.map(str::trim).filter(|c| !c.is_empty()) {
+        if let Some(deezer_id) = deezer_lookup(&format!("album/upc:{code}")).await {
+            log::info!("[qbz-qt] album.link via UPC {code} -> deezer album {deezer_id}");
+            return Some(format!("https://album.link/d/{deezer_id}"));
+        }
+        let trimmed = code.trim_start_matches('0');
+        if trimmed != code && !trimmed.is_empty() {
+            if let Some(deezer_id) = deezer_lookup(&format!("album/upc:{trimmed}")).await {
+                log::info!(
+                    "[qbz-qt] album.link via UPC {trimmed} (leading zeros trimmed) -> deezer album {deezer_id}"
+                );
+                return Some(format!("https://album.link/d/{deezer_id}"));
+            }
+        }
+    } else {
+        log::info!("[qbz-qt] album {album_id} has no UPC; trying Odesli URL fallback");
+    }
+    songlink_url(&qobuz_album_url(album_id)).await
+}
+
+/// Resolve a source URL to its universal Song.link (Odesli) page URL.
+/// One GET to the Odesli API; returns the `pageUrl` field. NOTE: Odesli
+/// cannot resolve Qobuz URLs (400 `could_not_resolve_entity`) — for Qobuz
+/// content use the ISRC/UPC resolvers above; this remains as their last
+/// resort and for any non-Qobuz source URL.
+pub async fn songlink_url(source_url: &str) -> Option<String> {
+    let resp = share_http_client()
+        .get("https://api.song.link/v1-alpha.1/links")
+        .query(&[("url", source_url), ("userCountry", "US")])
+        .send()
+        .await
+        .ok()?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        let snippet: String = body.chars().take(200).collect();
+        log::warn!("[qbz-qt] song.link status {status} for {source_url}: {snippet}");
+        return None;
+    }
+    let value: serde_json::Value = resp.json().await.ok()?;
+    value
+        .get("pageUrl")
+        .and_then(|p| p.as_str())
+        .map(|s| s.to_string())
 }

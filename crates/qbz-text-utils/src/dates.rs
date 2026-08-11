@@ -48,3 +48,26 @@ pub fn release_label(date: Option<&str>) -> String {
     // Year-only fallback (e.g. the source only had "2025").
     raw.get(0..4).unwrap_or_default().to_string()
 }
+
+/// Format a Qobuz release date as "MMMM D, YYYY" (FULL localized month) —
+/// the Album Info modal's "Released by … on <date>" line (Slint
+/// `info_modals.rs::full_release_date`, Tauri `formatReleaseDate`). Empty
+/// when the value is missing or unparseable (no year fallback here: the
+/// header already shows the short form elsewhere).
+pub fn full_release_label(date: Option<&str>) -> String {
+    let Some(raw) = date else {
+        return String::new();
+    };
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return String::new();
+    }
+    let head = raw.get(0..10).unwrap_or(raw);
+    if let Ok(parsed) = NaiveDate::parse_from_str(head, "%Y-%m-%d") {
+        // %B = localized full month, %-d = day without leading zero.
+        return parsed
+            .format_localized("%B %-d, %Y", current_locale())
+            .to_string();
+    }
+    String::new()
+}

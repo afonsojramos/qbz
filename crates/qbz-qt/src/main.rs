@@ -184,6 +184,11 @@ mod quality_state;
 mod offline_fwd;
 mod album_qt;
 mod track_info_qt;
+// Album Info (Credits/Review) modal controller — info_modals.rs port.
+mod album_info_qt;
+// Album custom covers + cover file actions — the album half of the Slint
+// `custom_artwork.rs` store (SAME json file, shared between both apps).
+mod cover_artwork_qt;
 mod external_reco_qt;
 mod ambient_qt;
 mod artist_qt;

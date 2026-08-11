@@ -5073,3 +5073,11 @@ msgstr "キオスクモード"
 
 msgid "Desktop mode"
 msgstr "デスクトップモード"
+
+# AlbumView cover menu / lightbox (Qt port, 2026-08-10)
+
+msgid "View cover"
+msgstr "カバーを表示"
+
+msgid "Could not load the image"
+msgstr "画像を読み込めませんでした"
