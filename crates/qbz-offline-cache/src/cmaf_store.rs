@@ -236,3 +236,61 @@ fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
     fs::rename(&tmp, path)?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn raw_bundle() -> CmafRawBundle {
+        CmafRawBundle {
+            init_bytes: b"init-segment-bytes".to_vec(),
+            segments: vec![b"segment-one".to_vec(), b"segment-two".to_vec()],
+            content_key: [7u8; 16],
+            infos: "infos".to_string(),
+            format_id: 6,
+            sampling_rate: Some(44100),
+            bit_depth: Some(16),
+            n_segments: 2,
+        }
+    }
+
+    /// The bundle is found by deriving its location from the root the cache is
+    /// open at, so an application directory that moves underneath it costs
+    /// nothing. iOS reassigns an app's data container on reinstall, which is
+    /// what makes this more than theoretical: every absolute path recorded at
+    /// download time names a directory that no longer exists, while the bundle
+    /// itself is untouched.
+    #[test]
+    fn a_bundle_is_found_after_its_root_moves() {
+        let old_root = tempfile::tempdir().unwrap();
+        let (written, _) = persist_bundle(old_root.path(), 42, &raw_bundle()).unwrap();
+
+        // What a reinstall does: same bytes, same layout, different prefix.
+        let new_parent = tempfile::tempdir().unwrap();
+        let new_root = new_parent.path().join("audio");
+        std::fs::rename(old_root.path(), &new_root).unwrap();
+        assert!(
+            !written.segments_path.exists(),
+            "the recorded path is stale"
+        );
+
+        let loaded = read_bundle(&BundleLayout::new(&new_root, 42)).unwrap();
+
+        assert_eq!(loaded.init_bytes, b"init-segment-bytes");
+        assert_eq!(loaded.segments.len(), 2);
+        assert_eq!(loaded.segments[1], b"segment-two");
+    }
+
+    #[test]
+    fn the_layout_is_the_same_one_persist_wrote_to() {
+        let root = tempfile::tempdir().unwrap();
+        let (written, _) = persist_bundle(root.path(), 7, &raw_bundle()).unwrap();
+
+        // Playback derives rather than reading the row back, so the two must
+        // agree for every track: this is what makes deriving safe.
+        let derived = BundleLayout::new(root.path(), 7);
+        assert_eq!(derived.init_path, written.init_path);
+        assert_eq!(derived.segments_path, written.segments_path);
+        assert_eq!(derived.manifest_path, written.manifest_path);
+    }
+}
