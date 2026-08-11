@@ -284,6 +284,11 @@ pub fn build_album_reco(album: &Album, subtitle: String, source: RecoSource) -> 
         quality_label,
         artwork_url: album.image.best().cloned().unwrap_or_default(),
         subtitle,
+        genre: album
+            .genre
+            .as_ref()
+            .map(|g| g.name.clone())
+            .unwrap_or_default(),
         source,
     }
 }

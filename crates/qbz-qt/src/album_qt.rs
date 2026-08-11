@@ -635,6 +635,32 @@ pub(crate) fn format_album_title(title: &str, version: Option<&str>) -> String {
     }
 }
 
+/// album_map.rs `album_artist` (Slint `qbz/src/album_map.rs:168-187`):
+/// `artist.name` first, then the `artists[]` array (the entry with the
+/// `main-artist` role, else the first entry). `/album/suggest` returns items
+/// whose flat `artist` is empty but whose `artists[]` is populated — without
+/// the fallback the "Listening suggestions" cards render no artist line.
+fn card_artist(album: &Album) -> (String, String) {
+    if !album.artist.name.is_empty() {
+        return (album.artist.name.clone(), album.artist.id.to_string());
+    }
+    if let Some(list) = album.artists.as_ref() {
+        let pick = list
+            .iter()
+            .find(|a| {
+                a.roles
+                    .as_ref()
+                    .map(|r| r.iter().any(|role| role == "main-artist"))
+                    .unwrap_or(false)
+            })
+            .or_else(|| list.first());
+        if let Some(a) = pick {
+            return (a.name.clone(), a.id.to_string());
+        }
+    }
+    (String::new(), String::new())
+}
+
 /// artist.rs `map_release` for carousel cards (deduped vs the open album).
 fn map_release_card(release: &qbz_models::PageArtistRelease) -> AlbumCardData {
     let artist = release
@@ -727,7 +753,7 @@ fn reco_to_card(r: qbz_external_reco::AlbumReco) -> AlbumCardData {
         title: r.title,
         artist: r.artist,
         artist_id: r.artist_id,
-        genre: String::new(),
+        genre: r.genre,
         year: r.year,
         quality_tier: r.quality_tier,
         quality_detail: r.quality_label,
@@ -767,13 +793,14 @@ pub async fn load_suggestions(
                 .as_ref()
                 .and_then(|d| d.original.clone().or(d.download.clone()).or(d.stream.clone()))
                 .or(a.release_date_original.clone());
+            let (artist, card_artist_id) = card_artist(a);
             AlbumCardData {
                 is_pinned: crate::sidebar_qt::is_pinned("album", &a.id),
                 is_favorite: crate::fav_cache_qt::is_album_favorite(&a.id),
                 id: a.id.clone(),
                 title: a.title.clone(),
-                artist: a.artist.name.clone(),
-                artist_id: a.artist.id.to_string(),
+                artist,
+                artist_id: card_artist_id,
                 genre: a.genre.as_ref().map(|g| g.name.clone()).unwrap_or_default(),
                 year: qbz_text_utils::dates::release_label(date.as_deref()),
                 quality_tier: home_qt::quality_tier_from_depth(bit_depth).to_string(),
