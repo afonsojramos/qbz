@@ -234,20 +234,36 @@ fn publish(doc: &AlbumInfoDoc, loading: bool) {
 /// fresh (the credits/copyright fields are not in the view's document), then
 /// publish. Non-catalog ids (local/Plex keys) are rejected — the button is
 /// hidden for those, this is the backstop.
+///
+/// The generation guard is load-bearing: open A → close → open B leaves A's
+/// fetch in flight, and without the guard a slow A publishes ITS document
+/// over B's loading state — the modal then shows album A's credits inside
+/// album B's page (seen in smoke 2026-08-10).
 pub fn open(album_id: String) {
     if album_id.parse::<u64>().is_err() {
         log::debug!("[qbz-qt] album info skipped for non-catalog id '{album_id}'");
         return;
     }
+    let generation = INFO_GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
     album_bridge::ui(|mut b| {
         b.as_mut().set_album_info_loading(true);
         b.as_mut().set_album_info_error(QString::default());
+        // Drop the previous document with the loading flag: a stale doc must
+        // never paint under the spinner.
+        b.as_mut().set_album_info_json(QString::from("{}"));
     });
     let runtime: Arc<AppRuntime<LoggingAdapter>> = crate::app();
     crate::spawn(async move {
         match runtime.core().get_album(&album_id).await {
-            Ok(album) => publish(&map(album), false),
+            Ok(album) => {
+                if generation == INFO_GENERATION.load(std::sync::atomic::Ordering::SeqCst) {
+                    publish(&map(album), false);
+                }
+            }
             Err(e) => {
+                if generation != INFO_GENERATION.load(std::sync::atomic::Ordering::SeqCst) {
+                    return;
+                }
                 log::warn!("[qbz-qt] album info load failed for {album_id}: {e}");
                 let msg = e.to_string();
                 album_bridge::ui(move |mut b| {
@@ -258,3 +274,6 @@ pub fn open(album_id: String) {
         }
     });
 }
+
+/// Monotonic open counter — see `open`.
+static INFO_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);

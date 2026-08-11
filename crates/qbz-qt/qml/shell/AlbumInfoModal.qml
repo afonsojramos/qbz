@@ -49,6 +49,11 @@ Popup {
     readonly property bool loading: QbzAlbum.albumInfoLoading === true
     readonly property string errorText: QbzAlbum.albumInfoError || ""
     property string activeTab: "credits"
+    // The album the user ASKED for. The data overlay holds until the
+    // published document answers for this id — belt-and-braces next to the
+    // Rust generation guard (album_info_qt.rs): a late doc for a previous
+    // album must never render inside this one's page.
+    property string requestedId: ""
 
     // --- Actions ---------------------------------------------------------
 
@@ -58,6 +63,7 @@ Popup {
         if (!albumId || albumId === "")
             return
         root.activeTab = "credits"
+        root.requestedId = albumId
         QbzAlbum.openAlbumInfo(albumId)
         open()
     }
@@ -494,10 +500,11 @@ Popup {
                 Item { width: 1; height: 24 }
             }
 
-            // ---- Loading / error overlay ----------------------------------
+            // ---- Loading / error / stale-doc overlay ----------------------
             Rectangle {
                 anchors.fill: parent
                 visible: root.loading || root.errorText !== ""
+                    || (root.doc.albumId || "") !== root.requestedId
                 color: theme.surfaceCard
                 radius: theme.radiusMd
                 MouseArea { anchors.fill: parent }
