@@ -4348,6 +4348,12 @@ msgstr "Al in gebruik door"
 msgid "Auto (recommended)"
 msgstr "Automatisch (aanbevolen)"
 
+msgid "Discrete GPU (higher performance)"
+msgstr "Aparte GPU (meer prestaties)"
+
+msgid "Integrated GPU (lower power)"
+msgstr "Geïntegreerde GPU (zuiniger)"
+
 msgid "Auto picks the best renderer for your graphics hardware. Only change this if the app feels slow or renders incorrectly (requires restart)"
 msgstr "Automatisch kiest de beste renderer voor je grafische hardware. Wijzig dit alleen als de app traag aanvoelt of verkeerd rendert (vereist herstart)"
 
@@ -4681,6 +4687,9 @@ msgstr "Geanimeerde albumhoes-achtergrond achter de hele app. Hoog verbruik van 
 msgid "Preferred GPU"
 msgstr "Voorkeurs-GPU"
 
+msgid "Which GPU renders the app. Only the GPUs actually present are listed. Choosing one other than the default also switches the renderer to Vulkan — the only backend Qt can select a GPU on (requires restart)"
+msgstr "Welke GPU de app rendert. Alleen daadwerkelijk aanwezige GPU's worden getoond. Een andere dan de standaard kiezen schakelt de renderer ook naar Vulkan — de enige backend waarop Qt een GPU kan kiezen (herstart vereist)"
+
 msgid "Which GPU renders the app. On a hybrid laptop, picking the discrete GPU moves the dynamic-background load off the integrated one (cooler, but more power). Auto is recommended (requires restart)"
 msgstr "Welke GPU de app rendert. Op een hybride laptop verplaatst het kiezen van de dedicated GPU de belasting van de dynamische achtergrond weg van de geïntegreerde GPU (koeler, maar meer stroomverbruik). Automatisch wordt aanbevolen (vereist herstart)"
 
@@ -4692,6 +4701,9 @@ msgstr "geïntegreerd"
 
 msgid "Preferred GPU changed — restart QBZ to apply"
 msgstr "Voorkeurs-GPU gewijzigd — herstart QBZ om toe te passen"
+
+msgid "Renderer changed — restart QBZ to apply"
+msgstr "Renderer gewijzigd — start QBZ opnieuw om toe te passen"
 
 msgid "Search your library"
 msgstr "Zoek in je bibliotheek"

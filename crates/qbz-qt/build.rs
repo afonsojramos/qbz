@@ -16,7 +16,102 @@ fn collect_qrc_files(dir: &Path, out: &mut Vec<String>) {
     }
 }
 
+/// Every RHI variant a Qt Quick shader should carry.
+///
+/// `qsb --qt6` is only `100 es,120,150` + HLSL 50 + MSL 12. This is that plus
+/// the modern GLES levels and desktop 440, because the runtime asks for the
+/// HIGHEST it can use and falls through: on a GLES 3.2 context Qt tries
+/// 320, 310, 300, 100 in that order and gives up if none is present.
+const SHADER_GLSL: &str = "100 es,300 es,310 es,320 es,120,150,440";
+const SHADER_HLSL: &str = "50";
+const SHADER_MSL: &str = "12";
+
+/// Locate Qt's `qsb`. PATH first, then the usual install layouts (Linux
+/// distro, Homebrew on the Mac mini).
+fn find_qsb() -> Option<std::path::PathBuf> {
+    if let Ok(explicit) = std::env::var("QSB") {
+        let p = std::path::PathBuf::from(explicit);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    if let Ok(path) = std::env::var("PATH") {
+        for dir in std::env::split_paths(&path) {
+            let p = dir.join("qsb");
+            if p.is_file() {
+                return Some(p);
+            }
+        }
+    }
+    for candidate in [
+        "/usr/lib64/qt6/bin/qsb",
+        "/usr/lib/qt6/bin/qsb",
+        "/usr/lib/x86_64-linux-gnu/qt6/bin/qsb",
+        "/opt/homebrew/opt/qt/bin/qsb",
+        "/usr/local/opt/qt/bin/qsb",
+    ] {
+        let p = std::path::PathBuf::from(candidate);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    None
+}
+
+/// Compile every `.frag` / `.vert` under `qml/assets/shaders/` to a `.qsb`
+/// beside it, with the full variant set.
+///
+/// WHY THIS EXISTS. The `.qsb` files used to be baked BY HAND and committed,
+/// with no record of the command. They carried SPIR-V + GLSL 440 + MSL and
+/// **no GLES variants at all**, so the moment the app got a GLES context every
+/// one of them failed with "No GLSL shader code found (versions tried: 320,
+/// 310, 300, 100)" and the visualiser went blank (2026-08-11). A hand-baked
+/// artifact cannot be audited and will be copied by the next person who adds a
+/// shader — so the bake is part of the build now.
+///
+/// Missing `qsb` is a WARNING, not an error: the committed `.qsb` are still
+/// in the tree and still load, so a box without Qt's shader tools can build.
+fn build_shaders() {
+    let dir = Path::new("qml/assets/shaders");
+    if !dir.is_dir() {
+        return;
+    }
+    let Some(qsb) = find_qsb() else {
+        println!(
+            "cargo:warning=qsb not found — shaders keep their committed .qsb. \
+             Set QSB=/path/to/qsb to re-bake them."
+        );
+        return;
+    };
+    for entry in std::fs::read_dir(dir).expect("read shaders dir").flatten() {
+        let src = entry.path();
+        let ext = src.extension().and_then(|e| e.to_str()).unwrap_or("");
+        if !matches!(ext, "frag" | "vert") {
+            continue;
+        }
+        println!("cargo:rerun-if-changed={}", src.display());
+        let out = src.with_extension(format!("{ext}.qsb"));
+        let mut cmd = std::process::Command::new(&qsb);
+        cmd.args(["--glsl", SHADER_GLSL, "--hlsl", SHADER_HLSL, "--msl", SHADER_MSL]);
+        // Vertex shaders used by Qt Quick need the batching rewrite, or the
+        // scene graph cannot batch the item and falls back per-node.
+        if ext == "vert" {
+            cmd.arg("-b");
+        }
+        cmd.arg("-o").arg(&out).arg(&src);
+        match cmd.status() {
+            Ok(s) if s.success() => {}
+            Ok(s) => panic!("qsb failed ({s}) on {}", src.display()),
+            Err(e) => panic!("could not run qsb on {}: {e}", src.display()),
+        }
+    }
+}
+
 fn main() {
+    // Bake the shaders BEFORE the qrc sweep below collects qml/assets, so a
+    // freshly compiled .qsb is the one that gets embedded.
+    build_shaders();
+
     // The WHOLE asset tree, recursively. This used to name the root-level
     // files by hand with only icons/ and fonts/ collected, so dropping a new
     // asset next to hi-res.svg compiled fine and then failed at runtime with

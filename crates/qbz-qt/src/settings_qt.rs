@@ -1149,19 +1149,36 @@ fn index_of(values: &[&str], key: &str, default: usize) -> i32 {
     values.iter().position(|v| *v == key).unwrap_or(default) as i32
 }
 
-/// Preferred-GPU dropdown (AppearanceSettings.slint): "Auto (recommended)"
-/// + detected adapter names built in Rust. POC-NOTE: no adapter enumeration
-/// in the POC — the list is Auto + the currently persisted adapter (so the
-/// owner's real value shows selected); picking it again is a no-op.
+/// Preferred-GPU dropdown. CLASS-LEVEL — Auto / integrated / discrete — which
+/// is the ceiling of what any of these platforms offers (Qt: "No further
+/// adapter configurability is provided at this time"; Slint's wgpu path is
+/// class-level too, its documented F7 limitation).
+///
+/// Until 2026-08-11 this was Auto + whatever happened to be persisted, and the
+/// select arm silently DROPPED every index but 0 — so the control could not
+/// select a GPU and did not say so. PARITY-DEBT #83.
+///
+/// The values are `renderer_qt::GPU_POWER_VALUES`, the same class keys the
+/// shipping Slint build parses out of the SHARED ui_prefs.json.
 fn gpu_power_choice() -> (Vec<String>, i32) {
-    let persisted = pref_str("gpu_power", "auto");
+    // REAL devices, enumerated with Vulkan — never classes. Offering
+    // "Discrete GPU" as a fixed row is what let you select hardware the
+    // machine does not have; this lists what is actually present, by model,
+    // in the same shape as the reference (`main.rs:7427-7438`).
+    //
+    // A box with no Vulkan (no libvulkan, no ICD) enumerates nothing and gets
+    // Auto alone — the honest answer, since no GPU choice could be applied
+    // there either.
+    let gpus = crate::renderer_qt::gpus();
     let mut opts = vec![qbz_i18n::t("Auto (recommended)")];
-    if persisted != "auto" && !persisted.is_empty() {
-        opts.push(persisted);
-        (opts, 1)
-    } else {
-        (opts, 0)
-    }
+    opts.extend(gpus.iter().map(|g| g.label()));
+    // Index 0 is Auto, so a device sits at its enumeration index + 1. An
+    // unmatched pref (a name from another machine, or a legacy class key with
+    // no such device) resolves to Auto.
+    let index = crate::renderer_qt::resolve_gpu(&pref_str("gpu_power", "auto"))
+        .map(|g| g.index as i32 + 1)
+        .unwrap_or(0);
+    (opts, index)
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -1328,6 +1345,11 @@ pub struct SettingsDoc {
     pub gpu_powers: Vec<String>,
     #[serde(rename = "gpuPowerIndex")]
     pub gpu_power_index: i32,
+    /// Can this platform honour a Preferred-GPU choice at all? False on macOS,
+    /// where QRhi hardcodes the system default device — the row HIDES there
+    /// rather than offering a control that cannot do anything.
+    #[serde(rename = "gpuSelectable")]
+    pub gpu_selectable: bool,
     // Appearance > SYSTEM TRAY (tray_settings.db)
     #[serde(rename = "trayEnable")]
     pub tray_enable: bool,
@@ -1741,6 +1763,7 @@ pub async fn publish_snapshot() {
             renderer_index: index_of(RENDERER_VALUES, &pref_str("renderer", "auto"), 0),
             gpu_powers: gpu_power_choice().0,
             gpu_power_index: gpu_power_choice().1,
+            gpu_selectable: crate::renderer_qt::gpu_selectable(),
             tray_enable: tray().get_settings().map(|t| t.enable_tray).unwrap_or(true),
             // S1: the shared default is `close_to_tray: true`
             // (`qbz-app/src/settings/tray.rs:61`), and the Slint glue reads it
@@ -2323,14 +2346,31 @@ pub async fn settings_select(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &st
             };
             save_pref("renderer", serde_json::json!(v));
             log::info!("[qbz-qt] renderer -> {v} (restart to apply)");
+            // The reference toasts here (`crates/qbz/src/main.rs:11326-11329`)
+            // and this port only logged — so the row changed nothing visible
+            // and gave no hint that a restart was needed.
+            crate::toast_qt::info(qbz_i18n::t("Renderer changed — restart QBZ to apply"));
         }
         "gpu-power" => {
-            // Only "Auto" is actionable in the POC (no adapter enumeration —
-            // the persisted-name row is display-only).
-            if index == 0 {
-                save_pref("gpu_power", serde_json::json!("auto"));
-                log::info!("[qbz-qt] gpu_power -> auto (restart to apply)");
-            }
+            // Index 0 is Auto; every other index is a REAL enumerated device,
+            // stored by NAME — the same shape the reference persists, so the
+            // shared ui_prefs round-trips between the two apps. The old arm
+            // accepted only index 0 and silently discarded the rest
+            // (PARITY-DEBT #83).
+            let gpus = crate::renderer_qt::gpus();
+            let value = if index <= 0 {
+                "auto".to_string()
+            } else {
+                match gpus.get((index - 1) as usize) {
+                    Some(g) => g.name.clone(),
+                    // The list moved under the user (a GPU was unplugged, or
+                    // the document is stale) — Auto rather than a wrong device.
+                    None => "auto".to_string(),
+                }
+            };
+            save_pref("gpu_power", serde_json::json!(value));
+            log::info!("[qbz-qt] gpu_power -> {value} (restart to apply)");
+            crate::toast_qt::info(qbz_i18n::t("Preferred GPU changed — restart QBZ to apply"));
         }
         "tray-icon-theme" => {
             let Some(v) = TRAY_ICON_VALUES.get(index) else {

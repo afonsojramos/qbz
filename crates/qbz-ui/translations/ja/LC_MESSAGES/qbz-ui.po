@@ -4249,6 +4249,12 @@ msgstr "すでに使用中:"
 msgid "Auto (recommended)"
 msgstr "自動（推奨）"
 
+msgid "Discrete GPU (higher performance)"
+msgstr "外部GPU（高パフォーマンス）"
+
+msgid "Integrated GPU (lower power)"
+msgstr "内蔵GPU（低消費電力）"
+
 msgid "Auto picks the best renderer for your graphics hardware. Only change this if the app feels slow or renders incorrectly (requires restart)"
 msgstr "自動はグラフィックハードウェアに最適なレンダラーを選択します。動作が遅い、または表示が乱れる場合のみ変更してください（再起動が必要）"
 
@@ -4655,6 +4661,9 @@ msgstr "アプリ全体の背後にアルバムアートワークのアニメー
 msgid "Preferred GPU"
 msgstr "優先GPU"
 
+msgid "Which GPU renders the app. Only the GPUs actually present are listed. Choosing one other than the default also switches the renderer to Vulkan — the only backend Qt can select a GPU on (requires restart)"
+msgstr "アプリを描画するGPU。実際に存在するGPUのみを表示します。既定以外を選ぶとレンダラーもVulkanに切り替わります — QtがGPUを選択できる唯一のバックエンドです（再起動が必要）"
+
 msgid "Which GPU renders the app. On a hybrid laptop, picking the discrete GPU moves the dynamic-background load off the integrated one (cooler, but more power). Auto is recommended (requires restart)"
 msgstr "どのGPUでアプリをレンダリングするかを選びます。ハイブリッド構成のノートPCでは、ディスクリートGPUを選ぶとダイナミック背景の負荷を内蔵GPUから移せます（温度は下がりますが消費電力は増えます）。自動を推奨します（再起動が必要）"
 
@@ -4666,6 +4675,9 @@ msgstr "内蔵"
 
 msgid "Preferred GPU changed — restart QBZ to apply"
 msgstr "優先GPUを変更しました — 適用するには QBZ を再起動してください"
+
+msgid "Renderer changed — restart QBZ to apply"
+msgstr "レンダラーを変更しました — 適用するには QBZ を再起動してください"
 
 msgid "Search your library"
 msgstr "ライブラリを検索"

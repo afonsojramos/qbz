@@ -534,9 +534,20 @@ Column {
         }
     }
     SettingRow {
-        visible: QbzShell.isLinux
+        // `gpuSelectable`, not `isLinux`: same answer today, but it comes from
+        // the SAME place as the code that applies the choice
+        // (`renderer_qt::gpu_selectable`), so the row cannot outlive the
+        // capability. macOS is false because QRhi hardcodes
+        // `MTLCreateSystemDefaultDevice` — there is no env and no API, so the
+        // row hides rather than lying (PARITY-DEBT #83 scoping).
+        visible: root.doc.gpuSelectable === true
         label: QbzSession.tr("Preferred GPU", QbzSession.trRev)
-        description: QbzSession.tr("Which GPU renders the app. On a hybrid laptop, picking the discrete GPU moves the dynamic-background load off the integrated one (cooler, but more power). Auto is recommended (requires restart)", QbzSession.trRev)
+        // The description states the Vulkan coupling out loud: picking a
+        // non-default GPU changes the RENDERER too, and a setting that quietly
+        // moves another setting is exactly the kind of surprise this row must
+        // not spring. Vulkan is the only Qt backend that can select a device —
+        // measured, see src/renderer_qt.rs.
+        description: QbzSession.tr("Which GPU renders the app. Only the GPUs actually present are listed. Choosing one other than the default also switches the renderer to Vulkan — the only backend Qt can select a GPU on (requires restart)", QbzSession.trRev)
         QbzSelect {
             menuWidth: 260
             options: root.doc.gpuPowers || []

@@ -4279,6 +4279,12 @@ msgstr "Уже используется:"
 msgid "Auto (recommended)"
 msgstr "Авто (рекомендуется)"
 
+msgid "Discrete GPU (higher performance)"
+msgstr "Дискретный GPU (выше производительность)"
+
+msgid "Integrated GPU (lower power)"
+msgstr "Встроенный GPU (меньше энергии)"
+
 msgid "Auto picks the best renderer for your graphics hardware. Only change this if the app feels slow or renders incorrectly (requires restart)"
 msgstr "Авто выбирает лучший рендерер для вашей видеокарты. Меняйте только если приложение работает медленно или отображается неправильно (требуется перезапуск)"
 
@@ -4685,6 +4691,9 @@ msgstr "Анимированный фон из обложки альбома з�
 msgid "Preferred GPU"
 msgstr "Предпочитаемый GPU"
 
+msgid "Which GPU renders the app. Only the GPUs actually present are listed. Choosing one other than the default also switches the renderer to Vulkan — the only backend Qt can select a GPU on (requires restart)"
+msgstr "Какой GPU отрисовывает приложение. Перечислены только реально присутствующие GPU. Выбор отличного от стандартного также переключает отрисовщик на Vulkan — единственный бэкенд, где Qt может выбрать GPU (нужен перезапуск)"
+
 msgid "Which GPU renders the app. On a hybrid laptop, picking the discrete GPU moves the dynamic-background load off the integrated one (cooler, but more power). Auto is recommended (requires restart)"
 msgstr "Какой GPU отрисовывает приложение. На гибридном ноутбуке выбор дискретного GPU переносит нагрузку динамического фона со встроенного (меньше нагрев, но выше энергопотребление). Рекомендуется Авто (требуется перезапуск)"
 
@@ -4696,6 +4705,9 @@ msgstr "встроенный"
 
 msgid "Preferred GPU changed — restart QBZ to apply"
 msgstr "Предпочитаемый GPU изменён — перезапустите QBZ, чтобы применить"
+
+msgid "Renderer changed — restart QBZ to apply"
+msgstr "Отрисовщик изменён — перезапустите QBZ, чтобы применить"
 
 msgid "Search your library"
 msgstr "Поиск в библиотеке"

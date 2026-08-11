@@ -182,6 +182,65 @@ ApplicationWindow {
 
     // Phase 23: every domain singleton boots (registers its Qt-thread
     // hop; QbzSession.boot additionally fires the app boot sequence).
+    // ── The renderer probe ────────────────────────────────────────────────
+    // The ONLY place that answers "what is actually drawing". QRhi decides it
+    // when the scene graph initialises, so `main::apply_renderer_preference()`
+    // — which runs before QGuiApplication — knows only what we ASKED for; a
+    // driver that refuses the request lands us somewhere else entirely.
+    //
+    // The enum is mapped to a NAME here, so Rust never depends on
+    // GraphicsInfo's numeric values (a Qt implementation detail). Rust ignores
+    // "unknown", the value reported before the graph resolves, so the report
+    // fires again for free once it does.
+    //
+    // This is the feature gate (shader scenes / dynamic background /
+    // reduce-motion), NOT the per-item drawing check: items that need to pick
+    // a draw path keep reading their own `GraphicsInfo.api`, which is per
+    // window and needs no round trip. See src/renderer_qt.rs.
+    Item {
+        id: rendererProbe
+        width: 0
+        height: 0
+        readonly property int api: GraphicsInfo.api
+        function report() {
+            var name = "unknown"
+            switch (rendererProbe.api) {
+            case GraphicsInfo.Software:     name = "software"; break
+            case GraphicsInfo.OpenGL:       name = "opengl";   break
+            case GraphicsInfo.Direct3D11:   name = "d3d11";    break
+            case GraphicsInfo.Direct3D12:   name = "d3d12";    break
+            case GraphicsInfo.Vulkan:       name = "vulkan";   break
+            case GraphicsInfo.Metal:        name = "metal";    break
+            case GraphicsInfo.Null:         name = "null";     break
+            }
+            QbzShell.reportRendererApi(name)
+        }
+        onApiChanged: report()
+        Component.onCompleted: report()
+    }
+
+    // ── The frame-liveness watchdog ───────────────────────────────────────
+    // Disarms the startup sentinel that `apply_renderer_preference()` armed
+    // for a forced renderer. The proof it waits for is FRAMES, not a window: a
+    // backend can create a window and then never present, which from the
+    // outside is indistinguishable from a healthy start until the user is
+    // looking at a frozen pane — and that is exactly the state the sentinel
+    // must NOT accept as success.
+    //
+    // 10 s rather than the first swap: a renderer that dies two seconds in
+    // would otherwise have already been declared healthy, and the next launch
+    // would keep re-forcing it. The reference waits for real user input with a
+    // 30 s no-touch fallback (`disarm_renderer_sentinel_on_liveness`); frames
+    // are the same idea with a signal Qt gives us directly.
+    property int _framesSwapped: 0
+    onFrameSwapped: window._framesSwapped++
+    Timer {
+        interval: 10000
+        repeat: false
+        running: true
+        onTriggered: QbzShell.reportFrameLiveness(window._framesSwapped)
+    }
+
     Component.onCompleted: {
         // DIAGNOSTIC (macOS chrome): the Rust side reports what AppKit ended
         // up with; this reports what QML asked for. Together they pin the

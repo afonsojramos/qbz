@@ -125,11 +125,16 @@ pub fn toggle() {
     log::info!("[qbz-qt] profile -> {value}");
 
     // Forced reduce-motion follows the profile (`main.rs:8596-8598`): the
-    // reference computes `kiosk_profile || !use_gpu_renderer`, and only the
-    // kiosk half has an honest source in this port (shell_bridge.rs:551-566).
+    // reference computes `kiosk_profile || !use_gpu_renderer`. BOTH halves are
+    // honest now (2026-08-11) — `renderer_qt` latches the tier from the QML
+    // probe — so this composes them instead of assigning the kiosk half alone.
+    // It used to write `to_kiosk` bare, which meant leaving kiosk on a
+    // software-tier box turned reduce-motion OFF and handed that box full-rate
+    // animations, the exact thing the tier half exists to prevent.
     shell_bridge::ui(move |mut b| {
         b.as_mut().set_kiosk_profile(to_kiosk);
-        b.as_mut().set_reduce_motion(to_kiosk);
+        b.as_mut()
+            .set_reduce_motion(crate::renderer_qt::reduce_motion(to_kiosk));
     });
     session_bridge::ui(move |mut b| {
         b.as_mut()

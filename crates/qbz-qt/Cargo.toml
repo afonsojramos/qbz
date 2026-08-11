@@ -59,6 +59,15 @@ qbz-audio = { path = "../qbz-audio" }
 # the Slint adapter and pulls in qbz-ui + slint, the ~1.6 M-line generated
 # module this whole track exists to stay out of.
 qbz-dac-wizard-core = { path = "../qbz-dac-wizard-core" }
+# Vulkan enumeration for the Preferred-GPU row — real adapter NAMES, MODELS and
+# types, in the exact order `QT_VK_PHYSICAL_DEVICE_INDEX` counts them (both are
+# `vkEnumeratePhysicalDevices`). This is the Qt analogue of what the reference
+# does with `wgpu::Instance::enumerate_adapters`.
+#
+# `ash` is a thin FFI binding that dlopens libvulkan at RUNTIME: no Vulkan SDK
+# at build time, and a box without libvulkan simply enumerates nothing. It was
+# already in the workspace lock (wgpu pulls it), so it costs no new compile.
+ash = "0.38"
 qbz-qobuz = { path = "../qbz-qobuz" }
 qbz-models = { path = "../qbz-models" }
 qbz-cache = { path = "../qbz-cache" }

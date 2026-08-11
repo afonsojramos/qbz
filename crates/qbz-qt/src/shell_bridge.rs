@@ -198,6 +198,26 @@ pub mod qbz_shell {
         /// KIOSK port can consume it rather than having to invent it. See
         /// `set_reduce_motion` for the two halves and why one is dormant.
         #[qproperty(bool, reduce_motion)]
+        /// The api QRhi actually gave us: "opengl" | "metal" | "vulkan" |
+        /// "d3d11" | "d3d12" | "software" | "null", or "unknown" before the
+        /// probe reports. Diagnostics only — features gate on the two
+        /// booleans below, never on this string.
+        #[qproperty(QString, renderer_api)]
+        /// Does the active backend carry the GPU tier? The Qt analogue of
+        /// Slint's `use_gpu_renderer` (`crates/qbz/src/main.rs:8448`).
+        #[qproperty(bool, gpu_tier)]
+        /// May the 6 immersive shader scenes be offered? Off the GPU tier they
+        /// render BLACK, which is why the reference hides them from the picker
+        /// and the `g` cycle key (`main.rs:8557`).
+        ///
+        /// **This is the gate the immersive shader scenes were waiting on** —
+        /// the immersive contract's D11 records the renderer-tier half as
+        /// deliberately absent, and it was the reason the scenes could not
+        /// ship.
+        #[qproperty(bool, shader_scenes_available)]
+        /// May the app-wide dynamic background ("modo Cider") be offered?
+        /// Same tier, same reason (`main.rs:8563`); gates the whole picker row.
+        #[qproperty(bool, app_background_available)]
         /// Is the kiosk touch shell the one currently mounted?
         ///
         /// The Qt counterpart of `ShellState.kiosk-profile`
@@ -313,6 +333,29 @@ pub mod qbz_shell {
         /// domain singleton; only QbzSession.boot also fires crate::on_boot).
         #[qinvokable]
         fn boot(self: Pin<&mut QbzShell>);
+
+        /// Report the api QRhi actually resolved to. Called ONCE, by the
+        /// renderer probe in `Main.qml`, with `GraphicsInfo.api` mapped to a
+        /// name in QML — so Rust never depends on the numeric enum, whose
+        /// values are a Qt implementation detail.
+        ///
+        /// Only QML can answer this: `apply_renderer_preference()` runs before
+        /// `QGuiApplication` and knows only what we ASKED for, and a driver
+        /// that refuses the request lands us somewhere else entirely.
+        /// "unknown" (the pre-resolution value) is ignored, not latched.
+        #[qinvokable]
+        fn report_renderer_api(self: Pin<&mut QbzShell>, api: QString);
+
+        /// The frame-liveness watchdog's verdict (PARITY-DEBT #104's other
+        /// owed half). Reported once by `Main.qml` after a settling window,
+        /// with the number of frames the window actually swapped in it.
+        ///
+        /// Proof of frames — not merely of a window — is what disarms the
+        /// startup sentinel: a backend can create a window and then never
+        /// present, which looks identical to a healthy start until the user
+        /// sees a frozen pane.
+        #[qinvokable]
+        fn report_frame_liveness(self: Pin<&mut QbzShell>, frames: i32);
 
         // --- Shell chrome -------------------------------------------------
         /// Header panel-left button: cycle the sidebar open -> mini ->
@@ -584,6 +627,10 @@ pub struct QbzShellRust {
     window_min_width: f32,
     window_min_height: f32,
     reduce_motion: bool,
+    renderer_api: QString,
+    gpu_tier: bool,
+    shader_scenes_available: bool,
+    app_background_available: bool,
     kiosk_profile: bool,
     kiosk_fullscreen_boot: bool,
     ambient_mode: i32,
@@ -662,6 +709,15 @@ impl Default for QbzShellRust {
             window_min_width: crate::settings_qt::WINDOW_MIN_WIDTH,
             window_min_height: crate::settings_qt::WINDOW_MIN_HEIGHT,
             reduce_motion: reduce_motion_at_boot(),
+            // The tier starts GPU-capable: both platforms were MEASURED on the
+            // GPU (OpenGL RHI / Metal, 2026-07-29), so it is the honest prior,
+            // and it keeps the pre-probe frames behaving exactly as they did
+            // before this seam existed. `renderer_qt` explains why a `false`
+            // default would be the worse guess.
+            renderer_api: QString::from("unknown"),
+            gpu_tier: crate::renderer_qt::gpu_tier(),
+            shader_scenes_available: crate::renderer_qt::gpu_tier(),
+            app_background_available: crate::renderer_qt::gpu_tier(),
             kiosk_profile: crate::kiosk_profile_qt::active(),
             kiosk_fullscreen_boot: crate::kiosk_profile_qt::active()
                 && crate::kiosk_profile_qt::fullscreen_at_boot(),
@@ -798,6 +854,51 @@ impl qbz_shell::QbzShell {
         if QT_THREAD.set(self.qt_thread()).is_err() {
             log::warn!("[qbz-qt] shell Qt thread already registered");
         }
+    }
+
+    /// The renderer probe's one-shot report (see the declaration).
+    ///
+    /// Writes all four derived properties from the SAME latch, so a consumer
+    /// can never see `gpuTier` disagree with `shaderScenesAvailable`. The
+    /// reduce-motion write composes both halves through
+    /// `renderer_qt::reduce_motion` rather than assigning the tier directly —
+    /// the kiosk toggle writes the same property, and a bare assignment from
+    /// either side would erase the other's contribution.
+    pub fn report_renderer_api(mut self: Pin<&mut Self>, api: QString) {
+        let api = api.to_string();
+        if !crate::renderer_qt::set_active_api(&api) {
+            return;
+        }
+        let tier = crate::renderer_qt::gpu_tier();
+        self.as_mut()
+            .set_renderer_api(QString::from(&crate::renderer_qt::active_api()));
+        self.as_mut().set_gpu_tier(tier);
+        self.as_mut().set_shader_scenes_available(tier);
+        self.as_mut().set_app_background_available(tier);
+        let kiosk = crate::kiosk_profile_qt::active();
+        self.as_mut()
+            .set_reduce_motion(crate::renderer_qt::reduce_motion(kiosk));
+    }
+
+    /// See the declaration. A window that swapped no frames is NOT liveness,
+    /// so it leaves the sentinel armed and the next launch reverts to auto.
+    pub fn report_frame_liveness(self: Pin<&mut Self>, frames: i32) {
+        if frames <= 0 {
+            // Only alarming when something is actually being protected. The
+            // offscreen smoke presents no frames BY DESIGN, and warning on
+            // every gate run would train the reader to ignore the one time it
+            // matters.
+            if crate::renderer_qt::sentinel_armed() {
+                log::warn!(
+                    "[qbz-qt] renderer: the liveness window closed with NO frames rendered — \
+                     leaving the startup sentinel armed so the next launch reverts to auto"
+                );
+            } else {
+                log::debug!("[qbz-qt] renderer: no frames in the liveness window (nothing armed)");
+            }
+            return;
+        }
+        crate::renderer_qt::disarm_on_liveness(frames);
     }
 
     pub fn cycle_sidebar(mut self: Pin<&mut Self>) {

@@ -4305,6 +4305,12 @@ msgstr "Déjà utilisé par"
 msgid "Auto (recommended)"
 msgstr "Auto (recommandé)"
 
+msgid "Discrete GPU (higher performance)"
+msgstr "GPU dédié (plus de performances)"
+
+msgid "Integrated GPU (lower power)"
+msgstr "GPU intégré (moins d'énergie)"
+
 msgid "Auto picks the best renderer for your graphics hardware. Only change this if the app feels slow or renders incorrectly (requires restart)"
 msgstr "Auto choisit le meilleur moteur de rendu pour votre matériel graphique. Ne le changez que si l’application semble lente ou s’affiche mal (redémarrage requis)"
 
@@ -4669,6 +4675,9 @@ msgstr "Arrière-plan animé à partir de la pochette derrière toute l'applicat
 msgid "Preferred GPU"
 msgstr "GPU préféré"
 
+msgid "Which GPU renders the app. Only the GPUs actually present are listed. Choosing one other than the default also switches the renderer to Vulkan — the only backend Qt can select a GPU on (requires restart)"
+msgstr "Quel GPU affiche l'application. Seuls les GPU réellement présents sont listés. En choisir un autre que celui par défaut bascule aussi le moteur de rendu sur Vulkan — le seul backend où Qt peut sélectionner un GPU (redémarrage requis)"
+
 msgid "Which GPU renders the app. On a hybrid laptop, picking the discrete GPU moves the dynamic-background load off the integrated one (cooler, but more power). Auto is recommended (requires restart)"
 msgstr "Quel GPU affiche l'application. Sur un portable hybride, choisir le GPU dédié déplace la charge de l'arrière-plan dynamique hors du GPU intégré (plus frais, mais plus gourmand en énergie). Auto est recommandé (redémarrage requis)"
 
@@ -4680,6 +4689,9 @@ msgstr "intégré"
 
 msgid "Preferred GPU changed — restart QBZ to apply"
 msgstr "GPU préféré modifié — redémarrez QBZ pour appliquer"
+
+msgid "Renderer changed — restart QBZ to apply"
+msgstr "Moteur de rendu modifié — redémarrez QBZ pour l'appliquer"
 
 msgid "Search your library"
 msgstr "Rechercher dans votre bibliothèque"

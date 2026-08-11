@@ -114,6 +114,11 @@ mod folders_qt;
 // user pastes into their own system, so two implementations would be the one
 // divergence this port must never produce.
 mod dac_wizard_qt;
+// The renderer TIER — one source of truth for what QRhi actually gave us and
+// what may be offered because of it (the Qt analogue of Slint's
+// `use_gpu_renderer`). A plain module: it declares no #[cxx_qt::bridge], so it
+// must NOT appear in build.rs's rust_files.
+mod renderer_qt;
 mod foryou_qt;
 mod genre_filter_qt;
 mod home_qt;
@@ -2420,41 +2425,82 @@ fn publish_home_sections(sections: &home_qt::DiscoverSections) {
 /// Metal default on macOS (the Slint remaps GL to skia(Metal) there,
 /// main.rs:7651-7653); `software` maps to `QT_QUICK_BACKEND=software`.
 ///
-/// OWED and kept in PARITY-DEBT #104: the crash auto-revert sentinel and
-/// the frame-liveness watchdog — forcing a renderer without them can leave
-/// a broken startup, exactly what the Slint sentinel was built for.
+/// PARITY-DEBT #104 is CLOSED as of 2026-08-11: the crash auto-revert
+/// sentinel and the frame-liveness watchdog now exist (`renderer_qt`). A
+/// forced choice arms a sentinel here and the QML watchdog disarms it once
+/// frames have genuinely been rendered; a launch that finds it still armed
+/// reverts to "auto", so a backend this machine cannot start can no longer
+/// lock the user out of Settings.
 fn apply_renderer_preference() {
+    // Do this FIRST, before any early return: a launch that died on a forced
+    // backend must be undone even when this one is being overridden by env.
+    let reverted = renderer_qt::revert_if_previous_launch_died();
+
     if std::env::var_os("QSG_RHI_BACKEND").is_some()
         || std::env::var_os("QT_QUICK_BACKEND").is_some()
     {
         log::info!("[renderer] explicit Qt backend env present; leaving the choice to it");
         return;
     }
-    let choice = match std::env::var("QBZ_RENDERER")
+    let from_env = std::env::var("QBZ_RENDERER")
         .ok()
         .map(|s| s.trim().to_ascii_lowercase())
-        .filter(|s| !s.is_empty() && s != "auto")
-    {
+        .filter(|s| !s.is_empty() && s != "auto");
+    let choice = match from_env.clone() {
         Some(v) => v,
+        // A revert has just rewritten the pref to "auto"; use that rather than
+        // a value read one line before it changed.
+        None if reverted => "auto".to_string(),
         None => settings_qt::pref_str("renderer", "auto"),
     };
-    match choice.as_str() {
+    // Does this choice actually FORCE a backend? Only a forced one can brick a
+    // startup, and only a forced one may arm the sentinel: arming for a choice
+    // that changes nothing would let a crash from an unrelated cause silently
+    // reset the user's renderer preference on the next launch.
+    //
+    // The GPU-tier aliases (auto / wgpu / gpu / hardware / hw) all resolve to
+    // Qt's own default backend, so they force nothing — `wgpu` is a
+    // cross-frontend name kept for the shared pref, not a Qt backend.
+    let forces_backend = match choice.as_str() {
         "software" | "cpu" | "soft" => {
             std::env::set_var("QT_QUICK_BACKEND", "software");
             log::info!("[renderer] '{choice}' -> QT_QUICK_BACKEND=software");
+            true
         }
         "gl" | "gles" | "femtovg" => {
             if cfg!(target_os = "macos") {
                 log::info!("[renderer] '{choice}' on macOS -> Metal default (the Slint GL remap)");
+                false
             } else {
                 std::env::set_var("QSG_RHI_BACKEND", "opengl");
                 log::info!("[renderer] '{choice}' -> QSG_RHI_BACKEND=opengl");
+                true
             }
         }
         "auto" | "wgpu" | "gpu" | "hardware" | "hw" => {
             log::info!("[renderer] '{choice}' -> Qt default backend (GPU path)");
+            false
         }
-        other => log::warn!("[renderer] unrecognized choice '{other}' -> Qt default backend"),
+        other => {
+            log::warn!("[renderer] unrecognized choice '{other}' -> Qt default backend");
+            false
+        }
+    };
+    // NOT armed for a `QBZ_RENDERER` override either: the revert rewrites the
+    // PERSISTED pref, which an env override never set — it would blame (and
+    // silently reset) a setting the user did not choose, while the env would
+    // keep forcing the same dead backend on the next launch anyway.
+    //
+    // Arming AFTER `set_var` is still before anything reads it: Qt only
+    // consults these when `QGuiApplication` builds the backend, which is the
+    // caller's next statement.
+    if forces_backend && from_env.is_none() {
+        renderer_qt::arm_for_choice(&choice);
+    } else {
+        renderer_qt::clear_stale_sentinel();
+        if from_env.is_some() && forces_backend {
+            log::info!("[renderer] QBZ_RENDERER override — the startup sentinel stays out of it");
+        }
     }
 }
 
@@ -2573,7 +2619,12 @@ fn main() {
     }
     let _ = APP.set(runtime);
 
+    // BOTH must run before QGuiApplication: the renderer envs are read when
+    // the backend is chosen, and the GPU envs when the graphics context is
+    // created. Setting either afterwards is a silent no-op — the context is
+    // already up and nothing complains.
     apply_renderer_preference();
+    renderer_qt::apply_gpu_preference();
 
     let mut app = QGuiApplication::new();
     let mut engine = QQmlApplicationEngine::new();
