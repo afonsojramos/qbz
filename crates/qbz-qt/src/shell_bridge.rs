@@ -514,6 +514,16 @@ pub mod qbz_shell {
         fn select_all_requested(self: Pin<&mut QbzShell>);
         #[qsignal]
         fn exit_multi_select_requested(self: Pin<&mut QbzShell>);
+        /// Offline-cache row status fan-out (offline_cache_qt::row_sink):
+        /// 0 none · 1 queued · 2 downloading · 3 ready · 4 failed. Views
+        /// patch the matching track row inside their own document copy.
+        #[qsignal]
+        fn track_cache_status_changed(
+            self: Pin<&mut QbzShell>,
+            track_id: QString,
+            status: i32,
+            progress: f64,
+        );
     }
 
     // The custom WRITE targets of the §4.6 seam properties. NOT qinvokables —

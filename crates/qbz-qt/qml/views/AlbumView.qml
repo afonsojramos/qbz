@@ -7,8 +7,9 @@
 // heart), label/awards sidebar, and the two bottom carousels ("From the
 // same artist", "Listening suggestions").
 //
-// POC-NOTEs: multi-select + bulk bar and the offline download column —
-// out of scope (visible stubs are inert).
+// POC-NOTEs: the offline download column (TrackRow status glyphs + ⋯ menu
+// rows) and multi-select + bulk bar are LIVE. Still out: DiscHeaderMenu
+// per-disc actions.
 //
 // Header atmosphere (AlbumPageView.slint:161-189, 221-257): the
 // artwork-tinted band IS wired now, through the shared
@@ -201,6 +202,103 @@ Rectangle {
         loadedAlbumId = id
         localToggles = ({})
         dispatchedCovers = ({})
+        // A new album carries no selection over (Slint resets multi-select
+        // on every album load/reset, album.rs:692-694).
+        setMultiSelect(false)
+        // Re-seed the live offline map from the new document (track rows
+        // carry their own seeded cacheStatus; this map tracks the LIVE one).
+        var seed = ({})
+        var ts = album.tracks || []
+        for (var i = 0; i < ts.length; i++)
+            seed[ts[i].id] = ts[i].cacheStatus || 0
+        cacheStates = seed
+    }
+
+    // --- Multi-select (AlbumPageView.slint:736-807) -------------------------
+    // The selection lives here in QML (LibraryView precedent): select-all and
+    // clear never reach Rust, everything else goes down as a JSON id array
+    // through QbzAlbum.albumBulkAction.
+    property bool multiSelect: false
+    property var selected: ({})
+    readonly property int selectedCount: Object.keys(root.selected).length
+    readonly property bool multiSelectOn: root.multiSelect
+    function setMultiSelect(on) {
+        root.multiSelect = on
+        if (!on) root.selected = ({})
+    }
+    function toggleSelected(id) {
+        var m = root.selected
+        if (m[id] === true) delete m[id]
+        else m[id] = true
+        // A rebind needs a NEW object reference — mutating in place notifies
+        // nothing.
+        root.selected = Object.assign({}, m)
+    }
+    /// Selected ids in VISIBLE order — never Object.keys (integer-like keys
+    /// iterate in NUMERIC order, not the user's).
+    function selectedIdsInOrder() {
+        var rows = root.visibleTracks
+        var out = []
+        for (var i = 0; i < rows.length; i++)
+            if (root.selected[rows[i].id] === true) out.push(rows[i].id)
+        return out
+    }
+    function bulkAction(action) {
+        if (action === "select-all") {
+            var m = {}
+            var rows = root.visibleTracks
+            for (var i = 0; i < rows.length; i++) m[rows[i].id] = true
+            root.selected = m
+            return
+        }
+        if (action === "clear") { root.selected = ({}); return }
+        var ids = root.selectedIdsInOrder()
+        if (ids.length === 0) return
+        QbzAlbum.albumBulkAction(header.id, JSON.stringify(ids), action)
+        // The Slint keeps the selection while a picker is still open (a
+        // failed write is retried from the same modal) and clears after
+        // everything else.
+        if (action !== "add-to-playlist" && action !== "add-to-mixtape")
+            root.selected = ({})
+    }
+    // Ctrl+A / Escape hotkey router seam (AppShell duck-types these).
+    function selectAll() {
+        if (!root.multiSelect) root.setMultiSelect(true)
+        root.bulkAction("select-all")
+    }
+    function exitMultiSelectMode() {
+        if (root.multiSelect) root.setMultiSelect(false)
+    }
+
+    // --- Offline cache live state ------------------------------------------
+    // Row glyphs own their live status (TrackRow's Connections). This map
+    // exists for ONE consumer: the ⋯ menu's "Make available offline" /
+    // "Refresh offline copy" swap, which needs the all-rows-ready aggregate
+    // (Slint recomputes album-fully-cached on every row flip,
+    // main.rs:2426-2438).
+    property var cacheStates: ({})
+    readonly property bool fullyCachedLive: {
+        var ts = album.tracks || []
+        if (ts.length === 0)
+            return false
+        var m = cacheStates
+        for (var i = 0; i < ts.length; i++) {
+            var st = m[ts[i].id]
+            if (st === undefined) st = ts[i].cacheStatus || 0
+            if (st !== 3)
+                return false
+        }
+        return true
+    }
+    Connections {
+        target: QbzShell
+        function onTrackCacheStatusChanged(trackId, status, progress) {
+            if (!(trackId in root.cacheStates))
+                return
+            var m = root.cacheStates
+            m[trackId] = status
+            root.cacheStates = Object.assign({}, m)
+        }
     }
 
     // Already-requested artwork keys. The document is now published in FOUR
@@ -856,24 +954,30 @@ Rectangle {
                                 }
                             }
                         }
-                        // Multi-select toggle — no seam on this bridge, so it
-                        // is DIMMED and inert-by-declaration instead of
-                        // rendering as a live button that swallows the click.
+                        // Multi-select toggle (AlbumPageView.slint:752-787):
+                        // accent border + tint while active; leaving the mode
+                        // clears the selection.
                         Rectangle {
                             width: 30
                             height: 30
                             radius: 6
-                            opacity: 0.4
                             anchors.verticalCenter: parent.verticalCenter
-                            color: theme.surfaceElevated
+                            color: selectToggleArea.containsMouse ? theme.surfaceHover : theme.surfaceElevated
                             border.width: 1
-                            border.color: theme.borderSubtle
+                            border.color: root.multiSelect ? theme.accent : theme.borderSubtle
                             QbzIcon {
                                 name: "square-check-big"
                                 width: 15
                                 height: 15
                                 anchors.centerIn: parent
-                                tintName: "secondary"
+                                tintName: root.multiSelect ? "accent" : "secondary"
+                            }
+                            MouseArea {
+                                id: selectToggleArea
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: root.setMultiSelect(!root.multiSelect)
                             }
                         }
                     }
@@ -983,6 +1087,9 @@ Rectangle {
                                 qualityStyle: "text"
                                 showDownload: true
                                 downloadGlyph: true
+                                selectMode: root.multiSelect
+                                checked: root.selected[item.id] === true
+                                onToggleSelect: root.toggleSelected(item.id)
                                 menuShowLater: false
                                 menuShowGoTo: false
                                 onPlayRequested: QbzPlayer.playAlbumFrom(header.id, item.id)
@@ -1169,6 +1276,34 @@ Rectangle {
         }
     }
 
+    // Multi-select bulk bar (primitives/MultiSelectBar.slint port is
+    // controls/QbzMultiSelectBar.qml). Declared AFTER the scrolling body:
+    // declaration order IS z-order, and this bar overlays the content top.
+    QbzMultiSelectBar {
+        id: bulkBar
+        visible: root.multiSelect && !root.primaryLoading
+        anchors.top: parent.top
+        anchors.topMargin: 10
+        anchors.left: parent.left
+        anchors.leftMargin: 32
+        anchors.right: parent.right
+        anchors.rightMargin: 32
+        selectedCount: root.selectedCount
+        // The reference's full AlbumView inventory (AlbumPageView.slint
+        // :792-807), make-offline included.
+        actions: [
+            { "id": "select-all", "label": QbzSession.tr("Select all", QbzSession.trRev), "icon": "square-check-big", "danger": false, "needsSelection": false },
+            { "id": "play-next", "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-start", "danger": false, "needsSelection": true },
+            { "id": "play-later", "label": QbzSession.tr("Play later", QbzSession.trRev), "icon": "list-plus", "danger": false, "needsSelection": true },
+            { "id": "queue", "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "danger": false, "needsSelection": true },
+            { "id": "add-to-playlist", "label": QbzSession.tr("Add to playlist", QbzSession.trRev), "icon": "list-music", "danger": false, "needsSelection": true },
+            { "id": "add-to-favorites", "label": QbzSession.tr("Add to Library", QbzSession.trRev), "icon": "heart", "danger": false, "needsSelection": true },
+            { "id": "make-offline", "label": QbzSession.tr("Make available offline", QbzSession.trRev), "icon": "cloud-download", "danger": false, "needsSelection": true },
+            { "id": "clear", "label": QbzSession.tr("Clear", QbzSession.trRev), "icon": "x", "danger": false, "needsSelection": true }
+        ]
+        onAction: function (id) { root.bulkAction(id) }
+    }
+
     // Thin auto-hiding scrollbar (ListScrollbar).
     QbzScrollBar {
         anchors.right: parent.right
@@ -1259,10 +1394,10 @@ Rectangle {
     // Popup reparents to the window overlay).
     AlbumInfoModal { id: albumInfo }
 
-    // Album ⋯ menu (AlbumContextMenu subset — the offline rows stay out:
-    // Qt has no album offline-cache seam. "Play later" as a distinct
-    // block-tail insert has no mode in playback_qt::enqueue_album either
-    // (next / append only), so "Add to queue" covers the append arm).
+    // Album ⋯ menu (AlbumContextMenu subset — "Play later" as a distinct
+    // block-tail insert has no mode in playback_qt::enqueue_album (next /
+    // append only), so "Add to queue" covers the append arm. The offline
+    // row swaps on the live all-cached aggregate).
     QbzContextMenu {
         id: albumMenu
         menuWidth: 196
@@ -1277,6 +1412,9 @@ Rectangle {
                     { "label": QbzSession.tr("Add to mixtape", QbzSession.trRev), "icon": "cassette-tape", "action": "mixtape" },
                     { "label": QbzSession.tr("Share Qobuz link", QbzSession.trRev), "icon": "link", "action": "share-qobuz" },
                     { "label": QbzSession.tr("Share Album.link", QbzSession.trRev), "icon": "link", "action": "share-albumlink" },
+                    // AlbumContextMenu.slint:137-152 — the offline row swaps
+                    // on the all-cached aggregate (live from row flips).
+                    { "label": root.fullyCachedLive ? QbzSession.tr("Refresh offline copy", QbzSession.trRev) : QbzSession.tr("Make available offline", QbzSession.trRev), "icon": root.fullyCachedLive ? "refresh-cw" : "cloud-download", "action": root.fullyCachedLive ? "recache-album" : "cache-album" },
                 ]
                 delegate: Rectangle {
                     required property var modelData
@@ -1331,6 +1469,10 @@ Rectangle {
                                 QbzAlbum.shareQobuzLink(header.id)
                             } else if (a === "share-albumlink") {
                                 QbzAlbum.shareAlbumLink(header.id)
+                            } else if (a === "cache-album") {
+                                QbzAlbum.albumCacheOffline(header.id)
+                            } else if (a === "recache-album") {
+                                QbzAlbum.albumRefreshOffline(header.id)
                             }
                         }
                     }

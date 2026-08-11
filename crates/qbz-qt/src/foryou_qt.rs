@@ -997,6 +997,7 @@ fn to_row(track: &Track) -> TrackRow {
             .and_then(|a| a.image.best().cloned())
             .unwrap_or_default(),
         is_favorite: crate::fav_cache_qt::is_favorite("track", &track.id.to_string()),
+        cache_status: if crate::offline_qt::is_cached(&track.id.to_string()) { 3 } else { 0 },
         ..TrackRow::default()
     }
 }

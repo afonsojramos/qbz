@@ -15,12 +15,12 @@
 //! artist/album blacklist, and the Recommendations dismissal set.
 //!
 //! Still omitted (no view reads them yet; each is a mechanical
-//! `init_for_user(&dir)` when its view lands): `crate::offline::activate`,
-//! `offline_cache::load_cached_ids`, `reco` (+train_async), `external_reco`,
-//! `qbz_reco::ArtistVectorStore`, `discover_prefs`, `session_persist`,
-//! `lyrics`. Also omitted: the subscription purge consumer
-//! (`spawn_subscription_purge_check`) — it needs the offline cache, which
-//! this phase does not bring up; TODO when the offline cache is wired.
+//! `init_for_user(&dir)` when its view lands): `reco` (+train_async),
+//! `external_reco`, `qbz_reco::ArtistVectorStore`, `discover_prefs`,
+//! `session_persist`, `lyrics`. Also omitted: the subscription purge
+//! consumer (`spawn_subscription_purge_check`) — it needs the offline
+//! cache, which IS wired now (`offline_qt::activate` runs in
+//! `bind_per_user_stores`); the purge consumer is its own TODO.
 //!
 //! KEPT (the offline guardrails this phase is about):
 //! `ensure_api_initialized` (scoped gate lift), `login_with_oauth_code`,
@@ -170,7 +170,7 @@ where
         crate::search_cache_qt::init();
         // Phase 17: playlist is_owner math.
         crate::playlist_qt::set_user_id(user_id);
-        bind_per_user_stores(&dir, user_id);
+        bind_per_user_stores(&dir, user_id).await;
     }
     crate::offline_fwd::subscription_mark_valid();
     crate::offline_fwd::engine().set_offline_session(false);
@@ -200,7 +200,7 @@ where
 /// `myqbz_qt::init_for_user` also runs the mixtape migrations (best-effort,
 /// logs on failure, never blocks shell entry) — one entry point, so the caller
 /// cannot bind the uid and forget the schema.
-fn bind_per_user_stores(dir: &std::path::Path, user_id: u64) {
+async fn bind_per_user_stores(dir: &std::path::Path, user_id: u64) {
     // MyQBZ: branding (label + icon, read by the sidebar/nav flyout on frame
     // 1) and the grids + mixtape schema.
     crate::myqbz_prefs_qt::init_for_user(dir);
@@ -211,6 +211,9 @@ fn bind_per_user_stores(dir: &std::path::Path, user_id: u64) {
     crate::artist_blacklist::init_for_user(dir);
     // "Not interested" dismissals on Recommendations cards.
     crate::reco_dismiss_qt::init_for_user(dir);
+    // Offline DOWNLOAD cache (index.db + library.db + cached-id seed) —
+    // awaited so the ready-set is seeded before any view can build rows.
+    crate::offline_qt::activate(user_id).await;
 }
 
 /// Make sure the Qobuz client holds bundle tokens before a sign-in call.
@@ -305,7 +308,7 @@ where
         crate::search_cache_qt::init();
                 // Phase 17: playlist is_owner math.
                 crate::playlist_qt::set_user_id(user_id);
-                bind_per_user_stores(&dir, user_id);
+                bind_per_user_stores(&dir, user_id).await;
             }
             crate::offline_fwd::subscription_mark_valid();
             crate::offline_fwd::engine().set_offline_session(false);
@@ -384,7 +387,7 @@ where
         crate::playlist_qt::set_user_id(user_id);
         // NOT optional on the offline path — see the helper's doc comment for
         // the leak this closes.
-        bind_per_user_stores(&dir, user_id);
+        bind_per_user_stores(&dir, user_id).await;
     }
     crate::offline_fwd::engine().set_offline_session(true);
     Ok(user_id)
@@ -443,6 +446,9 @@ where
     crate::artist_blacklist::teardown();
     crate::reco_dismiss_qt::teardown();
     crate::offline_fwd::teardown();
+    // The offline download cache (index.db/library connections + the cached
+    // id set) — torn down so the next account never reads this one's rows.
+    crate::offline_qt::deactivate().await;
     runtime.deactivate().await?;
     log::info!("[qbz-qt] logged out");
     Ok(())

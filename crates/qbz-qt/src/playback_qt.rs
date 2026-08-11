@@ -414,6 +414,31 @@ pub(crate) async fn route_track_to_peer(track: &QueueTrack, mode: &str) -> bool 
     }
 }
 
+/// The one funnel every local play goes through. Hands the play path the
+/// ACTIVE offline cache + the row-status sink (Slint passes both through
+/// `play_track_resolved`; this port used to pass `None, None`, which made
+/// the offline tier unreachable — downloaded tracks always streamed).
+/// With no active cache this degrades to exactly the old behaviour.
+pub(crate) async fn play_resolved_offline_aware(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    track_id: u64,
+    quality: qbz_models::Quality,
+    start_position_secs: u64,
+) -> Result<(), String> {
+    let off = crate::offline_qt::get().await;
+    let sink = off.as_ref().map(|_| crate::offline_cache_qt::row_sink());
+    runtime
+        .core()
+        .play_track_resolved(
+            track_id,
+            quality,
+            off.as_deref(),
+            sink.as_ref(),
+            start_position_secs,
+        )
+        .await
+}
+
 /// QConnect CONTROLLER-mode play routing (contract §7's decided arm position —
 /// Slint playback.rs:638-651): when a PEER renderer owns playback, route the
 /// play to the peer instead of running the local audible step. Call AFTER
@@ -625,9 +650,7 @@ pub async fn play_artist(runtime: &Arc<AppRuntime<LoggingAdapter>>, artist_id: &
         if route_play_to_peer(runtime, first_id).await {
             return Ok(());
         }
-        runtime
-            .core()
-            .play_track_resolved(first_id, current_quality(), None, None, 0)
+        play_resolved_offline_aware(runtime, first_id, current_quality(), 0)
             .await
             .map_err(|e| format!("play_track {first_id} failed: {e}"))?;
         refresh_now_playing(runtime).await;
@@ -676,9 +699,7 @@ pub async fn play_artist(runtime: &Arc<AppRuntime<LoggingAdapter>>, artist_id: &
     if route_play_to_peer(runtime, first_id).await {
         return Ok(());
     }
-    runtime
-        .core()
-        .play_track_resolved(first_id, current_quality(), None, None, 0)
+    play_resolved_offline_aware(runtime, first_id, current_quality(), 0)
         .await
         .map_err(|e| format!("play_track {first_id} failed: {e}"))?;
     refresh_now_playing(runtime).await;
@@ -783,9 +804,7 @@ pub async fn play_album_from(
     if route_play_to_peer(runtime, first_id).await {
         return Ok(());
     }
-    runtime
-        .core()
-        .play_track_resolved(first_id, current_quality(), None, None, 0)
+    play_resolved_offline_aware(runtime, first_id, current_quality(), 0)
         .await
         .map_err(|e| format!("play_track {first_id} failed: {e}"))?;
     log::info!("[qbz-qt] play_album: play_track_resolved started for {first_id}");
@@ -821,9 +840,7 @@ pub async fn play_album_from_track(
     if route_play_to_peer(runtime, first_id).await {
         return Ok(());
     }
-    runtime
-        .core()
-        .play_track_resolved(first_id, current_quality(), None, None, 0)
+    play_resolved_offline_aware(runtime, first_id, current_quality(), 0)
         .await
         .map_err(|e| format!("play_track {first_id} failed: {e}"))?;
     refresh_now_playing(runtime).await;
@@ -942,9 +959,7 @@ pub async fn play_track_list_in(
     if route_play_to_peer(runtime, first_id).await {
         return Ok(());
     }
-    runtime
-        .core()
-        .play_track_resolved(first_id, current_quality(), None, None, 0)
+    play_resolved_offline_aware(runtime, first_id, current_quality(), 0)
         .await
         .map_err(|e| format!("play_track {first_id} failed: {e}"))?;
     refresh_now_playing(runtime).await;
@@ -1341,9 +1356,7 @@ pub async fn play_single_track(
     if route_play_to_peer(runtime, track_id).await {
         return Ok(());
     }
-    runtime
-        .core()
-        .play_track_resolved(track_id, current_quality(), None, None, 0)
+    play_resolved_offline_aware(runtime, track_id, current_quality(), 0)
         .await
         .map_err(|e| format!("play_track {track_id} failed: {e}"))?;
     refresh_now_playing(runtime).await;
@@ -1485,9 +1498,7 @@ async fn play_queue_track(runtime: &Arc<AppRuntime<LoggingAdapter>>, track_id: u
         publish_queue(runtime).await;
         return;
     }
-    if let Err(e) = runtime
-        .core()
-        .play_track_resolved(track_id, current_quality(), None, None, 0)
+    if let Err(e) = play_resolved_offline_aware(runtime, track_id, current_quality(), 0)
         .await
     {
         log::error!("[qbz-qt] playback: play_track {track_id} failed: {e}");

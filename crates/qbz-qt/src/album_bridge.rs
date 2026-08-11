@@ -89,6 +89,16 @@ pub mod qbz_album_bridge {
         /// review) document (album_info_qt.rs).
         #[qinvokable]
         fn open_album_info(self: Pin<&mut QbzAlbum>, album_id: QString);
+        /// ⋯ menu offline rows (offline_cache_qt.rs): download the whole
+        /// album / re-download its copies.
+        #[qinvokable]
+        fn album_cache_offline(self: Pin<&mut QbzAlbum>, album_id: QString);
+        #[qinvokable]
+        fn album_refresh_offline(self: Pin<&mut QbzAlbum>, album_id: QString);
+        /// Multi-select bulk bar (album_qt::bulk_action): ids in visible
+        /// order, action id from the bar's vocabulary.
+        #[qinvokable]
+        fn album_bulk_action(self: Pin<&mut QbzAlbum>, album_id: QString, ids_json: QString, action: QString);
     }
 
     impl cxx_qt::Threading for QbzAlbum {}
@@ -175,5 +185,16 @@ impl qbz_album_bridge::QbzAlbum {
     }
     pub fn open_album_info(self: Pin<&mut Self>, album_id: QString) {
         crate::album_info_qt::open(album_id.to_string());
+    }
+    pub fn album_cache_offline(self: Pin<&mut Self>, album_id: QString) {
+        crate::offline_cache_qt::cache_album(album_id.to_string());
+    }
+    pub fn album_refresh_offline(self: Pin<&mut Self>, album_id: QString) {
+        // The menu's "Refresh offline copy" re-downloads the WHOLE album,
+        // not just the failed rows (Slint main.rs:12204).
+        crate::offline_cache_qt::redownload_album(album_id.to_string(), false);
+    }
+    pub fn album_bulk_action(self: Pin<&mut Self>, album_id: QString, ids_json: QString, action: QString) {
+        crate::album_qt::bulk_action(album_id.to_string(), ids_json.to_string(), action.to_string());
     }
 }

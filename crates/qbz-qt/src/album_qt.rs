@@ -96,6 +96,11 @@ pub struct TrackRow {
     /// drew empty — including on tracks the user had favourited.
     #[serde(rename = "isFavorite")]
     pub is_favorite: bool,
+    /// Offline-cache status at build time (0 none / 3 ready — in-flight
+    /// states only ever arrive live, via `trackCacheStatusChanged`). Seeded
+    /// from the session cached-id set, Slint `album.rs:583`.
+    #[serde(rename = "cacheStatus")]
+    pub cache_status: i32,
 }
 
 /// `Deserialize` rides along with `Serialize` so a card can be read BACK out of
@@ -181,6 +186,12 @@ pub struct AlbumHeader {
     /// by `load_album` for `download_booklet`.
     #[serde(rename = "hasBooklet")]
     pub has_booklet: bool,
+    /// Every track has a ready offline copy (Slint `album-fully-cached`:
+    /// `album.rs:677-679` — non-empty track list, all status 3). Swaps the
+    /// ⋯ menu's offline row between "Make available offline" and "Refresh
+    /// offline copy"; the view keeps it live from row-status signals.
+    #[serde(rename = "fullyCached")]
+    pub fully_cached: bool,
     /// A user-picked cover override exists (Slint `custom_artwork` store,
     /// shared file). The view swaps the header image to `customCoverPath`
     /// and flips the cover menu's Add/Change/Remove rows.
@@ -512,6 +523,11 @@ fn map_track(track: &Track) -> TrackRow {
         work_composer_name,
         work_composer_id,
         artwork_url: String::new(),
+        cache_status: if crate::offline_qt::is_cached(&track.id.to_string()) {
+            3
+        } else {
+            0
+        },
     }
 }
 
@@ -648,6 +664,8 @@ pub async fn load_album(runtime: &Arc<AppRuntime<LoggingAdapter>>, album_id: &st
             .unwrap_or_default(),
         awards,
         has_booklet: !booklet_url.is_empty(),
+        // album.rs:677-679 — the whole album is cached when every track is.
+        fully_cached: !tracks.is_empty() && tracks.iter().all(|t| t.cache_status == 3),
         has_custom_cover: !custom_cover.is_empty(),
         custom_cover_path: custom_cover,
     };
@@ -656,6 +674,138 @@ pub async fn load_album(runtime: &Arc<AppRuntime<LoggingAdapter>>, album_id: &st
         tracks,
         ..Default::default()
     })
+}
+
+// ==================== Multi-select bulk bar (AlbumView) ====================
+
+/// The AlbumView bulk bar (Slint `AlbumActions.bulk-action`, main.rs
+/// 14783-14884). The selection lives in QML; select-all/clear never reach
+/// Rust. Ids arrive in VISIBLE order and are resolved against a fresh
+/// `/album/get` (the port keeps no raw-track stash; the Slint resolves
+/// against one). Tracks the response no longer carries are dropped.
+pub fn bulk_action(album_id: String, ids_json: String, action: String) {
+    let ids: Vec<String> = serde_json::from_str(&ids_json).unwrap_or_default();
+    if ids.is_empty() {
+        log::debug!("[qbz-qt] album bulk {action}: empty selection, ignored");
+        return;
+    }
+    match action.as_str() {
+        "queue" | "play-next" | "play-later" => {
+            let runtime = crate::app();
+            crate::spawn(async move {
+                let queue = match crate::playback_qt::fetch_album_queue(&runtime, &album_id).await {
+                    Ok(q) => q,
+                    Err(e) => {
+                        log::warn!("[qbz-qt] album bulk {action}: {e}");
+                        return;
+                    }
+                };
+                let wanted: std::collections::HashSet<String> =
+                    ids.iter().map(|s| s.clone()).collect();
+                let mut picked: Vec<_> = queue
+                    .into_iter()
+                    .filter(|t| wanted.contains(&t.id.to_string()))
+                    .collect();
+                if picked.is_empty() {
+                    return;
+                }
+                let mode = match action.as_str() {
+                    "play-next" => "next",
+                    "play-later" => "later",
+                    _ => "queue",
+                };
+                // "next" inserts at the cursor — feed REVERSED so the block
+                // keeps its album order (playback_qt::enqueue_album's rule).
+                if mode == "next" {
+                    picked.reverse();
+                }
+                let picked = crate::playback_qt::stamped(
+                    picked,
+                    crate::playback_qt::PlayContext::album(&album_id),
+                );
+                if let Err(e) =
+                    crate::playback_qt::enqueue_track_list_mode(&runtime, picked, mode).await
+                {
+                    log::error!("[qbz-qt] album bulk {mode} failed: {e}");
+                }
+            });
+        }
+        "add-to-playlist" => {
+            // Same contract as the reference's playlist_picker::open_multi:
+            // the picker takes decimal catalog ids and filters the rest.
+            crate::playlist_picker_qt::open_for_ids(&crate::app(), ids);
+        }
+        "add-to-mixtape" => {
+            let runtime = crate::app();
+            crate::spawn(async move {
+                let album = match runtime.core().get_album(&album_id).await {
+                    Ok(a) => a,
+                    Err(e) => {
+                        log::warn!("[qbz-qt] album bulk add-to-mixtape: {e}");
+                        return;
+                    }
+                };
+                let wanted: std::collections::HashSet<String> =
+                    ids.iter().map(|s| s.clone()).collect();
+                let art = album.image.thumbnail.clone().or(album.image.small.clone());
+                let album_artist = album.artist.name.clone();
+                let items: Vec<crate::myqbz_add_qt::AddItem> = album
+                    .tracks
+                    .map(|c| c.items)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|t| wanted.contains(&t.id.to_string()))
+                    .map(|t| crate::myqbz_add_qt::AddItem {
+                        item_type: "track".into(),
+                        source: "qobuz".into(),
+                        source_item_id: t.id.to_string(),
+                        title: t.title.clone(),
+                        subtitle: Some(
+                            t.performer
+                                .as_ref()
+                                .map(|p| p.name.clone())
+                                .filter(|n| !n.is_empty())
+                                .unwrap_or_else(|| album_artist.clone()),
+                        ),
+                        artwork_url: art.clone(),
+                        year: None,
+                        track_count: None,
+                    })
+                    .collect();
+                if !items.is_empty() {
+                    crate::myqbz_add_qt::open_items(items);
+                }
+            });
+        }
+        "add-to-favorites" => {
+            // Slint: per-id add + fav-cache set, then clear (main.rs:14855+).
+            let runtime = crate::app();
+            crate::spawn(async move {
+                for id in &ids {
+                    if let Err(e) = runtime.core().add_favorite("track", id).await {
+                        log::error!("[qbz-qt] album bulk favorite {id} failed: {e}");
+                    }
+                    crate::fav_cache_qt::set("track", id, true);
+                    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                }
+                crate::toast_qt::success(qbz_i18n::t("Added to Library"));
+            });
+        }
+        "make-offline" => {
+            let runtime = crate::app();
+            crate::spawn(async move {
+                let raw: Vec<u64> = ids.iter().filter_map(|s| s.parse::<u64>().ok()).collect();
+                match runtime.core().get_tracks_batch(&raw).await {
+                    Ok(tracks) if !tracks.is_empty() => {
+                        crate::offline_cache_qt::cache_tracks(tracks)
+                    }
+                    Ok(_) => {}
+                    Err(e) => log::warn!("[qbz-qt] album bulk make-offline: {e}"),
+                }
+            });
+        }
+        other => log::warn!("[qbz-qt] album bulk: unknown action {other}"),
+    }
 }
 
 // ==================== Booklet (Slint booklet.rs port) ======================

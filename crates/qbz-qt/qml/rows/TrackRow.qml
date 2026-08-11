@@ -141,7 +141,26 @@ Rectangle {
     //   offlineCache no per-track cache bridge (the download cell is a stub)
     readonly property bool hasRadioSeam: false
     readonly property bool hasSonglinkSeam: false
-    readonly property bool hasOfflineCacheSeam: false
+    // Live since the offline port: catalog (Qobuz) rows only — local/Plex
+    // rows have no offline tier to download into (TrackContextMenu.slint
+    // gates on the same qobuz-actions rule).
+    readonly property bool hasOfflineCacheSeam: root.catalogRow && !root.localSourceRow
+
+    // --- Offline cache status (TrackRow.slint:639-702) --------------------
+    // 0 none · 1 queued · 2 downloading · 3 ready · 4 failed. Seeded from
+    // the document row; live updates arrive on QbzShell's
+    // trackCacheStatusChanged and are adopted only for THIS row's id.
+    property int cacheStatus: root.item.cacheStatus !== undefined ? root.item.cacheStatus : 0
+    function setCacheStatus(status) {
+        root.cacheStatus = status
+    }
+    Connections {
+        target: QbzShell
+        enabled: root.hasOfflineCacheSeam
+        function onTrackCacheStatusChanged(trackId, status, progress) {
+            if (trackId === (root.item.id || "")) root.cacheStatus = status
+        }
+    }
 
     // --- Add to playlist -------------------------------------------------
     // LIVE since QbzPlaylistPicker landed. It is NOT a flat constant, because
@@ -715,21 +734,58 @@ Rectangle {
                 onClicked: root.toggleFavorite()
             }
         }
-        // Download slot (showDownload arm): inert glyph stub or reserved
-        // spacer (the offline-cache column — not ported, POC-NOTE; the
-        // Slint reserves the slot so the grid stays aligned).
+        // Download slot (showDownload arm) — the offline-cache column,
+        // TrackRow.slint:639-702: cloud when absent, spinner while queued /
+        // downloading, accent check when ready, red alert on failure. Click
+        // map: ready -> remove, anything else -> (re)download. The slot is
+        // reserved wherever showDownload is on so the grid stays aligned;
+        // the glyph itself also shows when a surface that hides the column
+        // has a row with a live copy (`cacheStatus > 0`).
         Item {
-            visible: root.showDownload
+            visible: root.showDownload || (root.hasOfflineCacheSeam && root.cacheStatus > 0)
             width: cols.colDownload
             height: cols.colDownload
             anchors.verticalCenter: parent.verticalCenter
+
             QbzIcon {
-                visible: root.downloadGlyph
+                visible: root.cacheStatus === 0
                 anchors.centerIn: parent
                 name: "cloud-download"
                 width: 16
                 height: 16
-                tintName: "muted"
+                tintName: dlArea.containsMouse ? root.playGlyphTint : "muted"
+            }
+            QbzSpinner {
+                visible: root.cacheStatus === 1 || root.cacheStatus === 2
+                anchors.centerIn: parent
+                size: 16
+            }
+            QbzIcon {
+                visible: root.cacheStatus === 3
+                anchors.centerIn: parent
+                name: "circle-check-big"
+                width: 16
+                height: 16
+                tintName: "accent"
+            }
+            QbzIcon {
+                visible: root.cacheStatus === 4
+                anchors.centerIn: parent
+                name: "triangle-alert"
+                width: 16
+                height: 16
+                tintName: "favorite"
+            }
+            MouseArea {
+                id: dlArea
+                anchors.fill: parent
+                enabled: root.hasOfflineCacheSeam && !root.selectMode
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: {
+                    if (root.cacheStatus === 3) QbzPlayer.uncacheTrack(root.item.id)
+                    else QbzPlayer.cacheTrack(root.item.id)
+                }
             }
         }
         // ⋯ menu (showMenu arm).
@@ -796,8 +852,17 @@ Rectangle {
             m.push({ "label": t("Share Qobuz link", r), "icon": "link", "action": "share-qobuz" })
         if (root.hasSonglinkSeam)
             m.push({ "label": t("Share Song.link", r), "icon": "link", "action": "share-songlink" })
-        if (root.hasOfflineCacheSeam)
-            m.push({ "label": t("Make available offline", r), "icon": "cloud-download", "action": "cache" })
+        if (root.hasOfflineCacheSeam) {
+            // TrackContextMenu.slint:174-199 — the offline block tracks the
+            // row's live status: not-cached rows get the download arm, ready
+            // rows get refresh + remove.
+            if (root.cacheStatus === 3) {
+                m.push({ "label": t("Refresh offline copy", r), "icon": "refresh-cw", "action": "recache" })
+                m.push({ "label": t("Remove offline copy", r), "icon": "trash-2", "action": "uncache", "danger": true })
+            } else {
+                m.push({ "label": t("Make available offline", r), "icon": "cloud-download", "action": "cache" })
+            }
+        }
         if (root.menuShowGoTo && root.item.albumId)
             m.push({ "label": t("Go to album", r), "icon": "disc-3", "action": "go-album" })
         if (root.menuShowGoTo && root.item.artistId)
@@ -834,6 +899,9 @@ Rectangle {
                 QbzPlaylistPicker.openForTrack(root.item.id)
         }
         else if (a === "remove") root.removeRequested()
+        else if (a === "cache") QbzPlayer.cacheTrack(root.item.id)
+        else if (a === "uncache") QbzPlayer.uncacheTrack(root.item.id)
+        else if (a === "recache") QbzPlayer.recacheTrack(root.item.id)
         else if (a === "share-qobuz") root.copyToClipboard(
             "https://open.qobuz.com/track/" + (root.item.id || ""))
         else if (a === "track-info") root.openTrackInfo()

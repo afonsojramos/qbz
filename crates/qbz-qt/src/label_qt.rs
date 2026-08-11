@@ -1276,6 +1276,7 @@ fn parse_top_track(index: usize, raw: &Value) -> TrackRow {
         .or_else(|| raw.get("maximum_sampling_rate").and_then(|v| v.as_f64()));
     TrackRow {
         is_favorite: id.parse::<u64>().map(crate::fav_cache_qt::contains_track).unwrap_or(false),
+        cache_status: if crate::offline_qt::is_cached(&id) { 3 } else { 0 },
         id,
         number: (index + 1).to_string(),
         title,

@@ -170,6 +170,14 @@ pub mod qbz_player {
         /// AlbumCard ⋯ menu: Play next ("next") / Add to queue ("later").
         #[qinvokable]
         fn enqueue_album(self: Pin<&mut QbzPlayer>, album_id: QString, mode: QString);
+        /// Track-row offline cache actions (offline_cache_qt.rs): download /
+        /// remove / refresh the track's offline copy.
+        #[qinvokable]
+        fn cache_track(self: Pin<&mut QbzPlayer>, track_id: QString);
+        #[qinvokable]
+        fn uncache_track(self: Pin<&mut QbzPlayer>, track_id: QString);
+        #[qinvokable]
+        fn recache_track(self: Pin<&mut QbzPlayer>, track_id: QString);
         /// ArtistView Popular Tracks row play (whole list as the queue).
         #[qinvokable]
         fn play_artist_track(self: Pin<&mut QbzPlayer>, track_id: QString);
@@ -386,6 +394,22 @@ impl qbz_player::QbzPlayer {
 
     pub fn enqueue_album(self: Pin<&mut Self>, album_id: QString, mode: QString) {
         crate::enqueue_album(album_id.to_string(), mode.to_string());
+    }
+
+    pub fn cache_track(self: Pin<&mut Self>, track_id: QString) {
+        if let Ok(id) = track_id.to_string().parse::<u64>() {
+            crate::offline_cache_qt::cache_track(id);
+        }
+    }
+    pub fn uncache_track(self: Pin<&mut Self>, track_id: QString) {
+        if let Ok(id) = track_id.to_string().parse::<u64>() {
+            crate::offline_cache_qt::remove_cached(id);
+        }
+    }
+    pub fn recache_track(self: Pin<&mut Self>, track_id: QString) {
+        if let Ok(id) = track_id.to_string().parse::<u64>() {
+            crate::offline_cache_qt::refresh_cached(id);
+        }
     }
 
     pub fn play_artist_track(self: Pin<&mut Self>, track_id: QString) {
