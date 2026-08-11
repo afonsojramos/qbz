@@ -2161,7 +2161,7 @@ Rectangle {
                 // --- Latest release --------------------------------------
                 Column {
                     property string anchorId: "about"
-                    visible: !!artist.lastRelease
+                    visible: !!root.artist.lastRelease
                     width: parent.width
                     spacing: 12
                     Item { width: 1; height: 32 }
@@ -2172,20 +2172,27 @@ Rectangle {
                         font.weight: theme.weightSemibold
                     }
                     AlbumCard {
-                        albumId: artist.lastRelease ? artist.lastRelease.id : ""
-                        title: artist.lastRelease ? artist.lastRelease.title : ""
+                        // EVERY read here must be `root.artist.lastRelease`:
+                        // inside the AlbumCard instantiation the bare name
+                        // `artist` resolves to the CARD'S OWN string property
+                        // (a string has no .lastRelease → undefined → every
+                        // binding fell back to ""), so the card rendered as an
+                        // empty tile while the grids' modelData-driven cards
+                        // were fine. Verified live 2026-08-10 (VNC drive).
+                        albumId: root.artist.lastRelease ? root.artist.lastRelease.id : ""
+                        title: root.artist.lastRelease ? root.artist.lastRelease.title : ""
                         // year in the subtitle slot — card_to_item again
                         // (artist.rs:784 maps last_release through it too).
-                        artist: artist.lastRelease ? artist.lastRelease.year : ""
+                        artist: root.artist.lastRelease ? root.artist.lastRelease.year : ""
                         artistId: ""
-                        genre: artist.lastRelease ? artist.lastRelease.genre : ""
-                        year: artist.lastRelease ? artist.lastRelease.year : ""
-                        qualityTier: artist.lastRelease ? artist.lastRelease.qualityTier : ""
-                        artSource: artist.lastRelease ? (root.coverMap[artist.lastRelease.artUrl] || "") : ""
+                        genre: root.artist.lastRelease ? root.artist.lastRelease.genre : ""
+                        year: root.artist.lastRelease ? root.artist.lastRelease.year : ""
+                        qualityTier: root.artist.lastRelease ? root.artist.lastRelease.qualityTier : ""
+                        artSource: root.artist.lastRelease ? (root.coverMap[root.artist.lastRelease.artUrl] || "") : ""
                         // Same row shape as the release grids (map_release).
-                        isPinned: artist.lastRelease ? artist.lastRelease.isPinned === true : false
-                        artworkUrl: artist.lastRelease ? (artist.lastRelease.artUrl || "") : ""
-                        isFavorite: artist.lastRelease ? artist.lastRelease.isFavorite === true : false
+                        isPinned: root.artist.lastRelease ? root.artist.lastRelease.isPinned === true : false
+                        artworkUrl: root.artist.lastRelease ? (root.artist.lastRelease.artUrl || "") : ""
+                        isFavorite: root.artist.lastRelease ? root.artist.lastRelease.isFavorite === true : false
                     }
                 }
 
