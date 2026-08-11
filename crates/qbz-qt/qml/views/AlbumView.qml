@@ -888,6 +888,30 @@ Rectangle {
                         }
                     }
 
+                    // Multi-select bulk bar (controls/QbzMultiSelectBar.qml),
+                    // INLINE at the top of the track column — the Local
+                    // Library album view's layout (bar in flow, content below)
+                    // instead of a floating overlay.
+                    QbzMultiSelectBar {
+                        id: bulkBar
+                        visible: root.multiSelect && !root.primaryLoading
+                        width: parent.width
+                        selectedCount: root.selectedCount
+                        // The reference's full AlbumView inventory
+                        // (AlbumPageView.slint:792-807), make-offline included.
+                        actions: [
+                            { "id": "select-all", "label": QbzSession.tr("Select all", QbzSession.trRev), "icon": "square-check-big", "danger": false, "needsSelection": false },
+                            { "id": "play-next", "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-start", "danger": false, "needsSelection": true },
+                            { "id": "play-later", "label": QbzSession.tr("Play later", QbzSession.trRev), "icon": "list-plus", "danger": false, "needsSelection": true },
+                            { "id": "queue", "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "danger": false, "needsSelection": true },
+                            { "id": "add-to-playlist", "label": QbzSession.tr("Add to playlist", QbzSession.trRev), "icon": "list-music", "danger": false, "needsSelection": true },
+                            { "id": "add-to-favorites", "label": QbzSession.tr("Add to Library", QbzSession.trRev), "icon": "heart", "danger": false, "needsSelection": true },
+                            { "id": "make-offline", "label": QbzSession.tr("Make available offline", QbzSession.trRev), "icon": "cloud-download", "danger": false, "needsSelection": true },
+                            { "id": "clear", "label": QbzSession.tr("Clear", QbzSession.trRev), "icon": "x", "danger": false, "needsSelection": true }
+                        ]
+                        onAction: function (id) { root.bulkAction(id) }
+                    }
+
                     // Toolbar — quality badge + track search (+ inert select).
                     Row {
                         visible: !QbzAlbum.albumLoading
@@ -1274,34 +1298,6 @@ Rectangle {
                 coverMap: root.coverMap
             }
         }
-    }
-
-    // Multi-select bulk bar (primitives/MultiSelectBar.slint port is
-    // controls/QbzMultiSelectBar.qml). Declared AFTER the scrolling body:
-    // declaration order IS z-order, and this bar overlays the content top.
-    QbzMultiSelectBar {
-        id: bulkBar
-        visible: root.multiSelect && !root.primaryLoading
-        anchors.top: parent.top
-        anchors.topMargin: 10
-        anchors.left: parent.left
-        anchors.leftMargin: 32
-        anchors.right: parent.right
-        anchors.rightMargin: 32
-        selectedCount: root.selectedCount
-        // The reference's full AlbumView inventory (AlbumPageView.slint
-        // :792-807), make-offline included.
-        actions: [
-            { "id": "select-all", "label": QbzSession.tr("Select all", QbzSession.trRev), "icon": "square-check-big", "danger": false, "needsSelection": false },
-            { "id": "play-next", "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-start", "danger": false, "needsSelection": true },
-            { "id": "play-later", "label": QbzSession.tr("Play later", QbzSession.trRev), "icon": "list-plus", "danger": false, "needsSelection": true },
-            { "id": "queue", "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "danger": false, "needsSelection": true },
-            { "id": "add-to-playlist", "label": QbzSession.tr("Add to playlist", QbzSession.trRev), "icon": "list-music", "danger": false, "needsSelection": true },
-            { "id": "add-to-favorites", "label": QbzSession.tr("Add to Library", QbzSession.trRev), "icon": "heart", "danger": false, "needsSelection": true },
-            { "id": "make-offline", "label": QbzSession.tr("Make available offline", QbzSession.trRev), "icon": "cloud-download", "danger": false, "needsSelection": true },
-            { "id": "clear", "label": QbzSession.tr("Clear", QbzSession.trRev), "icon": "x", "danger": false, "needsSelection": true }
-        ]
-        onAction: function (id) { root.bulkAction(id) }
     }
 
     // Thin auto-hiding scrollbar (ListScrollbar).

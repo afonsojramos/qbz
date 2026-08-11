@@ -187,6 +187,9 @@ mod offline_fwd;
 // user-managed download cache (see AGENTS.md's caching-model note).
 mod offline_qt;
 mod offline_cache_qt;
+// Shared multi-select bulk actions for Qobuz track listings (playlist,
+// artist, label — the album page has its own album-ordered variant).
+mod bulk_tracks_qt;
 mod album_qt;
 mod track_info_qt;
 // Album Info (Credits/Review) modal controller — info_modals.rs port.

@@ -83,7 +83,58 @@ Rectangle {
         root.loadedLabelId = id
         root.previewCount = 5
         root.activeJumpTab = "about"
+        root.setMultiSelect(false)
         flick.contentY = 0
+    }
+
+    // --- Multi-select (Popular Tracks) -------------------------------------
+    // Same shape as AlbumView/PlaylistView: selection in QML, select-all /
+    // clear local, the rest via QbzPlayer.bulkTracksAction.
+    property bool multiSelect: false
+    property var selected: ({})
+    readonly property int selectedCount: Object.keys(root.selected).length
+    readonly property bool multiSelectOn: root.multiSelect
+    function setMultiSelect(on) {
+        root.multiSelect = on
+        if (!on) root.selected = ({})
+    }
+    function toggleSelected(id) {
+        var m = root.selected
+        if (m[id] === true) delete m[id]
+        else m[id] = true
+        // A rebind needs a NEW object reference — mutating in place notifies
+        // nothing.
+        root.selected = Object.assign({}, m)
+    }
+    function selectedIdsInOrder() {
+        var rows = root.topTracks
+        var out = []
+        for (var i = 0; i < rows.length; i++)
+            if (root.selected[rows[i].id] === true) out.push(rows[i].id)
+        return out
+    }
+    function bulkAction(action) {
+        if (action === "select-all") {
+            var m = {}
+            var rows = root.topTracks
+            for (var i = 0; i < rows.length; i++) m[rows[i].id] = true
+            root.selected = m
+            return
+        }
+        if (action === "clear") { root.selected = ({}); return }
+        var ids = root.selectedIdsInOrder()
+        if (ids.length === 0) return
+        QbzPlayer.bulkTracksAction(JSON.stringify(ids), action, "label", String(doc.id || ""))
+        if (action !== "add-to-playlist" && action !== "add-to-mixtape")
+            root.selected = ({})
+    }
+    // Ctrl+A / Escape hotkey router seam (AppShell duck-types these).
+    function selectAll() {
+        if (!root.multiSelect) root.setMultiSelect(true)
+        root.bulkAction("select-all")
+    }
+    function exitMultiSelectMode() {
+        if (root.multiSelect) root.setMultiSelect(false)
     }
 
     function scrollToSection(id) {
@@ -452,6 +503,26 @@ Rectangle {
                     }
                 }
 
+                // Multi-select bulk bar — INLINE above the Popular Tracks
+                // header (bar in flow, content below).
+                QbzMultiSelectBar {
+                    visible: root.multiSelect
+                    width: parent.width
+                    selectedCount: root.selectedCount
+                    actions: [
+                        { "id": "select-all", "label": QbzSession.tr("Select all", QbzSession.trRev), "icon": "square-check-big", "danger": false, "needsSelection": false },
+                        { "id": "play-next", "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-start", "danger": false, "needsSelection": true },
+                        { "id": "play-later", "label": QbzSession.tr("Play later", QbzSession.trRev), "icon": "list-plus", "danger": false, "needsSelection": true },
+                        { "id": "queue", "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "danger": false, "needsSelection": true },
+                        { "id": "add-to-playlist", "label": QbzSession.tr("Add to playlist", QbzSession.trRev), "icon": "list-music", "danger": false, "needsSelection": true },
+                        { "id": "add-to-mixtape", "label": QbzSession.tr("Add to Mixtape/Collection", QbzSession.trRev), "icon": "cassette-tape", "danger": false, "needsSelection": true },
+                        { "id": "add-to-favorites", "label": QbzSession.tr("Add to Library", QbzSession.trRev), "icon": "heart", "danger": false, "needsSelection": true },
+                        { "id": "make-offline", "label": QbzSession.tr("Make available offline", QbzSession.trRev), "icon": "cloud-download", "danger": false, "needsSelection": true },
+                        { "id": "clear", "label": QbzSession.tr("Clear", QbzSession.trRev), "icon": "x", "danger": false, "needsSelection": true }
+                    ]
+                    onAction: function (id) { root.bulkAction(id) }
+                }
+
                 // --- Popular Tracks -------------------------------------
                 // The WHOLE block is gated on a non-empty list (.slint:313).
                 Column {
@@ -478,11 +549,13 @@ Rectangle {
                             anchors.verticalCenter: parent.verticalCenter
                             onClicked: QbzHome.labelPlayTop()
                         }
-                        // Multi-select: DIMMED and inert (see the header note).
+                        // Multi-select toggle — live since the bulk-bar port.
                         QbzCircleAction {
                             name: "square-check-big"
-                            btnEnabled: false
+                            active: root.multiSelect
+                            btnEnabled: root.topTracks.length > 0
                             anchors.verticalCenter: parent.verticalCenter
+                            onClicked: root.setMultiSelect(!root.multiSelect)
                         }
                         QbzCircleAction {
                             id: topMoreBtn
@@ -553,6 +626,9 @@ Rectangle {
                             number: index + 1
                             showArtwork: true
                             showAlbum: true
+                            selectMode: root.multiSelect
+                            checked: root.selected[item.id] === true
+                            onToggleSelect: root.toggleSelected(item.id)
                             onPlayRequested: QbzHome.labelPlayTrack(modelData.id)
                             onEnqueueRequested: function (mode) {
                                 QbzHome.labelEnqueueTrack(modelData.id, mode)

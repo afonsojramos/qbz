@@ -178,6 +178,11 @@ pub mod qbz_player {
         fn uncache_track(self: Pin<&mut QbzPlayer>, track_id: QString);
         #[qinvokable]
         fn recache_track(self: Pin<&mut QbzPlayer>, track_id: QString);
+        /// Multi-select bulk actions for Qobuz track listings
+        /// (bulk_tracks_qt.rs): ids in visible order + the bar's action id +
+        /// the queue context to stamp ("" = none).
+        #[qinvokable]
+        fn bulk_tracks_action(self: Pin<&mut QbzPlayer>, ids_json: QString, action: QString, context_kind: QString, context_id: QString);
         /// ArtistView Popular Tracks row play (whole list as the queue).
         #[qinvokable]
         fn play_artist_track(self: Pin<&mut QbzPlayer>, track_id: QString);
@@ -410,6 +415,15 @@ impl qbz_player::QbzPlayer {
         if let Ok(id) = track_id.to_string().parse::<u64>() {
             crate::offline_cache_qt::refresh_cached(id);
         }
+    }
+
+    pub fn bulk_tracks_action(self: Pin<&mut Self>, ids_json: QString, action: QString, context_kind: QString, context_id: QString) {
+        crate::bulk_tracks_qt::run(
+            ids_json.to_string(),
+            action.to_string(),
+            context_kind.to_string(),
+            context_id.to_string(),
+        );
     }
 
     pub fn play_artist_track(self: Pin<&mut Self>, track_id: QString) {

@@ -774,11 +774,67 @@ Rectangle {
     // MusicBrainz section). Reset per-artist view state ONLY when the id
     // actually changed, or an enrichment pass would yank the sidebar tab back
     // under the user mid-read.
+    // --- Multi-select (Popular Tracks + Appears On) ------------------------
+    // One selection model for the page's Qobuz track lists. Same shape as
+    // AlbumView/PlaylistView: state in QML, select-all/clear local, the rest
+    // via QbzPlayer.bulkTracksAction (bulk_tracks_qt.rs).
+    property bool multiSelect: false
+    property var selected: ({})
+    readonly property int selectedCount: Object.keys(root.selected).length
+    readonly property bool multiSelectOn: root.multiSelect
+    function setMultiSelect(on) {
+        root.multiSelect = on
+        if (!on) root.selected = ({})
+    }
+    function toggleSelected(id) {
+        var m = root.selected
+        if (m[id] === true) delete m[id]
+        else m[id] = true
+        // A rebind needs a NEW object reference — mutating in place notifies
+        // nothing.
+        root.selected = Object.assign({}, m)
+    }
+    function selectedIdsInOrder() {
+        var out = []
+        var lists = [root.topTracks, root.appearsOn]
+        for (var l = 0; l < lists.length; l++) {
+            var rows = lists[l]
+            for (var i = 0; i < rows.length; i++)
+                if (root.selected[rows[i].id] === true) out.push(rows[i].id)
+        }
+        return out
+    }
+    function bulkAction(action) {
+        if (action === "select-all") {
+            var m = {}
+            var lists = [root.topTracks, root.appearsOn]
+            for (var l = 0; l < lists.length; l++)
+                for (var i = 0; i < lists[l].length; i++) m[lists[l][i].id] = true
+            root.selected = m
+            return
+        }
+        if (action === "clear") { root.selected = ({}); return }
+        var ids = root.selectedIdsInOrder()
+        if (ids.length === 0) return
+        QbzPlayer.bulkTracksAction(JSON.stringify(ids), action, "artist", String(artist.id || ""))
+        if (action !== "add-to-playlist" && action !== "add-to-mixtape")
+            root.selected = ({})
+    }
+    // Ctrl+A / Escape hotkey router seam (AppShell duck-types these).
+    function selectAll() {
+        if (!root.multiSelect) root.setMultiSelect(true)
+        root.bulkAction("select-all")
+    }
+    function exitMultiSelectMode() {
+        if (root.multiSelect) root.setMultiSelect(false)
+    }
+
     function syncArtistState() {
         var id = artist.id || ""
         if (id === loadedArtistId)
             return
         loadedArtistId = id
+        setMultiSelect(false)
         // Slint opens a fresh artist on Network, or on Magazine when
         // MusicBrainz is off (an empty Network tab is worse than none).
         netTab = (artist.network && artist.network.mbAvailable) ? "network" : "magazine"
@@ -922,6 +978,21 @@ Rectangle {
         property var row: ({})
         property int rowIndex: 0
         property bool showAlbum: true
+        // Multi-select (the view's bulk bar): in select mode the whole row
+        // body is the toggle and the leading cell swaps to a round checkbox
+        // (TrackRow.slint:173-177, 392-417).
+        property bool selectMode: false
+        property bool checked: false
+        signal toggleSelect()
+        // Live offline status for the row (seeded in the document; updates
+        // arrive on QbzShell's trackCacheStatusChanged).
+        property int cacheStatus: row.cacheStatus !== undefined ? row.cacheStatus : 0
+        Connections {
+            target: QbzShell
+            function onTrackCacheStatusChanged(trackId, status, progress) {
+                if (trackId === (popRow.row.id || "")) popRow.cacheStatus = status
+            }
+        }
 
         TrackCols { id: cols }
 
@@ -960,7 +1031,8 @@ Rectangle {
                 horizontalAlignment: Text.AlignHCenter
                 elide: Text.ElideRight
             }
-            // Cover with hover play overlay.
+            // Cover with hover play overlay — in select mode this cell is
+            // the row's round checkbox instead.
             //
             // RADIUS 4, not `theme.radiusSm` (8): rows/TrackRow.qml:553 — the
             // SHARED row this component is a fork of, and the one PlaylistView
@@ -978,7 +1050,27 @@ Rectangle {
                 radius: 4
                 color: theme.surfaceElevated
                 clip: true
+                // The select-mode checkbox (accent fill when checked).
+                Rectangle {
+                    visible: popRow.selectMode
+                    anchors.centerIn: parent
+                    width: 14
+                    height: 14
+                    radius: 7
+                    color: popRow.checked ? theme.accent : "transparent"
+                    border.width: popRow.checked ? 0 : 1.5
+                    border.color: theme.textMuted
+                    QbzIcon {
+                        visible: popRow.checked
+                        anchors.centerIn: parent
+                        name: "check"
+                        width: 10
+                        height: 10
+                        tintName: theme.accentGlyphTint
+                    }
+                }
                 QbzIcon {
+                    visible: !popRow.selectMode
                     anchors.centerIn: parent
                     name: "music"
                     width: showAlbum ? 16 : 14
@@ -986,11 +1078,13 @@ Rectangle {
                     tintName: "muted"
                 }
                 RoundedImage {
+                    visible: !popRow.selectMode
                     anchors.fill: parent
                     source: root.coverMap[row.artUrl] || ""
                     radius: 4
                 }
                 Rectangle {
+                    visible: !popRow.selectMode
                     anchors.fill: parent
                     radius: 4
                     color: "#000000"
@@ -998,7 +1092,7 @@ Rectangle {
                     Behavior on opacity { NumberAnimation { duration: 150 } }
                 }
                 QbzIcon {
-                    visible: trArea.containsMouse || isActive
+                    visible: !popRow.selectMode && (trArea.containsMouse || isActive)
                     anchors.centerIn: parent
                     name: isActive && QbzPlayer.npPlaying ? "pause" : "play-fill"
                     width: 16
@@ -1009,6 +1103,7 @@ Rectangle {
                 }
                 MouseArea {
                     anchors.fill: parent
+                    enabled: !popRow.selectMode
                     cursorShape: Qt.PointingHandCursor
                     onClicked: QbzPlayer.playArtistTrack(row.id)
                 }
@@ -1122,6 +1217,7 @@ Rectangle {
                 MouseArea {
                     id: favArea
                     anchors.fill: parent
+                    enabled: !popRow.selectMode
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
                     onClicked: {
@@ -1130,13 +1226,54 @@ Rectangle {
                     }
                 }
             }
-            // Offline download — INERT stub.
+            // Offline download — live since the offline port (the fork used
+            // to carry an inert stub). Same status vocabulary as the shared
+            // TrackRow: 0 none · 1 queued · 2 downloading · 3 ready · 4 failed.
             Rectangle {
                 width: cols.colDownload
                 height: cols.colDownload
                 anchors.verticalCenter: parent.verticalCenter
                 color: "transparent"
-                QbzIcon { anchors.centerIn: parent; name: "cloud-download"; width: 16; height: 16; tintName: "muted" }
+                QbzIcon {
+                    visible: popRow.cacheStatus === 0
+                    anchors.centerIn: parent
+                    name: "cloud-download"
+                    width: 16
+                    height: 16
+                    tintName: popDlArea.containsMouse ? root.tintOnSurface : "muted"
+                }
+                QbzSpinner {
+                    visible: popRow.cacheStatus === 1 || popRow.cacheStatus === 2
+                    anchors.centerIn: parent
+                    size: 16
+                }
+                QbzIcon {
+                    visible: popRow.cacheStatus === 3
+                    anchors.centerIn: parent
+                    name: "circle-check-big"
+                    width: 16
+                    height: 16
+                    tintName: "accent"
+                }
+                QbzIcon {
+                    visible: popRow.cacheStatus === 4
+                    anchors.centerIn: parent
+                    name: "triangle-alert"
+                    width: 16
+                    height: 16
+                    tintName: "favorite"
+                }
+                MouseArea {
+                    id: popDlArea
+                    anchors.fill: parent
+                    enabled: !popRow.selectMode
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                        if (popRow.cacheStatus === 3) QbzPlayer.uncacheTrack(row.id)
+                        else QbzPlayer.cacheTrack(row.id)
+                    }
+                }
             }
             // ⋯ row menu. It used to be a hover-lit button with NO handler at
             // all — a control that renders and no-ops, which is the defect
@@ -1151,6 +1288,7 @@ Rectangle {
                 MouseArea {
                     id: moreArea
                     anchors.fill: parent
+                    enabled: !popRow.selectMode
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
                     onClicked: function (mouse) { popMenu.openAtCursor(moreArea, mouse.x, mouse.y) }
@@ -1172,11 +1310,11 @@ Rectangle {
         // `controls/CardMenu.qml`, the same primitive rows/TrackRow.qml opens.
         //
         // ABSENT, not dead (the same discipline TrackRow applies): the radio
-        // pair, Share Qobuz link / Song.link, the offline-cache block and
-        // Track info. The first two need bridge seams that do not exist; the
-        // last two need the shared row's lazy Loaders (a TextEdit for the
-        // clipboard, a TrackInfoModal), and duplicating those per artist row
-        // is exactly the fork-drift this file already paid for once.
+        // pair, Share Qobuz link / Song.link and Track info. The first two
+        // need bridge seams that do not exist; the last needs the shared
+        // row's lazy Loader (a TrackInfoModal), and duplicating those per
+        // artist row is exactly the fork-drift this file already paid for
+        // once. (The offline block IS wired — it needs no Loader.)
         CardMenu {
             id: popMenu
             menuWidth: 224
@@ -1194,6 +1332,12 @@ Rectangle {
                     { "label": t("Add to mixtape", r), "icon": "cassette-tape", "action": "mixtape" },
                     { "label": t("Add to playlist", r), "icon": "list-music", "action": "add-to-playlist" },
                 ]
+                if (popRow.cacheStatus === 3) {
+                    m.push({ "label": t("Refresh offline copy", r), "icon": "refresh-cw", "action": "recache" })
+                    m.push({ "label": t("Remove offline copy", r), "icon": "trash-2", "action": "uncache", "danger": true })
+                } else {
+                    m.push({ "label": t("Make available offline", r), "icon": "cloud-download", "action": "cache" })
+                }
                 if ((popRow.row.albumId || "") !== "")
                     m.push({ "label": t("Go to album", r), "icon": "disc-3", "action": "go-album" })
                 if ((popRow.row.artistId || "") !== "")
@@ -1225,6 +1369,9 @@ Rectangle {
                         "year": null, "trackCount": null
                     }]))
                 }
+                else if (a === "cache") QbzPlayer.cacheTrack(id)
+                else if (a === "uncache") QbzPlayer.uncacheTrack(id)
+                else if (a === "recache") QbzPlayer.recacheTrack(id)
                 else if (a === "go-album") QbzAlbum.openAlbum(popRow.row.albumId)
                 else if (a === "go-artist") QbzArtist.openArtist(popRow.row.artistId)
             }
@@ -1235,8 +1382,11 @@ Rectangle {
             anchors.fill: parent
             hoverEnabled: true
             propagateComposedEvents: true
-            onDoubleClicked: QbzPlayer.playArtistTrack(row.id)
-            onClicked: mouse.accepted = false
+            onDoubleClicked: if (!popRow.selectMode) QbzPlayer.playArtistTrack(row.id)
+            onClicked: {
+                if (popRow.selectMode) popRow.toggleSelect()
+                else mouse.accepted = false
+            }
         }
         // Right press opens the SAME menu at the pointer — the invariant
         // controls/QbzContextMenu.qml:20-22 states. Declared last so it sits
@@ -2067,6 +2217,27 @@ Rectangle {
                 spacing: 0
 
                 // --- Popular Tracks -------------------------------------
+                // Multi-select bulk bar — INLINE above the Popular Tracks
+                // header (the Local Library album view's layout: bar in flow,
+                // content below), covering this page's Qobuz track lists.
+                QbzMultiSelectBar {
+                    visible: root.multiSelect
+                    width: parent.width
+                    selectedCount: root.selectedCount
+                    actions: [
+                        { "id": "select-all", "label": QbzSession.tr("Select all", QbzSession.trRev), "icon": "square-check-big", "danger": false, "needsSelection": false },
+                        { "id": "play-next", "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-start", "danger": false, "needsSelection": true },
+                        { "id": "play-later", "label": QbzSession.tr("Play later", QbzSession.trRev), "icon": "list-plus", "danger": false, "needsSelection": true },
+                        { "id": "queue", "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "danger": false, "needsSelection": true },
+                        { "id": "add-to-playlist", "label": QbzSession.tr("Add to playlist", QbzSession.trRev), "icon": "list-music", "danger": false, "needsSelection": true },
+                        { "id": "add-to-mixtape", "label": QbzSession.tr("Add to Mixtape/Collection", QbzSession.trRev), "icon": "cassette-tape", "danger": false, "needsSelection": true },
+                        { "id": "add-to-favorites", "label": QbzSession.tr("Add to Library", QbzSession.trRev), "icon": "heart", "danger": false, "needsSelection": true },
+                        { "id": "make-offline", "label": QbzSession.tr("Make available offline", QbzSession.trRev), "icon": "cloud-download", "danger": false, "needsSelection": true },
+                        { "id": "clear", "label": QbzSession.tr("Clear", QbzSession.trRev), "icon": "x", "danger": false, "needsSelection": true }
+                    ]
+                    onAction: function (id) { root.bulkAction(id) }
+                }
+
                 Row {
                     property string anchorId: "popular-tracks"
                     visible: topTracks.length > 0
@@ -2094,14 +2265,13 @@ Rectangle {
                         anchors.verticalCenter: parent.verticalCenter
                         onClicked: QbzPlayer.playArtistTop(false)
                     }
-                    // Multi-select has no seam on this bridge. Rendered but
-                    // DIMMED and click-gated (CircleAction's own `enabled`
-                    // treatment) rather than a live button that does nothing —
-                    // same call as the header's Radio / Mixtape / Info.
+                    // Multi-select toggle — live since the bulk-bar port.
                     QbzCircleAction {
                         name: "square-check-big"
-                        btnEnabled: false
+                        active: root.multiSelect
+                        btnEnabled: root.topTracks.length > 0
                         anchors.verticalCenter: parent.verticalCenter
+                        onClicked: root.setMultiSelect(!root.multiSelect)
                     }
                     QbzCircleAction {
                         id: topMenuBtn
@@ -2143,6 +2313,9 @@ Rectangle {
                         row: topTracks[index]
                         rowIndex: index
                         showAlbum: true
+                        selectMode: root.multiSelect
+                        checked: root.selected[row.id] === true
+                        onToggleSelect: root.toggleSelected(row.id)
                     }
                 }
                 Item { visible: topTracks.length > root.preview; width: 1; height: 4 }
@@ -2237,6 +2410,9 @@ Rectangle {
                             row: appearsOn[index]
                             rowIndex: index
                             showAlbum: false
+                            selectMode: root.multiSelect
+                            checked: root.selected[row.id] === true
+                            onToggleSelect: root.toggleSelected(row.id)
                         }
                     }
                     Item { visible: appearsOn.length > root.preview; width: 1; height: 4 }
@@ -2416,6 +2592,9 @@ Rectangle {
                         })
                         rowIndex: index
                         showAlbum: true
+                        selectMode: root.multiSelect
+                        checked: root.selected[row.id] === true
+                        onToggleSelect: root.toggleSelected(row.id)
                     }
                 }
                 Item { visible: libraryTab.libAlbums.length > 0; width: 1; height: 24 }

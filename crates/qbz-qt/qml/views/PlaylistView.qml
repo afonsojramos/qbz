@@ -68,6 +68,66 @@ Rectangle {
     readonly property var allTracks: doc.tracks || []
     readonly property bool isOwner: doc.isOwner === true
     readonly property bool loading: doc.loading === true
+
+    // --- Multi-select (the Qobuz track rows) ------------------------------
+    // Same shape as AlbumView: the selection lives in QML, select-all/clear
+    // never reach Rust, everything else goes down as a JSON id array through
+    // QbzPlayer.bulkTracksAction (bulk_tracks_qt.rs).
+    property bool multiSelect: false
+    property var selected: ({})
+    readonly property int selectedCount: Object.keys(root.selected).length
+    readonly property bool multiSelectOn: root.multiSelect
+    property string loadedPlaylistId: ""
+    function setMultiSelect(on) {
+        root.multiSelect = on
+        if (!on) root.selected = ({})
+    }
+    function toggleSelected(id) {
+        var m = root.selected
+        if (m[id] === true) delete m[id]
+        else m[id] = true
+        // A rebind needs a NEW object reference — mutating in place notifies
+        // nothing.
+        root.selected = Object.assign({}, m)
+    }
+    function selectedIdsInOrder() {
+        var rows = root.tracks
+        var out = []
+        for (var i = 0; i < rows.length; i++)
+            if (root.selected[rows[i].id] === true) out.push(rows[i].id)
+        return out
+    }
+    function bulkAction(action) {
+        if (action === "select-all") {
+            var m = {}
+            var rows = root.tracks
+            for (var i = 0; i < rows.length; i++) m[rows[i].id] = true
+            root.selected = m
+            return
+        }
+        if (action === "clear") { root.selected = ({}); return }
+        var ids = root.selectedIdsInOrder()
+        if (ids.length === 0) return
+        QbzPlayer.bulkTracksAction(JSON.stringify(ids), action, "playlist", String(doc.id || ""))
+        if (action !== "add-to-playlist" && action !== "add-to-mixtape")
+            root.selected = ({})
+    }
+    // Ctrl+A / Escape hotkey router seam (AppShell duck-types these).
+    function selectAll() {
+        if (!root.multiSelect) root.setMultiSelect(true)
+        root.bulkAction("select-all")
+    }
+    function exitMultiSelectMode() {
+        if (root.multiSelect) root.setMultiSelect(false)
+    }
+    function syncPlaylistState() {
+        var id = doc.id || ""
+        if (id === loadedPlaylistId)
+            return
+        loadedPlaylistId = id
+        setMultiSelect(false)
+    }
+    onDocChanged: syncPlaylistState()
     readonly property string sortField: doc.sortField || "default"
     readonly property bool sortAsc: doc.sortAsc === true
     readonly property string searchQuery: doc.search || ""
@@ -577,8 +637,17 @@ Rectangle {
                         // and open the editor on no playlist, silently.
                         onClicked: QbzPlaylistEdit.open(String(root.doc.id || ""))
                     }
+                    // Multi-select toggle (AlbumView's button, here for the
+                    // playlist's track list).
+                    QbzCircleAction {
+                        name: "square-check-big"
+                        active: root.multiSelect
+                        btnEnabled: root.tracks.length > 0
+                        anchors.verticalCenter: parent.verticalCenter
+                        onClicked: root.setMultiSelect(!root.multiSelect)
+                    }
 
-                    Item { width: parent.width - 40 - 32 * 6 - 7 * 12 - 220 - 140; height: 1 }
+                    Item { width: parent.width - 40 - 32 * 7 - 8 * 12 - 220 - 140; height: 1 }
 
                     // In-playlist search.
                     Rectangle {
@@ -737,6 +806,26 @@ Rectangle {
         //     width, which is inset 14px for the scrollbar gutter — 14px of
         //     extra stretch pushed Album/Duration/Quality right. The width
         //     below is the ROW width, which is the component's contract.
+        // Multi-select bulk bar — INLINE above the column header (the Local
+        // Library album view's layout: bar in flow, list below).
+        QbzMultiSelectBar {
+            visible: root.multiSelect && root.tracks.length > 0
+            width: parent.width
+            selectedCount: root.selectedCount
+            actions: [
+                { "id": "select-all", "label": QbzSession.tr("Select all", QbzSession.trRev), "icon": "square-check-big", "danger": false, "needsSelection": false },
+                { "id": "play-next", "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-start", "danger": false, "needsSelection": true },
+                { "id": "play-later", "label": QbzSession.tr("Play later", QbzSession.trRev), "icon": "list-plus", "danger": false, "needsSelection": true },
+                { "id": "queue", "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "danger": false, "needsSelection": true },
+                { "id": "add-to-playlist", "label": QbzSession.tr("Add to playlist", QbzSession.trRev), "icon": "list-music", "danger": false, "needsSelection": true },
+                { "id": "add-to-mixtape", "label": QbzSession.tr("Add to Mixtape/Collection", QbzSession.trRev), "icon": "cassette-tape", "danger": false, "needsSelection": true },
+                { "id": "add-to-favorites", "label": QbzSession.tr("Add to Library", QbzSession.trRev), "icon": "heart", "danger": false, "needsSelection": true },
+                { "id": "make-offline", "label": QbzSession.tr("Make available offline", QbzSession.trRev), "icon": "cloud-download", "danger": false, "needsSelection": true },
+                { "id": "clear", "label": QbzSession.tr("Clear", QbzSession.trRev), "icon": "x", "danger": false, "needsSelection": true }
+            ]
+            onAction: function (id) { root.bulkAction(id) }
+        }
+
         TrackListHeader {
             visible: root.tracks.length > 0
             width: parent.width - 14
@@ -754,7 +843,7 @@ Rectangle {
         // --- Track list -------------------------------------------------------
         Item {
             width: parent.width
-            height: parent.height - 28 - 150 - 18 - 50
+            height: parent.height - 28 - 150 - 18 - 50 - (root.multiSelect ? 46 : 0)
 
             // Track-list placeholder: the exact TrackRow footprint (50px
             // rows, no gap, 36px art cell), one instance for the whole
@@ -788,6 +877,9 @@ Rectangle {
                     showArtwork: true
                     showAlbum: true
                     showDownload: true
+                    selectMode: root.multiSelect
+                    checked: root.selected[item.id] === true
+                    onToggleSelect: root.toggleSelected(item.id)
                     menuShowRemove: root.isOwner
                     // Reorder chevrons (owner findings 5 + 8). `index` is the
                     // index into `root.tracks`, which under `canReorder` is
