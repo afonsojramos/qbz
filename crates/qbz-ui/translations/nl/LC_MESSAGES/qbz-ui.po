@@ -3098,6 +3098,9 @@ msgstr "Afspeellijstlink controleren..."
 msgid "Checking your audio stack…"
 msgstr "Je audiostack controleren…"
 
+msgid "Couldn't load the test tracks (offline?)"
+msgstr "Kan de testtracks niet laden (offline?)"
+
 msgid "Choose a cover image"
 msgstr "Kies een hoesafbeelding"
 

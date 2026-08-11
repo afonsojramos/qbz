@@ -55,6 +55,10 @@ arboard = { version = "3", features = ["wayland-data-control"] }
 qbz-core = { path = "../qbz-core" }
 qbz-app = { path = "../qbz-app" }
 qbz-audio = { path = "../qbz-audio" }
+# The HiFi Wizard's frontend-agnostic core. NOT `qbz-dac-wizard` — that one is
+# the Slint adapter and pulls in qbz-ui + slint, the ~1.6 M-line generated
+# module this whole track exists to stay out of.
+qbz-dac-wizard-core = { path = "../qbz-dac-wizard-core" }
 qbz-qobuz = { path = "../qbz-qobuz" }
 qbz-models = { path = "../qbz-models" }
 qbz-cache = { path = "../qbz-cache" }

@@ -72,6 +72,12 @@ mod playlist_edit_bridge;
 // manager, opened from two shell surfaces that outlive each other, and its
 // modal must survive the one that opened it (05 §5.8).
 mod playlist_import_bridge;
+// HiFi Wizard (DAC setup). Its own singleton rather than more surface on
+// QbzBridge: the wizard is one self-contained modal whose document nobody else
+// reads, and its read-back ticks every 1.5 s while the test plays — routing
+// that through the settings document would republish the whole Settings view
+// on every tick. Its controller half is `dac_wizard_qt` (a PLAIN module).
+mod dac_wizard_bridge;
 // Qobuz Connect (2026-08-01 contract §8, block B4-Rust): the QbzQConnect
 // singleton — the QML surface of the facade/sink controllers below
 // (qconnect_qt.rs / qconnect_event_sink_qt.rs).
@@ -101,6 +107,13 @@ mod fav_cache_qt;
 // #[cxx_qt::bridge], so it must NOT appear in build.rs's rust_files.
 mod folder_edit_qt;
 mod folders_qt;
+// The HiFi Wizard controller. A plain module — it declares no
+// #[cxx_qt::bridge], so it must NOT appear in build.rs's rust_files. All of
+// its COMPUTATION lives in the shared `qbz-dac-wizard-core` crate, which the
+// Slint adapter uses too: the wizard emits PipeWire/WirePlumber snippets the
+// user pastes into their own system, so two implementations would be the one
+// divergence this port must never produce.
+mod dac_wizard_qt;
 mod foryou_qt;
 mod genre_filter_qt;
 mod home_qt;

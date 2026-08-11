@@ -3102,6 +3102,9 @@ msgstr "Vérification du lien de la playlist..."
 msgid "Checking your audio stack…"
 msgstr "Vérification de votre pile audio…"
 
+msgid "Couldn't load the test tracks (offline?)"
+msgstr "Impossible de charger les pistes de test (hors ligne ?)"
+
 msgid "Choose a cover image"
 msgstr "Choisissez une image de couverture"
 

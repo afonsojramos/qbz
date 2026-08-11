@@ -328,4 +328,14 @@ Item {
     // panel that opens it. The reference mounts its counterpart at the
     // AppShell root for exactly the same reason (LibFolderEditModal.slint:5-8).
     LibFolderEditModal { doc: root.doc }
+
+    // The HiFi Wizard, opened from Settings > Audio. Mounted here for the same
+    // reason as the two above — a modal inside the scrolled panel would be
+    // sized by the content and ride the scroll — and it reads its OWN document
+    // (QbzDacWizard), not the settings one, so it takes no `doc`.
+    //
+    // It fills the view rather than the window: Settings is the full content
+    // area, and the reference is an overlay inside the app shell too, not a
+    // separate window (DacWizardModal.slint:8-9).
+    DacWizardModal { }
 }

@@ -24,6 +24,14 @@ members = [
     "qconnect-transport-ws",
     "qconnect-app",
     "qbz-ui",
+    # The HiFi Wizard's frontend-agnostic core (ADR-006), extracted for the Qt
+    # port. `qbz-dac-wizard` is the SLINT one and is deliberately NOT wired to
+    # this crate: the Slint tree is frozen (owner, 2026-08-11 — "ya no hacemos
+    # cambios para Slint"), and rewiring it would have been a change to a tree
+    # nobody compiles or tests any more. The two therefore hold the same logic
+    # twice; that is safe only BECAUSE the Slint side is frozen, and it is the
+    # reason a fix here never needs porting back.
+    "qbz-dac-wizard-core",
     "qbz-dac-wizard",
     "qbz-text-utils",
     "qbz-slint-common",

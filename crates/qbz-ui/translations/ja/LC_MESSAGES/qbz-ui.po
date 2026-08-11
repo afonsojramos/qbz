@@ -2959,6 +2959,9 @@ msgstr "プレイリストのリンクを確認中..."
 msgid "Checking your audio stack…"
 msgstr "オーディオスタックを確認中…"
 
+msgid "Couldn't load the test tracks (offline?)"
+msgstr "テストトラックを読み込めませんでした（オフライン？）"
+
 msgid "Choose a cover image"
 msgstr "カバー画像を選択"
 

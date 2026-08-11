@@ -191,6 +191,11 @@ const MASTERS: &[(&str, &str)] = &[
     ("folder-open", include_str!("../qml/assets/icons/primary/folder-open.svg")),
     ("folder-plus", include_str!("../qml/assets/icons/primary/folder-plus.svg")),
     ("folder", include_str!("../qml/assets/icons/primary/folder.svg")),
+    // The HiFi Wizard's header glyph. Unlike every other master this one is a
+    // FILLED path set (`fill="#ffffff"`), not a stroked outline — the literal
+    // substitution does not care, but a future "why is this file shaped
+    // differently" reads better answered here.
+    ("gandalf", include_str!("../qml/assets/icons/primary/gandalf.svg")),
     ("globe", include_str!("../qml/assets/icons/primary/globe.svg")),
     ("grip-vertical", include_str!("../qml/assets/icons/primary/grip-vertical.svg")),
     ("hard-drive", include_str!("../qml/assets/icons/primary/hard-drive.svg")),

@@ -6360,6 +6360,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "qbz-dac-wizard-core"
+version = "2.0.2"
+dependencies = [
+ "qbz-audio",
+ "qbz-i18n",
+ "qbz-models",
+]
+
+[[package]]
 name = "qbz-dsd"
 version = "2.0.2"
 dependencies = [
@@ -6634,6 +6643,7 @@ dependencies = [
  "qbz-cast",
  "qbz-core",
  "qbz-credentials",
+ "qbz-dac-wizard-core",
  "qbz-external-reco",
  "qbz-i18n",
  "qbz-integrations",

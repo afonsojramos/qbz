@@ -2983,6 +2983,9 @@ msgstr "Проверка ссылки на плейлист..."
 msgid "Checking your audio stack…"
 msgstr "Проверка аудиосистемы…"
 
+msgid "Couldn't load the test tracks (offline?)"
+msgstr "Не удалось загрузить тестовые треки (нет сети?)"
+
 msgid "Choose a cover image"
 msgstr "Выберите изображение обложки"
 

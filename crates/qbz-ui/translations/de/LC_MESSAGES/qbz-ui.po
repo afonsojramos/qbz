@@ -3102,6 +3102,9 @@ msgstr "Playlist-Link wird geprüft..."
 msgid "Checking your audio stack…"
 msgstr "Ihr Audio-Stack wird geprüft…"
 
+msgid "Couldn't load the test tracks (offline?)"
+msgstr "Die Testtitel konnten nicht geladen werden (offline?)"
+
 msgid "Choose a cover image"
 msgstr "Wählen Sie ein Coverbild"
 

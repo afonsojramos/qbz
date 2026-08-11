@@ -3102,6 +3102,9 @@ msgstr "Verificando el enlace de la lista de reproducción..."
 msgid "Checking your audio stack…"
 msgstr "Verificando tu sistema de audio…"
 
+msgid "Couldn't load the test tracks (offline?)"
+msgstr "No se pudieron cargar las pistas de prueba (¿sin conexión?)"
+
 msgid "Choose a cover image"
 msgstr "Elige una imagen de portada"
 

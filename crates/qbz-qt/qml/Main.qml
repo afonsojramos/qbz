@@ -273,6 +273,14 @@ ApplicationWindow {
         // importer makes (the whole progress panel, the log, the summary) is
         // dropped on the floor with nothing logged on either side.
         QbzPlaylistImport.boot()
+        // HiFi Wizard. Nothing to seed — the modal is closed until the
+        // Settings > Audio row opens it — but without this line every publish
+        // the wizard makes is dropped on the floor: the health verdict, the
+        // enumerated DACs, the generated config and the live read-back would
+        // all stay at their defaults, and nothing would be logged on either
+        // side. The wizard is the loudest case after QbzBlacklist, because its
+        // first step ends on "Checking your audio stack…" forever.
+        QbzDacWizard.boot()
         // Miniplayer (2026-08-03 miniplayer/tray contract, block B1). Booted
         // like every other domain singleton, after QbzSession: `boot()` is what
         // registers the Qt-thread hop, and without it `mini_bridge::ui()` is a

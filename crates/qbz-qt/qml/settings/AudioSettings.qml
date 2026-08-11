@@ -9,8 +9,12 @@
 // - "Detected device limit" + its fallback disclosure (#638): the device-cap
 //   probe (`device_cap.rs`) is Slint glue that was never ported, so there is
 //   no measured value to show.
-// - "HiFi Wizard": the guided PipeWire setup (DacWizardActions) is a whole
-//   modal flow, not a settings row.
+//
+// The HiFi Wizard IS shipped (2026-08-11): the last row of OUTPUT opens
+// settings/DacWizardModal.qml, mounted at the SettingsView root. Its logic
+// lives in `qbz-dac-wizard-core`, the frontend-agnostic crate extracted for
+// this port. Placement and backend gating diverge from the reference — see
+// the row itself.
 
 import QtQuick
 import com.blitzfc.qbz
@@ -123,6 +127,28 @@ Column {
             options: root.doc.dsdModes || []
             currentIndex: root.doc.dsdModeIndex || 0
             onSelected: function (i) { QbzBridge.settingsSelect("dsd-mode", i) }
+        }
+    }
+    // HiFi Wizard — guided bit-perfect DAC setup. The LAST row of OUTPUT,
+    // under "Output device", and shown for EVERY backend.
+    //
+    // TWO DIVERGENCES FROM THE REFERENCE, both owner rulings (2026-08-11):
+    // it lives in OUTPUT, not at the end of BIT-PERFECT; and it is NOT gated
+    // on `backend-is-pipewire` the way `AudioSettings.slint:282` gates it.
+    // The reference hides it off PipeWire because the config it generates is
+    // PipeWire/WirePlumber — but that is exactly who needs it: someone on ALSA
+    // direct who wants to set their DAC up cannot reach the wizard that would
+    // walk them through it. Do not "restore parity" by putting the gate back.
+    //
+    // Opening it resets the wizard and kicks the audio-stack probe off the UI
+    // thread, so there is nothing to arm here.
+    SettingRow {
+        label: QbzSession.tr("HiFi Wizard", QbzSession.trRev)
+        description: QbzSession.tr("Auto-detect your DACs and set up bit-perfect playback, step by step.", QbzSession.trRev)
+        SettingsButton {
+            iconName: "gandalf"
+            text: QbzSession.tr("Open Wizard", QbzSession.trRev)
+            onClicked: QbzDacWizard.open()
         }
     }
 
