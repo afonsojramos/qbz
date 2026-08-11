@@ -1818,6 +1818,14 @@ static LIBRARY_LOADED: Mutex<bool> = Mutex::new(false);
 /// Sidebar navigation: record the view and lazy-load its data.
 pub(crate) fn navigate_to(view: &str) {
     nav_qt::record(view);
+    // A plain section navigation carries no landing tab: clear any request
+    // a flyout click left behind, or the next mount of a tabbed view would
+    // be dragged onto a stale tab.
+    shell_bridge::ui(|mut b| {
+        if !b.as_ref().nav_tab().is_empty() {
+            b.as_mut().set_nav_tab(QString::default());
+        }
+    });
     LAST_DETAIL.lock().unwrap().0.clear();
     if view == "library" {
         load_library_once();
@@ -1840,6 +1848,33 @@ pub(crate) fn navigate_to(view: &str) {
     // only ever reached through a call that loads its own data first and
     // records the route itself (myqbz_detail_qt::open, myqbz_builder_qt::open,
     // blacklist_qt::open_manager), never through the sidebar.
+}
+
+/// NavFlyout entry activation: navigate to `view` AND land on its internal
+/// `tab` (Slint's `on_header_menu_navigate` per-route tab selection, e.g.
+/// `discover-forYou` → `home::select_tab`, crates/qbz/src/main.rs:18026).
+///
+/// The tab travels on the bridge (navTab/navTabView/navTabSeq) and is
+/// applied by a Binding in ContentRouter.qml — NOT by locating the view in
+/// the scene: the pre-bridge port did that with a depth-capped tree walk
+/// (NavFlyout's findTabHost), which the ContentRouter extraction (kiosk
+/// port D3) silently outran, leaving every flyout entry navigating to the
+/// section's default tab.
+///
+/// A click for the view already mounted skips `navigate_to`: it would
+/// record a duplicate history entry, and the property bump below is enough
+/// to re-apply the tab live.
+pub(crate) fn navigate_to_tab(view: &str, tab: &str) {
+    if nav_qt::current_view() != view {
+        navigate_to(view);
+    }
+    let (view, tab) = (view.to_string(), tab.to_string());
+    shell_bridge::ui(move |mut b| {
+        let seq = b.as_ref().nav_tab_seq() + 1;
+        b.as_mut().set_nav_tab_view(QString::from(view));
+        b.as_mut().set_nav_tab(QString::from(tab));
+        b.as_mut().set_nav_tab_seq(seq);
+    });
 }
 
 // ============================ i18n (phase 20) ==============================

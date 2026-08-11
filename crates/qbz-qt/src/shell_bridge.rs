@@ -50,6 +50,16 @@ pub mod qbz_shell {
         // Nav history (src/nav_qt.rs):
         #[qproperty(bool, can_back)]
         #[qproperty(bool, can_forward)]
+        // --- Flyout landing tab (NavFlyout rows carry view + tab) ----------
+        // The tab a nav-flyout click must land on: Discover > For You is
+        // nav_tab_view="home" + nav_tab="forYou". Written by
+        // `navigate_to_tab`, cleared by a plain `navigate_to`, applied to the
+        // mounted view by a Binding in ContentRouter.qml. `nav_tab_seq`
+        // bumps per request so re-clicking the SAME entry re-applies the tab
+        // (a bare string would not renotify).
+        #[qproperty(QString, nav_tab)]
+        #[qproperty(QString, nav_tab_view)]
+        #[qproperty(i32, nav_tab_seq)]
 
         // Now-playing bar mode (phase 18): 0 New / 1 Classic / 2 Small /
         // 3 Large — the ui_prefs npb_mode key, live-switchable.
@@ -326,6 +336,12 @@ pub mod qbz_shell {
         /// and lazy-load its data on first visit.
         #[qinvokable]
         fn navigate_to(self: Pin<&mut QbzShell>, view: QString);
+        /// NavFlyout entry activation: navigate AND land on a view-internal
+        /// tab ("home" + "forYou"). The tab rides the bridge (navTab /
+        /// navTabView / navTabSeq) because a QML id cannot cross documents —
+        /// ContentRouter applies it to the mounted view through a Binding.
+        #[qinvokable]
+        fn navigate_to_tab(self: Pin<&mut QbzShell>, view: QString, tab: QString);
         /// Open a url in the system browser (the Slint
         /// AlbumActions.open-external-link). Spawns xdg-open detached.
         #[qinvokable]
@@ -525,6 +541,9 @@ pub struct QbzShellRust {
     current_view: QString,
     can_back: bool,
     can_forward: bool,
+    nav_tab: QString,
+    nav_tab_view: QString,
+    nav_tab_seq: i32,
     npb_mode: i32,
     large_visualizer_on: bool,
     large_spectrum_mode: i32,
@@ -594,6 +613,9 @@ impl Default for QbzShellRust {
             queue_open: false,
             current_view: QString::from("home"),
             can_back: false,
+            nav_tab: QString::default(),
+            nav_tab_view: QString::default(),
+            nav_tab_seq: 0,
             can_forward: false,
             npb_mode: crate::settings_qt::npb_mode_index(),
             large_visualizer_on: crate::settings_qt::large_visualizer_on(),
@@ -803,6 +825,10 @@ impl qbz_shell::QbzShell {
 
     pub fn navigate_to(self: Pin<&mut Self>, view: QString) {
         crate::navigate_to(&view.to_string());
+    }
+
+    pub fn navigate_to_tab(self: Pin<&mut Self>, view: QString, tab: QString) {
+        crate::navigate_to_tab(&view.to_string(), &tab.to_string());
     }
 
     pub fn npb_set_mode(self: Pin<&mut Self>, mode: i32) {

@@ -145,4 +145,32 @@ Item {
                   || QbzShell.currentView === "collections")
         restoreMode: Binding.RestoreNone
     }
+
+    // NavFlyout landing tab (Discover > For You, Library > Albums, Local >
+    // Folders...). The request rides the bridge (QbzShell.navigateToTab ->
+    // navTab/navTabView/navTabSeq) because a QML id cannot cross documents;
+    // this Binding is the ONLY writer. It replaces NavFlyout's depth-capped
+    // scene search (findTabHost), which the ContentRouter extraction (kiosk
+    // port D3) silently outran — every flyout entry landed on the section's
+    // default tab instead of its own.
+    //
+    // `navTabSeq` in the value expression forces re-application when the
+    // same entry is clicked twice in a row (a bare navTab would not
+    // renotify). `navTabView === currentView` keeps a cross-view request
+    // from being stamped on the outgoing view before the route lands. The
+    // typeof guard leaves non-tabbed views alone rather than warning about
+    // a non-existent property. RestoreNone, like the `kind` Binding above:
+    // the target is destroyed on unload. An in-view tab-bar click writes
+    // `activeTab` directly and simply wins until the next flyout click —
+    // this Binding does not refire without a dependency change.
+    Binding {
+        target: viewLoader.item
+        property: "activeTab"
+        when: viewLoader.item !== null
+              && QbzShell.navTab !== ""
+              && QbzShell.navTabView === QbzShell.currentView
+              && typeof viewLoader.item.activeTab === "string"
+        value: (QbzShell.navTabSeq, QbzShell.navTab)
+        restoreMode: Binding.RestoreNone
+    }
 }

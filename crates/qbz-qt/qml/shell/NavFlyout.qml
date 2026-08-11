@@ -259,72 +259,18 @@ Item {
     // Entry activation
     // ---------------------------------------------------------------------
 
-    // The tab a just-navigated view must land on, held until the view mounts.
-    property string pendingTab: ""
-    property string pendingView: ""
-
+    // Entries with a tab go through the bridge seam (navigateToTab), which
+    // both navigates and hands the tab to ContentRouter's Binding — the
+    // Slint behaviour (on_header_menu_navigate selects the landing tab
+    // per route, crates/qbz/src/main.rs:18026-18046). Entries without one
+    // (Collections, Mixtapes) are a plain section navigation.
     function activate(entry) {
         panel.close()
         if (!entry || entry.enabled === false || entry.view === "") return
-        if (QbzShell.currentView === entry.view) {
-            // Already mounted — no currentViewChanged will fire.
-            applyTab(entry.tab)
-            return
-        }
-        nav.pendingTab = entry.tab
-        nav.pendingView = entry.view
-        QbzShell.navigateTo(entry.view)
-    }
-
-    Connections {
-        target: QbzShell
-        function onCurrentViewChanged() {
-            if (nav.pendingTab === "") return
-            var wanted = nav.pendingView
-            var tab = nav.pendingTab
-            nav.pendingTab = ""
-            nav.pendingView = ""
-            // A navigation somewhere else (back/forward, a card click) beat us
-            // to it — drop the request instead of stamping a stale tab later.
-            if (QbzShell.currentView !== wanted) return
-            // The content Loader instantiates the view from its own binding on
-            // the same property; binding order between it and this handler is
-            // undefined, so apply after the current pass.
-            Qt.callLater(function () { nav.applyTab(tab) })
-        }
-    }
-
-    // Selects a tab INSIDE the mounted view.
-    //
-    // TEMPORARY BRIDGE (the permanent fix is in the handoff report): the shell
-    // router only carries a view id, and the three tabbed views own their tab
-    // as plain QML state (HomeView/LibraryView/LocalLibraryView `activeTab`).
-    // There is no bridge property to hand a tab through yet, so the mounted
-    // view is located in the scene and its `activeTab` assigned directly. The
-    // search is depth-capped (the view sits 5 levels under the window content
-    // item: screenLoader > AppShell > contentFrame > Loader > view), so it
-    // never descends into delegate forests, and it degrades to a plain
-    // section navigation if nothing is found.
-    function applyTab(tab) {
-        if (!tab || tab === "") return
-        var top = nav
-        while (top.parent) top = top.parent
-        var view = findTabHost(top, 0)
-        if (view) view.activeTab = tab
-    }
-
-    function findTabHost(item, depth) {
-        if (!item || depth > 7) return null
-        // Only HomeView / LibraryView / LocalLibraryView expose `activeTab`,
-        // and exactly one of them is mounted at a time (one content Loader).
-        if (typeof item.activeTab === "string") return item
-        var kids = item.children
-        if (!kids) return null
-        for (var i = 0; i < kids.length; i++) {
-            var hit = findTabHost(kids[i], depth + 1)
-            if (hit) return hit
-        }
-        return null
+        if (entry.tab && entry.tab !== "")
+            QbzShell.navigateToTab(entry.view, entry.tab)
+        else
+            QbzShell.navigateTo(entry.view)
     }
 
     QbzTheme { id: theme }
