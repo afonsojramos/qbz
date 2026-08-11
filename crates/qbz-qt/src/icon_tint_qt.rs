@@ -184,6 +184,7 @@ const MASTERS: &[(&str, &str)] = &[
     ("disc", include_str!("../qml/assets/icons/primary/disc.svg")),
     ("element-connect", include_str!("../qml/assets/icons/primary/element-connect.svg")),
     ("ellipsis", include_str!("../qml/assets/icons/primary/ellipsis.svg")),
+    ("crown", include_str!("../qml/assets/icons/primary/crown.svg")),
     ("external-link", include_str!("../qml/assets/icons/primary/external-link.svg")),
     ("eye-off", include_str!("../qml/assets/icons/primary/eye-off.svg")),
     ("eye", include_str!("../qml/assets/icons/primary/eye.svg")),

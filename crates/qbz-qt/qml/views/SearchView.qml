@@ -247,9 +247,17 @@ Rectangle {
         property var card: ({})
         property string qualityLabel: ""
         color: "transparent"
+        // EXPLICIT size, and load-bearing: a bare Rectangle's implicit size
+        // is 0x0 (Item does NOT size from children), and the hero slot centers
+        // it — so the whole card painted from the slot's CENTER, ~100px into
+        // the Artists carousel, whenever the top result was a track (the
+        // artist/album arms carry their own 200px and never shifted).
+        width: 200
+        height: heroCol.implicitHeight
         readonly property bool overlayOn: heroArtArea.containsMouse
 
         Column {
+            id: heroCol
             spacing: 0
             Rectangle {
                 width: 200
@@ -508,7 +516,10 @@ Rectangle {
                             spacing: 12
                             Row {
                                 spacing: 8
-                                QbzIcon { name: "award"; width: 18; height: 18; tintName: "warning" }
+                                // The crown, 1:1 with the reference
+                                // (SearchResultsView.slint:584) — the POC's
+                                // "award" read as a mic.
+                                QbzIcon { name: "crown"; width: 18; height: 18; tintName: "warning" }
                                 Text {
                                     text: QbzSession.tr("Most popular", QbzSession.trRev)
                                     color: theme.textPrimary
