@@ -326,11 +326,14 @@ pub(crate) fn map_release(release: &PageArtistRelease) -> AlbumCardData {
             .unwrap_or_default(),
         quality_tier: home_qt::quality_tier_from_depth(bit_depth).to_string(),
         quality_detail: home_qt::quality_detail_from_parts(bit_depth, sample_rate),
-        art_url: release
-            .image
-            .as_ref()
-            .and_then(|img| img.best().cloned())
-            .unwrap_or_default(),
+        art_url: crate::cover_artwork_qt::prefer_album_cover(
+            &release.id,
+            release
+                .image
+                .as_ref()
+                .and_then(|img| img.best().cloned())
+                .unwrap_or_default(),
+        ),
     }
 }
 

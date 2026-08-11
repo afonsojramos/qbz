@@ -27,6 +27,9 @@ Popup {
     property string artSource: ""
 
     function openWith(source) {
+        // Builders hand over remote URLs, file:// urls, and (for custom
+        // covers) bare absolute paths — normalize here, once.
+        if (source.charAt(0) === "/") source = "file://" + source
         root.artSource = source
         root.open()
     }

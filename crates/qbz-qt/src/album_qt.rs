@@ -1026,11 +1026,14 @@ fn map_release_card(release: &qbz_models::PageArtistRelease) -> AlbumCardData {
             .unwrap_or_default(),
         quality_tier: home_qt::quality_tier_from_depth(bit_depth).to_string(),
         quality_detail: home_qt::quality_detail_from_parts(bit_depth, sample_rate),
-        art_url: release
-            .image
-            .as_ref()
-            .and_then(|img| img.best().cloned())
-            .unwrap_or_default(),
+        art_url: crate::cover_artwork_qt::prefer_album_cover(
+            &release.id,
+            release
+                .image
+                .as_ref()
+                .and_then(|img| img.best().cloned())
+                .unwrap_or_default(),
+        ),
     }
 }
 
@@ -1067,6 +1070,7 @@ pub async fn load_more_from_artist(
 /// One Last.fm recommendation as the card shape the two Qobuz rows already use,
 /// so the third row reuses their delegate instead of a fourth card variant.
 fn reco_to_card(r: qbz_external_reco::AlbumReco) -> AlbumCardData {
+    let art_url = crate::cover_artwork_qt::prefer_album_cover(&r.qobuz_album_id, r.artwork_url.clone());
     AlbumCardData {
         is_pinned: crate::sidebar_qt::is_pinned("album", &r.qobuz_album_id),
         is_favorite: crate::fav_cache_qt::is_album_favorite(&r.qobuz_album_id),
@@ -1078,7 +1082,7 @@ fn reco_to_card(r: qbz_external_reco::AlbumReco) -> AlbumCardData {
         year: r.year,
         quality_tier: r.quality_tier,
         quality_detail: r.quality_label,
-        art_url: r.artwork_url,
+        art_url,
     }
 }
 
@@ -1126,7 +1130,10 @@ pub async fn load_suggestions(
                 year: qbz_text_utils::dates::release_label(date.as_deref()),
                 quality_tier: home_qt::quality_tier_from_depth(bit_depth).to_string(),
                 quality_detail: home_qt::quality_detail_from_parts(bit_depth, sample_rate),
-                art_url: a.image.best().cloned().unwrap_or_default(),
+                art_url: crate::cover_artwork_qt::prefer_album_cover(
+                    &a.id,
+                    a.image.best().cloned().unwrap_or_default(),
+                ),
             }
         })
         .filter(|c| c.id != album_id)

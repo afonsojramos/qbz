@@ -375,7 +375,86 @@ Rectangle {
                     phase: root.skelPhase
                     settleMs: 4000
                 }
+                // Left-click: the lightbox (the shared CoverLightbox, same as
+                // the album page). Right-click: the custom-cover menu (Qt
+                // port addition — the Slint playlist header has no menu).
+                MouseArea {
+                    anchors.fill: parent
+                    acceptedButtons: Qt.LeftButton | Qt.RightButton
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: function (mouse) {
+                        if (mouse.button === Qt.RightButton) {
+                            plCoverMenu.openAtCursor(plCoverAnchor, mouse.x, mouse.y)
+                        } else {
+                            var src = (doc.coverUrl || "") !== "" ? doc.coverUrl
+                                : ((doc.covers || []).length > 0 ? doc.covers[0] : "")
+                            if (src !== "") plCoverLightbox.openWith(src)
+                        }
+                    }
+                }
+                Item { id: plCoverAnchor; anchors.fill: parent }
             }
+
+            // The playlist cover menu's rows, rebuilt per open (Add vs
+            // Change+Remove flips on hasCustomCover). The store is Qt-first
+            // (custom_playlist_covers.json — a `playlists` key inside the
+            // shared custom_artwork.json would be dropped on the Slint
+            // app's next write).
+            function buildPlCoverMenuModel() {
+                var rows = []
+                if (doc.hasCustomCover === true) {
+                    rows.push({ "label": QbzSession.tr("Change cover", QbzSession.trRev), "icon": "image-plus", "action": "add" })
+                    rows.push({ "label": QbzSession.tr("Remove cover", QbzSession.trRev), "icon": "trash-2", "action": "remove" })
+                } else {
+                    rows.push({ "label": QbzSession.tr("Add cover", QbzSession.trRev), "icon": "image-plus", "action": "add" })
+                }
+                return rows
+            }
+
+            QbzContextMenu {
+                id: plCoverMenu
+                menuWidth: 196
+                onAboutToShow: plCoverRepeater.model = root.buildPlCoverMenuModel()
+                Repeater {
+                    id: plCoverRepeater
+                    model: []
+                    delegate: Rectangle {
+                        required property var modelData
+                        width: parent ? parent.width : 0
+                        height: 33
+                        radius: 5
+                        color: pcmiArea.containsMouse ? theme.surfaceHover : "transparent"
+                        Row {
+                            anchors.fill: parent
+                            anchors.leftMargin: 8
+                            spacing: 8
+                            QbzIcon { name: modelData.icon; width: 15; height: 15; anchors.verticalCenter: parent.verticalCenter; tintName: "secondary" }
+                            Text {
+                                height: parent.height
+                                width: parent.width - 23
+                                text: modelData.label
+                                color: theme.textSecondary
+                                font.pixelSize: 13
+                                verticalAlignment: Text.AlignVCenter
+                                elide: Text.ElideRight
+                            }
+                        }
+                        MouseArea {
+                            id: pcmiArea
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                plCoverMenu.close()
+                                if (modelData.action === "add") QbzBridge.playlistCoverAdd(doc.id || "")
+                                else if (modelData.action === "remove") QbzBridge.playlistCoverRemove(doc.id || "")
+                            }
+                        }
+                    }
+                }
+            }
+
+            CoverLightbox { id: plCoverLightbox }
 
             // Metadata.
             Column {

@@ -135,6 +135,13 @@ pub mod qbz_bridge {
         fn playlist_toggle_follow(self: Pin<&mut QbzBridge>);
         #[qinvokable]
         fn playlist_toggle_pin(self: Pin<&mut QbzBridge>);
+
+        /// Playlist header cover menu (cover_artwork_qt.rs): pick / clear
+        /// the custom cover override for the OPEN playlist.
+        #[qinvokable]
+        fn playlist_cover_add(self: Pin<&mut QbzBridge>, playlist_id: QString);
+        #[qinvokable]
+        fn playlist_cover_remove(self: Pin<&mut QbzBridge>, playlist_id: QString);
         /// "Copy to your library" (foreign playlists).
         #[qinvokable]
         fn playlist_copy(self: Pin<&mut QbzBridge>);
@@ -317,6 +324,13 @@ impl qbz_bridge::QbzBridge {
 
     pub fn playlist_toggle_pin(self: Pin<&mut Self>) {
         crate::playlist_qt::toggle_pin();
+    }
+
+    pub fn playlist_cover_add(self: Pin<&mut Self>, playlist_id: QString) {
+        crate::cover_artwork_qt::add_custom_playlist_cover(playlist_id.to_string());
+    }
+    pub fn playlist_cover_remove(self: Pin<&mut Self>, playlist_id: QString) {
+        crate::cover_artwork_qt::remove_custom_playlist_cover(playlist_id.to_string());
     }
 
     pub fn playlist_copy(self: Pin<&mut Self>) {

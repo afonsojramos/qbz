@@ -229,7 +229,12 @@ pub async fn load(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
         }
         .into_iter()
         .map(|p| {
-            let cover_urls = {
+            // A custom playlist cover replaces the sidebar mosaic too.
+            let custom = crate::cover_artwork_qt::playlist_cover(&p.id.to_string())
+                .filter(|path| std::path::Path::new(path).is_file());
+            let cover_urls = if let Some(custom_path) = custom {
+                vec![custom_path]
+            } else {
                 let source = [&p.images300, &p.images150, &p.images]
                     .into_iter()
                     .flatten()

@@ -65,6 +65,19 @@ pub fn album_cover(album_id: &str) -> Option<String> {
     load_store().albums.get(album_id).cloned()
 }
 
+/// The art URL a card/collage builder should emit for an album: the custom
+/// override's absolute path when one is registered AND the file still
+/// exists, else the remote URL unchanged. The path flows through the
+/// ordinary artwork pipeline (artwork_qt::classify's LocalFile arm resolves
+/// it synchronously), so every surface that mounts AlbumCard picks the
+/// override up with no QML change.
+pub fn prefer_album_cover(album_id: &str, fallback_url: String) -> String {
+    match album_cover(album_id) {
+        Some(p) if std::path::Path::new(&p).is_file() => p,
+        _ => fallback_url,
+    }
+}
+
 fn set_album_cover(album_id: &str, path: &str) {
     let mut store = load_store();
     store.albums.insert(album_id.to_string(), path.to_string());
@@ -179,5 +192,106 @@ pub fn save_cover_as(album_id: String, title: String, artwork_url: String) {
             },
             Err(e) => log::warn!("[qbz-qt] cover save-as fetch failed: {e}"),
         }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Playlist custom covers (Qt-first; no Slint counterpart yet)
+// ---------------------------------------------------------------------------
+// Separate file on purpose: the Slint store struct round-trips only the keys
+// it knows, so a `playlists` key inside custom_artwork.json would be DROPPED
+// the next time the Slint app writes an album/artist override. A Qt-owned
+// file cannot be clobbered by it.
+
+#[derive(Default, Serialize, Deserialize)]
+struct PlaylistStore {
+    #[serde(default)]
+    playlists: HashMap<String, String>,
+}
+
+fn playlist_store_path() -> Option<PathBuf> {
+    Some(dirs::data_dir()?.join("qbz").join("custom_playlist_covers.json"))
+}
+
+fn load_playlist_store() -> PlaylistStore {
+    let Some(path) = playlist_store_path() else {
+        return PlaylistStore::default();
+    };
+    match std::fs::read(&path) {
+        Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_default(),
+        Err(_) => PlaylistStore::default(),
+    }
+}
+
+fn write_playlist_store(store: &PlaylistStore) {
+    let Some(path) = playlist_store_path() else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(json) = serde_json::to_vec_pretty(store) {
+        let _ = std::fs::write(&path, json);
+    }
+}
+
+/// The absolute path of the user-picked cover for `playlist_id`, if set.
+pub fn playlist_cover(playlist_id: &str) -> Option<String> {
+    load_playlist_store().playlists.get(playlist_id).cloned()
+}
+
+/// Playlist twin of [`prefer_album_cover`].
+pub fn prefer_playlist_cover(playlist_id: &str, fallback_url: String) -> String {
+    match playlist_cover(playlist_id) {
+        Some(p) if std::path::Path::new(&p).is_file() => p,
+        _ => fallback_url,
+    }
+}
+
+/// Playlist header "Add/Change cover": native picker, persist, re-open the
+/// playlist so every surface repaints from the override.
+pub fn add_custom_playlist_cover(playlist_id: String) {
+    if playlist_id.is_empty() {
+        return;
+    }
+    crate::spawn(async move {
+        let Some(file) = rfd::AsyncFileDialog::new()
+            .add_filter("Images", &["png", "jpg", "jpeg", "webp"])
+            .pick_file()
+            .await
+        else {
+            return;
+        };
+        let path = file.path().to_string_lossy().to_string();
+        let id = playlist_id.clone();
+        if tokio::task::spawn_blocking(move || {
+            let mut store = load_playlist_store();
+            store.playlists.insert(id, path);
+            write_playlist_store(&store);
+        })
+        .await
+        .is_ok()
+        {
+            crate::open_playlist(playlist_id);
+        }
+    });
+}
+
+/// "Remove cover": drop the override and re-open so the header reverts to
+/// the own-art/mosaic rule.
+pub fn remove_custom_playlist_cover(playlist_id: String) {
+    if playlist_id.is_empty() {
+        return;
+    }
+    let id = playlist_id.clone();
+    crate::spawn(async move {
+        let _ = tokio::task::spawn_blocking(move || {
+            let mut store = load_playlist_store();
+            if store.playlists.remove(&id).is_some() {
+                write_playlist_store(&store);
+            }
+        })
+        .await;
+        crate::open_playlist(playlist_id);
     });
 }

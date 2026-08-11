@@ -443,6 +443,12 @@ fn map_artist(artist: Artist) -> FeedItem {
 /// how the cards ended up showing a member-album sleeve where the playlist
 /// graphic belongs.
 pub(crate) fn playlist_cover_urls(playlist: &Playlist) -> Vec<String> {
+    // A custom playlist cover replaces the mosaic everywhere (one tile).
+    if let Some(p) = crate::cover_artwork_qt::playlist_cover(&playlist.id.to_string()) {
+        if std::path::Path::new(&p).is_file() {
+            return vec![p];
+        }
+    }
     let source = [&playlist.images300, &playlist.images150, &playlist.images]
         .into_iter()
         .flatten()

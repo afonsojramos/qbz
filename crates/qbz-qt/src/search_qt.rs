@@ -329,7 +329,10 @@ fn map_album(album: &Album) -> CardRow {
         year: year_of(album.release_date_original.as_deref()),
         quality_tier: tier(album.maximum_bit_depth).to_string(),
         quality_label: quality_label(album.maximum_bit_depth, album.maximum_sampling_rate),
-        art_url: album.image.best().cloned().unwrap_or_default(),
+        art_url: crate::cover_artwork_qt::prefer_album_cover(
+            &album.id,
+            album.image.best().cloned().unwrap_or_default(),
+        ),
         ..Default::default()
     }
 }

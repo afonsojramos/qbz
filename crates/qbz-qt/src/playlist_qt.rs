@@ -149,6 +149,10 @@ pub struct PlaylistDoc {
     /// urls itself and owns the empty (list-music) state.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub covers: Vec<String>,
+    /// A user-picked cover override exists (custom_playlist_covers.json) —
+    /// the header cover menu flips its Add/Change/Remove rows on this.
+    #[serde(rename = "hasCustomCover")]
+    pub has_custom_cover: bool,
     pub tracks: Vec<PlaylistTrackRow>,
     #[serde(rename = "trackCount")]
     pub track_count: i32,
@@ -650,6 +654,12 @@ fn playlist_own_image(playlist: &Playlist) -> String {
 /// mosaic everywhere), else the first four distinct track covers (what the
 /// Slint header's 2x2 collage reads).
 fn collage_urls(playlist: &Playlist, tracks: &[Track]) -> Vec<String> {
+    // A custom playlist cover replaces the whole mosaic on every surface.
+    if let Some(p) = crate::cover_artwork_qt::playlist_cover(&playlist.id.to_string()) {
+        if std::path::Path::new(&p).is_file() {
+            return vec![p];
+        }
+    }
     let mut out: Vec<String> = Vec::new();
     let push = |url: String, out: &mut Vec<String>| {
         if !url.is_empty() && !out.contains(&url) {
@@ -670,11 +680,18 @@ fn collage_urls(playlist: &Playlist, tracks: &[Track]) -> Vec<String> {
     }
     if out.is_empty() {
         for track in tracks {
-            let url = track
+            let (album_id, url) = track
                 .album
                 .as_ref()
-                .and_then(|a| a.image.best().cloned())
+                .map(|a| {
+                    (
+                        a.id.clone(),
+                        a.image.best().cloned().unwrap_or_default(),
+                    )
+                })
                 .unwrap_or_default();
+            // A member album with a custom cover contributes THAT art.
+            let url = crate::cover_artwork_qt::prefer_album_cover(&album_id, url);
             push(url, &mut out);
             if out.len() == 4 {
                 break;
@@ -715,8 +732,15 @@ pub async fn load(runtime: &Arc<AppRuntime<LoggingAdapter>>, playlist_id: u64) -
     // (and the first track's sleeve) is a MEMBER-ALBUM cover: binding it
     // here is exactly what rendered an album sleeve as the playlist's
     // artwork, and it also starved the collage of its tiles.
-    let cover_url = playlist_own_image(&pl);
-    let covers = collage_urls(&pl, &tracks);
+    // A custom cover beats BOTH arms (own graphic and mosaic).
+    let custom = crate::cover_artwork_qt::playlist_cover(&pl.id.to_string())
+        .filter(|p| std::path::Path::new(p).is_file());
+    let has_custom_cover = custom.is_some();
+    let cover_url = custom.clone().unwrap_or_else(|| playlist_own_image(&pl));
+    let covers = match custom {
+        Some(p) => vec![p],
+        None => collage_urls(&pl, &tracks),
+    };
     let description = pl
         .description
         .map(|d| qbz_text_utils::strip_html::strip_html(&d))
@@ -799,6 +823,7 @@ pub async fn load(runtime: &Arc<AppRuntime<LoggingAdapter>>, playlist_id: u64) -
         doc.cover_url = cover_url.clone();
         doc.cover_path = cover_path;
         doc.covers = covers;
+        doc.has_custom_cover = has_custom_cover;
         doc.tracks = rows;
         doc.track_count = track_count;
         doc.total_duration = total_duration;
