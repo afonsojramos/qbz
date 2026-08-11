@@ -623,6 +623,13 @@ pub async fn load_album(runtime: &Arc<AppRuntime<LoggingAdapter>>, album_id: &st
     // every build so the header swaps image source and the cover menu flips
     // its Add/Change/Remove rows.
     let custom_cover = crate::cover_artwork_qt::album_cover(&album.id).unwrap_or_default();
+    // Backfill the hash -> override link for covers set before the
+    // propagation map existed (custom_cover_keys.json).
+    if !custom_cover.is_empty() {
+        if let Some(url) = album.image.best() {
+            crate::cover_artwork_qt::note_override_key(url, &custom_cover);
+        }
+    }
 
     let header = AlbumHeader {
         show_external_links: links.is_some(),

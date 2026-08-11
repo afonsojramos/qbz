@@ -261,6 +261,13 @@ fn disk_path(key: &str, fetch: &str) -> Option<PathBuf> {
 /// be resolved without the network, or at all). SYNCHRONOUS — no download,
 /// and on a repeat call no SQLite either.
 pub fn cached_path(url: &str) -> String {
+    // A custom cover registered for this artwork's hash wins over every
+    // cached/remote variant (cover_artwork_qt::override_for_url), so cards,
+    // the NPB, the queue and mosaics all render the user's art.
+    let custom = crate::cover_artwork_qt::override_for_url(url);
+    if !custom.is_empty() {
+        return file_url(&custom);
+    }
     match classify(url) {
         ArtUrl::Empty | ArtUrl::PlexUnconfigured => String::new(),
         // Already on disk: this is the whole fix for local covers. Stat it so
@@ -293,6 +300,12 @@ pub fn cached_path(url: &str) -> String {
 /// Local classes deliberately return `None` — they were never in the disk
 /// cache to begin with, and their caller already has the path.
 pub fn cached_raw_path(url: &str) -> Option<PathBuf> {
+    // The custom-cover override answers here too (MPRIS art and the other
+    // raw-path consumers must not show the Qobuz art the UI replaced).
+    let custom = crate::cover_artwork_qt::override_for_url(url);
+    if !custom.is_empty() {
+        return Some(PathBuf::from(custom));
+    }
     match classify(url) {
         ArtUrl::Http(fetch) | ArtUrl::Plex(fetch) => disk_path(url, &fetch),
         ArtUrl::Empty | ArtUrl::PlexUnconfigured | ArtUrl::LocalFile(_) => None,
@@ -331,6 +344,10 @@ pub async fn download_missing(urls: Vec<String>) {
     let mut jobs: Vec<(String, String)> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
     for url in urls {
+        // Overridden art never needs a fetch — cached_path answers it.
+        if !crate::cover_artwork_qt::override_for_url(&url).is_empty() {
+            continue;
+        }
         match classify(&url) {
             ArtUrl::Http(fetch) | ArtUrl::Plex(fetch) => {
                 if seen.insert(fetch.clone()) {

@@ -74,7 +74,7 @@ pub mod qbz_album_bridge {
         /// Cover right-click menu (cover_artwork_qt.rs): pick / clear the
         /// custom cover override, save the artwork to disk.
         #[qinvokable]
-        fn cover_add_custom(self: Pin<&mut QbzAlbum>, album_id: QString);
+        fn cover_add_custom(self: Pin<&mut QbzAlbum>, album_id: QString, artwork_url: QString);
         #[qinvokable]
         fn cover_remove_custom(self: Pin<&mut QbzAlbum>, album_id: QString);
         #[qinvokable]
@@ -164,8 +164,8 @@ impl qbz_album_bridge::QbzAlbum {
     pub fn download_booklet(self: Pin<&mut Self>) {
         crate::album_qt::download_booklet();
     }
-    pub fn cover_add_custom(self: Pin<&mut Self>, album_id: QString) {
-        crate::cover_artwork_qt::add_custom_cover(album_id.to_string());
+    pub fn cover_add_custom(self: Pin<&mut Self>, album_id: QString, artwork_url: QString) {
+        crate::cover_artwork_qt::add_custom_cover(album_id.to_string(), artwork_url.to_string());
     }
     pub fn cover_remove_custom(self: Pin<&mut Self>, album_id: QString) {
         crate::cover_artwork_qt::remove_custom_cover(album_id.to_string());

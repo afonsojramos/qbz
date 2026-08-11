@@ -94,7 +94,7 @@ fn remove_album_cover(album_id: &str) {
 /// "Add cover" / "Change cover": native picker, persist the picked path,
 /// then re-open the album so the header repaints from the override.
 /// Cancel = no-op, no toast (the picker's own affordance).
-pub fn add_custom_cover(album_id: String) {
+pub fn add_custom_cover(album_id: String, artwork_url: String) {
     if album_id.is_empty() {
         return;
     }
@@ -110,6 +110,9 @@ pub fn add_custom_cover(album_id: String) {
         // Blocking IO, but tiny (read + write of a small JSON map); the spawn
         // keeps it off the Qt thread, same as the reference's handler.
         let id = album_id.clone();
+        // The hash -> override link is what lets the rest of the app (cards,
+        // NPB, queue, mosaics) render this art for this album.
+        note_override_key(&artwork_url, &path);
         if tokio::task::spawn_blocking(move || {
             set_album_cover(&id, &path);
         })
@@ -294,4 +297,97 @@ pub fn remove_custom_playlist_cover(playlist_id: String) {
         .await;
         crate::open_playlist(playlist_id);
     });
+}
+
+// ---------------------------------------------------------------------------
+// Propagation layer: artwork-hash -> override (the "everywhere" half)
+// ---------------------------------------------------------------------------
+// Album overrides are keyed by album id, but most of the app never sees the
+// id — cards, the NPB, the queue and mosaics carry only the art URL. The
+// bridge between the two is the Qobuz cover hash: every size variant of one
+// artwork shares the stem (`.../covers/tr/9l/<hash>_<size>.jpg`), so mapping
+// hash -> override path lets the ARTWORK layer answer with the override no
+// matter which surface asked or which size it wanted.
+//
+// The map lives in a Qt-side file (custom_cover_keys.json) for the same
+// reason the playlist store does: the Slint store round-trips only known
+// keys and would drop an extension on its next write.
+
+#[derive(Default, Serialize, Deserialize)]
+struct KeyStore {
+    #[serde(default)]
+    keys: HashMap<String, String>,
+}
+
+fn key_store_path() -> Option<PathBuf> {
+    Some(dirs::data_dir()?.join("qbz").join("custom_cover_keys.json"))
+}
+
+fn load_key_store() -> KeyStore {
+    let Some(path) = key_store_path() else {
+        return KeyStore::default();
+    };
+    match std::fs::read(&path) {
+        Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_default(),
+        Err(_) => KeyStore::default(),
+    }
+}
+
+fn write_key_store(store: &KeyStore) {
+    let Some(path) = key_store_path() else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(json) = serde_json::to_vec_pretty(store) {
+        let _ = std::fs::write(&path, json);
+    }
+}
+
+/// The artwork hash of a Qobuz cover URL: the filename stem before the size
+/// suffix (`<hash>_600.jpg` -> `<hash>`). None for non-cover URLs.
+fn art_key(url: &str) -> Option<String> {
+    let stem = url
+        .rsplit('/')
+        .next()
+        .and_then(|f| f.rsplit_once('.').map(|(s, _)| s).or(Some(f)))
+        .unwrap_or("");
+    if stem.is_empty() {
+        return None;
+    }
+    let (hash, _size) = stem.rsplit_once('_')?;
+    if hash.is_empty() {
+        None
+    } else {
+        Some(hash.to_string())
+    }
+}
+
+/// Record `hash -> override path` for the album whose current art URL is
+/// `artwork_url`. Called when a cover is set and on album-page load as a
+/// backfill for covers set before this map existed.
+pub fn note_override_key(artwork_url: &str, override_path: &str) {
+    let Some(key) = art_key(artwork_url) else {
+        return;
+    };
+    let mut store = load_key_store();
+    if store.keys.get(&key).map(|s| s.as_str()) == Some(override_path) {
+        return;
+    }
+    store.keys.insert(key, override_path.to_string());
+    write_key_store(&store);
+}
+
+/// The override path for any art URL whose hash has one ("" when none or the
+/// file is gone). `artwork_qt::cached_path` consults this BEFORE the network
+/// cache, so every surface renders the custom art.
+pub fn override_for_url(url: &str) -> String {
+    let Some(key) = art_key(url) else {
+        return String::new();
+    };
+    match load_key_store().keys.get(&key) {
+        Some(p) if std::path::Path::new(p).is_file() => p.clone(),
+        _ => String::new(),
+    }
 }

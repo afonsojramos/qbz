@@ -1376,7 +1376,7 @@ Rectangle {
                     onClicked: {
                         coverMenu.close()
                         var a = modelData.action
-                        if (a === "add") QbzAlbum.coverAddCustom(header.id)
+                        if (a === "add") QbzAlbum.coverAddCustom(header.id, header.artUrl)
                         else if (a === "remove") QbzAlbum.coverRemoveCustom(header.id)
                         else if (a === "view") coverLightbox.openWith(root.bestCoverSource())
                         else if (a === "browser") QbzShell.openExternalUrl(header.artUrl)
