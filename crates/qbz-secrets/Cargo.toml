@@ -43,10 +43,22 @@ tempfile = "3"
 # the next. `Backend::new` still reports `BackendKind::Keyring`, so the logs
 # say nothing is wrong.
 #
-# Linux is absent from this list because it is already covered: qbz-credentials
-# enables `async-secret-service` and Cargo unifies features across the graph.
-# Naming `sync-secret-service` here would be a build failure rather than belt
-# and braces — keyring's lib.rs has a `compile_error!` for enabling both the
-# sync and async halves of a store at once.
+# Linux names its backend here too, rather than relying on qbz-credentials
+# enabling `async-secret-service` and Cargo unifying features across the graph.
+# That does hold for any build containing qbz-credentials, which today is every
+# shipping one, but it makes this crate's correctness depend on a sibling: build
+# qbz-secrets on its own and `cargo tree` shows keyring with no secret-service,
+# which is the silent mock described above. A crate meant to be reusable should
+# not be one dependency-graph change away from storing secrets in a hashmap.
+#
+# `async-secret-service` and not `sync-secret-service`: keyring's lib.rs has a
+# `compile_error!` for enabling both halves of a store, and qbz-credentials
+# already picked the async one. `crypto-rust` is not optional, secret-service
+# does not build without a crypto backend selected.
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
-keyring = { version = "3", features = ["apple-native", "windows-native"] }
+keyring = { version = "3", features = [
+  "apple-native",
+  "windows-native",
+  "async-secret-service",
+  "crypto-rust",
+] }

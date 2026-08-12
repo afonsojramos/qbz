@@ -140,14 +140,21 @@ mod tests {
 
     fn test_vault() -> (SecretBox, TempDir) {
         let dir = TempDir::new().expect("tempdir");
-        // Use a service name that's extremely unlikely to collide with a
-        // real keyring entry on the dev machine. The KDF fallback path is
-        // exercised by design because the sandboxed tempdir + nonexistent
-        // entry guarantees a fresh state; the keyring may be reachable
-        // but we accept either backend — the round-trip still holds.
-        let vault = SecretBox::open("qbz-secrets-test-harness", dir.path())
-            .expect("open vault");
-        (vault, dir)
+        // Pinned to the KDF path rather than letting `open` pick. The old
+        // comment here claimed the sandboxed tempdir guaranteed a fresh state
+        // and so exercised the fallback by design; that was never true, because
+        // `try_open_keyring` ignores `storage_dir` entirely and looks the entry
+        // up by service name alone. Once this crate asks for real keyring
+        // backends, these four tests wrote a genuine login-Keychain item, and
+        // every subsequent run built a new test binary that macOS then blocked
+        // on an authorization dialog: four tests hanging forever, on every dev
+        // machine, from the second run onwards.
+        //
+        // `survives_a_restart.rs` is where the real backend belongs, because
+        // persistence across processes is what it is actually testing.
+        let backend = Backend::kdf_only("qbz-secrets-test-harness", dir.path())
+            .expect("kdf backend");
+        (SecretBox::from_backend(backend), dir)
     }
 
     #[test]

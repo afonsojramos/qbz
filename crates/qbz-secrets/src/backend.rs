@@ -87,6 +87,24 @@ impl Backend {
         })
     }
 
+    /// The KDF path only, never consulting the OS keyring.
+    ///
+    /// This exists for tests. Reaching the real Keychain from a unit test is
+    /// not a stronger test, it is a flaky one: macOS binds a keychain item's
+    /// ACL to the exact binary that created it, so the *second* `cargo test`
+    /// after any source edit is a new binary against an existing item, and the
+    /// OS blocks the process on an authorization dialog that a headless or CI
+    /// run can never answer. What the tests are about, wrap/unwrap round-trips
+    /// and tamper detection, is identical on either backend, so there is
+    /// nothing to be gained by rolling that dice.
+    pub fn kdf_only(service_name: &str, storage_dir: &Path) -> Result<Self, SecretError> {
+        let master_key = derive_fallback_key(service_name, storage_dir)?;
+        Ok(Self {
+            kind: BackendKind::KdfFallback,
+            master_key,
+        })
+    }
+
     pub fn kind(&self) -> BackendKind {
         self.kind
     }
