@@ -64,8 +64,11 @@ pub async fn load_cmaf_bundle_with_ui_events(
 /// caller should treat `None` as a cache miss — continue to the next
 /// tier or the network.
 ///
-/// `offline_root_path` is only used to locate the secret vault's
-/// install UUID file; it must match the path used at download time.
+/// `offline_root_path` is what the bundle itself is located under, and what
+/// locates the secret vault's install UUID file. It is the current root rather
+/// than the one the row recorded, which is the whole point of this change: iOS
+/// reassigns an app's data container on reinstall, so a recorded absolute path
+/// stops existing while the bytes are still on disk.
 /// Passing `OfflineCacheState::get_cache_path()` is correct.
 pub fn load_cmaf_bundle(
     track_id: u64,
@@ -221,9 +224,15 @@ mod tests {
         let BundleLoadError::Read(message) = &err else {
             panic!("expected a read failure with nothing on disk, got {err:?}");
         };
+        // The *whole* derived path, not just the root prefix. Matching the
+        // prefix alone leaves the guard blind to the two ways this can still be
+        // wrong while looking under the right root: the wrong subdirectory, and
+        // the wrong track id.
+        let expected = BundleLayout::new(root.path(), 42);
         assert!(
-            message.contains(root.path().to_str().unwrap()),
-            "the read should have been attempted under the current root: {message}"
+            message.contains(expected.init_path.to_str().unwrap()),
+            "the read should have been attempted at {:?}, got: {message}",
+            expected.init_path
         );
         assert!(
             !message.contains("/recorded-elsewhere/"),

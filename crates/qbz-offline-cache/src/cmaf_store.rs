@@ -284,13 +284,31 @@ mod tests {
     #[test]
     fn the_layout_is_the_same_one_persist_wrote_to() {
         let root = tempfile::tempdir().unwrap();
-        let (written, _) = persist_bundle(root.path(), 7, &raw_bundle()).unwrap();
+        persist_bundle(root.path(), 7, &raw_bundle()).unwrap();
 
         // Playback derives rather than reading the row back, so the two must
         // agree for every track: this is what makes deriving safe.
+        //
+        // Asserted against the filesystem rather than against what
+        // `persist_bundle` returned. That value is built by the same pure
+        // function this derives from, so comparing the two compares a value
+        // with itself: it stays green even when both are wrong, which is no
+        // guard at all.
         let derived = BundleLayout::new(root.path(), 7);
-        assert_eq!(derived.init_path, written.init_path);
-        assert_eq!(derived.segments_path, written.segments_path);
-        assert_eq!(derived.manifest_path, written.manifest_path);
+        assert!(
+            derived.init_path.exists(),
+            "nothing at the derived init path {:?}",
+            derived.init_path
+        );
+        assert!(
+            derived.segments_path.exists(),
+            "nothing at the derived segments path {:?}",
+            derived.segments_path
+        );
+        assert!(
+            derived.manifest_path.exists(),
+            "nothing at the derived manifest path {:?}",
+            derived.manifest_path
+        );
     }
 }
