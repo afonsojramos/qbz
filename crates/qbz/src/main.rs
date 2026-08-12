@@ -7476,7 +7476,10 @@ fn select_slint_backend() -> Result<bool, slint::PlatformError> {
     // post-creation on Wayland/KDE (server-side decorations are negotiated when the
     // surface is created), so the AppWindow keeps its system titlebar while the mini
     // never has one.
-    let attributes_hook = |attributes: i_slint_backend_winit::winit::window::WindowAttributes| {
+    // Copied out for the closure: the transparency below is only correct on the
+    // wgpu tier, and the hook runs for whichever tier was chosen.
+    let renderer_tier = tier;
+    let attributes_hook = move |attributes: i_slint_backend_winit::winit::window::WindowAttributes| {
         let creating_mini = crate::miniplayer::is_creating_mini();
         log::info!("[mini] window-attributes hook: creating_mini={creating_mini}");
         // Wayland app_id / X11 WM_CLASS: without an explicit name winit sends
@@ -7505,9 +7508,21 @@ fn select_slint_backend() -> Result<bool, slint::PlatformError> {
         // the miniplayer gets a transparent (blended) swapchain, for its whole
         // lifetime; the main window keeps an Opaque one, sparing the compositor a
         // full-window alpha blend every frame.
+        //
+        // Gated on the wgpu tier, which the thing it replaced was implicitly.
+        // `set_surface_prefers_transparent` was a femtovg-WGPU global and a
+        // no-op on the GL and software tiers; `with_transparent` is a real
+        // winit attribute that all three honour, so ungated it hands the
+        // miniplayer an ARGB visual on tiers that never had one. If those do
+        // not emit correctly premultiplied alpha the result is a black or
+        // smeared background, on exactly the GPU-less VM and Pi-class hosts
+        // those tiers exist to serve.
         #[cfg(not(target_os = "macos"))]
-        let attributes =
-            if creating_mini { attributes.with_transparent(true) } else { attributes };
+        let attributes = if creating_mini && renderer_tier == RendererTier::Wgpu {
+            attributes.with_transparent(true)
+        } else {
+            attributes
+        };
         // macOS custom chrome (owner decision 2026-07-03, default ON there):
         // keep the native decorations but make the title bar transparent and
         // extend the content underneath — the native traffic lights float over

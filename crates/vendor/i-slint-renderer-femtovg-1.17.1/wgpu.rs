@@ -28,6 +28,21 @@ pub struct WGPUBackend {
     /// this deadline, doubling the cooldown up to ~2 s while the compositor
     /// stays parked. Reset on the first successful acquire.
     acquire_skip_until: std::cell::Cell<Option<std::time::Instant>>,
+    /// QBZ vendor patch: which reason armed the cooldown above.
+    ///
+    /// The two callers want opposite things from a skipped frame. The #540
+    /// timeout means the compositor is parked and there is nothing to draw for,
+    /// so the app should go back to sleep. The #558 startup-scale race wants the
+    /// opposite: a redraw is what reconfigures the surface at the right size.
+    ///
+    /// Upstream 1.17 turned this into a visible difference. In 1.16 the skip
+    /// returned a qbz-local sentinel the adapter ignored, so `pending_redraw`
+    /// stayed false either way; 1.17 rides `BeginRendering::Skipped(DrawOutcome)`
+    /// and the winit adapter re-requests a redraw for any non-`Success` outcome.
+    /// Reporting `Timeout` for the parked case therefore keeps the frame
+    /// throttle alive and wakes the app about sixty times a second doing
+    /// nothing, on exactly the VRR/parked-display setup #540 exists for.
+    acquire_skip_idle: std::cell::Cell<bool>,
     acquire_backoff_ms: std::cell::Cell<u64>,
 }
 
@@ -175,6 +190,7 @@ impl GraphicsBackend for WGPUBackend {
             surface: Default::default(),
             snapshot_output: Default::default(),
             acquire_skip_until: Default::default(),
+            acquire_skip_idle: Default::default(),
             acquire_backoff_ms: Default::default(),
         }
     }
@@ -197,7 +213,13 @@ impl GraphicsBackend for WGPUBackend {
         // the UI thread for seconds while the compositor is parked.
         if let Some(until) = self.acquire_skip_until.get() {
             if std::time::Instant::now() < until {
-                return Ok(BeginRendering::Skipped(DrawOutcome::Timeout));
+                // `Success` means "nothing to do, stay asleep"; anything else
+                // has the adapter ask for another frame. See `acquire_skip_idle`.
+                return Ok(BeginRendering::Skipped(if self.acquire_skip_idle.get() {
+                    DrawOutcome::Success
+                } else {
+                    DrawOutcome::Timeout
+                }));
             }
         }
         let surface = self.surface.borrow();
@@ -219,6 +241,8 @@ impl GraphicsBackend for WGPUBackend {
                 self.acquire_skip_until.set(Some(
                     std::time::Instant::now() + std::time::Duration::from_millis(backoff),
                 ));
+                // The compositor is parked: idle rather than spin on it.
+                self.acquire_skip_idle.set(true);
                 static WARNED: std::sync::atomic::AtomicBool =
                     std::sync::atomic::AtomicBool::new(false);
                 if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
@@ -263,6 +287,9 @@ impl GraphicsBackend for WGPUBackend {
                         self.acquire_skip_until.set(Some(
                             std::time::Instant::now() + std::time::Duration::from_millis(backoff),
                         ));
+                        // A redraw is the fix here, not the problem: it is what
+                        // reconfigures the surface at the right size (#558).
+                        self.acquire_skip_idle.set(false);
                         static WARNED: std::sync::atomic::AtomicBool =
                             std::sync::atomic::AtomicBool::new(false);
                         if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
@@ -278,6 +305,7 @@ impl GraphicsBackend for WGPUBackend {
         };
         self.acquire_backoff_ms.set(0);
         self.acquire_skip_until.set(None);
+        self.acquire_skip_idle.set(false);
         Ok(BeginRendering::Acquired(WGPUWindowSurface::Surface(frame)))
     }
 
