@@ -90,6 +90,18 @@ Rectangle {
 
             Rectangle {
                 anchors.fill: parent
+                // Rounded at the TOP because this bar is full-bleed at y=0 of
+                // the content pane, and under the dynamic background the pane's
+                // own rounding cannot reach it: Qt's `clip` is a rectangular
+                // scissor that ignores `radius`, and AppShell hides its bezel
+                // nubs while the field is meant to show through the corners.
+                // So a full-bleed pane child rounds ITSELF — AppShell.qml says
+                // exactly this ("there is no mask that can do it for it here")
+                // and this bar was the counterexample the owner spotted in
+                // Discover. Invisible with the background off: the view root
+                // paints the same colour underneath.
+                topLeftRadius: theme.radiusMd
+                topRightRadius: theme.radiusMd
                 color: root.ambientOn ? theme.surfaceMainA30 : theme.surfaceMain
             }
 

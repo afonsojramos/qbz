@@ -66,6 +66,15 @@ Rectangle {
             // two never take the ambient bar alpha the browse pages do.
             Rectangle {
                 anchors.fill: parent
+                // Top-rounded: full-bleed at y=0 of the content pane. The fill
+                // stays UNCONDITIONAL per the note above (that is reference
+                // parity), but the corner is not a colour question — in Slint
+                // the pane's `clip` follows its radius and cuts this band;
+                // Qt's clip is a rectangular scissor, so the band squares the
+                // pane unless it rounds itself. Invisible with the background
+                // off, where the view root paints the same colour beneath.
+                topLeftRadius: theme.radiusMd
+                topRightRadius: theme.radiusMd
                 color: theme.surfaceMain
             }
 

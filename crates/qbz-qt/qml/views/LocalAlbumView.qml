@@ -203,7 +203,25 @@ Rectangle {
 
     // ============================ page ===================================
     // Neutral header band (local albums have no artwork-derived tint yet).
+    //
+    // SUPPRESSED under the app-wide dynamic background, exactly like the Qobuz
+    // page's artwork atmosphere (AlbumView.qml `headerAtmoOn = pref &&
+    // !ambientOn`, AlbumPageView.slint:168): the two backdrops clash, and the
+    // dynamic background is already providing the dark one. This band never got
+    // that gate, which is why the defect showed HERE and not on the Qobuz album
+    // page — the owner spotted it as a lost bezel, and the bezel was the
+    // symptom: the band is full-bleed at y=0 with no radius, so it painted over
+    // the content pane's rounded top corners. With the background OFF nothing
+    // changes, and nothing has to: AppShell's BezelCorner nubs are visible in
+    // that state and mask exactly these corners. They are hidden while the
+    // field is meant to show through them, which is what uncovered a band that
+    // had been square all along.
+    //
+    // Header text is `theme.textPrimary` here (not the Qobuz page's
+    // light-on-dark `hdrStrong`), so it does not depend on this band to stay
+    // readable — checked before removing the backdrop from under it.
     Rectangle {
+        visible: !root.ambientOn
         x: 0
         y: 0
         width: parent.width

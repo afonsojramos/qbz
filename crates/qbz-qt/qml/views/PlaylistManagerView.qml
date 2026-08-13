@@ -136,6 +136,11 @@ Rectangle {
         // view's fixed header takes the A30 treatment instead.
         Rectangle {
             anchors.fill: parent
+            // Top-rounded: full-bleed at y=0 of the content pane, whose own
+            // rounding cannot reach a child (Qt's clip is a rectangular
+            // scissor). See the longer note in HomeView.
+            topLeftRadius: theme.radiusMd
+            topRightRadius: theme.radiusMd
             color: root.ambientOn ? theme.surfaceMainA30 : theme.surfaceMain
         }
 
