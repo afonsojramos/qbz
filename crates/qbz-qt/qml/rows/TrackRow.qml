@@ -60,6 +60,7 @@
 import QtQuick
 import com.blitzfc.qbz
 import "../controls"
+import "../immersive"
 import "../shell"
 import "../theme"
 
@@ -322,6 +323,31 @@ Rectangle {
         || chevUp.hovered || chevDown.hovered
     readonly property bool isActive: QbzPlayer.npTrackId === (item.id || "")
 
+    // The animated now-playing indicator pref (AppearanceState
+    // .play-indicator-animation; the toggle lives in AppearanceSettings).
+    // Read by parsing the settings document — the AlbumView headerGradient
+    // precedent; the settings snapshot republishes on every settings write,
+    // which is the only time this re-evaluates.
+    readonly property bool playIndicatorAnim: {
+        var raw = QbzBridge.settingsJson
+        if (raw && raw.length > 2) {
+            try {
+                return JSON.parse(raw).playIndicatorAnimation === true
+            } catch (e) { /* fall through */ }
+        }
+        return false
+    }
+    // The animated eq bars carry the playing state in the play cell when the
+    // pref is ON (TrackPlayCell.slint:99-100 `show-bars`): only while this
+    // row's track is actually PLAYING, at rest (hover reveals the pause
+    // affordance instead), and never in select mode. The bars tick on the
+    // shared shell pulse, so they cost ZERO extra presents (EqualizerBars
+    // rides QbzShell.pulseMs) — that is what makes the indicator affordable
+    // here, where a display-rate animation was not.
+    readonly property bool showBars: root.playIndicatorAnim
+        && root.isActive && QbzPlayer.npPlaying && !root.hovered
+        && !root.selectMode
+
     // --- Column geometry: rows/TrackCols.qml, NOT literals ---------------
     // Every width, the padding and the gap come from the one file that
     // rows/TrackListHeader.qml also reads, so the header above a list of
@@ -382,9 +408,11 @@ Rectangle {
         root.showArtwork, root.showAlbum, root.showFavorite,
         root.showDownload, root.showMenu, root.showReorder)
 
-    // Static now-playing mark: 3px accent pill on the left edge.
+    // Static now-playing mark: 3px accent pill on the left edge. With the
+    // animation pref ON the eq bars in the play cell carry the state instead
+    // (TrackRow.slint:127-137 — the pill is the pref-OFF arm).
     Rectangle {
-        visible: root.isActive
+        visible: root.isActive && !root.playIndicatorAnim
         x: 2
         y: 7
         width: 3
@@ -476,8 +504,18 @@ Rectangle {
             // what the accent ring is FOR. The port showed it on hover only,
             // so the ring never appeared.
             readonly property bool showOverlay: root.hovered || root.isActive
-            // `accent-ring` (:108): the playing row, static form.
-            readonly property bool accentRing: root.isActive && QbzPlayer.npPlaying
+            // `accent-ring` (:108): the playing row's static form — only with
+            // the animation pref OFF; with it ON the eq bars carry the state.
+            readonly property bool accentRing: !root.playIndicatorAnim
+                && root.isActive && QbzPlayer.npPlaying
+            // `show-bars` (TrackPlayCell.slint:184-187): the animated eq bars
+            // replace the disc at rest on the playing row. Pulse-driven, so
+            // they ride the shell's frame instead of owning one.
+            EqualizerBars {
+                visible: root.showBars
+                active: root.isActive && QbzPlayer.npPlaying
+                anchors.centerIn: parent
+            }
             // Selection checkbox — TrackRow.slint:392-419: a 13px disc, accent
             // when selected, muted/text-primary ring when not. It REPLACES the
             // number and the play disc (both gate on !selectMode below), so
@@ -519,7 +557,7 @@ Rectangle {
                 font.pixelSize: 13
             }
             Rectangle {
-                visible: playCell.showOverlay && !root.selectMode
+                visible: playCell.showOverlay && !root.showBars && !root.selectMode
                 anchors.centerIn: parent
                 width: 24
                 height: 24
@@ -571,7 +609,9 @@ Rectangle {
             anchors.verticalCenter: parent.verticalCenter
             radius: 4
             color: theme.surfaceElevated
-            clip: true
+            // No clip: RoundedImage confines itself on both of its arms, and a
+            // rectangular scissor never produced this radius anyway. Same
+            // per-row batch-root cost as the quality cell above.
             RoundedImage {
                 anchors.fill: parent
                 source: root.item.artPath || ""
@@ -693,13 +733,18 @@ Rectangle {
         Item {
             width: cols.colQuality
             height: parent.height
-            clip: true
+            // No `clip: true`: a clip is an unconditional batch root
+            // (qsgbatchrenderer visitClipNode), so one here cost a draw call
+            // PER VISIBLE ROW and severed merging on both sides of it. The
+            // badge bounds itself instead — real details measure ~80px in a
+            // 92px cell, so the elide never fires.
             QualityBadgeFull {
                 anchors.centerIn: parent
                 tier: root.item.qualityTier || ""
                 detail: root.item.qualityDetail || ""
                 showIcon: false
                 bare: true
+                maxTextWidth: cols.colQuality
             }
         }
         // Favorite (showFavorite arm).
