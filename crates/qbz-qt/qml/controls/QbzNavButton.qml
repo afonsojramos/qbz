@@ -96,8 +96,7 @@ Rectangle {
     // `ShellState.app-background-active` (state.slint:4184) — the port spells
     // it this way app-wide, npHasTrack included: with nothing playing the
     // shell restores its opaque theme surfaces (rule D4).
-    readonly property bool ambientOn:
-        ambient && QbzShell.ambientMode > 0 && QbzPlayer.npHasTrack
+    readonly property bool ambientOn: ambient && theme.ambientOn
 
     width: 28
     height: 28

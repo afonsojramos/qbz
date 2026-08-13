@@ -26,6 +26,44 @@ const SHADER_GLSL: &str = "100 es,300 es,310 es,320 es,120,150,440";
 const SHADER_HLSL: &str = "50";
 const SHADER_MSL: &str = "12";
 
+/// The same list without `100 es`, for shaders that use unsigned integer
+/// arithmetic. GLSL ES 1.00 (OpenGL ES 2.0) has NO uint type, so SPIRV-Cross
+/// has to re-type the literals as int and refuses when that would make one
+/// negative — `qsb` then fails the whole bake, not just that variant.
+///
+/// The one shader in this position is `ambient.frag`, and its hash CANNOT drop
+/// to floats: the reference's own comment (ambient.wgsl) records that a float
+/// hash lets the same lattice corner disagree between adjacent cells and draws
+/// a straight seam through the warp field. So the ES 2.0 level is dropped
+/// instead, and AmbientField's Canvas arm covers that hardware — which is what
+/// the fallback exists for.
+const SHADER_GLSL_NO_ES100: &str = "300 es,310 es,320 es,120,150,440";
+
+/// Opt out of `100 es` by putting this marker anywhere in the shader source.
+const NO_ES100_MARKER: &str = "QSB-SKIP-GLES100";
+
+/// Is `out` already a current bake of `src`? True only when it exists and is
+/// no older than BOTH the shader source and this build script — the script
+/// because the variant lists and the `100 es` opt-out live here, so editing
+/// them has to invalidate every `.qsb` even though no `.frag` moved.
+///
+/// Anything unreadable answers false: a bake we cannot reason about is one we
+/// redo. Equal mtimes count as current (a same-second write is the normal case
+/// right after a bake, and treating it as stale would restart the churn).
+fn up_to_date(src: &Path, out: &Path) -> bool {
+    let mtime = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+    let (Some(out_t), Some(src_t)) = (mtime(out), mtime(src)) else {
+        return false;
+    };
+    if out_t < src_t {
+        return false;
+    }
+    match mtime(Path::new("build.rs")) {
+        Some(script_t) => out_t >= script_t,
+        None => true,
+    }
+}
+
 /// Locate Qt's `qsb`. PATH first, then the usual install layouts (Linux
 /// distro, Homebrew on the Mac mini).
 fn find_qsb() -> Option<std::path::PathBuf> {
@@ -71,6 +109,18 @@ fn find_qsb() -> Option<std::path::PathBuf> {
 ///
 /// Missing `qsb` is a WARNING, not an error: the committed `.qsb` are still
 /// in the tree and still load, so a box without Qt's shader tools can build.
+///
+/// THE BAKE MUST BE IDEMPOTENT, and that is not a nicety — it is the whole
+/// reason `up_to_date` exists. `qsb` REWRITES its output unconditionally:
+/// byte-identical content, brand-new mtime (measured — same md5, mtime moves).
+/// The `.qsb` live under `qml/assets`, which `main` watches with
+/// `cargo:rerun-if-changed=qml` plus one line per qrc file, so an
+/// unconditional bake made every build touch a file cargo was watching. Cargo
+/// then re-ran this script on the NEXT invocation, which baked again, which
+/// dirtied the watch again: `cargo build` never reached a no-op and every
+/// `qt-run.sh` recompiled the crate from the build script down. Introduced in
+/// 21e941bdf together with the bake itself, and it is why the tree started
+/// rebuilding on every run when nothing had changed.
 fn build_shaders() {
     let dir = Path::new("qml/assets/shaders");
     if !dir.is_dir() {
@@ -91,8 +141,15 @@ fn build_shaders() {
         }
         println!("cargo:rerun-if-changed={}", src.display());
         let out = src.with_extension(format!("{ext}.qsb"));
+        if up_to_date(&src, &out) {
+            continue;
+        }
+        let glsl = match std::fs::read_to_string(&src) {
+            Ok(text) if text.contains(NO_ES100_MARKER) => SHADER_GLSL_NO_ES100,
+            _ => SHADER_GLSL,
+        };
         let mut cmd = std::process::Command::new(&qsb);
-        cmd.args(["--glsl", SHADER_GLSL, "--hlsl", SHADER_HLSL, "--msl", SHADER_MSL]);
+        cmd.args(["--glsl", glsl, "--hlsl", SHADER_HLSL, "--msl", SHADER_MSL]);
         // Vertex shaders used by Qt Quick need the batching rewrite, or the
         // scene graph cannot batch the item and falls back per-node.
         if ext == "vert" {

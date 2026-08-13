@@ -108,8 +108,14 @@ Item {
         width: root.width
         height: root.width
         radius: theme.radiusMd
-        color: root.ambientOn ? theme.surfaceMainA22 : theme.surfaceMain
-        clip: true
+        // The art WELL takes surface-main @ 0.5, the chrome tier — not the
+        // content pane's 0.22 (SidebarNowPlayingDock.slint:193). It shows
+        // only in the frame around a cover that has not loaded, so at 0.22
+        // it read as a hole in the sidebar rather than a recess in it.
+        color: root.ambientOn ? theme.surfaceMainA50 : theme.surfaceMain
+        // No clip: RoundedImage confines itself on both arms; a clip is an
+        // unconditional batch root. The 28x28 eye chip and the centred icon
+        // are strictly inside the square.
 
         RoundedImage {
             visible: QbzPlayer.npHasTrack

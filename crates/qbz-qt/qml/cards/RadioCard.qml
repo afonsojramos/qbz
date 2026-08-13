@@ -62,7 +62,8 @@ Item {
             height: 200
             radius: theme.radiusSm
             color: theme.surfaceElevated
-            clip: true
+            // No clip: with the wordmark bounded below, nothing in this tile
+            // can cross its edge.
 
             // Centered artwork "display", nudged up 8px to leave room for
             // the wordmark.
@@ -73,7 +74,8 @@ Item {
                 y: Math.round((parent.height - height) / 2) - 8
                 radius: 4
                 color: theme.surfaceCard
-                clip: true
+                // No clip: RoundedImage confines itself on both arms; a clip is an
+                // unconditional batch root, one per visible card.
                 RoundedImage {
                     anchors.fill: parent
                     source: root.artSource
@@ -88,7 +90,16 @@ Item {
                 font.pixelSize: 15
                 font.weight: theme.weightBold
                 font.letterSpacing: 2
-                x: Math.round((parent.width - width) / 2)
+                // Bounded + centred-in-box instead of centred-by-width: this
+                // wordmark is the ONLY thing that could leave the tile (the PT
+                // string "PRINCIPAIS FAIXAS" at 15px bold with 2px letter
+                // spacing reaches the 200px edge), and bounding it is what
+                // lets both of this card's clips go. Worst case is now a right
+                // ellipsis instead of today's chop at both edges.
+                width: parent.width - 24
+                x: 12
+                horizontalAlignment: Text.AlignHCenter
+                elide: Text.ElideRight
                 y: parent.height - height - 16
             }
 

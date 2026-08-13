@@ -70,7 +70,7 @@ import "../theme"
 Rectangle {
     id: root
     color: ambientOn ? theme.surfaceCardA50 : theme.surfaceCard
-    readonly property bool ambientOn: QbzShell.ambientMode > 0 && QbzPlayer.npHasTrack
+    readonly property bool ambientOn: theme.ambientOn
     readonly property bool largeActive: QbzShell.npbMode === 3 && QbzShell.sidebarState === 0
     readonly property bool isClassic: QbzShell.npbMode === 1
 
@@ -312,8 +312,13 @@ Rectangle {
                     width: parent.width * Math.min(Math.max(QbzPlayer.npCacheProgress, 0), 1)
                     height: parent.height
                     radius: 2
-                    color: theme.textMuted
-                    opacity: 0.35
+                    color: Qt.rgba(theme.textMuted.r, theme.textMuted.g,
+                                   theme.textMuted.b, 0.35)
+                    // Alpha in the material, not a container `opacity`: an
+                    // always-on opacity node pins this quad in its own batch,
+                    // and the three seek quads use compatible materials
+                    // (QSGSmoothColorMaterial::compare() returns 0), so folding
+                    // it lets rail + cache + progress merge.
                 }
                 Rectangle {
                     width: parent.width * Math.min(Math.max(QbzPlayer.npProgress, 0), 1)

@@ -41,8 +41,13 @@ Rectangle {
     width: genreRow.width
     height: btnHeight
     radius: 6
+    // Resting fill translucent under the dynamic background
+    // (HomeView.slint:89, BrowseHeaderTools.slint:111, PlaylistTagFilter
+    // .slint:77 — the same chip in three mounts). Accent and hover keep theirs.
     color: root.active ? theme.accent
-         : genreArea.containsMouse ? theme.surfaceHover : theme.surfaceElevated
+         : genreArea.containsMouse
+             ? theme.surfaceHover
+             : (theme.ambientOn ? theme.surfaceElevatedA50 : theme.surfaceElevated)
 
     Row {
         id: genreRow

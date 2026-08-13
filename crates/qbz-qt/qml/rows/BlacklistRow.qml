@@ -109,7 +109,8 @@ Rectangle {
                     // Radius.sm on the album tile, a full circle otherwise.
                     radius: root.isAlbum ? theme.radiusSm : (root.leadSize / 2)
                     color: theme.surfaceElevated
-                    clip: root.isAlbum
+                    // No clip: the children are a 20px centred QbzIcon and a
+                    // self-confining RoundedImage. One batch root per row.
 
                     QbzIcon {
                         anchors.centerIn: parent

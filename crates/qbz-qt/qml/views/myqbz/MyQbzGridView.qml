@@ -78,7 +78,7 @@ Rectangle {
     readonly property string gridId: root.isMix ? "mixtapes" : "collections"
 
     color: ambientOn ? "transparent" : theme.surfaceMain
-    readonly property bool ambientOn: QbzShell.ambientMode > 0 && QbzPlayer.npHasTrack
+    readonly property bool ambientOn: theme.ambientOn
     // A LITERAL 12, as in all 14 painting view roots: QML clips are
     // RECTANGULAR, so the view must round its own fill or the shell bezel
     // reads square (AppShell.qml:188-258).

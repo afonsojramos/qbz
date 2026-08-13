@@ -1,4 +1,4 @@
-//! App-wide dynamic ambient background ("modo Cider", phase 14) — the
+//! App-wide dynamic ambient background (phase 14) — the
 //! palette half of the feature. Ports the album-art triad extraction the
 //! Slint pushes to `shader_underlay::set_palette` on every track change
 //! (crates/qbz/src/playback.rs:1590-1643 → crates/qbz/src/immersive.rs):
@@ -17,17 +17,35 @@
 //! Slint drive point. Decode + downscale run on a spawned task; only the
 //! three hex strings cross to the UI thread.
 //!
-//! POC-NOTEs:
-//! - The Slint renders the ambient scene with a custom WGSL shader (four
-//!   domain-warped album-colored metaballs + grain + audio breathe). The
-//!   POC renders the same orbit model as additive canvas gradients
-//!   (qml/AmbientField.qml): no fbm warp, no true metaball fusion, no
-//!   grain, no level_smooth breathe (the POC has no FFT tap), so the field
-//!   is a close-but-simpler read of the same concept.
-//! - The "blurred art" mode (route A, ImmersiveAtmosphere) is NOT
-//!   implemented; a persisted "blurred" pref maps to the ambient look.
-//! - The Slint gates the whole feature to the wgpu renderer tier; the
-//!   POC's canvas path is renderer-agnostic, so it is always available.
+//! The three POC-NOTEs that used to sit here are gone because the gaps they
+//! described are closed (2026-08-11) — leaving them would have kept asserting
+//! defects the code no longer has:
+//! - The scene is now a real shader. `qml/assets/shaders/ambient.frag` is a
+//!   line-for-line GLSL port of the WGSL (fbm domain warp, r^2/d^2 metaball
+//!   fusion, the smoothstep iso-surface, the saturation push, the grain), and
+//!   `AmbientField.qml` keeps the additive-gradient Canvas only as the
+//!   software-scene-graph fallback. The old note called that Canvas "a
+//!   close-but-simpler read"; it was closer to a different picture, because it
+//!   painted over a BLACK base and the reference has a 42%-of-album-colour
+//!   floor everywhere.
+//! - "Blurred art" is a real, separate mode. `app_background_mode()` returns
+//!   the reference's 0/1/2 and AppShell mounts ImmersiveAtmosphere for 2, the
+//!   same component the reference reuses; the pref no longer collapses to the
+//!   ambient look.
+//!
+//! What REMAINS a deliberate divergence:
+//! - The Slint gates the whole feature to the wgpu renderer tier (its scene is
+//!   the wgpu underlay, so off-tier there is nothing to show). Here the field
+//!   picks a ShaderEffect or a Canvas from `GraphicsInfo`, so it renders on
+//!   every path and the feature is never taken away from a weak GPU.
+//! - No audio breathe: the reference multiplies the blob radius by
+//!   `1 + 0.12 * level_smooth`, which needs the 30 fps FFT drain. Slint runs
+//!   that drain for mode 1 regardless — the same drain renders its shader
+//!   texture — while this field is timer-driven, so the tap would be switched
+//!   on app-wide purely for the pulse. At level 0 the reference's breathe is
+//!   exactly 1.0, so the geometry is unchanged; only the audio reaction is
+//!   absent. The shader keeps the `levelSmooth` uniform so wiring it later is
+//!   a QML binding, not a shader edit.
 
 use cxx_qt_lib::QString;
 

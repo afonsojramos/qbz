@@ -52,7 +52,7 @@ import "../theme"
 Rectangle {
     id: root
     color: ambientOn ? "transparent" : theme.surfaceMain
-    readonly property bool ambientOn: QbzShell.ambientMode > 0 && QbzPlayer.npHasTrack
+    readonly property bool ambientOn: theme.ambientOn
     radius: 12
 
     QbzTheme { id: theme }
@@ -689,7 +689,11 @@ Rectangle {
                         height: 34
                         radius: 6
                         anchors.verticalCenter: parent.verticalCenter
-                        color: sortArea.containsMouse ? theme.surfaceHover : theme.surfaceElevated
+                        // PlaylistView.slint:855-859 — resting fill
+                        // translucent under the dynamic background.
+                        color: sortArea.containsMouse
+                            ? theme.surfaceHover
+                            : (root.ambientOn ? theme.surfaceElevatedA50 : theme.surfaceElevated)
                         border.width: 1
                         border.color: theme.borderSubtle
                         Row {

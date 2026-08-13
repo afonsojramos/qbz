@@ -138,7 +138,11 @@ Rectangle {
                 width: 190
                 height: 190
                 radius: 95
-                clip: true
+                // No clip. It never made the circle — QML's clip is a
+                // rectangular scissor and ignores `radius`
+                // (qquickclipnode.cpp:13-22); the round shape comes from each
+                // child's own `radius` / RoundedImage mask. Geometrically
+                // nothing leaves the 190x190 box.
                 gradient: Gradient {
                     orientation: Gradient.Horizontal
                     GradientStop { position: 0.0; color: theme.surfaceElevated }

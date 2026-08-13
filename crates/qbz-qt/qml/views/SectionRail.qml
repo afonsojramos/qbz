@@ -1,6 +1,6 @@
 // Horizontal album rail (Carousel.slint) — extracted for reuse by the
 // detail views (AlbumView / ArtistView): section header + page chevrons +
-// clipped ListView of the shared AlbumCard, with Cider-style edge fades.
+// clipped ListView of the shared AlbumCard, with soft edge fades.
 
 import QtQuick
 import com.blitzfc.qbz
@@ -76,11 +76,21 @@ Column {
                 artworkUrl: modelData.artUrl || ""
             }
         }
+        // Edge fades — content dissolves into the page background at the
+        // scrolled edges instead of a hard cut. They fade to the OPAQUE
+        // surface-main, so under the app-wide dynamic background they would
+        // paint two dark 56px slabs over the moving field: the reference hides
+        // them outright for exactly that reason (Carousel.slint:304 and :312,
+        // `visible: !ShellState.app-background-active`). This is what put the
+        // black band down the right edge of "From the same artist" in the
+        // owner's 2026-08-04 capture, where the Slint shows the field through
+        // the half-scrolled card.
         Rectangle {
             anchors.left: parent.left
             anchors.top: parent.top
             anchors.bottom: parent.bottom
             width: 56
+            visible: !theme.ambientOn
             opacity: rail.contentX > 1 ? 1.0 : 0.0
             Behavior on opacity { NumberAnimation { duration: 150 } }
             gradient: Gradient {
@@ -94,6 +104,7 @@ Column {
             anchors.top: parent.top
             anchors.bottom: parent.bottom
             width: 56
+            visible: !theme.ambientOn
             opacity: rail.contentX < root.maxScroll - 1 ? 1.0 : 0.0
             Behavior on opacity { NumberAnimation { duration: 150 } }
             gradient: Gradient {

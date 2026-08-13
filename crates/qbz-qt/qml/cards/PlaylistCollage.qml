@@ -284,7 +284,8 @@ Item {
     Item {
         id: mosaic
         anchors.fill: parent
-        clip: true
+        // No clip: cellOf() tiles the parent rect exactly, and each tile is a
+        // RoundedImage that scissors itself when it needs to.
         visible: root.tiles.length > 0
         layer.enabled: !root._noShaders && root.radius > 0 && root.tiles.length > 0
         layer.smooth: true

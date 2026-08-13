@@ -8,12 +8,28 @@
 // AppShell.slint:358-390. The recovery affordance and logout live in the
 // header (offline badge flyout + app menu), like the Slint shell.
 //
-// The artwork-derived ambient background IS implemented: AmbientField is
-// mounted below, `ambientOn` derives from QbzShell.ambientMode, and the
-// content frame swaps to surface-main @ 0.22 with a hairline while it runs.
-// (The POC-NOTE that used to sit here said the opposite. It was a fossil —
-// corrected in passing per LESSONS-2026-08-03 L10, which asks that the ones
-// a diff touches be fixed rather than propagated.)
+// The artwork-derived ambient background IS implemented, in BOTH of the
+// reference's modes (AppShell.slint:206-242): 1 = Ambient, the album-triad
+// metaball field (AmbientField) under a tunable dark scrim; 2 = Blurred art,
+// the ImmersiveAtmosphere cover look, which carries its own `dim` and takes no
+// scrim. `theme.ambientOn` says "a mode is picked and a track is loaded";
+// `QbzShell.ambientMode` says WHICH. Until 2026-08-11 mode 2 rendered as mode 1
+// (ambient_qt.rs said so out loud), so the two settings looked identical.
+//
+// THE LAYERING, which is the part that has to be exact. Three tiers, not one:
+//   chrome  (Sidebar / HeaderBar / NPB / queue column / the CONTENT FRAME)
+//           -> surface-card @ 0.5
+//   panel   (the inset content pane) -> surface-main @ 0.22 + a 1px hairline,
+//           composited ON TOP OF the frame, because in the reference it is the
+//           frame's CHILD (AppShell.slint:358-414)
+//   views   -> transparent, with their thin bars at surface-main @ 0.3 and
+//           their controls at surface-elevated @ 0.5
+// The frame tier was missing here: `contentFrame` was a sibling of the shell
+// root, so the 8px gutter around the pane showed the RAW field instead of
+// card @ 0.5, and the pane composited over the raw field too. Measured on the
+// owner's side-by-side: Qt's sidebar (27,28,34) against its gutter (50,52,64) —
+// a bright seam at x=240 — where Slint's sidebar (79,72,23) and gutter
+// (82,74,20) are the same surface and read as one continuous frame.
 
 import QtQuick
 import com.blitzfc.qbz
@@ -30,12 +46,11 @@ Rectangle {
     color: theme.surfaceCard
 
     // App-wide dynamic background (phase 14): active when the mode pref is
-    // on AND a track is loaded (D4: no track -> opaque theme restored).
-    readonly property bool ambientOn: QbzShell.ambientMode > 0 && QbzPlayer.npHasTrack
-    // The bottom-most visual layer (AppShell.slint:206-242, declared FIRST
-    // so every chrome surface paints above it): the ambient album-colored
-    // field + the dark dim scrim that keeps chrome text legible
-    // (QBZ_BG_DIM-tunable, default 0.35).
+    // on AND a track is loaded (D4: no track -> opaque theme restored). The
+    // predicate itself now lives on the theme object so the ~25 surfaces that
+    // read it cannot drift apart (they did: the carousel fades and the header
+    // search field never got it).
+    readonly property bool ambientOn: theme.ambientOn
     // Window-level history navigation: mouse side buttons + two-finger
     // horizontal touchpad swipe (#653 parity). Declared FIRST so the whole UI
     // hit-tests on top of it — a scroll reaches it only when nothing above
@@ -46,16 +61,43 @@ Rectangle {
         anchors.fill: parent
     }
 
+    // --- The background layers (AppShell.slint:206-242) --------------------
+    // The bottom-most visual layer, declared before every chrome surface so
+    // they all paint above it. Mode 1 and mode 2 are DIFFERENT looks and are
+    // mutually exclusive; neither is mounted while a mode is off or nothing is
+    // playing, which is the D4 "opaque theme restored" case.
+    readonly property bool ambientModeOn: root.ambientOn && QbzShell.ambientMode === 1
+    readonly property bool blurredModeOn: root.ambientOn && QbzShell.ambientMode === 2
+
+    // Mode 1 — the album-triad metaball field, plus the tunable dark scrim
+    // that keeps chrome text legible over a bright album palette
+    // (QBZ_BG_DIM, default 0.35). The scrim is mode 1 ONLY: mode 2's
+    // atmosphere applies the same dim internally (AppShell.slint:236).
     AmbientField {
         anchors.fill: parent
-        visible: root.ambientOn
-        running: root.ambientOn
+        visible: root.ambientModeOn
+        running: root.ambientModeOn
     }
     Rectangle {
         anchors.fill: parent
-        visible: root.ambientOn
+        visible: root.ambientModeOn
         color: "#000000"
         opacity: QbzShell.ambientDim
+    }
+
+    // Mode 2 — Blurred art: the SAME ImmersiveAtmosphere the immersive view
+    // and the album/artist headers use, at window size (AppShell.slint:221-231
+    // reuses the identical component). `animated` follows the transport, so a
+    // paused player holds the static pose instead of drifting forever, and the
+    // fallback is the plain cover for a track whose atmosphere bitmap has not
+    // been generated yet.
+    ImmersiveAtmosphere {
+        anchors.fill: parent
+        visible: root.blurredModeOn
+        source: root.blurredModeOn ? QbzImmersive.atmosphereUrl : ""
+        fallbackSource: root.blurredModeOn ? QbzPlayer.npArtworkPath : ""
+        animated: root.blurredModeOn && QbzPlayer.npPlaying
+        dim: QbzShell.ambientDim
     }
 
     // The host ApplicationWindow (custom chrome: drag / maximize / resize).
@@ -233,45 +275,77 @@ Rectangle {
         }
     }
 
-    // Content frame — the rounded, inset surface-main panel (Radius.md,
-    // 8px gaps left/right/bottom, flush to the header).
+    // Content FRAME — the chrome slab the content pane is inset INTO
+    // (AppShell.slint:357-362). It is the same tier as the sidebar, the header
+    // and the player bar, and under the dynamic background it takes the same
+    // surface-card @ 0.5: the 8px gutter it leaves around the pane is the
+    // "bezel", and it must read as one continuous frame with the sidebar, not
+    // as a bright band of raw background between them.
+    //
+    // It also has to be the pane's PARENT, not its sibling. In the reference
+    // the pane is a child of this rectangle, so surface-main @ 0.22 composites
+    // over card @ 0.5 over the field; as a sibling it composited over the raw
+    // field and the pane came out roughly 1.8x brighter than the reference's.
+    // Measured at y=700 on the owner's capture, Slint's pane is exactly
+    // 0.78 x its gutter (51,48,34 against 65,62,44) — that ratio only falls out
+    // if the gutter is already under the pane.
+    //
+    // With the background OFF this is surface-card, i.e. the same colour the
+    // shell root paints, so the geometry and the look are byte-identical to
+    // what shipped before.
     Rectangle {
         id: contentFrame
         anchors.left: sidebar.right
         anchors.right: queueColumn.left
         anchors.top: header.bottom
         anchors.bottom: npb.top
-        anchors.leftMargin: 8
-        anchors.rightMargin: 8
-        anchors.bottomMargin: 8
-        radius: theme.radiusMd
-        // Frosted content panel while the ambient background is active
-        // (AppShell.slint: surface-main @ 0.22 + 1px #ffffff@0.10 hairline).
-        color: root.ambientOn ? theme.surfaceMainA22 : theme.surfaceMain
-        border.width: root.ambientOn ? 1 : 0
-        border.color: theme.frostBorder
-        clip: true
+        color: root.ambientOn ? theme.surfaceCardA50 : theme.surfaceCard
 
-        // The view-mount chain — every route arm, every hard-won comment and
-        // the MyQBZ `kind` discriminator now live in ContentRouter.qml, which
-        // the KIOSK shell mounts too (kiosk-port contract §4.2 / D3). The
-        // Slint kiosk copies AppShell's mount block verbatim and calls that
-        // copy debt in its own header (KioskShell.slint:10-17); this is the
-        // named fix, so the two shells cannot drift.
-        //
-        // `kiosk` defaults false, i.e. this instance routes every id to the
-        // desktop view it always did. Reached from elsewhere in this document
-        // through `contentRouter.currentItem` (the multi-select seam above) —
-        // a QML `id` does not cross documents, so `viewLoader` is no longer
-        // nameable here and that public property is the replacement.
-        ContentRouter {
-            id: contentRouter
+        // Content PANE — the rounded, inset surface-main panel (Radius.md,
+        // 8px gaps left/right/bottom, flush to the header: the reference gives
+        // the frame no top padding so the pane butts the header band).
+        Rectangle {
+            id: contentPane
             anchors.fill: parent
+            anchors.leftMargin: 8
+            anchors.rightMargin: 8
+            anchors.bottomMargin: 8
+            radius: theme.radiusMd
+            // Frosted content panel while the ambient background is active
+            // (AppShell.slint: surface-main @ 0.22 + 1px #ffffff@0.10
+            // hairline), over the frame's card @ 0.5.
+            color: root.ambientOn ? theme.surfaceMainA22 : theme.surfaceMain
+            border.width: root.ambientOn ? 1 : 0
+            border.color: theme.frostBorder
+            clip: true
+            // QBZ_PANE_LAYER: collapse the pane into one cached texture instead
+            // of redrawing its whole (all-alpha, unbatchable) draw list on every
+            // whole-window repaint. Measurement knob, default off — see
+            // settings_qt::pane_layer.
+            layer.enabled: QbzShell.paneLayer
+
+            // The view-mount chain — every route arm, every hard-won comment
+            // and the MyQBZ `kind` discriminator now live in ContentRouter.qml,
+            // which the KIOSK shell mounts too (kiosk-port contract §4.2 / D3).
+            // The Slint kiosk copies AppShell's mount block verbatim and calls
+            // that copy debt in its own header (KioskShell.slint:10-17); this
+            // is the named fix, so the two shells cannot drift.
+            //
+            // `kiosk` defaults false, i.e. this instance routes every id to the
+            // desktop view it always did. Reached from elsewhere in this
+            // document through `contentRouter.currentItem` (the multi-select
+            // seam above) — a QML `id` does not cross documents, so
+            // `viewLoader` is no longer nameable here and that public property
+            // is the replacement.
+            ContentRouter {
+                id: contentRouter
+                anchors.fill: parent
+            }
         }
     }
 
     // --- Bezel corners ----------------------------------------------------
-    // `clip: true` on contentFrame is a RECTANGULAR scissor in Qt Quick — it
+    // `clip: true` on contentPane is a RECTANGULAR scissor in Qt Quick — it
     // is a glScissor / QPainter setClipRect and it does NOT follow `radius`.
     // The radius only shapes that Rectangle's own fill, so anything that
     // paints opaquely at the frame's corners paints straight over the bezel
@@ -287,7 +361,7 @@ Rectangle {
     // reaches the top edge. The mask therefore belongs here, once, and it
     // covers every present and future view.
     //
-    // SIBLINGS of contentFrame, not children of it. Inside the frame they sat
+    // SIBLINGS of the pane, not children of it. Inside it they sat
     // at z:0 with the view Loader, so any overlay a VIEW mounts painted over
     // them and the corners read square while it was open — the pane-filling
     // modals are exactly that: DiscoverConfigModal z:3100 (HomeView:1130),
@@ -326,14 +400,16 @@ Rectangle {
     // an FBO the size of the whole content pane, re-rendered on every window
     // resize and invalidated by anything animating inside the pane.
     //
-    // The fill is the shell base (`root.color`) because that is literally
-    // what shows through the bezel: the 8px gutter, the HeaderBar above
-    // and the NPB gap below are all surface-card, and nothing else paints
-    // between `root` and the frame while the corners are on.
+    // The fill is `contentFrame.color` because that is literally what shows
+    // through the bezel — the frame IS the 8px gutter, and with the background
+    // off it is surface-card, the same colour as the HeaderBar above and the
+    // NPB gap below. (It was `root.color` before the frame existed; identical
+    // value, but now it tracks the surface it is actually cutting into rather
+    // than one that happens to match.)
     //
     // Gated on the ambient background being OFF, and that is not a
-    // shortcut: with the dynamic background active the frame goes
-    // translucent (surface-main @ 0.22 + hairline) and the ambient field
+    // shortcut: with the dynamic background active the pane goes
+    // translucent (surface-main @ 0.22 + hairline) and the field
     // is SUPPOSED to show through the corners, so an opaque nub would be
     // the regression. The same flag also suppresses the album/artist
     // atmosphere (AlbumView.qml:71 `headerAtmoOn = pref && !ambientOn`,
@@ -354,20 +430,27 @@ Rectangle {
     // parented to the window Overlay, where covering the pane corners is the
     // correct behaviour. A future full-bleed opaque pane child must round
     // itself the same way — there is no mask that can do it for it here.
-    BezelCorner { corner: 0; fill: root.color; r: contentFrame.radius
+    // Positions are the PANE's rect in shell coordinates. The pane is a child
+    // of the frame now, so its own x/y are frame-local (8, 0) and have to be
+    // offset by the frame's origin — reading contentPane.x directly here would
+    // put every nub 8px to the left of the corner it is meant to cut.
+    readonly property real _paneX: contentFrame.x + contentPane.x
+    readonly property real _paneY: contentFrame.y + contentPane.y
+
+    BezelCorner { corner: 0; fill: contentFrame.color; r: contentPane.radius
                   visible: !root.ambientOn
-                  x: contentFrame.x; y: contentFrame.y }
-    BezelCorner { corner: 1; fill: root.color; r: contentFrame.radius
+                  x: root._paneX; y: root._paneY }
+    BezelCorner { corner: 1; fill: contentFrame.color; r: contentPane.radius
                   visible: !root.ambientOn
-                  x: contentFrame.x + contentFrame.width - width; y: contentFrame.y }
-    BezelCorner { corner: 2; fill: root.color; r: contentFrame.radius
+                  x: root._paneX + contentPane.width - width; y: root._paneY }
+    BezelCorner { corner: 2; fill: contentFrame.color; r: contentPane.radius
                   visible: !root.ambientOn
-                  x: contentFrame.x + contentFrame.width - width
-                  y: contentFrame.y + contentFrame.height - height }
-    BezelCorner { corner: 3; fill: root.color; r: contentFrame.radius
+                  x: root._paneX + contentPane.width - width
+                  y: root._paneY + contentPane.height - height }
+    BezelCorner { corner: 3; fill: contentFrame.color; r: contentPane.radius
                   visible: !root.ambientOn
-                  x: contentFrame.x
-                  y: contentFrame.y + contentFrame.height - height }
+                  x: root._paneX
+                  y: root._paneY + contentPane.height - height }
 
     // The bezel nub itself. Kept as an inline component (no outer `id` is
     // referenced inside it — inline components do not share the document's

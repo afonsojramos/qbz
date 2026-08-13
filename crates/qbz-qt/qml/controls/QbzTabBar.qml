@@ -27,7 +27,9 @@ Rectangle {
 
     width: segBarRow.width
     height: segBarRow.height
-    color: theme.surfaceElevated
+    // The well: surface-elevated @ 0.5 under the dynamic background
+    // (SegmentedTabBar.slint:108).
+    color: theme.ambientOn ? theme.surfaceElevatedA50 : theme.surfaceElevated
     radius: 6
 
     Row {
@@ -45,7 +47,10 @@ Rectangle {
                 width: segRow.implicitWidth
                 height: segRow.implicitHeight
                 radius: 4
-                color: active ? theme.surfaceMain
+                // The ACTIVE cell takes surface-main @ 0.5 — surface-MAIN, not
+                // elevated, and at the chrome alpha (SegmentedTabBar.slint:29).
+                color: active
+                     ? (theme.ambientOn ? theme.surfaceMainA50 : theme.surfaceMain)
                      : segArea.containsMouse ? theme.surfaceHover : "transparent"
 
                 Row {

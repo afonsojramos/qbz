@@ -309,8 +309,8 @@ Rectangle {
          : theme.sidebarOpenWidth
     // surface-card @ 0.5 while the ambient background is active (phase 14).
     color: ambientOn ? theme.surfaceCardA50 : theme.surfaceCard
-    readonly property bool ambientOn: QbzShell.ambientMode > 0 && QbzPlayer.npHasTrack
-       
+    readonly property bool ambientOn: theme.ambientOn
+
     // Square edges; clip keeps content from spilling while the width
     // animates (same as the Slint root).
     clip: true

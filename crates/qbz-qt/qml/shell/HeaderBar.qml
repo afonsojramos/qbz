@@ -61,8 +61,8 @@ Rectangle {
     // surface-card @ 0.5 while the ambient background is active (phase 14,
     // HeaderBar.slint's with-alpha(app-background-surface-alpha)).
     color: ambientOn ? theme.surfaceCardA50 : theme.surfaceCard
-    readonly property bool ambientOn: QbzShell.ambientMode > 0 && QbzPlayer.npHasTrack
-       
+    readonly property bool ambientOn: theme.ambientOn
+
 
     // The host ApplicationWindow (custom chrome); null in previews.
     property var hostWindow: null
@@ -687,7 +687,11 @@ Rectangle {
         radius: 6
         border.width: 1
         border.color: searchInput.activeFocus ? theme.accent : theme.borderSubtle
-        color: theme.surfaceElevated
+        // surface-elevated @ 0.5 under the dynamic background
+        // (HeaderBar.slint:728) — it sits ON the already-translucent header, so
+        // leaving it opaque left one solid slab in the middle of a bar the
+        // field is otherwise showing through.
+        color: root.ambientOn ? theme.surfaceElevatedA50 : theme.surfaceElevated
 
         QbzIcon {
             name: "search"
@@ -961,7 +965,7 @@ Rectangle {
             }
         }
 
-        QbzIconButton { activeBackground: true 
+        QbzIconButton { activeBackground: true
             name: "menu"
             anchors.verticalCenter: parent.verticalCenter
             onClicked: appMenu.open()

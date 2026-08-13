@@ -9,7 +9,7 @@
 //! | consumer | line | meaning |
 //! |---|---|---|
 //! | `shader_scenes_available` | `:8557` | the 6 immersive shader scenes — they render BLACK off the GPU tier |
-//! | `app_background_available` | `:8563` | the app-wide dynamic background ("modo Cider") |
+//! | `app_background_available` | `:8563` | the app-wide dynamic background |
 //! | `reduce_motion` | `:8597` | `kiosk_profile \|\| !use_gpu_renderer` |
 //!
 //! This port had none of it. `reduce_motion` shipped as the kiosk half alone

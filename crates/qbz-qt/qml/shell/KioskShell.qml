@@ -219,8 +219,13 @@ Rectangle {
                     radius: theme.radiusSm
                     color: (backArea.containsMouse && QbzShell.canBack)
                            ? root.chromeHoverBg : "transparent"
-                    opacity: QbzShell.canBack ? 1.0 : 0.32
                     QbzIcon {
+                        // Opacity on the LEAF, not on the button: the
+                        // Rectangle resolves to "transparent" in every
+                        // disabled frame (hover requires canBack), so the
+                        // group node only ever dimmed this glyph — and an
+                        // always-on opacity group is its own batch.
+                        opacity: QbzShell.canBack ? 1.0 : 0.32
                         name: "chevron-left"
                         width: 22
                         height: 22
@@ -245,8 +250,13 @@ Rectangle {
                     radius: theme.radiusSm
                     color: (fwdArea.containsMouse && QbzShell.canForward)
                            ? root.chromeHoverBg : "transparent"
-                    opacity: QbzShell.canForward ? 1.0 : 0.32
                     QbzIcon {
+                        // Opacity on the LEAF, not on the button: the
+                        // Rectangle resolves to "transparent" in every
+                        // disabled frame (hover requires canForward), so the
+                        // group node only ever dimmed this glyph — and an
+                        // always-on opacity group is its own batch.
+                        opacity: QbzShell.canForward ? 1.0 : 0.32
                         name: "chevron-right"
                         width: 22
                         height: 22

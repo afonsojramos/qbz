@@ -212,8 +212,20 @@ struct ThemeTokens {
     // Ambient-layer derivations (phase-14 tokens, now theme-derived):
     // chrome surface-card @50%, frosted panel surface-main @22%, thin bars
     // surface-main @30%, hairline = alpha tier 10%.
+    //
+    // The two @50% siblings below carry the SAME `app-background-surface-alpha`
+    // (0.5) the chrome does — the Slint applies it to three different tokens
+    // depending on the surface's tier: surface-card for chrome
+    // (Sidebar/HeaderBar/PlayerBar/the content frame), surface-elevated for
+    // controls sitting ON a panel (ToggleButton/QbzSelect/SegmentedTabBar/
+    // CircleAction/the header search field), and surface-main for the Large
+    // dock's art well (SidebarNowPlayingDock.slint:193).
     #[serde(rename = "surfaceCardA50")]
     surface_card_a50: String,
+    #[serde(rename = "surfaceElevatedA50")]
+    surface_elevated_a50: String,
+    #[serde(rename = "surfaceMainA50")]
+    surface_main_a50: String,
     #[serde(rename = "surfaceMainA22")]
     surface_main_a22: String,
     #[serde(rename = "surfaceMainA30")]
@@ -261,6 +273,8 @@ fn tokens_for(colors: &ThemeColors) -> ThemeTokens {
         card_shadow: argb(colors.card_shadow),
         alpha: colors.alpha.iter().map(|c| argb(*c)).collect(),
         surface_card_a50: with_alpha(colors.surface_card, 0x80),
+        surface_elevated_a50: with_alpha(colors.surface_elevated, 0x80),
+        surface_main_a50: with_alpha(colors.surface_main, 0x80),
         surface_main_a22: with_alpha(colors.surface_main, 0x38),
         surface_main_a30: with_alpha(colors.surface_main, 0x4d),
         frost_border: argb(colors.alpha[ALPHA_PCTS.iter().position(|p| *p == 10).unwrap_or(4)]),

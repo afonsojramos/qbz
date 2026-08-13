@@ -58,8 +58,8 @@ Rectangle {
     // Transparent while the ambient background is active (phase 14 —
     // HomeView.slint:163: the frosted content panel shows through).
     color: ambientOn ? "transparent" : theme.surfaceMain
-    readonly property bool ambientOn: QbzShell.ambientMode > 0 && QbzPlayer.npHasTrack
-       
+    readonly property bool ambientOn: theme.ambientOn
+
     // Round to the AppShell content-frame bezel (Radius.md): QML clips
     // are rectangular, so the frame's own rounding never reaches the
     // view — the view's own fill must round instead.
@@ -423,13 +423,17 @@ Rectangle {
                     }
                 }
             }
-            // Cider-style edge fades (Carousel.slint): content dissolves
-            // into the page background at the scrolled edges.
+            // Soft edge fades (Carousel.slint): content dissolves
+            // into the page background at the scrolled edges. Hidden under the
+            // app-wide dynamic background — they fade to the OPAQUE
+            // surface-main, so over a moving field they read as two dark slabs
+            // rather than a dissolve (Carousel.slint:304, :312).
             Rectangle {
                 anchors.left: parent.left
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
                 width: 56
+                visible: !theme.ambientOn
                 opacity: rail.contentX > 1 ? 1.0 : 0.0
                 Behavior on opacity { NumberAnimation { duration: 150 } }
                 gradient: Gradient {
@@ -443,6 +447,7 @@ Rectangle {
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
                 width: 56
+                visible: !theme.ambientOn
                 opacity: rail.contentX < maxScroll - 1 ? 1.0 : 0.0
                 Behavior on opacity { NumberAnimation { duration: 150 } }
                 gradient: Gradient {
@@ -1253,6 +1258,17 @@ Rectangle {
         Item {
             width: parent.width
             height: 56
+
+            // Thin-bar tier: surface-main @ bar-alpha (0.3) under the app-wide
+            // dynamic background, opaque surface-main otherwise (HomeView.slint:182).
+            // The toolbar had NO fill of its own — with the background off the
+            // view root's surface-main showed through and it looked right, but
+            // the view root goes transparent under the background, so the bar
+            // lost its backing exactly when it needed one.
+            Rectangle {
+                anchors.fill: parent
+                color: root.ambientOn ? theme.surfaceMainA30 : theme.surfaceMain
+            }
 
             Row {
                 // Slint left-controls: x 32 + NavButtons (now a 0px

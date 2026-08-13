@@ -92,7 +92,11 @@ Rectangle {
                 width: 190
                 height: 190
                 radius: 95
-                clip: true
+                // No clip. It never clipped to the circle — QML's clip is a
+                // rectangular scissor and ignores `radius`; the round shape is
+                // each child's own `radius: 95` / RoundedImage mask. The logo
+                // is inset 28px with fit "contain" and the overlay row ends at
+                // y=157 < 190, so nothing overflows.
                 // Logo arm background (the Slint Theme.surface-elevated).
                 color: theme.surfaceElevated
 

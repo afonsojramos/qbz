@@ -34,7 +34,8 @@ QtObject {
         "borderSubtle": "#14ffffff", "borderMuted": "#38ffffff",
         "borderStrong": "#59ffffff", "focusRing": "#4285f4",
         "favorite": "#ef4444", "cardShadow": "#66000000",
-        "surfaceCardA50": "#801a1a1a", "surfaceMainA22": "#380f0f0f",
+        "surfaceCardA50": "#801a1a1a", "surfaceElevatedA50": "#80252525",
+        "surfaceMainA50": "#800f0f0f", "surfaceMainA22": "#380f0f0f",
         "surfaceMainA30": "#4d0f0f0f", "frostBorder": "#1affffff",
         "isDark": true
     })
@@ -103,10 +104,32 @@ QtObject {
     // thin bars surface-main @30%, hairline = alpha tier 10%. The live
     // values for the QBZ_BG_* env knobs still ride QbzBridge
     // .ambientSurfaceAlpha / .ambientBarAlpha.
+    //
+    // The 50% tier exists on THREE tokens because the Slint picks the base by
+    // the surface's tier, not by one blanket colour: chrome takes surface-card
+    // (Sidebar.slint:693, HeaderBar.slint:561, PlayerBar.slint:130,
+    // AppShell.slint:360), controls sitting on a panel take surface-elevated
+    // (ToggleButton.slint:25, QbzSelect.slint:112, SegmentedTabBar.slint:108,
+    // CircleAction.slint:53, HeaderBar.slint:728) and the Large dock's art well
+    // takes surface-main (SidebarNowPlayingDock.slint:193).
     readonly property color surfaceCardA50: _c("surfaceCardA50")
+    readonly property color surfaceElevatedA50: _c("surfaceElevatedA50")
+    readonly property color surfaceMainA50: _c("surfaceMainA50")
     readonly property color surfaceMainA22: _c("surfaceMainA22")
     readonly property color surfaceMainA30: _c("surfaceMainA30")
     readonly property color frostBorder: _c("frostBorder")
+
+    // THE ONE ambient predicate. Every chrome/control that goes translucent
+    // under the app-wide dynamic background reads this instead of re-deriving
+    // `QbzShell.ambientMode > 0 && QbzPlayer.npHasTrack` (which the port had
+    // copied into 25 files, and which is exactly the kind of duplicated
+    // expression that lets one surface drift out of the set — the fade
+    // rectangles and the header search field were both missing it).
+    // Mirrors ShellState.app-background-active (state.slint:4184) minus the
+    // renderer-tier arm: the Qt field renders on the software path too
+    // (ShaderEffect where shaders exist, Canvas where they do not), so the
+    // feature is never taken away from a weak GPU here.
+    readonly property bool ambientOn: QbzShell.ambientMode > 0 && QbzPlayer.npHasTrack
 
     // --- ON AN ACCENT FILL: the glyph tint and its colour twin -----------
     //

@@ -47,7 +47,7 @@ Rectangle {
     readonly property bool mostPlayed: mode === "mostPlayed"
     readonly property var items: doc.items || []
 
-    readonly property bool ambientOn: QbzShell.ambientMode > 0 && QbzPlayer.npHasTrack
+    readonly property bool ambientOn: theme.ambientOn
     // RecentAlbumsView.slint:31 is ambient-aware; MostPlayedAlbumsView
     // .slint:26 is plain surface-main.
     color: (!mostPlayed && ambientOn) ? "transparent" : theme.surfaceMain

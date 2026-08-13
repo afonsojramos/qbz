@@ -152,7 +152,9 @@ Rectangle {
                 anchors.centerIn: parent
                 radius: 4
                 color: theme.surfaceElevated
-                clip: true
+                // No clip: RoundedImage confines its own crop on both arms.
+                // One batch root per list row, for a scissor that never
+                // rounded anything.
                 RoundedImage {
                     anchors.fill: parent
                     source: root.artSource !== "" ? root.artSource : (root.item.artPath || "")

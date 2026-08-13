@@ -57,7 +57,7 @@ import "../theme"
 Rectangle {
     id: root
     color: ambientOn ? "transparent" : theme.surfaceMain
-    readonly property bool ambientOn: QbzShell.ambientMode > 0 && QbzPlayer.npHasTrack
+    readonly property bool ambientOn: theme.ambientOn
     radius: 12
 
     QbzTheme { id: theme }
@@ -398,6 +398,18 @@ Rectangle {
         Item {
             width: parent.width
             height: 56
+
+            // Thin-bar tier: surface-main @ bar-alpha (0.3) under the app-wide
+            // dynamic background, opaque surface-main otherwise (SearchResultsView.slint:386).
+            // The toolbar had NO fill of its own — with the background off the
+            // view root's surface-main showed through and it looked right, but
+            // the view root goes transparent under the background, so the bar
+            // lost its backing exactly when it needed one.
+            Rectangle {
+                anchors.fill: parent
+                color: root.ambientOn ? theme.surfaceMainA30 : theme.surfaceMain
+            }
+
             Text {
                 x: 32
                 anchors.verticalCenter: parent.verticalCenter

@@ -33,8 +33,8 @@ Rectangle {
     // Transparent while the ambient background is active (phase 14 —
     // HomeView.slint:163: the frosted content panel shows through).
     color: ambientOn ? "transparent" : theme.surfaceMain
-    readonly property bool ambientOn: QbzShell.ambientMode > 0 && QbzPlayer.npHasTrack
-       
+    readonly property bool ambientOn: theme.ambientOn
+
     // Round to the AppShell content-frame bezel (Radius.md): QML clips
     // are rectangular, so the frame's own rounding never reaches the
     // view — the view's own fill must round instead.
@@ -583,7 +583,9 @@ Rectangle {
                     height: 224
                     radius: 12
                     color: theme.surfaceElevated
-                    clip: true
+                    // No clip: RoundedImage confines itself on both arms; a clip is an
+                    // unconditional batch root. coverMenu and CoverLightbox are
+                    // view-root siblings, never descendants of this frame.
                     RoundedImage {
                         anchors.fill: parent
                         // A custom cover override (shared custom_artwork

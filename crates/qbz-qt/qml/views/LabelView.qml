@@ -48,7 +48,7 @@ Rectangle {
     id: root
 
     color: ambientOn ? "transparent" : theme.surfaceMain
-    readonly property bool ambientOn: QbzShell.ambientMode > 0 && QbzPlayer.npHasTrack
+    readonly property bool ambientOn: theme.ambientOn
     radius: 12
 
     QbzTheme { id: theme }
@@ -470,7 +470,9 @@ Rectangle {
                 width: parent.width - 64
                 padH: 0
                 showSearch: false
-                barBg: root.ambientOn ? "transparent" : theme.surfaceMain
+                // surface-main @ bar-alpha (0.3), LabelPageView.slint:593 —
+                // see the note on the identical mount in ArtistView.
+                barBg: root.ambientOn ? theme.surfaceMainA30 : theme.surfaceMain
                 tabs: root.jumpTabs
                 activeTabId: root.activeJumpTab
                 onTabClicked: function (id) { root.scrollToSection(id) }

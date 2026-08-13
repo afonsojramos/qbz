@@ -56,7 +56,7 @@ Rectangle {
     // round (the literal in all 14 painting view roots).
     radius: 12
     color: root.ambientOn ? "transparent" : theme.surfaceMain
-    readonly property bool ambientOn: QbzShell.ambientMode > 0 && QbzPlayer.npHasTrack
+    readonly property bool ambientOn: theme.ambientOn
 
     QbzTheme { id: theme }
 

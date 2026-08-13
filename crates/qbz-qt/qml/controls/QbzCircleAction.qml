@@ -86,7 +86,12 @@ Rectangle {
             : ((cbArea.containsMouse || active) ? "#3dffffff" : "#24ffffff"))
         : (primary
             ? (cbArea.containsMouse && btnEnabled ? theme.accentHover : theme.accent)
-            : ((cbArea.containsMouse || active) ? theme.surfaceHover : theme.surfaceElevated))
+            // Resting fill translucent under the dynamic background
+            // (CircleAction.slint:53-55). The overlay variant above sits on
+            // artwork and keeps its white scale.
+            : ((cbArea.containsMouse || active)
+                ? theme.surfaceHover
+                : (theme.ambientOn ? theme.surfaceElevatedA50 : theme.surfaceElevated)))
     border.width: primary ? 0 : 1.5
     border.color: overlay ? "#ccffffff" : theme.borderStrong
     opacity: btnEnabled ? 1.0 : 0.4

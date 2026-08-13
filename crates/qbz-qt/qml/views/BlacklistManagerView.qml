@@ -55,7 +55,7 @@ Rectangle {
     // Transparent while the ambient background is active — the frosted content
     // panel shows through (HomeView.qml:53 and its twelve siblings).
     color: root.ambientOn ? "transparent" : theme.surfaceMain
-    readonly property bool ambientOn: QbzShell.ambientMode > 0 && QbzPlayer.npHasTrack
+    readonly property bool ambientOn: theme.ambientOn
 
     // Round to the AppShell content-frame bezel (Radius.md): QML clips are
     // rectangular, so the frame's rounding never reaches the view — the view's

@@ -2113,7 +2113,14 @@ pub(crate) fn toggle_system_title_bar() {
 /// ambient layer is pure QML — no restart needed).
 pub(crate) fn toggle_ambient_background() {
     let mode = settings_qt::toggle_ambient_background();
-    log::info!("[qbz-qt] app_background -> {}", if mode == 1 { "ambient" } else { "off" });
+    log::info!(
+        "[qbz-qt] app_background -> {}",
+        match mode {
+            1 => "ambient",
+            2 => "blurred",
+            _ => "off",
+        }
+    );
     shell_bridge::ui(move |mut b| b.as_mut().set_ambient_mode(mode));
 }
 

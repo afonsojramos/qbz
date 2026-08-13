@@ -25,7 +25,9 @@ Rectangle {
     width: 68
     height: 34
     radius: 6
-    color: theme.surfaceElevated
+    // The well: surface-elevated @ 0.5 under the dynamic background
+    // (BrowseHeaderTools.slint:155).
+    color: theme.ambientOn ? theme.surfaceElevatedA50 : theme.surfaceElevated
     clip: true
 
     Row {

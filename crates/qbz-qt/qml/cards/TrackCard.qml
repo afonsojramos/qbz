@@ -72,7 +72,9 @@ Rectangle {
             height: 200
             radius: theme.radiusSm
             color: theme.surfaceElevated
-            clip: true
+            // No clip: the child RoundedImage confines itself on both arms, and
+            // a rectangular scissor never produced this radius. A clip is an
+            // unconditional batch root, so this one cost a draw call per item.
             RoundedImage {
                 anchors.fill: parent
                 source: root.artSource

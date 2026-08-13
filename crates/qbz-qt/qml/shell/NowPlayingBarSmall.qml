@@ -43,8 +43,8 @@ Rectangle {
     // surface-card @ 0.5 while the ambient background is active (phase 14,
     // PlayerBarSmall.slint).
     color: ambientOn ? theme.surfaceCardA50 : theme.surfaceCard
-    readonly property bool ambientOn: QbzShell.ambientMode > 0 && QbzPlayer.npHasTrack
-       
+    readonly property bool ambientOn: theme.ambientOn
+
 
     QbzTheme { id: theme }
 
@@ -212,8 +212,13 @@ Rectangle {
                     width: parent.width * Math.min(Math.max(QbzPlayer.npCacheProgress, 0), 1)
                     height: parent.height
                     radius: 2
-                    color: theme.textMuted
-                    opacity: 0.35
+                    color: Qt.rgba(theme.textMuted.r, theme.textMuted.g,
+                                   theme.textMuted.b, 0.35)
+                    // Alpha in the material, not a container `opacity`: an
+                    // always-on opacity node pins this quad in its own batch,
+                    // and the three seek quads use compatible materials
+                    // (QSGSmoothColorMaterial::compare() returns 0), so folding
+                    // it lets rail + cache + progress merge.
                 }
                 // Playback progress line.
                 Rectangle {
@@ -263,7 +268,9 @@ Rectangle {
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
                 width: (root.width - 6) * root.sideFrac
-                clip: true
+                // No clip: the Row sums to exactly this column (width-59 + 19
+                // + 40, spacing 0) and the two time Texts above are now
+                // bounded, which was the only escape path.
 
                 Row {
                     anchors.fill: parent
@@ -318,12 +325,22 @@ Rectangle {
                         anchors.verticalCenter: parent.verticalCenter
                         spacing: 1
                         Text {
+                            // Bounded so the column below needs no scissor: a
+                            // NaN transient or a >16h duration is the only way
+                            // these overflow, and truncating here lands at the
+                            // same x the clip did.
+                            width: parent.width
+                            horizontalAlignment: Text.AlignLeft
+                            elide: Text.ElideRight
                             text: root.fmt(QbzPlayer.npElapsedSecs)
                             font.family: "monospace"
                             font.pixelSize: 10
                             color: theme.textMuted
                         }
                         Text {
+                            width: parent.width
+                            horizontalAlignment: Text.AlignLeft
+                            elide: Text.ElideRight
                             text: root.fmt(QbzPlayer.npDurationSecs)
                             font.family: "monospace"
                             font.pixelSize: 10

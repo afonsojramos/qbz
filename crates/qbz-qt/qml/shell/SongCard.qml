@@ -49,7 +49,7 @@ Rectangle {
     /// Title clicked — the host opens the Track Info modal.
     signal trackInfoRequested()
 
-    readonly property bool ambientOn: QbzShell.ambientMode > 0 && QbzPlayer.npHasTrack
+    readonly property bool ambientOn: theme.ambientOn
     // Track Info is a Qobuz-only surface (Slint gates it on
     // NowPlayingState.source == "qobuz"). The Qt port publishes no np_source,
     // so a numeric track id is the proxy — local / Plex / ephemeral rows do
@@ -120,7 +120,8 @@ Rectangle {
                 color: theme.surfaceElevated
                 border.width: root.artBorderWidth
                 border.color: root.artBorderColor
-                clip: true
+                // No clip: RoundedImage confines itself on both arms; a clip is an
+                // unconditional batch root, and this one is always on screen.
                 RoundedImage {
                     visible: QbzPlayer.npHasTrack
                     anchors.fill: parent

@@ -26,7 +26,11 @@ import "../theme"
 Rectangle {
     id: root
     color: "transparent"
-    clip: true
+    // Clipped ONLY when stacked with the other panel. The drag ghost really
+    // does leave this rect, but in the single-panel case the panel coincides
+    // exactly with queueColumn, which already clips (AppShell.qml) — so the
+    // scissor is pure duplication there, and duplication costs a batch root.
+    clip: QbzShell.queueOpen && QbzShell.lyricsOpen
 
     // Queue (0) / History (1) — Slint QueueState.tab.
     property int tab: 0
@@ -378,7 +382,8 @@ Rectangle {
                 radius: 4
                 anchors.verticalCenter: parent.verticalCenter
                 color: theme.surfaceElevated
-                clip: true
+                // No clip: RoundedImage self-confines. One batch root per
+                // visible queue row.
                 RoundedImage {
                     anchors.fill: parent
                     source: root.coverMap[row.artUrl] || ""
@@ -816,7 +821,7 @@ Rectangle {
                                     radius: 4
                                     anchors.verticalCenter: parent.verticalCenter
                                     color: theme.surfaceCard
-                                    clip: true
+                                    // No clip: RoundedImage self-confines.
                                     RoundedImage {
                                         anchors.fill: parent
                                         source: root.currentRow ? (root.coverMap[root.currentRow.artUrl] || "") : ""
@@ -956,7 +961,7 @@ Rectangle {
                             Row {
                                 id: paginator
                                 spacing: theme.spacingMd
-                                QbzIconButton { btnSize: 30 
+                                QbzIconButton { btnSize: 30
                                     name: "chevron-left"
                                     iconSize: 15
                                     btnEnabled: (doc.page || 0) > 0
@@ -968,7 +973,7 @@ Rectangle {
                                     color: theme.textMuted
                                     font.pixelSize: 12
                                 }
-                                QbzIconButton { btnSize: 30 
+                                QbzIconButton { btnSize: 30
                                     name: "chevron-right"
                                     iconSize: 15
                                     btnEnabled: (doc.page || 0) < (doc.pageCount || 1) - 1
@@ -1374,10 +1379,14 @@ Rectangle {
         width: root.width - 2 * theme.spacingMd
         height: 34
         radius: theme.radiusSm
-        color: theme.surfaceElevated
+        color: Qt.rgba(theme.surfaceElevated.r, theme.surfaceElevated.g,
+                       theme.surfaceElevated.b, 0.95)
         border.width: 1
-        border.color: theme.accent
-        opacity: 0.95
+        border.color: Qt.rgba(theme.accent.r, theme.accent.g, theme.accent.b, 0.95)
+        // Alpha folded into the fill/border instead of a container `opacity`:
+        // an opacity node is its own batch group, and this ghost is live for
+        // the whole drag. Every theme builds these tokens opaque (checked
+        // across crates/qbz-theme/src), so this is the same pixel.
         Text {
             anchors.fill: parent
             anchors.leftMargin: theme.spacingSm

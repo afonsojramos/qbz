@@ -309,7 +309,8 @@ Rectangle {
             height: 200
             radius: theme.radiusSm
             color: theme.surfaceElevated
-            clip: true
+            // No clip: every child is geometrically contained and the overlay
+            // Texts above are now bounded. One batch root per grid card.
 
             RoundedImage {
                 anchors.fill: parent
@@ -349,6 +350,11 @@ Rectangle {
                 Text {
                     visible: root.genre !== ""
                     text: root.genre
+                    // Bounded because the tile's clip is gone: genre is
+                    // unbounded catalog data and was the ONLY thing that could
+                    // escape the 200px tile. 200 - 2*12 (the Column's x).
+                    width: 176
+                    elide: Text.ElideRight
                     height: 20
                     color: "#ebffffff"
                     font.pixelSize: 13
@@ -358,6 +364,8 @@ Rectangle {
                 Text {
                     visible: root.year !== ""
                     text: root.year
+                    width: 176
+                    elide: Text.ElideRight
                     height: 17
                     color: "#ccffffff"
                     font.pixelSize: 12

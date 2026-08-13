@@ -95,8 +95,16 @@ Rectangle {
     width: 60
     height: 30
     radius: 6
-    color: theme.surfaceElevated
-    clip: true
+    // The well itself: surface-elevated @ 0.5 under the dynamic background
+    // (SegmentedTabBar.slint:108).
+    color: theme.ambientOn ? theme.surfaceElevatedA50 : theme.surfaceElevated
+    // NO CLIP, and that turns a silent crop into a visible one. The invariant
+    // a caller now owns: `width >= N*segWidth + (N-1)*segSpacing`. All six
+    // call sites satisfy it today with integer geometry (54/60, 60/60, 90/90);
+    // a future one that does not will OVERFLOW instead of being cropped
+    // without a trace, which is the failure you want. The rounded corner comes
+    // from `segRadius` on the cells — a QML clip is a rectangular scissor and
+    // never shaped this well.
 
     Row {
         anchors.centerIn: parent

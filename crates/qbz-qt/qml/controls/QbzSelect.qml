@@ -36,7 +36,12 @@ Rectangle {
     radius: sm ? 6 : theme.radiusSm
     border.width: sm ? 0 : 1
     border.color: theme.borderSubtle
-    color: selArea.containsMouse && enabled ? theme.surfaceHover : theme.surfaceElevated
+    // Resting fill goes translucent under the dynamic background so the field
+    // shows through the control (QbzSelect.slint:110-116). Hover keeps its own
+    // token, which is already translucent.
+    color: selArea.containsMouse && enabled
+        ? theme.surfaceHover
+        : (theme.ambientOn ? theme.surfaceElevatedA50 : theme.surfaceElevated)
     opacity: enabled ? 1.0 : 0.4
 
     // `width`, NOT `menuWidth`: QbzSelect.slint:89-91 resolves the open list as

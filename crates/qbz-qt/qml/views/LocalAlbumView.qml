@@ -30,7 +30,7 @@ Rectangle {
     id: root
 
     color: ambientOn ? "transparent" : theme.surfaceMain
-    readonly property bool ambientOn: QbzShell.ambientMode > 0 && QbzPlayer.npHasTrack
+    readonly property bool ambientOn: theme.ambientOn
     radius: 12
 
     QbzTheme { id: theme }

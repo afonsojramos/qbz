@@ -161,10 +161,21 @@ Rectangle {
         width: root.expandable ? (root.open ? root.openWidth : 0) : root.width
         height: root.height
         radius: (root.searchMode || root.expandable) ? 6 : theme.radiusSm
-        color: root.elevated ? theme.surfaceElevated : theme.surfaceCard
+        // Translucent under the app-wide dynamic background, on the SAME
+        // token the opaque arm uses: surface-card for the expandable search
+        // overlay (ExpandableSearch.slint:80), surface-elevated for the inline
+        // toolbar field (BrowseHeaderTools.slint:26).
+        color: root.elevated
+            ? (theme.ambientOn ? theme.surfaceElevatedA50 : theme.surfaceElevated)
+            : (theme.ambientOn ? theme.surfaceCardA50 : theme.surfaceCard)
         border.width: (root.expandable && !root.open) ? 0 : 1
         border.color: input.activeFocus ? theme.accent : theme.borderSubtle
-        clip: true
+        // Load-bearing ONLY on the expandable arm, where `width` animates
+        // 0 -> openWidth past a fixed 14px magnifier and the 22/24px clear
+        // slot. On the plain arm the Row sums to exactly the box and the text
+        // is guarded one level down, so the scissor there was a free batch
+        // root on every mounted field.
+        clip: root.expandable
         Behavior on width {
             enabled: root.expandable
             NumberAnimation { duration: 200; easing.type: Easing.InOutQuad }
@@ -191,7 +202,8 @@ Rectangle {
                     - (root.searchMode ? root.glyph + 7 : 0)
                     - (clearSlot.visible ? clearSlot.width + 7 : 0))
                 height: parent.height
-                clip: true
+                // No clip: TextInput scissors itself (:207) and the
+                // placeholder elides. A redundant second scissor.
                 TextInput {
                     id: input
                     anchors.fill: parent

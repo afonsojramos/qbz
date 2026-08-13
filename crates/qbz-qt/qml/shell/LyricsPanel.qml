@@ -28,7 +28,11 @@ import "../theme"
 Rectangle {
     id: root
     color: "transparent"
-    clip: true
+    // Clipped ONLY when stacked with the other panel. The drag ghost really
+    // does leave this rect, but in the single-panel case the panel coincides
+    // exactly with queueColumn, which already clips (AppShell.qml) — so the
+    // scissor is pure duplication there, and duplication costs a batch root.
+    clip: QbzShell.queueOpen && QbzShell.lyricsOpen
 
     QbzTheme { id: theme }
 

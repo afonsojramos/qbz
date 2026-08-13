@@ -39,8 +39,12 @@ Rectangle {
     height: sm ? 30 : 34
     radius: 6
     opacity: btnEnabled ? 1.0 : 0.35
+    // Glass under the app-wide dynamic background: the ACTIVE fill goes
+    // translucent so the moving field shows through (ToggleButton.slint:25-29).
+    // Only the active arm changes — surface-hover is already translucent and
+    // the resting arm is transparent, so neither has an alpha to set.
     color: root.active
-        ? theme.surfaceHover
+        ? (theme.ambientOn ? theme.surfaceElevatedA50 : theme.surfaceHover)
         : (tbArea.containsMouse && root.btnEnabled ? theme.surfaceElevated : "transparent")
 
     QbzIcon {

@@ -45,8 +45,8 @@ Rectangle {
     // Transparent while the ambient background is active (phase 14 —
     // HomeView.slint:163: the frosted content panel shows through).
     color: ambientOn ? "transparent" : theme.surfaceMain
-    readonly property bool ambientOn: QbzShell.ambientMode > 0 && QbzPlayer.npHasTrack
-       
+    readonly property bool ambientOn: theme.ambientOn
+
     // Round to the AppShell content-frame bezel (Radius.md): QML clips
     // are rectangular, so the frame's own rounding never reaches the
     // view — the view's own fill must round instead.
@@ -2167,7 +2167,12 @@ Rectangle {
                 id: jumpBar
                 width: parent.width - 64
                 padH: 0
-                barBg: root.ambientOn ? "transparent" : theme.surfaceMain
+                // surface-main @ bar-alpha (0.3) under the dynamic
+                // background, NOT transparent: the sticky bar overlays the
+                // page content it scrolls over, so it needs SOME fill to
+                // stay readable — the reference gives thin bars their own
+                // lighter tier for exactly that (ArtistPageView.slint:1108).
+                barBg: root.ambientOn ? theme.surfaceMainA30 : theme.surfaceMain
                 tabs: root.jumpTabs
                 activeTabId: root.activeJumpTab
                 onTabClicked: function (id) { root.scrollToSection(id) }
@@ -2684,7 +2689,11 @@ Rectangle {
         height: Math.max(0, root.height - y)
         width: root.networkOpen ? 300 : 0
         clip: true
-        color: theme.surfaceCard
+        // Chrome tier: surface-card @ 0.5 under the dynamic background
+        // (ArtistPageView.slint:1196). Its 44px header row stays TRANSPARENT
+        // there (:1221) — it sits ON this already-translucent body, and a
+        // second translucent layer would compound to near-opaque.
+        color: root.ambientOn ? theme.surfaceCardA50 : theme.surfaceCard
         Behavior on width { NumberAnimation { duration: 160; easing.type: Easing.InOutQuad } }
 
         Rectangle { anchors.left: parent.left; anchors.top: parent.top; anchors.bottom: parent.bottom; width: 1; color: theme.borderSubtle }

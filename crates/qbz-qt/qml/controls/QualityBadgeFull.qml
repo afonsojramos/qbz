@@ -37,6 +37,12 @@ Item {
     property bool compact: false
     /// Extra proportional scale on top of `compact` (1.0 = none).
     property real scaleFactor: 1.0
+    /// Cap for the text column, in px. 0 = uncapped, which is what every
+    /// existing call site gets — this exists so the ONE caller that used to
+    /// wrap the badge in a `clip: true` (rows/TrackRow.qml's quality cell) can
+    /// bound the badge instead. A clip there was a batch root per visible row,
+    /// and Qt cannot merge alpha geometry across clip roots.
+    property real maxTextWidth: 0
 
     readonly property string tierLabel: tier === "hires" ? "HI-RES"
         : (tier === "mp3" ? "MP3"
@@ -110,7 +116,13 @@ Item {
             // with `width: parent.width` inside an implicitly-sized Column is
             // a binding loop. Both Texts are unwrapped, so `implicitWidth` is
             // the natural content width and does not depend on `width`.
-            width: Math.max(tierText.implicitWidth, detailText.implicitWidth)
+            // `implicitWidth` stays the natural content width even with the
+            // elides below (an unwrapped Text does not shrink its implicit
+            // size), so the no-binding-loop argument above still holds.
+            width: root.maxTextWidth > 0
+                ? Math.min(root.maxTextWidth,
+                           Math.max(tierText.implicitWidth, detailText.implicitWidth))
+                : Math.max(tierText.implicitWidth, detailText.implicitWidth)
 
             Text {
                 id: tierText
@@ -121,6 +133,7 @@ Item {
                 font.weight: Font.Thin
                 font.letterSpacing: 0.5
                 horizontalAlignment: root.bare ? Text.AlignHCenter : Text.AlignLeft
+                elide: Text.ElideRight
             }
             Text {
                 id: detailText
@@ -130,6 +143,7 @@ Item {
                 font.pixelSize: Math.max(1, Math.round((root.compact ? 8 : 9) * root.sf))
                 font.weight: Font.Thin
                 horizontalAlignment: root.bare ? Text.AlignHCenter : Text.AlignLeft
+                elide: Text.ElideRight
             }
         }
     }
