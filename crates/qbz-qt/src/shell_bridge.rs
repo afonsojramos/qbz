@@ -299,6 +299,8 @@ pub mod qbz_shell {
         /// wakeups a second with zero frames when nothing animates, because
         /// Rust cannot see QML mount state and a gate it cannot see would be
         /// a lie.
+        ///
+        /// Release note: docs/release-2.1.0/CHANGELOG.md (first Qt release).
         #[qproperty(i32, pulse_ms)]
         #[qproperty(f32, ambient_surface_alpha)]
         #[qproperty(f32, ambient_bar_alpha)]
