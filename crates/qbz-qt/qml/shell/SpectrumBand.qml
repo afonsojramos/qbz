@@ -17,9 +17,9 @@
 // the fill is the SAME vertical topColor->bottomColor gradient plus the 1px
 // radius the delegates had (rounded-rect SDF with a 1px AA edge, including
 // Rectangle's clamp of r to half the short side). Heights are pushed in ONE
-// JS pass per VizSettle re-evaluation — the push hooks the exact same
+// JS pass per VizSettle application — the push hooks the exact same
 // from/to/progress triplet the delegates' at(i) bindings used to capture —
-// so a 16 ms tick dirties ONE node instead of 28-48. No Canvas anywhere:
+// so a shell-pulse edge dirties ONE node instead of 28-48. No Canvas anywhere:
 // Canvas is CPU raster and is banned on this path.
 //
 // THE SHADER IS A .qsb, NOT AN INLINE STRING. Qt 6's ShaderEffect takes the
@@ -104,7 +104,9 @@ Rectangle {
     visible: band.shown
     radius: theme.radiusMd
     color: "#59000000"
-    clip: true
+    // No clip: the shader arm is anchors.fill, and the fallback bars take
+    // settle.at(i) hard-clamped to 0..1 (VizSettle.qml:86-91) against a
+    // hardcoded 42px band, so nothing can poke out.
 
     // Album-derived gradient, reusing the ambient triad (ambient_qt.rs) instead
     // of a second album-color pipeline — the Slint dock reads

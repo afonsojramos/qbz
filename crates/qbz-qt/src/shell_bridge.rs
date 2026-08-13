@@ -215,7 +215,7 @@ pub mod qbz_shell {
         /// deliberately absent, and it was the reason the scenes could not
         /// ship.
         #[qproperty(bool, shader_scenes_available)]
-        /// May the app-wide dynamic background ("modo Cider") be offered?
+        /// May the app-wide dynamic background be offered?
         /// Same tier, same reason (`main.rs:8563`); gates the whole picker row.
         #[qproperty(bool, app_background_available)]
         /// Is the kiosk touch shell the one currently mounted?
@@ -246,6 +246,11 @@ pub mod qbz_shell {
         /// `visibility` binding must be correct on the FIRST mapped frame, and
         /// a later push would arrive after the window is already on screen.
         #[qproperty(bool, kiosk_fullscreen_boot)]
+        /// App-wide dynamic background mode, `AppearanceState
+        /// .app-background-mode-index` semantics: 0 = Off, 1 = Ambient (the
+        /// album-triad metaball field), 2 = Blurred art (the
+        /// ImmersiveAtmosphere cover look). AppShell mounts a DIFFERENT layer
+        /// for 1 and 2 — never treat this as a bool.
         #[qproperty(i32, ambient_mode)]
         // Album-art triad (ambient_qt.rs), pushed on track change.
         #[qproperty(QString, ambient_primary)]
@@ -253,6 +258,48 @@ pub mod qbz_shell {
         #[qproperty(QString, ambient_accent)]
         // Look knobs (Slint AppearanceState defaults; QBZ_BG_* env seed).
         #[qproperty(f32, ambient_dim)]
+        /// Debug knob QBZ_BG_SCALE — RETIRED 2026-08-13: the ambient field
+        /// renders inline now (no offscreen target to scale), and the knob
+        /// measured as a non-lever anyway. Kept to avoid bridge churn.
+        #[qproperty(f32, ambient_scale)]
+        /// Debug knobs QBZ_VIZ_TICK / QBZ_PANE_LAYER — the two whole-window
+        /// redraw levers (settings_qt.rs documents what each measures).
+        /// NOTE 2026-08-13: viz_tick_ms is RETIRED (VizSettle ticks off the
+        /// pulse now); it stays only to avoid bridge churn.
+        #[qproperty(i32, viz_tick_ms)]
+        #[qproperty(bool, pane_layer)]
+        /// THE shell repaint pulse (2026-08-13 single-clock redesign).
+        ///
+        /// One Rust thread (`start_shell_pulse`) bumps this every
+        /// `settings_qt::shell_pulse_ms()` (default 33 ms, the FFT producer's
+        /// TARGET_FPS = 30 period). Every continuous whole-window animator
+        /// ticks off its NOTIFY EDGE — the ambient background drift
+        /// (ImmersiveAtmosphere) and the visualizer's frame application
+        /// (VizSettle) — instead of owning a private Timer. Qt Quick has no
+        /// dirty-region rendering, so N unsynchronised ~30 Hz clocks cost
+        /// N x 30 full-window presents a second; on one edge they all dirty
+        /// the scene in the SAME event-loop turn and the window presents
+        /// once per period. That rate is the shell's dominant GPU term
+        /// (render = 2 ms, swap = 12-24 ms on the owner's 4070 — the frames
+        /// are GPU-bound, so presents/s x window area is the whole bill).
+        ///
+        /// CONTRACT for QML: tick ONLY off this edge (a Connections on
+        /// QbzShell with `onPulseMsChanged`), and a handler that writes no
+        /// property costs no frame — the notify alone never schedules a
+        /// repaint, so an idle shell stays at zero presents. Never introduce
+        /// a component-local Timer/NumberAnimation/FrameAnimation for a
+        /// continuous animation; that is the exact regression this pulse
+        /// replaced.
+        ///
+        /// The value is a wrapping millisecond counter (24 h wrap) whose
+        /// absolute value means nothing — consumers accumulate their own
+        /// local tick on the edge, so a component can freeze/reset its pose
+        /// without touching the shared clock. The thread runs unconditionally
+        /// (unlike the viz drain, which owns its enable bit): ~30 event-loop
+        /// wakeups a second with zero frames when nothing animates, because
+        /// Rust cannot see QML mount state and a gate it cannot see would be
+        /// a lie.
+        #[qproperty(i32, pulse_ms)]
         #[qproperty(f32, ambient_surface_alpha)]
         #[qproperty(f32, ambient_bar_alpha)]
 
@@ -487,8 +534,8 @@ pub mod qbz_shell {
         fn toggle_system_title_bar(self: Pin<&mut QbzShell>);
 
         /// App-menu ambient toggle: flip the persisted `app_background` pref
-        /// off <-> "ambient" and apply LIVE (pure QML layering — no restart,
-        /// unlike the titlebar).
+        /// off <-> the last picked mode ("ambient" or "blurred") and apply
+        /// LIVE (pure QML layering — no restart, unlike the titlebar).
         #[qinvokable]
         fn toggle_ambient_background(self: Pin<&mut QbzShell>);
 
@@ -638,6 +685,10 @@ pub struct QbzShellRust {
     ambient_secondary: QString,
     ambient_accent: QString,
     ambient_dim: f32,
+    ambient_scale: f32,
+    viz_tick_ms: i32,
+    pane_layer: bool,
+    pulse_ms: i32,
     ambient_surface_alpha: f32,
     ambient_bar_alpha: f32,
     force_canvas_art: bool,
@@ -727,6 +778,10 @@ impl Default for QbzShellRust {
             ambient_secondary: QString::from("#9632ff"),
             ambient_accent: QString::from("#3fd9c8"),
             ambient_dim: crate::settings_qt::ambient_dim(),
+            ambient_scale: crate::settings_qt::ambient_scale(),
+            viz_tick_ms: crate::settings_qt::viz_tick_ms(),
+            pane_layer: crate::settings_qt::pane_layer(),
+            pulse_ms: 0,
             ambient_surface_alpha: crate::settings_qt::ambient_surface_alpha(),
             ambient_bar_alpha: crate::settings_qt::ambient_bar_alpha(),
             // Read here, not in boot(): the first QML access to this singleton
@@ -818,6 +873,35 @@ pub(crate) fn ui(f: impl FnOnce(Pin<&mut QbzShell>) + Send + 'static) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// The shell repaint pulse (2026-08-13 single-clock redesign)
+// ---------------------------------------------------------------------------
+
+/// 24 h wrap for the pulse counter. Consumers only use the notify EDGE (they
+/// accumulate their own local tick), so the wrap is invisible; it exists to
+/// keep the counter an i32 forever.
+const PULSE_WRAP_MS: i32 = 86_400_000;
+
+/// Spawn the one shared repaint clock. Started from `boot()` (the first boot
+/// only — a duplicate registration warns and skips), ticks every
+/// `settings_qt::shell_pulse_ms()`, and hops to the Qt loop to bump
+/// `pulse_ms`. Runs unconditionally: a bump no QML handler reacts to costs an
+/// event-loop wakeup and no frame (see the qproperty contract).
+fn start_shell_pulse() {
+    let period = crate::settings_qt::shell_pulse_ms();
+    std::thread::Builder::new()
+        .name("qbz-qt-shell-pulse".to_string())
+        .spawn(move || {
+            let mut tick: i32 = 0;
+            loop {
+                std::thread::sleep(std::time::Duration::from_millis(period as u64));
+                tick = (tick + period) % PULSE_WRAP_MS;
+                ui(move |mut shell| shell.as_mut().set_pulse_ms(tick));
+            }
+        })
+        .expect("spawn shell pulse thread");
+}
+
 /// Rust-side mirror of the `queue_open` property — `toggle_queue` below is
 /// the ONLY writer (the NPB button and the queue panel's close both call it;
 /// QML never writes the property directly). Read by the hotkeys §1.2 Escape
@@ -853,6 +937,8 @@ impl qbz_shell::QbzShell {
     pub fn boot(self: Pin<&mut Self>) {
         if QT_THREAD.set(self.qt_thread()).is_err() {
             log::warn!("[qbz-qt] shell Qt thread already registered");
+        } else {
+            start_shell_pulse();
         }
     }
 

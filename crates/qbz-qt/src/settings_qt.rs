@@ -484,9 +484,10 @@ pub fn wc_on_left() -> bool {
 // "ambient"). Same additive key patch.
 // ---------------------------------------------------------------------------
 
-/// Mode index, ui_prefs.rs `app_background_index` semantics, except the POC
-/// has no blurred-art route: 0 = off, 1 = on (ambient look) for BOTH
-/// "ambient" and "blurred" (see ambient_qt.rs POC-NOTE).
+/// Mode index, ui_prefs.rs `app_background_index` semantics, 1:1 with the
+/// Slint: 0 = Off, 1 = Ambient (the album-triad metaball field), 2 = Blurred
+/// art (the ImmersiveAtmosphere blurred-cover look). The two are DIFFERENT
+/// looks and each has its own layer in AppShell.qml — an unknown key is Off.
 pub fn app_background_mode() -> i32 {
     let Some(path) = prefs_path() else {
         return 0;
@@ -499,7 +500,10 @@ pub fn app_background_mode() -> i32 {
                 .and_then(|q| q.as_str().map(str::to_string))
         })
         .unwrap_or_else(|| "off".to_string());
-    if key == "off" { 0 } else { 1 }
+    APP_BACKGROUND_VALUES
+        .iter()
+        .position(|v| *v == key)
+        .unwrap_or(0) as i32
 }
 
 /// Live-tuning knobs (Slint AppearanceState defaults; the QBZ_BG_* envs are
@@ -509,6 +513,82 @@ pub fn ambient_dim() -> f32 {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(0.35)
+}
+/// RETIRED 2026-08-13 (single-pulse redesign): VizSettle no longer owns a
+/// driver timer — every whole-window animator ticks off the shared shell
+/// pulse (`shell_pulse_ms` below / `QbzShell.pulseMs`). This knob still feeds
+/// the `vizTickMs` qproperty, which nothing reads anymore; it stays only
+/// because deleting a qproperty churns the bridge for no gain.
+///
+/// Was: VizSettle's interpolation tick in ms, QBZ_VIZ_TICK (default 16).
+/// This was the single biggest GPU lever in the shell and it was NOT about
+/// the spectrum: Qt Quick has no dirty-region rendering, so every tick of
+/// that timer redrew the WHOLE window. Measured on the owner's 4070 at
+/// half-screen with the Large band up — band alone 45-69%, band + ambient
+/// 76-82%, ambient alone 36%. The band was the dominant term because it set
+/// the redraw RATE, and the ambient is expensive because it turns the whole
+/// scene into an all-alpha stack that then gets redrawn at that rate.
+pub fn viz_tick_ms() -> i32 {
+    std::env::var("QBZ_VIZ_TICK")
+        .ok()
+        .and_then(|v| v.parse::<i32>().ok())
+        .map(|v| v.clamp(8, 100))
+        .unwrap_or(16)
+}
+
+/// The shell repaint pulse period in ms, QBZ_PULSE_MS (default 33).
+///
+/// THE single-clock knob of the 2026-08-13 redesign: one Rust thread hops to
+/// the Qt loop every `period` and bumps `QbzShell.pulseMs`, and every
+/// continuous animator (the ambient background drift, VizSettle's frame
+/// application) ticks off that ONE notify edge, so all of them dirty the
+/// scene in the same event-loop turn and the window presents ONCE per
+/// period — not once per animator. Qt Quick has no dirty-region rendering,
+/// so presents/s IS the shell's GPU term; two unsynchronised ~30 Hz clocks
+/// measured ~62 presents/s and 93-97% GPU on the owner's 4070.
+///
+/// 33 ms matches the FFT producer's TARGET_FPS = 30 (qbz-audio
+/// visualizer/mod.rs:32): one pulse per published frame, so no published
+/// frame is ever skipped and none is rendered twice. Clamped to [10, 200] —
+/// below 10 ms you are paying presents the data cannot fill, above 200 ms
+/// the motion reads as broken, not calm.
+pub fn shell_pulse_ms() -> i32 {
+    std::env::var("QBZ_PULSE_MS")
+        .ok()
+        .and_then(|v| v.parse::<i32>().ok())
+        .map(|v| v.clamp(10, 200))
+        .unwrap_or(33)
+}
+
+/// Cache the content pane in a texture layer, QBZ_PANE_LAYER (default off).
+///
+/// `layer.enabled` collapses the pane's whole subtree into ONE textured quad,
+/// re-rendered only when something inside it changes. With the dynamic
+/// background up every element in there is alpha-blended and unbatchable, so a
+/// static track list currently costs its full draw list on every one of those
+/// whole-window redraws. Off by default because it trades an FBO the size of
+/// the pane, and because a SCROLLING list invalidates it every frame — it is
+/// here to be measured, not assumed.
+pub fn pane_layer() -> bool {
+    matches!(std::env::var("QBZ_PANE_LAYER").as_deref(), Ok("1") | Ok("true"))
+}
+
+/// Offscreen render-target multiplier for the ambient field, QBZ_BG_SCALE.
+///
+/// RETIRED 2026-08-13: the field renders INLINE now (no FBO to size), and the
+/// knob was measured to be a non-lever anyway (0.5 moved the GPU ~5 points in
+/// mode 1 — the per-present cost, not the fragment cost, dominates). The
+/// qproperty stays to avoid bridge churn; nothing reads it.
+///
+/// Was: 1.0 = the reference's own sizing, clamped to [0.2, 1.0] — below 0.2
+/// the metaball lobes started to band on the upscale, above 1.0 there was
+/// nothing to gain.
+pub fn ambient_scale() -> f32 {
+    std::env::var("QBZ_BG_SCALE")
+        .ok()
+        .and_then(|v| v.parse::<f32>().ok())
+        .map(|v| v.clamp(0.2, 1.0))
+        .unwrap_or(1.0)
 }
 pub fn ambient_surface_alpha() -> f32 {
     std::env::var("QBZ_BG_SURFACE_ALPHA")
@@ -523,24 +603,53 @@ pub fn ambient_bar_alpha() -> f32 {
         .unwrap_or(0.3)
 }
 
-/// Flip + persist off <-> "ambient" (the owner's mode; "blurred" is not a
-/// POC route). Returns the new mode index (0/1).
+/// Flip + persist the app-wide background off <-> on. Returns the new mode
+/// index (0 = off, 1 = ambient, 2 = blurred art).
+///
+/// Turning it back ON restores the mode the user had PICKED in Appearance,
+/// not a hardcoded "ambient": now that "Blurred art" is a distinct look, a
+/// menu toggle that silently rewrote it to the metaball field would be a
+/// setting the app changes behind the user's back. The previous mode rides
+/// the additive `app_background_last` key (same one-document patch style as
+/// every other pref here); absent or unusable, it falls back to "ambient".
 ///
 /// Same one-document rule as `toggle_system_title_bar`: the current key is
 /// read inside the write closure, so a torn read can no longer make the app
 /// commit "ambient" over a user who had just turned it off (or the reverse).
 pub fn toggle_ambient_background() -> i32 {
     edit_prefs(|doc| {
-        let was_off = doc
+        let current = doc
             .get("app_background")
             .and_then(|q| q.as_str())
             .unwrap_or("off")
-            == "off";
-        doc.insert(
-            "app_background".to_string(),
-            serde_json::Value::String(if was_off { "ambient" } else { "off" }.to_string()),
-        );
-        (true, if was_off { 1 } else { 0 })
+            .to_string();
+        if current == "off" {
+            let restored = doc
+                .get("app_background_last")
+                .and_then(|q| q.as_str())
+                .filter(|v| *v != "off" && APP_BACKGROUND_VALUES.contains(v))
+                .unwrap_or("ambient")
+                .to_string();
+            let index = APP_BACKGROUND_VALUES
+                .iter()
+                .position(|v| *v == restored)
+                .unwrap_or(1) as i32;
+            doc.insert(
+                "app_background".to_string(),
+                serde_json::Value::String(restored),
+            );
+            (true, index)
+        } else {
+            doc.insert(
+                "app_background_last".to_string(),
+                serde_json::Value::String(current),
+            );
+            doc.insert(
+                "app_background".to_string(),
+                serde_json::Value::String("off".to_string()),
+            );
+            (true, 0)
+        }
     })
     .unwrap_or_else(|| {
         let current = app_background_mode();
@@ -2285,8 +2394,9 @@ pub async fn settings_select(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &st
                 return;
             };
             save_pref("app_background", serde_json::json!(mode));
-            // Live (pure QML layering; blurred renders AS ambient in the POC).
-            let ambient = if *mode == "off" { 0 } else { 1 };
+            // Live (pure QML layering — AppShell mounts AmbientField for 1 and
+            // ImmersiveAtmosphere for 2, exactly like AppShell.slint:213-231).
+            let ambient = index as i32;
             crate::shell_bridge::ui(move |mut b| b.as_mut().set_ambient_mode(ambient));
         }
         "language" => {
