@@ -9,19 +9,22 @@
 // 0 / 0.25 / 0.125 / 0.375 (the Svelte animation-delays 0.0/0.2/0.1/0.3 of
 // the 0.8s period, as fractions).
 //
-// The Slint loop is pull-based off animation-tick(); the Qt twin is ONE
-// 800ms linear NumberAnimation on `t` (0->1), so the whole equalizer is a
-// single animation node. The wave is the Slint formula verbatim:
+// The Slint loop is pull-based off animation-tick(); the Qt twin accumulates
+// `t` on the shared shell pulse (see the note at the property), so the whole
+// equalizer ticks at the shell's 30 Hz instead of the display rate. The wave
+// is the Slint formula verbatim:
 //   0.3 + 0.7 * (0.5 - 0.5*cos((t+phase mod 1) * 2π))
-// (Svelte keyframes 0/100% -> 0.3, 50% -> 1.0). The loop runs only while
-// the item is visible — every mount site gates visibility on npPlaying
-// (ImmersiveTrackInfo.slint:85,:100), so a paused player animates nothing.
+// (Svelte keyframes 0/100% -> 0.3, 50% -> 1.0). The loop runs only while the
+// item is visible AND the immersive is open — every mount site gates
+// visibility on npPlaying (ImmersiveTrackInfo.slint:85,:100), so a paused
+// player animates nothing.
 // Reduce-motion: the seam EXISTS now — `QbzShell.reduceMotion`, built by the
 // cortinilla-parity contract (§5.g). This surface is simply not a consumer
 // yet; wiring it is a one-liner (throttle the tick when it is true) and its
 // own change, not a side effect of someone else's commit.
 
 import QtQuick
+import com.blitzfc.qbz
 
 Item {
     id: root
@@ -34,14 +37,32 @@ Item {
     implicitWidth: 18
     implicitHeight: 14
 
-    // Loop phase 0..1, 800ms (ImmersiveTrackInfo.slint:32).
+    // Loop phase 0..1, 800ms (ImmersiveTrackInfo.slint:32). Advanced on the
+    // SHELL PULSE (QbzShell.pulseMs), not a NumberAnimation: an 800ms
+    // infinite animation is serviced by the animation driver at DISPLAY rate
+    // (180 Hz on the owner's panel) and every update is a whole-window
+    // present. The wave's period is 800 ms, so the 30 Hz pulse samples it
+    // ~24 times per loop — indistinguishable. Riding the pulse also means
+    // ZERO extra presents: the bars move in the same frame as everything
+    // else the pulse moves.
+    //
+    // The `active` gate belongs to the HOST, because this component mounts
+    // in always-alive-but-invisible trees (the immersive overlay) where a
+    // local `visible` check alone keeps ticking with the overlay closed —
+    // and invisible geometry changes still dirty the whole window (the
+    // 2026-08-13 SpectrumPanel finding). ImmersiveTrackMeta passes
+    // `QbzImmersive.open`; the track row passes its playing-row predicate.
+    // `_tickMs` must match settings_qt::shell_pulse_ms (default 33) — a
+    // mismatch only mis-speeds the loop, never the present rate.
+    property bool active: true
     property real t: 0
-    NumberAnimation on t {
-        from: 0
-        to: 1
-        duration: 800
-        loops: Animation.Infinite
-        running: root.visible
+    readonly property int _tickMs: 33
+    Connections {
+        target: QbzShell
+        function onPulseMsChanged() {
+            if (root.active && root.visible)
+                root.t = (root.t + root._tickMs / 800.0) % 1.0
+        }
     }
 
     // Slint wave() verbatim (:34-36).

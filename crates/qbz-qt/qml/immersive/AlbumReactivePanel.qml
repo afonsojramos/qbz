@@ -13,10 +13,12 @@
 // player clearance(132) — keep it in sync with the paddings below (:106-112).
 //
 // FFT CONSUMPTION (trap 6): energy arrives through ONE VizSettle on
-// QbzViz.energy — NEVER a Repeater.model on a QbzViz list. The visual
-// settle is then reproduced by the 100ms eases on width/height/opacity/blur
-// (:138-139,:160), exactly as the Slint panel reproduces the Svelte EMA with
-// its 100ms `animate`s.
+// QbzViz.energy — NEVER a Repeater.model on a QbzViz list. The scalars apply
+// DIRECTLY at the pulse rate: the 100ms eases the Slint panel uses to
+// reproduce the Svelte EMA (:138-139,:160) were dropped 2026-08-13 — a
+// Behavior retriggered at 30 Hz animates at display rate, and every
+// animation frame is a whole-window present (measured: 132 presents/s, 83%
+// GPU, immersive open). The Rust EMA already provides the smoothing.
 //
 // SPEAKER-CONE PULSE: the art grows from its CENTER via animated
 // width/height; x/y are PLAIN bindings ((parent - size)/2), NEVER animated —
@@ -51,25 +53,34 @@ Item {
         live: root.visible && QbzImmersive.open
     }
     readonly property real globalEnergy: {
-        if (QbzViz.energy.length < 5)
+        // Read the SETTLE, never QbzViz.energy: a binding that reads the
+        // bridge list re-evaluates on every 30 Hz publish — OFF the pulse —
+        // and this one feeds geometry (artScale/glow), so each publish was a
+        // whole-window present of its own (measured: the immersive ran at
+        // 57 presents/s with 1 ms-apart pairs, 2026-08-13).
+        if (energySettle.to.length < 5)
             return 0.0
         return (energySettle.at(0) + energySettle.at(1) + energySettle.at(2)
                 + energySettle.at(3) + energySettle.at(4)) / 5.0
     }
     readonly property real bassEnergy: {
-        if (QbzViz.energy.length < 2)
+        if (energySettle.to.length < 2)
             return 0.0
         return (energySettle.at(0) + energySettle.at(1)) / 2.0
     }
 
     // --- Reactive formulas (:62-66) ----------------------------------------
+    // NO 100ms Behaviors here (2026-08-13): a Behavior retriggered by 30 Hz
+    // data animates at DISPLAY rate, and every animation frame is a
+    // whole-window present — measured with the immersive open: ~132
+    // presents/s and 83% GPU, versus ~33/s when these apply directly. The
+    // Rust EMA (attack 0.7 / decay 0.65) already band-limits the stream to
+    // ~6 Hz, so the values step at the pulse rate and still read smooth.
+    // The Slint `animate 100ms` is unaffordable in Qt Quick — its ease only
+    // repaints the rect; ours presents the window.
     readonly property real artScale: 1.0 + root.globalEnergy * 0.25
-    // NOT readonly: the 100ms Behavior below must attach (a Behavior on a
-    // readonly property is a load-time "Invalid property assignment").
     property real glowSpread: 15.0 + root.bassEnergy * 200.0
-    Behavior on glowSpread { NumberAnimation { duration: 100; easing.type: Easing.OutQuad } }
     property real glowOpacity: Math.min(0.1 + root.globalEnergy * 1.5, 1.0)
-    Behavior on glowOpacity { NumberAnimation { duration: 100; easing.type: Easing.OutQuad } }
 
     // --- Base art box (:84-92) ---------------------------------------------
     // Native source resolution — cap the RESTING art so the cover is never
@@ -113,6 +124,11 @@ Item {
                 height: root.baseArt * 1.25
 
                 // Static black art shadow 32/#00000080/8 (:157-159).
+                // NO 100ms width/height Behaviors (2026-08-13) — a Behavior
+                // retriggered by 30 Hz data animates at display rate, and
+                // each animation frame is a whole-window present. The art
+                // pulse steps at the pulse rate; see the note by the
+                // reactive formulas above.
                 Rectangle {
                     width: root.artSize
                     height: root.artSize
@@ -126,13 +142,12 @@ Item {
                         blurMax: 32
                         blur: 1.0
                     }
-                    Behavior on width { NumberAnimation { duration: 100; easing.type: Easing.OutQuad } }
-                    Behavior on height { NumberAnimation { duration: 100; easing.type: Easing.OutQuad } }
                 }
 
                 // Glow halo (:123-140): same size/position as the art, glow
                 // color + reactive opacity, blurred. x/y NOT animated (see
-                // the header's speaker-cone note).
+                // the header's speaker-cone note). No size Behaviors either
+                // (see the reactive-formulas note).
                 Rectangle {
                     width: root.artSize
                     height: root.artSize
@@ -147,19 +162,16 @@ Item {
                         blurMax: 64
                         blur: Math.min(1, root.glowSpread / 64)
                     }
-                    Behavior on width { NumberAnimation { duration: 100; easing.type: Easing.OutQuad } }
-                    Behavior on height { NumberAnimation { duration: 100; easing.type: Easing.OutQuad } }
                 }
 
-                // Artwork (:147-170). Grows from center via animated
-                // width/height; x/y plain bindings (lockstep, zero drift).
+                // Artwork (:147-170). Grows from center via width/height
+                // bindings applied at the pulse rate; x/y plain bindings
+                // (lockstep, zero drift). No Behaviors (see above).
                 Item {
                     width: root.artSize
                     height: root.artSize
                     x: (parent.width - width) / 2
                     y: (parent.height - height) / 2
-                    Behavior on width { NumberAnimation { duration: 100; easing.type: Easing.OutQuad } }
-                    Behavior on height { NumberAnimation { duration: 100; easing.type: Easing.OutQuad } }
                     RoundedImage {
                         anchors.fill: parent
                         radius: 8

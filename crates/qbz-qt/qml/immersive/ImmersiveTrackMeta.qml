@@ -43,6 +43,9 @@ Column {
             height: 14
             EqualizerBars {
                 tint: root.equalizerTint
+                // The gate lives at the mount (EqualizerBars.qml explains
+                // why): this host sits inside the always-mounted ImmersiveView.
+                active: QbzImmersive.open
                 anchors.verticalCenter: parent.verticalCenter
             }
             Text {

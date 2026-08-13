@@ -8,11 +8,14 @@
 // the same `qbz_lyrics::sync` pure functions, over the same Rust-held parsed
 // document, so native Qobuz wsync word stamps drive the fill).
 //
-// Cadence is ADAPTIVE, 1:1 with the Slint engine:
-//   - ACTIVE 33ms (~30Hz) while the gate is open (surface shown + doc synced
-//     + ready + effectively playing);
-//   - IDLE 250ms otherwise — the tick then only re-checks the gate.
-// Every tick recomputes from the ABSOLUTE position, which makes seeks
+// Cadence is ADAPTIVE:
+//   - ACTIVE: the shell pulse (QbzShell.pulseMs, ~30 Hz) while the gate is
+//     open and playback runs — NOT a private 33 ms Timer: a second 33 ms
+//     clock beats against the pulse and doubles the present rate (measured
+//     with the immersive open, 2026-08-13: 57 presents/s with 1 ms-apart
+//     pairs = the pulse and this timer landing back-to-back).
+//   - IDLE 250ms Timer otherwise — the tick then only re-checks the gate.
+// Every pass recomputes from the ABSOLUTE position, which makes seeks
 // inherently safe: `fillAnimMs` is zeroed across discontinuities (line change
 // or backward move) so the fill first-paints exactly at the reported
 // progress, and smoothed (45ms, just above the tick) while continuous.
@@ -50,11 +53,22 @@ Item {
     width: 0
     height: 0
 
+    // The ACTIVE cadence rides the shared pulse — one frame per period for
+    // the whole shell, lyrics fill included.
+    Connections {
+        target: QbzShell
+        function onPulseMsChanged() {
+            if (engine.gateOpen && engine._fast)
+                engine.pump(true)
+        }
+    }
+    // The IDLE cadence keeps its own slow timer: with nothing playing it
+    // only re-checks the gate, and 4/s of no-write ticks cost no frames.
     Timer {
         id: tick
-        interval: engine._fast ? 33 : 250
+        interval: 250
         repeat: true
-        running: engine.gateOpen
+        running: engine.gateOpen && !engine._fast
         onTriggered: engine.pump(true)
     }
 
