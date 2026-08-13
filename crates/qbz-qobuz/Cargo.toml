@@ -29,6 +29,7 @@ chrono = { workspace = true }
 
 # Filesystem (bundle-token cache location)
 dirs = "6"
+tempfile = "3"
 
 # Regex
 regex = { workspace = true }

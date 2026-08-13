@@ -6,8 +6,10 @@
 use regex::Regex;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+use tempfile::Builder;
 
 use super::error::{ApiError, Result};
 
@@ -60,6 +62,28 @@ fn cache_path(cache_dir: Option<&Path>) -> Option<PathBuf> {
     Some(root.join("qbz").join("bundle_tokens.json"))
 }
 
+fn atomic_write_with(
+    path: &Path,
+    write: impl FnOnce(&mut std::fs::File) -> io::Result<()>,
+) -> io::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "cache path has no parent"))?;
+    std::fs::create_dir_all(parent)?;
+
+    let mut temp = Builder::new()
+        .prefix(".bundle_tokens.")
+        .tempfile_in(parent)?;
+    write(temp.as_file_mut())?;
+    temp.as_file().sync_all()?;
+    temp.persist(path).map_err(|error| error.error)?;
+    Ok(())
+}
+
+fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    atomic_write_with(path, |file| file.write_all(bytes))
+}
+
 /// Load cached tokens if a valid cache file exists. Returns `None` on any error
 /// (missing file, malformed JSON, empty fields) so the caller falls back to a
 /// live fetch.
@@ -88,11 +112,8 @@ fn save_cached_bundle(c: &CachedBundle, cache_dir: Option<&Path>) {
         log::warn!("[Bundle] No cache dir available, skipping token cache write");
         return;
     };
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
     match serde_json::to_vec_pretty(c) {
-        Ok(bytes) => match std::fs::write(&path, bytes) {
+        Ok(bytes) => match atomic_write(&path, &bytes) {
             Ok(_) => log::info!("[Bundle] Cached tokens (version {})", c.bundle_version),
             Err(e) => log::warn!("[Bundle] Failed to write token cache: {}", e),
         },
@@ -443,5 +464,39 @@ mod tests {
             cache_path(Some(root)),
             Some(root.join("qbz").join("bundle_tokens.json"))
         );
+    }
+
+    #[test]
+    fn interrupted_cache_write_preserves_the_previous_file() {
+        let root = tempfile::tempdir().expect("cache root");
+        let path = root.path().join("qbz").join("bundle_tokens.json");
+        atomic_write(&path, b"previous cache").expect("initial cache write");
+
+        let result = atomic_write_with(&path, |file| {
+            file.write_all(b"partial replacement")?;
+            Err(io::Error::other("simulated interruption"))
+        });
+
+        assert!(result.is_err());
+        assert_eq!(
+            std::fs::read(&path).expect("previous cache remains readable"),
+            b"previous cache"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cache_file_is_owner_readable_and_writable_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().expect("cache root");
+        let path = root.path().join("qbz").join("bundle_tokens.json");
+        atomic_write(&path, b"cache").expect("cache write");
+
+        let mode = std::fs::metadata(path)
+            .expect("cache metadata")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
     }
 }
