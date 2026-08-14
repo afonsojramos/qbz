@@ -45,6 +45,21 @@ Rectangle {
     /// Horizontal inset. 32 = the .slint's own padding for a full-bleed
     /// mount; a host that already pads its column passes 0.
     property real padH: 32
+    /// Top-corner rounding, for a host that PINS this bar to y=0 of the
+    /// content pane.
+    ///
+    /// A full-bleed child sitting at the pane's top-left/right has to round
+    /// ITSELF: Qt's `clip` is a rectangular scissor that ignores `radius`, and
+    /// AppShell hides its bezel nubs while the dynamic background shows through
+    /// the corners — so the pane's own rounding cannot reach a child. Square
+    /// corners then poke out past the bezel, which is exactly what the owner
+    /// caught in Discover (`DiscoverBrowseView.qml:103`) and again here once
+    /// this bar became sticky.
+    ///
+    /// The host must drive it from the PINNED state, not set it once: rounded
+    /// corners in mid-page, where the bar is surrounded by content on all
+    /// sides, are a notch out of the strip with nothing behind them.
+    property real topRadius: 0
 
     signal tabClicked(string id)
     signal searchEdited(string text)
@@ -54,6 +69,8 @@ Rectangle {
 
     height: 44
     color: root.barBg
+    topLeftRadius: root.topRadius
+    topRightRadius: root.topRadius
 
     Rectangle {
         x: 0

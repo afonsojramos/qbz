@@ -1849,7 +1849,10 @@ Rectangle {
             // .slint:147 `atmo-height: page.y + body-row.y` — the band ends
             // exactly where the body begins, i.e. at the JUMP TO strip, so a
             // long bio pushes the fade down with no manual tuning.
-            height: page.y + jumpBar.y
+            // `jumpSlot`, not `jumpBar`: the bar is a pinned overlay now and
+            // its y is the CLAMPED viewport position, which would freeze this
+            // band's height the moment the bar stuck.
+            height: page.y + jumpSlot.y
             tint: artist.headerColor || ""
             // Route A: the blurred field. Empty until the cover resolves, and the
             // flat tint stands in meanwhile (HeaderGradient handles the swap).
@@ -2162,21 +2165,15 @@ Rectangle {
             // pads 32 — the .slint's own 32px padding lands the strip in the
             // same place.
             // POC-NOTE (unchanged): the bar scrolls with the page; the
-            // .slint's sticky clamp (:1120-1126) is not ported.
-            QbzJumpNavBar {
-                id: jumpBar
+            // The bar itself is an OVERLAY outside this Flickable (see
+            // `jumpBar` after it) so it can pin to the top on scroll. What
+            // stays in the flow is this slot, which reserves exactly its
+            // height: without it the body would jump up by the bar's height
+            // the moment the bar was lifted out.
+            Item {
+                id: jumpSlot
                 width: parent.width - 64
-                padH: 0
-                // surface-main @ bar-alpha (0.3) under the dynamic
-                // background, NOT transparent: the sticky bar overlays the
-                // page content it scrolls over, so it needs SOME fill to
-                // stay readable — the reference gives thin bars their own
-                // lighter tier for exactly that (ArtistPageView.slint:1108).
-                barBg: root.ambientOn ? theme.surfaceMainA30 : theme.surfaceMain
-                tabs: root.jumpTabs
-                activeTabId: root.activeJumpTab
-                onTabClicked: function (id) { root.scrollToSection(id) }
-                onSearchEdited: function (text) { root.searchQuery = text }
+                height: jumpBar.height
             }
 
             // --- Primary placeholder --------------------------------------
@@ -2674,6 +2671,51 @@ Rectangle {
     // The port ran it top-to-bottom of the whole view, which put the panel
     // alongside the header and made it read as app chrome instead of a page
     // panel.
+    // --- STICKY JUMP TO bar (ArtistPageView.slint:1113-1126) ---------------
+    //
+    // An OVERLAY over the Flickable, not a row inside it, and that is the only
+    // way it can pin: an item in the content column scrolls with the content by
+    // definition. `jumpSlot` above holds its place in the flow so nothing jumps
+    // when it lifts out.
+    //
+    // The clamp is the reference's, verbatim: `y = max(naturalTop, 0)` where
+    // naturalTop is the slot's VIEWPORT-relative y. The reference's own comment
+    // is worth keeping in mind — the formula must NOT add the viewport y, or
+    // the scroll is double-counted and the bar lifts ahead of the body during
+    // the transition (a visible gap plus a bar-over-header artifact mid-scroll).
+    //
+    // Full width with padH 32, where the in-flow version was `parent.width - 64`
+    // with padH 0: the Column supplied that 32px padding, and outside it the bar
+    // has to supply its own or the strip would shift left by 32 when it sticks.
+    // Net position of the tabs is unchanged. Same shape as the .slint, which
+    // also mounts it at x:0 across `root.width`.
+    QbzJumpNavBar {
+        id: jumpBar
+        x: 0
+        width: root.width
+        padH: 32
+        y: Math.max(page.y + jumpSlot.y - flick.contentY, 0)
+        // PINNED at the pane's top edge -> round the top corners, or the bar's
+        // square ones poke out past the shell's rounded bezel (the Discover
+        // full-bleed toolbar, same defect, same fix). Driven off the live y so
+        // the rounding exists ONLY while the bar is actually at the top: in
+        // mid-page it is surrounded by content and a notch there would be worse
+        // than the square corner it fixes.
+        topRadius: y <= 0 ? theme.radiusMd : 0
+        // surface-main @ bar-alpha (0.3) under the dynamic background, NOT
+        // transparent: pinned, it overlays the page content scrolling beneath
+        // it, so it needs SOME fill to stay readable — the reference gives thin
+        // bars their own lighter tier for exactly that
+        // (ArtistPageView.slint:1108). This mattered less when the bar scrolled
+        // with the page; now it is load-bearing.
+        barBg: root.ambientOn ? theme.surfaceMainA30 : theme.surfaceMain
+        tabs: root.jumpTabs
+        activeTabId: root.activeJumpTab
+        visible: root.jumpTabs.length > 0
+        onTabClicked: function (id) { root.scrollToSection(id) }
+        onSearchEdited: function (text) { root.searchQuery = text }
+    }
+
     Rectangle {
         id: netPanel
         // Viewport-relative y of the strip's bottom edge. `jumpBar.y` is
@@ -2681,7 +2723,7 @@ Rectangle {
         // viewport position — the same arithmetic the .slint does with
         // absolute-position.
         readonly property real naturalTop:
-            page.y + jumpBar.y + jumpBar.height - flick.contentY
+            page.y + jumpSlot.y + jumpSlot.height - flick.contentY
         readonly property real stickyTop: 44
 
         anchors.right: parent.right
