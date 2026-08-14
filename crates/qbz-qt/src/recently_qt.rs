@@ -61,6 +61,14 @@ pub struct RecentTrack {
     pub source: String,
 }
 
+/// One history entry by track id. The store is a short JSON list (24 rows
+/// reach the rail), so a linear scan is cheaper than any index — and this is
+/// the ONLY place that knows a non-Qobuz row's album key, which is what the
+/// Plex cache is queried by.
+pub fn find_track(id: &str) -> Option<RecentTrack> {
+    load_tracks().into_iter().find(|t| t.id == id)
+}
+
 /// One recently-played album (its own history since #567).
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct RecentAlbum {

@@ -32,6 +32,7 @@
 //! ```
 
 pub mod player;
+pub mod remote_stream;
 pub mod queue;
 
 // Re-export main types

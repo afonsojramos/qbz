@@ -1032,15 +1032,41 @@ fn flat_index_content_y(data: &CortinillaData, flat_index: i32) -> f64 {
 /// ids are in a different space from the catalog's, and a local artist row
 /// has no id at all, so a bucket keyed on them could never be matched again.
 pub fn row_clicked(flat_index: i32) {
+    // TRACED, because this router had THREE ways to do nothing without saying
+    // so — no snapshot, no matching flat index, and an unhandled kind — and the
+    // owner reported a local row whose click produced no effect AND no log
+    // line. A silent no-op is indistinguishable from a dead signal from the
+    // outside; whichever of these fires, the log now names it.
     let snap = LAST_CORT.lock().unwrap_or_else(|e| e.into_inner()).clone();
-    let Some(data) = snap else { return };
+    let Some(data) = snap else {
+        log::warn!("[qbz-qt] cortinilla click {flat_index}: NO SNAPSHOT (LAST_CORT is None)");
+        return;
+    };
     let row = data
         .top
         .iter()
         .chain(data.sections.iter().flat_map(|s| s.rows.iter()))
         .find(|r| r.flat_index == flat_index)
         .cloned();
-    let Some(row) = row else { return };
+    let Some(row) = row else {
+        let have: Vec<i32> = data
+            .top
+            .iter()
+            .chain(data.sections.iter().flat_map(|s| s.rows.iter()))
+            .map(|r| r.flat_index)
+            .collect();
+        log::warn!(
+            "[qbz-qt] cortinilla click {flat_index}: NO ROW with that flat index — \
+             snapshot holds {have:?}"
+        );
+        return;
+    };
+    log::info!(
+        "[qbz-qt] cortinilla click {flat_index}: kind={} source={} id={}",
+        row.kind,
+        row.source,
+        row.id
+    );
     set_cortinilla_open(false);
     if row.source != "local" {
         let action = if row.kind == "track" {
@@ -1057,12 +1083,31 @@ pub fn row_clicked(flat_index: i32) {
     // album that happens to share the number.
     if row.source == "local" {
         match row.kind.as_str() {
-            // The group key opens the local album view directly.
-            "album" => crate::local_bridge::open_album_by_id(row.id),
-            // BY NAME — local artists have no id (search_local.rs).
-            "artist" => crate::local_album_actions::open_artist_by_name(row.title),
+            // Through the SHARED album router, not straight to the loader.
+            // `open_album_by_id` only publishes the document — it does not
+            // navigate — so calling it alone loaded the album into a view that
+            // was never shown: the click did nothing and logged nothing
+            // (owner report, 2026-08-13, on `plex:4868...`). `crate::open_album`
+            // is the one place that pairs the load with `nav_qt::record` +
+            // `set_current_view`, and its `is_local_feed_id` arm already
+            // recognises both `plex:` keys and path-shaped local group keys.
+            "album" => crate::open_album(row.id),
+            // BY NAME — local artists have no id (search_local.rs). Same shape
+            // as the album row: `open_artist_by_name` only parks the name in
+            // `local_pending_artist` for the Artists tab to consume, so the
+            // view has to be brought up for anything to consume it.
+            "artist" => {
+                crate::nav_qt::record("local");
+                crate::shell_bridge::ui(|mut b| {
+                    b.as_mut()
+                        .set_current_view(QString::from("local"))
+                });
+                crate::local_album_actions::open_artist_by_name(row.title);
+            }
             "track" => play_local_row(&row.id),
-            _ => {}
+            other => log::warn!(
+                "[qbz-qt] cortinilla click: local row kind {other:?} has no route — nothing done"
+            ),
         }
         return;
     }

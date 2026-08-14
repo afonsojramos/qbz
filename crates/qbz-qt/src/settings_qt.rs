@@ -1685,6 +1685,12 @@ fn backend_label(t: AudioBackendType) -> String {
 pub async fn publish_snapshot() {
     let audio_settings = audio_settings();
     let prefs = with_playback(|s| s.get_preferences()).unwrap_or_default();
+    // Re-seed the persistence gates from what we just read. `init_for_user`
+    // seeds them at login and the two toggles push them live, so this only
+    // matters when the prefs changed OUTSIDE this process — the Slint build
+    // writes the same per-user DB. Cheap, and it makes the gates self-healing
+    // instead of trusting that nothing else ever touches the file.
+    qbz_app::session_persist::set_gates(prefs.persist_session, prefs.resume_playback_position);
     let streaming_key = streaming_quality();
 
     // The now-playing stamp's two output LEDs are a pure function of the
@@ -2062,10 +2068,17 @@ pub async fn settings_bool(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &str,
             r
         }
         "persist-session" => {
-            with_playback(|s| s.set_persist_session(value)).map(|_| Apply::None)
+            // Push the LIVE gate too, not just the stored bool: capture/restore
+            // read the gate, so persisting alone left the toggle inert until a
+            // restart — the "renders, persists, drives nothing" class again.
+            let r = with_playback(|s| s.set_persist_session(value)).map(|_| Apply::None);
+            qbz_app::session_persist::set_persist_gate(value);
+            r
         }
         "resume-position" => {
-            with_playback(|s| s.set_resume_playback_position(value)).map(|_| Apply::None)
+            let r = with_playback(|s| s.set_resume_playback_position(value)).map(|_| Apply::None);
+            qbz_app::session_persist::set_resume_gate(value);
+            r
         }
         // --- Appearance (phase 19): plain ui_prefs bools (+ live bridge
         // side-effects where the POC already has the consumer).

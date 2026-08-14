@@ -156,6 +156,11 @@ where
         // Plex settings live per-user (plex_settings.db); bind the store to
         // this session so the first Local Library read does not have to.
         crate::local_plex::init_for_user(&dir);
+        // Session persistence (queue + current track + position). The store is
+        // per-user (`session.db`) and the gates are seeded from this user's
+        // playback prefs inside init_for_user, so it works before Settings has
+        // published anything.
+        qbz_app::session_persist::init_for_user(&dir);
         // Phase 5: local-favorites store (Library show-local + hearts).
         crate::library_qt::init_local_favorites(&dir);
         // Qobuz favourite-id cache (favorites_cache.db, shared with the Slint
@@ -298,6 +303,8 @@ where
                 // store to this session so the first Local Library read does
                 // not have to.
                 crate::local_plex::init_for_user(&dir);
+                // Session persistence — see the fresh-login path.
+                qbz_app::session_persist::init_for_user(&dir);
                 crate::library_qt::init_local_favorites(&dir);
                 // Qobuz favourite-id cache — see the fresh-login path.
                 crate::fav_cache_qt::init_for_user(&dir);
@@ -372,6 +379,11 @@ where
         // Plex settings live per-user (plex_settings.db); bind the store to
         // this session so the first Local Library read does not have to.
         crate::local_plex::init_for_user(&dir);
+        // Session persistence (queue + current track + position). The store is
+        // per-user (`session.db`) and the gates are seeded from this user's
+        // playback prefs inside init_for_user, so it works before Settings has
+        // published anything.
+        qbz_app::session_persist::init_for_user(&dir);
         // Phase 5: local-favorites store (Library show-local + hearts).
         crate::library_qt::init_local_favorites(&dir);
         // Qobuz favourite-id cache. The disk seed is the ONLY source offline

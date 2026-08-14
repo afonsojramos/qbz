@@ -200,6 +200,12 @@ pub mod qbz_player {
         /// Track-row click (Library): play the track as a 1-element queue.
         #[qinvokable]
         fn play_track(self: Pin<&mut QbzPlayer>, track_id: QString);
+        /// Play one track KNOWING where the row came from ("qobuz" | "local" |
+        /// "plex"; empty = qobuz). Use this from any rail whose rows can be
+        /// non-Qobuz — `play_track` alone only has an id, and an id is not
+        /// enough to tell a library rowid from a Qobuz track id.
+        #[qinvokable]
+        fn play_track_from(self: Pin<&mut QbzPlayer>, track_id: QString, source: QString);
         /// Library track context menus: Play next ("next") / Play later
         /// ("later") / Add to queue ("queue") on a single feed track.
         #[qinvokable]
@@ -447,6 +453,12 @@ impl qbz_player::QbzPlayer {
     pub fn play_track(self: Pin<&mut Self>, track_id: QString) {
         if let Ok(id) = track_id.to_string().parse::<u64>() {
             crate::play_track(id);
+        }
+    }
+
+    pub fn play_track_from(self: Pin<&mut Self>, track_id: QString, source: QString) {
+        if let Ok(id) = track_id.to_string().parse::<u64>() {
+            crate::play_track_from(id, source.to_string());
         }
     }
 

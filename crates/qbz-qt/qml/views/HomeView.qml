@@ -516,7 +516,12 @@ Rectangle {
             anchors.fill: parent
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
-            onClicked: QbzPlayer.playTrack(card.id)
+            // The row's ORIGIN goes with the id. A Recently-Played row can be a
+            // Qobuz track, a local file or a Plex row, and `playTrack` alone
+            // sends every id to the Qobuz catalog — which 404s on the other two
+            // (the owner hit it on a Plex id from this exact rail). Empty
+            // source = qobuz, which is the legacy history shape.
+            onClicked: QbzPlayer.playTrackFrom(card.id, card.source || "")
         }
     }
 

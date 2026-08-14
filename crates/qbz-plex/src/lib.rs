@@ -324,8 +324,32 @@ fn open_plex_cache_db() -> Result<Connection, String> {
     Ok(conn)
 }
 
+/// The default-timeout Plex client, built ONCE.
+///
+/// It used to be rebuilt on every call, and a fresh `reqwest::Client` is not
+/// free: new connection pool (so no keep-alive to reuse), fresh TLS handshake,
+/// and a fresh DNS resolution. On Plex that last one is the expensive part —
+/// LAN servers are addressed as `https://<ip>.<hash>.plex.direct:32400`, and
+/// `*.plex.direct` resolves through Plex's own nameservers, i.e. over the
+/// INTERNET. So every play paid an internet DNS round trip plus a TLS handshake
+/// before the first byte of a file that was sitting on the local network.
+///
+/// That is the shape the owner reported (2026-08-13): playing a Plex track took
+/// LONGER than streaming a Qobuz track from the internet, which no amount of
+/// LAN transfer time can explain — but a per-call client can, because the Qobuz
+/// path reuses one long-lived client and this one threw its away every time.
+///
+/// Cached here rather than at the call sites so every Plex entry point gets it.
+/// `build_plex_client_with_timeout` stays uncached: its callers pick a short
+/// bound on purpose (quality hydration), and those are genuinely different
+/// clients.
+static PLEX_CLIENT: std::sync::OnceLock<Result<reqwest::Client, String>> =
+    std::sync::OnceLock::new();
+
 fn build_plex_client() -> Result<reqwest::Client, String> {
-    build_plex_client_with_timeout(Duration::from_secs(120))
+    PLEX_CLIENT
+        .get_or_init(|| build_plex_client_with_timeout(Duration::from_secs(120)))
+        .clone()
 }
 
 /// Build the LAN Plex client with a caller-chosen request timeout. Quality

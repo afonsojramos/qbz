@@ -302,12 +302,90 @@ pub async fn play_plex_track(runtime: &Runtime, rating_key: String, play_id: u64
         log::error!("[qbz-qt] plex play: no Plex credentials configured");
         return false;
     }
+    // TIMED, because the shape of this delay does not match its obvious
+    // explanation. The whole-file download below is a known POC gap, but the
+    // owner measured this path taking LONGER than a Qobuz track that streams
+    // over the internet — and 58 MB over a LAN cannot do that. So before any
+    // redesign, the log says which segment actually costs: the metadata round
+    // trip, the transfer, or the handoff to the player. It also prints the base
+    // URL, because `resolve_base_url` can hand back the plex.tv RELAY instead
+    // of the LAN address, and a relayed transfer is a round trip through Plex's
+    // servers — that alone would outweigh a local download and would explain
+    // being slower than remote Qobuz.
+    let t0 = std::time::Instant::now();
+    let base = cfg.base_url.clone();
+    let is_lan = crate::local_plex::is_local_address(&base);
+
+    // PROGRESSIVE FIRST. `plex_resolve_part_url` stops at the URL and the
+    // shared feeder Range-streams the original bytes, so audio starts on the
+    // first chunk instead of after the whole FLAC is in RAM. The doc on
+    // `PlexPartLocation` states the intent outright — "~1s to first audio
+    // instead of buffering the whole FLAC into RAM first" — and it went unused
+    // here only because the feeder lived inside the Slint binary until it was
+    // moved to `qbz_player::remote_stream`.
+    //
+    // Duration comes from the queue row (the feeder needs it for its buffer
+    // maths); 0 is acceptable — it only makes the estimate conservative.
+    let duration = runtime
+        .core()
+        .current_track()
+        .await
+        .map(|t| t.duration_secs as u64)
+        .unwrap_or(0);
+    match qbz_plex::plex_resolve_part_url(base.clone(), cfg.token.clone(), rating_key.clone()).await
+    {
+        Ok(loc) => {
+            let resolved = t0.elapsed();
+            match qbz_player::remote_stream::stream_remote_track_into_player(
+                &runtime.core().player(),
+                play_id,
+                duration,
+                0,
+                &loc.part_url,
+                "PLEX",
+            )
+            .await
+            {
+                Ok(()) => {
+                    log::info!(
+                        "[qbz-qt][perf] plex play {play_id}: STREAMED — resolve {resolved:?}, \
+                         first audio {:?} — base {} ({})",
+                        t0.elapsed(),
+                        base,
+                        if is_lan { "LAN" } else { "NOT a LAN address — relayed?" },
+                    );
+                    return true;
+                }
+                // The whole-file path below stays as the fallback, exactly as
+                // the reference keeps it: a server that refuses Range, or a
+                // part that will not probe, still plays — just slowly.
+                Err(e) => log::warn!(
+                    "[qbz-qt] plex play {play_id}: streaming failed ({e}) — \
+                     falling back to whole-file download"
+                ),
+            }
+        }
+        Err(e) => log::warn!("[qbz-qt] plex play: part-url resolve failed ({e}) — full download"),
+    }
     match qbz_plex::plex_resolve_track_media(cfg.base_url, cfg.token, rating_key.clone()).await {
         Ok(media) => {
+            let fetched = t0.elapsed();
+            let bytes = media.bytes.len();
+            let t1 = std::time::Instant::now();
             if let Err(e) = runtime.core().player().play_data(media.bytes, play_id) {
                 log::error!("[qbz-qt] plex play: play_data {play_id} failed: {e}");
                 return false;
             }
+            log::info!(
+                "[qbz-qt][perf] plex play {play_id}: resolve+fetch {:?} for {} bytes \
+                 ({:.1} MB/s), play_data {:?} — base {} ({})",
+                fetched,
+                bytes,
+                (bytes as f64 / 1_048_576.0) / fetched.as_secs_f64().max(0.001),
+                t1.elapsed(),
+                base,
+                if is_lan { "LAN" } else { "NOT a LAN address — relayed?" },
+            );
             true
         }
         Err(e) => {
@@ -684,4 +762,78 @@ mod tests {
     fn missing_hint_falls_back_to_queue_id() {
         assert_eq!(plex_rating_key(None, 771), "771");
     }
+}
+
+// ---------------------------------------------------------------------------
+// Source-aware single-track play (Home's Recently-Played rail, 2026-08-13)
+// ---------------------------------------------------------------------------
+
+/// Play ONE non-Qobuz track by its queue id, resolving it through its own
+/// source. Returns false when the row cannot be resolved.
+///
+/// WHY THIS EXISTS. `playback_qt::queue_track_for` has exactly two arms — the
+/// Qobuz favourites feed, then `get_track` against the catalog — so any id that
+/// misses the feed goes to the Qobuz API. For a local or Plex id that is a
+/// guaranteed 404 (reported by the owner from Discover's Recently-Played rail:
+/// `get_track(1099511673001)` on a `PLEX_TRACK_ID_FLOOR`-namespaced id). The
+/// cortinilla has routed by source since it was written and says why in its own
+/// comment: handing a local id to the catalog "would 404 or, worse, open
+/// someone else's album that happens to share the number". This is that seam
+/// for the rails that reach playback through the generic by-id entry.
+///
+/// ROUTING IS BY THE ROW'S `source`, NEVER BY ID ARITHMETIC. `id >=
+/// PLEX_TRACK_ID_FLOOR` is only unambiguous for Plex; plain local ids are small
+/// `library.db` rowids that CAN collide with real Qobuz track ids, so a
+/// speculative `get_track()` on the local DB could play the wrong file. It is
+/// also what keeps Jellyfin/Navidrome a match arm here instead of another sweep
+/// through the tree.
+///
+/// An unresolvable row plays NOTHING and says so. Falling back to the Qobuz
+/// path would reproduce the 404 this exists to remove, and falling back to
+/// "some other track" is the failure the cortinilla explicitly refuses.
+pub async fn play_single_from_source(runtime: &Runtime, track_id: u64, source: &str) -> bool {
+    let track = match source {
+        // A library row: the DB has everything, and `local_queue_track` builds
+        // the QueueTrack the audible step expects.
+        "local" | "qobuz_download" => {
+            tokio::task::spawn_blocking(move || with_db(|db| db.get_track(track_id as i64)).flatten())
+                .await
+                .ok()
+                .flatten()
+        }
+        // A Plex row is SYNTHETIC — `local_plex::map_cached_to_local_track`
+        // mints it and it never touches library.db, so there is no row to read.
+        // The cache is queried by ALBUM, and the recently-played entry carries
+        // the album artist/title, which is exactly the key. Resolving through
+        // the real cached row is what recovers `rating_key` (the audible step
+        // needs it as `source_item_id_hint`, and it is NOT derivable from the
+        // namespaced id: the id packs the cache ROWID, the hint is a different
+        // column).
+        "plex" => {
+            let entry = crate::recently_qt::find_track(&track_id.to_string());
+            let Some(entry) = entry else {
+                log::warn!("[qbz-qt] plex play: {track_id} is not in the recently-played store");
+                return false;
+            };
+            let key = crate::local_plex::album_key_for(&entry.album_artist, &entry.album_title);
+            tokio::task::spawn_blocking(move || {
+                crate::local_plex::album_tracks(&key)
+                    .into_iter()
+                    .find(|t| t.id as u64 == track_id)
+            })
+            .await
+            .ok()
+            .flatten()
+        }
+        other => {
+            log::warn!("[qbz-qt] play: unknown source {other:?} for track {track_id}");
+            return false;
+        }
+    };
+    let Some(track) = track else {
+        log::warn!("[qbz-qt] play: {source} track {track_id} could not be resolved");
+        return false;
+    };
+    play_rows(runtime, vec![track], 0, false).await;
+    true
 }

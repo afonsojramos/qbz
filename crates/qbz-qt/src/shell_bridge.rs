@@ -721,7 +721,13 @@ impl Default for QbzShellRust {
             nav_header_compact: crate::settings_qt::nav_header_compact(),
             sidebar_playlist_collage: crate::settings_qt::sidebar_playlist_collage(),
             queue_open: false,
-            current_view: QString::from("home"),
+            // The persisted startup page (Settings > Appearance > Startup
+            // page). Resolved at CONSTRUCTION so the first mounted view is
+            // already the right one — routing after the fact would flash Home
+            // and then swap, which is worse than not restoring at all.
+            // `startup_view()` returns "home" unless the pref says "remember"
+            // AND the stored view is in the safe set.
+            current_view: QString::from(crate::nav_qt::startup_view().as_str()),
             can_back: false,
             nav_tab: QString::default(),
             nav_tab_view: QString::default(),

@@ -67,6 +67,20 @@ Row {
         anchors.verticalCenter: parent.verticalCenter
         onClicked: QbzPlayer.toggleShuffle()
     }
+    // True while the player is resolving/fetching the track that is about to
+    // play. Not gated on `npHasTrack`: the first play of a session has no
+    // track yet, and that is exactly the case that felt dead.
+    readonly property bool loading: QbzPlayer.npLoading
+    // Spin phase, advanced on the shared shell pulse (QbzShell.pulseMs).
+    property real spinPhase: 0
+    Connections {
+        target: QbzShell
+        function onPulseMsChanged() {
+            if (tc.loading)
+                tc.spinPhase = (tc.spinPhase + 0.42) % 6.283185
+        }
+    }
+
     QbzIconButton {
         name: "skip-back"
         btnEnabled: QbzPlayer.npHasTrack
@@ -83,12 +97,47 @@ Row {
             ? (playArea.containsMouse && QbzPlayer.npHasTrack ? theme.accentHover : theme.accent)
             : ((playArea.containsMouse && QbzPlayer.npHasTrack) ? theme.surfaceHover : "transparent")
         QbzIcon {
+            // Hidden while loading — the ring below stands in for it, so the
+            // button never shows a play glyph for a track that is still being
+            // fetched.
+            visible: !tc.loading
             name: QbzPlayer.npPlaying ? "pause" : "play-fill"
             width: 20
             height: 20
             anchors.centerIn: parent
             tintName: tc.playCircle ? tc.tintOnAccent
                 : (playArea.containsMouse ? "accent" : tc.tintStrong)
+        }
+        // LOADING RING. Between the click and the first sample there was NO
+        // affordance anywhere in the shell, so a fetch that takes seconds — a
+        // Plex part, a cold CMAF session — reads as a dead click (owner report,
+        // 2026-08-13). `npLoading` already existed and was published
+        // (now_playing.rs) but the only consumer was SongCard's artwork
+        // spinner, which is gated on `npHasTrack` and so shows nothing on the
+        // first play of a session.
+        //
+        // ON THE SHELL PULSE, not a NumberAnimation: a rotation animator ticks
+        // at display rate and every animation frame is a whole-window present
+        // (CLAUDE.md, "the repaint pulse"). At ~30 Hz this costs zero extra
+        // presents because the pulse is already running.
+        Item {
+            anchors.fill: parent
+            visible: tc.loading
+            Rectangle {
+                id: ring
+                anchors.centerIn: parent
+                width: parent.width - 8
+                height: width
+                radius: width / 2
+                color: "transparent"
+                border.width: 2
+                border.color: tc.playCircle ? theme.accentText : theme.accent
+                // A 270-degree arc read: three quarters of the ring at full
+                // alpha and the last quarter masked by the fill behind it is
+                // not expressible on a Rectangle, so the spin is carried by
+                // opacity pulsing instead — one property, no extra node.
+                opacity: 0.35 + 0.45 * (1 + Math.sin(tc.spinPhase)) / 2
+            }
         }
         MouseArea {
             id: playArea

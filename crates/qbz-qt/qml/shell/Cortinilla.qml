@@ -511,9 +511,22 @@ Item {
                 // doing nothing. The highlight above already guards with
                 // `?? -2`; this is the same guard on the action.
                 var fi = row.flatIndex
-                if (fi === undefined || fi === null) return
-                if (root.headerBar) root.headerBar.clearSearch()
+                if (fi === undefined || fi === null) {
+                    // Was a bare `return`: the one failure mode that leaves NO
+                    // trace anywhere, which is exactly what a dead click looks
+                    // like from the outside.
+                    console.warn("cortinilla: row has no flatIndex, click dropped —",
+                                 JSON.stringify(row))
+                    return
+                }
+                // ORDER MATTERS. clearSearch() empties the header field, which
+                // drives the live-search path; if that reaches Rust before the
+                // click does, it can replace or clear the very snapshot the
+                // router is about to look the row up in — and the router then
+                // returns silently. The click goes FIRST now; the field is
+                // cleared after, which is the visible behaviour either way.
                 QbzSearch.cortinillaRowClicked(fi)
+                if (root.headerBar) root.headerBar.clearSearch()
             }
         }
     }

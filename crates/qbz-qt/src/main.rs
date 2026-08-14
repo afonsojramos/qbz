@@ -353,6 +353,52 @@ static SIDEBAR_LOADED: Mutex<bool> = Mutex::new(false);
 /// (`on_session_entered`) and again on logout, so neither a logout -> login nor
 /// an offline -> login transition can leave a new session reading the previous
 /// one's answer. Each latch's own doc explains what it gates.
+/// Restore the persisted queue + current track, once per process.
+///
+/// PAUSED by design (the shared module's "Phase A"): the queue and the cursor
+/// come back, the audio does not start itself. The saved position rides along
+/// and is consumed by the first play of that same track
+/// (`session_persist::take_resume_for`, threaded through
+/// `play_resolved_offline_aware`).
+fn restore_session_once() {
+    static DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if DONE.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    // Bind the exit context here rather than at startup: this is the first
+    // moment a runtime exists AND a user session owns a store, so a snapshot
+    // taken on quit can never belong to nobody. `OnceLock` — later entries are
+    // ignored, which is what we want (the runtime is process-global anyway).
+    qbz_app::session_persist::bind_exit_ctx(
+        app(),
+        TOKIO.get().expect("tokio runtime set before the shell mounts").handle().clone(),
+    );
+    // Crash-chain rung 3: two consecutive boots died even after the view reset,
+    // so skip the queue restore for THIS boot only. The persisted queue stays
+    // on disk untouched — a healthy boot brings it back.
+    if nav_qt::crash_level() >= 3 {
+        log::warn!("[crash-chain] session restore bypassed this boot (queue kept on disk)");
+        return;
+    }
+    spawn(async move {
+        let runtime = app();
+        if !qbz_app::session_persist::restore(&runtime).await {
+            return;
+        }
+        // The queue exists in the core now; the bar and the queue panel repaint
+        // from explicit refreshes, not from the core mutation.
+        playback_qt::refresh_now_playing(&runtime).await;
+        // AFTER the meta publish, never before: `refresh_now_playing` goes
+        // through `set_track`, which arms loading+playing for the real play
+        // path. Nothing was dispatched here, so those have to be taken back
+        // down or the app opens with the play button spinning.
+        now_playing::mark_restored_idle();
+        playback_qt::publish_queue(&runtime).await;
+        let resume = qbz_app::session_persist::pending_resume_position();
+        log::info!("[qbz-qt] session restored (resume position {resume}s)");
+    });
+}
+
 fn reset_session_latches() {
     *HOME_LOADED.lock().unwrap() = false;
     *LIBRARY_LOADED.lock().unwrap() = false;
@@ -479,7 +525,7 @@ fn on_session_entered() {
     reset_session_latches();
     // Phase 2: the shell mounts on the (only) "home" view; seed the nav
     // history and push the current now-playing model onto the bar.
-    nav_qt::record("home");
+    nav_qt::record(&nav_qt::shell_entry_view());
     now_playing::publish_current();
     // Phase 3: fetch Discover > Home (online sessions only — the offline
     // engine gates Qobuz calls anyway, and the view shows the offline
@@ -487,6 +533,12 @@ fn on_session_entered() {
     load_home_once();
     // Phase 4: the 1 Hz playback state pump (idempotent).
     playback_qt::start_poll_loop(app());
+    // Phase 4b: session restore (queue + current track, PAUSED). One-shot per
+    // process — `on_session_entered` is multi-entry (login, session restore,
+    // "Start offline") and restoring again on a re-login would clobber whatever
+    // the user has queued since. Runs AFTER the poll loop so the track-change
+    // edge is already listening when the restored cursor lands.
+    restore_session_once();
     // Integrations runtime: applies the persisted MusicBrainz / Discord /
     // ListenBrainz opt-ins and starts the scrobble-queue flush watcher.
     // Strictly opt-in — every one of them is inert until the user connects it.
@@ -1342,10 +1394,39 @@ pub(crate) fn enqueue_artist_top() {
 /// Track-row click (Library tracks): one-track queue through the core.
 pub(crate) fn play_track(track_id: u64) {
     search_qt::record_page_interaction("track", &track_id.to_string(), search_qt::InteractionAction::Play);
+    now_playing::begin_loading();
     let runtime = app();
     spawn(async move {
         if let Err(e) = playback_qt::play_single_track(&runtime, track_id).await {
             log::error!("[qbz-qt] play_track failed: {e}");
+        }
+    });
+}
+
+/// `play_track` with the row's ORIGIN attached — the single router for rails
+/// that can show non-Qobuz tracks (Home's Recently-Played, and any future
+/// mixed feed). Qobuz keeps the existing path byte for byte; everything else
+/// resolves through its own source and never touches the catalog.
+pub(crate) fn play_track_from(track_id: u64, source: String) {
+    if source.is_empty() || source == "qobuz" {
+        play_track(track_id);
+        return;
+    }
+    search_qt::record_page_interaction(
+        "track",
+        &track_id.to_string(),
+        search_qt::InteractionAction::Play,
+    );
+    // Spinner ON at DISPATCH: everything after this is async, and a local file
+    // read or a Plex part fetch can take seconds with nothing on screen.
+    now_playing::begin_loading();
+    let runtime = app();
+    spawn(async move {
+        // No Qobuz fallback on failure, deliberately: that is the 404 this
+        // router exists to remove, and guessing another row is the failure the
+        // cortinilla refuses by design (search_qt.rs:1172).
+        if !local_playback::play_single_from_source(&runtime, track_id, &source).await {
+            log::error!("[qbz-qt] play_track_from: {source} track {track_id} did not play");
         }
     });
 }
@@ -2372,6 +2453,10 @@ pub(crate) fn reload_home() {
                     + sections.for_you.iter().map(|s| s.items.len()).sum::<usize>();
 
                 publish_home_sections(&sections);
+                // LIVENESS. The shell has a mounted view with real content, so
+                // whatever was restored this boot did not kill it — clear the
+                // crash chain for the next start.
+                nav_qt::mark_startup_healthy();
                 log::info!(
                     "[qbz-qt] home published: {}+{}+{} sections, {} cards, {} artwork misses",
                     sections.home.len(),
@@ -2574,6 +2659,14 @@ pub(crate) fn arm_hard_exit_watchdog(source: &'static str) {
 
 fn main() {
     qbz_log::install("info");
+    // BEFORE any restore reads a pref: read + increment the crash chain, so a
+    // boot that dies from a restored view or queue degrades the NEXT boot
+    // instead of trapping the user in a loop it cannot escape from inside the
+    // UI. Cleared by `mark_startup_healthy` once the shell is usable.
+    nav_qt::arm_startup_probe();
+    // Hand the level to the shared persistence module: the queue restore has
+    // its own rung on the same ladder (>=3 skips it for this boot only).
+    qbz_app::session_persist::set_crash_chain_level(nav_qt::crash_level());
     // glibc resolver hardening (2026-08-10): this host's path to its first
     // resolver drops the SECOND of two parallel DNS queries on one socket,
     // so every getaddrinfo (which fires A+AAAA in parallel) stalls for the
@@ -2653,6 +2746,19 @@ fn main() {
         // the watchdog `_exit(0)`s the process. Idempotent — the quit paths
         // arm it earlier, at the moment quit was requested.
         arm_hard_exit_watchdog("event-loop exit");
+        // Final full snapshot. Placed here — after the loop and AFTER the
+        // watchdog — rather than in each QML quit handler: window close, tray
+        // "Quit" and the hotkey all converge on this line, so one call covers
+        // paths that four scattered ones would keep missing. (The reference
+        // flushes from the handlers instead — `tray/mod.rs:300`.)
+        //
+        // ORDER IS LOAD-BEARING: this is a synchronous `block_on` of a SQLite
+        // write on the main thread with no UI left. Behind the watchdog it can
+        // wedge and the process still dies in 5s; in front of it, a wedge is an
+        // app with no window that only `kill -9` ends — the 2026-08-04 quit
+        // incident exactly. No-op unless `persist_session` is on.
+        qbz_app::session_persist::save_on_exit();
+
         // Same reason as logout: leaving the app must stop the renderer.
         //
         // BOUNDED. This is a `block_on` on the main thread after the UI is

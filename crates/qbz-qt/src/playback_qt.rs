@@ -427,6 +427,14 @@ pub(crate) async fn play_resolved_offline_aware(
 ) -> Result<(), String> {
     let off = crate::offline_qt::get().await;
     let sink = off.as_ref().map(|_| crate::offline_cache_qt::row_sink());
+    // Session resume: if this is the track restored at launch, start it at the
+    // saved position (consumed once). Only when the caller did not ask for a
+    // position itself — an explicit seek-then-play must win over the restore.
+    let start_position_secs = if start_position_secs == 0 {
+        qbz_app::session_persist::take_resume_for(track_id)
+    } else {
+        start_position_secs
+    };
     runtime
         .core()
         .play_track_resolved(
@@ -1423,13 +1431,21 @@ pub async fn toggle_play(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
         }
     }
     let event = runtime.core().player().get_playback_event();
-    let result = if event.is_playing {
+    let was_playing = event.is_playing;
+    let result = if was_playing {
         runtime.core().pause()
     } else {
         runtime.core().resume()
     };
     if let Err(e) = result {
         log::warn!("[qbz-qt] toggle-play failed: {e}");
+        return;
+    }
+    if was_playing {
+        // Persist the paused position: pausing is the strongest signal the user
+        // is done for now, and the ~5s poll flush can be up to 5s stale.
+        // No-op unless `persist_session` is on.
+        qbz_app::session_persist::capture_and_save(runtime).await;
     }
 }
 
@@ -1965,6 +1981,8 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
         let mut last_track_id: u64 = 0;
         let mut was_playing = false;
         let mut seen_position: u64 = 0;
+        // Divider for the ~5s position flush (see the save_position call).
+        let mut save_pos_tick: u64 = 0;
         // Track id we have already fired a gapless prefetch for, so this poll
         // does not re-request it on every tick while the download is in flight
         // (playback.rs:5049-5051).
@@ -2235,6 +2253,14 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                         crate::recently_qt::record_queue_track(&track);
                     }
                 }
+                // Persist the session (queue + current track + position) so a
+                // restart can restore it. Hooked on the DE-DUPED track edge and
+                // not at each play call site: `play_queue_track` alone has five
+                // early returns (cast, peer, local, plex, Qobuz) and the album /
+                // single / shuffle entries add more, so a per-call-site hook is
+                // a list that silently goes stale. This edge sees them all.
+                // No-op unless `persist_session` is on.
+                qbz_app::session_persist::capture_and_save(&runtime).await;
                 last_track_id = track_id;
                 // The engine may have reached this track through a GAPLESS
                 // hand-off, in which case the arming guard still names the
@@ -2511,6 +2537,14 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
             }
 
             seen_position = position;
+            // Persist the live position every ~5s while playing so a crash keeps
+            // a near-current resume point. The reference ticks at 450ms and uses
+            // `% 11`; this loop ticks at 1 Hz, so the WALL-CLOCK equivalent is
+            // `% 5` — tick-count throttles do not translate 1:1.
+            save_pos_tick = save_pos_tick.wrapping_add(1);
+            if is_playing && track_id != 0 && save_pos_tick % 5 == 0 {
+                qbz_app::session_persist::save_position(position);
+            }
             // Reflect play/pause into the tray tooltip on the TRANSITION only,
             // so the "Middle-click to pause/play" hint stays correct without
             // spamming the updater channel every tick (§7-M12). The second of

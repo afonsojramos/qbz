@@ -72,6 +72,13 @@ pub struct HomeCard {
     pub ribbon: String,
     #[serde(rename = "ribbonKind")]
     pub ribbon_kind: String,
+    /// Where the row came from: "qobuz" | "local" | "plex" (empty = qobuz, the
+    /// legacy history shape). CARRIED, not inferred: playback routes on it, and
+    /// a local id handed to the Qobuz catalog 404s or opens a different album
+    /// that happens to share the number. `slimTracks` is the rail that needs
+    /// it; every other kind leaves it empty and it stays off the wire.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source: String,
     #[serde(rename = "isPinned", default)]
     pub is_pinned: bool,
     /// Heart state at BUILD time, from `fav_cache_qt` — the row's own kind
@@ -1274,6 +1281,9 @@ fn map_recent_track(t: crate::recently_qt::RecentTrack) -> HomeCard {
         id: t.id,
         title: t.title,
         artist: t.subtitle,
+        // The one line this whole fix turns on: the history stores the origin
+        // and the card used to drop it on the floor via `..default()`.
+        source: t.source,
         art_url: if t.artwork_url.is_empty() {
             t.album_artwork_url
         } else {

@@ -478,8 +478,38 @@ pub fn set_artwork_path(path: String) {
 /// branch normally clears the spinner via `set_position(has_audio = true)`,
 /// but a refused play never primes the peer, so a paused+idle peer would
 /// leave the spinner latched.
+/// Light the spinner the MOMENT a play is dispatched, before anything is
+/// resolved.
+///
+/// `loading` used to be set only inside the meta publish, i.e. once the track
+/// was already known — which leaves the entire resolve/fetch window with no
+/// affordance anywhere in the shell. That window is seconds for a Plex part or
+/// a cold CMAF session, and the owner read it as a dead click. The clear side
+/// already exists (`clear_loading`, plus the position push once audio flows),
+/// so this only moves the START earlier.
+pub(crate) fn begin_loading() {
+    mutate(|m| m.loading = true);
+}
+
 pub(crate) fn clear_loading() {
     mutate(|m| m.loading = false);
+}
+
+/// A track's meta is on the bar but NOTHING was dispatched — the session
+/// restore at startup.
+///
+/// `set_track` asserts `loading = true` and `playing = true` because its normal
+/// caller is a real play, and both are cleared by the audio that follows:
+/// `set_position(has_audio = true)` turns the spinner off. A restored track has
+/// no dispatch behind it and no audio ahead of it, so nothing ever arrives to
+/// clear either flag — the app opened with the play button spinning and the
+/// transport claiming to play, forever. Restore is the one caller that has to
+/// say so explicitly.
+pub(crate) fn mark_restored_idle() {
+    mutate(|m| {
+        m.loading = false;
+        m.playing = false;
+    });
 }
 pub fn set_position(
     elapsed_secs: i32,
