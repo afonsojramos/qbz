@@ -34,6 +34,7 @@
 
 import QtQuick
 import com.blitzfc.qbz
+import "../controls"
 
 Item {
     id: root
@@ -47,6 +48,28 @@ Item {
     // those cannot reach into this file and need a public surface.
     readonly property var currentItem: viewLoader.item
 
+    // SYNCHRONOUS — and the reasoning for the failed experiment is kept here so
+    // nobody re-runs it.
+    //
+    // The dead-click complaint ("nothing is happening after the click… ah, it
+    // WAS loading, I thought it had died") is real: a route change instantiates
+    // the whole view on the UI thread before anything can paint. `asynchronous:
+    // true` plus a router-level placeholder looked like the answer, and it made
+    // the app MUCH worse — the owner's words were "como si mi conexión fuera de
+    // 56kbps" and "nos regresó 10 años atrás".
+    //
+    // WHY it was worse, because this is the part that is not obvious: async
+    // incubation is TIME-SLICED. It yields to the UI thread between slices, so
+    // it trades a short freeze for a much longer wall-clock build, and the
+    // Loader stays in `Loading` until the ENTIRE tree exists — for Discover >
+    // Home that means all 413 cards. A 1s freeze became a five-second skeleton.
+    // On a top-level tab the user expects to be instant, that trade is simply
+    // the wrong one.
+    //
+    // The real fix is NOT here: it is to stop rebuilding these views at all
+    // (keep the top-level tabs alive across navigation) and to make the heavy
+    // views build incrementally. Until one of those exists, synchronous is the
+    // honest behaviour — the same one that shipped before 2026-08-13.
     Loader {
         id: viewLoader
         anchors.fill: parent
