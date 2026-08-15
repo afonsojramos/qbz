@@ -154,6 +154,16 @@ pub struct StoryRow {
 /// MusicBrainz Origin block (artist.rs `MbOrigin`). `hasData` is the gate the
 /// sidebar uses so an MB-matched artist with no life-span/location renders
 /// nothing at all instead of an empty heading.
+///
+/// The `location*` / `seed*` / `artistName` fields below exist so the Artist
+/// Scene can be opened WITHOUT a second MusicBrainz round-trip: `map_origin`
+/// already receives the whole `ArtistMetadata`, and until 2026-08-14 it threw
+/// all of this away and kept only `location_display`. Everything
+/// `discover_artists_by_location` needs is therefore carried on the artist
+/// document itself. (The reference solves the same problem with a process-wide
+/// `static LOCATION_PARAMS` mutex, `crates/qbz/src/artist.rs:1509-1543`; a
+/// document field is the Qt-shaped answer and cannot go stale against the
+/// artist being displayed.)
 #[derive(Clone, Default, Serialize)]
 pub struct MbOriginJson {
     #[serde(rename = "isPerson")]
@@ -166,6 +176,52 @@ pub struct MbOriginJson {
     pub location_display: String,
     #[serde(rename = "hasData")]
     pub has_data: bool,
+
+    // ---- Artist Scene payload ------------------------------------------
+    /// MusicBrainz area id, "" when absent. `area_id` on the discovery call.
+    #[serde(rename = "locationAreaId")]
+    pub location_area_id: String,
+    /// City, "" when absent. The discovery call prefers this over the display
+    /// name for `area_name` (ArtistsByLocationView.svelte:364).
+    #[serde(rename = "locationCity")]
+    pub location_city: String,
+    /// Country NAME, "" when absent. Also the hero title fallback.
+    #[serde(rename = "locationCountry")]
+    pub location_country: String,
+    /// ISO country code, "" when absent. This is what selects the flag, and
+    /// without it the hero simply has no flag element.
+    #[serde(rename = "locationCountryCode")]
+    pub location_country_code: String,
+    /// "city" | "state" | "country" | "" — feeds `locationClickable` only.
+    #[serde(rename = "locationPrecision")]
+    pub location_precision: String,
+    /// Affinity seeds: the discovery query's genres, and the hero subtitle's
+    /// fallback when the backend returns no `genre_summary`.
+    #[serde(rename = "seedGenres")]
+    pub seed_genres: Vec<String>,
+    #[serde(rename = "seedTags")]
+    pub seed_tags: Vec<String>,
+    /// The MUSICBRAINZ name, not the Qobuz one — it is what the scene hero's
+    /// "Based on {artist}" prints (ArtistDetailView.svelte:2915).
+    #[serde(rename = "artistName")]
+    pub artist_name: String,
+    /// Whether the location text is a link. Computed HERE so QML never
+    /// re-derives it: Tauri's guard is written without parentheses
+    /// (`ArtistDetailView.svelte:2904`) and JS `&&` binds tighter than `||`,
+    /// so it reads `(handler && precision != 'country') || city`. The second
+    /// arm forgets the handler check and is harmless there only because the
+    /// call is optional-chained. This is the INTENDED rule:
+    ///
+    ///     clickable = has_location && (precision != Country || city.is_some())
+    ///
+    /// A country-only location has nothing to drill into. The reference
+    /// reached the same rule independently (`crates/qbz/src/artist.rs:1561`).
+    ///
+    /// NOTE: this is necessary but NOT sufficient to enable either door — both
+    /// also require a non-empty `mbid` and a live MusicBrainz-enabled check.
+    /// `mb_available` is NOT that check; see its own doc below.
+    #[serde(rename = "locationClickable")]
+    pub location_clickable: bool,
 }
 
 /// One Members / Member-Of / Collaborators row (artist.rs `MbRelationshipRow`).
@@ -200,8 +256,17 @@ pub struct MbDiscoveryJson {
 /// (which ride the Qobuz artist page). Mirrors Slint's `NetworkSidebarState`.
 #[derive(Clone, Default, Serialize)]
 pub struct ArtistNetwork {
-    /// MusicBrainz is enabled AND this artist resolved to an MBID. False =
-    /// every MB-driven section is ABSENT (opt-in rule: no error, no frame).
+    /// The user's MusicBrainz OPT-IN, and ONLY that. False = every MB-driven
+    /// section is ABSENT (opt-in rule: no error, no frame).
+    ///
+    /// ⚠ This doc used to claim "MusicBrainz is enabled AND this artist
+    /// resolved to an MBID". It never did that: it is assigned from
+    /// `musicbrainz_is_enabled()` alone (see `data.network.mb_available`
+    /// below), seeded SYNCHRONOUSLY with the first artist frame, while `mbid`
+    /// stays "" until the async `publish_network` lands. Anything that needs
+    /// "this artist actually has an MBID" must test `mbid` itself — gating an
+    /// affordance on this flag makes it live from frame one with no id to
+    /// hand it, which is exactly how the Artist Scene doors would break.
     #[serde(rename = "mbAvailable")]
     pub mb_available: bool,
     pub mbid: String,
@@ -1314,7 +1379,7 @@ async fn load_mb_metadata(
 }
 
 fn map_origin(meta: &qbz_integrations::musicbrainz::ArtistMetadata) -> MbOriginJson {
-    use qbz_integrations::musicbrainz::ArtistType;
+    use qbz_integrations::musicbrainz::{ArtistType, LocationPrecision};
 
     let is_person = matches!(meta.artist_type, ArtistType::Person);
     let begin_date = meta
@@ -1334,12 +1399,40 @@ fn map_origin(meta: &qbz_integrations::musicbrainz::ArtistMetadata) -> MbOriginJ
         .unwrap_or_default();
     let has_data =
         !begin_date.is_empty() || !end_date.is_empty() || !location_display.is_empty();
+
+    // ---- Artist Scene payload, from the SAME metadata this call already has.
+    // No extra fetch: `meta` carries the whole location and the affinity
+    // seeds, and every one of these was being discarded here.
+    let loc = meta.location.as_ref();
+    let opt = |s: &Option<String>| s.clone().unwrap_or_default();
+    let location_precision = loc
+        .map(|l| match l.precision {
+            LocationPrecision::City => "city",
+            LocationPrecision::State => "state",
+            LocationPrecision::Country => "country",
+        })
+        .unwrap_or("")
+        .to_string();
+    // The INTENDED form of Tauri's guard — see the field's doc.
+    let location_clickable = loc.is_some_and(|l| {
+        !matches!(l.precision, LocationPrecision::Country) || l.city.is_some()
+    });
+
     MbOriginJson {
         is_person,
         begin_date,
         end_date,
         location_display,
         has_data,
+        location_area_id: loc.map(|l| opt(&l.area_id)).unwrap_or_default(),
+        location_city: loc.map(|l| opt(&l.city)).unwrap_or_default(),
+        location_country: loc.map(|l| opt(&l.country)).unwrap_or_default(),
+        location_country_code: loc.map(|l| opt(&l.country_code)).unwrap_or_default(),
+        location_precision,
+        seed_genres: meta.affinity_seeds.genres.clone(),
+        seed_tags: meta.affinity_seeds.tags.clone(),
+        artist_name: meta.name.clone(),
+        location_clickable,
     }
 }
 

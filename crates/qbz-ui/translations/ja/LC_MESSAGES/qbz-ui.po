@@ -5096,3 +5096,75 @@ msgstr "カバーを表示"
 
 msgid "Could not load the image"
 msgstr "画像を読み込めませんでした"
+
+# ArtistScene + MusicianPage (Qt port, 2026-08-14 contract §7). Copy is Tauri's
+# verbatim: ASCII "..." (not U+2026), U+00B7 in the hero subtitle, ASCII hyphen
+# in "(A-Z)". Reused rather than twinned — "Filter by genre", "Clear filter",
+# "No albums found", "Off", "Group: A-Z", "Group: Off", "Scene", "Appears On",
+# "Bands & Projects", "Load more", "Loading…", "Artist Scene",
+# "No artists found for this scene.", "No album appearances found." and
+# "Select an artist to see their albums." (period-only delta) already exist.
+# The {artist}/{genres}/{genre}/{name} placeholders are NAMED, per contract §7,
+# and are byte-identical in all eight locales. qbz_i18n::t_args CANNOT fill them
+# (substitute() at qbz-i18n/src/lib.rs:153-170 only matches a bare "{}") — every
+# call site substitutes explicitly, e.g. .replace("{artist}", name).
+
+msgid "Based on {artist} · {genres}"
+msgstr "{artist} · {genres} に基づく"
+
+msgid "Searching MusicBrainz for {genre} artists..."
+msgstr "MusicBrainz で {genre} のアーティストを検索中..."
+
+msgid "Verifying availability on Qobuz..."
+msgstr "Qobuz での配信状況を確認中..."
+
+msgid "Preparing results..."
+msgstr "結果を準備中..."
+
+msgid "No matching artists from this scene are currently available on Qobuz."
+msgstr "このシーンに該当するアーティストは現在 Qobuz では利用できません。"
+
+msgid "Loading albums..."
+msgstr "アルバムを読み込み中..."
+
+msgid "Failed to load albums"
+msgstr "アルバムを読み込めませんでした"
+
+msgid "Failed to load appearances"
+msgstr "参加作品を読み込めませんでした"
+
+msgid "Looking up {name}..."
+msgstr "{name} を検索中..."
+
+msgid "Failed to look up musician"
+msgstr "ミュージシャンを検索できませんでした"
+
+msgid "Browse view"
+msgstr "ブラウズ表示"
+
+msgid "Grid view"
+msgstr "グリッド表示"
+
+msgid "Alphabetical (A-Z)"
+msgstr "アルファベット順 (A-Z)"
+
+msgid "This musician appears in album credits but has limited catalog information available in Qobuz."
+msgstr "このミュージシャンはアルバムのクレジットに含まれていますが、Qobuz で利用できるカタログ情報は限られています。"
+
+msgid "Unable to verify this musician's catalog. The information shown is based on album credits."
+msgstr "このミュージシャンのカタログを確認できませんでした。表示されている情報はアルバムのクレジットに基づいています。"
+
+msgid "This musician appears in album credits."
+msgstr "このミュージシャンはアルバムのクレジットに含まれています。"
+
+msgid "Discography"
+msgstr "ディスコグラフィー"
+
+msgid "Live Albums"
+msgstr "ライブアルバム"
+
+msgid "Select an artist to see their albums"
+msgstr "アーティストを選択してアルバムを表示します"
+
+msgid "{} / {} artists"
+msgstr "{} / {} 組のアーティスト"

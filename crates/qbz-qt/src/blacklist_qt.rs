@@ -378,6 +378,25 @@ fn emit_changed(kind: &str, id: &str, value: bool) {
 fn republish_all() {
     publish();
     crate::publish_settings();
+    // Drop the 30-day Artist Scene cache (contract B3, requirement 3).
+    //
+    // THIS IS A CORRECTNESS CALL, NOT HOUSEKEEPING. Scene discovery caches a
+    // validated candidate list, and a cache hit short-circuits the whole
+    // validation loop — so a post-filter on the way out can hide a
+    // newly-blocked artist, but it can NEVER undo a substitution. Concretely:
+    // while artist X was blacklisted, validation resolved that MusicBrainz
+    // candidate to a DIFFERENT same-name Qobuz artist and cached that. Un-block
+    // X and the post-filter has nothing to restore — the row simply is not X
+    // any more, and stays wrong for the full TTL. Only dropping the entry
+    // re-runs validation.
+    //
+    // Placed in this funnel rather than at the four artist-axis mutators
+    // because every mutation already routes through here and a fifth one added
+    // later would silently miss the invalidation. The ALBUM-axis mutators trip
+    // it too, which is over-invalidation — a scene lists artists, not albums.
+    // That is an accepted cost: the penalty is one re-fetch, and the
+    // alternative is a rule someone has to remember.
+    crate::app().core().invalidate_scene_cache();
 }
 
 // ---------------------------------------------------------------------------

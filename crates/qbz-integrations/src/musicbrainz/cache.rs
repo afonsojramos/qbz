@@ -26,6 +26,30 @@ const METADATA_TTL_SECS: i64 = 30 * 24 * 60 * 60;
 const SCENE_TTL_SECS: i64 = 30 * 24 * 60 * 60;
 /// TTL for Qobuz artist validation cache (30 days)
 const QOBUZ_VALIDATION_TTL_SECS: i64 = 30 * 24 * 60 * 60;
+/// TTL for the typed Qobuz artist-match cache (30 days, same as above)
+const QOBUZ_ARTIST_MATCH_TTL_SECS: i64 = 30 * 24 * 60 * 60;
+
+/// The Qobuz half of a scene validation, and NOTHING else.
+///
+/// This exists because the old `mb_qobuz_validation` table stores a whole
+/// `LocationCandidate` — MBID, affinity score and genres included — keyed on
+/// the normalised artist NAME alone. Tauri only ever wrote it; reading it back
+/// would transplant one scene's identity and ranking onto another scene's
+/// candidate with the same name. Only these four fields are a pure function of
+/// the name (they are literally what the Qobuz artist search returns), so only
+/// these four are safe to replay. The caller rebuilds the candidate around them
+/// from the CURRENT mbid, score and genres.
+///
+/// Negative results are deliberately NOT cached: Tauri disabled its negative
+/// cache (`// Negative cache — TEMPORARILY DISABLED`) and a "not on Qobuz"
+/// verdict that sticks for 30 days is how a newly-added artist stays invisible.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct QobuzArtistMatch {
+    pub qobuz_id: i64,
+    pub name: String,
+    pub image: Option<String>,
+    pub albums_count: Option<u32>,
+}
 
 /// Cache statistics
 #[derive(Debug, Clone, serde::Serialize)]
@@ -122,6 +146,17 @@ impl MusicBrainzCache {
                     fetched_at INTEGER NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS idx_mb_qobuz_validation_fetched ON mb_qobuz_validation(fetched_at);
+
+                -- Typed Qobuz artist match (id/name/image/album count only),
+                -- keyed on the normalized artist name. Separate table from
+                -- mb_qobuz_validation because that one holds Tauri-era whole
+                -- LocationCandidate rows that must never be replayed.
+                CREATE TABLE IF NOT EXISTS mb_qobuz_artist_match (
+                    name_normalized TEXT PRIMARY KEY,
+                    data TEXT NOT NULL,
+                    fetched_at INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_mb_qobuz_artist_match_fetched ON mb_qobuz_artist_match(fetched_at);
 
                 -- V2 resolved tracks (simple cache)
                 CREATE TABLE IF NOT EXISTS resolved_tracks (
@@ -455,9 +490,75 @@ impl MusicBrainzCache {
         Ok(())
     }
 
+    /// Drop every cached scene, leaving the rest of the cache alone.
+    ///
+    /// Targeted invalidation for the cases a post-filter cannot fix: the
+    /// blacklist is applied INSIDE the validation loop (a blocked artist makes
+    /// the loop pick the next-best same-name Qobuz artist for that MBID), so
+    /// UN-blacklisting cannot be undone by filtering on the way out. Also the
+    /// right hammer on account switch, because the account territory decides
+    /// which candidates validate and is not yet part of the key.
+    ///
+    /// Returns the number of rows removed.
+    pub fn clear_scene_cache(&self) -> Result<usize, String> {
+        let deleted = self
+            .conn
+            .execute("DELETE FROM mb_scene_cache", [])
+            .map_err(|e| format!("Failed to clear scene cache: {}", e))?;
+        if deleted > 0 {
+            log::info!("MusicBrainz scene cache invalidated: {} entries", deleted);
+        }
+        Ok(deleted)
+    }
+
     // ============ Qobuz Validation Cache ============
 
+    /// Get the typed Qobuz match for a normalized artist name.
+    ///
+    /// A parse failure is a MISS, not an error — the row is from an older
+    /// shape and re-validating costs one search.
+    pub fn get_qobuz_artist_match(
+        &self,
+        name_normalized: &str,
+    ) -> Result<Option<QobuzArtistMatch>, String> {
+        let min_fetched_at = Self::current_timestamp() - QOBUZ_ARTIST_MATCH_TTL_SECS;
+        let result: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT data FROM mb_qobuz_artist_match WHERE name_normalized = ? AND fetched_at > ?",
+                params![name_normalized, min_fetched_at],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| format!("Failed to query artist-match cache: {}", e))?;
+
+        Ok(result.and_then(|data| serde_json::from_str(&data).ok()))
+    }
+
+    /// Cache the typed Qobuz match for a normalized artist name.
+    pub fn set_qobuz_artist_match(
+        &self,
+        name_normalized: &str,
+        data: &QobuzArtistMatch,
+    ) -> Result<(), String> {
+        let fetched_at = Self::current_timestamp();
+        let json = serde_json::to_string(data)
+            .map_err(|e| format!("Failed to serialize artist match: {}", e))?;
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO mb_qobuz_artist_match (name_normalized, data, fetched_at) VALUES (?, ?, ?)",
+                params![name_normalized, json, fetched_at],
+            )
+            .map_err(|e| format!("Failed to cache artist match: {}", e))?;
+        Ok(())
+    }
+
     /// Get cached Qobuz validation result for an artist name
+    ///
+    /// DEAD in this tree and left that way on purpose: the stored value is a
+    /// whole scene-specific `LocationCandidate` keyed on the name alone, so
+    /// replaying it in another scene transplants the wrong MBID, score and
+    /// genres. [`Self::get_qobuz_artist_match`] is the safe replacement.
     pub fn get_qobuz_validation(&self, name_normalized: &str) -> Result<Option<String>, String> {
         let min_fetched_at = Self::current_timestamp() - QOBUZ_VALIDATION_TTL_SECS;
         let result: Option<String> = self
@@ -629,6 +730,7 @@ impl MusicBrainzCache {
             ("mb_artist_metadata", METADATA_TTL_SECS),
             ("mb_scene_cache", SCENE_TTL_SECS),
             ("mb_qobuz_validation", QOBUZ_VALIDATION_TTL_SECS),
+            ("mb_qobuz_artist_match", QOBUZ_ARTIST_MATCH_TTL_SECS),
         ];
 
         for (table, ttl) in &tables_and_ttls {
@@ -662,6 +764,7 @@ impl MusicBrainzCache {
                 DELETE FROM mb_artist_metadata;
                 DELETE FROM mb_scene_cache;
                 DELETE FROM mb_qobuz_validation;
+                DELETE FROM mb_qobuz_artist_match;
                 DELETE FROM resolved_tracks;
                 DELETE FROM resolved_artists;
                 UPDATE cache_stats SET value = 0;

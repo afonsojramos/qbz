@@ -19,7 +19,15 @@
 //! `artistreleases`, `settings`, `search`, `playlist`, `discoverbrowse`,
 //! `playlistbrowse`, `recentalbums`, `mostplayedalbums`, `label`,
 //! `labelreleases`, `mix`, `mixtapes`, `collections`, `mixtapedetail`,
-//! `discobuilder`, `blacklist`, `playlistmanager`, `nowplaying`.
+//! `discobuilder`, `blacklist`, `playlistmanager`, `nowplaying`, `scene`,
+//! `musician`.
+//!
+//! `scene` (the "artists from the same place" discovery view) and `musician`
+//! both carry a required context that only their opener has, so neither is in
+//! the session-restore-safe set below: reopening the app on one would land on
+//! a page with nothing to show. Note the musician MODAL is not a route at all —
+//! only the `contextual` branch navigates; `weak`/`none` publish a document
+//! that a global overlay renders (`musician_qt.rs`).
 //!
 //! `nowplaying` is KIOSK-ONLY (2026-08-02 kiosk-port contract §3): it is the
 //! NavRail's fifth tile and the route the kiosk's full-screen player lives on.

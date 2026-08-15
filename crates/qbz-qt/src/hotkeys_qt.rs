@@ -634,6 +634,13 @@ pub struct EscapeState {
     pub link_resolver_open: bool,
     pub customize_open: bool,
     pub cheatsheet_open: bool,
+    /// The global musician modal (z 3200). Sits ABOVE `immersive_open` in this
+    /// order on purpose: it paints above the immersive overlay by design —
+    /// consumer #6 opens it from the immersive Track-info panel and the
+    /// overlay deliberately stays up underneath — so Escape must take the
+    /// modal first, or the one keypress would close the thing behind it and
+    /// leave the modal floating over a dismissed view.
+    pub musician_modal_open: bool,
     pub cortinilla_open: bool,
     pub immersive_open: bool,
     /// §4.6 seam: no Qt multi-select exit invokable exists yet (B2 adds
@@ -647,6 +654,7 @@ pub enum EscapeTarget {
     LinkResolver,
     Customize,
     Cheatsheet,
+    MusicianModal,
     Cortinilla,
     Immersive,
     MultiSelect,
@@ -667,6 +675,9 @@ pub fn escape_target(s: &EscapeState) -> EscapeTarget {
     }
     if s.cheatsheet_open {
         return EscapeTarget::Cheatsheet;
+    }
+    if s.musician_modal_open {
+        return EscapeTarget::MusicianModal;
     }
     if s.cortinilla_open {
         return EscapeTarget::Cortinilla;
@@ -908,28 +919,57 @@ mod tests {
     // --- Escape stack order (§1.2) -----------------------------------------
 
     #[test]
-    fn escape_stack_walks_the_seven_surfaces_in_order() {
-        let s = |link, cust, cheat, cort, imm, multi, queue| EscapeState {
-            link_resolver_open: link,
-            customize_open: cust,
-            cheatsheet_open: cheat,
-            cortinilla_open: cort,
-            immersive_open: imm,
-            multi_select_active: multi,
-            queue_open: queue,
-        };
+    fn escape_stack_walks_the_eight_surfaces_in_order() {
+        #[allow(clippy::too_many_arguments)]
+        fn s(
+            link: bool,
+            cust: bool,
+            cheat: bool,
+            musician: bool,
+            cort: bool,
+            imm: bool,
+            multi: bool,
+            queue: bool,
+        ) -> EscapeState {
+            EscapeState {
+                link_resolver_open: link,
+                customize_open: cust,
+                cheatsheet_open: cheat,
+                musician_modal_open: musician,
+                cortinilla_open: cort,
+                immersive_open: imm,
+                multi_select_active: multi,
+                queue_open: queue,
+            }
+        }
         // Everything open → the link-resolver arm wins (order position 1).
-        assert_eq!(escape_target(&s(true, true, true, true, true, true, true)), EscapeTarget::LinkResolver);
+        assert_eq!(escape_target(&s(true, true, true, true, true, true, true, true)), EscapeTarget::LinkResolver);
         // Then, in order, each surface beats every LATER one.
-        assert_eq!(escape_target(&s(false, true, true, true, true, true, true)), EscapeTarget::Customize);
-        assert_eq!(escape_target(&s(false, false, true, true, true, true, true)), EscapeTarget::Cheatsheet);
-        assert_eq!(escape_target(&s(false, false, false, true, true, true, true)), EscapeTarget::Cortinilla);
-        assert_eq!(escape_target(&s(false, false, false, false, true, true, true)), EscapeTarget::Immersive);
-        assert_eq!(escape_target(&s(false, false, false, false, false, true, true)), EscapeTarget::MultiSelect);
-        assert_eq!(escape_target(&s(false, false, false, false, false, false, true)), EscapeTarget::Queue);
-        assert_eq!(escape_target(&s(false, false, false, false, false, false, false)), EscapeTarget::None);
-        // Multi-select beats the queue (order position 6 vs 7).
-        assert_eq!(escape_target(&s(false, false, false, false, false, true, true)), EscapeTarget::MultiSelect);
+        assert_eq!(escape_target(&s(false, true, true, true, true, true, true, true)), EscapeTarget::Customize);
+        assert_eq!(escape_target(&s(false, false, true, true, true, true, true, true)), EscapeTarget::Cheatsheet);
+        assert_eq!(escape_target(&s(false, false, false, true, true, true, true, true)), EscapeTarget::MusicianModal);
+        assert_eq!(escape_target(&s(false, false, false, false, true, true, true, true)), EscapeTarget::Cortinilla);
+        assert_eq!(escape_target(&s(false, false, false, false, false, true, true, true)), EscapeTarget::Immersive);
+        assert_eq!(escape_target(&s(false, false, false, false, false, false, true, true)), EscapeTarget::MultiSelect);
+        assert_eq!(escape_target(&s(false, false, false, false, false, false, false, true)), EscapeTarget::Queue);
+        assert_eq!(escape_target(&s(false, false, false, false, false, false, false, false)), EscapeTarget::None);
+        // Multi-select beats the queue (order position 7 vs 8).
+        assert_eq!(escape_target(&s(false, false, false, false, false, false, true, true)), EscapeTarget::MultiSelect);
+    }
+
+    /// The musician modal is opened FROM the immersive Track-info panel
+    /// (consumer #6) and paints above it at z 3200, while the immersive
+    /// overlay deliberately stays up underneath. So with both up, Escape must
+    /// take the MODAL — dismissing immersive first would leave the modal
+    /// floating over a view the user never asked to close.
+    #[test]
+    fn musician_modal_beats_immersive() {
+        let state = EscapeState {
+            musician_modal_open: true,
+            immersive_open: true,
+            ..EscapeState::default()
+        };
+        assert_eq!(escape_target(&state), EscapeTarget::MusicianModal);
     }
 
     // --- Capture: Escape-cancels vs conflict-keeps-recording ---------------

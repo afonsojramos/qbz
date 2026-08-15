@@ -79,6 +79,41 @@ pub(crate) fn current_quality() -> Quality {
 
 // Mute bookkeeping (mirrors playback.rs MUTED / PREMUTE_VOLUME: there is no
 // dedicated mute API on the core — mute is volume 0 with a stash).
+/// The track id of a COLD START that has been dispatched but has not yet
+/// surfaced on the poll loop's track-change edge. 0 = nothing in flight.
+///
+/// It exists because the cold-start branch in `toggle_play` opened a window the
+/// resume branch never had: between dispatch and the first audio frame the
+/// engine reports `is_playing == false` AND `has_loaded_audio() == false` — the
+/// exact condition that branch tests — so a second Play press would dispatch a
+/// SECOND `play_track_resolved` for the same id, racing the first. On this port
+/// that window is seconds, not milliseconds (the ACTIVE_TASK notes an
+/// unexplained 5459 ms CMAF init).
+///
+/// THE SHAPE MATTERS, and it is the reference's, not Tauri's. Tauri had a
+/// consumed-once `pendingSessionRestore` token that it cleared BEFORE awaiting
+/// the load and never re-armed in the catch (`playerStore.ts:522`, `:603-608`),
+/// so ONE failed load consumed the restore intent and every later Play press
+/// fell through to a bare resume against an empty engine — the Play button was
+/// dead for the rest of the session, silently. That is a large part of why this
+/// feature "nunca quedaba bien" there.
+///
+/// This latch cannot do that, because it never gates the ABILITY to start:
+///  - Its branch CANCELS the in-flight load (stop + clear) rather than
+///    refusing, so a press always does something and always leaves a state the
+///    next press can act on.
+///  - It is cleared on the track edge AND on every failure path, so a failed
+///    cold start re-opens the cold-start branch instead of latching it shut.
+///  - Even if it were somehow stranded set, the next press stops and clears it,
+///    and the press after that cold-starts normally. It self-heals in both
+///    directions; a consumed-once token heals in neither.
+///
+/// This is also the reference's #661 fix (`crates/qbz/src/playback.rs:4811-4824`):
+/// a pause issued during the load window used to fall through to the resume
+/// branch and be swallowed — the track started anyway and the sleep inhibitor
+/// stayed held with no successful pause to release it.
+static PENDING_PLAY_ID: AtomicU64 = AtomicU64::new(0);
+
 static MUTED: AtomicBool = AtomicBool::new(false);
 static PREMUTE_VOLUME: AtomicU64 = AtomicU64::new(0);
 
@@ -1432,6 +1467,76 @@ pub async fn toggle_play(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
     }
     let event = runtime.core().player().get_playback_event();
     let was_playing = event.is_playing;
+
+    // COLD CURSOR: not playing, and the engine holds no loaded stream.
+    //
+    // `resume()` only means "un-pause a stream that is already decoded". The
+    // audio thread answers a resume with no data by logging
+    // "cannot resume - no audio data available" and RETURNING
+    // (`qbz-player/src/player/mod.rs` around :3184-3205) — it does not error,
+    // so the `Err` arm below never fires and the user just sees a dead Play
+    // button. Reachable states:
+    //
+    //  - **A restored session.** `session_persist::restore` rebuilds the queue
+    //    and the cursor, and the NPB paints the track, but nothing is loaded
+    //    until something plays. This is the owner-reported bug: queue restored,
+    //    bar correct, Play does nothing.
+    //  - A QConnect renderer queue whose cursor sits on a never-loaded track.
+    //  - A cold cursor after the queue ended.
+    //
+    // The reference solves it the same way and names the same log line
+    // (`crates/qbz/src/playback.rs:4781-4791`, `:4826-4841`): load and play the
+    // CURRENT queue track instead of resuming. A normal pause leaves the stream
+    // loaded, so `has_loaded_audio()` stays true and the ordinary pause/resume
+    // path is untouched.
+    // A cold start is already in flight: this press is a CANCEL, not a second
+    // start. Without this arm the window below is re-entrant — see
+    // PENDING_PLAY_ID. Ordered before the `has_loaded_audio` test because
+    // during that window the engine answers false to both.
+    let pending = PENDING_PLAY_ID.load(Ordering::Relaxed);
+    if !was_playing && pending != 0 {
+        log::info!("[qbz-qt] toggle-play: cancelling the in-flight cold start of track {pending}");
+        PENDING_PLAY_ID.store(0, Ordering::Relaxed);
+        crate::now_playing::clear_loading();
+        if let Err(e) = runtime.core().stop() {
+            log::warn!("[qbz-qt] toggle-play: stop-during-load failed: {e}");
+        }
+        return;
+    }
+
+    if !was_playing && !runtime.core().player().has_loaded_audio() {
+        match runtime.core().current_track().await {
+            Some(track) => {
+                log::info!(
+                    "[qbz-qt] toggle-play: no loaded audio -> cold-starting current track {}",
+                    track.id
+                );
+                PENDING_PLAY_ID.store(track.id, Ordering::Relaxed);
+                // Goes through the normal play path, so the persisted resume
+                // position is consumed by the same `take_resume_for` handshake
+                // a fresh play uses — a bare `resume()` could never have
+                // applied it, because there was no stream to seek.
+                play_queue_track(runtime, track.id, 0).await;
+                // Cleared unconditionally: `play_queue_track` swallows its own
+                // errors, so this is the only place a FAILED cold start can
+                // release the latch. The poll loop's track-change edge clears
+                // it too — whichever runs first wins, and both are idempotent.
+                // Leaving it set on failure is precisely the Tauri scar.
+                PENDING_PLAY_ID.compare_exchange(
+                    track.id,
+                    0,
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                )
+                .ok();
+            }
+            None => {
+                log::info!("[qbz-qt] toggle-play ignored: no loaded audio and an empty queue");
+            }
+        }
+        return;
+    }
+
     let result = if was_playing {
         runtime.core().pause()
     } else {
@@ -1466,7 +1571,7 @@ pub async fn next(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
         }
     }
     if let Some(track) = runtime.core().next_track().await {
-        play_queue_track(runtime, track.id).await;
+        play_queue_track(runtime, track.id, 0).await;
     }
 }
 
@@ -1483,15 +1588,28 @@ pub async fn previous(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
         }
     }
     if let Some(track) = runtime.core().previous_track().await {
-        play_queue_track(runtime, track.id).await;
+        play_queue_track(runtime, track.id, 0).await;
     }
 }
 
 pub(crate) async fn play_queue_track_public(runtime: &Arc<AppRuntime<LoggingAdapter>>, track_id: u64) {
-    play_queue_track(runtime, track_id).await;
+    play_queue_track(runtime, track_id, 0).await;
 }
 
-async fn play_queue_track(runtime: &Arc<AppRuntime<LoggingAdapter>>, track_id: u64) {
+/// Play a queue track from the top of the source ladder (cast → peer → local
+/// → Qobuz).
+///
+/// `start_position_secs` is the position to START at, and 0 means "the normal
+/// start", NOT "second zero": `play_resolved_offline_aware` treats 0 as the
+/// signal to consult `session_persist::take_resume_for`, so a restored track
+/// resumes where it was left. A non-zero value is an EXPLICIT request and wins
+/// over the restore stash — which is what lets a seek on a cold cursor
+/// cold-start directly at the dragged position.
+async fn play_queue_track(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    track_id: u64,
+    start_position_secs: u64,
+) {
     // CAST owns playback while a renderer is connected: route the new track to
     // it instead of starting the local backend, or both would play.
     if crate::cast_qt::play_current_if_cast(runtime).await {
@@ -1514,7 +1632,8 @@ async fn play_queue_track(runtime: &Arc<AppRuntime<LoggingAdapter>>, track_id: u
         publish_queue(runtime).await;
         return;
     }
-    if let Err(e) = play_resolved_offline_aware(runtime, track_id, current_quality(), 0)
+    if let Err(e) =
+        play_resolved_offline_aware(runtime, track_id, current_quality(), start_position_secs)
         .await
     {
         log::error!("[qbz-qt] playback: play_track {track_id} failed: {e}");
@@ -1609,7 +1728,7 @@ fn auto_skip_unavailable<'a>(
             "[qbz-qt] advance: skipping unavailable track, trying {} ({skips}/{MAX_UNAVAILABLE_SKIPS})",
             track.id
         );
-        play_queue_track(runtime, track.id).await;
+        play_queue_track(runtime, track.id, 0).await;
     })
 }
 
@@ -1641,6 +1760,48 @@ pub async fn seek_frac(runtime: &Arc<AppRuntime<LoggingAdapter>>, frac: f32) {
         }
     }
     let event = runtime.core().player().get_playback_event();
+
+    // COLD CURSOR: the bar is draggable but the engine holds no stream.
+    //
+    // Two ways in, and BOTH were silently wrong before this branch:
+    //
+    //  (a) A restored session. `event.duration` is 0 because nothing ever
+    //      loaded, so the guard below returned and the drag did nothing at
+    //      all. The bar still looked seekable, because the NPB's duration
+    //      comes from the restored track's META, not from the engine. The
+    //      keyboard seek was worse: it derives its fraction from the MODEL
+    //      position, which is non-zero, so it built a perfectly valid
+    //      fraction and handed it to a function that discarded it.
+    //  (b) A cold cursor after a Stop (cast/QConnect handoff, or a queue that
+    //      ended). `SharedState::duration` is never reset by the Stop arm, so
+    //      it still holds the PREVIOUS track's length — the guard passed,
+    //      `seek()` returned Ok because it only posts a command, and we then
+    //      told D-Bus we had jumped. The audio thread meanwhile bailed with
+    //      "cannot seek - no audio data available". The desktop widget was
+    //      being told a position the player was not at and could not reach.
+    //
+    // Cold-starting AT the requested position is the honest answer to a drag,
+    // and it composes for free: a non-zero `start_position_secs` is treated as
+    // an explicit request and wins over the restore stash
+    // (`play_resolved_offline_aware`), so dragging before pressing Play does
+    // what the user asked instead of jumping back to the saved position.
+    if !runtime.core().player().has_loaded_audio() {
+        let Some(track) = runtime.core().current_track().await else {
+            return;
+        };
+        let duration = track.duration_secs;
+        if duration == 0 {
+            return;
+        }
+        let target = (frac.clamp(0.0, 1.0) * duration as f32) as u64;
+        log::info!(
+            "[qbz-qt] seek on a cold cursor -> cold-starting track {} at {target}s",
+            track.id
+        );
+        play_queue_track(runtime, track.id, target).await;
+        return;
+    }
+
     if event.duration == 0 {
         return;
     }
@@ -2224,6 +2385,8 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
 
             // --- Track-change edge (new current track surfaced) ----------
             if track_id != 0 && track_id != last_track_id {
+                // A cold start that reached audio is no longer pending.
+                PENDING_PLAY_ID.store(0, Ordering::Relaxed);
                 // Reconcile the queue pointer (a real advance moves it; a
                 // manual play already did) and refresh meta + queue.
                 let _ = runtime.core().sync_current_to_id(track_id).await;
@@ -2526,7 +2689,7 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                 if let Some(track) = runtime.core().next_track().await {
                     let next_id = track.id;
                     log::info!("[qbz-qt] poll: advancing to {next_id}");
-                    play_queue_track(&runtime, next_id).await;
+                    play_queue_track(&runtime, next_id, 0).await;
                 } else if try_infinite_refill(&runtime, ended_track_id).await {
                     // InfiniteRadio started a fresh smart radio; it replaced
                     // the queue and published on its way in.

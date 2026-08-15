@@ -48,6 +48,8 @@ mod local_bridge;
 mod library_bridge;
 mod album_bridge;
 mod artist_bridge;
+mod musician_bridge;
+mod scene_bridge;
 mod cast_bridge;
 // MyQBZ splits across THREE singletons rather than one, because the two
 // modals are global overlays with their own lifetime: QbzMyQbz carries the
@@ -184,6 +186,8 @@ mod artist_prefs;
 // onto QbzArtist.artistReleasesJson (artist_bridge.rs) and records its own nav
 // entry, the label_qt shape.
 mod artist_releases_qt;
+mod artist_scene_qt;
+mod musician_qt;
 // Shared in-app toast publisher (the port of qbz-slint-common's toast.rs).
 // A plain module, NOT a bridge — it publishes onto QbzShell.toastJson, and
 // `controls/QbzToast.qml` owns the auto-hide timer.
@@ -590,12 +594,31 @@ fn on_session_entered() {
 
     // Restore the persisted player volume so audio starts at the SAVED level
     // (1:1 with qbz/src/main.rs:220-227). Without it every launch started at
-    // 100% — on an exclusive-mode DAC that is not a cosmetic default. The poll
-    // loop mirrors it onto the bar's slider from the engine, so nothing else
-    // has to publish it.
+    // 100% — on an exclusive-mode DAC that is not a cosmetic default.
     let restored = crate::settings_qt::read_pref_f32("volume").unwrap_or(1.0).clamp(0.0, 1.0);
     let rt = app();
     spawn(async move { playback_qt::set_volume(&rt, restored).await });
+    // ...and seed the UI model with the SAME value, or the engine and the
+    // slider disagree from the first frame.
+    //
+    // This line used to be absent, under a comment claiming "the poll loop
+    // mirrors it onto the bar's slider from the engine, so nothing else has to
+    // publish it". No such mirror exists on the local path:
+    // `now_playing::set_volume` has exactly two callers — the Cast echo
+    // (`cast_qt.rs:783`) and the QConnect PEER branch
+    // (`playback_qt.rs:2167`) — and neither runs in a normal local session. So
+    // the model kept its idle default of `volume: 1.0` (`now_playing.rs:94`,
+    // "no track, full volume") and every launch drew the slider at 100 % while
+    // the audio was correctly at the saved level. Owner-reported 2026-08-14.
+    //
+    // One call covers every surface: the NPB (`PlayerBar.qml:585`), the small
+    // bar, the immersive bar (`ImmersivePlayerBar.qml:282`) and the miniplayer
+    // all bind `QbzPlayer.npVolume`, which `now_playing::publish` writes.
+    // (The kiosk shell has no volume control at all — checked, not assumed.)
+    //
+    // Ordering is safe: `set_volume` only mutates the model and republishes, so
+    // it does not race the async engine call above.
+    crate::now_playing::set_volume(restored);
 
     // Qobuz Connect service wiring (2026-08-01 contract §11.5), in order.
     // This fn is MULTI-ENTRY (login, session restore AND start_offline all
@@ -1830,22 +1853,26 @@ pub(crate) fn large_cycle_spectrum() {
     shell_bridge::ui(move |mut b| b.as_mut().set_large_spectrum_mode(mode));
 }
 
-/// Artist-network row click: resolve a musician NAME to a Qobuz artist and open
-/// their page. Only a CONFIRMED match navigates — a guess would drop the user on
-/// the wrong artist, which is worse than the row doing nothing.
+/// Artist-network row click: resolve a musician NAME and open the right
+/// surface for them.
+///
+/// This used to BE the whole feature, and it implemented exactly ONE of the
+/// reference's five branches: a Confirmed match with a Qobuz id navigated, and
+/// every other confidence logged a line and left the user staring at a row that
+/// did nothing. Since the majority of credited session musicians resolve to
+/// `contextual` or `weak`, the common case was a dead click.
+///
+/// The five-way dispatch now lives in `musician_qt` so that ALL SIX call sites
+/// — the three artist-network groups, the album-credits modal, the desktop
+/// track-info modal and the immersive track-info panel — behave identically and
+/// no QML anywhere branches on confidence. See that module's header for the
+/// branch table and for why `Some(0)` is not a valid id.
+///
+/// The function survives as a forwarder because `artist_bridge.rs:210` calls
+/// `crate::resolve_musician`; replacing the body is a smaller blast radius than
+/// re-pointing that bridge.
 pub(crate) fn resolve_musician(name: String, role: String) {
-    let runtime = app();
-    spawn(async move {
-        match runtime.core().musicbrainz_resolve_musician(&name, &role).await {
-            Ok(r) => match (r.confidence, r.qobuz_artist_id) {
-                (qbz_integrations::musicbrainz::MusicianConfidence::Confirmed, Some(id)) => {
-                    open_artist(id.to_string());
-                }
-                _ => log::info!("[qbz-qt] musician '{name}' not confidently resolved; not navigating"),
-            },
-            Err(e) => log::warn!("[qbz-qt] musician resolve failed for '{name}': {e}"),
-        }
-    });
+    musician_qt::resolve_and_open(name, role);
 }
 
 /// Artist-card overlay play (ArtistGridCard): Popular tracks with the
@@ -2038,6 +2065,18 @@ pub(crate) fn apply_language(code: String) {
     // living inside a JSON document, and LAST_DETAIL only ever latches "album"
     // or "artist" — it cannot reach this page. No-op when nothing is open.
     artist_releases_qt::republish();
+    // Same class again: the musician page publishes a Rust-translated error
+    // line INSIDE its JSON document (`musician_qt.rs:679,781`), and `trRev`
+    // cannot reach a string that travels as data. LAST_DETAIL only ever
+    // latches "album" or "artist", so this page is unreachable through the
+    // match below. No-op when nothing is open.
+    //
+    // The Artist Scene deliberately has NO counterpart here: it translates
+    // nothing in Rust — every string on that view is a QML
+    // `QbzSession.tr(..., trRev)`, including the discovery phase labels and the
+    // card's (always empty) subtitle — so it re-translates by itself and a
+    // republish would be dead code.
+    musician_qt::republish();
     let (view, id) = LAST_DETAIL.lock().unwrap().clone();
     if !id.is_empty() {
         match view.as_str() {
@@ -2060,6 +2099,26 @@ fn republish_album(album_id: String) {
             album_bridge::ui(move |mut b| b.as_mut().set_album_json(QString::from(json.as_str())));
         }
     });
+}
+
+/// Republish whichever detail page is open, if it is the artist page.
+///
+/// Exists for the MusicBrainz toggle. Every MB-derived field on the artist
+/// document — `mbAvailable`, the whole Origin block, the relationship groups,
+/// and `origin.locationClickable`, which is the gate on BOTH Artist Scene
+/// doors — is baked at document-build time. Flipping the setting updates only
+/// the core client, so without this a page the user navigates back to keeps
+/// offering an affordance the client can no longer serve, and the discovery
+/// call would run against a disabled MusicBrainz and report a false "no
+/// artists found" (the shared core swallows the disabled-client error).
+///
+/// No-op when the open detail is not an artist, and `republish_artist` is
+/// itself a no-op offline.
+pub(crate) fn republish_open_artist() {
+    let (view, id) = LAST_DETAIL.lock().unwrap().clone();
+    if view == "artist" && !id.is_empty() {
+        republish_artist(id);
+    }
 }
 
 fn republish_artist(artist_id: String) {
@@ -2717,6 +2776,35 @@ fn main() {
     } else {
         log::warn!("[qbz-qt] runtime has no visualizer tap; the Large dock band stays empty");
     }
+    // MusicBrainz cache — a SQLite store at
+    // <data-dir>/qbz/cache/musicbrainz_cache.db so artist metadata,
+    // relationships and scene discovery persist across sessions.
+    //
+    // THIS WAS MISSING ENTIRELY. `set_musicbrainz_cache` had exactly one
+    // caller in the tree — the Slint binary (crates/qbz/src/main.rs:9011) —
+    // so every MusicBrainz call this build made went uncached, on every
+    // artist page, against an API with a strict rate limit. It is the same
+    // path and the same filename the reference uses, so a user switching
+    // between the two builds keeps one warm cache.
+    //
+    // Failure to open only degrades to direct network calls: the core's
+    // methods skip the cache when none is set.
+    if let Some(data_dir) = dirs::data_dir() {
+        let cache_dir = data_dir.join("qbz").join("cache");
+        if let Err(e) = std::fs::create_dir_all(&cache_dir) {
+            log::warn!("[qbz-qt] MB cache dir create failed: {e}");
+        } else {
+            let db_path = cache_dir.join("musicbrainz_cache.db");
+            match qbz_integrations::musicbrainz::cache::MusicBrainzCache::new(&db_path) {
+                Ok(cache) => {
+                    runtime.core().set_musicbrainz_cache(cache);
+                    log::info!("[qbz-qt] MB cache opened at {db_path:?}");
+                }
+                Err(e) => log::warn!("[qbz-qt] MB cache open failed: {e}"),
+            }
+        }
+    }
+
     let _ = APP.set(runtime);
 
     // BOTH must run before QGuiApplication: the renderer envs are read when

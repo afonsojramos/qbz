@@ -2227,6 +2227,16 @@ pub async fn settings_bool(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &str,
                 Ok(()) => {
                     // Live apply (main.rs:9019-9029 seeds core from this pref).
                     runtime.core().musicbrainz_set_enabled(value).await;
+                    // ...and repaint the open artist page, because every
+                    // MB-derived field on that document is baked when the
+                    // document is built: `mbAvailable`, the Origin block, the
+                    // relationship rows, and `origin.locationClickable` — the
+                    // gate on both Artist Scene doors. Without this, turning
+                    // MusicBrainz OFF leaves a live "Artist Scene" link on a
+                    // page the user navigates back to, and following it would
+                    // run discovery against a disabled client that reports a
+                    // false "no artists found" rather than an error.
+                    crate::republish_open_artist();
                     Ok(Apply::None)
                 }
                 Err(e) => Err(e),

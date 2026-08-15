@@ -5111,3 +5111,75 @@ msgstr "Cover ansehen"
 
 msgid "Could not load the image"
 msgstr "Das Bild konnte nicht geladen werden"
+
+# ArtistScene + MusicianPage (Qt port, 2026-08-14 contract §7). Copy is Tauri's
+# verbatim: ASCII "..." (not U+2026), U+00B7 in the hero subtitle, ASCII hyphen
+# in "(A-Z)". Reused rather than twinned — "Filter by genre", "Clear filter",
+# "No albums found", "Off", "Group: A-Z", "Group: Off", "Scene", "Appears On",
+# "Bands & Projects", "Load more", "Loading…", "Artist Scene",
+# "No artists found for this scene.", "No album appearances found." and
+# "Select an artist to see their albums." (period-only delta) already exist.
+# The {artist}/{genres}/{genre}/{name} placeholders are NAMED, per contract §7,
+# and are byte-identical in all eight locales. qbz_i18n::t_args CANNOT fill them
+# (substitute() at qbz-i18n/src/lib.rs:153-170 only matches a bare "{}") — every
+# call site substitutes explicitly, e.g. .replace("{artist}", name).
+
+msgid "Based on {artist} · {genres}"
+msgstr "Basierend auf {artist} · {genres}"
+
+msgid "Searching MusicBrainz for {genre} artists..."
+msgstr "Suche auf MusicBrainz nach {genre}-Künstlern..."
+
+msgid "Verifying availability on Qobuz..."
+msgstr "Verfügbarkeit auf Qobuz wird geprüft..."
+
+msgid "Preparing results..."
+msgstr "Ergebnisse werden vorbereitet..."
+
+msgid "No matching artists from this scene are currently available on Qobuz."
+msgstr "Derzeit sind keine passenden Künstler aus dieser Szene auf Qobuz verfügbar."
+
+msgid "Loading albums..."
+msgstr "Alben werden geladen..."
+
+msgid "Failed to load albums"
+msgstr "Alben konnten nicht geladen werden"
+
+msgid "Failed to load appearances"
+msgstr "Mitwirkungen konnten nicht geladen werden"
+
+msgid "Looking up {name}..."
+msgstr "{name} wird gesucht..."
+
+msgid "Failed to look up musician"
+msgstr "Musiker konnte nicht gefunden werden"
+
+msgid "Browse view"
+msgstr "Browse-Ansicht"
+
+msgid "Grid view"
+msgstr "Rasteransicht"
+
+msgid "Alphabetical (A-Z)"
+msgstr "Alphabetisch (A-Z)"
+
+msgid "This musician appears in album credits but has limited catalog information available in Qobuz."
+msgstr "Dieser Musiker erscheint in den Album-Credits, es sind bei Qobuz aber nur wenige Katalogdaten verfügbar."
+
+msgid "Unable to verify this musician's catalog. The information shown is based on album credits."
+msgstr "Der Katalog dieses Musikers konnte nicht überprüft werden. Die angezeigten Informationen stammen aus den Album-Credits."
+
+msgid "This musician appears in album credits."
+msgstr "Dieser Musiker erscheint in den Album-Credits."
+
+msgid "Discography"
+msgstr "Diskografie"
+
+msgid "Live Albums"
+msgstr "Live-Alben"
+
+msgid "Select an artist to see their albums"
+msgstr "Wähle einen Künstler aus, um seine Alben zu sehen"
+
+msgid "{} / {} artists"
+msgstr "{} / {} Künstler"

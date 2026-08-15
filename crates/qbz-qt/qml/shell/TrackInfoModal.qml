@@ -115,9 +115,20 @@ Popup {
     // TODO(qt-bridge): no label view in the Qt port (cards/LabelCard.qml has
     // the same hole) — the link is rendered 1:1 and inert.
     function openLabel(labelId) {}
-    // TODO(qt-bridge): no musician navigation in the Qt port (Slint routes to
-    // NetworkSidebarActions.musician-clicked) — names hover 1:1, inert.
-    function openMusician(name, roleRaw) {}
+    // Musician click — consumer #5 of six (contract §2.2). This was an empty
+    // stub: the name hovered like a link and did nothing.
+    //
+    // CLOSE ORDER IS LOAD-BEARING, and it is the reverse of what reads
+    // naturally: the reference dispatches FIRST and closes AFTER
+    // (TrackInfoModal.svelte:20-27). Closing first would destroy this modal —
+    // and, for a `weak`/`none` result, the global MusicianModal is summoned
+    // by the very click that would have killed its opener. Dispatch, then close.
+    function openMusician(name, roleRaw) {
+        if (!name || name === "")
+            return
+        QbzArtist.resolveMusician(name, roleRaw || "")
+        close()
+    }
 
     background: Rectangle { color: "#bf000000" }
 

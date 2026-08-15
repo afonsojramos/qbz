@@ -237,6 +237,46 @@ Rectangle {
     readonly property var mbRelationships: network.relationships || ({})
     readonly property var stories: artist.stories || []
 
+    // ---- Artist Scene: the gate BOTH doors share (contract §2.1) ---------
+    //
+    // Three terms, and dropping any one of them breaks a door:
+    //
+    //  1. `locationClickable` — computed in Rust (artist_qt.rs `map_origin`)
+    //     so QML never re-derives the reference's unparenthesised guard. A
+    //     country-only location has nothing to drill into.
+    //  2. `mbid !== ""` — and NOT `network.mbAvailable`, which is the trap.
+    //     That flag is the user's MusicBrainz OPT-IN and nothing else
+    //     (artist_qt.rs:982-983, whose doc comment used to claim otherwise);
+    //     it is seeded SYNCHRONOUSLY with the first artist frame while `mbid`
+    //     stays "" until the async publish_network lands. Gating on it alone
+    //     lights both doors up on frame one with no id to hand them, and the
+    //     click fires with an empty parameter.
+    //  3. `mbAvailable` — the MusicBrainz opt-in, which is now trustworthy at
+    //     THIS point in time: the settings toggle republishes the open artist
+    //     document (settings_qt.rs, "musicbrainz" arm -> republish_open_artist),
+    //     so a stale `locationClickable: true` can no longer survive on a page
+    //     the user navigates back to after switching the integration off.
+    readonly property bool sceneAvailable:
+        mbOrigin.locationClickable === true
+        && (network.mbid || "") !== ""
+        && network.mbAvailable === true
+
+    /// Both doors call THIS — never `QbzScene.open` directly — so they can
+    /// never drift apart in what they pass.
+    function openArtistScene() {
+        if (!sceneAvailable)
+            return
+        QbzScene.open(network.mbid || "",
+                      mbOrigin.artistName || artist.name || "",
+                      mbOrigin.locationAreaId || "",
+                      mbOrigin.locationCity || "",
+                      mbOrigin.locationCountry || "",
+                      mbOrigin.locationCountryCode || "",
+                      mbOrigin.locationPrecision || "",
+                      (mbOrigin.seedGenres || []).join(","),
+                      (mbOrigin.seedTags || []).join(","))
+    }
+
     property var coverMap: ({})
     property string activeJumpTab: "popular-tracks"
     property string artistTab: "catalog"
@@ -1489,8 +1529,14 @@ Rectangle {
 
     // One "KEY   value" row of the MB Origin block.
     component OriginRow: Item {
+        id: originRow
         property string key: ""
         property string value: ""
+        /// When true the value renders as a link and emits `activated`.
+        /// Only the location row ever sets it (door D1 to the Artist Scene);
+        /// born/founded/died/disbanded stay plain text, as in the reference.
+        property bool clickable: false
+        signal activated()
         // The host section Column carries 14px of left+right padding, and a
         // QML Positioner does NOT shrink its children for it — a right-aligned
         // value bound to the bare parent.width would run past the sidebar
@@ -1508,15 +1554,37 @@ Rectangle {
             font.letterSpacing: 0.5
         }
         Text {
+            id: originValue
             anchors.right: parent.right
             anchors.left: originKey.right
             anchors.leftMargin: 8
             anchors.verticalCenter: parent.verticalCenter
             text: value
-            color: theme.textPrimary
+            // The reference's `.origin-location-link` is
+            // `background:none; border:none; padding:0; font-size:13px;
+            // color:var(--accent-primary)` with `text-decoration:underline;
+            // text-underline-offset:2px` on hover
+            // (ArtistDetailView.svelte:3365-3379). Same 13px as the plain
+            // rows, so only the colour and the underline change.
+            color: originRow.clickable ? theme.accent : theme.textPrimary
             font.pixelSize: 13
+            font.underline: originRow.clickable && originLink.containsMouse
             horizontalAlignment: Text.AlignRight
             elide: Text.ElideRight
+        }
+        MouseArea {
+            id: originLink
+            // Only the text, not the whole row — the key ("BORN IN") is not
+            // part of the link in the reference either.
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            width: Math.min(originValue.implicitWidth, originValue.width)
+            enabled: originRow.clickable
+            visible: originRow.clickable
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: originRow.activated()
         }
     }
 
@@ -1557,7 +1625,20 @@ Rectangle {
                 // otherwise) — landing the user on a same-name artist is worse
                 // than the row doing nothing.
                 navigable: true
-                onClicked: QbzArtist.resolveMusician(modelData.name, relGroup.roleKey || "")
+                // `modelData.role`, NOT `relGroup.roleKey`. Rust already built
+                // the right string per ROW: `group_relations` seeds each group
+                // with the reference's own default ("Band Member" / "Band" /
+                // "Collaborator") and then prefers that person's actual first
+                // credited role (artist_qt.rs `map_relationships`), which is
+                // exactly what the reference sends
+                // (ArtistDetailView.svelte:3015,3033,3046). Sending `roleKey`
+                // instead threw all of that away and shipped a per-GROUP
+                // lowercase MusicBrainz key shared by every row — and for the
+                // middle group it is not even a casing difference, it sent
+                // "member of" where the reference sends "Band". The role is
+                // echoed back on every appearance card, so it was visible.
+                onClicked: QbzArtist.resolveMusician(modelData.name,
+                                                     modelData.role || relGroup.roleKey || "")
             }
         }
         Text {
@@ -2854,11 +2935,13 @@ Rectangle {
                             visible: network.originLoading !== true && (mbOrigin.locationDisplay || "") !== ""
                             key: mbOrigin.isPerson ? QbzSession.tr("BORN IN", QbzSession.trRev)
                                                    : QbzSession.tr("FOUNDED IN", QbzSession.trRev)
-                            // POC-NOTE: the Slint row is clickable and opens
-                            // ArtistsByLocationView; that view has no port
-                            // here, so the affordance is left out rather than
-                            // rendered dead.
+                            // DOOR D1 to the Artist Scene, and the reference's
+                            // ONLY door (ArtistDetailView.svelte:2904-2935).
+                            // Was plain text under a POC-NOTE until the scene
+                            // view existed to receive it.
                             value: mbOrigin.locationDisplay || ""
+                            clickable: root.sceneAvailable
+                            onActivated: root.openArtistScene()
                         }
                         OriginRow {
                             visible: network.originLoading !== true && (mbOrigin.endDate || "") !== ""
@@ -3163,7 +3246,14 @@ Rectangle {
                 // and the menu keeps its shape.
                 model: [
                     { "label": QbzSession.tr("Create Artist Collection", QbzSession.trRev), "icon": "library-big", "action": "disco", "live": true },
-                    { "label": QbzSession.tr("Artist Scene", QbzSession.trRev), "icon": "map-pin", "action": "stub", "live": false },
+                    // DOOR D2. This row rendered at opacity 0.4 with
+                    // `action: "stub"` — the track's named defect class, a
+                    // control that renders, persists and drives nothing. It is
+                    // a Slint-era invention with no counterpart in the visual
+                    // reference (kept on the owner's explicit instruction,
+                    // contract ruling R4), and it shares D1's gate exactly so
+                    // the two doors can never disagree about availability.
+                    { "label": QbzSession.tr("Artist Scene", QbzSession.trRev), "icon": "map-pin", "action": "scene", "live": root.sceneAvailable },
                     { "label": QbzSession.tr("Share", QbzSession.trRev), "icon": "link", "action": "share", "live": true },
                     { "label": root.toggleState("artistPin", artist.isPinned) ? QbzSession.tr("Unpin", QbzSession.trRev) : QbzSession.tr("Pin", QbzSession.trRev), "icon": root.toggleState("artistPin", artist.isPinned) ? "pin-filled" : "pin", "action": "pin", "live": true },
                 ]
@@ -3200,6 +3290,8 @@ Rectangle {
                             if (modelData.action === "pin") {
                                 root.setToggleState("artistPin", !root.toggleState("artistPin", artist.isPinned))
                                 QbzLibrary.togglePin("artist", artist.id, artist.name, "", artist.artUrl)
+                            } else if (modelData.action === "scene") {
+                                root.openArtistScene()
                             } else if (modelData.action === "disco") {
                                 // Discography Builder — ArtistPageView.slint
                                 // :505-511 `media-action("artist", id,

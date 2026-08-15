@@ -62,4 +62,10 @@ pub use qbz_models::{CoreEvent, FrontendAdapter, LoggingAdapter, NoOpAdapter};
 
 // Re-exports from this crate
 pub use core::{normalize_artist_name, QbzCore};
+// Scene discovery ("artists from the same place"). A frontend driving it needs
+// all four: the token to cancel a run it has navigated away from, the phase for
+// the progress label, and the typed error to tell "offline" and "the upstreams
+// all failed" apart from an honest empty result — which the untyped
+// `CoreError` cannot express and which the view's error state depends on.
+pub use core::{CancelToken, ScenePhase, SceneDiscoveryError};
 pub use error::CoreError;

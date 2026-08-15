@@ -102,6 +102,18 @@ Item {
             // to "" and the pane goes blank with nothing logged, i.e. the
             // dead "See discography" in a new costume.
             : QbzShell.currentView === "artistreleases" ? "../views/ArtistReleasesView.qml"
+            // Artist page > Network > Origin > the location link, and the
+            // header ⋯ > "Artist Scene". Both doors call QbzScene.open(...),
+            // which records this id (artist_scene_qt.rs:430). Same two-file
+            // contract as everything else in this chain — and the same failure
+            // mode if the arm is forgotten: a blank pane, logged nowhere,
+            // recoverable with Back, i.e. indistinguishable from the dead
+            // click the whole feature exists to fix.
+            : QbzShell.currentView === "scene" ? "../views/ArtistSceneView.qml"
+            // A credited musician who did NOT resolve to a Qobuz artist:
+            // musician_qt.rs:362 records this on the `contextual` branch only.
+            // `weak`/`none` are a global modal, not a route — see AppShell.
+            : QbzShell.currentView === "musician" ? "../views/MusicianPageView.qml"
             // For You > Qobuz Mixes. The whole chain existed —
             // HomeView's tile -> QbzHome.openMix -> foryou_qt -> nav_qt
             // records the "mix" view — and MixView.qml is written and

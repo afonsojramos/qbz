@@ -379,6 +379,10 @@ impl qbz_hotkeys::QbzHotkeys {
             link_resolver_open: false,
             customize_open: *self.customize_open(),
             cheatsheet_open: *self.cheatsheet_open(),
+            // Sampled from the OWNER of the state, like cortinilla/immersive
+            // below: the modal is an always-instantiated, self-gated global
+            // overlay, so no other surface can observe whether it is up.
+            musician_modal_open: crate::musician_qt::modal_open(),
             cortinilla_open: crate::search_qt::cortinilla_open(),
             immersive_open: crate::immersive_bridge::is_open(),
             // §4.6 seam: the QML-reported mirror (a view's multiSelectOn
@@ -390,6 +394,7 @@ impl qbz_hotkeys::QbzHotkeys {
         match crate::hotkeys_qt::escape_target(&state) {
             EscapeTarget::Customize => self.as_mut().set_customize_open(false),
             EscapeTarget::Cheatsheet => self.as_mut().set_cheatsheet_open(false),
+            EscapeTarget::MusicianModal => crate::musician_qt::close_modal(),
             EscapeTarget::Cortinilla => crate::search_qt::dismiss(),
             EscapeTarget::Immersive => crate::immersive_bridge::close(),
             EscapeTarget::MultiSelect => {

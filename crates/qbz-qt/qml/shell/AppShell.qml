@@ -703,6 +703,20 @@ Rectangle {
     MyQbzModals {
         anchors.fill: parent
     }
+    // MusicianModal — where a WEAK / NONE / resolve-error musician click lands.
+    // It is the majority branch, not an edge case: most credited sidemen are
+    // not Qobuz artists, and before this the click did nothing at all.
+    //
+    // Out here, and not in any of its six openers, for the strongest version of
+    // the reason its neighbours give: FOUR of those six openers are themselves
+    // modals or overlays (album credits, desktop track info, the immersive
+    // track-info panel), and each CLOSES ITSELF as it dispatches — so a modal
+    // parented into the opener would be destroyed by the very click that
+    // summoned it. Self-gates on QbzMusician.modalJson, so while closed it is
+    // an invisible, non-interactive Item.
+    MusicianModal {
+        anchors.fill: parent
+    }
     // FolderModals — the "New folder" create panel, the full folder editor and
     // their delete confirm (contract D21). Out here for the same reason as its
     // neighbours: it is opened from the SIDEBAR's "..." menu and row menu as

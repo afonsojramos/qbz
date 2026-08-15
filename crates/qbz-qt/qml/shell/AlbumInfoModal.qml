@@ -83,11 +83,21 @@ Popup {
         QbzHome.openLabel(labelId)
     }
 
+    // Musician click — consumer #4 of six (contract §2.2).
+    //
+    // ORDER: dispatch, THEN close — the reverse of what stood here, and it
+    // matches the reference (AlbumCreditsModal.svelte:20-28). It matters now
+    // that the click has a destination: a `weak`/`none` result opens the
+    // global MusicianModal, and closing this one first hands focus back to the
+    // shell a moment before that modal takes it, which is precisely the
+    // unstable-focus window the contract flags (§5.2). The neighbouring
+    // openArtist/openLabel keep close-first because they navigate the shell
+    // underneath rather than summoning another overlay.
     function openMusician(name, primaryRole) {
         if (!name || name === "")
             return
-        close()
         QbzArtist.resolveMusician(name, primaryRole || "")
+        close()
     }
 
     // Cover source: the custom override beats the remote best() URL, same

@@ -297,6 +297,8 @@ ApplicationWindow {
         QbzLibrary.boot()
         QbzAlbum.boot()
         QbzArtist.boot()
+        QbzScene.boot()
+        QbzMusician.boot()
         QbzLyrics.boot()
         QbzCast.boot()
         QbzBridge.boot()
