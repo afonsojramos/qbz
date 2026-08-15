@@ -9,7 +9,8 @@
 //! Props: the one artist-view JSON document + its loading flag, and the one
 //! discography-page document (artistReleasesJson — the sub-view reached from
 //! "See discography", state and all).
-//! Invokables: openArtist, resolveMusician, share, loadReleaseSection
+//! Invokables: openArtist, resolveMusician, share, the portrait menu's three
+//! (imageAddCustom / imageRemoveCustom / imageSaveAs), loadReleaseSection
 //! (per-bucket "Load more"), setSectionSort (per-bucket release sort, persisted
 //! by release_type), and the discography page's four —
 //! openReleases / releasesLoadMore / releasesSetSort / releasesRetry.
@@ -79,6 +80,23 @@ pub mod qbz_artist_bridge {
         /// which QML only discovers when the menu opens.
         #[qinvokable]
         fn share(self: Pin<&mut QbzArtist>, artist_id: QString);
+
+        /// Portrait right-click menu (cover_artwork_qt.rs): pick / clear the
+        /// custom artist image, save the portrait to disk. The store is keyed
+        /// by artist NAME (`ArtistPageView.slint:312`), which is why the name
+        /// travels instead of the id; `artwork_url` is the Qobuz portrait URL,
+        /// needed for the hash -> override link and as the save-as fallback
+        /// source. "Open in browser" is NOT here — it reuses
+        /// `QbzShell.openExternalUrl`, exactly as the album cover menu does.
+        ///
+        /// `#[auto_cxx_name]` makes the QML names QbzArtist.imageAddCustom /
+        /// .imageRemoveCustom / .imageSaveAs.
+        #[qinvokable]
+        fn image_add_custom(self: Pin<&mut QbzArtist>, name: QString, artwork_url: QString);
+        #[qinvokable]
+        fn image_remove_custom(self: Pin<&mut QbzArtist>, name: QString, artwork_url: QString);
+        #[qinvokable]
+        fn image_save_as(self: Pin<&mut QbzArtist>, name: QString, artwork_url: QString);
 
         /// ArtistView per-section "Load more" — the next releases page.
         #[qinvokable]
@@ -205,6 +223,24 @@ impl qbz_artist_bridge::QbzArtist {
     /// frame of latency between the click and the re-ordered grid.
     pub fn set_section_sort(self: Pin<&mut Self>, release_type: QString, sort: QString) {
         crate::artist_qt::resort_section(&release_type.to_string(), &sort.to_string());
+    }
+
+    // Portrait menu — straight through to `cover_artwork_qt`, no `crate::`
+    // forwarder: these mutate the artwork store and repaint through
+    // `artist_qt::apply_custom_image`, and touch neither nav nor AppRuntime.
+    pub fn image_add_custom(self: Pin<&mut Self>, name: QString, artwork_url: QString) {
+        crate::cover_artwork_qt::add_custom_artist_image(name.to_string(), artwork_url.to_string());
+    }
+
+    pub fn image_remove_custom(self: Pin<&mut Self>, name: QString, artwork_url: QString) {
+        crate::cover_artwork_qt::remove_custom_artist_image(
+            name.to_string(),
+            artwork_url.to_string(),
+        );
+    }
+
+    pub fn image_save_as(self: Pin<&mut Self>, name: QString, artwork_url: QString) {
+        crate::cover_artwork_qt::save_artist_image_as(name.to_string(), artwork_url.to_string());
     }
 
     pub fn resolve_musician(self: Pin<&mut Self>, name: QString, role: QString) {

@@ -5099,6 +5099,12 @@ msgstr "Bureaubladmodus"
 msgid "View cover"
 msgstr "Hoes bekijken"
 
+# ArtistView portrait menu / lightbox (Qt port, 2026-08-14) — the
+# artist twin of "View cover".
+
+msgid "View image"
+msgstr "Afbeelding bekijken"
+
 msgid "Could not load the image"
 msgstr "De afbeelding kon niet worden geladen"
 

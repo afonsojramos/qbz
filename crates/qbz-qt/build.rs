@@ -164,7 +164,89 @@ fn build_shaders() {
     }
 }
 
+/// Emit the two compile-time env vars the About modal's "Build" row reads
+/// (`src/about_qt.rs`): the build DATE (`QBZ_BUILD_DATE`, `YYYY-MM-DD`) and the
+/// short git COMMIT (`QBZ_BUILD_COMMIT`). Ported from `crates/qbz/build.rs:16-41`.
+///
+/// Both degrade gracefully and neither can fail the build:
+/// - the date prefers `SOURCE_DATE_EPOCH` (reproducible builds; Flathub sets
+///   it) and falls back to the wall clock;
+/// - the commit shells out to `git rev-parse --short HEAD` and is simply EMPTY
+///   in an offline source tarball with no `.git` (Flathub/Snap).
+fn emit_build_stamp() {
+    // Re-run when HEAD moves so the embedded commit stays fresh.
+    //
+    // Ask git where HEAD actually lives instead of assuming `../../.git/HEAD`:
+    // in a git WORKTREE `.git` is a 70-byte file, not a directory, so that path
+    // does not exist — and cargo treats a missing `rerun-if-changed` target as
+    // always-dirty, which re-ran this whole script (per-shader qsb, the
+    // recursive asset sweep, cxx-qt/moc codegen) on every single cargo
+    // invocation in the tree. Emit nothing when git cannot answer.
+    if let Some(head) = std::process::Command::new("git")
+        .args(["rev-parse", "--git-path", "HEAD"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty() && std::path::Path::new(s).exists())
+    {
+        println!("cargo:rerun-if-changed={head}");
+    }
+    println!("cargo:rerun-if-env-changed=SOURCE_DATE_EPOCH");
+
+    let epoch: i64 = std::env::var("SOURCE_DATE_EPOCH")
+        .ok()
+        .and_then(|s| s.trim().parse::<i64>().ok())
+        .or_else(|| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()
+                .map(|d| d.as_secs() as i64)
+        })
+        .unwrap_or(0);
+
+    println!("cargo:rustc-env=QBZ_BUILD_DATE={}", format_ymd(epoch));
+
+    let commit = std::process::Command::new("git")
+        .args(["rev-parse", "--short", "HEAD"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+    println!("cargo:rustc-env=QBZ_BUILD_COMMIT={commit}");
+}
+
+/// Unix timestamp (seconds, UTC) -> `YYYY-MM-DD`, via Howard Hinnant's
+/// days→civil algorithm. Copied as-is from `crates/qbz/build.rs:58-75`: it is
+/// chrono-free BY DESIGN, and `qbz-qt` has no chrono dependency to lean on.
+/// Empty string for a zero/invalid epoch.
+fn format_ymd(epoch_secs: i64) -> String {
+    if epoch_secs <= 0 {
+        return String::new();
+    }
+    let days = epoch_secs.div_euclid(86_400);
+    // days_from_civil inverse (Hinnant, "chrono-Compatible Low-Level Date Algorithms").
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097; // [0, 146096]
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
+    let year = if m <= 2 { y + 1 } else { y };
+    format!("{year:04}-{m:02}-{d:02}")
+}
+
 fn main() {
+    // The About modal's build stamp. Emitted before anything else so a failure
+    // anywhere below cannot leave the env vars unset (env! is a compile error
+    // when they are).
+    emit_build_stamp();
+
     // Bake the shaders BEFORE the qrc sweep below collects qml/assets, so a
     // freshly compiled .qsb is the one that gets embedded.
     build_shaders();
@@ -203,7 +285,7 @@ fn main() {
             // (myqbz_qt.rs, blacklist_qt.rs, toast_qt.rs, …) are plain
             // modules and must NOT be listed — only files that declare a
             // #[cxx_qt::bridge] mod belong in this array.
-            rust_files: &["src/bridge.rs", "src/session_bridge.rs", "src/shell_bridge.rs", "src/player_bridge.rs", "src/queue_bridge.rs", "src/home_bridge.rs", "src/viz_bridge.rs", "src/immersive_bridge.rs", "src/suggestions_bridge.rs", "src/hotkeys_bridge.rs", "src/search_bridge.rs", "src/local_bridge.rs", "src/library_bridge.rs", "src/album_bridge.rs", "src/artist_bridge.rs", "src/scene_bridge.rs", "src/musician_bridge.rs", "src/lyrics_qt.rs", "src/icon_tint_qt.rs", "src/cast_bridge.rs", "src/myqbz_bridge.rs", "src/myqbz_add_bridge.rs", "src/disco_bridge.rs", "src/blacklist_bridge.rs", "src/playlist_picker_bridge.rs", "src/playlist_manager_bridge.rs", "src/playlist_import_bridge.rs", "src/dac_wizard_bridge.rs", "src/folder_edit_bridge.rs", "src/playlist_edit_bridge.rs", "src/qconnect_bridge.rs", "src/kiosk_nav_bridge.rs", "src/mini_bridge.rs", "src/tray_bridge.rs"],
+            rust_files: &["src/bridge.rs", "src/session_bridge.rs", "src/shell_bridge.rs", "src/player_bridge.rs", "src/queue_bridge.rs", "src/home_bridge.rs", "src/viz_bridge.rs", "src/immersive_bridge.rs", "src/suggestions_bridge.rs", "src/hotkeys_bridge.rs", "src/search_bridge.rs", "src/local_bridge.rs", "src/library_bridge.rs", "src/album_bridge.rs", "src/artist_bridge.rs", "src/scene_bridge.rs", "src/musician_bridge.rs", "src/lyrics_qt.rs", "src/icon_tint_qt.rs", "src/cast_bridge.rs", "src/myqbz_bridge.rs", "src/myqbz_add_bridge.rs", "src/disco_bridge.rs", "src/blacklist_bridge.rs", "src/playlist_picker_bridge.rs", "src/playlist_manager_bridge.rs", "src/playlist_import_bridge.rs", "src/dac_wizard_bridge.rs", "src/folder_edit_bridge.rs", "src/playlist_edit_bridge.rs", "src/qconnect_bridge.rs", "src/kiosk_nav_bridge.rs", "src/mini_bridge.rs", "src/tray_bridge.rs", "src/about_bridge.rs"],
             qml_files: &[
                 "qml/LoginScreen.qml",
                 "qml/Main.qml",
@@ -231,6 +313,7 @@ fn main() {
                 "qml/controls/PlaylistPickerModal.qml",
                 "qml/controls/PmFolderIcon.qml",
                 "qml/controls/QbzCircleAction.qml",
+                "qml/controls/QbzColorPicker.qml",
                 "qml/controls/QbzConfirmModal.qml",
                 "qml/controls/QbzContextMenu.qml",
                 "qml/controls/QbzEmptyState.qml",
@@ -269,6 +352,7 @@ fn main() {
                 "qml/rows/TrackListHeader.qml",
                 "qml/rows/TrackRow.qml",
                 "qml/settings/AppearanceSettings.qml",
+                "qml/settings/CustomThemeEditor.qml",
                 "qml/settings/IntegrationsSettings.qml",
                 "qml/settings/SettingsView.qml",
                 "qml/shell/AmbientField.qml",
@@ -316,7 +400,13 @@ fn main() {
                 // AppShell mounts last.
                 "qml/shell/QconnectFlyout.qml",
                 "qml/shell/LogViewerModal.qml",
+                "qml/shell/ReportIssueModal.qml",
                 "qml/shell/QconnectDevModal.qml",
+                // About QBZ + What's New (the header menu's last two rows),
+                // both mounted at the AppShell overlay tail and self-gated on
+                // QbzAbout's two documents.
+                "qml/shell/AboutModal.qml",
+                "qml/shell/WhatsNewModal.qml",
                 // Immersive mode (2026-08-02 immersive-port contract §2) —
                 // its own module directory like views/local/ and
                 // views/playlistmanager/. B2 shipped the root overlay + the
@@ -362,6 +452,7 @@ fn main() {
                 "qml/views/HomeView.qml",
                 "qml/views/LibraryView.qml",
                 "qml/views/LocalLibraryView.qml",
+                "qml/views/PlaylistRail.qml",
                 "qml/views/PlaylistView.qml",
                 "qml/views/SearchView.qml",
                 "qml/views/SectionRail.qml",
@@ -404,6 +495,7 @@ fn main() {
                 "qml/settings/BlacklistSettings.qml",
                 "qml/settings/DacWizardModal.qml",
                 "qml/settings/DeveloperSettings.qml",
+                "qml/settings/DiagnosticsPanel.qml",
                 "qml/settings/LibFolderEditModal.qml",
                 "qml/settings/LibraryFolderTable.qml",
                 "qml/settings/LocalLibrarySettings.qml",

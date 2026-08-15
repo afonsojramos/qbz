@@ -7,7 +7,8 @@
 //! Synthetic slugs (theme.rs): "auto" (AutoSource::System regeneration —
 //! falls back to OLED when headless generation fails) and "custom"
 //! (`<data_dir>/qbz/custom_theme.json`, the SAME file the Slint custom-theme
-//! editor writes; read-only apply here — POC-NOTE: no token editor). The
+//! editor writes — the editor and the write path live in `custom_theme_qt`,
+//! which also owns the path and the in-memory base this module reads). The
 //! "system" registry theme resolves via the OS palette in Slint; the POC
 //! maps it to the Dark palette (POC-NOTE).
 
@@ -65,16 +66,13 @@ pub fn set_theme(slug: &str) {
 // Slug -> ThemeColors (theme.rs apply_theme / auto / custom startup dispatch)
 // ---------------------------------------------------------------------------
 
-fn custom_theme_path() -> Option<std::path::PathBuf> {
-    Some(dirs::data_dir()?.join("qbz").join("custom_theme.json"))
-}
-
+/// The user-authored theme: the 11 editable base tokens expanded through the
+/// SHARED derivation. The base (and the file path, and the write path) belong
+/// to `custom_theme_qt` — reading it back off disk here would show the last
+/// PERSISTED colours during the editor's debounce window instead of the live
+/// ones.
 fn custom_colors() -> ThemeColors {
-    let base = custom_theme_path()
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .and_then(|text| serde_json::from_str::<qbz_theme::CustomThemeBase>(&text).ok())
-        .unwrap_or_else(qbz_theme::CustomThemeBase::default_oled);
-    qbz_theme::theme_from_base(&base)
+    qbz_theme::theme_from_base(&crate::custom_theme_qt::load())
 }
 
 /// Build the generator's source from the persisted pref — 1:1 with the
@@ -149,7 +147,7 @@ const ALPHA_PCTS: [u32; 24] = [
 
 #[derive(Serialize)]
 struct ThemeTokens {
-    // 30 named colors (ThemeColors contract).
+    // 31 named colors (ThemeColors contract).
     #[serde(rename = "surfaceMain")]
     surface_main: String,
     #[serde(rename = "surfaceCard")]
@@ -286,6 +284,17 @@ fn tokens_for(colors: &ThemeColors) -> ThemeTokens {
 pub fn theme_json() -> String {
     let colors = colors_for_slug(&current_slug());
     serde_json::to_string(&tokens_for(&colors)).unwrap_or_else(|_| "{}".into())
+}
+
+/// Push an ALREADY-RESOLVED palette — the custom-theme editor's live preview
+/// (`custom_theme_qt::apply_live`). Deliberately does NOT touch `theme_slug`
+/// and deliberately does NOT re-resolve the slug: during a colour drag the
+/// authority is the in-memory base, not the (debounced) file on disk.
+pub(crate) fn publish_colors(colors: &ThemeColors) {
+    let json = serde_json::to_string(&tokens_for(colors)).unwrap_or_else(|_| "{}".into());
+    crate::shell_bridge::ui(move |mut b| {
+        b.as_mut().set_theme_json(QString::from(json.as_str()));
+    });
 }
 
 /// Re-resolve + republish after a slug change (the push_colors moment).

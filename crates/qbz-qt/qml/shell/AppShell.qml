@@ -198,6 +198,7 @@ Rectangle {
         anchors.top: parent.top
         height: theme.headerHeight
         hostWindow: root.hostWindow
+        onReportIssueRequested: reportIssueModal.open = true
         // Square corners (phase 12: the window is opaque; any rounding is
         // the compositor's business).
     }
@@ -754,8 +755,17 @@ Rectangle {
     CustomizeShortcutsModal {
         anchors.fill: parent
     }
+    // The four overlays below are ALWAYS-ON-TOP: in the reference they are
+    // mounted after every modal (AppShell.slint:941-953) and so paint above
+    // them. This port relied on declaration order alone, which held only while
+    // no modal carried an explicit `z` — and the modal band is 3000-3200
+    // (ADR-009 as this port spells it), so any z-carrying modal buried them:
+    // a toast raised by a background event behind an opaque panel is simply
+    // never seen. They now carry an explicit band of their own, ABOVE the
+    // modals, keeping the relative order they already had.
     QbzToast {
         anchors.fill: parent
+        z: 3500
     }
 
     // Immersive mode root overlay (2026-08-02 immersive-port contract §5.1):
@@ -768,17 +778,18 @@ Rectangle {
     // corners is correct for a window-level overlay (:555-563 above).
     ImmersiveView {
         anchors.fill: parent
+        z: 3510
     }
 
-    // LAST child = above every surface, exactly like ArtPreviewOverlay.slint's
-    // mount in AppShell.slint. Non-interactive, so it never steals the hover
-    // that is keeping it open (see the file header).
-    ArtPreviewOverlay { }
+    // Above every surface (see the always-on-top band above), exactly like
+    // ArtPreviewOverlay.slint's mount in AppShell.slint. Non-interactive, so it
+    // never steals the hover that is keeping it open (see the file header).
+    ArtPreviewOverlay { z: 3520 }
 
     // The shell's ONE hover-tooltip overlay — the port of Slint's
-    // TooltipOverlay/SidebarTooltip mechanism, mounted LAST for the reason
-    // TooltipOverlay.slint's header gives: "mounted last in AppShell so no
-    // neighbour can cover it". Surfaces do not own a popup; they call
+    // TooltipOverlay/SidebarTooltip mechanism, topmost of the always-on-top
+    // band for the reason TooltipOverlay.slint's header gives: "mounted last in
+    // AppShell so no neighbour can cover it". Surfaces do not own a popup; they call
     // showRight()/showAbove()/hide() on this instance (see QbzTooltip.qml).
     //
     // WIRED SO FAR: the collapsed sidebar rail (Sidebar.qml). Everything else
@@ -787,6 +798,7 @@ Rectangle {
     QbzTooltip {
         id: tooltipOverlay
         anchors.fill: parent
+        z: 3530
     }
 
     // Qobuz Connect diagnostics modal (DeveloperSettings > QOBUZ CONNECT) —
@@ -806,4 +818,23 @@ Rectangle {
     // on the document's `open`, so while closed it is an invisible,
     // non-interactive Item that parses one small JSON string.
     LogViewerModal { }
+
+    // Report an issue (the header hamburger's row): explains the manual,
+    // redacted log-sharing flow and offers "Go to logs" + the GitHub bug
+    // template. Its `open` is LOCAL state — nothing in Rust needs to know it
+    // is up — so the menu row flips it directly through this id.
+    ReportIssueModal { id: reportIssueModal }
+
+    // About QBZ + What's New (the header hamburger menu's last two rows),
+    // mirroring AppShell.slint:925-936 where both are mounted with the global
+    // modals. Each self-gates on its half of QbzAbout's two documents, so
+    // while closed it is an invisible, non-interactive Item that parses one
+    // small JSON string — and each carries an explicit `z: 3000` (ADR-009 as
+    // this port spells it) rather than relying on declaration order alone.
+    AboutModal {
+        anchors.fill: parent
+    }
+    WhatsNewModal {
+        anchors.fill: parent
+    }
 }

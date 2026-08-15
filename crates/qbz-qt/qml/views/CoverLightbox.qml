@@ -1,11 +1,20 @@
-// Cover lightbox — NEW in the Qt port (no Slint counterpart): the album art
-// at its best available quality, fitted to the window. Opened by left-click
-// on the AlbumView cover or by the cover menu's "View cover" entry.
+// Artwork lightbox — NEW in the Qt port (no Slint counterpart): the artwork
+// at its best available quality, fitted to the window. Opened by left-click on
+// the AlbumView cover, the PlaylistView cover or the ArtistView portrait, and
+// by those menus' "View cover" / "View image" entries.
 //
 // Shape follows TrackInfoModal: a full-window Popup parented to
 // Overlay.overlay, a dim scrim whose click closes, Escape closes. The image
 // asks for a decode capped at the window size (sourceSize), so a mega
 // variant does not cost a full-res decode to display at ~90% of the window.
+//
+// ASPECT-AWARE, and it has to be. This used to force a SQUARE box of
+// `min(w,h) * 0.9` on the grounds that "covers are square". Album covers are;
+// artist portraits frequently are NOT (1080x720 among the portraits measured
+// in this machine's cache), and a landscape image squeezed into the min-axis
+// square gave up roughly a third of the height available on a wide window.
+// The box now takes the image's own ratio inside a 90% viewport, which lands
+// on exactly the old square for a square source — nothing regresses.
 
 import QtQuick
 import QtQuick.Controls
@@ -41,6 +50,7 @@ Popup {
     }
 
     contentItem: Item {
+        id: stage
         // Scrim click closes; clicks on the image itself are swallowed so
         // the lightbox stays up while the user inspects it.
         MouseArea {
@@ -48,19 +58,32 @@ Popup {
             onClicked: root.close()
         }
 
-        // Fit the LONGER window axis at 90%, so the cover never touches the
-        // rim. Covers are square; PreserveAspectFit keeps any odd one honest.
-        readonly property real side: Math.min(root.width, root.height) * 0.9
+        // The 90% viewport the artwork is fitted into, so it never touches
+        // the rim on either axis.
+        readonly property real maxW: root.width * 0.9
+        readonly property real maxH: root.height * 0.9
+        // The SOURCE ratio. `implicitWidth/Height` report the decoded size,
+        // which `sourceSize` has already scaled — but scaled preserving the
+        // aspect, so the ratio is the source's. 1.0 until the image reports,
+        // i.e. the square box this file used to force unconditionally.
+        readonly property real ratio: (art.implicitWidth > 0 && art.implicitHeight > 0)
+            ? (art.implicitWidth / art.implicitHeight) : 1.0
+        readonly property real boxW: Math.min(stage.maxW, stage.maxH * stage.ratio)
+        readonly property real boxH: Math.min(stage.maxH, stage.maxW / stage.ratio)
 
         Image {
             id: art
             anchors.centerIn: parent
-            width: parent.side
-            height: parent.side
+            width: stage.boxW
+            height: stage.boxH
             source: root.artSource
             asynchronous: true
             fillMode: Image.PreserveAspectFit
-            sourceSize: Qt.size(parent.side, parent.side)
+            // Capped off the VIEWPORT, not off boxW/boxH: the box is derived
+            // from implicitWidth/Height, which sourceSize itself determines —
+            // binding the cap to the box would be a loop. The viewport is the
+            // real display bound anyway, so nothing is under-decoded.
+            sourceSize: Qt.size(Math.round(stage.maxW), Math.round(stage.maxH))
             smooth: true
             visible: status === Image.Ready
 

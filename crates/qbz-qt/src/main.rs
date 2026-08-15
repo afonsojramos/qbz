@@ -103,6 +103,8 @@ mod kiosk_profile_qt;
 mod artwork_qt;
 mod atmosphere_qt;
 mod bridge;
+mod custom_theme_qt;
+mod diagnostics_qt;
 mod discover_config_qt;
 mod fav_cache_qt;
 // The folder-modal controller. A plain module — it declares no
@@ -130,6 +132,12 @@ mod recently_qt;
 // "Share logs" from an `open::that(path)` handoff into a filterable view with
 // copy / bundle / upload.
 mod log_viewer_qt;
+// About QBZ + What's New (the header menu's last two rows). `about_bridge`
+// declares the #[cxx_qt::bridge] and IS listed in build.rs's rust_files; the
+// other two are plain controller modules and must NOT be.
+mod about_bridge;
+mod about_qt;
+mod whats_new_qt;
 mod recommendations_qt;
 mod library_db_qt;
 mod library_qt;
@@ -2221,8 +2229,37 @@ pub(crate) fn refresh_devices() {
 /// Appearance > Theme row: persist the slug + republish the token document
 /// (live switch — QbzTheme.qml rebinds every consumer).
 pub(crate) fn theme_set(slug: String) {
+    // FIRST-EVER selection of "Custom": seed the editable base from the
+    // palette the user is looking at RIGHT NOW, so picking Custom customizes
+    // what they see instead of jumping to OLED black (1:1 with the reference,
+    // crates/qbz/src/main.rs:11414-11422).
+    //
+    // The snapshot is taken BEFORE `set_theme`, and that ordering is the whole
+    // fix: `set_theme` persists the slug and `current_slug()` re-reads it from
+    // disk, so a seed taken afterwards would resolve "custom", find no file,
+    // and snapshot the default it was supposed to replace.
+    // Entering Custom re-reads the file. The in-memory base is memoized for
+    // the life of the process (so a drag does not re-read it), and it is
+    // filled at bridge construction for every user — including one who booted
+    // with no file and whose theme the SHIPPING SLINT BUILD wrote afterwards.
+    // Without this the cached OLED default would win over their actual theme.
+    if slug == "custom" {
+        custom_theme_qt::invalidate();
+    }
+    let seed_from = (slug == "custom" && !custom_theme_qt::exists())
+        .then(|| theme_qt::colors_for_slug(&theme_qt::current_slug()));
     theme_qt::set_theme(&slug);
+    if let Some(prev) = seed_from {
+        custom_theme_qt::seed_from_current(&prev);
+    }
     theme_qt::publish_theme();
+    // The editor's swatches ride their own document: republish so the grid is
+    // correct the instant the rows appear (and after a seed rewrote the base).
+    // Only under "custom" — anywhere else the editor is not mounted, and the
+    // call would lazily read custom_theme.json for nothing.
+    if slug == "custom" {
+        custom_theme_qt::publish_state();
+    }
 }
 
 /// Appearance > theme filter cycle (0 All / 1 Dark / 2 Light).

@@ -354,6 +354,12 @@ ApplicationWindow {
         // (contract §15 trap 27). The Connections that answer those four
         // signals are below, beside the window verbs they call.
         QbzTray.boot()
+        // About / What's New. Its four invokables self-register the hop, so
+        // today's menu-driven paths work without this line — but the FIRST
+        // publish that is not preceded by an invokable (an avatar prefetch at
+        // startup, an auto-show, a "new version" badge) would be a silent
+        // no-op. Booting it here keeps it in the same contract as the other 34.
+        QbzAbout.boot()
 
         // Seed the maximized latch ONCE, imperatively — see its declaration for
         // why it must not be a binding on the bridge property.

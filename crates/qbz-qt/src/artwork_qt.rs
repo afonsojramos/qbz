@@ -181,6 +181,20 @@ pub fn classify(url: &str) -> ArtUrl {
 /// raw. Percent-encode exactly those two plus `%` itself (first, or the
 /// escapes we add would be double-decoded). Anything already carrying the
 /// scheme is passed through untouched.
+/// The inverse of [`file_url`]: a `file://` URI back to a filesystem path.
+///
+/// `trim_start_matches("file://")` is NOT the inverse — it leaves the three
+/// percent-escapes in place, so any path holding `%`, `#` or `?` comes back as
+/// a name that does not exist on disk. That silently broke whatever opened the
+/// result (a tint decode, a copy) for exactly the files the escaping exists to
+/// support.
+pub fn local_path(url: &str) -> String {
+    let raw = url.strip_prefix("file://").unwrap_or(url);
+    raw.replace("%23", "#")
+        .replace("%3F", "?")
+        .replace("%25", "%")
+}
+
 pub fn file_url(path: &str) -> String {
     if path.starts_with("file://") {
         return path.to_string();

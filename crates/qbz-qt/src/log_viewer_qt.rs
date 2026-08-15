@@ -212,18 +212,30 @@ pub fn copy_all() {
     flash_copied();
 }
 
-/// The GitHub-ready bundle: the shared formatter's `<details>` header plus the
-/// last [`BUNDLE_LINES`] lines.
+/// The GitHub-ready bundle: the shared formatter's `<details>` header, the FULL
+/// diagnostics report, then the last [`BUNDLE_LINES`] lines.
 ///
-/// DELIBERATE NARROWING vs the reference, recorded rather than hidden: its
-/// bundle prepends `diagnostics::build_full_report` (system + the LIVE audio
-/// device + graphics + playback + qconnect), which is the DiagnosticsPanel's
-/// backend and is not ported. This uses `qbz_log::bundle`, the shared
-/// formatter both frontends already have, so the bundle is complete for its
-/// own header fields and simply lacks the diagnostics report. It becomes 1:1
-/// the day the panel lands.
-fn bundle_text() -> String {
+/// This used to carry the eight header fields alone. The reference's bundle
+/// (`crates/qbz/src/log_viewer.rs:260-277`) prepends the diagnostics report as
+/// well — roughly seventy fields — so until the panel landed every issue filed
+/// from a Qt build arrived with no kernel, no distro, no install method, no
+/// GPU, no exclusive-mode / DAC / sample-rate state and no playback context.
+/// [`crate::diagnostics_qt::report_markdown`] is that body, and this is the day
+/// the narrowing ends.
+///
+/// It is injected INTO `format_diagnostics_bundle` rather than replacing it:
+/// the reference's `build_share_text` emits no `<details><summary>` wrapper, and
+/// dropping it would make a pasted bundle expand the whole log inline in the
+/// GitHub issue.
+///
+/// ASYNC, and that is load-bearing: the report re-runs the settings reads, the
+/// `pactl` shell-outs and the CPAL enumeration, so every caller has to be on
+/// the tokio runtime — which is why `copy_bundle` is async and its invokable
+/// takes the `log_upload` shape. The clipboard therefore lands one tick after
+/// the click.
+async fn bundle_text() -> String {
     let lines = qbz_log::ring::snapshot();
+    let report = crate::diagnostics_qt::report_markdown().await;
     let fields = qbz_log::bundle::DiagFields {
         app_version: env!("CARGO_PKG_VERSION"),
         os: std::env::consts::OS,
@@ -234,11 +246,11 @@ fn bundle_text() -> String {
         locale: &qbz_i18n::current_language(),
         log_level: &std::env::var("RUST_LOG").unwrap_or_else(|_| "info".into()),
     };
-    qbz_log::bundle::format_diagnostics_bundle(&fields, &lines, BUNDLE_LINES)
+    qbz_log::bundle::format_diagnostics_bundle_with_report(&fields, &report, &lines, BUNDLE_LINES)
 }
 
-pub fn copy_bundle() {
-    crate::share_qt::copy_to_clipboard(bundle_text());
+pub async fn copy_bundle() {
+    crate::share_qt::copy_to_clipboard(bundle_text().await);
     flash_copied();
 }
 
@@ -258,7 +270,7 @@ pub async fn upload() {
         .clear();
     publish();
 
-    let body = bundle_text();
+    let body = bundle_text().await;
     let url = match reqwest::Client::new()
         .post("https://paste.rs/")
         .body(body)

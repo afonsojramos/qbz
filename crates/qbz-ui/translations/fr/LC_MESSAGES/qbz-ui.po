@@ -5109,6 +5109,12 @@ msgstr "Mode bureau"
 msgid "View cover"
 msgstr "Voir la pochette"
 
+# ArtistView portrait menu / lightbox (Qt port, 2026-08-14) — the
+# artist twin of "View cover".
+
+msgid "View image"
+msgstr "Voir l'image"
+
 msgid "Could not load the image"
 msgstr "Impossible de charger l'image"
 

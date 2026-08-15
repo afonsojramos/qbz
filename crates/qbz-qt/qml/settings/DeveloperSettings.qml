@@ -9,8 +9,10 @@
 // - "Export settings…" writes the bundle immediately with auth EXCLUDED; the
 //   SettingsExportModal's include-auth gate (default OFF) is not ported, so
 //   the safe default is the only behaviour.
-// - The inline DiagnosticsPanel (seven saved-vs-runtime tables) is not
-//   ported — it is a view of its own, not a settings row.
+// - The inline DiagnosticsPanel is ported and mounted last, as in the
+//   reference — with the GTK/WebKit/GSK/GDK rows CUT, because in a Qt process
+//   they can only read "—" and their saved column would come from a file this
+//   binary never writes. The panel's own header explains the cut.
 
 import QtQuick
 import com.blitzfc.qbz
@@ -105,4 +107,10 @@ Column {
         font.pixelSize: theme.fontLegal
         wrapMode: Text.WordWrap
     }
+
+    SettingsSpacer { }
+
+    // ========================== DIAGNOSTICS ==============================
+    // Last child, 1:1 with DeveloperSettings.slint:92.
+    DiagnosticsPanel { }
 }

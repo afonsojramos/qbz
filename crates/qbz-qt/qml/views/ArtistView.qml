@@ -1,6 +1,8 @@
 // Artist detail page — QML port of artist/ArtistPageView.slint.
 //
-// Header (200px circular portrait, name, bio + Read more, CircleAction
+// Header (200px circular portrait — right-click for the image menu
+// (Add/Change/Remove custom image, View image, Open in browser, Save as…),
+// left-click for the lightbox — name, bio + Read more, CircleAction
 // row: Follow / Radio / Network / ⋯, From-catalog/In-library toggle),
 // JUMP TO bar (jump-scroll), Popular Tracks (artwork + album column rows,
 // Load more 5→all, play/shuffle-all), Latest release, release sections
@@ -803,6 +805,7 @@ Rectangle {
     }
     onArtistChanged: {
         syncArtistState()
+        invalidatePortraitOverride()
         dispatchCovers()
     }
     // Cover dispatch keys off the raw document (artist.artUrl etc.), so
@@ -923,6 +926,29 @@ Rectangle {
             fresh.push(u)
         }
         if (fresh.length > 0) QbzShell.sidebarArtworkWindow(JSON.stringify(fresh))
+    }
+
+    // A custom portrait is consulted by `artwork_qt::cached_path` (it checks
+    // `cover_artwork_qt::override_for_url` FIRST), so once one exists
+    // `coverMap[artist.artUrl]` holds the OVERRIDE file, not the Qobuz one.
+    // Removing the override has to invalidate that entry as well, or the
+    // header and the lightbox keep showing the picture the user just deleted:
+    // `dispatchedCovers` dedupes by url and is cleared only on an artist
+    // change, so the republish alone never re-resolves it. Add/Change need the
+    // same invalidation in reverse.
+    property string _lastCustomPortrait: ""
+    function invalidatePortraitOverride() {
+        var cur = (artist && artist.customImagePath) ? artist.customImagePath : ""
+        if (cur === root._lastCustomPortrait) return
+        root._lastCustomPortrait = cur
+        var url = (artist && artist.artUrl) ? artist.artUrl : ""
+        if (url === "") return
+        var m = Object.assign({}, root.coverMap)
+        delete m[url]
+        root.coverMap = m
+        // Drop the dedupe key too, so the dispatchCovers() that follows in the
+        // same handler actually re-requests it.
+        delete root.dispatchedCovers[url]
     }
 
     // THE RULE FOR THIS FUNCTION: every section of the page that binds
@@ -1999,19 +2025,49 @@ Rectangle {
                 width: parent.width - 64
                 spacing: 32
 
-                // Circular portrait (rounded Rectangle + clip round-clips
-                // on this Qt build — verified against the phase-3 circles).
+                // Circular portrait. The circle comes from RoundedImage's
+                // MASK, not from a clip: QML's `clip` is rectangular and does
+                // NOT follow a Rectangle's radius — theme/RoundedImage.qml:3-6
+                // says so and proved it with an isolated scene on this Qt
+                // build, and :508 measures this exact radius-100-on-200px
+                // case. The `clip: true` that used to sit here (with a comment
+                // claiming the opposite) therefore rounded nothing, cost an
+                // unconditional batch root, and would have swallowed anything
+                // mounted inside the frame — which is why the menu and the
+                // lightbox are view-root siblings, exactly as
+                // AlbumView.qml:586-588 keeps them.
                 Rectangle {
                     width: 200
                     height: 200
                     radius: 100
                     color: theme.surfaceElevated
-                    clip: true
                     RoundedImage {
                         anchors.fill: parent
-                        source: root.coverMap[artist.artUrl] || ""
+                        // A custom portrait (the SHARED custom_artwork store,
+                        // keyed by artist NAME) beats the url-keyed pipeline
+                        // image — the album header's rule on the artist axis.
+                        source: (artist.customImageUrl || "") !== ""
+                            ? artist.customImageUrl
+                            : (root.coverMap[artist.artUrl] || "")
                         radius: 100
                     }
+                    // Left-click: the lightbox (NEW in this port — the
+                    // reference lets left clicks pass through,
+                    // ArtistPageView.slint:290-293). Right-click: the portrait
+                    // menu the reference DOES have (ArtistPageView.slint:292-353),
+                    // which this port simply never paid.
+                    MouseArea {
+                        anchors.fill: parent
+                        acceptedButtons: Qt.LeftButton | Qt.RightButton
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: function (mouse) {
+                            if (mouse.button === Qt.RightButton)
+                                portraitMenu.openAtCursor(portraitMenuAnchor, mouse.x, mouse.y)
+                            else if (root.bestArtistImage() !== "")
+                                portraitLightbox.openWith(root.bestArtistImage())
+                        }
+                    }
+                    Item { id: portraitMenuAnchor; anchors.fill: parent }
                 }
 
                 Column {
@@ -2509,67 +2565,27 @@ Rectangle {
                 }
 
                 // --- Playlists --------------------------------------------
-                Column {
+                // The reference mounts the SHARED playlist carousel here
+                // (ArtistPageView.slint:985-995 -> discover/PlaylistCarousel
+                // -> discover/PlaylistCard), so this page gets the same card
+                // Home, Search, Browse, Label and the Library feed already
+                // mount: body click opens, overlay play/favourite/⋯, pin
+                // badge, context menu — and the banner rendered CONTAIN
+                // instead of cropped 2.11:1 into a square.
+                //
+                // What stood here was a hand-rolled Rectangle delegate whose
+                // MouseArea had no onClicked at all (only a cursor, which is
+                // why it LOOKED clickable) and a RoundedImage with no `fit:`,
+                // i.e. the default crop. Its POC-NOTE claimed there was no
+                // playlist view yet; views/PlaylistView.qml has existed and
+                // been routed for a long time.
+                Item { visible: playlists.length > 0; width: 1; height: 32 }
+                PlaylistRail {
                     visible: playlists.length > 0
                     width: parent.width
-                    spacing: 12
-                    Item { width: 1; height: 32 }
-                    Text {
-                        text: QbzSession.tr("Playlists", QbzSession.trRev)
-                        color: theme.textPrimary
-                        font.pixelSize: theme.fontHeading
-                        font.weight: theme.weightSemibold
-                    }
-                    ListView {
-                        width: parent.width
-                        height: 246
-                        orientation: ListView.Horizontal
-                        spacing: 32
-                        clip: true
-                        boundsBehavior: Flickable.StopAtBounds
-                        model: playlists
-                        delegate: Rectangle {
-                            width: 200
-                            height: 246
-                            color: "transparent"
-                            Column {
-                                spacing: 0
-                                Rectangle {
-                                    width: 200
-                                    height: 200
-                                    radius: theme.radiusSm
-                                    color: theme.surfaceElevated
-                                    clip: true
-                                    RoundedImage {
-                                        anchors.fill: parent
-                                        source: root.coverMap[modelData.artUrl] || ""
-                                        radius: theme.radiusSm
-                                    }
-                                    MouseArea {
-                                        anchors.fill: parent
-                                        cursorShape: Qt.PointingHandCursor
-                                        // POC-NOTE: no playlist view yet.
-                                    }
-                                }
-                                Item { width: 1; height: 6 }
-                                Text {
-                                    width: 200
-                                    text: modelData.title
-                                    color: theme.textPrimary
-                                    font.pixelSize: theme.fontBody - 2
-                                    font.weight: theme.weightMedium
-                                    elide: Text.ElideRight
-                                }
-                                Text {
-                                    width: 200
-                                    text: modelData.subtitle
-                                    color: theme.textMuted
-                                    font.pixelSize: theme.fontLink - 1
-                                    elide: Text.ElideRight
-                                }
-                            }
-                        }
-                    }
+                    title: QbzSession.tr("Playlists", QbzSession.trRev)
+                    items: playlists
+                    coverMap: root.coverMap
                 }
 
                 // --- Other (collapsed) ------------------------------------
@@ -3425,4 +3441,104 @@ Rectangle {
                 }
             }
         }
+
+    // --- Artist portrait: menu + lightbox -----------------------------------
+    // View-root siblings, never descendants of the portrait frame (the frame
+    // is a 200px circle; anything inside it would be masked away).
+
+    /// Best available portrait source for the lightbox: the custom override
+    /// first, then the file the artwork pipeline ALREADY downloaded for this
+    /// page, then the remote URL as a last resort.
+    ///
+    /// Deliberate divergence from AlbumView.bestCoverSource(), which goes
+    /// straight to the remote URL and re-downloads a file it already has on
+    /// disk. Preferring the cache also matters more here: the artist `large`
+    /// segment is the ORIGINAL upload (measured on this machine's cache:
+    /// n=149, median 1439px, max 5679px), so the fetch it avoids is a big one.
+    function bestArtistImage() {
+        var custom = artist.customImageUrl || ""
+        if (custom !== "") return custom
+        var cached = root.coverMap[artist.artUrl] || ""
+        if (cached !== "") return cached
+        return artist.artUrl || ""
+    }
+
+    /// The portrait menu's rows, rebuilt per open so Add/Change/Remove track
+    /// the live flag (ArtistPageView.slint:307-351, plus "View image" — the
+    /// lightbox entry, this port's addition and the twin of the album menu's
+    /// "View cover").
+    ///
+    /// The two url-only rows are hidden when there is nothing for them to act
+    /// on. The reference passes `ArtistState.artwork-url` blindly and shows
+    /// them even for an artist Qobuz has no portrait for, where they do
+    /// nothing — a small, deliberate divergence rather than a copied hole.
+    /// "Save as…" survives an empty url when a custom image exists, because
+    /// that path saves the local file.
+    function buildPortraitMenuModel() {
+        var rows = []
+        if (artist.hasCustomImage === true) {
+            rows.push({ "label": QbzSession.tr("Change image", QbzSession.trRev), "icon": "image-plus", "action": "add" })
+            rows.push({ "label": QbzSession.tr("Remove image", QbzSession.trRev), "icon": "trash-2", "action": "remove" })
+        } else {
+            rows.push({ "label": QbzSession.tr("Add image", QbzSession.trRev), "icon": "image-plus", "action": "add" })
+        }
+        if (root.bestArtistImage() !== "")
+            rows.push({ "label": QbzSession.tr("View image", QbzSession.trRev), "icon": "eye", "action": "view" })
+        if ((artist.artUrl || "") !== "")
+            rows.push({ "label": QbzSession.tr("Open in browser", QbzSession.trRev), "icon": "external-link", "action": "browser" })
+        if ((artist.artUrl || "") !== "" || artist.hasCustomImage === true)
+            rows.push({ "label": QbzSession.tr("Save as…", QbzSession.trRev), "icon": "cloud-download", "action": "save" })
+        return rows
+    }
+
+    QbzContextMenu {
+        id: portraitMenu
+        menuWidth: 196
+        onAboutToShow: portraitMenuRepeater.model = root.buildPortraitMenuModel()
+        Repeater {
+            id: portraitMenuRepeater
+            model: []
+            delegate: Rectangle {
+                required property var modelData
+                width: parent ? parent.width : 0
+                height: 33
+                radius: 5
+                color: pmiArea.containsMouse ? theme.surfaceHover : "transparent"
+                Row {
+                    anchors.fill: parent
+                    anchors.leftMargin: 8
+                    spacing: 8
+                    QbzIcon { name: modelData.icon; width: 15; height: 15; anchors.verticalCenter: parent.verticalCenter; tintName: "secondary" }
+                    Text {
+                        height: parent.height
+                        width: parent.width - 23
+                        text: modelData.label
+                        color: theme.textSecondary
+                        font.pixelSize: 13
+                        verticalAlignment: Text.AlignVCenter
+                        elide: Text.ElideRight
+                    }
+                }
+                MouseArea {
+                    id: pmiArea
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                        portraitMenu.close()
+                        var a = modelData.action
+                        // The store is keyed by NAME (ArtistPageView.slint:312),
+                        // so the name — not the id — is what travels.
+                        if (a === "add") QbzArtist.imageAddCustom(artist.name || "", artist.artUrl || "")
+                        else if (a === "remove") QbzArtist.imageRemoveCustom(artist.name || "", artist.artUrl || "")
+                        else if (a === "view") portraitLightbox.openWith(root.bestArtistImage())
+                        else if (a === "browser") QbzShell.openExternalUrl(artist.artUrl)
+                        else if (a === "save") QbzArtist.imageSaveAs(artist.name || "", artist.artUrl || "")
+                    }
+                }
+            }
+        }
+    }
+
+    CoverLightbox { id: portraitLightbox }
 }

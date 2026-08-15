@@ -13,9 +13,6 @@
 //   "Detected: <desktop>" line): there is no file-chooser seam here, so the
 //   button would do nothing. The Source dropdown still persists all three
 //   values (the shared ui_prefs key the Slint reads).
-// - The Custom-theme editor (seed-from-current, the dark-polarity toggle and
-//   the base-token swatch grid): the port applies custom_theme.json read-only
-//   and has no ColorPicker primitive.
 // - The commented-out Slint blocks (immersive background / panels / FPS,
 //   window-title template) stay out, 1:1 the owner's cut.
 
@@ -134,6 +131,44 @@ Column {
             text: QbzSession.tr("Regenerate", QbzSession.trRev)
             onClicked: QbzShell.themeSet(QbzShell.themeSlug)
         }
+    }
+
+    // Custom-theme editor rows (the appended "Custom" theme only), 1:1 with
+    // AppearanceSettings.slint:313-425. "Start from current theme" re-seeds
+    // the base from the applied palette; the "Dark theme" toggle flips
+    // polarity; the grid below edits each base token and the rest of the
+    // palette is derived live in Rust on every change.
+    //
+    // There is deliberately NO save / save-as, NO delete, NO named-theme list
+    // and NO import/export: the model is ONE implicit custom theme that
+    // autosaves, and the reference has none of those affordances either.
+    SettingRow {
+        visible: QbzShell.themeSlug === "custom"
+        label: QbzSession.tr("Start from current theme", QbzSession.trRev)
+        description: QbzSession.tr("Copy the colors of the currently applied theme into the editor as a starting point.", QbzSession.trRev)
+        SettingsButton {
+            text: QbzSession.tr("Use current colors", QbzSession.trRev)
+            onClicked: {
+                QbzShell.customSeedFromCurrent()
+                customThemeEditor.closePicker()
+            }
+        }
+    }
+    SettingRow {
+        visible: QbzShell.themeSlug === "custom"
+        label: QbzSession.tr("Dark theme", QbzSession.trRev)
+        description: QbzSession.tr("Set the overall light or dark polarity. Affects derived shades, borders and overlays.", QbzSession.trRev)
+        QbzToggle {
+            checked: customThemeEditor.isDark
+            onToggled: function (v) { QbzShell.customToggleDark(v) }
+        }
+    }
+    // NOT inside a SettingRow: that control hardcodes 52/64px and centres one
+    // child, which would clip the ~250px picker. The reference keeps the grid
+    // outside its own rows for the same reason.
+    CustomThemeEditor {
+        id: customThemeEditor
+        visible: QbzShell.themeSlug === "custom"
     }
 
     SettingsSpacer { }

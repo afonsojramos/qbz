@@ -92,12 +92,29 @@ pub mod qbz_shell {
         #[qproperty(QString, theme_list_json)]
         // Dropdown filter: 0 All / 1 Dark / 2 Light (ui_prefs theme_filter).
         #[qproperty(i32, theme_filter)]
+        // The custom-theme EDITOR state (custom_theme_qt.rs):
+        // {"isDark":bool,"tokens":{"<kebab-key>":"#aarrggbb"}} — the eleven
+        // editable base tokens plus the polarity, mirroring the Slint
+        // AppearanceState.custom-* swatch properties. The token colours are
+        // `#aarrggbb` because QML binds them as `color` fills, like every
+        // other theme token; the EDIT/PERSIST side of the same feature is
+        // 6-digit `#rrggbb` (see the custom_theme_qt header). Seeded at
+        // construction next to `theme_json`, for the same reason.
+        //
+        // `custom-open-token` (state.slint:3205) is deliberately NOT here:
+        // which swatch has the picker open is pure view state and lives in
+        // CustomThemeEditor.qml.
+        #[qproperty(QString, custom_theme_json)]
 
         // --- Log viewer (log_viewer_qt.rs) --------------------------------
         // ONE document: {open, rows[], total, shown, filterLevel, search,
         // autoTail, uploading, uploadedUrl}. The ring can hold thousands of
         // lines and the view shows at most 500, so the FILTER runs Rust-side
         // and only the survivors cross the bridge.
+        /// The Diagnostics panel's whole document (Settings > Developer).
+        /// Seeded with the full shape so every binding reads a real object on
+        /// the pre-publish frame.
+        #[qproperty(QString, diagnostics_json)]
         #[qproperty(QString, log_viewer_json)]
 
         // --- Lyrics panel (phase 9) ----------------------------------------
@@ -483,6 +500,20 @@ pub mod qbz_shell {
         /// The GitHub-ready `<details>` bundle.
         #[qinvokable]
         fn log_copy_bundle(self: Pin<&mut QbzShell>);
+        /// Diagnostics panel (Settings > Developer). The open state reaches
+        /// Rust because it is what gates the publisher — a collapsed panel is
+        /// not reading and a publish can carry a hundred rows.
+        #[qinvokable]
+        fn diag_set_open(self: Pin<&mut QbzShell>, open: bool);
+        #[qinvokable]
+        fn diag_refresh(self: Pin<&mut QbzShell>);
+        #[qinvokable]
+        fn diag_export_clipboard(self: Pin<&mut QbzShell>);
+        #[qinvokable]
+        fn diag_cast_scan(self: Pin<&mut QbzShell>);
+        /// The header menu's "Report an Issue" row — the GitHub bug template.
+        #[qinvokable]
+        fn report_issue_open(self: Pin<&mut QbzShell>);
         /// Upload the bundle to a public paste; the url lands in the document.
         #[qinvokable]
         fn log_upload(self: Pin<&mut QbzShell>);
@@ -513,6 +544,28 @@ pub mod qbz_shell {
         /// Appearance > theme filter cycle button (0 All / 1 Dark / 2 Light).
         #[qinvokable]
         fn theme_set_filter(self: Pin<&mut QbzShell>, index: i32);
+
+        // --- Custom-theme editor (custom_theme_qt.rs) ----------------------
+        /// Set one editable base token from a `#rrggbb` string — BOTH the live
+        /// ColorPicker drag and the HEX-field commit (the reference splits
+        /// these into `custom-set-token` / `custom-set-token-hex`, which is a
+        /// Slint artifact: there a colour and a string are different types).
+        /// Re-derives and republishes the whole palette live; the disk write
+        /// is debounced. Malformed hex and unknown keys are ignored.
+        #[qinvokable]
+        fn custom_set_token(self: Pin<&mut QbzShell>, key: QString, hex: QString);
+        /// Persist NOW if a live edit is pending — called on colour-drag end
+        /// and on a HEX commit, so a settled edit never waits out the debounce.
+        #[qinvokable]
+        fn custom_flush(self: Pin<&mut QbzShell>);
+        /// Flip the custom theme's light/dark polarity (derived shades,
+        /// borders and overlays follow; the base colours do not change).
+        #[qinvokable]
+        fn custom_toggle_dark(self: Pin<&mut QbzShell>, is_dark: bool);
+        /// "Use current colors": snapshot the applied palette into the
+        /// editable base, persist, apply and republish the swatches.
+        #[qinvokable]
+        fn custom_seed_from_current(self: Pin<&mut QbzShell>);
 
         /// Main.qml, debounced off every settled resize / visibility flip and
         /// fired once more on close: persist the FLOATING size plus the
@@ -654,6 +707,8 @@ pub struct QbzShellRust {
     theme_slug: QString,
     theme_list_json: QString,
     theme_filter: i32,
+    custom_theme_json: QString,
+    diagnostics_json: QString,
     log_viewer_json: QString,
     lyrics_open: bool,
     lyrics_json: QString,
@@ -741,6 +796,10 @@ impl Default for QbzShellRust {
             theme_slug: QString::from(crate::theme_qt::current_slug().as_str()),
             theme_list_json: QString::from(crate::theme_qt::theme_list_json().as_str()),
             theme_filter: crate::theme_qt::theme_filter(),
+            custom_theme_json: QString::from(crate::custom_theme_qt::state_json().as_str()),
+            diagnostics_json: QString::from(
+                crate::diagnostics_qt::empty_doc_json().as_str(),
+            ),
             log_viewer_json: QString::from("{}"),
             lyrics_open: false,
             lyrics_json: QString::from("{}"),
@@ -1073,7 +1132,29 @@ impl qbz_shell::QbzShell {
         crate::log_viewer_qt::copy_all();
     }
     pub fn log_copy_bundle(self: Pin<&mut Self>) {
-        crate::log_viewer_qt::copy_bundle();
+        // The bundle now carries the full diagnostics report, which re-runs the
+        // settings reads and the `pactl` shell-outs — so it is async, and this
+        // takes the `log_upload` shape. The clipboard lands one tick later.
+        crate::spawn(async move { crate::log_viewer_qt::copy_bundle().await });
+    }
+    pub fn diag_set_open(self: Pin<&mut Self>, open: bool) {
+        crate::diagnostics_qt::set_open(open);
+    }
+    pub fn diag_refresh(self: Pin<&mut Self>) {
+        crate::diagnostics_qt::refresh();
+    }
+    pub fn diag_export_clipboard(self: Pin<&mut Self>) {
+        crate::diagnostics_qt::export_clipboard();
+    }
+    pub fn diag_cast_scan(self: Pin<&mut Self>) {
+        crate::diagnostics_qt::cast_scan();
+    }
+    pub fn report_issue_open(self: Pin<&mut Self>) {
+        // Same URL the reference opens (crates/qbz/src/main.rs:14619-14624):
+        // the repo's bug-report template, no prefilled body.
+        if let Err(e) = open::that("https://github.com/vicrodh/qbz/issues/new?template=bug_report.yml") {
+            log::warn!("[qbz-qt] could not open the issue template: {e}");
+        }
     }
     pub fn log_upload(self: Pin<&mut Self>) {
         crate::spawn(async move { crate::log_viewer_qt::upload().await });
@@ -1095,6 +1176,22 @@ impl qbz_shell::QbzShell {
 
     pub fn theme_set_filter(self: Pin<&mut Self>, index: i32) {
         crate::theme_set_filter(index);
+    }
+
+    pub fn custom_set_token(self: Pin<&mut Self>, key: QString, hex: QString) {
+        crate::custom_theme_qt::set_token(&key.to_string(), &hex.to_string());
+    }
+
+    pub fn custom_flush(self: Pin<&mut Self>) {
+        crate::custom_theme_qt::flush();
+    }
+
+    pub fn custom_toggle_dark(self: Pin<&mut Self>, is_dark: bool) {
+        crate::custom_theme_qt::toggle_dark(is_dark);
+    }
+
+    pub fn custom_seed_from_current(self: Pin<&mut Self>) {
+        crate::custom_theme_qt::seed_from_applied();
     }
 
     pub fn save_window_geometry(

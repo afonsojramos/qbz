@@ -144,10 +144,10 @@ pub struct QbzIconTintRust {
 
 /// Every icon the app can ask for, as the `primary/` bake's source text.
 ///
-/// This IS the shipped `qml/assets/icons/primary/` directory (115 files),
+/// This IS the shipped `qml/assets/icons/primary/` directory (124 files),
 /// compiled in. Two consequences worth knowing:
 ///   - every runtime tint is COMPLETE, so the partial-directory trap the qrc
-///     bakes have (`favorite/` = 57 files, `amber/` = 6, plus the two
+///     bakes have (`favorite/` = 58 files, `amber/` = 6, plus the two
 ///     single-glyph brand dirs `green/` and `orange/`) does not exist here;
 ///   - a new icon dropped into `primary/` needs a line ADDED here, otherwise
 ///     that one glyph silently drops back to its qrc bake (visible, just not
@@ -289,6 +289,8 @@ const MASTERS: &[(&str, &str)] = &[
     ("user", include_str!("../qml/assets/icons/primary/user.svg")),
     ("volume-2", include_str!("../qml/assets/icons/primary/volume-2.svg")),
     ("volume-x", include_str!("../qml/assets/icons/primary/volume-x.svg")),
+    // The header menu's "What's New" glyph (HeaderBar.slint:1222).
+    ("wand-sparkles", include_str!("../qml/assets/icons/primary/wand-sparkles.svg")),
     ("wifi", include_str!("../qml/assets/icons/primary/wifi.svg")),
     ("x", include_str!("../qml/assets/icons/primary/x.svg")),
 ];

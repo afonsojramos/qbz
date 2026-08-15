@@ -26,6 +26,25 @@ pub fn format_diagnostics_bundle(
     last_lines: &[LogLine],
     max_lines: usize,
 ) -> String {
+    format_diagnostics_bundle_with_report(f, "", last_lines, max_lines)
+}
+
+/// [`format_diagnostics_bundle`] with a full diagnostics REPORT injected between
+/// the eight-field header and the log block.
+///
+/// This exists because the eight fields above are all a frontend can produce on
+/// its own, and a bug report wants the ~70 the Diagnostics panel gathers (kernel,
+/// distro, install method, GPU, exclusive-mode / DAC / sample-rate state,
+/// playback context). The caller renders that markdown — this only wraps it, so
+/// the `<details><summary>` collapsible that makes the paste readable on GitHub
+/// survives. Pass `""` for no report; [`format_diagnostics_bundle`] is exactly
+/// that call.
+pub fn format_diagnostics_bundle_with_report(
+    f: &DiagFields,
+    report: &str,
+    last_lines: &[LogLine],
+    max_lines: usize,
+) -> String {
     let n = max_lines.min(last_lines.len());
     let start = last_lines.len() - n;
     let tail = &last_lines[start..];
@@ -42,6 +61,11 @@ pub fn format_diagnostics_bundle(
         "**Locale:** {}  **Log level:** {}\n",
         f.locale, f.log_level
     ));
+    if !report.trim().is_empty() {
+        out.push('\n');
+        out.push_str(report.trim_end());
+        out.push('\n');
+    }
     out.push_str("\n```log\n");
     for line in tail {
         out.push_str(&format!(
@@ -110,5 +134,40 @@ mod tests {
         assert!(out.contains("line 9"));
         assert!(out.contains("line 7"));
         assert!(!out.contains("line 6"));
+    }
+
+    #[test]
+    fn report_lands_between_header_and_log_block() {
+        let lines = vec![LogLine {
+            ts: 1,
+            level: Level::Info,
+            target: "t".into(),
+            message: "hello".into(),
+        }];
+        let report = "# qbz diagnostics\n\n- **Kernel:** 7.1.6\n";
+        let out = format_diagnostics_bundle_with_report(&fields(), report, &lines, 200);
+
+        let header = out.find("**Audio backend:**").expect("header");
+        let body = out.find("- **Kernel:**").expect("report body");
+        let block = out.find("```log").expect("log block");
+        assert!(header < body && body < block, "wrong order: {out}");
+        // The collapsible survives — that is the whole reason this wraps
+        // rather than replaces.
+        assert!(out.contains("<details><summary>qbz diagnostics</summary>"));
+        assert!(out.trim_end().ends_with("</details>"));
+    }
+
+    #[test]
+    fn empty_report_is_byte_identical_to_the_plain_bundle() {
+        let lines = vec![LogLine {
+            ts: 1,
+            level: Level::Info,
+            target: "t".into(),
+            message: "hello".into(),
+        }];
+        assert_eq!(
+            format_diagnostics_bundle(&fields(), &lines, 200),
+            format_diagnostics_bundle_with_report(&fields(), "   \n ", &lines, 200)
+        );
     }
 }

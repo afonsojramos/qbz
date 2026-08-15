@@ -130,6 +130,11 @@ pub struct ArtistSimilar {
     pub name: String,
 }
 
+/// One row of the artist page's "Playlists" rail. The shape is
+/// `cards/PlaylistCard.qml`'s item contract — that card is what the reference
+/// mounts here too (`ArtistPageView.slint:985-995` -> `PlaylistCarousel` ->
+/// `discover/PlaylistCard.slint`), so this row publishes the state the card
+/// draws instead of leaving it to guess.
 #[derive(Clone, Serialize)]
 pub struct ArtistPlaylist {
     pub id: String,
@@ -137,6 +142,34 @@ pub struct ArtistPlaylist {
     pub subtitle: String,
     #[serde(rename = "artUrl")]
     pub art_url: String,
+    /// Pin badge state, from the per-user store. Without it the glyph reads
+    /// "unpinned" for a playlist that IS pinned and the first click un-pins it
+    /// (the exact defect already fixed for this view's album grids).
+    #[serde(rename = "isPinned")]
+    pub is_pinned: bool,
+    /// The library heart (the qbz-local library.db flag).
+    #[serde(rename = "isFavorite")]
+    pub is_favorite: bool,
+    /// The overlay tri-state, same reasoning as `home_qt::map_playlist`: the
+    /// Slint reference hard-writes both false (`qbz/src/artist.rs:901-903`)
+    /// because its `PlaylistSlim` carries no owner id — `PageArtistPlaylist`
+    /// DOES, so this port draws the state the reference guesses at. Strictly a
+    /// superset: an editorial playlist's owner is Qobuz, so it still resolves
+    /// to the foreign follow arm. Both sets are empty until the first
+    /// `get_user_playlists` lands, i.e. a cold page may draw `user-plus` for a
+    /// playlist the user owns, exactly as the Home rails do.
+    #[serde(rename = "playlistOwned")]
+    pub playlist_owned: bool,
+    #[serde(rename = "playlistFollowing")]
+    pub playlist_following: bool,
+    /// True when `artUrl` is the playlist's OWN Qobuz graphic. It always is on
+    /// this page — the payload carries `images.rectangle` and nothing else —
+    /// and the flag makes the card render it CONTAIN deterministically instead
+    /// of measuring the ratio. Those banners are 2.11:1 (800x380) and cropping
+    /// them into the 200px square is what the owner reported as "gigantic".
+    /// The serde name follows `library_qt.rs:110-114`, the only other producer.
+    #[serde(rename = "playlistOwnImage")]
+    pub playlist_own_image: bool,
 }
 
 /// Magazine story teaser (Qobuz editorial — `/artist/getStory`). Not an
@@ -297,6 +330,22 @@ pub struct ArtistViewData {
     pub bio_source: String,
     #[serde(rename = "artUrl")]
     pub artwork_url: String,
+    /// A user-picked portrait is registered for this artist. Flips the
+    /// portrait menu between "Add image" and "Change image"+"Remove image"
+    /// (`ArtistPageView.slint:307-330`).
+    #[serde(rename = "hasCustomImage")]
+    pub has_custom_image: bool,
+    /// Absolute path of that portrait ("" when none). The view prefers it over
+    /// the url-keyed pipeline image, and it is also what the header tint and
+    /// the atmosphere are derived from — so the flag is never decorative.
+    #[serde(rename = "customImagePath")]
+    pub custom_image_path: String,
+    /// The same file as an ESCAPED `file://` URI, which is what QML must bind.
+    /// `"file://" + path` is not equivalent: a portrait picked out of a folder
+    /// holding `%`, `#` or `?` renders blank, because QUrl eats those. The raw
+    /// path stays published beside it because the Rust side needs to open it.
+    #[serde(rename = "customImageUrl")]
+    pub custom_image_url: String,
     #[serde(rename = "isFollowing")]
     pub is_following: bool,
     #[serde(rename = "isPinned")]
@@ -571,6 +620,22 @@ fn map_artist(page: PageArtistResponse) -> ArtistViewData {
         })
         .unwrap_or_default();
 
+    // Custom portrait — the SHARED `custom_artwork.json` store, keyed by
+    // artist NAME exactly as `ArtistPageView.slint:312` keys it (see the
+    // module header of cover_artwork_qt.rs for why id-keying is wrong here).
+    // The `is_file` filter is the reference's accepted behaviour: an override
+    // whose file the user has since moved simply stops applying.
+    let custom_image_path = crate::cover_artwork_qt::artist_image(&name)
+        .filter(|p| std::path::Path::new(p).is_file())
+        .unwrap_or_default();
+    let has_custom_image = !custom_image_path.is_empty();
+    // Backfill the hash -> override link (the same backfill album_qt.rs does
+    // on album load) so a portrait set in the Slint build, or before this map
+    // existed, propagates to every OTHER surface that only knows the URL.
+    if has_custom_image && !artwork_url.is_empty() {
+        crate::cover_artwork_qt::note_override_key(&artwork_url, &custom_image_path);
+    }
+
     let top_tracks = page
         .top_tracks
         .unwrap_or_default()
@@ -638,6 +703,11 @@ fn map_artist(page: PageArtistResponse) -> ArtistViewData {
             p.items
                 .into_iter()
                 .map(|pl| {
+                    // `owner` carries BOTH halves this row needs — the display
+                    // name for the subtitle and the id for the ownership
+                    // check — so read the id off the borrow before the name
+                    // moves it out.
+                    let owner_id = pl.owner.as_ref().map(|o| o.id).unwrap_or(0);
                     let owner = pl
                         .owner
                         .and_then(|o| o.name)
@@ -650,6 +720,14 @@ fn map_artist(page: PageArtistResponse) -> ArtistViewData {
                         .and_then(|rects| rects.into_iter().find(|s| !s.is_empty()))
                         .unwrap_or_default();
                     ArtistPlaylist {
+                        is_pinned: crate::sidebar_qt::is_pinned("playlist", &pl.id.to_string()),
+                        is_favorite: crate::fav_cache_qt::is_playlist_favorite(pl.id),
+                        playlist_owned: crate::playlist_qt::owns(owner_id),
+                        playlist_following: crate::playlist_qt::is_following(pl.id),
+                        // `images.rectangle` is the playlist's own graphic by
+                        // definition — `PageArtistPlaylistImages` has no other
+                        // field (qbz-models types.rs:1436-1439).
+                        playlist_own_image: !art_url.is_empty(),
                         id: pl.id.to_string(),
                         title: pl.title.unwrap_or_default(),
                         subtitle: format!("{owner} · {track_count}"),
@@ -753,6 +831,13 @@ fn map_artist(page: PageArtistResponse) -> ArtistViewData {
         bio_truncated,
         bio_source,
         artwork_url,
+        has_custom_image,
+        custom_image_url: if custom_image_path.is_empty() {
+            String::new()
+        } else {
+            crate::artwork_qt::file_url(&custom_image_path)
+        },
+        custom_image_path,
         is_following,
         is_pinned: crate::sidebar_qt::is_pinned("artist", &page.id.to_string()),
         is_blacklisted: crate::artist_blacklist::is_blacklisted(page.id),
@@ -1052,7 +1137,16 @@ pub async fn load_artist_view(
     data.stories_loading = true;
     // Header atmosphere — see the ArtistViewData field comments.
     data.header_gradient = crate::settings_qt::pref_bool("album_header_gradient", true);
-    let header_art = data.artwork_url.clone();
+    // Tint + atmosphere come from the image the user actually SEES. The
+    // override's raw path is handed over directly rather than relying on the
+    // hash link, because an artist Qobuz has no portrait for has an empty
+    // `artwork_url` — the very case a custom portrait exists for, and the one
+    // `spawn_header_color` early-returns on.
+    let header_art = if data.custom_image_path.is_empty() {
+        data.artwork_url.clone()
+    } else {
+        data.custom_image_path.clone()
+    };
 
     let json = serde_json::to_string(&data).map_err(|e| e.to_string())?;
     log::info!(
@@ -1128,6 +1222,72 @@ fn publish_patch(generation: u64, f: impl FnOnce(&mut serde_json::Value)) {
     });
 }
 
+/// Repaint the OPEN artist page after its custom portrait was set or removed
+/// (`cover_artwork_qt::add_custom_artist_image` / `remove_custom_artist_image`).
+///
+/// DELIBERATELY NOT `crate::open_artist`. That router
+/// (`main.rs:1066-1075`) records a search-ranking interaction, then returns
+/// early when the session is offline, then records a nav entry — so re-opening
+/// would (a) do NOTHING at all offline, leaving a picked portrait invisible,
+/// (b) push a duplicate nav entry so Back re-lands on the same artist, and
+/// (c) log a page interaction the user never performed. This patches the two
+/// published fields into the stashed document and re-publishes it through
+/// `publish_patch`, the port's ONE transport for this view — the same shape
+/// `resort_section` uses, and the same instinct as the Slint reference, which
+/// applies the new image in place without a reload
+/// (`crates/qbz/src/main.rs:23184-23187`).
+///
+/// Guarded on the artist NAME rather than the generation counter, for the
+/// reason `resort_section` reads its generation off the stash: the click was
+/// aimed at the page on screen, and if the user has navigated on since the
+/// file picker opened, the stash belongs to somebody else and the edit is
+/// dropped.
+pub(crate) fn apply_custom_image(artist_name: &str) {
+    let path = crate::cover_artwork_qt::artist_image(artist_name)
+        .filter(|p| std::path::Path::new(p).is_file())
+        .unwrap_or_default();
+    // The guard is dropped before `publish_patch` takes the same lock.
+    let stash = {
+        let Ok(guard) = ARTIST_DOC.lock() else {
+            return;
+        };
+        let Some((generation, doc)) = guard.as_ref() else {
+            return;
+        };
+        if doc.get("name").and_then(|v| v.as_str()) != Some(artist_name) {
+            return;
+        }
+        (
+            *generation,
+            doc.get("artUrl")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string(),
+        )
+    };
+    let (generation, artwork_url) = stash;
+    // Re-derive the header tint + atmosphere from whatever the portrait is
+    // NOW. With the override registered, `cached_path(artwork_url)` already
+    // resolves to the custom file; the explicit path arm is for the artists
+    // that have no Qobuz portrait to key on.
+    let header_art = if path.is_empty() {
+        artwork_url
+    } else {
+        path.clone()
+    };
+    let published = path.clone();
+    publish_patch(generation, move |doc| {
+        doc["hasCustomImage"] = json!(!published.is_empty());
+        doc["customImageUrl"] = json!(if published.is_empty() {
+            String::new()
+        } else {
+            crate::artwork_qt::file_url(&published)
+        });
+        doc["customImagePath"] = json!(published);
+    });
+    spawn_header_color(generation, header_art);
+}
+
 /// Resolve the artist portrait (downloading it if needed), reduce it to the
 /// header tint (`album_qt::header_tint_hex` — ONE colour pipeline for both
 /// detail pages, exactly as the Slint shares `artwork::header_tint`) and
@@ -1148,7 +1308,7 @@ fn spawn_header_color(generation: u64, artwork_url: String) {
         if path.is_empty() {
             return;
         }
-        let path = path.trim_start_matches("file://").to_string();
+        let path = crate::artwork_qt::local_path(&path);
         // One decode, two products: the flat tint (Slint's FALLBACK arm) and
         // the blurred atmosphere it actually renders behind the header.
         let p2 = path.clone();

@@ -22,10 +22,11 @@
 // opens on the first keystroke instead of 220ms after the last one. The
 // dropdown itself is shell/Cortinilla.qml.
 // Right: the tri-state offline status badge with its flyout (recovery
-// "Sign in" wired to QbzSession.recoveryLogin) and the app menu (user block
-// + Keyboard Shortcuts + Documentation + Log Out + Close. Still missing vs
-// Slint, each needing a surface the port does not have yet: Open Music Link,
-// Report an Issue, What's New, About QBZ.
+// "Sign in" wired to QbzSession.recoveryLogin) and the app menu (user block +
+// Settings + Keyboard Shortcuts + Documentation + What's New + About QBZ +
+// Report an Issue + Log Out + Close). ONE row is still missing against the
+// Slint menu: Open Music Link, which needs the LinkResolver this port does not
+// have yet.
 //
 // The custom window chrome IS built (the note claiming it was skipped was a
 // fossil): the header itself is the drag surface (`startSystemMove()` below),
@@ -63,6 +64,9 @@ Rectangle {
     color: ambientOn ? theme.surfaceCardA50 : theme.surfaceCard
     readonly property bool ambientOn: theme.ambientOn
 
+
+    /// Raised by the app menu's "Report an issue" row; AppShell owns the modal.
+    signal reportIssueRequested()
 
     // The host ApplicationWindow (custom chrome); null in previews.
     property var hostWindow: null
@@ -1071,11 +1075,11 @@ Rectangle {
     }
 
     // --- App menu (user block + Settings + Keyboard Shortcuts +
-    // Documentation + Log Out + Close) -------------------------------------
+    // Documentation + What's New + About QBZ + Log Out + Close) ------------
     // Still missing against the Slint menu, each needing a surface this port
-    // does not have yet: Open Music Link, Report an Issue, What's New,
-    // About QBZ. (The older note here also listed Keyboard Shortcuts and
-    // Documentation, which have since landed.)
+    // does not have yet: Open Music Link (the LinkResolver is not ported) and
+    // Report an Issue. (The older note here also listed Keyboard Shortcuts,
+    // Documentation, What's New and About QBZ, all of which have landed.)
     Popup {
         id: appMenu
         x: root.width - 234 - theme.spacingMd
@@ -1204,6 +1208,42 @@ Rectangle {
                     QbzShell.openExternalUrl("https://github.com/vicrodh/qbz/wiki")
                 }
             }
+            // Slint order continues (HeaderBar.slint:1213-1240): Report an
+            // Issue -> What's New -> About QBZ -> divider -> Log Out.
+            AppMenuItem {
+                name: "bug"
+                label: QbzSession.tr("Report an issue", QbzSession.trRev)
+                onClicked: {
+                    appMenu.close()
+                    // The modal is mounted at the AppShell root (global modals
+                    // do not live inside the header). QML ids are file-scoped,
+                    // so this travels as a signal the host connects — the same
+                    // shape the window verbs use rather than a bridge
+                    // round-trip for state Rust has no use for.
+                    root.reportIssueRequested()
+                }
+            }
+            AppMenuItem {
+                name: "wand-sparkles"
+                label: QbzSession.tr("What's New", QbzSession.trRev)
+                onClicked: {
+                    appMenu.close()
+                    QbzAbout.whatsNewOpen()
+                }
+            }
+            AppMenuItem {
+                name: "info"
+                label: QbzSession.tr("About QBZ", QbzSession.trRev)
+                onClicked: {
+                    appMenu.close()
+                    QbzAbout.aboutOpen()
+                }
+            }
+            // The divider Slint draws between About QBZ and Log Out
+            // (HeaderBar.slint:1237-1240), in this file's own idiom (:1120).
+            Item { width: 1; height: 4 }
+            Rectangle { width: parent.width; height: 1; color: theme.borderSubtle }
+            Item { width: 1; height: 4 }
             AppMenuItem {
                 name: "log-out"
                 label: QbzSession.tr("Log Out", QbzSession.trRev)

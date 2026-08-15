@@ -1,13 +1,21 @@
-//! Album custom covers + cover file actions — the Qt port of the album half
-//! of `crates/qbz/src/custom_artwork.rs` and the cover-menu Rust arms
-//! (`main.rs:23167-23239` add/remove, `:23096-23159` open-in-browser/save-as).
+//! Custom album covers and artist portraits + the artwork file actions — the
+//! Qt port of `crates/qbz/src/custom_artwork.rs` and the cover/portrait menu
+//! Rust arms (`main.rs:23167-23239` add/remove, `:23096-23159`
+//! open-in-browser/save-as).
 //!
 //! The store is the SAME file and format the Slint app uses
-//! (`<data-dir>/qbz/custom_artwork.json`, `albums: album_id → absolute
-//! path`), so a cover set in either app shows in both. The store records the
-//! picked file's own path (Slint does not copy/resize into the cache); if
-//! the user later moves or deletes that file the override silently stops
-//! applying — the reference's accepted behaviour, kept on purpose.
+//! (`<data-dir>/qbz/custom_artwork.json`, `albums: album_id → absolute path`
+//! and `artists: artist NAME → absolute path`), so an override set in either
+//! app shows in both. The store records the picked file's own path (Slint does
+//! not copy/resize into the cache); if the user later moves or deletes that
+//! file the override silently stops applying — the reference's accepted
+//! behaviour, kept on purpose.
+//!
+//! The artist half is keyed by DISPLAY NAME, not id, because that is what
+//! `artist/ArtistPageView.slint:312` writes. Two artists sharing a name
+//! collide and an upstream rename orphans the override; "improving" this to
+//! id-keying would stop the file round-tripping with the shipping Slint build,
+//! which is the entire point of sharing it.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -16,8 +24,9 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Default, Serialize, Deserialize)]
 struct Store {
-    // Artist images share this file in the Slint store; the key must round-
-    // trip even though this port only writes album covers.
+    /// Artist portraits, keyed by DISPLAY NAME (the Slint key — see the
+    /// module header). Written by the artist page's portrait menu since the
+    /// 2026-08-14 round; before that this port only round-tripped the map.
     #[serde(default)]
     artists: HashMap<String, String>,
     #[serde(default)]
@@ -199,6 +208,187 @@ pub fn save_cover_as(album_id: String, title: String, artwork_url: String) {
 }
 
 // ---------------------------------------------------------------------------
+// Artist portraits (the artist half of the SHARED store)
+// ---------------------------------------------------------------------------
+// 1:1 with `crates/qbz/src/custom_artwork.rs:69-86` — same file, same map,
+// same NAME key, so a portrait set in either build shows in both.
+
+/// The absolute path of the user-picked portrait for `name`, if registered.
+/// `artist_qt::load_artist` calls this on every build to seed the header's
+/// `hasCustomImage` / `customImagePath`.
+pub fn artist_image(name: &str) -> Option<String> {
+    load_store().artists.get(name).cloned()
+}
+
+fn set_artist_image(name: &str, path: &str) {
+    let mut store = load_store();
+    store.artists.insert(name.to_string(), path.to_string());
+    write_store(&store);
+}
+
+fn remove_artist_image(name: &str) {
+    let mut store = load_store();
+    if store.artists.remove(name).is_some() {
+        write_store(&store);
+    }
+}
+
+/// "Add image" / "Change image": native picker, persist the picked path, then
+/// repaint the OPEN artist page.
+///
+/// The repaint is `artist_qt::apply_custom_image`, NOT `crate::open_artist`:
+/// that router returns early when the session is offline (`main.rs:1071`), so
+/// re-opening would leave a portrait picked offline invisible until a restart;
+/// it also records a second nav entry (Back would land on the same artist) and
+/// feeds the search-ranking interaction log with a click the user never made.
+/// The Slint reference has the same instinct for a different reason — it
+/// applies the decoded image in place without a reload
+/// (`crates/qbz/src/main.rs:23184-23187`) precisely because the artists this
+/// feature exists for are the ones Qobuz has no portrait for.
+pub fn add_custom_artist_image(artist_name: String, artwork_url: String) {
+    if artist_name.is_empty() {
+        return;
+    }
+    crate::spawn(async move {
+        let Some(file) = rfd::AsyncFileDialog::new()
+            .add_filter("Images", &["png", "jpg", "jpeg", "webp"])
+            .pick_file()
+            .await
+        else {
+            return;
+        };
+        let path = file.path().to_string_lossy().to_string();
+        // The hash -> override link is what carries this portrait to the rest
+        // of the app (search cards, similar-artist rails, the sidebar dock).
+        // It is a no-op when the artist has no Qobuz portrait to key on — that
+        // artist's override then applies on the artist page alone, which is
+        // still strictly better than today's nothing.
+        note_override_key(&artwork_url, &path);
+        let name = artist_name.clone();
+        if tokio::task::spawn_blocking(move || {
+            set_artist_image(&name, &path);
+        })
+        .await
+        .is_ok()
+        {
+            crate::artist_qt::apply_custom_image(&artist_name);
+        }
+    });
+}
+
+/// "Remove image": drop the override (and its hash link) and repaint, so the
+/// header reverts to the Qobuz portrait.
+///
+/// Dropping the hash link is what the album twin cannot do — `cover_remove_
+/// custom` takes only the album id and so has no url to compute the key from,
+/// which leaves a removed album cover still overriding every card. Fixing that
+/// means widening an invokable this lane does not own; the artist arm is built
+/// without the hole rather than made symmetric with it.
+pub fn remove_custom_artist_image(artist_name: String, artwork_url: String) {
+    if artist_name.is_empty() {
+        return;
+    }
+    let name = artist_name.clone();
+    let url = artwork_url.clone();
+    crate::spawn(async move {
+        let _ = tokio::task::spawn_blocking(move || {
+            remove_artist_image(&name);
+            forget_override_key(&url);
+        })
+        .await;
+        crate::artist_qt::apply_custom_image(&artist_name);
+    });
+}
+
+/// "Save as…": native save dialog seeded `{name}.jpg` (the reference's default,
+/// `ArtistPageView.slint:349`). Local sources first — the override file, then
+/// the artwork cache — else one GET of the portrait URL.
+pub fn save_artist_image_as(artist_name: String, artwork_url: String) {
+    crate::spawn(async move {
+        // Resolve the source BEFORE opening the dialog, so the seeded filename
+        // can carry the real extension. A PNG or WebP portrait written out as
+        // `.jpg` is a file that lies about itself.
+        //
+        // The override arm is filtered on `is_file()` for the same reason the
+        // two callers in `artist_qt` are: an override whose file has since been
+        // moved is `Some`, and without the filter it short-circuits the whole
+        // chain — the copy then fails into a `log::warn!` and the user gets no
+        // file, no error and no fallback to the cached portrait.
+        let local = artist_image(&artist_name)
+            .filter(|p| !p.is_empty() && std::path::Path::new(p).is_file())
+            .or_else(|| {
+                let cached = crate::artwork_qt::cached_path(&artwork_url);
+                if cached.is_empty() {
+                    None
+                } else {
+                    // `cached_path` hands back a file:// URL; the override map
+                    // hands back a raw path. `tokio::fs::copy` takes neither
+                    // form on faith, and trimming the scheme is not enough —
+                    // the URL is percent-escaped.
+                    Some(crate::artwork_qt::local_path(&cached))
+                }
+            });
+
+        let ext = local
+            .as_deref()
+            .and_then(|p| std::path::Path::new(p).extension())
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+            .filter(|e| matches!(e.as_str(), "jpg" | "jpeg" | "png" | "webp"))
+            .unwrap_or_else(|| "jpg".to_string());
+
+        let default_name = format!(
+            "{}.{ext}",
+            if artist_name.is_empty() {
+                "artist"
+            } else {
+                &artist_name
+            }
+        );
+        let Some(dest) = rfd::AsyncFileDialog::new()
+            .set_file_name(&default_name)
+            .add_filter("Image", &["jpg", "jpeg", "png", "webp"])
+            .save_file()
+            .await
+        else {
+            return;
+        };
+        let dest_path = dest.path().to_path_buf();
+
+        if let Some(src) = local {
+            if let Err(e) = tokio::fs::copy(&src, &dest_path).await {
+                log::warn!("[qbz-qt] artist image save-as copy failed: {e}");
+            }
+            return;
+        }
+        if artwork_url.is_empty() {
+            return;
+        }
+        let client = match reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                log::warn!("[qbz-qt] artist image save-as client error: {e}");
+                return;
+            }
+        };
+        match client.get(&artwork_url).send().await.and_then(|r| r.error_for_status()) {
+            Ok(resp) => match resp.bytes().await {
+                Ok(bytes) => {
+                    if let Err(e) = tokio::fs::write(&dest_path, &bytes).await {
+                        log::warn!("[qbz-qt] artist image save-as write failed: {e}");
+                    }
+                }
+                Err(e) => log::warn!("[qbz-qt] artist image save-as read failed: {e}"),
+            },
+            Err(e) => log::warn!("[qbz-qt] artist image save-as fetch failed: {e}"),
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
 // Playlist custom covers (Qt-first; no Slint counterpart yet)
 // ---------------------------------------------------------------------------
 // Separate file on purpose: the Slint store struct round-trips only the keys
@@ -345,8 +535,20 @@ fn write_key_store(store: &KeyStore) {
     }
 }
 
-/// The artwork hash of a Qobuz cover URL: the filename stem before the size
-/// suffix (`<hash>_600.jpg` -> `<hash>`). None for non-cover URLs.
+/// The artwork hash of a Qobuz artwork URL: the filename stem before the size
+/// suffix (`<hash>_600.jpg` -> `<hash>`). None for non-artwork URLs.
+///
+/// ARTIST PORTRAITS CARRY NO SIZE SUFFIX. Their URL is
+/// `.../images/artists/covers/{small|medium|large}/<hash>.jpg` — the size is a
+/// PATH segment — so the `_` rule returns None for them and both
+/// `note_override_key` and `override_for_url` were silent no-ops on the artist
+/// axis. The suffix-less arm is scoped to that one path prefix on purpose: a
+/// global loosening would key every stray URL on its bare filename and let two
+/// unrelated images collide on one override.
+///
+/// The `_` arm is UNCHANGED, so the rows already written into
+/// `custom_cover_keys.json` under the old rule keep resolving exactly as
+/// before — this widening only adds keys that could never have been written.
 fn art_key(url: &str) -> Option<String> {
     let stem = url
         .rsplit('/')
@@ -356,11 +558,10 @@ fn art_key(url: &str) -> Option<String> {
     if stem.is_empty() {
         return None;
     }
-    let (hash, _size) = stem.rsplit_once('_')?;
-    if hash.is_empty() {
-        None
-    } else {
-        Some(hash.to_string())
+    match stem.rsplit_once('_') {
+        Some((hash, _size)) if !hash.is_empty() => Some(hash.to_string()),
+        _ if url.contains("/images/artists/covers/") => Some(stem.to_string()),
+        _ => None,
     }
 }
 
@@ -379,6 +580,20 @@ pub fn note_override_key(artwork_url: &str, override_path: &str) {
     write_key_store(&store);
 }
 
+/// Drop the `hash -> override path` link for `artwork_url`. The counterpart of
+/// [`note_override_key`], called when an override is REMOVED: without it the
+/// artwork layer keeps serving the custom file to every card long after the
+/// header has reverted.
+fn forget_override_key(artwork_url: &str) {
+    let Some(key) = art_key(artwork_url) else {
+        return;
+    };
+    let mut store = load_key_store();
+    if store.keys.remove(&key).is_some() {
+        write_key_store(&store);
+    }
+}
+
 /// The override path for any art URL whose hash has one ("" when none or the
 /// file is gone). `artwork_qt::cached_path` consults this BEFORE the network
 /// cache, so every surface renders the custom art.
@@ -389,5 +604,46 @@ pub fn override_for_url(url: &str) -> String {
     match load_key_store().keys.get(&key) {
         Some(p) if std::path::Path::new(p).is_file() => p.clone(),
         _ => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::art_key;
+
+    #[test]
+    fn album_covers_key_on_the_stem_before_the_size_suffix() {
+        assert_eq!(
+            art_key("https://static.qobuz.com/images/covers/tr/9l/abc123_600.jpg").as_deref(),
+            Some("abc123")
+        );
+        // Every size variant of one artwork resolves to the SAME key — that is
+        // what makes an override apply on cards, the NPB and the queue alike.
+        assert_eq!(
+            art_key("https://static.qobuz.com/images/covers/tr/9l/abc123_50.jpg"),
+            art_key("https://static.qobuz.com/images/covers/tr/9l/abc123_230.jpg")
+        );
+    }
+
+    #[test]
+    fn artist_portraits_key_on_the_bare_stem_across_every_size_segment() {
+        assert_eq!(
+            art_key("https://static.qobuz.com/images/artists/covers/large/784ec128.jpg").as_deref(),
+            Some("784ec128")
+        );
+        assert_eq!(
+            art_key("https://static.qobuz.com/images/artists/covers/large/784ec128.jpg"),
+            art_key("https://static.qobuz.com/images/artists/covers/medium/784ec128.png")
+        );
+    }
+
+    #[test]
+    fn suffixless_urls_outside_the_artist_path_stay_unkeyed() {
+        // The whole point of scoping the widening: an arbitrary URL must not
+        // start colliding with another one on its bare filename.
+        assert_eq!(art_key("https://example.com/thing/photo.jpg"), None);
+        assert_eq!(art_key("https://static.qobuz.com/images/covers/tr/9l/abc123.jpg"), None);
+        assert_eq!(art_key(""), None);
+        assert_eq!(art_key("https://static.qobuz.com/images/artists/covers/large/"), None);
     }
 }

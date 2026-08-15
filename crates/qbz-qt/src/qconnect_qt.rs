@@ -384,10 +384,11 @@ pub fn dev_clear() {
 
 struct QtQconnectRuntime {
     app: Arc<QtQconnectApp>,
-    #[allow(dead_code)] // retained for status/endpoint reporting in the UI step
+    // Read by `diagnostics_snapshot` (the "Has Endpoint" row).
     config: WsTransportConfig,
     event_loop: tokio::task::JoinHandle<()>,
-    #[allow(dead_code)] // shared with the app + sink; kept for future snapshot queries
+    // Shared with the app + sink; read by the renderer snapshots and by
+    // `diagnostics_snapshot` (session topology).
     sync_state: Arc<Mutex<QconnectRemoteSyncState>>,
 }
 
@@ -684,10 +685,95 @@ fn build_reorder_payload(
     }))
 }
 
-// §9 D10: the reference's `diagnostics_snapshot` / `QconnectDiagSnapshot` is
-// SKIPPED — its only Slint consumers (the settings Diagnostics panel tables +
-// markdown export) do not exist in Qt. The Connect diagnostics modal is served
-// by the dev_* state above, not by a snapshot read.
+/// Pure observation of the live session, for the Settings > Developer
+/// Diagnostics panel and the log bundle's markdown report.
+///
+/// Ported from `crates/qbz/src/qconnect_service.rs:572` (§9 D10 used to say
+/// this was SKIPPED "because its only Slint consumers do not exist in Qt" —
+/// they exist as of 2026-08-14, so it is ported).
+///
+/// Every field is a PURE read of state the running service already maintains
+/// (lock -> read -> clone -> unlock). It never touches discovery, guard or
+/// transport logic — QConnect is control-fragile, so this only observes.
+/// `last_error` is returned raw; the diagnostics controller redacts id-like
+/// substrings before it reaches the UI or the export.
+#[derive(Default)]
+pub struct QconnectDiagSnapshot {
+    pub running: bool,
+    pub transport_connected: bool,
+    pub has_endpoint: bool,
+    pub last_error: Option<String>,
+    pub role: &'static str,
+    pub active_name: Option<String>,
+    pub active_brand: Option<String>,
+    pub active_model: Option<String>,
+    pub renderer_count: usize,
+}
+
+impl QtQconnectService {
+    /// See [`QconnectDiagSnapshot`]. Returns a default snapshot (role "none")
+    /// when the service is not running.
+    pub(crate) async fn diagnostics_snapshot(&self) -> QconnectDiagSnapshot {
+        // Pull the app + sync-state handles (and the static fields) under a
+        // brief inner lock, then release it before awaiting the per-handle
+        // locks — the reference's ordering, kept verbatim.
+        let (app, sync_state, last_error, has_endpoint, running) = {
+            let guard = self.inner.lock().await;
+            match guard.runtime.as_ref() {
+                Some(rt) => (
+                    Some(Arc::clone(&rt.app)),
+                    Some(Arc::clone(&rt.sync_state)),
+                    guard.last_error.clone(),
+                    !rt.config.endpoint_url.is_empty(),
+                    true,
+                ),
+                None => (None, None, guard.last_error.clone(), false, false),
+            }
+        };
+
+        let mut snap = QconnectDiagSnapshot {
+            running,
+            has_endpoint,
+            last_error,
+            role: "none",
+            ..Default::default()
+        };
+
+        let (Some(app), Some(sync_state)) = (app, sync_state) else {
+            return snap;
+        };
+
+        // Transport-connected mirror (same source the event sink reads).
+        snap.transport_connected = app.state_handle().lock().await.transport_connected;
+
+        // Session topology: renderer count + the active renderer's identity.
+        let state = sync_state.lock().await;
+        let session = &state.session;
+        snap.renderer_count = session.renderers.len();
+        let active_id = session.active_renderer_id;
+        let local_id = session.local_renderer_id;
+        if let Some(active_id) = active_id {
+            if let Some(renderer) = session.renderers.iter().find(|r| r.renderer_id == active_id) {
+                snap.active_name = renderer.friendly_name.clone();
+                snap.active_brand = renderer.brand.clone();
+                snap.active_model = renderer.model.clone();
+            }
+            // active == local -> we render locally; active != local -> we
+            // control a peer. Mirrors the Tauri role rule.
+            snap.role = if Some(active_id) == local_id {
+                "local-renderer"
+            } else {
+                "controller"
+            };
+        } else if snap.running || snap.transport_connected {
+            snap.role = "observer";
+        } else {
+            snap.role = "none";
+        }
+
+        snap
+    }
+}
 
 impl QtQconnectService {
     pub fn new(runtime: Runtime) -> Self {

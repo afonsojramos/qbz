@@ -5126,6 +5126,12 @@ msgstr "Режим рабочего стола"
 msgid "View cover"
 msgstr "Показать обложку"
 
+# ArtistView portrait menu / lightbox (Qt port, 2026-08-14) — the
+# artist twin of "View cover".
+
+msgid "View image"
+msgstr "Показать изображение"
+
 msgid "Could not load the image"
 msgstr "Не удалось загрузить изображение"
 

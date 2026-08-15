@@ -266,6 +266,37 @@ impl CastService {
         set_scanning(false);
     }
 
+    /// `(chromecast_count, dlna_count, [(protocol, name)])` for the Settings >
+    /// Developer Diagnostics panel's Cast Discovery section.
+    ///
+    /// The reference reads the `CastState` Slint global on the UI thread
+    /// (`crates/qbz/src/diagnostics.rs:253-270`) because that is where its
+    /// picker's device list lives. Here the lists live in `inner`, so the
+    /// panel reads them straight from the service instead of round-tripping
+    /// through the bridge — same numbers, one fewer hop, and no oneshot.
+    /// PURE read: it never starts or stops discovery.
+    pub(crate) async fn diag_devices(&self) -> (i32, i32, Vec<(String, String)>) {
+        let inner = self.inner.lock().await;
+        let cc = inner
+            .chromecast_discovery
+            .as_ref()
+            .map(|d| d.get_discovered_devices())
+            .unwrap_or_default();
+        let dl = inner
+            .dlna_discovery
+            .as_ref()
+            .map(|d| d.get_discovered_devices())
+            .unwrap_or_default();
+        let mut rows: Vec<(String, String)> = Vec::with_capacity(cc.len() + dl.len());
+        for d in &cc {
+            rows.push(("chromecast".to_string(), d.name.clone()));
+        }
+        for d in &dl {
+            rows.push(("dlna".to_string(), d.name.clone()));
+        }
+        (cc.len() as i32, dl.len() as i32, rows)
+    }
+
     /// Snapshot both device lists and push them to the picker.
     async fn refresh_devices(&self) {
         let (chromecast, dlna) = {
@@ -1328,9 +1359,25 @@ impl CastService {
 // Entry points for the bridge (each hops onto the tokio runtime)
 // ---------------------------------------------------------------------------
 
+/// Whether the cast picker currently owns discovery.
+///
+/// Rust-side mirror of the `picker_open` qproperty, kept here because the
+/// Diagnostics panel's on-demand scan has to decide whether stopping discovery
+/// would kill a LIVE picker's device list — the reference reads
+/// `CastState.picker-open` on the UI thread for exactly that gate
+/// (`crates/qbz/src/diagnostics.rs:284-291`), and a qproperty cannot be read
+/// off the Qt thread.
+static PICKER_OPEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// See [`PICKER_OPEN`].
+pub(crate) fn picker_open() -> bool {
+    PICKER_OPEN.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 /// Picker opened: arm discovery. This is the ONLY trigger — nothing scans in
 /// the background and nothing touches the network before this runs.
 pub(crate) fn open_picker() {
+    PICKER_OPEN.store(true, std::sync::atomic::Ordering::SeqCst);
     set_error(String::new());
     let svc = service();
     crate::spawn(async move {
@@ -1340,6 +1387,7 @@ pub(crate) fn open_picker() {
 
 /// Picker closed: stop both discoveries. An active cast is untouched.
 pub(crate) fn close_picker() {
+    PICKER_OPEN.store(false, std::sync::atomic::Ordering::SeqCst);
     let svc = service();
     crate::spawn(async move {
         svc.stop_discovery().await;
