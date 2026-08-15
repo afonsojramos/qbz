@@ -27,6 +27,58 @@ pub struct TrackTagWrite {
     pub disc_number: Option<u32>,
 }
 
+/// Should this file's per-track ARTIST be rewritten to the album artist?
+///
+/// ARTIST is TRACK scope — a release with guest performers legitimately holds a
+/// different artist per track — but the editor offers exactly one artist field.
+/// The DB index resolves that by renaming the track artist ONLY where it still
+/// equals the value that was uniform across the album before the edit
+/// (`Database::update_album_group_metadata`). The file writer has to agree with
+/// it, or the two halves of one save disagree.
+///
+/// It used to call `set_artist(album_artist)` unconditionally on every file,
+/// which meant a various-artists release — where the editor leaves the artist
+/// field EMPTY precisely because the track artists disagree — had an empty
+/// ARTIST written over every one of its files. Irreversibly.
+fn should_rename_artist(
+    current: Option<&str>,
+    previous_uniform: Option<&str>,
+    new_artist: &str,
+) -> bool {
+    if new_artist.trim().is_empty() {
+        return false;
+    }
+    let Some(previous) = previous_uniform.map(str::trim).filter(|p| !p.is_empty()) else {
+        // The album had no single prior artist, so there is no value this edit
+        // can be said to be renaming. Leave every file's ARTIST alone.
+        return false;
+    };
+    current.map(str::trim) == Some(previous)
+}
+
+/// The artist shared by every file, or `None` when they disagree or any is
+/// blank. Read from the FILES rather than the library index, because the files
+/// are what is about to be overwritten.
+fn uniform_file_artist(paths: &[&str]) -> Option<String> {
+    use lofty::prelude::*;
+
+    let mut shared: Option<String> = None;
+    for path in paths {
+        let file = lofty::read_from_path(Path::new(path)).ok()?;
+        let tag = file.primary_tag().or_else(|| file.first_tag())?;
+        let artist = tag.artist()?.trim().to_string();
+        if artist.is_empty() {
+            return None;
+        }
+        match &shared {
+            None => shared = Some(artist),
+            Some(seen) if *seen == artist => {}
+            Some(_) => return None,
+        }
+    }
+    shared
+}
+
 /// Write embedded tags to each file. Dedups by `file_path` keeping the FIRST
 /// occurrence (order preserved). `on_progress(current, total)` is called
 /// BEFORE each file write (1-based; total = deduped count). Partial-failure
@@ -48,6 +100,16 @@ pub fn write_album_tags_to_files(
         .filter(|t| seen.insert(t.file_path.clone()))
         .collect();
     let total = unique.len();
+
+    // Read the prior per-track artist BEFORE the first write, so the rename
+    // rule sees the album as it was rather than as the loop has left it.
+    // Skipped entirely when there is no album artist to rename anything to.
+    let previous_artist = if album.album_artist.trim().is_empty() {
+        None
+    } else {
+        let paths: Vec<&str> = unique.iter().map(|t| t.file_path.as_str()).collect();
+        uniform_file_artist(&paths)
+    };
 
     for (i, track) in unique.iter().enumerate() {
         on_progress(i + 1, total);
@@ -80,7 +142,16 @@ pub fn write_album_tags_to_files(
 
             tag.set_title(track.title.trim().to_string());
             tag.set_album(album.album_title.trim().to_string());
-            tag.set_artist(album.album_artist.trim().to_string());
+
+            // ARTIST is track scope — see `should_rename_artist`.
+            let current_artist = tag.artist().map(|a| a.into_owned());
+            if should_rename_artist(
+                current_artist.as_deref(),
+                previous_artist.as_deref(),
+                &album.album_artist,
+            ) {
+                tag.set_artist(album.album_artist.trim().to_string());
+            }
 
             if let Some(no) = track.track_number {
                 tag.set_track(no);
@@ -165,4 +236,42 @@ pub fn compute_track_artist_match(tracks: &[LocalTrack]) -> Option<String> {
         }
     }
     artists.into_iter().next()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_rename_artist;
+
+    #[test]
+    fn renames_only_the_artist_the_album_actually_had() {
+        // The ordinary case: one artist across the album, user renames it.
+        assert!(should_rename_artist(
+            Some("Seiji Yokoyama"),
+            Some("Seiji Yokoyama"),
+            "Yokoyama Seiji"
+        ));
+        // A guest track inside an otherwise uniform album keeps its performer.
+        assert!(!should_rename_artist(
+            Some("MAKE-UP"),
+            Some("Seiji Yokoyama"),
+            "Yokoyama Seiji"
+        ));
+    }
+
+    #[test]
+    fn never_blanks_the_track_artist() {
+        // The various-artists shape: the editor leaves the field empty because
+        // the track artists disagree. Writing that empty value over 247 files
+        // is the data loss this guard exists to stop.
+        assert!(!should_rename_artist(Some("MAKE-UP"), None, ""));
+        assert!(!should_rename_artist(Some("MAKE-UP"), Some("MAKE-UP"), ""));
+        assert!(!should_rename_artist(Some("MAKE-UP"), Some("MAKE-UP"), "   "));
+    }
+
+    #[test]
+    fn no_uniform_prior_artist_means_nothing_is_renamed() {
+        assert!(!should_rename_artist(Some("MAKE-UP"), None, "Various Artists"));
+        assert!(!should_rename_artist(Some("MAKE-UP"), Some(""), "Various Artists"));
+        assert!(!should_rename_artist(None, Some("MAKE-UP"), "Yokoyama Seiji"));
+    }
 }
