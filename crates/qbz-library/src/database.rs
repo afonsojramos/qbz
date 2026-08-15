@@ -1128,6 +1128,95 @@ impl LibraryDatabase {
             std::path::Path::new(&track.file_path),
         );
 
+        // Re-indexing an already-known file must KEEP ITS ROWID.
+        //
+        // `INSERT OR REPLACE` resolves a conflict by DELETING the old row and
+        // inserting a new one, which hands out a fresh rowid. `local_tracks.id`
+        // is a foreign key elsewhere — `playlist_local_tracks.local_track_id`
+        // (a local file added to a Qobuz playlist) — and SQLite's foreign keys
+        // are OFF here (the only pragmas set are journal_mode and synchronous),
+        // so the cascade never fires and the playlist row survives pointing at
+        // an id that no longer exists. The INNER JOIN that reads it then
+        // returns nothing: the track silently vanishes from the playlist. The
+        // scan re-inserts EVERY file (there is no mtime skip), so this happened
+        // on every rescan. Verified against a scratch database.
+        //
+        // First-class LOCAL playlists are unaffected — `local_playlist_tracks`
+        // stores `local_path`, not an id.
+        //
+        // Two identities, because there are two unique constraints: the table's
+        // `UNIQUE(file_path, cue_start_secs)`, and the partial index
+        // `idx_tracks_file_nocue ON local_tracks(file_path) WHERE cue_file_path
+        // IS NULL` (NULL `cue_start_secs` values do not collide under the
+        // former, so the latter is what actually catches an ordinary track).
+        let existing_id: Option<i64> = if track.cue_file_path.is_none() {
+            self.conn
+                .query_row(
+                    "SELECT id FROM local_tracks WHERE file_path = ?1 AND cue_file_path IS NULL",
+                    params![track.file_path],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|e| LibraryError::Database(e.to_string()))?
+        } else {
+            self.conn
+                .query_row(
+                    "SELECT id FROM local_tracks
+                     WHERE file_path = ?1
+                       AND cue_start_secs IS ?2",
+                    params![track.file_path, track.cue_start_secs],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|e| LibraryError::Database(e.to_string()))?
+        };
+
+        if let Some(id) = existing_id {
+            self.conn
+                .execute(
+                    r#"UPDATE local_tracks SET
+                        title = ?1, artist = ?2, album = ?3, album_artist = ?4,
+                        track_number = ?5, disc_number = ?6, year = ?7, genre = ?8,
+                        catalog_number = ?9, duration_secs = ?10, format = ?11,
+                        bit_depth = ?12, sample_rate = ?13, channels = ?14,
+                        file_size_bytes = ?15, cue_file_path = ?16, cue_start_secs = ?17,
+                        cue_end_secs = ?18, artwork_path = ?19, last_modified = ?20,
+                        indexed_at = ?21, album_group_key = ?22, album_group_title = ?23,
+                        source = ?24, is_network_mount = ?25
+                       WHERE id = ?26"#,
+                    params![
+                        track.title,
+                        track.artist,
+                        track.album,
+                        track.album_artist,
+                        track.track_number,
+                        track.disc_number,
+                        track.year,
+                        track.genre,
+                        track.catalog_number,
+                        track.duration_secs,
+                        track.format.to_string(),
+                        track.bit_depth,
+                        track.sample_rate,
+                        track.channels,
+                        track.file_size_bytes,
+                        track.cue_file_path,
+                        track.cue_start_secs,
+                        track.cue_end_secs,
+                        track.artwork_path,
+                        track.last_modified,
+                        track.indexed_at,
+                        track.album_group_key,
+                        track.album_group_title,
+                        source,
+                        is_network_mount as i64,
+                        id,
+                    ],
+                )
+                .map_err(|e| LibraryError::Database(e.to_string()))?;
+            return Ok(id);
+        }
+
         self.conn
             .execute(
                 r#"INSERT OR REPLACE INTO local_tracks
@@ -6631,6 +6720,47 @@ mod sidecar_position_tests {
             .unwrap()
             .collect::<Result<Vec<_>, _>>()
             .unwrap()
+    }
+
+    #[test]
+    fn reindexing_a_track_keeps_its_rowid_so_playlists_survive_a_rescan() {
+        let (_tmp, db) = fresh_db();
+        let ids = seed_local_tracks(&db, 1);
+        db.add_local_track_to_playlist(7, ids[0], 0).unwrap();
+        assert_eq!(local_positions(&db, 7).len(), 1);
+
+        // What a rescan does: the same file, re-extracted, inserted again.
+        let mut again = LocalTrack::default();
+        again.file_path = "/t/track0.flac".into();
+        again.title = "T0 (retagged)".into();
+        again.artist = "A".into();
+        again.album = "B".into();
+        let id_after = db.insert_track(&again).unwrap();
+
+        assert_eq!(
+            id_after, ids[0],
+            "re-indexing must UPDATE in place; a new rowid orphans every \
+             playlist_local_tracks row that points at the old one"
+        );
+        assert_eq!(
+            db.get_track(ids[0]).unwrap().unwrap().title,
+            "T0 (retagged)",
+            "the row must still take the fresh metadata"
+        );
+
+        let rows = local_positions(&db, 7);
+        assert_eq!(rows.len(), 1, "the playlist row must survive");
+        let resolvable: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM playlist_local_tracks p
+                 JOIN local_tracks t ON t.id = p.local_track_id
+                 WHERE p.qobuz_playlist_id = 7",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(resolvable, 1, "and it must still resolve to a track");
     }
 
     #[test]
