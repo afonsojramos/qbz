@@ -48,9 +48,33 @@ fn now_secs() -> i64 {
         .unwrap_or(0)
 }
 
+/// Read the sidecar for one directory, caching the (possibly absent) result.
+fn cached_sidecar<'a>(
+    dir: &Path,
+    cache: &'a mut HashMap<String, Option<AlbumTagSidecar>>,
+) -> Option<&'a AlbumTagSidecar> {
+    let key = dir.to_string_lossy().to_string();
+    cache
+        .entry(key)
+        .or_insert_with(|| {
+            if !dir.is_dir() {
+                return None;
+            }
+            crate::tag_sidecar::read_album_sidecar(dir).unwrap_or(None)
+        })
+        .as_ref()
+}
+
 /// Apply a per-album sidecar override to a scanned track, caching the sidecar
-/// read per album group key. Mirrors Tauri's
+/// read per directory. Mirrors Tauri's
 /// `library_apply_sidecar_override_if_present`.
+///
+/// The sidecar lives at the album ROOT, which is the group key — but the group
+/// key climbs past disc subdirectories. A sidecar saved while a disc was still
+/// its own album (which is what a titled disc folder produced before
+/// `MetadataExtractor::is_titled_disc_folder` existed) sits one level below the
+/// root, and looking only at the root would drop every override it holds
+/// without a word. So the file's own directory is a second place to look.
 fn apply_sidecar_override(
     track: &mut LocalTrack,
     cache: &mut HashMap<String, Option<AlbumTagSidecar>>,
@@ -59,15 +83,20 @@ fn apply_sidecar_override(
     if group_key.is_empty() {
         return;
     }
-    let cached = cache.entry(group_key.to_string()).or_insert_with(|| {
-        let album_dir = Path::new(group_key);
-        if !album_dir.is_dir() {
-            return None;
+    let album_dir = PathBuf::from(group_key);
+
+    let mut dirs = vec![album_dir.clone()];
+    if let Some(own_dir) = Path::new(&track.file_path).parent() {
+        if own_dir != album_dir {
+            dirs.push(own_dir.to_path_buf());
         }
-        crate::tag_sidecar::read_album_sidecar(album_dir).unwrap_or(None)
-    });
-    if let Some(sidecar) = cached.as_ref() {
-        crate::tag_sidecar::apply_sidecar_to_track(track, sidecar);
+    }
+
+    for dir in dirs {
+        if let Some(sidecar) = cached_sidecar(&dir, cache) {
+            crate::tag_sidecar::apply_sidecar_to_track(track, sidecar);
+            return;
+        }
     }
 }
 
@@ -90,18 +119,11 @@ fn process_cue_file(
     let format = MetadataExtractor::detect_format(&audio_path);
     let mut tracks = cue_to_tracks(&cue, properties.duration_secs, format, &properties);
 
-    if let Some(group_key) = tracks
-        .first()
-        .map(|t| t.album_group_key.trim().to_string())
-        .filter(|k| !k.is_empty())
-    {
-        let album_dir = Path::new(&group_key);
-        if album_dir.is_dir() {
-            if let Ok(Some(sidecar)) = crate::tag_sidecar::read_album_sidecar(album_dir) {
-                for t in tracks.iter_mut() {
-                    crate::tag_sidecar::apply_sidecar_to_track(t, &sidecar);
-                }
-            }
+    if !tracks.is_empty() {
+        // Same two-directory lookup as `apply_sidecar_override`.
+        let mut cache: HashMap<String, Option<AlbumTagSidecar>> = HashMap::new();
+        for t in tracks.iter_mut() {
+            apply_sidecar_override(t, &mut cache);
         }
     }
 

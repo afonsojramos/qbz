@@ -177,6 +177,51 @@ impl MetadataExtractor {
     }
 
     fn is_disc_folder(name: &str) -> bool {
+        Self::is_bare_disc_folder(name) || Self::is_titled_disc_folder(name)
+    }
+
+    /// `Disc 01 - TV Series Soundtrack #01`, `CD2 – Bonus Material`: a disc
+    /// folder that also names the disc. Box sets are shipped this way, and
+    /// without this arm every disc becomes its own album, because
+    /// `album_root_dir` only climbs past folders this predicate accepts.
+    ///
+    /// Disjoint from the #147 false positives by construction. Those are album
+    /// titles that END with a disc token (`Now 75 - CD1`,
+    /// `100 Popular Classics, Disc 1`, `Relaxation Disc1`); here the
+    /// designator must be the FIRST thing in the name. The separator must have
+    /// whitespace on one side, so `CD-Rom Favourites` is not a disc folder
+    /// either — an accidental merge of two albums is worse than the split this
+    /// fixes, so the rule stays narrow.
+    fn is_titled_disc_folder(name: &str) -> bool {
+        let trimmed = name.trim();
+        let bytes = trimmed.as_bytes();
+
+        let mut split = None;
+        for (idx, ch) in trimmed.char_indices() {
+            if !matches!(ch, '-' | '\u{2013}' | '\u{2014}' | ':') {
+                continue;
+            }
+            let space_before = idx > 0 && bytes[idx - 1].is_ascii_whitespace();
+            let after = idx + ch.len_utf8();
+            let space_after = trimmed[after..].starts_with(char::is_whitespace);
+            if space_before || space_after {
+                split = Some((idx, after));
+                break;
+            }
+        }
+
+        let Some((head_end, tail_start)) = split else {
+            return false;
+        };
+
+        let head = trimmed[..head_end].trim();
+        let tail = trimmed[tail_start..].trim();
+
+        // `Disc 1 -` with nothing after it is already the bare form.
+        !tail.is_empty() && Self::is_bare_disc_folder(head)
+    }
+
+    fn is_bare_disc_folder(name: &str) -> bool {
         let lower = name.to_lowercase();
         let tokens: Vec<&str> = lower
             .split(|c: char| !c.is_ascii_alphanumeric())
@@ -1195,6 +1240,70 @@ mod tests {
         assert!(!MetadataExtractor::is_disc_folder("20 Blues Greats"));
         assert!(!MetadataExtractor::is_disc_folder("The Beatles"));
         assert!(!MetadataExtractor::is_disc_folder("Abbey Road"));
+    }
+
+    #[test]
+    fn test_is_disc_folder_titled() {
+        // Box sets name the disc after the designator. Every one of these used
+        // to become its own album, in the DEFAULT (folder) grouping mode.
+        assert!(MetadataExtractor::is_disc_folder(
+            "Disc 01 - TV Series Soundtrack #01"
+        ));
+        assert!(MetadataExtractor::is_disc_folder("CD1 - Bonus Material"));
+        assert!(MetadataExtractor::is_disc_folder("Disc 2 \u{2013} Live"));
+        assert!(MetadataExtractor::is_disc_folder("Disc 3: The Remixes"));
+        assert!(MetadataExtractor::is_disc_folder(
+            "Bonus Disc - Rarities 1994-1999"
+        ));
+        assert!(MetadataExtractor::is_disc_folder("cd 04 - instrumentals"));
+    }
+
+    #[test]
+    fn test_is_disc_folder_titled_stays_narrow() {
+        // The designator must LEAD. These are the issue #147 shapes with a
+        // separator in them, and they must stay album titles.
+        assert!(!MetadataExtractor::is_disc_folder("Now 75 - CD1"));
+        assert!(!MetadataExtractor::is_disc_folder(
+            "Match of the Day - The Album CD1"
+        ));
+        assert!(!MetadataExtractor::is_disc_folder(
+            "Greatest Hits - Disc 1 of 2 Collection"
+        ));
+        // No whitespace beside the separator: a hyphenated word, not a title.
+        assert!(!MetadataExtractor::is_disc_folder("CD-Rom Favourites"));
+        // A leading disc word with no separator at all.
+        assert!(!MetadataExtractor::is_disc_folder("Disc Jockey Anthems"));
+        // Nothing after the separator is the bare form, not the titled one.
+        assert!(!MetadataExtractor::is_titled_disc_folder("Disc 1 -"));
+    }
+
+    #[test]
+    fn test_album_root_dir_titled_disc_folders_group_as_one() {
+        // A 13-disc box set: every disc directory must resolve to the SAME
+        // album root, or the library shows 13 albums.
+        let box_root = Path::new("/music/Seiji Yokoyama/Saint Seiya Eternal CD-Box");
+        let first = MetadataExtractor::album_root_dir(Path::new(
+            "/music/Seiji Yokoyama/Saint Seiya Eternal CD-Box/Disc 01 - TV Series Soundtrack #01/01. Pegasus Fantasy.flac",
+        ))
+        .unwrap();
+        let last = MetadataExtractor::album_root_dir(Path::new(
+            "/music/Seiji Yokoyama/Saint Seiya Eternal CD-Box/Disc 13 - Complete Song Collection 3/07. Blue Forever.flac",
+        ))
+        .unwrap();
+        assert_eq!(first, box_root);
+        assert_eq!(last, box_root);
+    }
+
+    #[test]
+    fn test_disc_number_recovered_from_titled_disc_folder() {
+        assert_eq!(
+            MetadataExtractor::disc_number_from_name("Disc 01 - TV Series Soundtrack #01"),
+            Some(1)
+        );
+        assert_eq!(
+            MetadataExtractor::disc_number_from_name("CD13 - Complete Song Collection 3"),
+            Some(13)
+        );
     }
 
     #[test]
