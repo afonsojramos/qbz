@@ -92,7 +92,7 @@ Item {
     // Scrim — click dismisses.
     Rectangle {
         anchors.fill: parent
-        color: "#000000bf"
+        color: "#bf000000"
         MouseArea {
             anchors.fill: parent
             onClicked: root.close()
@@ -106,7 +106,7 @@ Item {
         width: panel.width + 8
         height: panel.height + 8
         radius: theme.radiusMd
-        color: "#00000080"
+        color: "#80000000"
         z: -1
     }
 

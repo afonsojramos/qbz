@@ -79,7 +79,7 @@ Item {
     // Dimmed backdrop; a click closes.
     Rectangle {
         anchors.fill: parent
-        color: "#000000bf"
+        color: "#bf000000"
         MouseArea {
             anchors.fill: parent
             onClicked: QbzShell.logClose()
@@ -93,7 +93,7 @@ Item {
         width: panel.width + 8
         height: panel.height + 8
         radius: theme.radiusMd
-        color: "#00000080"
+        color: "#80000000"
     }
 
     Rectangle {

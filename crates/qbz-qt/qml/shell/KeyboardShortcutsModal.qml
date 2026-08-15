@@ -137,7 +137,7 @@ Item {
             width: card.width
             height: card.height
             radius: theme.radiusMd
-            color: "#00000080"
+            color: "#80000000"
             opacity: 0.5
         }
 
