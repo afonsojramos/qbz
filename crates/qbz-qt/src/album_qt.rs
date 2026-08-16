@@ -1035,6 +1035,8 @@ fn map_release_card(release: &qbz_models::PageArtistRelease) -> AlbumCardData {
         quality_detail: home_qt::quality_detail_from_parts(bit_depth, sample_rate),
         art_url: crate::cover_artwork_qt::prefer_album_cover(
             &release.id,
+            // Release grid card: full variant (best()) — the down-tier was
+            // reverted after the 2026-08-15 owner smoke (contract 04 §3).
             release
                 .image
                 .as_ref()
@@ -1139,6 +1141,9 @@ pub async fn load_suggestions(
                 quality_detail: home_qt::quality_detail_from_parts(bit_depth, sample_rate),
                 art_url: crate::cover_artwork_qt::prefer_album_cover(
                     &a.id,
+                    // Recommendation grid card: full variant (best()) — the
+                    // down-tier was reverted after the 2026-08-15 owner smoke
+                    // (contract 04 §3).
                     a.image.best().cloned().unwrap_or_default(),
                 ),
             }

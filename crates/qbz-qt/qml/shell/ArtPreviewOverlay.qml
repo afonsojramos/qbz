@@ -58,14 +58,20 @@ Item {
             width: 220
             height: 220
             fillMode: Image.PreserveAspectFit
-            // The .slint prefers `artwork-large` and falls back to `artwork`;
-            // this port publishes only one cover path (player_bridge
-            // .np_artwork_path), which is the cached original — 600px for a
-            // Qobuz cover, so the 220px preview is a downscale either way.
-            source: QbzPlayer.npArtworkPath
+            // D2 (contract 04 §4): the small feed is now the thumbnail
+            // variant (150px), too small for a 220px preview — prefer the
+            // size-resolved large feed, fall back to the small one. The
+            // request below asks with 2x DPR headroom (440 -> the 600
+            // bucket).
+            source: QbzPlayer.npArtworkPathLarge !== ""
+                ? QbzPlayer.npArtworkPathLarge : QbzPlayer.npArtworkPath
             asynchronous: true
             smooth: true
             mipmap: true
         }
     }
+
+    // Ask for the large feed while the preview is up (bucketed in Rust —
+    // repeated shows of the same track at the same size are no-ops).
+    onVisibleChanged: if (visible) QbzPlayer.requestNpArtworkSize(440)
 }

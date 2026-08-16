@@ -137,6 +137,7 @@ pub use types::{
     AssetOrigin,
     AudioParams,
     probe_streaminfo,
+    qobuz_cover_at_px,
     ExternalStreamAsset,
     StreamQualityInfo,
     StreamRestriction,

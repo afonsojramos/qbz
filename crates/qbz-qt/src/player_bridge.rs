@@ -32,6 +32,11 @@ pub mod qbz_player {
         #[qproperty(QString, np_title)]
         #[qproperty(QString, np_artist)]
         #[qproperty(QString, np_artwork_path)]
+        // Size-aware LARGE art sibling (contract 04 §4, D2): resolved per
+        // size bucket by request_np_artwork_size for the big immersive slots.
+        // "" = no large art resolved — bind with a fallback to
+        // np_artwork_path (the Slint `artwork-large : artwork` pattern).
+        #[qproperty(QString, np_artwork_path_large)]
         #[qproperty(i32, np_elapsed_secs)]
         #[qproperty(i32, np_duration_secs)]
         #[qproperty(f32, np_progress)]
@@ -72,6 +77,11 @@ pub mod qbz_player {
         // 0 none · 1 streaming-quality setting · 2 local output device cap ·
         // 3 cast renderer cap · 4 Qobuz offered nothing higher.
         #[qproperty(i32, np_quality_limit_cause)]
+        // A3: the DELIVERED stream params as scalars (0 = not reported yet) —
+        // the Spectral Ribbon overlay header reads them
+        // (ImmersiveSpectralOverlay.slint:45 parity).
+        #[qproperty(i32, np_eff_rate_hz)]
+        #[qproperty(i32, np_eff_bits)]
 
         // --- Output LEDs (settings.rs `output_labels`) -------------------
         // PIPEWIRE|ALSA|JACK|PULS|SYST|AUTO — *_active lights the LED.
@@ -127,6 +137,14 @@ pub mod qbz_player {
         /// domain singleton; only QbzSession.boot also fires crate::on_boot).
         #[qinvokable]
         fn boot(self: Pin<&mut QbzPlayer>);
+
+        /// A big art slot (immersive panels) reports its size in CSS px
+        /// (D2, contract 04 §4). Bucketed on the Qobuz variant table: only a
+        /// bucket CROSSING re-resolves, the result lands on
+        /// `np_artwork_path_large` asynchronously, and a shrink never
+        /// re-fetches (the derivative layer downscales the cached file).
+        #[qinvokable]
+        fn request_np_artwork_size(self: Pin<&mut QbzPlayer>, px: i32);
 
         // --- Transport (phase 4 wires the player; POC log-and-noop, except
         // the pure-UI toggles which mutate the NowPlayingModel) -----------
@@ -231,6 +249,7 @@ pub struct QbzPlayerRust {
     np_title: QString,
     np_artist: QString,
     np_artwork_path: QString,
+    np_artwork_path_large: QString,
     np_elapsed_secs: i32,
     np_duration_secs: i32,
     np_progress: f32,
@@ -249,6 +268,8 @@ pub struct QbzPlayerRust {
     np_quality_true_detail: QString,
     np_quality_effective_tier: QString,
     np_quality_limit_cause: i32,
+    np_eff_rate_hz: i32,
+    np_eff_bits: i32,
     np_output_backend_label: QString,
     np_output_backend_active: bool,
     np_output_mode_label: QString,
@@ -278,6 +299,7 @@ impl Default for QbzPlayerRust {
             np_title: QString::default(),
             np_artist: QString::default(),
             np_artwork_path: QString::default(),
+            np_artwork_path_large: QString::default(),
             np_elapsed_secs: 0,
             np_duration_secs: 0,
             np_progress: 0.0,
@@ -297,6 +319,8 @@ impl Default for QbzPlayerRust {
             np_quality_true_detail: QString::default(),
             np_quality_effective_tier: QString::default(),
             np_quality_limit_cause: 0,
+            np_eff_rate_hz: 0,
+            np_eff_bits: 0,
             // The Slint NowPlayingState defaults (state.slint) — an unlit
             // "SYST / DEFAULT" pair until the first settings snapshot.
             np_output_backend_label: QString::from("SYST"),
@@ -345,6 +369,10 @@ impl qbz_player::QbzPlayer {
         if QT_THREAD.set(self.qt_thread()).is_err() {
             log::warn!("[qbz-qt] player Qt thread already registered");
         }
+    }
+
+    pub fn request_np_artwork_size(self: Pin<&mut Self>, px: i32) {
+        crate::artwork_qt::request_now_playing_art(px);
     }
 
     pub fn toggle_play(self: Pin<&mut Self>) {

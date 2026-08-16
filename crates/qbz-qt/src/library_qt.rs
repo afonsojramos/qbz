@@ -312,6 +312,7 @@ fn map_track(track: Track) -> FeedItem {
     if let Some(version) = track.version.as_ref().filter(|v| !v.is_empty()) {
         title = format!("{title} ({version})");
     }
+    // Track row art: full variant (best()) — the thumbnail down-tier was reverted after the 2026-08-15 owner smoke (contract 04 §3).
     let artwork_url = track
         .album
         .as_ref()
@@ -403,6 +404,8 @@ fn map_album(album: Album) -> FeedItem {
         year: qbz_text_utils::dates::release_label(date.as_deref()),
         quality_tier: home_qt::quality_tier_from_depth(bit_depth).to_string(),
         quality_detail: home_qt::quality_detail_from_parts(bit_depth, sample_rate),
+        // Library grid card: full variant (best()) — the down-tier was
+        // reverted after the 2026-08-15 owner smoke (contract 04 §3).
         image_url: album.image.best().cloned().unwrap_or_default(),
         is_favorite: true,
         ..Default::default()
@@ -808,6 +811,7 @@ async fn fetch_purchases(
         .items
         .into_iter()
         .map(|t| {
+            // Track row art: full variant (best()) — the thumbnail down-tier was reverted after the 2026-08-15 owner smoke (contract 04 §3).
             let (img, alb, aid) = t
                 .album
                 .as_ref()

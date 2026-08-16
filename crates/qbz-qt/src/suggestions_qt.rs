@@ -170,7 +170,11 @@ fn shuffle_tracks(tracks: &mut [qbz_models::Track], seed: u64) {
     }
 }
 
-/// Best collage cover URL for a track's album (large → best variant).
+/// Collage cover URL for a track's album. Suggestion-card collage tiles draw
+/// at <= ~144 CSS px (SuggestionsPanel wells); the full variant (best()) is
+/// downscaled to the drawn size by the RoundedImage derivative layer — the
+/// thumbnail down-tier was reverted after the 2026-08-15 owner smoke
+/// (contract 04 §3).
 fn track_album_cover(track: &qbz_models::Track) -> Option<String> {
     track
         .album

@@ -61,7 +61,9 @@ pub use tag_writer::{
 pub use scanner::{LibraryScanner, ScanResult};
 pub use thumbnails::{
     clear_thumbnails, generate_thumbnail, generate_thumbnail_from_bytes, get_cache_size,
+    get_or_generate_large_thumbnail, get_or_generate_large_thumbnail_from_bytes,
     get_or_generate_thumbnail, get_thumbnail_path, get_thumbnails_dir, thumbnail_exists,
+    LARGE_ART_PX,
 };
 
 // Re-export database module for backwards compatibility

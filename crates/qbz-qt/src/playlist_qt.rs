@@ -515,6 +515,7 @@ pub(crate) fn map_track(track: &Track) -> PlaylistTrackRow {
         bit_depth: track.maximum_bit_depth,
         sample_rate: track.maximum_sampling_rate,
         explicit: track.parental_warning,
+        // Track row art: full variant (best()) — the thumbnail down-tier was reverted after the 2026-08-15 owner smoke (contract 04 §3).
         art_url: album
             .and_then(|a| a.image.best().cloned())
             .unwrap_or_default(),
@@ -686,6 +687,10 @@ fn collage_urls(playlist: &Playlist, tracks: &[Track]) -> Vec<String> {
                 .map(|a| {
                     (
                         a.id.clone(),
+                        // Mosaic tiles on the header/cards: the server-listed
+                        // arm above prefers images300, so the member-album
+                        // fallback requests the matching large variant
+                        // (contract 04 §3).
                         a.image.best().cloned().unwrap_or_default(),
                     )
                 })

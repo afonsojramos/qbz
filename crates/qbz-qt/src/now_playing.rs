@@ -164,6 +164,11 @@ fn publish(m: &NowPlayingModel) {
             .set_np_quality_effective_tier(QString::from(m.delivered.effective_tier.as_str()));
         b.as_mut()
             .set_np_quality_limit_cause(m.delivered.limit_cause);
+        // A3: the delivered stream params as scalars — the Spectral Ribbon
+        // overlay header reads them ("Audio Stream, {rate} Hz, {bits} bits",
+        // ImmersiveSpectralOverlay.slint:45). 0 = not reported yet.
+        b.as_mut().set_np_eff_rate_hz(m.eff_rate_hz as i32);
+        b.as_mut().set_np_eff_bits(m.eff_bits as i32);
         // --- Cast / remote ------------------------------------------------
         b.as_mut().set_np_is_remote(m.is_remote);
         b.as_mut()
@@ -279,6 +284,12 @@ pub struct TrackMeta {
     pub album: String,
     pub album_id: String,
     pub artist_id: String,
+    /// The queue track's id + source ("qobuz" | "local" | "plex" | …), stashed
+    /// out-of-band for the size-aware large-art feed (D2): local tracks need
+    /// the rowid to re-open embedded/folder art, Plex rows route to the 1024
+    /// transcode tier, Qobuz rows re-resolve through the registered ImageSet.
+    pub track_id: u64,
+    pub source: String,
     /// Container origin of THIS track ("album" | "artist" | "playlist" |
     /// "label" + its id). Never optional at this seam: `refresh_now_playing`
     /// resolves the fallback (the track's own album) before it gets here, so a
@@ -299,6 +310,17 @@ pub struct TrackMeta {
 /// Resets the DELIVERED block: the engine re-derives it once the new stream
 /// opens, and the previous track's downgrade state must never linger.
 pub fn set_track(meta: TrackMeta) {
+    // Stash the artwork seed out-of-band BEFORE the meta swap (the closure
+    // moves the fields it publishes): the small feed resolves through
+    // `artwork_qt::attach_now_playing`, the size-aware large feed (D2) reads
+    // ART_SEED.
+    *ARTWORK_URL.lock().unwrap() = meta.artwork_url.clone();
+    *ART_SEED.lock().unwrap() = ArtSeed {
+        url: meta.artwork_url.clone(),
+        track_id: meta.track_id,
+        album_id: meta.album_id.clone(),
+        source: meta.source.clone(),
+    };
     mutate(|m| {
         m.has_track = true;
         m.title = meta.title;
@@ -322,9 +344,6 @@ pub fn set_track(meta: TrackMeta) {
         m.shuffle = meta.shuffle;
         m.repeat_mode = meta.repeat_mode;
     });
-    // Stash the url out-of-band so the artwork pipeline can resolve it
-    // without a second full publish.
-    *ARTWORK_URL.lock().unwrap() = meta.artwork_url;
 }
 
 /// Seed the CATALOG maximum + the requested tier for the new current track
@@ -389,6 +408,9 @@ pub fn clear_track() {
         *m = kept;
     });
     crate::quality_state::seed_track(None, None, false);
+    // No current track: the large-art feed has nothing to re-resolve (D2).
+    *ART_SEED.lock().unwrap() = ArtSeed::default();
+    set_artwork_path_large(String::new());
 }
 
 // --- Cast / remote (wiring seam — no cast service in the POC build) -------
@@ -463,9 +485,76 @@ pub fn set_cast_delivered(delivered: Delivered) {
 /// The artwork url of the current track, stashed for the artwork pipeline.
 static ARTWORK_URL: Mutex<String> = Mutex::new(String::new());
 
+/// What the size-aware large-art feed (D2, contract
+/// `2026-08-15-immersive-completion` 04 §4) needs to re-resolve the current
+/// track at a bigger tier: the raw url, the queue id (local tracks re-open
+/// their audio file by rowid), the album id (Qobuz variant-set registry key)
+/// and the source word ("local" | "plex" | "qobuz" | …).
+#[derive(Clone, Default)]
+pub struct ArtSeed {
+    pub url: String,
+    pub track_id: u64,
+    pub album_id: String,
+    pub source: String,
+}
+
+static ART_SEED: Mutex<ArtSeed> = Mutex::new(ArtSeed {
+    url: String::new(),
+    track_id: 0,
+    album_id: String::new(),
+    source: String::new(),
+});
+
+/// The current track's large-art seed (empty url = nothing to re-resolve).
+pub(crate) fn art_seed() -> ArtSeed {
+    ART_SEED.lock().unwrap().clone()
+}
+
+/// `(track_id, progress 0..1)` for the Spectral Ribbon drain (A3,
+/// `viz_qt.rs` → `ribbon_qt.rs`): the playback fraction at SECOND
+/// granularity — the reference reads Slint's NowPlayingState progress, which
+/// is itself second-granular, and the gap-fill exists precisely because it
+/// updates ~1 Hz (`shader_underlay.rs:898-899`). Reads the model + the art
+/// seed's queue id (the model carries no numeric track id).
+pub(crate) fn ribbon_cursor() -> (u64, f32) {
+    let guard = MODEL.lock().unwrap();
+    let progress = guard
+        .as_ref()
+        .map(|m| {
+            if m.duration_secs > 0 {
+                (m.elapsed_secs as f32 / m.duration_secs as f32).clamp(0.0, 1.0)
+            } else {
+                0.0
+            }
+        })
+        .unwrap_or(0.0);
+    drop(guard);
+    (art_seed().track_id, progress)
+}
+
 /// Attach a resolved artwork path to the current track (artwork pipeline).
 pub fn set_artwork_path(path: String) {
     mutate(|m| m.artwork_path = path);
+}
+
+/// Publish the size-aware LARGE art sibling (`QbzPlayer.npArtworkPathLarge`).
+/// Deliberately NOT a model field: it resolves asynchronously and
+/// independently of the meta publish, so it gets the single-property
+/// publisher treatment (the `publish_show_context_icon` pattern) — one notify
+/// per actual change, no full-model republish per art landing (pulse law:
+/// batched, deduped).
+pub fn set_artwork_path_large(path: String) {
+    static LAST: Mutex<String> = Mutex::new(String::new());
+    {
+        let mut last = LAST.lock().unwrap();
+        if *last == path {
+            return;
+        }
+        *last = path.clone();
+    }
+    crate::player_bridge::ui(move |mut b| {
+        b.as_mut().set_np_artwork_path_large(QString::from(path.as_str()))
+    });
 }
 
 /// 1 Hz position push from the poll pump. `has_audio` = the engine

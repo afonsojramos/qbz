@@ -77,6 +77,14 @@ const HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 /// now-playing bar / the sidebar dock, which all render well under it.
 pub const PLEX_THUMB_PX: u32 = 256;
 
+/// The ONE larger Plex transcode tier (contract 04 §3): only the big slots
+/// (immersive main art, lightbox-class surfaces) tokenize at 1024; every list
+/// stays at [`PLEX_THUMB_PX`]. The transcode url carries `width=`, so the two
+/// tiers are separate cache entries by construction. (The Slint app passes
+/// per-surface sizes — `qbz/src/artwork.rs:555-566` — so this is parity, not
+/// invention.)
+pub const PLEX_THUMB_PX_LARGE: u32 = 1024;
+
 /// Memo ceiling. The memo is an accelerator, not a source of truth, so it is
 /// cleared wholesale rather than carrying LRU bookkeeping.
 const MEMO_CAP: usize = 8192;
@@ -445,15 +453,43 @@ pub async fn download_missing(urls: Vec<String>) {
 // Now-playing artwork (phase 4)
 // ---------------------------------------------------------------------------
 
+/// The pixel tier the now-playing feed (`npArtworkPath`) resolves Qobuz
+/// covers at. The queue persists WHATEVER variant the building surface
+/// picked — a restored session can carry the 50px `small` (measured in the
+/// owner's image cache 2026-08-15: 50x50 JPEGs, pixelated art on the NPB,
+/// MPRIS and immersive). 600 covers every consumer of this feed (NPB large,
+/// the preview overlay, the sidebar dock, queue rows through the derivative
+/// layer); bigger immersive slots are served by the large feed below.
+const NP_FEED_PX: u32 = 600;
+
+/// The url the now-playing feed actually resolves: a sized Qobuz cover is
+/// rewritten to [`NP_FEED_PX`] (`qbz_models::qobuz_cover_at_px`); everything
+/// else (local files, Plex thumbs, unsized urls) passes through. A custom
+/// cover override is keyed on the url the surfaces carry, so its presence
+/// pins the original — the rewrite must not route around it.
+fn np_feed_url(url: &str) -> String {
+    if !crate::cover_artwork_qt::override_for_url(url).is_empty() {
+        return url.to_string();
+    }
+    qbz_models::qobuz_cover_at_px(url, NP_FEED_PX).unwrap_or_else(|| url.to_string())
+}
+
 /// Attach the current track's artwork to the NowPlayingModel: a disk hit (or
 /// a local file, which is always a hit) applies immediately; a miss downloads
 /// in the background and then republishes.
 pub fn attach_now_playing(url: &str) {
+    // D2 track edge: the size-aware large feed belongs to the track that just
+    // ended. Clear it, and re-resolve at the pending bucket when a panel has
+    // one outstanding (the QML side only calls `requestNpArtworkSize` on
+    // bucket/visibility changes, so without this kick a track change with a
+    // settled window would leave the immersive art on the small feed).
+    restart_now_playing_large();
     if url.is_empty() {
         crate::now_playing::set_artwork_path(String::new());
         return;
     }
-    let hit = cached_path(url);
+    let feed = np_feed_url(url);
+    let hit = cached_path(&feed);
     if !hit.is_empty() {
         crate::now_playing::set_artwork_path(hit);
         return;
@@ -461,20 +497,271 @@ pub fn attach_now_playing(url: &str) {
     // Nothing fetchable (a missing local cover, Plex not connected): clear
     // the bar instead of leaving the previous track's cover behind.
     if matches!(
-        classify(url),
+        classify(&feed),
         ArtUrl::Empty | ArtUrl::LocalFile(_) | ArtUrl::PlexUnconfigured
     ) {
         crate::now_playing::set_artwork_path(String::new());
         return;
     }
-    let url = url.to_string();
     crate::spawn(async move {
-        download_missing(vec![url.clone()]).await;
-        let path = cached_path(&url);
+        download_missing(vec![feed.clone()]).await;
+        let path = cached_path(&feed);
         if !path.is_empty() {
             crate::now_playing::set_artwork_path(path);
         }
     });
+}
+
+// ---------------------------------------------------------------------------
+// Size-aware LARGE now-playing art (contract 2026-08-15-immersive-completion
+// 04 §4 — workstream D2)
+// ---------------------------------------------------------------------------
+//
+// `npArtworkPath` stays the fallback feed — the queue-build sites' best()
+// pick, with sized Qobuz covers rewritten UP to [`NP_FEED_PX`] (a restored
+// queue can carry the 50px `small`; owner smoke 2026-08-15). The immersive
+// panels (Static / AlbumReactive /
+// SPLIT) compute their slot size, call `QbzPlayer.requestNpArtworkSize(px)`,
+// and bind `npArtworkPathLarge` with a fallback to `npArtworkPath` (the Slint
+// `artwork-large.width > 0 ? artwork-large : artwork` pattern). Re-resolution
+// is BUCKETED on `qbz_models::ImageSet::bucket_for_px` — one landing (and one
+// notify) per size tier crossed, never per resize pixel (pulse law), and a
+// SHRINK never re-fetches: the already-cached larger file downscales through
+// the RoundedImage derivative layer.
+
+/// album id -> the full Qobuz variant set, registered at queue-build time
+/// (the only place the `ImageSet` still exists — `QueueTrack` flattens it to
+/// one url). Capped, cleared wholesale: an accelerator, not a source of
+/// truth; a miss just keeps the large feed on the small-feed url.
+static NP_VARIANTS: LazyLock<RwLock<HashMap<String, qbz_models::ImageSet>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
+
+const NP_VARIANTS_CAP: usize = 512;
+
+/// Queue-build sites call this with the album's full `ImageSet` so the large
+/// feed can re-pick the variant per size bucket later.
+pub fn note_np_variants(album_id: &str, image: &qbz_models::ImageSet) {
+    if album_id.is_empty() || image.best().is_none() {
+        return;
+    }
+    if let Ok(mut map) = NP_VARIANTS.write() {
+        if map.len() >= NP_VARIANTS_CAP {
+            map.clear();
+        }
+        map.insert(album_id.to_string(), image.clone());
+    }
+}
+
+fn np_variants(album_id: &str) -> Option<qbz_models::ImageSet> {
+    NP_VARIANTS.read().ok()?.get(album_id).cloned()
+}
+
+/// The last large-art request: which track it serves and the biggest bucket
+/// requested for it. `bucket == 0` = no panel has asked for large art this
+/// session (the common case: immersive never opened), so track edges cost
+/// nothing.
+struct LargeReq {
+    track_id: u64,
+    bucket: u32,
+}
+
+static NP_LARGE: Mutex<LargeReq> = Mutex::new(LargeReq {
+    track_id: 0,
+    bucket: 0,
+});
+
+/// Registry-miss rewrites that already failed this session (a 404 = the
+/// album predates the mega tier; a network failure pins the same way, and
+/// self-heals on the next launch). One miss per url EVER: without this a
+/// pre-mega album would cost a 404 on EVERY track change — the reason the
+/// rewrite used to be capped at [`NP_FEED_PX`]. The cap is what left
+/// restored-queue art soft on the big slots: a restored session carries no
+/// `ImageSet`, every smoke of the owner starts from one, and 600px into a
+/// ~1000px split slot reads as pixelation (owner smoke 2026-08-15 night).
+static NP_LARGE_NEG: LazyLock<RwLock<HashSet<String>>> =
+    LazyLock::new(|| RwLock::new(HashSet::new()));
+
+/// `QbzPlayer.requestNpArtworkSize(px)` — a panel reports its art slot size
+/// (CSS px; the same expression as its artProbe cap, minus the native clamp,
+/// which stays the final safety). Bucketed + deduped: a resize drag costs at
+/// most one resolve per tier crossed, and requests at or below the tier
+/// already resolved for this track are no-ops.
+pub fn request_now_playing_art(px: i32) {
+    if px <= 0 {
+        return;
+    }
+    let bucket = qbz_models::ImageSet::bucket_for_px(px as u32);
+    let seed = crate::now_playing::art_seed();
+    if seed.url.is_empty() {
+        return;
+    }
+    {
+        let mut lr = NP_LARGE.lock().unwrap();
+        if lr.track_id == seed.track_id && bucket <= lr.bucket {
+            return;
+        }
+        lr.track_id = seed.track_id;
+        lr.bucket = bucket;
+    }
+    resolve_np_large(seed, bucket);
+}
+
+/// Track edge (called from [`attach_now_playing`]): drop the previous track's
+/// large path and re-resolve at the pending bucket, if any.
+fn restart_now_playing_large() {
+    crate::now_playing::set_artwork_path_large(String::new());
+    let bucket = NP_LARGE.lock().unwrap().bucket;
+    if bucket == 0 {
+        return;
+    }
+    let seed = crate::now_playing::art_seed();
+    if seed.url.is_empty() {
+        return;
+    }
+    NP_LARGE.lock().unwrap().track_id = seed.track_id;
+    resolve_np_large(seed, bucket);
+}
+
+/// Kick the async resolve; the landing publishes ONLY if the track is still
+/// current (a slow Plex transcode must not stamp the previous track's art
+/// onto the new one).
+fn resolve_np_large(seed: crate::now_playing::ArtSeed, bucket: u32) {
+    crate::spawn(async move {
+        let path = resolve_large(&seed, bucket).await;
+        if crate::now_playing::art_seed().track_id == seed.track_id {
+            // "" on failure: the QML fallback keeps showing npArtworkPath.
+            crate::now_playing::set_artwork_path_large(path);
+        }
+    });
+}
+
+/// Where the large art for `seed` at size `bucket` comes from:
+///  - Qobuz (registry hit): the `ImageSet::for_px` variant url, through the
+///    shared disk cache like any remote cover;
+///  - Qobuz (registry miss — a restored queue keeps no `ImageSet`): the
+///    seed url's size suffix rewritten to `min(bucket, 600)`
+///    (`qbz_models::qobuz_cover_at_px`);
+///  - Plex: the 1024px transcode tier ([`PLEX_THUMB_PX_LARGE`]);
+///  - Local: the on-demand 1600px tier (`local_artwork::large_art_blocking`);
+///  - anything else: "" — the fallback shows the small feed.
+async fn resolve_large(seed: &crate::now_playing::ArtSeed, bucket: u32) -> String {
+    if !matches!(seed.source.as_str(), "local" | "plex") {
+        if let Some(set) = np_variants(&seed.album_id) {
+            if let Some(url) = set.for_px(bucket).cloned() {
+                let hit = cached_path(&url);
+                if !hit.is_empty() {
+                    return hit;
+                }
+                download_missing(vec![url.clone()]).await;
+                return cached_path(&url);
+            }
+        }
+        // Registry miss (a restored queue flattens tracks to ONE url, so no
+        // ImageSet survives): a sized Qobuz cover still upgrades by suffix
+        // rewrite, now to the FULL requested bucket — the 600 cap this used
+        // to have left restored-queue art soft on every big slot (see
+        // NP_LARGE_NEG). A 404 (a pre-mega album) is paid ONCE per url per
+        // session thanks to the negative set, never per track change. A
+        // custom cover override answers the small feed already, so the large
+        // feed stays empty and the QML fallback shows it.
+        if !crate::cover_artwork_qt::override_for_url(&seed.url).is_empty() {
+            return String::new();
+        }
+        if let Some(upgraded) = qbz_models::qobuz_cover_at_px(&seed.url, bucket) {
+            if NP_LARGE_NEG.read().ok().is_some_and(|n| n.contains(&upgraded)) {
+                return String::new();
+            }
+            let hit = cached_path(&upgraded);
+            if !hit.is_empty() {
+                return hit;
+            }
+            download_missing(vec![upgraded.clone()]).await;
+            let got = cached_path(&upgraded);
+            if got.is_empty() {
+                if let Ok(mut n) = NP_LARGE_NEG.write() {
+                    n.insert(upgraded);
+                }
+            }
+            return got;
+        }
+        return String::new();
+    }
+    // Plex: classify() hardcodes the 256 tier, so the large tier tokenizes
+    // apart under a size-suffixed memo key (the transcode url itself carries
+    // `width=`, so cache entries separate naturally).
+    if crate::local_plex::is_thumb_path(&seed.url) {
+        let key = format!("{}@{}", seed.url, PLEX_THUMB_PX_LARGE);
+        let fetch = crate::local_plex::thumb_url(&seed.url, Some(PLEX_THUMB_PX_LARGE));
+        if fetch.is_empty() {
+            return String::new();
+        }
+        if let Some(p) = disk_path(&key, &fetch) {
+            return file_url(&p.to_string_lossy());
+        }
+        download_one(key.clone(), fetch.clone()).await;
+        return disk_path(&key, &fetch)
+            .map(|p| file_url(&p.to_string_lossy()))
+            .unwrap_or_default();
+    }
+    // Local / offline file: the on-demand large tier (bounded decode, native
+    // when smaller). Blocking — off the async executor.
+    if let ArtUrl::LocalFile(path) = classify(&seed.url) {
+        let track_id = (seed.source == "local").then_some(seed.track_id);
+        let resolved =
+            tokio::task::spawn_blocking(move || crate::local_artwork::large_art_blocking(&path, track_id))
+                .await
+                .ok()
+                .flatten();
+        return resolved
+            .map(|p| file_url(&p.to_string_lossy()))
+            .unwrap_or_default();
+    }
+    String::new()
+}
+
+/// Single-url download into the shared cache — the large feed's fetch (the
+/// batched [`download_missing`] re-classifies urls, which would tokenize a
+/// Plex path at the WRONG tier; this takes the final fetch url directly).
+/// Same discipline as the batched body: status check, empty-body reject,
+/// zero-byte entries count as misses on the next read.
+async fn download_one(key: String, fetch: String) {
+    if disk_path(&key, &fetch).is_some() {
+        return;
+    }
+    let response = match HTTP.get(&fetch).send().await {
+        Ok(resp) => resp,
+        Err(e) => {
+            log::warn!("[qbz-qt] artwork download failed ({fetch}): {e}");
+            return;
+        }
+    };
+    let response = match response.error_for_status() {
+        Ok(resp) => resp,
+        Err(e) => {
+            log::warn!("[qbz-qt] artwork download rejected ({fetch}): {e}");
+            return;
+        }
+    };
+    let bytes = match response.bytes().await {
+        Ok(b) if !b.is_empty() => b,
+        _ => return,
+    };
+    let Some(cache) = cache() else {
+        return;
+    };
+    let stored = cache
+        .lock()
+        .ok()
+        .and_then(|guard| match guard.store(&fetch, &bytes) {
+            Ok(path) => Some(path),
+            Err(e) => {
+                log::warn!("[qbz-qt] artwork store failed ({fetch}): {e}");
+                None
+            }
+        });
+    if let Some(path) = stored {
+        memo_put(&key, path);
+    }
 }
 
 #[cfg(test)]
@@ -519,6 +806,24 @@ mod tests {
     #[test]
     fn missing_local_file_resolves_to_placeholder() {
         assert_eq!(cached_path("/nonexistent/qbz/cover.jpg"), "");
+    }
+
+    #[test]
+    fn np_variant_registry_round_trips_and_skips_empty_sets() {
+        let set = qbz_models::ImageSet {
+            thumbnail: Some("t150".into()),
+            mega: Some("m3000".into()),
+            ..Default::default()
+        };
+        note_np_variants("alb-1", &set);
+        let got = np_variants("alb-1").expect("registered");
+        assert_eq!(got.for_px(660).map(String::as_str), Some("m3000"));
+        assert_eq!(got.for_px(72).map(String::as_str), Some("t150"));
+        // Empty ids and url-less sets are not registered.
+        note_np_variants("", &set);
+        note_np_variants("alb-2", &qbz_models::ImageSet::default());
+        assert!(np_variants("").is_none());
+        assert!(np_variants("alb-2").is_none());
     }
 }
 

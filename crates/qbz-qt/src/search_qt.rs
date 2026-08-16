@@ -331,6 +331,9 @@ fn map_album(album: &Album) -> CardRow {
         quality_label: quality_label(album.maximum_bit_depth, album.maximum_sampling_rate),
         art_url: crate::cover_artwork_qt::prefer_album_cover(
             &album.id,
+            // Search-result album grid card: full variant (best()) — the
+            // down-tier was reverted after the 2026-08-15 owner smoke
+            // (contract 04 §3).
             album.image.best().cloned().unwrap_or_default(),
         ),
         ..Default::default()
@@ -342,6 +345,7 @@ fn map_track(track: &Track) -> TrackRow {
     if let Some(version) = track.version.as_ref().filter(|v| !v.is_empty()) {
         title = format!("{title} ({version})");
     }
+    // Track row art: full variant (best()) — the thumbnail down-tier was reverted after the 2026-08-15 owner smoke (contract 04 §3).
     let artwork_url = track
         .album
         .as_ref()
@@ -394,6 +398,8 @@ fn map_artist(artist: &Artist) -> ArtistRow {
             Some(n) if n > 0 => qbz_i18n::tf("{} album", "{} albums", n as i64, &[&n.to_string()]),
             _ => String::new(),
         },
+        // ArtistCard grid cell (200px): full variant (best()) — the down-tier
+        // was reverted after the 2026-08-15 owner smoke (contract 04 §3).
         art_url: artist
             .image
             .as_ref()
@@ -549,6 +555,9 @@ fn map_search_all_to_cortinilla(query: &str, results: &SearchAllResults) -> Cort
         source: "qobuz".into(),
         title: a.name.clone(),
         subtitle: map_artist(a).subtitle,
+        // Cortinilla dropdown row art (~40px): full variant (best()) — the
+        // thumbnail down-tier was reverted after the 2026-08-15 owner smoke
+        // (contract 04 §3).
         art_url: a
             .image
             .as_ref()
@@ -1336,6 +1345,9 @@ fn map_search_all_to_immersive(query: &str, results: &SearchAllResults) -> Corti
         source: "qobuz".into(),
         title: a.name.clone(),
         subtitle: map_artist(a).subtitle,
+        // Cortinilla dropdown row art (~40px): full variant (best()) — the
+        // thumbnail down-tier was reverted after the 2026-08-15 owner smoke
+        // (contract 04 §3).
         art_url: a
             .image
             .as_ref()

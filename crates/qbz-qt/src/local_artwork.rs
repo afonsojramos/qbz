@@ -269,3 +269,64 @@ pub async fn fetch_plex_misses(misses: Vec<(String, String)>) -> Vec<(String, St
         })
         .collect()
 }
+
+// ---------------------------------------------------------------------------
+// Large art tier (contract 2026-08-15-immersive-completion 04 §5, ruling 6)
+// ---------------------------------------------------------------------------
+
+/// The 1600px-tier art for a big slot (immersive main art, SPLIT, lightbox),
+/// resolved ON DEMAND. `src` is the track's raw art source (the DB's
+/// `artwork_path` — usually the 500px thumb; sometimes an original cover file
+/// when the folder-cover fallback served it directly). `track_id` is the
+/// local-library rowid, needed to re-open the source when `src` is only the
+/// thumb: embedded picture bytes out of the audio file first (the scanner's
+/// precedence, scan.rs:130), then the folder-art heuristic. If the original
+/// fits inside `qbz_library::LARGE_ART_PX` the native file is served — never
+/// an upscale. When every re-open fails, the 500px thumb itself is returned:
+/// it is the best art that exists for this track.
+///
+/// BLOCKING (one DB read, then possibly a decode) — call from
+/// `spawn_blocking`. Lists never come here: they keep the 500px tier.
+pub fn large_art_blocking(src: &str, track_id: Option<u64>) -> Option<PathBuf> {
+    let path = Path::new(src);
+    if !path.is_file() {
+        return None;
+    }
+    let is_thumb = qbz_library::get_thumbnails_dir()
+        .map(|dir| path.starts_with(dir))
+        .unwrap_or(false);
+    if !is_thumb {
+        // An original cover file: bound it (native size served as-is when it
+        // already fits).
+        return qbz_library::get_or_generate_large_thumbnail(path).ok();
+    }
+    // `src` is a 500px thumb — its hash is one-way, so the original is
+    // re-derived from the track row.
+    let Some(track) = track_id.and_then(|id| {
+        crate::local_state::with_db(|db| db.get_track(id as i64)).flatten()
+    }) else {
+        return Some(path.to_path_buf());
+    };
+    // Serialize per source (the module-docs race): the large tier shares the
+    // 500px tier's hash key, so the same lock shard covers both.
+    let guard = GEN_LOCKS[gen_shard(src)]
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let out = large_art_for_track(&track).or_else(|| Some(path.to_path_buf()));
+    drop(guard);
+    out
+}
+
+/// Embedded bytes first (the scanner's precedence), folder art second.
+fn large_art_for_track(track: &qbz_library::LocalTrack) -> Option<PathBuf> {
+    let file = Path::new(&track.file_path);
+    if let Some(bytes) = qbz_library::MetadataExtractor::extract_artwork_bytes(file) {
+        if let Ok(p) =
+            qbz_library::get_or_generate_large_thumbnail_from_bytes(&bytes, &track.file_path)
+        {
+            return Some(p);
+        }
+    }
+    let art = qbz_library::MetadataExtractor::find_folder_artwork(file, Some(&track.album))?;
+    qbz_library::get_or_generate_large_thumbnail(Path::new(&art)).ok()
+}

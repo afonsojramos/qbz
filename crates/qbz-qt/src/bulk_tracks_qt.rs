@@ -40,10 +40,18 @@ fn queue_track(track: &Track) -> qbz_models::QueueTrack {
         Some(album) => (
             album.id.clone(),
             album.title.clone(),
+            // Queue row / np bar feed: full variant (best()) — the thumbnail
+            // down-tier was reverted after the 2026-08-15 owner smoke (contract 04 §3).
             album.image.best().cloned().unwrap_or_default(),
         ),
         None => (String::new(), String::new(), String::new()),
     };
+    // Register the full variant set for the immersive large-art feed (D2).
+    if let Some(album) = track.album.as_ref() {
+        if !album.id.is_empty() {
+            crate::artwork_qt::note_np_variants(&album.id, &album.image);
+        }
+    }
     let album_key = if album_id.is_empty() {
         None
     } else {

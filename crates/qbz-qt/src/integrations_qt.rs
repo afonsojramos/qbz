@@ -315,11 +315,15 @@ pub fn discord_push(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
         };
         // Discord's large_image needs an http(s) URL or an asset key; local /
         // Plex covers are filesystem paths Discord can't fetch, so drop them
-        // (the core falls back to the "cover" asset key).
+        // (the core falls back to the "cover" asset key). A sized Qobuz cover
+        // is rewritten to the 600 tier first — the queue can carry the 50px
+        // `small` from a restored session, and Discord renders whatever the
+        // suffix says (owner smoke 2026-08-15: pixelated presence art).
         let cover_url = track
             .artwork_url
             .clone()
-            .filter(|u| u.starts_with("http://") || u.starts_with("https://"));
+            .filter(|u| u.starts_with("http://") || u.starts_with("https://"))
+            .map(|u| qbz_models::qobuz_cover_at_px(&u, 600).unwrap_or(u));
         let meta = NowListening {
             title,
             artist: track.artist.clone(),

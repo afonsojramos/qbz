@@ -329,6 +329,16 @@ pub struct TrackFileUrl {
 
 // ============ Image Types ============
 
+/// Pixel size each `ImageSet` variant serves, ascending: small, thumbnail,
+/// large, extralarge, mega. This is the Qobuz CDN CONVENTION — the API does
+/// not state variant dimensions in-repo (contract
+/// `2026-08-15-immersive-completion` 00 §8: verify against live responses
+/// before retuning). THE table lives here and only here: `ImageSet::for_px`
+/// and the size bucketing (`ImageSet::bucket_for_px`, used by the Qt
+/// frontend's responsive-art request path) both read it, so tuning either
+/// side is ONE edit.
+pub const IMAGE_VARIANT_PX: [u32; 5] = [50, 150, 300, 600, 3000];
+
 /// Image set with multiple resolutions
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ImageSet {
@@ -350,6 +360,46 @@ impl ImageSet {
             .or(self.small.as_ref())
     }
 
+    /// The smallest variant whose pixel size (per [`IMAGE_VARIANT_PX`])
+    /// covers `px` — the size-aware pick for a surface that knows its slot
+    /// size, so a 72px row never fetches a ~3000px mega and a big slot never
+    /// settles for a 150px thumbnail. A missing variant keeps the scan
+    /// moving UP (a bigger variant still covers the slot); when nothing is
+    /// big enough (or the set is partial — Discover returns only
+    /// small/thumbnail/large) the fallbacks are `best()` and then
+    /// `smallest()` order, so this never returns WORSE than what a bare
+    /// `best()` call would have served.
+    pub fn for_px(&self, px: u32) -> Option<&String> {
+        let variants = [
+            (&self.small, IMAGE_VARIANT_PX[0]),
+            (&self.thumbnail, IMAGE_VARIANT_PX[1]),
+            (&self.large, IMAGE_VARIANT_PX[2]),
+            (&self.extralarge, IMAGE_VARIANT_PX[3]),
+            (&self.mega, IMAGE_VARIANT_PX[4]),
+        ];
+        for (slot, slot_px) in variants {
+            if slot_px >= px {
+                if let Some(url) = slot.as_ref() {
+                    return Some(url);
+                }
+            }
+        }
+        self.best().or_else(|| self.smallest())
+    }
+
+    /// The size bucket a slot of `px` pixels resolves to: the smallest
+    /// [`IMAGE_VARIANT_PX`] entry that covers it, or the mega entry when none
+    /// does. Callers that re-resolve art on window resize compare BUCKETS, not
+    /// pixels, so a resize drag costs at most one re-request per tier crossed
+    /// instead of one per pixel.
+    pub fn bucket_for_px(px: u32) -> u32 {
+        IMAGE_VARIANT_PX
+            .iter()
+            .copied()
+            .find(|&entry| entry >= px)
+            .unwrap_or(IMAGE_VARIANT_PX[IMAGE_VARIANT_PX.len() - 1])
+    }
+
     /// The smallest available variant — for list-row thumbnails, where
     /// `best()` (mega/large) would needlessly download huge images.
     pub fn smallest(&self) -> Option<&String> {
@@ -359,6 +409,51 @@ impl ImageSet {
             .or(self.large.as_ref())
             .or(self.extralarge.as_ref())
             .or(self.mega.as_ref())
+    }
+}
+
+/// Rewrite a sized Qobuz CDN cover url to the variant tier covering `px`.
+///
+/// Qobuz covers carry the variant's pixel size as the `_<px>.<ext>` suffix
+/// (`https://static.qobuz.com/images/covers/pb/ap/gxy13gb56appb_50.jpg`),
+/// with the sizes of [`IMAGE_VARIANT_PX`] — EXCEPT the mega tier, whose
+/// suffix is the literal `_max` (the size it serves is the album master's,
+/// 1400px and up). The queue, `recently_played.json`
+/// and the persisted session store WHATEVER variant the building surface
+/// picked, so a restored session can carry the 50px `small` into the
+/// now-playing feed, MPRIS and Discord — measured 2026-08-15 on the owner's
+/// cache: 50x50 JPEGs downloaded by the Qt now-playing art feed, pixelated
+/// art on every big surface.
+///
+/// The rewrite targets the smallest table entry covering `px`
+/// ([`ImageSet::bucket_for_px`]), so any surface holding ANY sized Qobuz
+/// cover can serve itself the tier it needs without the original
+/// `ImageSet`. Returns `None` — leaving the url to the caller unchanged —
+/// for non-Qobuz urls, unsized covers, and suffixes the table does not know
+/// (a stray `_<digits>` in an id is never mistaken for a size).
+pub fn qobuz_cover_at_px(url: &str, px: u32) -> Option<String> {
+    if !url.contains("/images/covers/") {
+        return None;
+    }
+    let (stem, ext) = url.rsplit_once('.')?;
+    if ext.len() > 4 || !ext.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return None;
+    }
+    let (head, size) = stem.rsplit_once('_')?;
+    // The mega tier's suffix is the LITERAL `_max`, not `_3000`: measured
+    // against the live CDN 2026-08-15, `_3000.jpg` is a 404 on albums whose
+    // mega exists (`_max.jpg` serves it, at whatever size that album's
+    // master is — 1400px and up), and the API advertises mega urls with the
+    // `_max` suffix. `3000` stays the tier's pixel CONVENTION in
+    // [`IMAGE_VARIANT_PX`]; only the wire suffix is `max`.
+    if size != "max" && !IMAGE_VARIANT_PX.contains(&size.parse::<u32>().ok()?) {
+        return None;
+    }
+    let bucket = ImageSet::bucket_for_px(px);
+    if bucket == IMAGE_VARIANT_PX[IMAGE_VARIANT_PX.len() - 1] {
+        Some(format!("{head}_max.{ext}"))
+    } else {
+        Some(format!("{head}_{bucket}.{ext}"))
     }
 }
 
@@ -1532,5 +1627,135 @@ mod tests {
         let back: UserSession =
             serde_json::from_str(&serde_json::to_string(&session).unwrap()).unwrap();
         assert_eq!(back.language_code.as_deref(), Some("fr"));
+    }
+
+    fn image_set() -> ImageSet {
+        ImageSet {
+            small: Some("s50".into()),
+            thumbnail: Some("t150".into()),
+            large: Some("l300".into()),
+            extralarge: Some("x600".into()),
+            mega: Some("m3000".into()),
+            back: None,
+        }
+    }
+
+    #[test]
+    fn for_px_picks_the_smallest_covering_variant() {
+        let set = image_set();
+        assert_eq!(set.for_px(72).map(String::as_str), Some("t150"));
+        assert_eq!(set.for_px(150).map(String::as_str), Some("t150"));
+        assert_eq!(set.for_px(151).map(String::as_str), Some("l300"));
+        assert_eq!(set.for_px(300).map(String::as_str), Some("l300"));
+        assert_eq!(set.for_px(660).map(String::as_str), Some("m3000"));
+        // Past mega there is nothing bigger: best() is the ceiling.
+        assert_eq!(set.for_px(4000).map(String::as_str), Some("m3000"));
+    }
+
+    #[test]
+    fn for_px_skips_missing_variants_upward_on_partial_sets() {
+        // Discover endpoints return only small/thumbnail/large.
+        let discover = ImageSet {
+            small: Some("s50".into()),
+            thumbnail: Some("t150".into()),
+            large: Some("l300".into()),
+            ..ImageSet::default()
+        };
+        assert_eq!(discover.for_px(72).map(String::as_str), Some("t150"));
+        // Nothing >= 600: best-available (large), never an upscale promise.
+        assert_eq!(discover.for_px(600).map(String::as_str), Some("l300"));
+        // A gap below the request keeps scanning UP: {small, mega} at 200px
+        // is served by mega — the smallest variant that COVERS the slot (the
+        // "never upscale into a slot" rule wins over download size; full
+        // album/track sets populate all five variants, so this only bites on
+        // genuinely sparse sets).
+        let gapped = ImageSet {
+            small: Some("s50".into()),
+            mega: Some("m3000".into()),
+            ..ImageSet::default()
+        };
+        assert_eq!(gapped.for_px(200).map(String::as_str), Some("m3000"));
+        assert_eq!(gapped.for_px(72).map(String::as_str), Some("m3000"));
+    }
+
+    #[test]
+    fn for_px_never_serves_worse_than_best() {
+        let tiny = ImageSet {
+            small: Some("s50".into()),
+            ..ImageSet::default()
+        };
+        assert_eq!(tiny.for_px(1600).map(String::as_str), Some("s50"));
+        assert_eq!(ImageSet::default().for_px(300), None);
+    }
+
+    #[test]
+    fn bucket_for_px_maps_slots_onto_the_variant_table() {
+        assert_eq!(ImageSet::bucket_for_px(0), IMAGE_VARIANT_PX[0]);
+        assert_eq!(ImageSet::bucket_for_px(72), 150);
+        assert_eq!(ImageSet::bucket_for_px(150), 150);
+        assert_eq!(ImageSet::bucket_for_px(151), 300);
+        assert_eq!(ImageSet::bucket_for_px(660), 3000);
+        // Beyond the table the bucket saturates at mega, so a 4K window does
+        // not invent a size no variant serves.
+        assert_eq!(ImageSet::bucket_for_px(5000), 3000);
+    }
+
+    #[test]
+    fn qobuz_cover_at_px_rewrites_the_size_suffix() {
+        let small = "https://static.qobuz.com/images/covers/pb/ap/gxy13gb56appb_50.jpg";
+        assert_eq!(
+            qobuz_cover_at_px(small, 600).as_deref(),
+            Some("https://static.qobuz.com/images/covers/pb/ap/gxy13gb56appb_600.jpg")
+        );
+        // Slots bucket UP to the smallest covering variant.
+        assert_eq!(
+            qobuz_cover_at_px(small, 250).as_deref(),
+            Some("https://static.qobuz.com/images/covers/pb/ap/gxy13gb56appb_300.jpg")
+        );
+        assert_eq!(
+            qobuz_cover_at_px(small, 5000).as_deref(),
+            Some("https://static.qobuz.com/images/covers/pb/ap/gxy13gb56appb_max.jpg")
+        );
+        // The mega bucket emits the literal `_max` suffix, never `_3000`
+        // (a 404 on the live CDN, measured 2026-08-15).
+        assert_eq!(
+            qobuz_cover_at_px(small, 700).as_deref(),
+            Some("https://static.qobuz.com/images/covers/pb/ap/gxy13gb56appb_max.jpg")
+        );
+        // Down-tiering works too (a mega `_max` carried into a 150px slot).
+        let mega = "https://static.qobuz.com/images/covers/pb/ap/gxy13gb56appb_max.jpg";
+        assert_eq!(
+            qobuz_cover_at_px(mega, 100).as_deref(),
+            Some("https://static.qobuz.com/images/covers/pb/ap/gxy13gb56appb_150.jpg")
+        );
+    }
+
+    #[test]
+    fn qobuz_cover_at_px_leaves_unrecognized_urls_alone() {
+        // Not a cover url, no size suffix, an unknown size, a query string —
+        // all None, so callers keep the original.
+        assert_eq!(qobuz_cover_at_px("https://example.com/a_50.jpg", 600), None);
+        assert_eq!(
+            qobuz_cover_at_px(
+                "https://static.qobuz.com/images/covers/pb/ap/gxy13gb56appb.jpg",
+                600
+            ),
+            None
+        );
+        assert_eq!(
+            qobuz_cover_at_px(
+                "https://static.qobuz.com/images/covers/pb/ap/gxy13gb56appb_123.jpg",
+                600
+            ),
+            None
+        );
+        assert_eq!(
+            qobuz_cover_at_px(
+                "https://static.qobuz.com/images/covers/pb/ap/x_50.jpg?token=1",
+                600
+            ),
+            None
+        );
+        assert_eq!(qobuz_cover_at_px("/home/u/Music/cover.jpg", 600), None);
     }
 }

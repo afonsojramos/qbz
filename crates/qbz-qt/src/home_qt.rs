@@ -1245,6 +1245,8 @@ pub(crate) fn map_flat_album(album: Album) -> HomeCard {
             album.maximum_bit_depth,
             album.maximum_sampling_rate,
         ),
+        // Home rail grid card: full variant (best()) — the down-tier was
+        // reverted after the 2026-08-15 owner smoke (contract 04 §3).
         art_url: album.image.best().cloned().unwrap_or_default(),
         ..HomeCard::default()
     }
@@ -1358,6 +1360,8 @@ fn map_fav_artist(a: Artist) -> HomeCard {
         id: a.id.to_string(),
         title: a.name,
         item_kind: "artist".to_string(),
+        // Artist grid card on Home: full variant (best()) — the down-tier
+        // was reverted after the 2026-08-15 owner smoke (contract 04 §3).
         art_url: a
             .image
             .and_then(|img| img.best().cloned())

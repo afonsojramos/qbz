@@ -859,6 +859,27 @@ impl MetadataExtractor {
         }
     }
 
+    /// The RAW embedded picture bytes of an audio file (first picture, the
+    /// same pick `extract_artwork` makes), WITHOUT the 500px thumbnail
+    /// encode. This is the re-open-the-source seam for the on-demand large
+    /// art tier (contract `2026-08-15-immersive-completion` 04 §5): the DB
+    /// keeps only the 500px thumb path, so a big slot re-derives its bounded
+    /// 1600px JPEG from these bytes. DSD containers are opened through
+    /// `qbz_dsd` exactly like `extract_artwork`.
+    pub fn extract_artwork_bytes(file_path: &Path) -> Option<Vec<u8>> {
+        if qbz_dsd::is_dsd_path(file_path) {
+            let demux = qbz_dsd::open_dsd(file_path).ok()?;
+            return demux.info().tags.artwork.clone();
+        }
+
+        let tagged_file = Probe::open(file_path).ok()?.read().ok()?;
+        let tag = tagged_file
+            .primary_tag()
+            .or_else(|| tagged_file.first_tag())?;
+
+        tag.pictures().first().map(|p| p.data().to_vec())
+    }
+
     /// Generate thumbnail from an existing artwork file
     pub fn cache_artwork_file(artwork_path: &Path, _cache_dir: &Path) -> Option<String> {
         if !artwork_path.is_file() {

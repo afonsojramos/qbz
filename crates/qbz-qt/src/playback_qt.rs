@@ -555,7 +555,13 @@ pub(crate) async fn fetch_album_queue(
 
     let album_title = album.title.clone();
     let album_artist = album.artist.name.clone();
+    // Queue rows / the np bar feed render <= 150px but take the full
+    // variant (best()) — the thumbnail down-tier was reverted after the
+    // 2026-08-15 owner smoke ("mala calidad" on the big tiles). The full
+    // variant set is registered so the immersive large-art feed can
+    // re-resolve per slot size (D2).
     let album_artwork = album.image.best().cloned().unwrap_or_default();
+    crate::artwork_qt::note_np_variants(album_id, &album.image);
     let raw_tracks = album
         .tracks
         .as_ref()
@@ -623,6 +629,13 @@ fn artist_top_queue_tracks(
             let audio = track.audio_info.as_ref();
             let album = track.album.as_ref();
             let album_id = album.map(|a| a.id.clone());
+            // Queue rows / the np bar feed render <= 150px but take the
+            // full variant (best()) — the thumbnail down-tier was reverted
+            // after the 2026-08-15 owner smoke; register the full set so the
+            // immersive large-art feed can re-resolve (D2).
+            if let (Some(id), Some(img)) = (album_id.as_deref(), album.and_then(|a| a.image.as_ref())) {
+                crate::artwork_qt::note_np_variants(id, img);
+            }
             QueueTrack {
                 id: track.id,
                 title: track.title.clone(),
@@ -1318,10 +1331,19 @@ async fn catalog_queue_track(
         Some(album) => (
             album.id.clone(),
             album.title.clone(),
+            // Queue row / np bar feed: full variant (best()) — the
+            // thumbnail down-tier was reverted after the 2026-08-15 owner
+            // smoke (contract 04 §3);
+            // the full set is registered for the immersive large feed (D2).
             album.image.best().cloned().unwrap_or_default(),
         ),
         None => (String::new(), String::new(), String::new()),
     };
+    if let Some(album) = track.album.as_ref() {
+        if !album.id.is_empty() {
+            crate::artwork_qt::note_np_variants(&album.id, &album.image);
+        }
+    }
     let album_key = if album_id.is_empty() {
         None
     } else {
@@ -2032,6 +2054,8 @@ pub(crate) async fn refresh_now_playing(runtime: &Arc<AppRuntime<LoggingAdapter>
             .artist_id
             .map(|id| id.to_string())
             .unwrap_or_default(),
+        track_id: track.id,
+        source: track.source.clone().unwrap_or_default(),
         context_kind,
         context_id,
         duration_secs: track.duration_secs as i32,

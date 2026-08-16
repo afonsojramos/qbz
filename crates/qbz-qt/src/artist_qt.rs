@@ -442,6 +442,8 @@ pub(crate) fn map_release(release: &PageArtistRelease) -> AlbumCardData {
         quality_detail: home_qt::quality_detail_from_parts(bit_depth, sample_rate),
         art_url: crate::cover_artwork_qt::prefer_album_cover(
             &release.id,
+            // Discography grid card: full variant (best()) — the down-tier
+            // was reverted after the 2026-08-15 owner smoke (contract 04 §3).
             release
                 .image
                 .as_ref()

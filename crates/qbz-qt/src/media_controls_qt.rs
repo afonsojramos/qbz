@@ -273,6 +273,17 @@ fn meta_changed(key: &(u64, Option<String>)) -> bool {
 pub(crate) fn art_url_for(track: &qbz_models::QueueTrack) -> Option<String> {
     let plex = crate::local_plex::settings();
     let artwork = track.artwork_ref_with_plex(&plex.base_url, &plex.token, None);
+    // A restored queue can carry the 50px `small` Qobuz variant — the widget
+    // fetches this url itself, so a tiny suffix IS the pixelation the owner
+    // reported on the Plasma/GNOME art (2026-08-15). Rewrite to the 600 tier
+    // (and the offline cache lookup below then hits the very file the
+    // now-playing feed already downloaded at that tier).
+    let artwork = match artwork {
+        qbz_models::ArtworkRef::Remote(u) => qbz_models::ArtworkRef::Remote(
+            qbz_models::qobuz_cover_at_px(&u, 600).unwrap_or(u),
+        ),
+        other => other,
+    };
     let mut art = artwork.to_mpris_url();
     if crate::offline_fwd::engine().is_offline() {
         if let qbz_models::ArtworkRef::Remote(url) = &artwork {
