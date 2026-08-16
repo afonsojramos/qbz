@@ -4273,6 +4273,9 @@ msgstr "移動"
 msgid "Line Bed"
 msgstr "Line Bed"
 
+msgid "Tunnel Flow"
+msgstr "Tunnel Flow"
+
 msgid "Open Music Link"
 msgstr "音楽リンクを開く"
 

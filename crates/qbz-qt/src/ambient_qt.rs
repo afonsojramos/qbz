@@ -385,12 +385,24 @@ pub fn update_for_artwork(artwork_url: &str) {
             );
             let glow = glow_hex_qt(glow_color(&tiny8));
             let atmosphere = crate::atmosphere_qt::for_cover_blocking(&path);
-            Some((hex(primary), hex(secondary), hex(accent), glow, atmosphere))
+            // B1: the SAME decode feeds the Tunnel Flow palette — the Tauri
+            // extractLinePaletteFromArtwork port (tunnelflow_qt.rs) at its
+            // 36x36 sample size, off the Qt thread like the triad.
+            let tiny36 = image::imageops::resize(
+                &rgba,
+                crate::tunnelflow_qt::SAMPLE_SIZE,
+                crate::tunnelflow_qt::SAMPLE_SIZE,
+                image::imageops::FilterType::Triangle,
+            );
+            let tunnel = crate::tunnelflow_qt::line_palette_json(
+                &crate::tunnelflow_qt::line_palette(&tiny36),
+            );
+            Some((hex(primary), hex(secondary), hex(accent), glow, atmosphere, tunnel))
         })
         .await
         .ok()
         .flatten();
-        if let Some((primary, secondary, accent, glow, atmosphere)) = triad {
+        if let Some((primary, secondary, accent, glow, atmosphere, tunnel)) = triad {
             log::info!("[qbz-qt] ambient palette: {primary} / {secondary} / {accent}");
             crate::shell_bridge::ui(move |mut b| {
                 b.as_mut().set_ambient_primary(QString::from(primary.as_str()));
@@ -407,6 +419,9 @@ pub fn update_for_artwork(artwork_url: &str) {
                     x.as_mut().set_atmosphere_url(QString::from(url.as_str()));
                 }
             });
+            // B1: the Tunnel Flow palette rides the same success-only rule
+            // (one batched QString on QbzShaderScene).
+            crate::shader_scene_bridge::publish_tunnel_palette(tunnel);
         }
     });
 }

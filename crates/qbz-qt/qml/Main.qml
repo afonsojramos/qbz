@@ -288,6 +288,12 @@ ApplicationWindow {
         // atmosphere_url to this singleton on every track change — a missing
         // boot line would drop those publishes silently (see above).
         QbzImmersive.boot()
+        // Shader scenes (2026-08-15 immersive-completion contract, block A1).
+        // Booted right after QbzImmersive: its open funnel resets the scene
+        // through this singleton's hop, and the viz drain publishes the audio
+        // pack here on every tick while immersive is open — a missing boot
+        // line makes both silent no-ops (TRACK-RULES, singleton boot order).
+        QbzShaderScene.boot()
         // Immersive Suggestions (the same contract, block B4 §4.5) — booted
         // WITH its bridge: every publish the suggestions loader makes rides
         // this hop, so a missing line is the forever-"{}" silent no-op the
@@ -646,10 +652,10 @@ ApplicationWindow {
         // false, clear the maximized latch in the FullScreen branch too. Qt
         // collapses both into one enum, so the maximized latch is cleared ONLY
         // by an explicit return to Windowed — never by entering fullscreen.
-        // Nothing in QBZ's chrome sets FullScreen (both toggles go
-        // Maximized <-> Windowed, shell/HeaderBar.qml:76,830); it arrives from
-        // the WM keybind, and quitting from there must not un-maximize the
-        // next launch of either frontend.
+        // FullScreen arrives from the WM keybind OR from the immersive
+        // chrome (immersive/ImmersiveHeader.qml fs toggle — the first
+        // FullScreen write in this frontend, 2026-08-02 §5.2); quitting from
+        // there must not un-maximize the next launch of either frontend.
         if (vis === Window.Maximized) {
             window.maximizedLatch = true
             window.fullScreenLatch = false

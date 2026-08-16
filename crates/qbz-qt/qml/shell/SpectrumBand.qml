@@ -197,10 +197,10 @@ Rectangle {
 
                 // .qsb baked from qml/assets/shaders/spectrum_bars.frag — see the header.
                 fragmentShader: "../assets/shaders/spectrum_bars.frag.qsb"
-                // Shared default-equivalent vertex stage (Qt 6.11's
-                // built-in default emits no qt_TexCoord0, so the link
-                // fails without an explicit one).
-                vertexShader: "../assets/shaders/spectrum.vert.qsb"
+                // Paired vertex stage (Qt 6.11's built-in default emits no
+                // qt_TexCoord0); the GL link requires both stages to declare
+                // the SAME uniform block (see spectrum_bars.vert).
+                vertexShader: "../assets/shaders/spectrum_bars.vert.qsb"
             }
 
             // FALLBACK ARM — the pre-F3 delegates, verbatim. Geometry: x =
@@ -329,10 +329,9 @@ Rectangle {
 
                 // .qsb baked from qml/assets/shaders/spectrum_wave.frag — see the header.
                 fragmentShader: "../assets/shaders/spectrum_wave.frag.qsb"
-                // Shared default-equivalent vertex stage (Qt 6.11's
-                // built-in default emits no qt_TexCoord0, so the link
-                // fails without an explicit one).
-                vertexShader: "../assets/shaders/spectrum.vert.qsb"
+                // Paired vertex stage — same uniform block in both stages
+                // (the GL link requires it; see spectrum_wave.vert).
+                vertexShader: "../assets/shaders/spectrum_wave.vert.qsb"
             }
 
             // FALLBACK ARM — the pre-F3 delegates, verbatim. Geometry: x =
@@ -403,10 +402,9 @@ Rectangle {
 
                 // .qsb baked from qml/assets/shaders/spectrum_energy.frag — see the header.
                 fragmentShader: "../assets/shaders/spectrum_energy.frag.qsb"
-                // Shared default-equivalent vertex stage (Qt 6.11's
-                // built-in default emits no qt_TexCoord0, so the link
-                // fails without an explicit one).
-                vertexShader: "../assets/shaders/spectrum.vert.qsb"
+                // Paired vertex stage — same uniform block in both stages
+                // (the GL link requires it; see spectrum_energy.vert).
+                vertexShader: "../assets/shaders/spectrum_energy.vert.qsb"
             }
 
             // FALLBACK ARM — the pre-F3 delegates, verbatim. Geometry: x =

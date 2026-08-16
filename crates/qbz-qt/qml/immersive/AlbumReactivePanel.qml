@@ -83,6 +83,26 @@ Item {
     property real glowOpacity: Math.min(0.1 + root.globalEnergy * 1.5, 1.0)
 
     // --- Base art box (:84-92) ---------------------------------------------
+    // D2 (contract 04 §4): size-aware large art. `artSource` prefers the
+    // size-resolved large feed and falls back to the small one while it
+    // resolves (the Slint `artwork-large : artwork` pattern); the probe reads
+    // the SAME source so the native cap tracks the image actually shown.
+    readonly property string artSource: QbzPlayer.npArtworkPathLarge !== ""
+        ? QbzPlayer.npArtworkPathLarge : QbzPlayer.npArtworkPath
+    // The baseArt slot expression WITHOUT the native cap — the request must
+    // reflect the SLOT so the feed can serve a variant big enough for it.
+    readonly property real artSlot: Math.max(180,
+        Math.min(Math.min((root.height - 384) / 1.25, root.width * 0.62), 660))
+    // Bucketed in Rust (one re-resolve per variant tier crossed, none per
+    // pixel); gated on visible so a hidden panel writes nothing (pulse law).
+    function requestArtSize() {
+        if (root.visible)
+            QbzPlayer.requestNpArtworkSize(Math.round(root.artSlot))
+    }
+    onArtSlotChanged: requestArtSize()
+    onVisibleChanged: requestArtSize()
+    Component.onCompleted: requestArtSize()
+
     // Native source resolution — cap the RESTING art so the cover is never
     // UPSCALED beyond its own size (owner: oversized blurry art looked
     // nefasto); the audio breathing still grows it momentarily. Slint reads
@@ -92,7 +112,7 @@ Item {
     Image {
         id: artProbe
         visible: false
-        source: QbzPlayer.npArtworkPath
+        source: root.artSource
     }
     readonly property real srcNative: artProbe.status === Image.Ready
         ? artProbe.implicitWidth : 0
@@ -175,7 +195,7 @@ Item {
                     RoundedImage {
                         anchors.fill: parent
                         radius: 8
-                        source: QbzPlayer.npArtworkPath
+                        source: root.artSource
                     }
                 }
             }

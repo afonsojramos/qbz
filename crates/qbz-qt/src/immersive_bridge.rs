@@ -159,9 +159,11 @@ impl Default for QbzImmersiveRust {
     fn default() -> Self {
         Self {
             open: false,
-            view_mode: 0,
-            mode: 0,
-            split_panel: 0,
+            // Pre-first-open construction default — the same Split > Lyrics
+            // the remember-restore falls back to (see the DEFAULT_* consts).
+            view_mode: DEFAULT_VIEW_MODE,
+            mode: DEFAULT_MODE,
+            split_panel: DEFAULT_SPLIT_PANEL,
             glow_color: QString::from(GLOW_DEFAULT_QT),
             atmosphere_url: QString::from(""),
             imm_search_open: false,
@@ -212,6 +214,16 @@ pub(crate) fn toggle() {
 pub(crate) fn close() {
     ui(|imm| imm.set_open(false));
 }
+
+/// Owner ruling 2026-08-15: "cuando no hay una escena activa por default
+/// debemos caer siempre en Split>Lyrics" — with NOTHING remembered, a fresh
+/// immersive open lands on viewMode=1 (SPLIT), splitPanel=0 (Lyrics), never
+/// on a FOCUS panel. These are the FALLBACKS of the remember-last restore
+/// (and the bridge's construction default): a saved triple still wins, so
+/// existing users keep their remembered view.
+const DEFAULT_VIEW_MODE: i32 = 1; // SPLIT
+const DEFAULT_MODE: i32 = 0; // (meaningless under SPLIT; FOCUS AlbumReactive)
+const DEFAULT_SPLIT_PANEL: i32 = 0; // Lyrics
 
 /// §3.1 pinned map: a pinned default always lands on `view_mode=0` + the
 /// matching FOCUS `mode` (never WaveBed). `None` = "remember"/unknown — the
@@ -272,9 +284,9 @@ fn apply_open(mut this: Pin<&mut QbzImmersive>, value: bool) {
             // string writes would poison its whole-document load. (The
             // contract's "pref_str i32-parse" would read NEITHER app's
             // numbers; pref_i32 is the compatible reader — delivery notes.)
-            let vm = crate::settings_qt::pref_i32("immersive_last_view_mode", 0);
-            let m = crate::settings_qt::pref_i32("immersive_last_mode", 0);
-            let sp = crate::settings_qt::pref_i32("immersive_last_split_panel", 0);
+            let vm = crate::settings_qt::pref_i32("immersive_last_view_mode", DEFAULT_VIEW_MODE);
+            let m = crate::settings_qt::pref_i32("immersive_last_mode", DEFAULT_MODE);
+            let sp = crate::settings_qt::pref_i32("immersive_last_split_panel", DEFAULT_SPLIT_PANEL);
             this.as_mut().set_view_mode(vm);
             this.as_mut().set_mode(m);
             this.as_mut().set_split_panel(sp);
@@ -285,6 +297,10 @@ fn apply_open(mut this: Pin<&mut QbzImmersive>, value: bool) {
         }
         // Unknown key: Slint's `_ => {}` — leave the current view alone.
         crate::viz_qt::immersive_opened();
+        // Shader scenes (block A1): entering immersive force-resets the
+        // scene to Off — parity main.rs:10300-10301, a documented no-op in
+        // v1 (the scenes were parked), REAL now that QbzShaderScene exists.
+        crate::shader_scene_bridge::reset_on_immersive_open();
         // §3.4 open-edge hygiene: a stale-true desktop cortinillaOpen is
         // possible in theory — close it deterministically (the Rust
         // equivalent of QbzBridge.cortinillaDismiss, bridge.rs:359-361; the
@@ -397,6 +413,16 @@ mod tests {
         assert_eq!(pinned_view("spectrum"), Some((0, 3)));
         assert_eq!(pinned_view("lyrics"), Some((0, 4)));
         assert_eq!(pinned_view("queue"), Some((0, 5)));
+    }
+
+    #[test]
+    fn fresh_open_defaults_to_split_lyrics() {
+        // Owner ruling 2026-08-15: with no remembered triple, the
+        // remember-restore fallbacks AND the bridge construction default land
+        // on viewMode=1 (SPLIT), splitPanel=0 (Lyrics) — never a FOCUS panel.
+        assert_eq!((DEFAULT_VIEW_MODE, DEFAULT_MODE, DEFAULT_SPLIT_PANEL), (1, 0, 0));
+        assert_eq!(QbzImmersiveRust::default().view_mode, 1);
+        assert_eq!(QbzImmersiveRust::default().split_panel, 0);
     }
 
     #[test]

@@ -17,8 +17,13 @@
 //
 // Layer order bottom->top (§5.1):
 //   1. root color #0a0a0b, clip (:1199-1200)
-//   2. ImmersiveAtmosphere — ALWAYS the underlay (the Slint shader-mode==0
-//      gate is constant in v1, ruling 1; :1313-1321)
+//   1b. ShaderSceneLayer (block A1, :1293-1300) — the GPU shader scene,
+//       bottom-most VISUAL layer when QbzShaderScene.scene > 0, replacing
+//       the atmosphere AND the FOCUS/SPLIT panels (their gates below gain
+//       `scene === 0`, parity :1313-1405); chrome stays on top
+//   2. ImmersiveAtmosphere — the underlay while NO scene is active
+//      (gated `scene === 0`; in v1 the shader-mode==0 gate was constant,
+//      ruling 1; :1313-1321)
 //   2b. FULL-COVERAGE click-blocker MouseArea (load-bearing — without it
 //      clicks pass through to the desktop header search field, the dock's
 //      spectrum band and the viz eye toggle; port of the Slint root
@@ -117,15 +122,27 @@ Item {
         color: "#0a0a0b"
     }
 
+    // --- Layer 1b: the shader scene (block A1, :1293-1300) ------------------
+    // Bottom-most VISUAL layer, ABOVE the root surface, below everything
+    // else. Self-gated: it renders and ticks only while a scene is active
+    // (scene > 0 && open && available — see the file's header). The
+    // atmosphere below and every FOCUS/SPLIT panel gate themselves off on
+    // `scene === 0`, so the scene owns the background (parity :1313-1405).
+    ShaderSceneLayer {
+        anchors.fill: parent
+        visible: QbzShaderScene.scene > 0
+    }
+
     // --- Layer 2: the atmosphere underlay (§5.1, :1313-1321) ----------------
-    // ALWAYS the underlay in v1 (the Slint shader-mode==0 gate is constant,
-    // ruling 1). Source = the host-generated 128x128 atmosphere PNG, fallback
+    // The underlay WHILE NO SCENE IS ACTIVE (the Slint shader-mode==0 gate,
+    // :1313). Source = the host-generated 128x128 atmosphere PNG, fallback
     // the plain cover; dim 0.15. `animated` binds npPlaying (:1321); the
     // && open arm stops the drift clock while the overlay is closed (the
     // Slint view is UNMOUNTED then — same zero cost). Spectrum/WaveBed paint
     // opaque #000 over it — intended (§5.1).
     ImmersiveAtmosphere {
         anchors.fill: parent
+        visible: QbzShaderScene.scene === 0
         source: QbzImmersive.atmosphereUrl
         fallbackSource: QbzPlayer.npArtworkPath
         animated: QbzPlayer.npPlaying && QbzImmersive.open
@@ -137,6 +154,16 @@ Item {
         anchors.fill: parent
         acceptedButtons: Qt.AllButtons
         hoverEnabled: true
+        // C1 fullscreen integration (contract 03 §5, divergence D2 — not a
+        // Slint parity item): blank the cursor when the chrome has
+        // auto-hidden in FullScreen; wake() restores it. Windowed mode keeps
+        // the cursor always. Note: panels with their own cursor-less
+        // MouseAreas above this layer still show the default arrow — the
+        // blank covers the bare-atmosphere regions, which is where a
+        // stationary cursor rests while watching fullscreen.
+        cursorShape: (root.Window.window !== null
+                      && root.Window.window.visibility === Window.FullScreen
+                      && !root.chromeVisible) ? Qt.BlankCursor : Qt.ArrowCursor
         onPressed: function (mouse) { mouse.accepted = true }
         onReleased: function (mouse) { mouse.accepted = true }
         onClicked: function (mouse) { mouse.accepted = true }
@@ -146,19 +173,39 @@ Item {
 
     // --- §5.3 auto-hide / wake ----------------------------------------------
     // hideTimer 6000ms (:1271); hides chrome only when !immSearchOpen &&
-    // !pointerInChrome (:1275); pointerInChrome = pointerInWindow &&
-    // (y <= 64 || y >= height-132) (:1196-1197, HoverHandler on the root);
-    // wake on any mouse move (:1283-1286); 300ms fades on the chrome itself.
+    // !pointerInChrome; wake on any REAL mouse move (delta guard below);
+    // 300ms fades on the chrome itself.
+    //
+    // 2026-08-15 C1 (contract 03 §4): pointerInChrome is the union of the
+    // REAL chrome rects (header ∪ player bar ∪ song card), not the Slint
+    // y-only bands (:1196-1197). The bands kept the chrome awake over dead
+    // strips (the 24px side margins, the 18px above the bar) which read as
+    // "mouse-sensitive in some zones", and spanned the full width.
     property bool chromeVisible: true
     readonly property bool pointerInWindow: rootHover.hovered
     readonly property bool pointerInChrome: rootHover.hovered
-        && (rootHover.point.position.y <= 64
-            || rootHover.point.position.y >= root.height - 132)
+        && (pointInChromeItem(header) || pointInChromeItem(playerBar)
+            || pointInChromeItem(songCard))
+
+    function pointInChromeItem(item) {
+        if (!item.visible)
+            return false
+        var p = item.mapFromItem(root, rootHover.point.position.x,
+                                 rootHover.point.position.y)
+        return p.x >= 0 && p.y >= 0 && p.x <= item.width && p.y <= item.height
+    }
 
     function wake() {
         chromeVisible = true
         hideTimer.restart()
     }
+
+    // C1 macOS traffic-light inset (contract 03 §6) — same rule as the
+    // shell's HeaderBar: ask SafeArea, floor at 78, only when the native
+    // lights float over client area (i.e. not with the system title bar).
+    readonly property int chromeLeftInset:
+        QbzShell.isMacos && !QbzShell.systemTitleBar
+            ? Math.max(root.SafeArea.margins.left, 78) : 0
 
     // Last hover position that WOKE the chrome. Load-bearing delta guard:
     // Qt re-delivers HoverMove at the unchanged position whenever the scene
@@ -198,26 +245,33 @@ Item {
     // --- Layer 3: the FOCUS panels (B3 + B4) --------------------------------
     // FOCUS: one panel per mode, gated viewMode==0 && mode==N, full-viewport
     // — each panel carries its own Slint-internal reserves (pad-top 52/70,
-    // the 132px player clearance; §6.1/§6.2/§6.6).
+    // the 132px player clearance; §6.1/§6.2/§6.6). Block A1 adds the
+    // `scene === 0` gate to every panel (parity :1313-1405 — a shader scene
+    // REPLACES the panels; chrome stays on top).
     AlbumReactivePanel {
         anchors.fill: parent
-        visible: QbzImmersive.viewMode === 0 && QbzImmersive.mode === 0
+        visible: QbzShaderScene.scene === 0
+            && QbzImmersive.viewMode === 0 && QbzImmersive.mode === 0
     }
     StaticPanel {
         anchors.fill: parent
-        visible: QbzImmersive.viewMode === 0 && QbzImmersive.mode === 1
+        visible: QbzShaderScene.scene === 0
+            && QbzImmersive.viewMode === 0 && QbzImmersive.mode === 1
     }
     CoverflowPanel {
         anchors.fill: parent
-        visible: QbzImmersive.viewMode === 0 && QbzImmersive.mode === 2
+        visible: QbzShaderScene.scene === 0
+            && QbzImmersive.viewMode === 0 && QbzImmersive.mode === 2
     }
     SpectrumPanel {
         anchors.fill: parent
-        visible: QbzImmersive.viewMode === 0 && QbzImmersive.mode === 3
+        visible: QbzShaderScene.scene === 0
+            && QbzImmersive.viewMode === 0 && QbzImmersive.mode === 3
     }
     WaveBedPanel {
         anchors.fill: parent
-        visible: QbzImmersive.viewMode === 0 && QbzImmersive.mode === 6
+        visible: QbzShaderScene.scene === 0
+            && QbzImmersive.viewMode === 0 && QbzImmersive.mode === 6
     }
     // FOCUS Lyrics (mode 4, B4 §6.6): the giant-line variant. It shares the
     // immersive LyricsSyncEngine with the split lyrics mount (trap 22 — the
@@ -225,7 +279,8 @@ Item {
     // fetches lyrics automatically per track (§5.5).
     LyricsFocusPanel {
         anchors.fill: parent
-        visible: QbzImmersive.viewMode === 0 && QbzImmersive.mode === 4
+        visible: QbzShaderScene.scene === 0
+            && QbzImmersive.viewMode === 0 && QbzImmersive.mode === 4
         lines: root.immLyricsLines
         synced: root.immLyricsSynced
         status: root.immLyricsStatus
@@ -235,7 +290,8 @@ Item {
     // placement, full-screen (centered: false -> min(vw-96, 720) column).
     QueueTabsPanel {
         anchors.fill: parent
-        visible: QbzImmersive.viewMode === 0 && QbzImmersive.mode === 5
+        visible: QbzShaderScene.scene === 0
+            && QbzImmersive.viewMode === 0 && QbzImmersive.mode === 5
         centered: false
     }
 
@@ -260,6 +316,7 @@ Item {
     LyricsSyncEngine {
         id: immLyricsEngine
         gateOpen: QbzImmersive.open
+            && QbzShaderScene.scene === 0 // A1: the scenes replace the panels
             && ((QbzImmersive.viewMode === 0 && QbzImmersive.mode === 4)
                 || (QbzImmersive.viewMode === 1 && QbzImmersive.splitPanel === 0))
     }
@@ -284,7 +341,11 @@ Item {
     Item {
         id: splitRoot
         anchors.fill: parent
-        visible: QbzImmersive.viewMode === 1
+        // A1: a shader scene replaces the SPLIT layout too (:1416 parity).
+        visible: QbzShaderScene.scene === 0 && QbzImmersive.viewMode === 1
+        // D2: re-request the large art when the SPLIT layout becomes visible
+        // (leftCol's own request is gated on this visibility).
+        onVisibleChanged: if (visible) leftCol.requestArtSize()
 
         // col-h: the column height below the header/player clearance
         // (:1415). colW: the explicit half (:1435).
@@ -306,6 +367,24 @@ Item {
                 width: splitRoot.colW
                 height: parent.height
 
+                // D2 (contract 04 §4): size-aware large art — prefer the
+                // size-resolved large feed, fall back to the small one while
+                // it resolves (the StaticPanel/AlbumReactivePanel pattern).
+                readonly property string artSource: QbzPlayer.npArtworkPathLarge !== ""
+                    ? QbzPlayer.npArtworkPathLarge : QbzPlayer.npArtworkPath
+                // The artSize slot expression WITHOUT the native cap — the
+                // request must reflect the SLOT; the probe cap below stays
+                // the final upscale safety. Bucketed in Rust (one re-resolve
+                // per variant tier crossed, none per pixel).
+                readonly property real artSlot: Math.max(240,
+                    Math.min(splitRoot.colW, splitRoot.colH - 200))
+                function requestArtSize() {
+                    if (splitRoot.visible)
+                        QbzPlayer.requestNpArtworkSize(Math.round(leftCol.artSlot))
+                }
+                onArtSlotChanged: requestArtSize()
+                Component.onCompleted: requestArtSize()
+
                 // Native source resolution (physical px) of the active
                 // cover, so the art is never UPSCALED beyond its own size
                 // (:1449-1452) — the AlbumReactivePanel.qml artProbe idiom
@@ -314,7 +393,7 @@ Item {
                 Image {
                     id: splitArtProbe
                     visible: false
-                    source: QbzPlayer.npArtworkPath
+                    source: leftCol.artSource
                 }
                 readonly property real srcNative: splitArtProbe.status === Image.Ready
                     ? splitArtProbe.implicitWidth : 0
@@ -365,7 +444,7 @@ Item {
                             height: leftCol.artSize
                             visible: QbzPlayer.npArtworkPath !== ""
                             radius: 12
-                            source: QbzPlayer.npArtworkPath
+                            source: leftCol.artSource
                         }
                     }
 
@@ -463,15 +542,20 @@ Item {
     }
 
     // --- Layer 4: ImmersiveSongCard (§5.1, :1602-1605) ----------------------
-    // Visible ONLY viewMode==0 && mode==6 && npHasTrack (trap 19);
-    // bottom-right 24px insets; NON-interactive; does NOT fade with the
-    // auto-hide chrome (no opacity binding here — that is deliberate).
+    // Slint shows it bottom-right ONLY over the shader backgrounds OR in
+    // WaveBed (shader-mode > 0 || (view-mode == 0 && mode == 6)) &&
+    // has-track — the focus panels render their own metadata. In v1
+    // shader-mode was constant 0 so the first arm was dead (trap 19); A1
+    // makes it real. NON-interactive; does NOT fade with the auto-hide
+    // chrome (no opacity binding here — that is deliberate).
     ImmersiveSongCard {
+        id: songCard
         anchors.right: parent.right
         anchors.bottom: parent.bottom
         anchors.rightMargin: 24
         anchors.bottomMargin: 24
-        visible: QbzImmersive.viewMode === 0 && QbzImmersive.mode === 6
+        visible: (QbzShaderScene.scene > 0
+                  || (QbzImmersive.viewMode === 0 && QbzImmersive.mode === 6))
             && QbzPlayer.npHasTrack
     }
 
@@ -481,7 +565,8 @@ Item {
     Connections {
         target: QbzPlayer
         function onNpTrackIdChanged() {
-            if (!root.visible || QbzImmersive.viewMode !== 1)
+            if (!root.visible || QbzImmersive.viewMode !== 1
+                    || QbzShaderScene.scene !== 0) // A1: split panels unmounted under a scene
                 return
             if (QbzImmersive.splitPanel === 1)
                 QbzAlbum.openTrackInfo(QbzPlayer.npTrackId)
@@ -507,6 +592,24 @@ Item {
             QbzImmersive.open = false
         event.accepted = true
     }
+    // Block A1: `g` cycles the SHIPPED shader scenes (0→1→2→3→4→5→7→0 with
+    // Plasma A2, Ribbon A3 and Line Bed A4 shipped — the ring lives in
+    // QbzShaderScene.cycleScene; Tunnel Flow 8 is menu-only, NOT in the
+    // ring). No-op on tiers where the scenes can't run
+    // (QbzShell.shaderScenesAvailable — the same flag the FOCUS menu rows
+    // check), and the textInputActive gate keeps a 'g' typed in the search
+    // field from cycling (§5.4). wake() on cycle, like Slint. The key is
+    // ACCEPTED even when unavailable — Slint's `return accept` — so it never
+    // falls through to another handler.
+    Keys.onPressed: function (event) {
+        if (event.key === Qt.Key_G && !root.textInputActive) {
+            if (QbzShell.shaderScenesAvailable) {
+                QbzShaderScene.cycleScene()
+                root.wake()
+            }
+            event.accepted = true
+        }
+    }
     // The seek arrows are GONE (2026-08-03 hotkeys-port §1.3): ±5s/±10s now
     // fire as the REBINDABLE focus.seekForward/Back/Long actions through the
     // AppShell dispatcher, with the Context::Immersive gate and the central
@@ -517,6 +620,9 @@ Item {
     // --- Layer 5: the player bar (§5.7, :1607-1616) -------------------------
     // Centered, y = height-90-24; fades with the auto-hide chrome on the
     // SAME binding as the header (300ms), inert while hidden.
+    // C1: hit-enabled follows the STATE (`chromeVisible`), not the animated
+    // opacity — gating on `opacity > 0` left the bar clickable mid-fade and
+    // re-triggered the Behavior on wake/hide races (contract 03 §2 item 4).
     ImmersivePlayerBar {
         id: playerBar
         anchors.horizontalCenter: parent.horizontalCenter
@@ -524,7 +630,7 @@ Item {
         viewportWidth: root.width
         opacity: root.chromeVisible ? 1 : 0
         Behavior on opacity { NumberAnimation { duration: 300 } }
-        enabled: opacity > 0
+        enabled: root.chromeVisible
         onWakeRequested: root.wake()
     }
 
@@ -534,13 +640,17 @@ Item {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.top: parent.top
-        anchors.leftMargin: 24
+        // C1 macOS: clear the native traffic-light cluster (it floats over
+        // the top-left corner, x ≈ 7-85 — the view trigger's exact spot) with
+        // the same inset the shell HeaderBar computes
+        // (HeaderBar.qml chromeLeftInset: SafeArea left margin, 78 floor).
+        anchors.leftMargin: 24 + root.chromeLeftInset
         anchors.rightMargin: 24
         anchors.topMargin: 16
         height: 36
         opacity: root.chromeVisible ? 1 : 0
         Behavior on opacity { NumberAnimation { duration: 300 } }
-        enabled: opacity > 0
+        enabled: root.chromeVisible
     }
 
     // --- Layer 7: the search cortinilla (§3.4, :1695-1705) -------------------

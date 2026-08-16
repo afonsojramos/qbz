@@ -170,6 +170,13 @@ ksni = { version = "0.3", default-features = false, features = ["blocking", "asy
 
 [build-dependencies]
 cxx-qt-build = "0.7"
+# A4 (Line Bed QQuickRhiItem): the crate's first hand-written C++
+# (cxx/linebed_item.cpp). `qt-build-utils` provides moc + the Qt include
+# paths — it is cxx-qt-build's OWN engine, already in the lock at the same
+# version, so this adds no new package. `cc` compiles the static lib
+# (likewise already in the lock).
+qt-build-utils = "0.7"
+cc = "1"
 
 # macOS only: the Dock-icon activation policy behind the "Hide Dock icon when
 # closed to menu bar" setting (Spotify behaviour — close puts the app in the

@@ -30,6 +30,10 @@ mod viz_bridge;
 // QbzImmersive singleton (§3) — open funnel + view persistence + the §3.4
 // search surface. The QML overlay lands in B2.
 mod immersive_bridge;
+// Shader scenes (2026-08-15 immersive-completion contract, block A1): the
+// QbzShaderScene singleton — scene mode + tier gate + the batched audio
+// pack. `scene_bridge.rs` was TAKEN by ArtistScene (spec 01 §4 name check).
+mod shader_scene_bridge;
 // Immersive Suggestions (the same contract, block B4, §4.5): the
 // QbzSuggestions singleton — the one genuinely absent domain.
 mod suggestions_bridge;
@@ -229,6 +233,9 @@ mod album_info_qt;
 mod cover_artwork_qt;
 mod external_reco_qt;
 mod ambient_qt;
+// Tunnel Flow scene (B1, 2026-08-15 immersive-completion contract): the
+// Tauri line-palette extraction, published on QbzShaderScene per track.
+mod tunnelflow_qt;
 mod artist_qt;
 mod lyrics_qt;
 mod playback_qt;

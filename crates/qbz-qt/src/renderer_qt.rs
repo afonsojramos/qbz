@@ -84,7 +84,14 @@ pub fn set_active_api(api: &str) -> bool {
     if api.is_empty() || api == "unknown" {
         return false;
     }
-    let tier = api_is_gpu(&api);
+    // Headless-verification override: the VNC/offscreen platforms report a
+    // "null" probe api even when the scene graph renders through a real RHI
+    // (e.g. QSG_RHI_BACKEND=vulkan offscreen), which would hide the shader
+    // scenes from exactly the verification runs that need them.
+    // QBZ_FORCE_GPU_TIER=1 forces the tier on; it changes nothing else (the
+    // resolved api string still reports what the probe saw).
+    let forced = std::env::var_os("QBZ_FORCE_GPU_TIER").is_some_and(|v| v == "1");
+    let tier = api_is_gpu(&api) || forced;
     let previous_tier = GPU_TIER.swap(tier, Ordering::SeqCst);
     let first = !RESOLVED.swap(true, Ordering::SeqCst);
     {

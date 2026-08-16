@@ -42,6 +42,13 @@ const SHADER_GLSL_NO_ES100: &str = "300 es,310 es,320 es,120,150,440";
 /// Opt out of `100 es` by putting this marker anywhere in the shader source.
 const NO_ES100_MARKER: &str = "QSB-SKIP-GLES100";
 
+/// Opt out of the `-b` batching rewrite for VERTEX shaders by putting this
+/// marker anywhere in the source. The rewrite is only valid for Qt Quick
+/// scene-graph-batched items (ShaderEffect stages); a custom
+/// `QQuickRhiItem` (linebed.vert, A4) owns its attribute layout and the
+/// rewrite would corrupt it.
+const NO_BATCH_MARKER: &str = "QSB-SKIP-BATCH";
+
 /// Is `out` already a current bake of `src`? True only when it exists and is
 /// no older than BOTH the shader source and this build script — the script
 /// because the variant lists and the `100 es` opt-out live here, so editing
@@ -144,15 +151,19 @@ fn build_shaders() {
         if up_to_date(&src, &out) {
             continue;
         }
-        let glsl = match std::fs::read_to_string(&src) {
-            Ok(text) if text.contains(NO_ES100_MARKER) => SHADER_GLSL_NO_ES100,
-            _ => SHADER_GLSL,
+        let text = std::fs::read_to_string(&src).unwrap_or_default();
+        let glsl = if text.contains(NO_ES100_MARKER) {
+            SHADER_GLSL_NO_ES100
+        } else {
+            SHADER_GLSL
         };
         let mut cmd = std::process::Command::new(&qsb);
         cmd.args(["--glsl", glsl, "--hlsl", SHADER_HLSL, "--msl", SHADER_MSL]);
         // Vertex shaders used by Qt Quick need the batching rewrite, or the
-        // scene graph cannot batch the item and falls back per-node.
-        if ext == "vert" {
+        // scene graph cannot batch the item and falls back per-node —
+        // EXCEPT custom QQuickRhiItem stages, which own their attribute
+        // layout (NO_BATCH_MARKER).
+        if ext == "vert" && !text.contains(NO_BATCH_MARKER) {
             cmd.arg("-b");
         }
         cmd.arg("-o").arg(&out).arg(&src);
@@ -241,6 +252,64 @@ fn format_ymd(epoch_secs: i64) -> String {
     format!("{year:04}-{m:02}-{d:02}")
 }
 
+/// The hand-written C++ QQuickRhiItems: A4's `LineBedItem`, A2's
+/// `PlasmaItem`, A3's `RibbonItem` and B1's `TunnelFlowItem` (`cxx/*_item.*`,
+/// the scenes a ShaderEffect cannot express — line strips / feedback
+/// ping-pong / persistent sub-rect texture writes — spec 01 §2.5/§2.1/§2.4,
+/// spec 02 §3).
+///
+/// The crate had no non-cxx-qt C++ precedent (`src/macos_chrome.rs` is pure
+/// Rust objc2), so this adds the minimal wiring: `moc` (the Q_OBJECT meta
+/// object) and the Qt include paths come from `qt-build-utils` — already in
+/// the lock as cxx-qt-build's own engine, same version — and the compile is
+/// a plain `cc::Build` static lib that cargo links into the binary. The Qt
+/// LINK libraries are already emitted by CxxQtBuilder below (Gui/Quick are
+/// among its modules); this lib only adds objects.
+///
+/// The `<rhi/qrhi.h>` headers live in Qt's PRIVATE include tree
+/// (`<headers>/Qt<Module>/<version>/Qt<Module>`), so those paths are added
+/// explicitly. macOS note: the private-headers path exists in the same
+/// layout under Homebrew Qt; NOT COMPILED HERE (this tree builds on Linux,
+/// same caveat as the macOS objc2 arms).
+fn build_rhi_items() {
+    let mut qtbuild = qt_build_utils::QtBuild::new(vec![
+        "Core".to_string(),
+        "Gui".to_string(),
+        "Qml".to_string(),
+        "Quick".to_string(),
+    ])
+    .expect("Qt6 not found for the RHI items (cxx-qt-build would fail too)");
+
+    let mut cc = cc::Build::new();
+    cc.cpp(true)
+        .std("c++17")
+        .pic(true)
+        .include("cxx"); // the moc outputs do `#include "<name>.h"`
+    for item in ["linebed_item", "plasma_item", "ribbon_item", "tunnelflow_item"] {
+        let header = format!("cxx/{item}.h");
+        let source = format!("cxx/{item}.cpp");
+        println!("cargo:rerun-if-changed={header}");
+        println!("cargo:rerun-if-changed={source}");
+        // moc: the Q_OBJECT meta-object. No QML_ELEMENT (the types are
+        // registered by hand in the .cpps), so no uri/include-path
+        // arguments are needed.
+        let moc = qtbuild.moc(&header, qt_build_utils::MocArguments::default());
+        cc.file(source).file(&moc.cpp);
+    }
+    for p in qtbuild.include_paths() {
+        cc.include(p);
+    }
+    let headers = qtbuild.qmake_query("QT_INSTALL_HEADERS");
+    let version = qtbuild.version().to_string();
+    for module in ["QtCore", "QtGui", "QtQml", "QtQuick"] {
+        let private = format!("{headers}/{module}/{version}/{module}");
+        if Path::new(&private).is_dir() {
+            cc.include(private);
+        }
+    }
+    cc.compile("qbz_rhi_items");
+}
+
 fn main() {
     // The About modal's build stamp. Emitted before anything else so a failure
     // anywhere below cannot leave the env vars unset (env! is a compile error
@@ -250,6 +319,11 @@ fn main() {
     // Bake the shaders BEFORE the qrc sweep below collects qml/assets, so a
     // freshly compiled .qsb is the one that gets embedded.
     build_shaders();
+
+    // The hand-written C++ QQuickRhiItems (cxx/). Static lib linked into
+    // the binary; the QML types self-register at QGuiApplication
+    // construction.
+    build_rhi_items();
 
     // The WHOLE asset tree, recursively. This used to name the root-level
     // files by hand with only icons/ and fonts/ collected, so dropping a new
@@ -285,7 +359,7 @@ fn main() {
             // (myqbz_qt.rs, blacklist_qt.rs, toast_qt.rs, …) are plain
             // modules and must NOT be listed — only files that declare a
             // #[cxx_qt::bridge] mod belong in this array.
-            rust_files: &["src/bridge.rs", "src/session_bridge.rs", "src/shell_bridge.rs", "src/player_bridge.rs", "src/queue_bridge.rs", "src/home_bridge.rs", "src/viz_bridge.rs", "src/immersive_bridge.rs", "src/suggestions_bridge.rs", "src/hotkeys_bridge.rs", "src/search_bridge.rs", "src/local_bridge.rs", "src/library_bridge.rs", "src/album_bridge.rs", "src/artist_bridge.rs", "src/scene_bridge.rs", "src/musician_bridge.rs", "src/lyrics_qt.rs", "src/icon_tint_qt.rs", "src/cast_bridge.rs", "src/myqbz_bridge.rs", "src/myqbz_add_bridge.rs", "src/disco_bridge.rs", "src/blacklist_bridge.rs", "src/playlist_picker_bridge.rs", "src/playlist_manager_bridge.rs", "src/playlist_import_bridge.rs", "src/dac_wizard_bridge.rs", "src/folder_edit_bridge.rs", "src/playlist_edit_bridge.rs", "src/qconnect_bridge.rs", "src/kiosk_nav_bridge.rs", "src/mini_bridge.rs", "src/tray_bridge.rs", "src/about_bridge.rs"],
+            rust_files: &["src/bridge.rs", "src/session_bridge.rs", "src/shell_bridge.rs", "src/player_bridge.rs", "src/queue_bridge.rs", "src/home_bridge.rs", "src/viz_bridge.rs", "src/immersive_bridge.rs", "src/shader_scene_bridge.rs", "src/suggestions_bridge.rs", "src/hotkeys_bridge.rs", "src/search_bridge.rs", "src/local_bridge.rs", "src/library_bridge.rs", "src/album_bridge.rs", "src/artist_bridge.rs", "src/scene_bridge.rs", "src/musician_bridge.rs", "src/lyrics_qt.rs", "src/icon_tint_qt.rs", "src/cast_bridge.rs", "src/myqbz_bridge.rs", "src/myqbz_add_bridge.rs", "src/disco_bridge.rs", "src/blacklist_bridge.rs", "src/playlist_picker_bridge.rs", "src/playlist_manager_bridge.rs", "src/playlist_import_bridge.rs", "src/dac_wizard_bridge.rs", "src/folder_edit_bridge.rs", "src/playlist_edit_bridge.rs", "src/qconnect_bridge.rs", "src/kiosk_nav_bridge.rs", "src/mini_bridge.rs", "src/tray_bridge.rs", "src/about_bridge.rs"],
             qml_files: &[
                 "qml/LoginScreen.qml",
                 "qml/Main.qml",
@@ -427,6 +501,26 @@ fn main() {
                 "qml/immersive/ImmersiveView.qml",
                 "qml/immersive/LyricsFocusPanel.qml",
                 "qml/immersive/QueueTabsPanel.qml",
+                // Shader scenes (2026-08-15 immersive-completion contract,
+                // block A1): the bottom-most scene layer (Tunnel / Aurora /
+                // Ambient) driven by QbzShaderScene.
+                "qml/immersive/ShaderSceneLayer.qml",
+                // Block A4: the Line Bed scene (mode 5) — the QML wrapper
+                // for the C++ LineBedItem (cxx/linebed_item.*). Its own
+                // file so the RHI item's contract is one screen of QML.
+                "qml/immersive/LineBedScene.qml",
+                // Block A2: Plasma (scene 1) — QML wrapper for PlasmaItem
+                // (cxx/plasma_item.*), the WGSL->GLSL feedback port.
+                "qml/immersive/PlasmaScene.qml",
+                // Block A3: Spectral Ribbon (scene 4) — RibbonItem wrapper
+                // plus the stream/FFT overlay ported from
+                // ImmersiveSpectralOverlay.slint.
+                "qml/immersive/RibbonScene.qml",
+                "qml/immersive/SpectralOverlay.qml",
+                // Block B1: Tunnel Flow (scene 8, Qt-only) — the QML wrapper
+                // for the C++ TunnelFlowItem (cxx/tunnelflow_item.*), the
+                // Tauri Canvas2D tunnel ported to a feedback fragment shader.
+                "qml/immersive/TunnelFlowScene.qml",
                 "qml/immersive/SpectrumPanel.qml",
                 "qml/immersive/StaticPanel.qml",
                 "qml/immersive/SuggestionsPanel.qml",

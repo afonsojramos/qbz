@@ -191,10 +191,10 @@ Item {
         }
 
         fragmentShader: "../assets/shaders/atmosphere.frag.qsb"
-        // Shared default-equivalent vertex stage (Qt 6.11's built-in default
-        // emits no qt_TexCoord0, so the program link fails without an
-        // explicit one — the same file SpectrumBand/AmbientField use).
-        vertexShader: "../assets/shaders/spectrum.vert.qsb"
+        // Paired vertex stage (Qt 6.11's built-in default emits no
+        // qt_TexCoord0); the GL link requires both stages to declare the
+        // SAME uniform block (see atmosphere.vert / scene_pack.vert).
+        vertexShader: "../assets/shaders/atmosphere.vert.qsb"
     }
 
     // --- FALLBACK arm: the original four-Image stack, verbatim ----------------

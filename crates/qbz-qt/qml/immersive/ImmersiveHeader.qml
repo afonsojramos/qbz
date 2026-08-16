@@ -75,6 +75,8 @@ Item {
         }
 
         // One row model entry: vm 0 = FOCUS (mode m), vm 1 = SPLIT (panel sp).
+        // Block A1 adds `sc`: >= 0 = a SHADER SCENE row (the Slint shader
+        // rows at ImmersiveView.slint:654-711), -1/absent = a panel row.
         // `entry` names the §5.5 entry load fired alongside setView:
         //   "queue"       -> QbzQueue.queuePanelOpened()
         //   "trackinfo"   -> QbzAlbum.openTrackInfo(QbzPlayer.npTrackId)
@@ -82,6 +84,19 @@ Item {
         //   ""            -> none (Lyrics rows: Qt fetches lyrics
         //                    automatically per track, §5.5).
         function fireRow(row) {
+            if (row.sc !== undefined && row.sc >= 0) {
+                // Shader scene row: FOCUS view + scene N (Slint sets
+                // view-mode=0 and shader-mode=N and leaves `mode` alone;
+                // setView is the ONLY mode mutator here, §3.2).
+                if (row.sc > 0 && QbzImmersive.viewMode !== 0)
+                    QbzImmersive.setView(0, QbzImmersive.mode, QbzImmersive.splitPanel)
+                QbzShaderScene.scene = row.sc
+                viewMenu.close()
+                return
+            }
+            // Panel rows turn the scene OFF — every Slint panel row sets
+            // shader-mode = 0 (:586-650) — then setView as before.
+            QbzShaderScene.scene = 0
             QbzImmersive.setView(
                 row.vm === 0 ? 0 : 1,
                 row.vm === 0 ? row.m : QbzImmersive.mode,
@@ -99,9 +114,19 @@ Item {
             id: menuRow
             Rectangle {
                 required property var modelData
-                readonly property bool active: modelData.vm === 0
-                    ? (QbzImmersive.viewMode === 0 && QbzImmersive.mode === modelData.m)
-                    : (QbzImmersive.viewMode === 1 && QbzImmersive.splitPanel === modelData.sp)
+                // A1: shader rows (sc >= 0) are active when their scene is
+                // on; FOCUS panel rows additionally require the scene OFF
+                // (Slint: `active: is-focus && sh == 0 && md == N`).
+                readonly property bool active: {
+                    if (modelData.sc !== undefined && modelData.sc >= 0)
+                        return QbzShaderScene.scene === modelData.sc
+                    if (modelData.vm === 0)
+                        return QbzImmersive.viewMode === 0
+                            && QbzImmersive.mode === modelData.m
+                            && QbzShaderScene.scene === 0
+                    return QbzImmersive.viewMode === 1
+                        && QbzImmersive.splitPanel === modelData.sp
+                }
                 width: parent ? parent.width : 0
                 height: 33
                 radius: 8
@@ -157,7 +182,7 @@ Item {
         Repeater {
             // FOCUS rows IN SLINT ORDER (:586-650): Album Reactive(0),
             // Static(1), Coverflow(2), Spectrum(3), Wave Bed(6), Lyrics(4),
-            // Queue(5). NO shader rows (owner ruling 1).
+            // Queue(5).
             model: [
                 { "vm": 0, "m": 0, "sp": -1, "entry": "",
                   "label": QbzSession.tr("Album Reactive", QbzSession.trRev) },
@@ -174,6 +199,43 @@ Item {
                 { "vm": 0, "m": 5, "sp": -1, "entry": "queue",
                   "label": QbzSession.tr("Queue", QbzSession.trRev) },
             ]
+            delegate: menuRow
+        }
+        Repeater {
+            // A1 shader rows (:654-711), inside the FOCUS group like Slint
+            // (no separate header there). SHIPPED scenes only — the Slint
+            // order is Plasma, Tunnel, Aurora, Ambient, Spectral Ribbon,
+            // Line Bed: Plasma shipped with A2, the Ribbon with A3; Liquid
+            // Spectrum is parked in Slint itself, so its row DOES NOT
+            // appear (00-CONTRACT ruling 1); Line Bed shipped with A4 and
+            // appears LAST here, the shipped-set tail.
+            // There is NO "Off" row (owner ruling 2026-08-15: Slint has
+            // none — a panel row already turns the scene off, and `g`
+            // cycles back to 0). The whole group hides on tiers that
+            // cannot run the shaders (the Slint `if shader-scenes-available`
+            // gates) — QbzShell.shaderScenesAvailable is the single source
+            // of truth, seeded from the Rust renderer probe. The six A-block
+            // labels are EXISTING qbz-ui msgids; B1's "Tunnel Flow" is the
+            // one NEW msgid (added to all 8 locales).
+            model: QbzShell.shaderScenesAvailable ? [
+                { "vm": 0, "m": -1, "sp": -1, "entry": "", "sc": 1,
+                  "label": QbzSession.tr("Plasma", QbzSession.trRev) },
+                { "vm": 0, "m": -1, "sp": -1, "entry": "", "sc": 2,
+                  "label": QbzSession.tr("Tunnel", QbzSession.trRev) },
+                { "vm": 0, "m": -1, "sp": -1, "entry": "", "sc": 3,
+                  "label": QbzSession.tr("Aurora", QbzSession.trRev) },
+                { "vm": 0, "m": -1, "sp": -1, "entry": "", "sc": 7,
+                  "label": QbzSession.tr("Ambient", QbzSession.trRev) },
+                { "vm": 0, "m": -1, "sp": -1, "entry": "", "sc": 4,
+                  "label": QbzSession.tr("Spectral Ribbon", QbzSession.trRev) },
+                { "vm": 0, "m": -1, "sp": -1, "entry": "", "sc": 5,
+                  "label": QbzSession.tr("Line Bed", QbzSession.trRev) },
+                // B1: Tunnel Flow (sc 8) — the QT-ONLY scene (spec 02),
+                // after Line Bed. Menu-only: NOT in the `g` ring (spec 02
+                // §5). NEW msgid (added to all 8 locales).
+                { "vm": 0, "m": -1, "sp": -1, "entry": "", "sc": 8,
+                  "label": QbzSession.tr("Tunnel Flow", QbzSession.trRev) },
+            ] : []
             delegate: menuRow
         }
         Text {
@@ -252,15 +314,24 @@ Item {
     }
 
     // --- RIGHT: the window-controls capsule --------------------------------
-    // Collapsed: 44px circle, sliders glyph. Hover expands it LEFTWARD to
-    // 112px (150ms ease-in-out, anchored right) revealing the fullscreen
-    // toggle and the X exit. Minimize/maximize/drag parked (Slint :1173-1183).
+    // Collapsed: 44px circle, sliders glyph. Expands LEFTWARD to 112px
+    // (150ms ease-in-out, anchored right) revealing the fullscreen toggle
+    // and the X exit. Minimize/maximize/drag parked (Slint :1173-1183).
+    //
+    // The expansion is the Slint state machine ported 1:1
+    // (ImmersiveView.slint:1057-1184): `expanded = pinned || anyHover` is a
+    // BOOL and the buttons gate on that bool — NEVER on the animated width.
+    // (2026-08-15 flicker root cause: gating on `capsule.width > 100`
+    // mid-animation let the binding flip while the capsule was traveling,
+    // and the expanding left edge could cross a resting cursor frame by
+    // frame — a visible 44↔112 bounce. Clicking the circle toggles `pinned`
+    // (Slint circle-ta, :1159-1162), which is what "stays 100% open" means.)
     Rectangle {
         id: capsule
         anchors.right: parent.right
         anchors.verticalCenter: parent.verticalCenter
         height: 36
-        width: capHover.containsMouse ? 112 : 44
+        width: expanded ? 112 : 44
         radius: 18
         color: "#80000000"
         border.width: 1
@@ -270,10 +341,23 @@ Item {
             NumberAnimation { duration: 150; easing.type: Easing.InOutQuad }
         }
 
+        // Click-pin state; survives the auto-hide (Slint keeps it too).
+        property bool pinned: false
+        // Hover over ANY part of the capsule: the background or either
+        // button (their hover areas extend 9px past the glyphs).
+        readonly property bool anyHover: capHover.containsMouse
+            || fsArea.containsMouse || xArea.containsMouse
+        readonly property bool expanded: pinned || anyHover
+
         MouseArea {
             id: capHover
             anchors.fill: parent
             hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            // Collapsed-circle click = pin open (Slint circle-ta). Clicking
+            // the expanded body un-pins; hover still holds it open, so this
+            // can never collapse anything out from under the cursor.
+            onClicked: capsule.pinned = !capsule.pinned
         }
 
         // Collapsed-state glyph (fades out as the capsule opens).
@@ -283,7 +367,7 @@ Item {
             height: 16
             anchors.centerIn: parent
             tintName: "white"
-            opacity: capsule.width < 100 ? 1 : 0
+            opacity: capsule.expanded ? 0 : 1
             Behavior on opacity { NumberAnimation { duration: 100 } }
         }
 
@@ -299,18 +383,18 @@ Item {
             x: capsule.width - 72
             anchors.verticalCenter: parent.verticalCenter
             tintName: fsArea.containsMouse ? "white" : "muted"
-            opacity: capsule.width > 100 ? 1 : 0
+            opacity: capsule.expanded ? 1 : 0
             Behavior on opacity { NumberAnimation { duration: 100 } }
             MouseArea {
                 id: fsArea
                 anchors.fill: parent
                 anchors.margins: -9
-                // Gated on the expansion: the two button MouseAreas are
+                // Gated on the expansion BOOL: the two button MouseAreas are
                 // INVISIBLE while collapsed but would still cover the 44px
                 // circle (the -9 margins make the X's hit area span almost
                 // all of it), so a click on the collapsed capsule exited
-                // immersive instead of doing nothing.
-                enabled: capsule.width > 100
+                // immersive instead of pinning it.
+                enabled: capsule.expanded
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
                 onClicked: {
@@ -329,13 +413,13 @@ Item {
             x: capsule.width - 36
             anchors.verticalCenter: parent.verticalCenter
             tintName: xArea.containsMouse ? "white" : "muted"
-            opacity: capsule.width > 100 ? 1 : 0
+            opacity: capsule.expanded ? 1 : 0
             Behavior on opacity { NumberAnimation { duration: 100 } }
             MouseArea {
                 id: xArea
                 anchors.fill: parent
                 anchors.margins: -9
-                enabled: capsule.width > 100
+                enabled: capsule.expanded
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
                 // Exit path 2 (§5.4) — every exit funnels through the bridge's

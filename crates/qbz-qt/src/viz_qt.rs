@@ -27,7 +27,18 @@
 //! marshalled into a `QList` (in Bars mode the 512-float waveform is latched
 //! for an instant mode switch but never published) — UNLESS the immersive
 //! overlay is open, which owns the marshalling set and publishes all three
-//! streams every frame (§4.2 of the immersive-port contract).
+//! streams every frame (§4.2 of the immersive-port contract). Block A1
+//! (2026-08-15 immersive-completion) extends the immersive set: `Spectral512`
+//! and `Transient1` are LATCHED too (still never dock-marshalled), and the
+//! drain derives the shader-scenes uniform pack from them HOST-SIDE
+//! (visualizer.rs:172-269 parity — bands8 pairing, level, the level_smooth
+//! EMA, the beat/transient envelopes, the phase accumulator with the 4096
+//! wrap, the spectral_peak EMA) and publishes it as ONE batched JSON property
+//! on `QbzShaderScene` per fresh FFT frame (spec 01 §3: a single property
+//! bag, not 20 individual notifies — each notify dirties). Block A4 consumes
+//! the SAME latched `Spectral512` Rust-side for the Line Bed depth ring
+//! (`linebed_qt.rs` — the 512 floats never reach QML; the ready 256x200
+//! ring publishes once per tick, gated on the scene being on screen).
 //!
 //! Protected-audio note: this lives entirely downstream of the read-only ring
 //! buffer. It touches none of the device/stream init (CLAUDE.md "Audio
@@ -43,6 +54,20 @@ use qbz_audio::VisualizerTap;
 
 use crate::viz_bridge;
 
+// A4 (Line Bed, mode 5): the scene's CPU half (LineBedState + the
+// 512→256 reshape, fed from the latched Spectral512 cell). Declared HERE
+// with #[path] rather than in main.rs because main.rs sits outside this
+// block's file ownership (a second agent is working the tree) — the drain
+// is its only consumer anyway.
+#[path = "linebed_qt.rs"]
+pub(crate) mod linebed_qt;
+
+// A3 (Spectral Ribbon, mode 4): the scene's CPU half (RibbonState — the
+// 512-byte row + the playback column/reset header, fed from the SAME
+// latched Spectral512 cell). Same #[path] rationale as linebed_qt.
+#[path = "ribbon_qt.rs"]
+pub(crate) mod ribbon_qt;
+
 /// Single-slot, latest-wins frame store shared with the FFT producer thread.
 /// A stalled UI drops intermediate frames instead of growing a queue.
 #[derive(Default)]
@@ -50,6 +75,14 @@ struct VizCells {
     bars: Mutex<Option<[f32; 16]>>,
     energy: Mutex<Option<[f32; 5]>>,
     waveform: Mutex<Option<Box<[f32; 512]>>>,
+    // A1 (shader scenes): latched ONLY while the immersive overlay is open
+    // (MARSHAL_ALL) — the dock renders neither, so the dock path keeps
+    // dropping them exactly like before. Neither stream WAKES the drain:
+    // they hitchhike on the bars/energy/waveform wakes, the way the Slint
+    // 33 ms timer drain takes whatever the cells happen to hold
+    // (visualizer.rs:146-178).
+    spectral: Mutex<Option<Vec<f32>>>,
+    transient: Mutex<Option<f32>>,
 }
 
 /// Producer-side sink: latches frames into the shared cells and signals the
@@ -64,9 +97,10 @@ impl VizSink for QtVizSink {
         // energy, transient, waveform). Waking the drain on each of them would
         // cost 3-4 wakeups per frame for one useful publish, so only the
         // stream the visible mode renders signals — UNLESS the immersive
-        // overlay is open (MARSHAL_ALL, §4.2b), which consumes all three. The
-        // other cells are still latched so a mode switch has a frame ready
-        // immediately.
+        // overlay is open (MARSHAL_ALL, §4.2b), whose wake table covers every
+        // signalled stream; A1's two scene-only streams latch WITHOUT
+        // signalling (see their match arms). The other cells are still
+        // latched so a mode switch has a frame ready immediately.
         let mode = ACTIVE_MODE.load(Ordering::Relaxed);
         let all = MARSHAL_ALL.load(Ordering::Relaxed);
         let wake = match frame {
@@ -82,9 +116,25 @@ impl VizSink for QtVizSink {
                 *self.cells.energy.lock().unwrap() = Some(b);
                 stream_wakes(mode, all, Stream::Energy)
             }
-            // The dock renders none of these; ignoring them costs nothing (the
-            // producer computes the spectral ribbon only for the shader scenes).
-            VizFrame::Spectral512(_) | VizFrame::Transient1(_) => false,
+            // The dock renders neither stream, so off-immersive they are
+            // still dropped for free. While the immersive overlay is open
+            // (MARSHAL_ALL, A1) they are LATCHED — Transient1 feeds every
+            // scene's beat punch and Spectral512 feeds the spectral-peak
+            // EMA (the future mode 4) — but neither WAKES the drain: they
+            // ride the next bars/energy/waveform-signalled pass, so the
+            // wake/publish cadence is unchanged.
+            VizFrame::Spectral512(b) => {
+                if all {
+                    *self.cells.spectral.lock().unwrap() = Some(b);
+                }
+                false
+            }
+            VizFrame::Transient1(x) => {
+                if all {
+                    *self.cells.transient.lock().unwrap() = Some(x);
+                }
+                false
+            }
         };
         if wake {
             wake_drain();
@@ -193,26 +243,187 @@ fn to_qlist(values: &[f32]) -> QList<f32> {
     list
 }
 
+// ---------------------------------------------------------------------------
+// A1: the host-side shader pack (visualizer.rs:172-269 parity)
+// ---------------------------------------------------------------------------
+
+/// Derivation state for the shader-scenes uniform pack — the Qt twin of the
+/// Slint drain's `last_*` locals (qbz/src/visualizer.rs). Lives on the DRAIN
+/// thread (a plain local, no locking): every field is per-tick state derived
+/// from the latched cells. Energy/bars arrive ALREADY smoothed upstream
+/// (qbz-audio) and are passed through raw — no double EMA
+/// (shader_underlay.rs FrameAudio doc).
+#[derive(Default)]
+struct ShaderPackState {
+    last_bars16: [f32; 16],
+    last_energy: [f32; 5],
+    level_smooth: f32,
+    beat: f32,
+    transient: f32,
+    phase: f32,
+    spectral_peak: f32,
+}
+
+/// The 4096 phase wrap: an integer multiple of 8 so the Tunnel's `& 7` ring
+/// math stays seamless across the wrap (tunnel.wgsl:66-69). The Qt port MUST
+/// keep it (spec 01 §1).
+const PHASE_WRAP: f32 = 4096.0;
+
+impl ShaderPackState {
+    /// Advance ONE drain tick (~30 Hz, gated on a fresh Viz16 — the cadence
+    /// carrier) and return the batched JSON pack. Mirrors
+    /// visualizer.rs:203-269 EXACTLY, including the ORDER: the fresh
+    /// transient maxes into both envelopes first, then the envelopes decay
+    /// (beat ×0.88, transient ×0.85), then level/bands/phase derive from the
+    /// DECAYED values.
+    fn tick(&mut self, new_transient: Option<f32>, new_spectral: Option<&[f32]>) -> String {
+        if let Some(x) = new_transient {
+            self.transient = x.max(self.transient);
+            self.beat = x.max(self.beat);
+        }
+        self.transient *= 0.85;
+        self.beat *= 0.88;
+
+        // 8 log bands paired from the 16 bars (visualizer.rs:205-208).
+        let mut bands8 = [0.0f32; 8];
+        for i in 0..8 {
+            bands8[i] = (self.last_bars16[2 * i] + self.last_bars16[2 * i + 1]) * 0.5;
+        }
+        // level = mean(energy5); level_smooth = slow EMA (×0.96 + 0.04·level).
+        let level = (self.last_energy[0]
+            + self.last_energy[1]
+            + self.last_energy[2]
+            + self.last_energy[3]
+            + self.last_energy[4])
+            * 0.2;
+        self.level_smooth = self.level_smooth * 0.96 + level * 0.04;
+        // Forward-motion clock: host-side (rate is audio-dependent), wrapped
+        // at an integer so fract()-based ring patterns stay continuous across
+        // the wrap (visualizer.rs:219-222).
+        self.phase += 0.012 + level * 0.02 + self.beat * 0.02;
+        if self.phase >= PHASE_WRAP {
+            self.phase -= PHASE_WRAP;
+        }
+        // Real-time ceiling (the future mode 4): highest band with signal,
+        // EMA-smoothed so the line tracks without jitter (visualizer.rs:
+        // 223-239). Derived whenever a fresh spectral frame is latched,
+        // mode-agnostic — the shipped scenes ignore it.
+        if let Some(bins) = new_spectral {
+            let n = bins.len();
+            if n > 1 {
+                let mut hi = 0usize;
+                for (i, &v) in bins.iter().enumerate() {
+                    if v > 0.05 {
+                        hi = i;
+                    }
+                }
+                let target = hi as f32 / (n - 1) as f32;
+                self.spectral_peak = self.spectral_peak * 0.85 + target * 0.15;
+            }
+        }
+
+        // ONE batched publish per tick (spec 01 §3: a single property bag,
+        // not 20 individual notifies — each notify dirties). The vec4 fields
+        // of the uniform contract map as: energy_lo = sub/bass/mid/presence,
+        // energy_hi = air/spectral_peak/0/0 (shader_underlay.rs:844-845),
+        // bands_lo/hi = bands8 0..3 / 4..7. time/resolution/palette are NOT
+        // in the pack: time is the QML layer's local pulse clock, resolution
+        // is the item size, palette is QbzShell.ambient*.
+        format!(
+            "{{\"phase\":{},\"beat\":{},\"level\":{},\"levelSmooth\":{},\
+             \"transient\":{},\
+             \"energyLo\":[{},{},{},{}],\"energyHi\":[{},{},0,0],\
+             \"bandsLo\":[{},{},{},{}],\"bandsHi\":[{},{},{},{}]}}",
+            self.phase,
+            self.beat,
+            level,
+            self.level_smooth,
+            self.transient,
+            self.last_energy[0],
+            self.last_energy[1],
+            self.last_energy[2],
+            self.last_energy[3],
+            self.last_energy[4],
+            self.spectral_peak,
+            bands8[0],
+            bands8[1],
+            bands8[2],
+            bands8[3],
+            bands8[4],
+            bands8[5],
+            bands8[6],
+            bands8[7],
+        )
+    }
+}
+
 /// Take the pending frame(s) of the stream(s) the current marshalling set
 /// renders and hop them onto the Qt thread. Each cell's guard is released by
 /// the end of its `let` statement — the mutex is NEVER held across the
 /// `viz_bridge::ui` hop, so the producer never blocks on the drain.
-fn publish_active(cells: &VizCells) {
+fn publish_active(cells: &VizCells, pack: &mut ShaderPackState, linebed: &mut linebed_qt::LineBedState, ribbon: &mut ribbon_qt::RibbonState) {
     // §4.2b: immersive open -> publish ALL THREE streams each frame (the
     // immersive panels consume bars + energy + waveform simultaneously, like
     // the Slint immersive does). ACTIVE_MODE is irrelevant here.
     if MARSHAL_ALL.load(Ordering::Relaxed) {
         let bars = cells.bars.lock().unwrap().take();
+        // Viz16 is emitted on EVERY producer frame, so a fresh bars cell is
+        // the cadence carrier for the pack tick below: a wake that found the
+        // cells already drained (the sink unparks once per stream variant,
+        // the park permit coalesces) must NOT tick — the envelopes and the
+        // phase accumulator are per-tick, and ticking on empty passes would
+        // run the decay faster than the reference's 30 Hz drain.
+        let fresh_frame = bars.is_some();
         if let Some(b) = bars {
+            pack.last_bars16 = b;
             viz_bridge::ui(move |mut v| v.as_mut().set_bars(to_qlist(&b)));
         }
         let energy = cells.energy.lock().unwrap().take();
         if let Some(b) = energy {
+            pack.last_energy = b;
             viz_bridge::ui(move |mut v| v.as_mut().set_energy(to_qlist(&b)));
         }
         let waveform = cells.waveform.lock().unwrap().take();
         if let Some(b) = waveform {
             viz_bridge::ui(move |mut v| v.as_mut().set_waveform(to_qlist(b.as_ref())));
+        }
+        // A1: the scene-only streams, latched by the sink without waking.
+        let spectral = cells.spectral.lock().unwrap().take();
+        let transient = cells.transient.lock().unwrap().take();
+        if fresh_frame {
+            crate::shader_scene_bridge::publish_pack(
+                pack.tick(transient, spectral.as_deref()),
+            );
+        }
+        // A4 (Line Bed, mode 5): push the SAME latched Spectral512 frame
+        // into the depth ring (fresh frames only, like the reference's
+        // per-spectral-frame push — shader_underlay.rs:934-939) and publish
+        // the ready 256x200 ring ONCE per tick, one QByteArray notify. Both
+        // are gated on the scene being on screen (the bridge's atomic
+        // mirror of scene == 5): 200 KB at 30 Hz for a scene nobody is
+        // looking at is exactly what the pulse law forbids. The state
+        // persists across scene switches, like Slint's thread-local.
+        if crate::shader_scene_bridge::linebed_active() {
+            if let Some(bins) = spectral.as_deref() {
+                linebed.push(bins);
+            }
+            crate::shader_scene_bridge::publish_linebed(linebed.ring_bytes());
+        }
+        // A3 (Spectral Ribbon, mode 4): one self-describing frame per fresh
+        // Spectral512 (the 512-byte row + playback column + reset header —
+        // ribbon_qt.rs), gated on the scene exactly like the linebed ring
+        // (517 B at 30 Hz for a scene nobody is looking at is still the
+        // pulse law's "invisible writes nothing"). FRESH frames only: a
+        // re-publish at the same progress would re-stamp the same columns
+        // (the C++ gap-fill cursor never moves backward on its own).
+        if crate::shader_scene_bridge::ribbon_active() {
+            if let Some(bins) = spectral.as_deref() {
+                if let Some(frame) =
+                    ribbon.frame(bins, crate::now_playing::ribbon_cursor())
+                {
+                    crate::shader_scene_bridge::publish_ribbon(frame);
+                }
+            }
         }
         return;
     }
@@ -256,18 +467,27 @@ pub fn install(tap: VisualizerTap) {
     let drain_cells = cells.clone();
     let drain_thread = std::thread::Builder::new()
         .name("qbz-qt-viz-drain".to_string())
-        .spawn(move || loop {
-            if !ENABLED.load(Ordering::Relaxed) {
-                // Disabled: block until `set_enabled(true)` unparks us. A
-                // leftover permit only costs one extra trip round this check.
+        .spawn(move || {
+            // A1: the shader-pack derivation state lives and dies with the
+            // drain thread — per-tick state, never shared, never locked.
+            let mut pack = ShaderPackState::default();
+            // A4: the Line Bed depth ring, same drain-local pattern.
+            let mut linebed = linebed_qt::LineBedState::default();
+            // A3: the Spectral Ribbon cursor/reset state, same pattern.
+            let mut ribbon = ribbon_qt::RibbonState::default();
+            loop {
+                if !ENABLED.load(Ordering::Relaxed) {
+                    // Disabled: block until `set_enabled(true)` unparks us. A
+                    // leftover permit only costs one extra trip round this check.
+                    std::thread::park();
+                    continue;
+                }
+                publish_active(&drain_cells, &mut pack, &mut linebed, &mut ribbon);
+                // Wait for the next produced frame. If the sink unparked us while
+                // we were publishing, the permit is already set and this returns
+                // immediately — no wakeup is lost, we just re-check the cell.
                 std::thread::park();
-                continue;
             }
-            publish_active(&drain_cells);
-            // Wait for the next produced frame. If the sink unparked us while
-            // we were publishing, the permit is already set and this returns
-            // immediately — no wakeup is lost, we just re-check the cell.
-            std::thread::park();
         })
         .expect("spawn viz drain thread")
         .thread()
@@ -478,5 +698,100 @@ mod tests {
         // Leave the statics as found for any later test in the process.
         set_enabled(false);
         assert_eq!(ENABLED_MASK.load(Ordering::Relaxed), 0);
+    }
+
+    // --- A1: the shader-pack derivation (visualizer.rs:203-269 parity) -----
+
+    /// bands8 pairing + level/level_smooth math, checked against the JSON the
+    /// QML layer parses (the pack's ONLY consumer contract).
+    #[test]
+    fn pack_bands_pairing_and_level_ema() {
+        let mut p = ShaderPackState {
+            last_bars16: [
+                0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 0.1, 0.3, 0.5, 0.7, 0.9, 0.2, 0.4, 0.6, 0.8, 1.0,
+            ],
+            // mean = (0.1+0.2+0.3+0.4+0.5)*0.2 = 0.3
+            last_energy: [0.1, 0.2, 0.3, 0.4, 0.5],
+            ..Default::default()
+        };
+        let json = p.tick(None, None);
+        let doc: serde_json::Value = serde_json::from_str(&json).unwrap();
+        // bands8[0] = (0.0+0.2)/2 = 0.1; bands8[7] = (0.8+1.0)/2 = 0.9.
+        let bands_lo = doc["bandsLo"].as_array().unwrap();
+        let bands_hi = doc["bandsHi"].as_array().unwrap();
+        assert!((bands_lo[0].as_f64().unwrap() - 0.1).abs() < 1e-6);
+        assert!((bands_hi[3].as_f64().unwrap() - 0.9).abs() < 1e-6);
+        assert!((doc["level"].as_f64().unwrap() - 0.3).abs() < 1e-6);
+        // First tick: level_smooth = 0*0.96 + 0.3*0.04 = 0.012.
+        assert!((doc["levelSmooth"].as_f64().unwrap() - 0.012).abs() < 1e-6);
+        // Second tick: 0.012*0.96 + 0.012 = 0.02352.
+        let doc2: serde_json::Value = serde_json::from_str(&p.tick(None, None)).unwrap();
+        assert!((doc2["levelSmooth"].as_f64().unwrap() - 0.02352).abs() < 1e-5);
+        // energy_hi = [air, spectral_peak, 0, 0] (shader_underlay.rs:845).
+        let energy_hi = doc["energyHi"].as_array().unwrap();
+        assert!((energy_hi[0].as_f64().unwrap() - 0.5).abs() < 1e-6);
+        assert_eq!(energy_hi[2].as_f64().unwrap(), 0.0);
+    }
+
+    /// The envelopes: a fresh transient MAXES into beat AND transient first,
+    /// then both decay (×0.88 / ×0.85) — and the pack carries the DECAYED
+    /// values, exactly like visualizer.rs:176-189.
+    #[test]
+    fn pack_envelopes_max_in_then_decay() {
+        let mut p = ShaderPackState::default();
+        let doc: serde_json::Value = serde_json::from_str(&p.tick(Some(0.5), None)).unwrap();
+        assert!((doc["beat"].as_f64().unwrap() - 0.44).abs() < 1e-6); // 0.5*0.88
+        assert!((doc["transient"].as_f64().unwrap() - 0.425).abs() < 1e-6); // 0.5*0.85
+        // A weaker transient mid-decay does NOT lower the envelope (max-in).
+        let doc: serde_json::Value = serde_json::from_str(&p.tick(Some(0.1), None)).unwrap();
+        assert!((doc["beat"].as_f64().unwrap() - 0.44 * 0.88).abs() < 1e-5);
+        assert!((doc["transient"].as_f64().unwrap() - 0.425 * 0.85).abs() < 1e-5);
+    }
+
+    /// The forward-motion clock: +0.012 + level*0.02 + beat*0.02 per tick,
+    /// wrapping at 4096 (a multiple of 8, so the Tunnel's `& 7` ring math is
+    /// seamless across the wrap — spec 01 §1).
+    #[test]
+    fn pack_phase_advances_and_wraps_at_4096() {
+        let mut p = ShaderPackState {
+            phase: 4096.0 - 0.005,
+            ..Default::default()
+        };
+        // level = 0, beat = 0 -> +0.012 -> 4096.007 -> wraps to 0.007.
+        // Tolerance 2e-3, not tighter: at the 4096 scale an f32 ulp is
+        // ~4.9e-4, so the pre-wrap addition rounds by a few ulps — the test
+        // pins the WRAP (and continuity), not the exact residue.
+        let doc: serde_json::Value = serde_json::from_str(&p.tick(None, None)).unwrap();
+        assert!((doc["phase"].as_f64().unwrap() - 0.007).abs() < 2e-3);
+        // With level 0.5 and a decayed beat 0.44: +0.012+0.010+0.0088.
+        let mut p = ShaderPackState {
+            last_energy: [0.5; 5],
+            ..Default::default()
+        };
+        let doc: serde_json::Value =
+            serde_json::from_str(&p.tick(Some(0.5), None)).unwrap();
+        let expected = 0.012 + 0.5 * 0.02 + 0.44 * 0.02;
+        assert!((doc["phase"].as_f64().unwrap() - expected).abs() < 1e-4);
+    }
+
+    /// The spectral-peak EMA (the future mode 4): the highest bin above 0.05
+    /// as a fraction, smoothed ×0.85 + 0.15·target (visualizer.rs:223-239).
+    /// A single-bin / empty frame is ignored (the n > 1 guard).
+    #[test]
+    fn pack_spectral_peak_ema() {
+        let mut p = ShaderPackState::default();
+        let mut bins = vec![0.0f32; 101];
+        bins[75] = 0.5; // highest active: 75/100 = 0.75
+        let doc: serde_json::Value =
+            serde_json::from_str(&p.tick(None, Some(&bins))).unwrap();
+        assert!((doc["energyHi"][1].as_f64().unwrap() - 0.75 * 0.15).abs() < 1e-5);
+        // Empty of signal: target 0, the EMA decays toward it.
+        let doc: serde_json::Value =
+            serde_json::from_str(&p.tick(None, Some(&vec![0.0f32; 101]))).unwrap();
+        assert!((doc["energyHi"][1].as_f64().unwrap() - 0.75 * 0.15 * 0.85).abs() < 1e-4);
+        // The n > 1 guard: a one-bin frame changes nothing.
+        let before = p.spectral_peak;
+        p.tick(None, Some(&[1.0]));
+        assert_eq!(p.spectral_peak, before);
     }
 }

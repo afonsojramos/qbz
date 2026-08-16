@@ -89,6 +89,19 @@ Rectangle {
     readonly property real artSize: Math.max(160,
         Math.min(Math.min(root.height * 0.45, root.width * 0.5), 360))
 
+    // D2 (contract 04 §4): size-aware large art — this card draws up to
+    // 360 CSS px, past what the thumbnail-tier small feed covers. Same
+    // bucketed request + fallback binding as StaticPanel/AlbumReactivePanel.
+    readonly property string artSource: QbzPlayer.npArtworkPathLarge !== ""
+        ? QbzPlayer.npArtworkPathLarge : QbzPlayer.npArtworkPath
+    function requestArtSize() {
+        if (root.visible)
+            QbzPlayer.requestNpArtworkSize(Math.round(root.artSize))
+    }
+    onArtSizeChanged: requestArtSize()
+    onVisibleChanged: requestArtSize()
+    Component.onCompleted: requestArtSize()
+
     Item {
         anchors.fill: parent
         anchors.topMargin: 70
@@ -122,7 +135,7 @@ Rectangle {
                     x: (parent.width - width) / 2
                     y: (parent.height - height) / 2
                     radius: 8
-                    source: QbzPlayer.npArtworkPath
+                    source: root.artSource
                 }
             }
 

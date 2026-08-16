@@ -74,6 +74,17 @@ Item {
         Math.min(Math.min(root.height - 372, root.width * 0.52), 560))
     readonly property real pitch: root.baseArt * 0.42
 
+    // D2 (contract 04 §4): the CENTER card is a large slot (up to 560 CSS
+    // px) — report its size so the large-art feed re-resolves per bucket;
+    // the card below binds large-feed-first with the row cover as last
+    // fallback. Bucketed in Rust; invisible panel writes nothing (pulse law).
+    function requestArtSize() {
+        if (root.visible)
+            QbzPlayer.requestNpArtworkSize(Math.round(root.baseArt))
+    }
+    onBaseArtChanged: requestArtSize()
+    onVisibleChanged: requestArtSize()
+
     // --- Animated scroll — the ONLY motion (:152-153) -----------------------
     property real scroll: root.cfDoc.index
     Behavior on scroll { NumberAnimation { duration: 320; easing.type: Easing.InOutQuad } }
@@ -88,7 +99,10 @@ Item {
             root.coverMap = Object.assign({}, m)
         }
     }
-    Component.onCompleted: root.dispatchCovers()
+    Component.onCompleted: {
+        root.dispatchCovers()
+        requestArtSize() // D2 initial large-art request
+    }
     onCfDocChanged: root.dispatchCovers()
     function dispatchCovers() {
         var tracks = root.cfDoc.tracks
@@ -274,9 +288,9 @@ Item {
 
                 // CENTER card — drawn LAST so it paints over its neighbors
                 // (:255-273). Bound to the current index's offset (eases to
-                // 0 with `scroll`). Prefers the unified large now-playing
-                // cover; falls back to the model row's cover while it
-                // resolves. Non-interactive.
+                // 0 with `scroll`). Prefers the size-resolved large
+                // now-playing cover (D2), then the small feed, then the
+                // model row's cover while they resolve. Non-interactive.
                 CoverCard {
                     readonly property string rowCover: root.centerIdx >= 0
                         && root.centerIdx < root.cfLen
@@ -286,8 +300,10 @@ Item {
                     pitch: root.pitch
                     stageCx: fanStage.cx
                     stageHeight: fanStage.height
-                    artSource: QbzPlayer.npArtworkPath !== ""
-                        ? QbzPlayer.npArtworkPath : rowCover
+                    artSource: QbzPlayer.npArtworkPathLarge !== ""
+                        ? QbzPlayer.npArtworkPathLarge
+                        : (QbzPlayer.npArtworkPath !== ""
+                            ? QbzPlayer.npArtworkPath : rowCover)
                     hasArt: artSource !== ""
                     interactive: false
                 }

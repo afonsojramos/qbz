@@ -192,10 +192,10 @@ Item {
         }
 
         fragmentShader: "../assets/shaders/ambient.frag.qsb"
-        // Shared default-equivalent vertex stage — Qt 6.11's built-in default
-        // emits no qt_TexCoord0, so the program link fails without an explicit
-        // one (the same file SpectrumBand uses).
-        vertexShader: "../assets/shaders/spectrum.vert.qsb"
+        // Paired vertex stage — Qt 6.11's built-in default emits no
+        // qt_TexCoord0, and the GL link requires both stages to declare the
+        // SAME uniform block (see ambient.vert / scene_pack.vert).
+        vertexShader: "../assets/shaders/ambient.vert.qsb"
     }
 
     // --- CPU fallback arm ---------------------------------------------------
