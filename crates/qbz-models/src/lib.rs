@@ -54,6 +54,7 @@ pub use types::{
     RadioResponse,
     ArtistAlbums,
     ArtistBiography,
+    Goody,
     // Discover types
     DiscoverAlbum,
     DiscoverAlbumDates,

@@ -30,9 +30,10 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-use qbz_library::LibraryDatabase;
+use qbz_library::{write_purchase_tags, LibraryDatabase, PurchaseTagWrite};
 use qbz_models::{
     Album, PurchaseAlbum, PurchaseFormatOption, PurchaseResponse, PurchaseTrack, SearchResultsPage,
+    Track,
 };
 use qbz_qobuz::QobuzClient;
 use qbz_qobuz::Result as QobuzResult;
@@ -223,13 +224,45 @@ pub fn synth_formats(album: &Album) -> Vec<PurchaseFormatOption> {
 ///   * `downloaded = downloaded_ids.contains(track.id)`;
 ///   * `downloaded_format_ids = format_map.get(track.id).cloned().unwrap_or_default()`.
 ///
-/// Per album (the all-mode / by-type path where albums and tracks are sibling
-/// pages): collect the ids of `response.tracks.items` whose
-/// `track.album.id == album.id`; then
+/// Per album: **DELIBERATE DIVERGENCE from the reference, contract §11-1, ruled
+/// by the owner on 2026-08-16.**
+///
+/// The reference collected the ids of `response.tracks.items` whose
+/// `track.album.id == album.id` and set
 /// `album.downloaded = !ids.is_empty() && all ids ∈ downloaded_ids`.
-/// An album with NO matching tracks in this response → `downloaded = false`
-/// (the empty-set rule; partial-page albums may flip to not-downloaded — this
-/// is the documented page-mode gotcha and is replicated verbatim).
+/// That predicate is UNSATISFIABLE on the screen that uses it: the Albums tab
+/// loads `getUserPurchases?type=albums`, and that response omits the `tracks`
+/// key entirely (measured against a live account, §2.5b). With no sibling
+/// tracks page the id set is always empty, so the empty-set rule pins
+/// `downloaded` to `false` — forever, and silently, because the field is
+/// optional behind a lenient deserializer. The visible consequence in the
+/// reference is that no album card can ever show as downloaded and the
+/// "Hide downloaded" filter can never hide anything. The guide-dog user would
+/// have had no way to notice a filter that simply does nothing.
+///
+/// So the album rule reads the LOCAL REGISTRY instead, which is the only party
+/// that actually knows: `album_counts` maps a purchase album id to its count of
+/// DISTINCT downloaded tracks (`get_downloaded_purchase_album_counts`), and an
+/// album is downloaded when that count covers its `tracks_count`.
+///
+/// Two properties worth keeping in mind:
+///   * it is format-AGNOSTIC, matching the reference's list-level semantics (the
+///     detail screen is the format-scoped one);
+///   * an absent or zero `tracks_count` yields `false`. `PurchaseAlbum.tracks_count`
+///     is an `Option`, and without it there is no denominator — "every track is
+///     downloaded" is unprovable, so the answer is no. That is the safe direction
+///     (it under-claims rather than showing a green mark for an album that may be
+///     half on disk) and it preserves the reference's empty-set rule.
+///
+/// **Status, stated so this comment does not describe behaviour that does not
+/// exist yet:** as of 2026-08-16 this function has NO production caller. The Qt
+/// controller that will call it on every list path — so that browsing and
+/// searching cannot disagree about the same album — is not written. The shipping
+/// Slint controller does NOT use this function; it computes album state itself
+/// with its own copy of the old nested-tracks predicate
+/// (`crates/qbz/src/purchases.rs`, `enrich_albums`), and therefore still shows
+/// the unsatisfiable behaviour described above. Until the Qt side lands the two
+/// frontends will disagree, and that is expected rather than a bug to chase.
 ///
 /// `downloaded_ids`/`format_map` are keyed by `i64` (registry track ids); track
 /// ids are `u64` and compared via `track.id as i64`, exactly as the source.
@@ -237,6 +270,7 @@ pub fn apply_download_flags(
     response: &mut PurchaseResponse,
     downloaded_ids: &HashSet<i64>,
     format_map: &HashMap<i64, Vec<u32>>,
+    album_counts: &HashMap<String, u32>,
 ) {
     for track in &mut response.tracks.items {
         let tid = track.id as i64;
@@ -245,24 +279,23 @@ pub fn apply_download_flags(
     }
 
     for album in &mut response.albums.items {
-        let album_track_ids: Vec<i64> = response
-            .tracks
-            .items
-            .iter()
-            .filter(|track| {
-                track
-                    .album
-                    .as_ref()
-                    .map(|album_ref| album_ref.id == album.id)
-                    .unwrap_or(false)
-            })
-            .map(|track| track.id as i64)
-            .collect();
+        album.downloaded = album_downloaded_from_registry(&album.id, album.tracks_count, album_counts);
+    }
+}
 
-        album.downloaded = !album_track_ids.is_empty()
-            && album_track_ids
-                .iter()
-                .all(|track_id| downloaded_ids.contains(track_id));
+/// The shared "is this purchased album fully downloaded" predicate (§11-1).
+/// Pure, so both the list annotation and the detail builder can agree, and so it
+/// is unit-testable without a database.
+pub fn album_downloaded_from_registry(
+    album_id: &str,
+    tracks_count: Option<u32>,
+    album_counts: &HashMap<String, u32>,
+) -> bool {
+    match tracks_count {
+        Some(expected) if expected > 0 => {
+            album_counts.get(album_id).copied().unwrap_or(0) >= expected
+        }
+        _ => false,
     }
 }
 
@@ -275,9 +308,14 @@ pub fn apply_download_flags(
 ///
 /// Mapping rules (verbatim from command #5):
 ///   * the nested track list comes from `album.tracks.items` mapped to
-///     `PurchaseTrack` — the `version`/subtitle is DROPPED (purchases have no
-///     `version` field, §4.6); `performer` defaults when the catalog track has
-///     none; per-track `purchased_at` is the album-level meta value;
+///     `PurchaseTrack`; `performer` defaults when the catalog track has none;
+///     per-track `purchased_at` is the album-level meta value;
+///   * the `version`/subtitle IS carried across. This is a deliberate divergence
+///     from the reference: Tauri's frontend type declares `version` and its detail
+///     view renders `formatTrackTitle(title, version)`, but the mapping here never
+///     populated it, so every purchased track lost its subtitle (issue #360). The
+///     catalog track does carry it (`qbz_models::Track::version`), so the fix is a
+///     field copy. Contract §10-C rules this in.
 ///   * `downloadable = purchase_meta.map(|m| m.downloadable).unwrap_or(true)`
 ///     (defaults TRUE when the album is not found in the purchases listing);
 ///   * `purchased_at = purchase_meta.and_then(|m| m.purchased_at)`;
@@ -310,6 +348,7 @@ pub fn build_purchase_album(
                 .map(|track| PurchaseTrack {
                     id: track.id,
                     title: track.title.clone(),
+                    version: track.version.clone(),
                     track_number: track.track_number,
                     media_number: track.media_number,
                     duration: track.duration,
@@ -508,10 +547,16 @@ fn write_track_file(
     Ok(target.to_string_lossy().to_string())
 }
 
+/// PUBLIC so the download harness (`tests/purchase_download_harness.rs`) can
+/// drive the write + registry tail with real bytes without standing up a
+/// `QobuzClient`. That harness is the only thing that executes this code before
+/// a user does — Purchases cannot be smoke-tested here — so reachability from a
+/// test is worth the wider surface.
 #[allow(clippy::too_many_arguments)]
-fn write_and_register_track(
+pub fn write_and_register_track(
     db: &LibraryDatabase,
     track_id: u64,
+    album_id: Option<&str>,
     requested_format_id: u32,
     data: &[u8],
     artist_name: &str,
@@ -536,17 +581,327 @@ fn write_and_register_track(
     )?;
 
     // Addendum B.1/B.2: registry write AFTER the file is on disk, with the
-    // REQUESTED format_id (album_id None for single-track downloads). A registry
-    // failure here returns Err while the file stays on disk (orphaned).
+    // REQUESTED format_id. A registry failure here returns Err while the file
+    // stays on disk (orphaned) — the reference does the same and does not roll back.
+    //
+    // `album_id` is folded into THIS write rather than left to a follow-up call.
+    // The reference wrote `None` here and then backfilled the album id from the
+    // frontend (`markTrackDownloaded(...).catch(() => {})`, both in the album loop
+    // and in the single-track path). Collapsing the two writes reaches the same end
+    // state with one statement and no window in which the column is null — which
+    // matters now that the column has a reader (the album-downloaded rule below).
     db.mark_purchase_downloaded(
         track_id as i64,
-        None,
+        album_id,
         &file_path,
         requested_format_id as i64,
     )
     .map_err(|e| e.to_string())?;
 
     Ok(file_path)
+}
+
+// ─── Scope expansion §14: tags, covers, goodies ──────────────────────────────
+//
+// Everything in this block is ADDITIVE over the reference, which wrote no tags,
+// no cover and no goodies. Nothing here changes a request or the entitlement
+// boundary, and every part degrades to reference behaviour when it fails: the
+// audio file is the deliverable, and it is already on disk and registered before
+// any of this runs.
+
+/// Album-level facts a track download needs in order to tag itself, gathered
+/// once by the caller before the album loop rather than re-derived per track.
+///
+/// `cover_jpeg` is carried as bytes because it is embedded into EVERY track of
+/// the album; fetching it per track would issue one CDN request per file for a
+/// value that never changes.
+#[derive(Debug, Clone, Default)]
+pub struct PurchaseAlbumContext {
+    pub album_artist: String,
+    pub year: Option<u32>,
+    pub genre: Option<String>,
+    pub label: Option<String>,
+    pub cover_jpeg: Option<Vec<u8>>,
+}
+
+impl PurchaseAlbumContext {
+    /// Build the context from the catalog album the detail screen already holds.
+    /// The cover is fetched separately (it is I/O) and attached with
+    /// [`Self::with_cover`].
+    pub fn from_album(album: &Album) -> Self {
+        // The V2 nested `dates.original` wins over the flat
+        // `release_date_original` when present — the model says so on the field
+        // itself, and on a V2-shaped album the flat field is absent, which would
+        // silently drop the DATE tag from every track of that release.
+        let date = album
+            .dates
+            .as_ref()
+            .and_then(|d| d.original.as_deref())
+            .or(album.release_date_original.as_deref());
+
+        Self {
+            album_artist: album.artist.name.clone(),
+            year: parse_release_year(date),
+            genre: album.genre.as_ref().map(|g| g.name.clone()),
+            label: album.label.as_ref().map(|l| l.name.clone()),
+            cover_jpeg: None,
+        }
+    }
+
+    pub fn with_cover(mut self, cover_jpeg: Option<Vec<u8>>) -> Self {
+        self.cover_jpeg = cover_jpeg;
+        self
+    }
+}
+
+/// Pull the year out of a Qobuz `release_date_original` (`"2019-05-31"`).
+/// Anything that does not start with four digits yields `None` rather than a
+/// wrong year — a wrong DATE tag is worse than an absent one.
+pub fn parse_release_year(date: Option<&str>) -> Option<u32> {
+    let date = date?;
+    let head: String = date.chars().take(4).collect();
+    if head.len() == 4 && head.chars().all(|c| c.is_ascii_digit()) {
+        head.parse().ok()
+    } else {
+        None
+    }
+}
+
+/// The largest asset this will pull into memory. Covers are ~100 KB and booklets
+/// a few MB; the ceiling exists so a hostile or wrong `Content-Length` cannot
+/// decide our allocation.
+const MAX_ASSET_BYTES: usize = 32 * 1024 * 1024;
+
+/// How long a single asset may take, end to end.
+const ASSET_TIMEOUT_SECS: u64 = 60;
+
+/// Fetch an image or extra asset over HTTP, returning `None` on any failure.
+///
+/// Deliberately infallible-by-return: every caller treats a missing cover or
+/// goodie as "skip it", never as a download failure.
+///
+/// **This does NOT reuse `QobuzClient::download_audio`, and the difference is
+/// deliberate.** That function is tuned for one job — a multi-minute hi-res
+/// track from the Qobuz CDN — and three of its properties are wrong here:
+///   * it sizes its buffer with `Vec::with_capacity(content_length)`, i.e. from
+///     a number the remote chose. For a track that is a trusted CDN; for a
+///     goodie it is an arbitrary URL out of an album payload whose item shape has
+///     never been observed. A bogus length would attempt the allocation
+///     immediately, and an allocation failure ABORTS the process — on a machine
+///     this project's own build rules describe as hard-freezing under memory
+///     pressure;
+///   * it sets no total timeout, because a large track legitimately exceeds any
+///     fixed budget. A cover that never finishes would hang the album loop with
+///     nothing to cancel it;
+///   * it logs every fetch as "Downloading audio", which is simply wrong for a
+///     PDF and makes the logs lie during exactly the investigation that needs
+///     them.
+///
+/// So assets get their own client: a hard size ceiling, a total timeout, and a
+/// capacity hint that is `min(content_length, ceiling)`.
+pub async fn fetch_asset_bytes(url: &str) -> Option<Vec<u8>> {
+    use std::time::Duration;
+
+    let url = url.trim();
+    if url.is_empty() {
+        return None;
+    }
+
+    let client = match reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(ASSET_TIMEOUT_SECS))
+        .build()
+    {
+        Ok(client) => client,
+        Err(e) => {
+            log::warn!("[Purchases] could not build the asset client: {e}");
+            return None;
+        }
+    };
+
+    let response = match client.get(url).header("User-Agent", "Mozilla/5.0").send().await {
+        Ok(response) => response,
+        Err(e) => {
+            log::warn!("[Purchases] asset fetch failed ({url}): {e}");
+            return None;
+        }
+    };
+
+    if !response.status().is_success() {
+        log::warn!("[Purchases] asset fetch got HTTP {} ({url})", response.status());
+        return None;
+    }
+
+    // Refuse oversized assets on the ANNOUNCED length before reading a byte, and
+    // then again on the actual bytes, because the announcement is not binding.
+    if let Some(len) = response.content_length() {
+        if len as usize > MAX_ASSET_BYTES {
+            log::warn!("[Purchases] asset is {len} bytes, over the {MAX_ASSET_BYTES} cap ({url})");
+            return None;
+        }
+    }
+
+    let bytes = match response.bytes().await {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            log::warn!("[Purchases] asset body failed ({url}): {e}");
+            return None;
+        }
+    };
+
+    if bytes.is_empty() {
+        log::warn!("[Purchases] asset fetch returned 0 bytes: {url}");
+        return None;
+    }
+    if bytes.len() > MAX_ASSET_BYTES {
+        log::warn!(
+            "[Purchases] asset body was {} bytes despite its headers, over the cap ({url})",
+            bytes.len()
+        );
+        return None;
+    }
+
+    Some(bytes.to_vec())
+}
+
+/// Write `cover.jpg` / `back.jpg` beside the album's tracks (§14.2).
+///
+/// `album/get`'s `image` object carries exactly `small`, `thumbnail`, `large`
+/// and `back` — measured 2026-08-15; there is no `mega`, matching the earlier
+/// finding that Qobuz album art tops out around 600 px in practice. So `large`
+/// is the best available and `back` is a bonus nothing else in QBZ uses.
+///
+/// Best-effort by contract: a write failure is logged and swallowed.
+pub fn write_album_cover_files(
+    album_dir: &std::path::Path,
+    cover_jpeg: Option<&[u8]>,
+    back_jpeg: Option<&[u8]>,
+) {
+    for (bytes, name) in [(cover_jpeg, "cover.jpg"), (back_jpeg, "back.jpg")] {
+        let Some(bytes) = bytes.filter(|b| !b.is_empty()) else {
+            continue;
+        };
+        let path = album_dir.join(name);
+        if let Err(e) = std::fs::write(&path, bytes) {
+            log::warn!("[Purchases] failed to write {}: {e}", path.display());
+        }
+    }
+}
+
+/// Tag a file that has just been downloaded (§14.1). Never fails the download —
+/// it returns nothing and logs on error, so a caller cannot accidentally
+/// propagate it.
+pub fn tag_downloaded_file(file_path: &str, track: &Track, ctx: &PurchaseAlbumContext) {
+    let meta = PurchaseTagWrite {
+        title: track.title.clone(),
+        version: track.version.clone(),
+        // The track's OWN performer, straight from the API. This is the whole
+        // reason purchases do not reuse the editor's writer, whose artist rule
+        // reads the file — and a just-downloaded file has nothing to read.
+        artist: track
+            .performer
+            .as_ref()
+            .map(|a| a.name.clone())
+            .unwrap_or_else(|| ctx.album_artist.clone()),
+        // `"Singles"` matches what the PATH builder uses for a track with no
+        // album (`download_purchase_track`). Defaulting to an empty string here
+        // instead would file the track in a folder called `Singles` while
+        // stamping `ALBUM=` on it — the folder and the tag disagreeing about the
+        // same track.
+        album_title: track
+            .album
+            .as_ref()
+            .map(|a| a.title.clone())
+            .unwrap_or_else(|| "Singles".to_string()),
+        album_artist: ctx.album_artist.clone(),
+        track_number: Some(track.track_number),
+        disc_number: track.media_number,
+        year: ctx.year,
+        genre: ctx.genre.clone(),
+        label: ctx.label.clone(),
+        isrc: track.isrc.clone(),
+        composer: track.composer.as_ref().map(|c| c.name.clone()),
+        copyright: track.copyright.clone(),
+    };
+
+    if let Err(e) = write_purchase_tags(file_path, &meta, ctx.cover_jpeg.as_deref()) {
+        log::warn!("[Purchases] failed to tag {file_path}: {e}");
+    }
+}
+
+/// Download one album goodie (booklet PDF, video, …) into the album folder
+/// (§14.3).
+///
+/// The item shape is UNVERIFIED — goodies come back as an empty array on albums
+/// nobody owns, and we cannot capture a populated one without owning a purchase.
+/// So this reads the URL and name through the defensive accessors and gives up
+/// quietly on anything it cannot make sense of. Goodies are counted separately
+/// from track progress (a goodie is not a track) and a goodie failure never
+/// fails the album.
+pub async fn download_goodie(
+    goody: &qbz_models::Goody,
+    album_dir: &std::path::Path,
+) -> Option<String> {
+    let url = goody.best_url()?;
+
+    // Create the folder BEFORE spending the download. Doing it afterwards throws
+    // away however many megabytes were just fetched if the directory cannot be
+    // made.
+    if let Err(e) = std::fs::create_dir_all(album_dir) {
+        log::warn!("[Purchases] failed to create the goodie folder: {e}");
+        return None;
+    }
+
+    let path = goodie_target_path(album_dir, &goody.display_name(), url);
+    let bytes = fetch_asset_bytes(url).await?;
+
+    match std::fs::write(&path, &bytes) {
+        Ok(()) => Some(path.to_string_lossy().to_string()),
+        Err(e) => {
+            log::warn!("[Purchases] failed to write goodie {}: {e}", path.display());
+            None
+        }
+    }
+}
+
+/// Pick a safe, non-colliding on-disk name for a goodie. Pure, so the naming
+/// rules are testable without a download.
+///
+/// Three hazards, all handled here:
+///   * **the extension must be read from the PATH, not the whole URL.** Query and
+///     fragment are stripped FIRST. Doing it the other way round — splitting on
+///     the last `.` and then removing the query — turns a signed
+///     `…/booklet.pdf?sig=a.b3f` into a file called `Booklet.b3f`;
+///   * **a leading dot would hide the file.** `sanitize_filename` keeps ASCII
+///     `.`, so a goodie named `.notes` would land as a dotfile the user never
+///     sees. (It also maps `/` and `\` to `-`, which is what makes escaping the
+///     album folder impossible — that part needs no help here.)
+///   * **two goodies can sanitize to the same name.** Rather than let the second
+///     silently overwrite the first, later ones get a ` (2)`, ` (3)` suffix.
+fn goodie_target_path(album_dir: &std::path::Path, display_name: &str, url: &str) -> PathBuf {
+    let path_part = url.split(['?', '#']).next().unwrap_or(url);
+    let ext = path_part
+        .rsplit('/')
+        .next()
+        .and_then(|segment| segment.rsplit_once('.'))
+        .map(|(_, ext)| ext)
+        // Booklets are the only goodie kind ever observed, and a wrong extension
+        // is recoverable while a missing file is not.
+        .filter(|ext| !ext.is_empty() && ext.len() <= 5 && ext.chars().all(char::is_alphanumeric))
+        .unwrap_or("pdf");
+
+    let mut stem = sanitize_filename(display_name);
+    if stem.starts_with('.') {
+        stem.insert(0, '_');
+    }
+
+    let mut candidate = album_dir.join(format!("{stem}.{ext}"));
+    let mut n = 2;
+    while candidate.exists() && n < 100 {
+        candidate = album_dir.join(format!("{stem} ({n}).{ext}"));
+        n += 1;
+    }
+    candidate
 }
 
 /// The single canonical single-track download primitive (Slice 5).
@@ -581,12 +936,18 @@ pub async fn download_purchase_track(
     client: &QobuzClient,
     db: &LibraryDatabase,
     track_id: u64,
+    album_id: Option<&str>,
     format_id: u32,
     destination: &str,
     quality_dir: &str,
+    ctx: Option<&PurchaseAlbumContext>,
 ) -> Result<String, String> {
+    // UNSIGNED on the purchase path (contract §11-6): the vendor's own desktop
+    // client sends `/track/get` without a signature, and so did the reference.
+    // The entitlement proof is the signature on `getFileUrl` below, which is
+    // untouched.
     let track = client
-        .get_track(track_id)
+        .get_track_for_purchase(track_id)
         .await
         .map_err(|e| format!("Failed to fetch track {}: {}", track_id, e))?;
     let stream = client
@@ -607,9 +968,19 @@ pub async fn download_purchase_track(
         .map(|album| album.title.clone())
         .unwrap_or_else(|| "Singles".to_string());
 
-    write_and_register_track(
+    // Fall back to the album the TRACK itself reports. `album_id` is what makes
+    // an album's downloaded state answerable at all (§11-1), and the reference
+    // only ever populated it from the album loop — so a user who downloaded a
+    // release one track at a time produced rows the rule can never attribute,
+    // and their album stayed un-downloaded forever with no way to notice. The
+    // `/track/get` payload fetched two lines above already carries the id, so
+    // there is no reason for any path to write NULL.
+    let resolved_album_id = album_id.or_else(|| track.album.as_ref().map(|a| a.id.as_str()));
+
+    let file_path = write_and_register_track(
         db,
         track_id,
+        resolved_album_id,
         format_id,
         &data,
         &artist_name,
@@ -620,27 +991,51 @@ pub async fn download_purchase_track(
         stream.format_id,
         &stream.mime_type,
         destination,
-    )
+    )?;
+
+    // §14.1, additive: tag AFTER the file is on disk and registered, so the
+    // deliverable is already durable and a tagging failure can only cost tags.
+    // `None` reproduces reference behaviour exactly (no tags written at all),
+    // which is what the legacy Slint call site passes.
+    if let Some(ctx) = ctx {
+        tag_downloaded_file(&file_path, &track, ctx);
+    }
+
+    Ok(file_path)
 }
 
 /// Download-ONLY variant of the single-track primitive: identical CDN fetch +
 /// `.part`→rename pipeline as `download_purchase_track`, but it does **NOT**
 /// write the `downloaded_purchases` registry. Returns the final on-disk path.
 ///
-/// This exists for the ALBUM loop (`qbz-slint::execute_album_download`), which
-/// matches Svelte `executeAlbumDownload` (`purchaseDownloadStore.ts:130-147`):
-/// the album loop marks the track `'complete'` on download success FIRST, then
-/// performs the registry write as a SEPARATE best-effort step that SWALLOWS
-/// failure (`await markTrackDownloaded(...).catch(() => {})`). So a registry-write
-/// failure during an album download leaves the track `'complete'` (file on disk,
-/// just unregistered) — UNLIKE the single-track path, where a registry error
-/// propagates and the track shows `'failed'` (§B.1).
+/// **This function's original rationale was WRONG, and it is kept only because
+/// `qbz-slint` calls it.** New code must not use it. Verified against the
+/// reference on 2026-08-16:
 ///
-/// The caller is responsible for the best-effort registry write afterwards
-/// (`db.mark_purchase_downloaded(track_id, Some(album_id), &file_path,
-/// format_id)`), ignoring its error. Addendum B.2 (extension from RESPONSE,
-/// registry/qualityDir from REQUESTED), B.3 (silent overwrite), and B.5
-/// (restrictions ignored) all hold identically to `download_purchase_track`.
+/// The comment here used to claim that Svelte's `executeAlbumDownload` marks a
+/// track `'complete'` first and then writes the registry as a best-effort step
+/// that swallows failure, and therefore that an album-path registry failure
+/// leaves the track `'complete'` but unregistered. That misreads the reference.
+/// `executeAlbumDownload` awaits `downloadTrack`, which invokes
+/// `v2_purchases_download_track` — and THAT command writes the registry itself
+/// and propagates the error with `?` (`legacy_compat.rs:3019-3021`). So a
+/// registry failure throws out of `downloadTrack`, is caught by the loop's
+/// `catch`, and the track is marked **`'failed'`**, exactly as on the
+/// single-track path. The `markTrackDownloaded(...).catch(() => {})` that follows
+/// (`purchaseDownloadStore.ts:147`) is a SECOND, backfill-only write whose sole
+/// effect is filling the `album_id` column; its swallowed failure costs that
+/// column and nothing else.
+///
+/// Consequence: this "write the file, register separately" split has no basis in
+/// the reference, and the Slint controller's use of it is the one silent
+/// divergence in the purchases port — it leaves files on disk with no registry
+/// row while reporting success. The Qt controller uses
+/// `download_purchase_track` with `Some(album_id)` instead, which registers
+/// inside the same call and propagates.
+///
+/// Addendum B.2 (extension from RESPONSE, registry/qualityDir from REQUESTED),
+/// B.3 (silent overwrite), and B.5 (restrictions ignored) hold identically to
+/// `download_purchase_track`.
 pub async fn download_purchase_track_file_only(
     client: &QobuzClient,
     track_id: u64,
@@ -648,8 +1043,12 @@ pub async fn download_purchase_track_file_only(
     destination: &str,
     quality_dir: &str,
 ) -> Result<String, String> {
+    // UNSIGNED on the purchase path (contract §11-6): the vendor's own desktop
+    // client sends `/track/get` without a signature, and so did the reference.
+    // The entitlement proof is the signature on `getFileUrl` below, which is
+    // untouched.
     let track = client
-        .get_track(track_id)
+        .get_track_for_purchase(track_id)
         .await
         .map_err(|e| format!("Failed to fetch track {}: {}", track_id, e))?;
     let stream = client
@@ -878,6 +1277,21 @@ mod tests {
         }
     }
 
+    /// An album that declares how many tracks it has — the denominator the
+    /// registry-backed downloaded rule needs (§11-1).
+    fn album_with_tracks(id: &str, tracks_count: u32) -> PurchaseAlbum {
+        PurchaseAlbum {
+            id: id.to_string(),
+            tracks_count: Some(tracks_count),
+            ..Default::default()
+        }
+    }
+
+    /// Registry counts: purchase album id → DISTINCT downloaded track count.
+    fn reg(pairs: &[(&str, u32)]) -> HashMap<String, u32> {
+        pairs.iter().map(|(k, v)| (k.to_string(), *v)).collect()
+    }
+
     fn track_for_album(id: u64, album_id: &str) -> PurchaseTrack {
         PurchaseTrack {
             id,
@@ -903,7 +1317,7 @@ mod tests {
         let mut format_map: HashMap<i64, Vec<u32>> = HashMap::new();
         format_map.insert(10, vec![27, 6]);
 
-        apply_download_flags(&mut resp, &downloaded, &format_map);
+        apply_download_flags(&mut resp, &downloaded, &format_map, &HashMap::new());
 
         assert!(resp.tracks.items[0].downloaded);
         assert_eq!(resp.tracks.items[0].downloaded_format_ids, vec![27, 6]);
@@ -912,48 +1326,72 @@ mod tests {
         assert!(resp.tracks.items[1].downloaded_format_ids.is_empty());
     }
 
+    // The three album tests below were rewritten on 2026-08-16. They used to
+    // assert the reference's nested-tracks predicate (every track whose
+    // `album.id` matches must be in `downloaded_ids`). That predicate was
+    // replaced under contract §11-1 because the screen that uses it never
+    // receives a tracks page, so it could only ever answer `false`. The INTENT
+    // of each test is preserved — complete, partial, unknown — but the source of
+    // truth is now the local registry.
+
     #[test]
-    fn apply_flags_album_downloaded_when_all_nested_track_ids_present() {
-        // Every track whose album.id == "a1" is in dlIds → album downloaded.
+    fn apply_flags_album_downloaded_when_the_registry_covers_it() {
         let mut resp = response(
-            vec![album_id("a1")],
+            vec![album_with_tracks("a1", 2)],
             vec![track_for_album(10, "a1"), track_for_album(20, "a1")],
         );
-        apply_download_flags(&mut resp, &dl_ids(&[10, 20]), &HashMap::new());
+        apply_download_flags(
+            &mut resp,
+            &dl_ids(&[10, 20]),
+            &HashMap::new(),
+            &reg(&[("a1", 2)]),
+        );
         assert!(resp.albums.items[0].downloaded);
     }
 
     #[test]
     fn apply_flags_album_not_downloaded_when_partially_owned() {
-        // One of the two album tracks missing from dlIds → album NOT downloaded.
         let mut resp = response(
-            vec![album_id("a1")],
+            vec![album_with_tracks("a1", 2)],
             vec![track_for_album(10, "a1"), track_for_album(20, "a1")],
         );
-        apply_download_flags(&mut resp, &dl_ids(&[10]), &HashMap::new());
+        apply_download_flags(
+            &mut resp,
+            &dl_ids(&[10]),
+            &HashMap::new(),
+            &reg(&[("a1", 1)]),
+        );
         assert!(!resp.albums.items[0].downloaded);
     }
 
     #[test]
-    fn apply_flags_album_with_no_matching_tracks_is_not_downloaded() {
-        // No tracks reference this album (empty set rule) → false, never panic.
-        let mut resp = response(vec![album_id("a1")], vec![track_for_album(10, "other")]);
-        apply_download_flags(&mut resp, &dl_ids(&[10]), &HashMap::new());
+    fn apply_flags_album_absent_from_the_registry_is_not_downloaded() {
+        // Nothing of this album has been downloaded → false, never panic.
+        let mut resp = response(
+            vec![album_with_tracks("a1", 2)],
+            vec![track_for_album(10, "other")],
+        );
+        apply_download_flags(
+            &mut resp,
+            &dl_ids(&[10]),
+            &HashMap::new(),
+            &reg(&[("other", 1)]),
+        );
         assert!(!resp.albums.items[0].downloaded);
     }
 
     #[test]
     fn apply_flags_frontend_overrides_stale_backend_downloaded() {
-        // Backend wrongly set downloaded=true; frontend recomputes to false.
+        // Backend wrongly set downloaded=true; the annotation recomputes to false.
         let mut track = track_for_album(10, "a1");
         track.downloaded = true;
         track.downloaded_format_ids = vec![99];
-        let mut backend_true_album = album_id("a1");
+        let mut backend_true_album = album_with_tracks("a1", 1);
         backend_true_album.downloaded = true;
 
         let mut resp = response(vec![backend_true_album], vec![track]);
-        // dlIds empty → both must be overridden to false / cleared.
-        apply_download_flags(&mut resp, &dl_ids(&[]), &HashMap::new());
+        // Nothing downloaded → both must be overridden to false / cleared.
+        apply_download_flags(&mut resp, &dl_ids(&[]), &HashMap::new(), &HashMap::new());
         assert!(!resp.tracks.items[0].downloaded);
         assert!(resp.tracks.items[0].downloaded_format_ids.is_empty());
         assert!(!resp.albums.items[0].downloaded);
@@ -1152,6 +1590,7 @@ mod tests {
         let path = write_and_register_track(
             &db,
             /*track_id*/ 4242,
+            /*album_id*/ Some("alb-4242"),
             /*requested_format_id*/ 27,
             &data,
             "Miles Davis",
@@ -1190,6 +1629,7 @@ mod tests {
         let path = write_and_register_track(
             &db,
             1,
+            /*album_id*/ None,
             /*requested*/ 7,
             b"x",
             "A",
@@ -1216,14 +1656,16 @@ mod tests {
         let dest = tmp.path().join("dl");
 
         let first = write_and_register_track(
-            &db, 9, 6, b"old", "A", "Alb", "", 2, "Song", 6, "audio/flac", dest.to_str().unwrap(),
+            &db, 9, None, 6, b"old", "A", "Alb", "", 2, "Song", 6, "audio/flac",
+            dest.to_str().unwrap(),
         )
         .unwrap();
         assert_eq!(std::fs::read(&first).unwrap(), b"old");
 
         // Second write to the SAME deterministic path with new bytes overwrites.
         let second = write_and_register_track(
-            &db, 9, 6, b"new", "A", "Alb", "", 2, "Song", 6, "audio/flac", dest.to_str().unwrap(),
+            &db, 9, None, 6, b"new", "A", "Alb", "", 2, "Song", 6, "audio/flac",
+            dest.to_str().unwrap(),
         )
         .unwrap();
         assert_eq!(first, second, "same deterministic target path");
@@ -1256,7 +1698,8 @@ mod tests {
 
         let dest = tmp.path().join("downloads");
         let res = write_and_register_track(
-            &db, 77, 6, b"bytes", "A", "Alb", "", 1, "Song", 6, "audio/flac", dest.to_str().unwrap(),
+            &db, 77, None, 6, b"bytes", "A", "Alb", "", 1, "Song", 6, "audio/flac",
+            dest.to_str().unwrap(),
         );
 
         // Registry INSERT failed (no such table) → Err.
@@ -1265,5 +1708,337 @@ mod tests {
         let orphan = dest.join("A").join("Alb").join("01 - Song.flac");
         assert!(orphan.exists(), "file left on disk after registry failure (orphaned, B.1)");
         assert!(!orphan.with_extension("flac.part").exists(), "`.part` already renamed away");
+    }
+}
+
+// ─── §12-3: the path builder and sanitizer, against the inputs that break them ──
+#[cfg(test)]
+mod path_contract_tests {
+    use super::*;
+    use crate::metadata::sanitize_filename;
+
+    /// §4.5. `char::is_alphanumeric` is Unicode-aware, so accented Latin, Greek,
+    /// Cyrillic and CJK all SURVIVE sanitization — only non-ASCII
+    /// NON-alphanumerics (em dash, curly quotes, ™, ♭) become `-`.
+    ///
+    /// This matters far beyond aesthetics: the library-to-registry join is exact
+    /// `file_path` string equality, so an implementer who "knows" that non-ASCII
+    /// becomes dashes writes different paths for most non-English releases and
+    /// the gold purchase badge silently stops working for them.
+    #[test]
+    fn sanitize_keeps_unicode_alphanumerics() {
+        assert_eq!(sanitize_filename("Björk"), "Björk");
+        assert_eq!(sanitize_filename("Café Tacvba"), "Café Tacvba");
+        assert_eq!(sanitize_filename("Ελλάδα"), "Ελλάδα");
+        assert_eq!(sanitize_filename("Кино"), "Кино");
+        assert_eq!(sanitize_filename("日本語"), "日本語");
+    }
+
+    /// The other half of the same rule: non-ASCII punctuation does NOT survive.
+    #[test]
+    fn sanitize_replaces_non_ascii_punctuation() {
+        // Em dash and curly apostrophe are non-ASCII and non-alphanumeric.
+        assert_eq!(sanitize_filename("A—B"), "A-B");
+        assert_eq!(sanitize_filename("Don’t"), "Don-t");
+        // Consecutive dashes collapse, ends are trimmed.
+        assert_eq!(sanitize_filename("™™Hits™™"), "Hits");
+    }
+
+    /// Filesystem-invalid ASCII still becomes `-`; ASCII brackets do NOT.
+    ///
+    /// The bracket half is load-bearing and was mis-documented: the quality
+    /// folder suffix is literally `[FLAC][24-bit,96kHz]`, and `[` is ASCII, so
+    /// it is kept. "Fixing" the brackets would relocate every downloaded album.
+    #[test]
+    fn sanitize_keeps_ascii_brackets_but_replaces_path_separators() {
+        assert_eq!(sanitize_filename("[FLAC][24-bit,96kHz]"), "[FLAC][24-bit,96kHz]");
+        assert_eq!(sanitize_filename("AC/DC"), "AC-DC");
+        assert_eq!(sanitize_filename("a:b*c?d\"e<f>g|h"), "a-b-c-d-e-f-g-h");
+    }
+
+    /// §4.5 / §10-E: the 200 cap is in BYTES and `String::truncate` panics on a
+    /// non-char-boundary index — reachable exactly BECAUSE multibyte characters
+    /// survive the mapping above.
+    ///
+    /// Which characters actually crash is worth stating precisely, because the
+    /// obvious guess is wrong. 200 is even, so a run of TWO-byte characters
+    /// (`é`, `Ω`, Cyrillic) lands on a boundary and truncates fine. The crash
+    /// belongs to the THREE-byte class — CJK and most of the BMP beyond Latin
+    /// and Cyrillic — where 200 % 3 == 2 always lands mid-character. Measured,
+    /// not reasoned: `'本'` and `'日'` panic under the old code, the rest do not.
+    /// The two-byte cases are kept here anyway as regression cover for the
+    /// boundary walk itself.
+    #[test]
+    fn sanitize_does_not_panic_truncating_multibyte_titles() {
+        // '本' and '日' are the ones that panicked before the fix.
+        for ch in ['é', 'Ω', '本', 'ы', '日'] {
+            let long: String = std::iter::repeat(ch).take(400).collect();
+            let out = sanitize_filename(&long);
+            assert!(out.len() <= 200, "cap is bytes: {} bytes", out.len());
+            assert!(!out.is_empty());
+            // Still valid UTF-8 with no replacement damage: every char is the input char.
+            assert!(out.chars().all(|c| c == ch));
+        }
+    }
+
+    /// A byte cap must not silently become a char cap: pure ASCII is unchanged,
+    /// so already-downloaded libraries keep their paths.
+    #[test]
+    fn sanitize_ascii_cap_is_exactly_200() {
+        let long = "a".repeat(400);
+        assert_eq!(sanitize_filename(&long).len(), 200);
+    }
+
+    #[test]
+    fn sanitize_empty_result_falls_back() {
+        assert_eq!(sanitize_filename("—"), "track");
+        assert_eq!(sanitize_filename(""), "track");
+    }
+
+    /// §4.4: an EMPTY quality dir drops the album folder's trailing space too.
+    /// Copying the formula literally yields `"Album "` and a different directory.
+    #[test]
+    fn target_path_empty_quality_dir_has_no_trailing_space() {
+        let with_quality = target_path("/d", "A", "Album", "[FLAC][16-bit,44.1kHz]", 1, "T", "flac");
+        let without = target_path("/d", "A", "Album", "", 1, "T", "flac");
+
+        assert_eq!(
+            without,
+            std::path::PathBuf::from("/d/A/Album/01 - T.flac"),
+            "no trailing space when the quality dir is empty"
+        );
+        assert_eq!(
+            with_quality,
+            std::path::PathBuf::from("/d/A/Album [FLAC][16-bit,44.1kHz]/01 - T.flac")
+        );
+    }
+
+    /// §4.4, recorded as a KNOWN reference behaviour rather than a bug to fix:
+    /// `media_number` never reaches the path, so two discs of one release collide
+    /// on track number and `fs::rename` overwrites silently. Disc 2 track 1
+    /// lands on top of disc 1 track 1.
+    ///
+    /// This test exists to make the collision explicit and to fail loudly if
+    /// someone changes the scheme without deciding to — the scheme is what the
+    /// reference shipped and what existing users' folders look like.
+    #[test]
+    fn target_path_multi_disc_collides_on_track_number() {
+        let disc1 = target_path("/d", "A", "Album", "", 1, "Opening", "flac");
+        let disc2 = target_path("/d", "A", "Album", "", 1, "Opening", "flac");
+        assert_eq!(
+            disc1, disc2,
+            "documented reference behaviour: no media_number in the path"
+        );
+
+        // Different titles still collide on the NUMBER prefix only, not the name,
+        // so the practical collision needs the same title as well.
+        let other_title = target_path("/d", "A", "Album", "", 1, "Reprise", "flac");
+        assert_ne!(disc1, other_title);
+    }
+
+    /// Non-ASCII flows through the whole builder, not just the sanitizer.
+    #[test]
+    fn target_path_preserves_unicode_end_to_end() {
+        let p = target_path(
+            "/music",
+            "Café Tacvba",
+            "Ré",
+            "[FLAC][24-bit,96kHz]",
+            7,
+            "El Ciclón",
+            "flac",
+        );
+        assert_eq!(
+            p,
+            std::path::PathBuf::from("/music/Café Tacvba/Ré [FLAC][24-bit,96kHz]/07 - El Ciclón.flac")
+        );
+    }
+
+    /// §4.4: the extension comes from the SERVED format, the folder suffix from
+    /// the REQUESTED label — they are allowed to disagree, and do when Qobuz
+    /// downgrades a request.
+    #[test]
+    fn extension_follows_the_served_format_not_the_request() {
+        assert_eq!(purchase_extension(5, "audio/flac"), "mp3");
+        assert_eq!(purchase_extension(27, "audio/mpeg"), "mp3");
+        assert_eq!(purchase_extension(27, "audio/flac"), "flac");
+        assert_eq!(purchase_extension(6, ""), "flac");
+    }
+}
+
+// ─── §11-1: the album-downloaded rule, which no UI test could reach ────────────
+#[cfg(test)]
+mod album_downloaded_tests {
+    use super::*;
+
+    fn counts(pairs: &[(&str, u32)]) -> HashMap<String, u32> {
+        pairs.iter().map(|(k, v)| (k.to_string(), *v)).collect()
+    }
+
+    #[test]
+    fn album_is_downloaded_when_the_registry_covers_every_track() {
+        let c = counts(&[("alb1", 12)]);
+        assert!(album_downloaded_from_registry("alb1", Some(12), &c));
+        // Over-count (same track in two formats is already de-duplicated by the
+        // query, but a stale row must not un-mark the album).
+        assert!(album_downloaded_from_registry("alb1", Some(10), &c));
+    }
+
+    #[test]
+    fn partial_downloads_do_not_mark_the_album() {
+        let c = counts(&[("alb1", 11)]);
+        assert!(!album_downloaded_from_registry("alb1", Some(12), &c));
+    }
+
+    #[test]
+    fn unknown_album_is_not_downloaded() {
+        let c = counts(&[("alb1", 12)]);
+        assert!(!album_downloaded_from_registry("other", Some(12), &c));
+    }
+
+    /// No denominator means the answer is NO. Showing a green mark for an album
+    /// that might be half on disk is the worse failure.
+    #[test]
+    fn absent_or_zero_track_count_is_never_downloaded() {
+        let c = counts(&[("alb1", 99)]);
+        assert!(!album_downloaded_from_registry("alb1", None, &c));
+        assert!(!album_downloaded_from_registry("alb1", Some(0), &c));
+    }
+
+    /// The regression this rule exists to prevent: with the reference's
+    /// predicate, an albums-only response (which carries NO tracks page) pinned
+    /// every album to `false`. Here the registry answers instead.
+    #[test]
+    fn albums_only_response_can_still_report_downloaded() {
+        let mut response = PurchaseResponse {
+            albums: SearchResultsPage {
+                items: vec![PurchaseAlbum {
+                    id: "alb1".to_string(),
+                    tracks_count: Some(2),
+                    ..Default::default()
+                }],
+                total: 1,
+                offset: 0,
+                limit: 500,
+            },
+            // `?type=albums` omits the tracks key entirely — this is that shape.
+            tracks: SearchResultsPage {
+                items: vec![],
+                total: 0,
+                offset: 0,
+                limit: 0,
+            },
+        };
+
+        apply_download_flags(
+            &mut response,
+            &HashSet::new(),
+            &HashMap::new(),
+            &counts(&[("alb1", 2)]),
+        );
+
+        assert!(
+            response.albums.items[0].downloaded,
+            "the registry knows this album is complete even with no tracks page"
+        );
+    }
+
+    #[test]
+    fn track_flags_are_still_format_scoped_and_registry_driven() {
+        let mut response = PurchaseResponse {
+            albums: SearchResultsPage { items: vec![], total: 0, offset: 0, limit: 0 },
+            tracks: SearchResultsPage {
+                items: vec![
+                    PurchaseTrack { id: 10, ..Default::default() },
+                    PurchaseTrack { id: 11, ..Default::default() },
+                ],
+                total: 2,
+                offset: 0,
+                limit: 500,
+            },
+        };
+
+        let downloaded: HashSet<i64> = [10i64].into_iter().collect();
+        let mut formats: HashMap<i64, Vec<u32>> = HashMap::new();
+        formats.insert(10, vec![6, 27]);
+
+        apply_download_flags(&mut response, &downloaded, &formats, &HashMap::new());
+
+        assert!(response.tracks.items[0].downloaded);
+        assert_eq!(response.tracks.items[0].downloaded_format_ids, vec![6, 27]);
+        assert!(!response.tracks.items[1].downloaded);
+        assert!(response.tracks.items[1].downloaded_format_ids.is_empty());
+    }
+}
+
+// ─── §14: the scope-expansion helpers ──────────────────────────────────────────
+#[cfg(test)]
+mod scope_expansion_tests {
+    use super::*;
+
+    #[test]
+    fn release_year_parses_only_a_real_leading_year() {
+        assert_eq!(parse_release_year(Some("2019-05-31")), Some(2019));
+        assert_eq!(parse_release_year(Some("1971")), Some(1971));
+        // A wrong year is worse than no year.
+        assert_eq!(parse_release_year(Some("n/a")), None);
+        assert_eq!(parse_release_year(Some("")), None);
+        assert_eq!(parse_release_year(Some("19-05-31")), None);
+        assert_eq!(parse_release_year(None), None);
+    }
+
+    #[test]
+    fn goody_url_falls_back_through_every_known_spelling() {
+        use qbz_models::Goody;
+
+        let original = Goody {
+            original_url: "https://o/a.pdf".into(),
+            url: "https://u/a.pdf".into(),
+            ..goody_blank()
+        };
+        assert_eq!(original.best_url(), Some("https://o/a.pdf"));
+
+        let only_url = Goody { url: "https://u/a.pdf".into(), ..goody_blank() };
+        assert_eq!(only_url.best_url(), Some("https://u/a.pdf"));
+
+        let only_file_url = Goody {
+            file_url: Some("https://f/a.pdf".into()),
+            ..goody_blank()
+        };
+        assert_eq!(only_file_url.best_url(), Some("https://f/a.pdf"));
+
+        // Nothing usable → skip the item, never fail the album.
+        assert_eq!(goody_blank().best_url(), None);
+        let whitespace = Goody { url: "   ".into(), ..goody_blank() };
+        assert_eq!(whitespace.best_url(), None);
+    }
+
+    #[test]
+    fn goody_display_name_is_never_empty() {
+        use qbz_models::Goody;
+
+        let named = Goody { name: "Booklet".into(), ..goody_blank() };
+        assert_eq!(named.display_name(), "Booklet");
+
+        let described = Goody {
+            description: Some("Liner notes".into()),
+            ..goody_blank()
+        };
+        assert_eq!(described.display_name(), "Liner notes");
+
+        let bare = Goody { id: 42, ..goody_blank() };
+        assert_eq!(bare.display_name(), "Goody 42");
+    }
+
+    fn goody_blank() -> qbz_models::Goody {
+        qbz_models::Goody {
+            id: 0,
+            name: String::new(),
+            url: String::new(),
+            original_url: String::new(),
+            file_url: None,
+            file_format_id: None,
+            description: None,
+        }
     }
 }

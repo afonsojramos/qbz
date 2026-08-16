@@ -56,7 +56,8 @@ pub use models::*;
 pub use mount_info::{is_network_path, network_fs_label};
 pub use scan::{scan_with_progress, ScanEvent};
 pub use tag_writer::{
-    compute_track_artist_match, write_album_tags_to_files, AlbumTagWrite, TrackTagWrite,
+    compute_track_artist_match, write_album_tags_to_files, write_purchase_tags, AlbumTagWrite,
+    PurchaseTagWrite, TrackTagWrite,
 };
 pub use scanner::{LibraryScanner, ScanResult};
 pub use thumbnails::{

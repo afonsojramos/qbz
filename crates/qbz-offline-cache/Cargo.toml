@@ -36,3 +36,15 @@ log = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
+# The purchase download harness (`tests/purchase_download_harness.rs`) stands up
+# a real local HTTP server and drives the pipeline with real bytes. Integration
+# tests do not inherit `[dependencies]`, so the crates it names are repeated here.
+tokio = { workspace = true }
+lofty = "0.23"
+qbz-models = { path = "../qbz-models" }
+qbz-library = { path = "../qbz-library" }
+# reqwest is built with `rustls-tls-webpki-roots-no-provider`, so building ANY
+# client panics with "No provider set" until a process-level CryptoProvider is
+# installed. The app does that at startup (`qbz_app::ensure_crypto_provider`);
+# a test binary has no startup, so the harness installs it itself.
+rustls = { version = "0.23", features = ["aws_lc_rs"] }

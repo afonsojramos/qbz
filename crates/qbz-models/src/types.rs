@@ -572,8 +572,18 @@ pub struct Album {
     pub upc: Option<String>,
     /// Editorial description/review of the album
     pub description: Option<String>,
-    /// Album goodies (booklets, liner notes PDFs)
-    #[serde(default)]
+    /// Album goodies (booklets, liner notes PDFs, videos).
+    ///
+    /// LENIENT on purpose. `/album/get` is parsed with the strict structs — its
+    /// `Option<T>` fields carry no lenient wrapper, so ONE wrong-typed value
+    /// fails the entire album parse and the album simply will not open. That
+    /// risk is concentrated exactly here: on albums nobody owns, `goodies` comes
+    /// back an empty array, so its populated item shape has never been observed.
+    /// The vendor's own downloader gates goodie fetching behind purchases, which
+    /// is the hypothesis for why. We cannot capture a populated one without
+    /// owning a purchase, so the shape stays UNVERIFIED — and an unverified
+    /// shape must degrade to `None`, never take the album down with it.
+    #[serde(default, deserialize_with = "crate::purchase_serde::lenient_option")]
     pub goodies: Option<Vec<Goody>>,
     /// Editorial awards (Qobuzissime, Album of the Week, press accolades).
     #[serde(default)]
@@ -609,7 +619,14 @@ pub struct AlbumArtist {
     pub roles: Option<Vec<String>>,
 }
 
-/// A downloadable extra bundled with an album (e.g. PDF booklet)
+/// A downloadable extra bundled with an album (e.g. PDF booklet).
+///
+/// Every field defaults, so a missing key never fails an item, and the whole
+/// list is behind `lenient_option` on `Album::goodies`, so a surprising list or
+/// item shape degrades to "no goodies" rather than to "the album will not open".
+/// Read `url`/`name` through [`Goody::best_url`] / [`Goody::display_name`] rather
+/// than directly — the populated shape has never been observed and those helpers
+/// are where the fallbacks live.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Goody {
     #[serde(default)]
@@ -621,11 +638,49 @@ pub struct Goody {
     /// Original (full-size) URL
     #[serde(default)]
     pub original_url: String,
+    /// A third spelling seen in vendor payloads; kept as a fallback source for
+    /// [`Goody::best_url`] because we cannot confirm which key a real,
+    /// purchase-gated goodie uses.
+    #[serde(default)]
+    pub file_url: Option<String>,
     /// File format id (e.g. 21 for PDF)
     #[serde(default)]
     pub file_format_id: Option<u32>,
     #[serde(default)]
     pub description: Option<String>,
+}
+
+impl Goody {
+    /// The URL to fetch, trying every spelling we know of. `original_url` wins
+    /// because it is documented as the full-size asset; `url` is the common
+    /// shape; `file_url` is the unconfirmed third. Returns `None` when the item
+    /// carries no usable URL at all, which is the signal to skip it rather than
+    /// to fail anything.
+    pub fn best_url(&self) -> Option<&str> {
+        [
+            self.original_url.as_str(),
+            self.url.as_str(),
+            self.file_url.as_deref().unwrap_or(""),
+        ]
+        .into_iter()
+        .map(str::trim)
+        .find(|candidate| !candidate.is_empty())
+    }
+
+    /// A human label, falling back through the fields most likely to carry one
+    /// and finally to the id, so a goodie is never rendered nameless.
+    pub fn display_name(&self) -> String {
+        for candidate in [Some(self.name.as_str()), self.description.as_deref()]
+            .into_iter()
+            .flatten()
+        {
+            let trimmed = candidate.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+        format!("Goody {}", self.id)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1063,9 +1118,18 @@ pub struct PurchaseAlbum {
     pub tracks: Option<SearchResultsPage<PurchaseTrack>>,
 }
 
-/// A purchased track. NOTE: there is intentionally **no `version` field** — the
-/// purchases path never carries the track subtitle/edition (see source-of-truth
-/// §4.6). `streamable` defaults TRUE; `downloaded`/`downloaded_format_ids` are
+/// A purchased track.
+///
+/// It DOES carry a `version` (the track subtitle/edition). It deliberately did
+/// not, on the reasoning that the purchases endpoints never send one — which is
+/// true of the endpoints and beside the point for the screen: the album-detail
+/// view builds its tracks from the CATALOG album (`/album/get`), which does send
+/// `version`, and the reference's frontend renders
+/// `formatTrackTitle(title, version)`. Dropping the field is what made every
+/// purchased track lose its subtitle (issue #360); contract §10-C rules the
+/// field back in and `build_purchase_album` maps it across.
+///
+/// `streamable` defaults TRUE; `downloaded`/`downloaded_format_ids` are
 /// server-computed from the local registry; `media_number` is the disc number
 /// used for disc-grouping. `purchased_at` is unix epoch seconds.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -1074,6 +1138,14 @@ pub struct PurchaseTrack {
     pub id: u64,
     #[serde(default)]
     pub title: String,
+    /// Track subtitle ("Remastered", "Live at …"). The purchases endpoints do
+    /// not send it, but the catalog `/album/get` track does, and the detail
+    /// screen renders `formatTrackTitle(title, version)` — so `build_purchase_album`
+    /// carries it across. Tauri declared the same field on its frontend type and
+    /// never mapped it, which is why purchased track titles lost their version
+    /// (issue #360); this field is what closes that.
+    #[serde(default, deserialize_with = "crate::purchase_serde::lenient_option")]
+    pub version: Option<String>,
     #[serde(default)]
     pub track_number: u32,
     #[serde(default, deserialize_with = "crate::purchase_serde::lenient_option")]
@@ -1757,5 +1829,211 @@ mod tests {
             None
         );
         assert_eq!(qobuz_cover_at_px("/home/u/Music/cover.jpg", 600), None);
+    }
+}
+
+// ─── §12-4: purchase deserializers, one payload per missing optional field ────
+//
+// The whole point of this module is that the purchase path cannot be smoke-
+// tested: Qobuz Purchases is not sold in the owner's region, so the only
+// populated payloads anyone will ever see belong to end users. Every default
+// below is therefore asserted rather than assumed, and the ones that DIFFER
+// between two structs with the same field name get their own test, because that
+// is the trap most likely to invert a screen's behaviour silently.
+#[cfg(test)]
+mod purchase_deserializer_tests {
+    use super::*;
+
+    // ── §2.6: the `streamable` split ─────────────────────────────────────────
+
+    /// A purchases-list track defaults `streamable` to **true**.
+    #[test]
+    fn purchase_track_streamable_defaults_true() {
+        let t: PurchaseTrack = serde_json::from_str(r#"{"id":1,"title":"T"}"#).unwrap();
+        assert!(
+            t.streamable,
+            "PurchaseTrack.streamable defaults TRUE (serde_true)"
+        );
+    }
+
+    /// A CATALOG track — the one `/album/get` returns, which is what builds the
+    /// album-detail screen — defaults `streamable` to **false**.
+    ///
+    /// These two together are the trap: the detail screen gates click-to-play on
+    /// `streamable`, so a blanket "streamable defaults true" inverts that whole
+    /// screen's behaviour, and nobody here can click a purchased album to notice.
+    #[test]
+    fn catalog_track_streamable_defaults_false() {
+        let t: Track = serde_json::from_str(r#"{"id":1,"title":"T"}"#).unwrap();
+        assert!(
+            !t.streamable,
+            "catalog Track.streamable defaults FALSE — the detail screen depends on it"
+        );
+    }
+
+    /// `downloadable` drives three list behaviours (the hide-unavailable filter,
+    /// the album click gate, the unavailable marker), so its default is not
+    /// decoration: getting it wrong ships clickable unavailable albums.
+    #[test]
+    fn purchase_album_downloadable_defaults_true() {
+        let a: PurchaseAlbum = serde_json::from_str(r#"{"id":"x","title":"A"}"#).unwrap();
+        assert!(a.downloadable);
+        assert!(!a.downloaded, "downloaded is local-only, never from the wire");
+        assert!(a.tracks.is_none());
+        assert!(a.purchased_at.is_none());
+    }
+
+    // ── §2.5: leniency is load-bearing, and has a documented limit ────────────
+
+    /// Wrong-typed optional fields degrade to `None` instead of failing the item.
+    #[test]
+    fn wrong_typed_optionals_degrade_to_none() {
+        let json = r#"{
+            "id": 7, "title": "T",
+            "media_number": "not a number",
+            "maximum_sampling_rate": {"nope": true},
+            "maximum_bit_depth": [],
+            "album": 12345,
+            "purchased_at": "yesterday",
+            "version": []
+        }"#;
+        let t: PurchaseTrack = serde_json::from_str(json).unwrap();
+        assert_eq!(t.id, 7);
+        assert_eq!(t.media_number, None);
+        assert_eq!(t.maximum_sampling_rate, None);
+        assert_eq!(t.maximum_bit_depth, None);
+        assert!(t.album.is_none());
+        assert_eq!(t.purchased_at, None);
+        assert_eq!(t.version, None);
+    }
+
+    /// A malformed page collapses to an EMPTY page while its sibling still
+    /// parses. This is why a 401/403 body shaped like JSON and "you own nothing"
+    /// are indistinguishable — stated here so nobody later mistakes the empty
+    /// state for proof that the request succeeded.
+    #[test]
+    fn a_malformed_page_empties_itself_without_taking_its_sibling() {
+        let json = r#"{
+            "albums": "this is not a page",
+            "tracks": {"offset":0,"limit":50,"total":1,"items":[{"id":9,"title":"Nine"}]}
+        }"#;
+        let r: PurchaseResponse = serde_json::from_str(json).unwrap();
+        assert!(r.albums.items.is_empty());
+        assert_eq!(r.albums.total, 0);
+        assert_eq!(r.tracks.items.len(), 1);
+        assert_eq!(r.tracks.items[0].title, "Nine");
+    }
+
+    /// §2.5b-2, measured against a live account: `?type=albums` OMITS the
+    /// `tracks` key entirely — it is not present-and-zero. A port that models a
+    /// present-but-empty sibling page is modelling the wrong thing.
+    #[test]
+    fn typed_response_with_an_absent_sibling_page_parses() {
+        let json = r#"{
+            "albums": {"offset":0,"limit":500,"total":0,"items":[]},
+            "user": {"id": 1, "login": "someone"}
+        }"#;
+        let r: PurchaseResponse = serde_json::from_str(json).unwrap();
+        assert!(r.albums.items.is_empty());
+        assert!(r.tracks.items.is_empty(), "absent sibling defaults, never fails");
+        assert_eq!(r.tracks.total, 0);
+    }
+
+    /// §2.5b-3: the IDS envelope has a DIFFERENT page shape — `{total, items}`
+    /// with no `offset` and no `limit`. If those scalars were required, the
+    /// lenient page wrapper would swallow the failure and hand back an empty
+    /// page, and both tab counters would read 0 forever with nothing logged.
+    #[test]
+    fn ids_response_page_shape_preserves_total_without_offset_or_limit() {
+        let json = r#"{
+            "albums": {"total": 42, "items": [1,2,3]},
+            "tracks": {"total": 7, "items": []},
+            "user": {"id": 1, "login": "someone"}
+        }"#;
+        let r: PurchaseIdsResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(r.albums.total, 42, "the tab counter comes from here");
+        assert_eq!(r.tracks.total, 7);
+        assert_eq!(r.albums.offset, 0);
+        assert_eq!(r.albums.limit, 0);
+    }
+
+    /// The documented LIMIT of the leniency: a non-object top level still fails.
+    /// Recorded so the empty-list-on-everything claim is not overstated.
+    /// The documented LIMIT of the leniency — MEASURED 2026-08-16, and it is
+    /// wider than the contract stated.
+    ///
+    /// The contract (§2.5) says "a transport error, a non-JSON body and an
+    /// invalid top-level shape still FAIL". The first two hold. The third does
+    /// not, for ARRAYS: serde's derived `Deserialize` accepts a struct from a
+    /// JSON sequence as well as a map, and since both fields carry
+    /// `#[serde(default)]` plus a lenient page wrapper, `[]` — and even
+    /// `[1, 2]`, whose elements are consumed positionally and swallowed —
+    /// deserialize into a perfectly valid EMPTY response.
+    ///
+    /// What genuinely fails is a SCALAR top level: string, number, bool, null.
+    ///
+    /// This does not change the contract's conclusion (a JSON-shaped 401/403
+    /// body is an object, and it collapses to "you own nothing" exactly as
+    /// described) but it does widen the silent-empty surface by one shape, and
+    /// on a feature nobody can smoke-test the exact boundary is worth pinning
+    /// down rather than approximating.
+    #[test]
+    fn only_scalar_top_levels_fail_arrays_collapse_to_empty() {
+        for ok in ["{}", "[]", "[1,2]"] {
+            let parsed = serde_json::from_str::<PurchaseResponse>(ok)
+                .unwrap_or_else(|e| panic!("expected {ok} to collapse to empty, got {e}"));
+            assert!(parsed.albums.items.is_empty());
+            assert!(parsed.tracks.items.is_empty());
+        }
+
+        for err in ["\"nope\"", "7", "null", "true"] {
+            assert!(
+                serde_json::from_str::<PurchaseResponse>(err).is_err(),
+                "a scalar top level must still fail: {err}"
+            );
+        }
+    }
+
+    // ── §10-C: the version field that closes the latent #360 regression ───────
+
+    #[test]
+    fn purchase_track_carries_a_version_when_the_catalog_supplies_one() {
+        let t: PurchaseTrack =
+            serde_json::from_str(r#"{"id":1,"title":"Song","version":"Live"}"#).unwrap();
+        assert_eq!(t.version.as_deref(), Some("Live"));
+    }
+
+    // ── §14.3: goodies must never take an album down ──────────────────────────
+
+    /// The shape of a POPULATED goodies list has never been observed — it comes
+    /// back empty on every album nobody owns. So an unexpected shape has to
+    /// degrade to "no goodies", not to "this album will not open". `/album/get`
+    /// is parsed with the strict structs, which is exactly where that would bite.
+    #[test]
+    fn a_surprising_goodies_shape_does_not_fail_the_album() {
+        for weird in [
+            r#"{"id":"1","title":"A","goodies":"a string"}"#,
+            r#"{"id":"1","title":"A","goodies":{"unexpected":"object"}}"#,
+            r#"{"id":"1","title":"A","goodies":[{"totally":"different"}]}"#,
+            r#"{"id":"1","title":"A","goodies":7}"#,
+        ] {
+            let album: Album = serde_json::from_str(weird)
+                .unwrap_or_else(|e| panic!("goodies shape took the album down: {weird} → {e}"));
+            assert_eq!(album.title, "A");
+        }
+    }
+
+    #[test]
+    fn a_well_formed_goodie_parses_and_reads_defensively() {
+        let album: Album = serde_json::from_str(
+            r#"{"id":"1","title":"A","goodies":[
+                {"id":5,"name":"Booklet","url":"https://u/b.pdf","original_url":"https://o/b.pdf"}
+            ]}"#,
+        )
+        .unwrap();
+        let goodies = album.goodies.expect("goodies present");
+        assert_eq!(goodies.len(), 1);
+        assert_eq!(goodies[0].best_url(), Some("https://o/b.pdf"));
+        assert_eq!(goodies[0].display_name(), "Booklet");
     }
 }

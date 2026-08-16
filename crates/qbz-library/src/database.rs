@@ -5730,8 +5730,40 @@ impl LibraryDatabase {
         Ok(())
     }
 
-    /// Remove a downloaded purchase record (e.g. user deleted the file).
-    pub fn remove_downloaded_purchase(&self, track_id: i64) -> Result<(), LibraryError> {
+    /// Remove ONE downloaded purchase record (e.g. the user deleted the file).
+    ///
+    /// The table's primary key is `(track_id, format_id)` — the same purchased
+    /// track may be downloaded in several formats at once, and the whole
+    /// "downloaded" UI is format-scoped because of it. This delete is therefore
+    /// keyed by the full pair. It previously deleted by `track_id` alone, which
+    /// silently dropped the OTHER formats' rows; that never fired because nothing
+    /// called it, and it is corrected here before Qt gives it a caller. The stale
+    /// prune in `get_downloaded_purchase_track_ids` already deletes by the pair.
+    pub fn remove_downloaded_purchase(
+        &self,
+        track_id: i64,
+        format_id: i64,
+    ) -> Result<(), LibraryError> {
+        self.conn
+            .execute(
+                "DELETE FROM downloaded_purchases WHERE track_id = ?1 AND format_id = ?2",
+                rusqlite::params![track_id, format_id],
+            )
+            .map_err(|e| {
+                LibraryError::Database(format!("Failed to remove downloaded purchase: {}", e))
+            })?;
+        Ok(())
+    }
+
+    /// Remove EVERY downloaded record for a track, across all formats.
+    ///
+    /// Split out from `remove_downloaded_purchase` so that erasing all formats is
+    /// something a caller has to ask for by name rather than something it gets by
+    /// accident from an under-specified key.
+    pub fn remove_downloaded_purchase_all_formats(
+        &self,
+        track_id: i64,
+    ) -> Result<(), LibraryError> {
         self.conn
             .execute(
                 "DELETE FROM downloaded_purchases WHERE track_id = ?1",
@@ -5741,6 +5773,73 @@ impl LibraryDatabase {
                 LibraryError::Database(format!("Failed to remove downloaded purchase: {}", e))
             })?;
         Ok(())
+    }
+
+    /// Count DISTINCT downloaded tracks per purchased album id.
+    ///
+    /// This is what makes the Albums tab's "downloaded" mark and its
+    /// "Hide downloaded" filter work at all. The reference derived an album's
+    /// downloaded state from `album.tracks.items` in the purchases response, but
+    /// `getUserPurchases?type=albums` carries no nested tracks page (measured
+    /// against a live account, contract §2.5b), so that predicate is unsatisfiable
+    /// and the filter can never hide anything. The local registry is the only
+    /// place that knows, and `album_id` — written since the table was created and
+    /// never read until now — is the column that answers it. There is already an
+    /// index on it (`idx_downloaded_purchases_album`).
+    ///
+    /// Counting is format-AGNOSTIC (`DISTINCT track_id`), matching the reference's
+    /// list-level rule: a track downloaded in two formats counts once. Rows with a
+    /// NULL `album_id` are skipped — they cannot be attributed to an album.
+    ///
+    /// **Rows whose file no longer exists on disk are excluded**, the same way
+    /// `get_downloaded_purchase_track_ids` excludes them. Without that, an album
+    /// whose files the user deleted keeps reporting as downloaded — and, worse,
+    /// stays HIDDEN behind "Hide downloaded" — until some unrelated call happens
+    /// to prune first. Making the answer depend on which accessor ran last is the
+    /// kind of order-coupling nobody remembers six months later, so this query
+    /// stands on its own.
+    ///
+    /// Unlike the track-ids accessor this one only FILTERS; it does not delete.
+    /// Pruning is left to that accessor so there is exactly one writer, and a
+    /// read taken while a download is mid-flight cannot race it.
+    ///
+    /// The caller compares each count against the album's `tracks_count`; this
+    /// method deliberately does not decide "fully downloaded", because only the
+    /// caller holds the purchase metadata.
+    pub fn get_downloaded_purchase_album_counts(
+        &self,
+    ) -> Result<std::collections::HashMap<String, u32>, LibraryError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT album_id, track_id, file_path FROM downloaded_purchases
+                 WHERE album_id IS NOT NULL",
+            )
+            .map_err(|e| LibraryError::Database(format!("Failed to prepare statement: {}", e)))?;
+
+        let rows: Vec<(String, i64, String)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .map_err(|e| {
+                LibraryError::Database(format!("Failed to query purchase album counts: {}", e))
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| LibraryError::Database(format!("Failed to collect album counts: {}", e)))?;
+
+        // DISTINCT over (album_id, track_id) is done here rather than in SQL so
+        // the existence check can drop a row before it is counted.
+        let mut seen: std::collections::HashSet<(String, i64)> = std::collections::HashSet::new();
+        let mut counts: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+
+        for (album_id, track_id, file_path) in rows {
+            if !std::path::Path::new(&file_path).exists() {
+                continue;
+            }
+            if seen.insert((album_id.clone(), track_id)) {
+                *counts.entry(album_id).or_insert(0) += 1;
+            }
+        }
+
+        Ok(counts)
     }
 
     /// Get all downloaded track IDs for fast lookup (any format).
@@ -6243,6 +6342,133 @@ mod folder_tree_tests {
         t.disc_number = disc;
         t.track_number = track_no;
         db.insert_track(&t).unwrap();
+    }
+
+    // ── §12-5: the gold purchase badge, end to end ───────────────────────
+    //
+    // The badge chain is: a purchase download writes `downloaded_purchases`
+    // (file_path, format_id) → a later library scan inserts the same file →
+    // `insert_track` stamps `source = 'qobuz_purchase'` → the UI branches on
+    // that literal to draw the gold mark.
+    //
+    // The join is by EXACT `file_path` string equality, which is the whole
+    // reason these tests exist. Nobody here can smoke-test Purchases, and a
+    // path that differs by one character — a Unicode title sanitized
+    // differently, a trailing space from an empty quality folder — breaks the
+    // stamp silently: the file is there, the registry row is there, and the
+    // badge simply never appears with nothing logged.
+
+    #[test]
+    fn a_scanned_file_matching_the_registry_is_stamped_as_a_purchase() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = LibraryDatabase::open(&tmp.path().join("lib.db")).unwrap();
+
+        let path = "/music/Artist/Album [FLAC][24-bit,96kHz]/01 - Song.flac";
+        db.mark_purchase_downloaded(1001, Some("alb-1"), path, 7)
+            .unwrap();
+
+        insert_at(&db, path, Some(1), Some(1), "Song");
+
+        let source: String = db
+            .with_connection(|conn| {
+                conn.query_row(
+                    "SELECT source FROM local_tracks WHERE file_path = ?1",
+                    rusqlite::params![path],
+                    |row| row.get(0),
+                )
+                .map_err(|e| LibraryError::Database(e.to_string()))
+            })
+            .unwrap();
+
+        assert_eq!(
+            source, "qobuz_purchase",
+            "the scan must stamp a file that the purchase registry already knows"
+        );
+    }
+
+    #[test]
+    fn a_scanned_file_the_registry_does_not_know_stays_user() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = LibraryDatabase::open(&tmp.path().join("lib.db")).unwrap();
+
+        insert_at(&db, "/music/Other/Album/01 - Song.flac", Some(1), Some(1), "Song");
+
+        let source: String = db
+            .with_connection(|conn| {
+                conn.query_row(
+                    "SELECT source FROM local_tracks WHERE file_path = ?1",
+                    rusqlite::params!["/music/Other/Album/01 - Song.flac"],
+                    |row| row.get(0),
+                )
+                .map_err(|e| LibraryError::Database(e.to_string()))
+            })
+            .unwrap();
+
+        assert_eq!(source, "user");
+    }
+
+    /// The failure mode the exact-equality join actually has. A registry row and
+    /// a scanned file that differ by ONE character — here the trailing space an
+    /// implementer gets by formatting the album folder as `"{album} {quality}"`
+    /// with an empty quality — do not join, and the badge silently never appears.
+    ///
+    /// This is a characterisation test: it asserts the join is exact, so that if
+    /// anyone ever makes it fuzzy they have to come here and say so deliberately.
+    #[test]
+    fn a_one_character_path_difference_breaks_the_stamp_silently() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = LibraryDatabase::open(&tmp.path().join("lib.db")).unwrap();
+
+        db.mark_purchase_downloaded(1002, Some("alb-2"), "/music/A/Album /01 - S.flac", 6)
+            .unwrap();
+        insert_at(&db, "/music/A/Album/01 - S.flac", Some(1), Some(1), "S");
+
+        let source: String = db
+            .with_connection(|conn| {
+                conn.query_row(
+                    "SELECT source FROM local_tracks WHERE file_path = ?1",
+                    rusqlite::params!["/music/A/Album/01 - S.flac"],
+                    |row| row.get(0),
+                )
+                .map_err(|e| LibraryError::Database(e.to_string()))
+            })
+            .unwrap();
+
+        assert_eq!(
+            source, "user",
+            "documented: the join is exact, so a one-character path drift loses the badge"
+        );
+    }
+
+    /// A re-scan re-stamps. The contract records that if a scan runs BEFORE the
+    /// registry write the row is stamped `'user'` until the next scan of that
+    /// folder — this proves the "until" half, which is why no repair migration
+    /// or re-stamp UI is owed.
+    #[test]
+    fn a_rescan_after_the_registry_write_upgrades_the_stamp() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = LibraryDatabase::open(&tmp.path().join("lib.db")).unwrap();
+        let path = "/music/A/Album/01 - Late.flac";
+
+        // Scan first: nothing in the registry yet.
+        insert_at(&db, path, Some(1), Some(1), "Late");
+
+        // The download registers afterwards, then the folder is scanned again.
+        db.mark_purchase_downloaded(1003, Some("alb-3"), path, 6).unwrap();
+        insert_at(&db, path, Some(1), Some(1), "Late");
+
+        let source: String = db
+            .with_connection(|conn| {
+                conn.query_row(
+                    "SELECT source FROM local_tracks WHERE file_path = ?1",
+                    rusqlite::params![path],
+                    |row| row.get(0),
+                )
+                .map_err(|e| LibraryError::Database(e.to_string()))
+            })
+            .unwrap();
+
+        assert_eq!(source, "qobuz_purchase", "the next scan re-stamps it");
     }
 
     /// Insert a row directly with `source = 'qobuz_download'`.

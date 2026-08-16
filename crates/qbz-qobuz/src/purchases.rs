@@ -32,11 +32,126 @@ use super::client::QobuzClient;
 use super::endpoints::{self, paths};
 use super::error::{ApiError, Result};
 use qbz_models::{
-    PurchaseAlbum, PurchaseIdsResponse, PurchaseResponse, PurchaseTrack, SearchResultsPage,
-    StreamRestriction, StreamUrl,
+    Album, PurchaseAlbum, PurchaseIdsResponse, PurchaseResponse, PurchaseTrack, SearchResultsPage,
+    StreamRestriction, StreamUrl, Track,
 };
 
+/// What the purchases pagination loop should do after receiving a page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PurchasePageStep {
+    /// Stop; every item has been collected (or the page came back empty).
+    Stop,
+    /// Request the next page starting at this offset.
+    Continue { next_offset: u32 },
+}
+
+/// The purchases pagination loop's terminating condition, extracted so it can be
+/// asserted rather than merely inspected (contract §12-2).
+///
+/// Verbatim from the reference (`src-tauri/src/api/client.rs:1694-1729`): `total`
+/// is captured only on the FIRST page, and the loop stops when the page came back
+/// empty or when `offset + got >= total`.
+///
+/// The case worth naming is `total == 0` with a non-empty page: `0 + got >= 0`
+/// holds immediately, so the loop stops after ONE page. That is not a
+/// "truncation at 500" — the caller then reports that page's actual length as the
+/// total. The behaviour is replicated because the reference shipped it and the
+/// endpoint is untestable from here; the caller logs a warning so the symptom is
+/// diagnosable if it ever bites.
+pub fn purchase_page_step(offset: u32, got: u32, total: u32) -> PurchasePageStep {
+    if got == 0 || offset.saturating_add(got) >= total {
+        PurchasePageStep::Stop
+    } else {
+        PurchasePageStep::Continue {
+            next_offset: offset + got,
+        }
+    }
+}
+
 impl QobuzClient {
+    /// `/album/get` for the PURCHASE path — header-auth, **UNSIGNED**.
+    ///
+    /// The general `get_album` signs this call. Signing evidently works (QBZ
+    /// browses the catalogue with it every day), so this is not a bug being
+    /// fixed — but on the purchase path it is a variable nobody can test, and it
+    /// diverges from both implementations known to work there. Neither the
+    /// reference (`src-tauri/src/api/client.rs:641`) nor Qobuz's own Electron
+    /// desktop client sign it: in the vendor bundle the request helper takes a
+    /// SIGN flag, and `album/get`, `track/get` and `purchase/getUserPurchases`
+    /// all pass it false while `track/getFileUrl` passes it true (contract
+    /// §2.1b). So the purchase path matches the vendor exactly.
+    ///
+    /// Unsigned is NOT anonymous: measured 2026-08-15, `/album/get` with
+    /// `X-App-Id` alone returns **401**. The user token is required, which is
+    /// what `authenticated_headers()` supplies.
+    ///
+    /// Status IS hard-checked here, unlike the two purchases list endpoints. That
+    /// asymmetry is the reference's (`client.rs:653-669`) and it is load-bearing:
+    /// this response is parsed with the STRICT `Album`/`Track` structs, whose
+    /// optional fields carry no lenient wrapper, so one wrong-typed value fails
+    /// the whole album rather than degrading to an empty page.
+    pub async fn get_album_for_purchase(&self, album_id: &str) -> Result<Album> {
+        let url = endpoints::build_url(paths::ALBUM_GET);
+        let http_response = self
+            .http()?
+            .get(&url)
+            .headers(self.authenticated_headers().await?)
+            .query(&[("album_id", album_id)])
+            .send()
+            .await?;
+        let status = http_response.status();
+        log::debug!("[Purchases] get_album_for_purchase({album_id}) status={status}");
+
+        if status == reqwest::StatusCode::NOT_FOUND {
+            return Err(ApiError::ApiResponse(format!(
+                "Album {album_id} not found (404)"
+            )));
+        }
+        if !status.is_success() {
+            return Err(ApiError::ApiResponse(format!(
+                "get_album_for_purchase({album_id}) status {status}"
+            )));
+        }
+
+        let response: Value = http_response.json().await?;
+        Ok(serde_json::from_value(response)?)
+    }
+
+    /// `/track/get` for the PURCHASE path — header-auth, **UNSIGNED**.
+    ///
+    /// Same rationale as `get_album_for_purchase`. This call runs before EVERY
+    /// purchase download (`legacy_compat.rs:2659` calls `get_track` immediately
+    /// before `get_track_file_url_by_format`) and supplies the artist, album
+    /// title and track number that build the on-disk path — and, since the scope
+    /// expansion, the metadata written into the file's tags.
+    ///
+    /// It carries no entitlement. `/track/getFileUrl` is where the right to the
+    /// file is proved, by its signature, and that call is untouched.
+    pub async fn get_track_for_purchase(&self, track_id: u64) -> Result<Track> {
+        let url = endpoints::build_url(paths::TRACK_GET);
+        let http_response = self
+            .http()?
+            .get(&url)
+            .headers(self.authenticated_headers().await?)
+            .query(&[("track_id", track_id.to_string())])
+            .send()
+            .await?;
+        let status = http_response.status();
+        log::debug!("[Purchases] get_track_for_purchase({track_id}) status={status}");
+
+        if status == reqwest::StatusCode::NOT_FOUND {
+            return Err(ApiError::TrackUnavailable(track_id));
+        }
+        if !status.is_success() {
+            return Err(ApiError::ApiResponse(format!(
+                "get_track_for_purchase({track_id}) status {status}"
+            )));
+        }
+
+        let response: Value = http_response.json().await?;
+        Ok(serde_json::from_value(response)?)
+    }
+
     /// Get one purchases page from Qobuz, optionally constrained by purchase
     /// type (`"albums"` / `"tracks"`; omitted if `None`).
     ///
@@ -200,6 +315,18 @@ impl QobuzClient {
         &self,
         purchase_type: &str,
     ) -> Result<PurchaseResponse> {
+        // Pre-flight validation (contract §8-D2). The reference validates the
+        // type BEFORE any I/O (`legacy_compat.rs:2773-2778`); this loop used to
+        // fetch a page first and only reject inside the match arm, so a bogus
+        // type issued a live authenticated GET before failing. Same error, no
+        // request.
+        if purchase_type != "albums" && purchase_type != "tracks" {
+            return Err(ApiError::ApiResponse(format!(
+                "Unsupported purchase type: {}",
+                purchase_type
+            )));
+        }
+
         let page_limit = 500u32;
         let mut offset = 0u32;
 
@@ -219,10 +346,10 @@ impl QobuzClient {
                     }
                     let got = page.albums.items.len() as u32;
                     all_albums.extend(page.albums.items);
-                    if got == 0 || offset + got >= total {
-                        break;
+                    match purchase_page_step(offset, got, total) {
+                        PurchasePageStep::Stop => break,
+                        PurchasePageStep::Continue { next_offset } => offset = next_offset,
                     }
-                    offset += got;
                 }
                 "tracks" => {
                     if offset == 0 {
@@ -230,29 +357,39 @@ impl QobuzClient {
                     }
                     let got = page.tracks.items.len() as u32;
                     all_tracks.extend(page.tracks.items);
-                    if got == 0 || offset + got >= total {
-                        break;
+                    match purchase_page_step(offset, got, total) {
+                        PurchasePageStep::Stop => break,
+                        PurchasePageStep::Continue { next_offset } => offset = next_offset,
                     }
-                    offset += got;
                 }
-                _ => {
-                    return Err(ApiError::ApiResponse(format!(
-                        "Unsupported purchase type: {}",
-                        purchase_type
-                    )));
-                }
+                // Unreachable: the type is validated before the first request.
+                // Kept so the match stays exhaustive without an unreachable!().
+                _ => break,
             }
         }
 
-        let final_total = if total == 0 {
-            if purchase_type == "albums" {
-                all_albums.len() as u32
-            } else {
-                all_tracks.len() as u32
-            }
+        // §2.3: a ZERO server total terminates the loop after a single page,
+        // because `offset + got >= total` holds immediately. The returned total
+        // then falls back to the accumulated length — which is THAT PAGE's actual
+        // length, not a 500-item truncation. Replicated verbatim because the
+        // reference shipped it, but it is worth a log line: a user whose library
+        // silently stops at one page has no other signal, and without this the
+        // symptom gets misdiagnosed as "truncated at 500".
+        let accumulated = if purchase_type == "albums" {
+            all_albums.len() as u32
         } else {
-            total
+            all_tracks.len() as u32
         };
+        if total == 0 && accumulated > 0 {
+            log::warn!(
+                "[Purchases] {purchase_type}: server reported total=0 while returning \
+                 {accumulated} item(s); pagination stopped after the first page. \
+                 Reporting total={accumulated}. If the real library is larger, this \
+                 is where the items were lost."
+            );
+        }
+
+        let final_total = if total == 0 { accumulated } else { total };
 
         Ok(PurchaseResponse {
             albums: SearchResultsPage {
@@ -481,5 +618,135 @@ impl QobuzClient {
 
         log::info!("[Purchases] Downloaded {} bytes", all_data.len());
         Ok(all_data)
+    }
+}
+
+#[cfg(test)]
+mod purchase_contract_tests {
+    use super::*;
+    use crate::auth::{generate_signature, sign_get_file_url};
+
+    // ── §12-1: the requests must be byte-identical to the reference ──────────
+    //
+    // These assert the SIGNATURE PREIMAGE and the endpoint paths, not just that
+    // "a signature is produced". The purchase path is the one feature nobody on
+    // this team can smoke-test — Qobuz Purchases is not sold in the owner's
+    // region — so inspection is not evidence and these tests are the only thing
+    // standing between a wrong request and a shipped, invisible failure.
+
+    /// The preimage has NO separators anywhere, and the intent baked into it is
+    /// `stream` — not `download`, which is what the inferred OpenAPI lists.
+    /// Both facts come from the implementation that demonstrably worked, and
+    /// from Qobuz's own desktop client, which signs this call and only this call.
+    #[test]
+    fn file_url_signature_preimage_is_exact() {
+        let track_id = 123_456_u64;
+        let format_id = 27_u32;
+        let timestamp = 1_700_000_000_u64;
+        let secret = "0123456789abcdef0123456789abcdef";
+
+        // Assembled here by hand, character for character, from the contract:
+        //   trackgetFileUrl + format_id{fid} + intentstream + track_id{tid}
+        //   + {timestamp} + {secret}
+        let expected_preimage =
+            format!("trackgetFileUrlformat_id{format_id}intentstreamtrack_id{track_id}{timestamp}{secret}");
+        let expected = {
+            use md5::{Digest, Md5};
+            let mut hasher = Md5::new();
+            hasher.update(expected_preimage.as_bytes());
+            format!("{:x}", hasher.finalize())
+        };
+
+        assert_eq!(
+            sign_get_file_url(track_id, format_id, timestamp, secret),
+            expected,
+            "the getFileUrl signature preimage drifted; every purchase download \
+             will fail auth and nobody here can smoke-test it"
+        );
+    }
+
+    /// Guard the two halves of the preimage that a well-meaning edit would
+    /// "fix": the intent, and the absence of separators.
+    #[test]
+    fn file_url_signature_rejects_download_intent_and_separators() {
+        let (tid, fid, ts, secret) = (99_u64, 6_u32, 1_u64, "s");
+        let actual = sign_get_file_url(tid, fid, ts, secret);
+
+        let with_download_intent = generate_signature(
+            "trackgetFileUrl",
+            &format!("format_id{fid}intentdownloadtrack_id{tid}"),
+            ts,
+            secret,
+        );
+        assert_ne!(
+            actual, with_download_intent,
+            "intent must stay `stream`; the OpenAPI's `download` is not what shipped"
+        );
+
+        let with_separators = generate_signature(
+            "trackgetFileUrl",
+            &format!("format_id{fid}&intentstream&track_id{tid}"),
+            ts,
+            secret,
+        );
+        assert_ne!(actual, with_separators, "the preimage carries no separators");
+    }
+
+    /// The endpoint constants themselves — a typo here fails silently into an
+    /// empty purchases list, because the list endpoints never check status.
+    #[test]
+    fn purchase_endpoint_paths_are_the_reference_paths() {
+        assert_eq!(paths::PURCHASE_GET_USER_PURCHASES, "/purchase/getUserPurchases");
+        assert_eq!(
+            paths::PURCHASE_GET_USER_PURCHASES_IDS,
+            "/purchase/getUserPurchasesIds"
+        );
+        assert_eq!(paths::ALBUM_GET, "/album/get");
+        assert_eq!(paths::TRACK_GET, "/track/get");
+    }
+
+    // ── §12-2: the pagination loop's terminating condition ───────────────────
+
+    #[test]
+    fn pagination_stops_on_an_empty_page() {
+        assert_eq!(purchase_page_step(0, 0, 1_000), PurchasePageStep::Stop);
+        // Even mid-walk, and even when the server claims more remain.
+        assert_eq!(purchase_page_step(500, 0, 1_000), PurchasePageStep::Stop);
+    }
+
+    #[test]
+    fn pagination_walks_while_items_remain() {
+        assert_eq!(
+            purchase_page_step(0, 500, 1_200),
+            PurchasePageStep::Continue { next_offset: 500 }
+        );
+        assert_eq!(
+            purchase_page_step(500, 500, 1_200),
+            PurchasePageStep::Continue { next_offset: 1_000 }
+        );
+        // Final page: 1000 + 200 >= 1200.
+        assert_eq!(purchase_page_step(1_000, 200, 1_200), PurchasePageStep::Stop);
+    }
+
+    /// THE case from §2.3. A zero total stops the walk after one page even
+    /// though that page was full. The caller then reports the accumulated
+    /// length, so the symptom is "my library is exactly one page long", not
+    /// "truncated at 500" — a distinction that has to survive in a test because
+    /// it cannot be reproduced against a live account here.
+    #[test]
+    fn pagination_zero_total_stops_after_one_page_even_when_full() {
+        assert_eq!(purchase_page_step(0, 500, 0), PurchasePageStep::Stop);
+        assert_eq!(purchase_page_step(0, 1, 0), PurchasePageStep::Stop);
+    }
+
+    /// Exact-boundary and overshoot: `>=`, never `>`.
+    #[test]
+    fn pagination_boundary_is_inclusive() {
+        assert_eq!(purchase_page_step(0, 500, 500), PurchasePageStep::Stop);
+        assert_eq!(purchase_page_step(0, 501, 500), PurchasePageStep::Stop);
+        assert_eq!(
+            purchase_page_step(0, 499, 500),
+            PurchasePageStep::Continue { next_offset: 499 }
+        );
     }
 }

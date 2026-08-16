@@ -1081,13 +1081,20 @@ pub fn start_track_download(
                     });
                     return;
                 };
+                // `None`: this call site is unchanged in behaviour — the primitive
+                // used to hard-code `None` for the album id. It became a parameter
+                // so the Qt controller can register the album a track came from.
                 let status = match purchases_service::download_purchase_track(
                     &client,
                     &db,
                     track_id,
+                    None,
                     format_id,
                     &destination,
                     &quality_dir,
+                    // No album context: this legacy path writes no tags, exactly
+                    // as the reference did.
+                    None,
                 )
                 .await
                 {
