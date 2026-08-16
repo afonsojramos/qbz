@@ -3098,6 +3098,24 @@ impl Default for QobuzClient {
 mod tests {
     use super::*;
 
+    /// Install the process-level rustls `CryptoProvider`, once.
+    ///
+    /// UNRELATED DRIVE-BY FIX, 2026-08-16: the two gate tests below were failing
+    /// on every run — `reqwest` is built with `rustls-tls-webpki-roots-no-provider`,
+    /// so BUILDING a client panics with "No provider set" until a provider is
+    /// installed, and a test binary has no application startup to do it. The
+    /// application installs it via `qbz_app::ensure_crypto_provider`, but this
+    /// crate sits below `qbz-app` and cannot call that, so it installs its own.
+    /// `install_default` is idempotent and returns `Err` if someone else won the
+    /// race, which is why the result is discarded.
+    fn ensure_crypto_provider() {
+        use std::sync::Once;
+        static INIT: Once = Once::new();
+        INIT.call_once(|| {
+            let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        });
+    }
+
     /// With the offline gate closed, any public API method must fail fast
     /// with the typed `ApiError::OfflineMode` — no network access, no
     /// connect timeout. The gate is process-global and tests run in
@@ -3105,6 +3123,7 @@ mod tests {
     /// drop guard reopens the gate even if the test panics.
     #[tokio::test]
     async fn offline_gate_fails_fast_with_typed_error() {
+        ensure_crypto_provider();
         let _lock = crate::offline_gate::test_lock()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -3138,6 +3157,7 @@ mod tests {
     /// and without touching the network.
     #[tokio::test]
     async fn offline_gate_exempts_login_methods() {
+        ensure_crypto_provider();
         let _lock = crate::offline_gate::test_lock()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());

@@ -44,3 +44,7 @@ anyhow = { workspace = true }
 # Used only by examples/lyrics_probe.rs (read-only live probe of the lyrics
 # endpoint): loads the saved OAuth token / credentials for login.
 qbz-credentials = { path = "../qbz-credentials" }
+# The offline-gate tests build a reqwest client, which panics with
+# "No provider set" until a process-level rustls CryptoProvider exists. The app
+# installs one at startup; a test binary has to do it itself.
+rustls = { version = "0.23", features = ["aws_lc_rs"] }
