@@ -366,6 +366,12 @@ ApplicationWindow {
         // startup, an auto-show, a "new version" badge) would be a silent
         // no-op. Booting it here keeps it in the same contract as the other 34.
         QbzAbout.boot()
+        // Purchases. Unlike QbzAbout above, this one has NO self-registering
+        // invokable to fall back on: `purchases_bridge::ui()` is a silent no-op
+        // until the Qt-thread hop exists, so without this line every publish is
+        // dropped and both purchase screens stay permanently empty with nothing
+        // logged. Position is free (only QbzSession and QbzQConnect are ordered).
+        QbzPurchases.boot()
 
         // Seed the maximized latch ONCE, imperatively — see its declaration for
         // why it must not be a binding on the bridge property.

@@ -3872,6 +3872,9 @@ msgstr "No se pudo iniciar la descarga. Inténtalo de nuevo."
 msgid "No downloadable formats available"
 msgstr "No hay formatos disponibles para descargar"
 
+msgid "Download goodies"
+msgstr "Descargar extras"
+
 # Playlist "Suggested Songs" section (T8)
 msgid "Suggested songs"
 msgstr "Canciones sugeridas"

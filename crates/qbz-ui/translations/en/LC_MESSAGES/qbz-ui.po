@@ -804,3 +804,7 @@ msgstr "This musician appears in album credits."
 
 msgid "Tunnel Flow"
 msgstr "Tunnel Flow"
+
+# --- Purchases (Slice 13, Qt port) ---
+msgid "Download goodies"
+msgstr "Download goodies"

@@ -3872,6 +3872,9 @@ msgstr "Échec du démarrage du téléchargement. Veuillez réessayer."
 msgid "No downloadable formats available"
 msgstr "Aucun format téléchargeable disponible"
 
+msgid "Download goodies"
+msgstr "Télécharger les goodies"
+
 # Playlist "Suggested Songs" section (T8)
 msgid "Suggested songs"
 msgstr "Titres suggérés"

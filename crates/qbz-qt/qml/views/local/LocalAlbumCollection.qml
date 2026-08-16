@@ -248,7 +248,17 @@ Item {
                                 // BADGE is what the flag switches (blanking
                                 // `source` would also silence the card's
                                 // source-aware menu gates).
-                                source: cardCell.modelData.source
+                                //
+                                // `sourceRaw` FIRST (contract §D.1). It carries
+                                // `qobuz_purchase` and nothing else; `source`
+                                // folds that into "offline" so the source chips
+                                // keep filtering it, which means the card's gold
+                                // purchase chip (AlbumCard.qml:588) only ever
+                                // fires off the raw word. All FOUR badge sites
+                                // do this — grid and list must not disagree
+                                // about the same album.
+                                source: cardCell.modelData.sourceRaw
+                                    || cardCell.modelData.source
                                 showSourceBadge: root.showSource
                                 // SELECT MODE IS THE CARD'S (AlbumCard's
                                 // `selectMode`/`selected`/`selectToggled`, the

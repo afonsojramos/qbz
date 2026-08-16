@@ -359,7 +359,7 @@ fn main() {
             // (myqbz_qt.rs, blacklist_qt.rs, toast_qt.rs, …) are plain
             // modules and must NOT be listed — only files that declare a
             // #[cxx_qt::bridge] mod belong in this array.
-            rust_files: &["src/bridge.rs", "src/session_bridge.rs", "src/shell_bridge.rs", "src/player_bridge.rs", "src/queue_bridge.rs", "src/home_bridge.rs", "src/viz_bridge.rs", "src/immersive_bridge.rs", "src/shader_scene_bridge.rs", "src/suggestions_bridge.rs", "src/hotkeys_bridge.rs", "src/search_bridge.rs", "src/local_bridge.rs", "src/library_bridge.rs", "src/album_bridge.rs", "src/artist_bridge.rs", "src/scene_bridge.rs", "src/musician_bridge.rs", "src/lyrics_qt.rs", "src/icon_tint_qt.rs", "src/cast_bridge.rs", "src/myqbz_bridge.rs", "src/myqbz_add_bridge.rs", "src/disco_bridge.rs", "src/blacklist_bridge.rs", "src/playlist_picker_bridge.rs", "src/playlist_manager_bridge.rs", "src/playlist_import_bridge.rs", "src/dac_wizard_bridge.rs", "src/folder_edit_bridge.rs", "src/playlist_edit_bridge.rs", "src/qconnect_bridge.rs", "src/kiosk_nav_bridge.rs", "src/mini_bridge.rs", "src/tray_bridge.rs", "src/about_bridge.rs"],
+            rust_files: &["src/bridge.rs", "src/session_bridge.rs", "src/shell_bridge.rs", "src/player_bridge.rs", "src/queue_bridge.rs", "src/home_bridge.rs", "src/viz_bridge.rs", "src/immersive_bridge.rs", "src/shader_scene_bridge.rs", "src/suggestions_bridge.rs", "src/hotkeys_bridge.rs", "src/search_bridge.rs", "src/local_bridge.rs", "src/library_bridge.rs", "src/album_bridge.rs", "src/artist_bridge.rs", "src/scene_bridge.rs", "src/musician_bridge.rs", "src/lyrics_qt.rs", "src/icon_tint_qt.rs", "src/cast_bridge.rs", "src/myqbz_bridge.rs", "src/myqbz_add_bridge.rs", "src/disco_bridge.rs", "src/blacklist_bridge.rs", "src/playlist_picker_bridge.rs", "src/playlist_manager_bridge.rs", "src/playlist_import_bridge.rs", "src/dac_wizard_bridge.rs", "src/folder_edit_bridge.rs", "src/playlist_edit_bridge.rs", "src/qconnect_bridge.rs", "src/kiosk_nav_bridge.rs", "src/mini_bridge.rs", "src/tray_bridge.rs", "src/about_bridge.rs", "src/purchases_bridge.rs"],
             qml_files: &[
                 "qml/LoginScreen.qml",
                 "qml/Main.qml",
@@ -647,6 +647,26 @@ fn main() {
                 "qml/views/myqbz/MyQbzDetailRow.qml",
                 "qml/views/myqbz/MyQbzDetailView.qml",
                 "qml/views/myqbz/MyQbzGridView.qml",
+                // Purchases (routes "purchases" and "purchase-album") — the
+                // opt-in Qobuz store surface, plus its own module directory
+                // like views/local/ and views/myqbz/.
+                //
+                // TWO different silent failures meet here, and the feature is
+                // the one nobody can smoke-test (it is not sold in the owner's
+                // region, so their account returns an empty list forever):
+                // a missing ROUTE view leaves the qrc without the file and the
+                // router mounts nothing, and a missing MODULE file fails its
+                // PARENT at load with "… is not a type" — taking the whole
+                // screen, not one row. Both are invisible to cargo check and to
+                // both audit scripts, and `show_purchases` defaults OFF, so
+                // neither would be noticed by anyone who never turns it on.
+                "qml/views/PurchasesView.qml",
+                "qml/views/PurchaseAlbumView.qml",
+                "qml/views/purchases/PurchaseAlbumsCollection.qml",
+                "qml/views/purchases/PurchaseGridCard.qml",
+                "qml/views/purchases/PurchaseListRow.qml",
+                "qml/views/purchases/PurchaseTrackRow.qml",
+                "qml/views/purchases/PurchasesToolbar.qml",
                 // Playlist Manager (route "playlistmanager"): the router target
                 // plus the TWELVE files of its own module directory. A .qml
                 // missing from this array is absent from the qrc and fails its

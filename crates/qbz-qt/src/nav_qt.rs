@@ -8,10 +8,13 @@
 //!
 //! There is NO route table here, and that is deliberate: a view id is an
 //! opaque `String`, and the only place the set of legal ids is enumerated is
-//! `qml/shell/AppShell.qml`'s content `Loader` chain. Adding a route is
-//! therefore a two-file change — the caller `record`s its id, AppShell grows
-//! an arm for it — and nothing needs registering in this file. The failure
-//! mode when the AppShell arm is forgotten is a BLANK content pane (the
+//! `qml/shell/ContentRouter.qml`'s content `Loader` chain. (It used to live in
+//! `AppShell.qml`; the kiosk port extracted it so BOTH shells share one chain,
+//! and this paragraph said "AppShell" for far too long afterwards — it has
+//! since sent more than one reader to the wrong file.) Adding a route is
+//! therefore a two-file change — the caller `record`s its id, ContentRouter
+//! grows an arm for it — and nothing needs registering in this file. The
+//! failure mode when the router arm is forgotten is a BLANK content pane (the
 //! ternary falls through to `""`), recoverable with Back; it is not a crash,
 //! which is exactly why it is easy to miss.
 //!
@@ -20,7 +23,7 @@
 //! `playlistbrowse`, `recentalbums`, `mostplayedalbums`, `label`,
 //! `labelreleases`, `mix`, `mixtapes`, `collections`, `mixtapedetail`,
 //! `discobuilder`, `blacklist`, `playlistmanager`, `nowplaying`, `scene`,
-//! `musician`.
+//! `musician`, `purchases`, `purchase-album`.
 //!
 //! `scene` (the "artists from the same place" discovery view) and `musician`
 //! both carry a required context that only their opener has, so neither is in
@@ -28,6 +31,17 @@
 //! a page with nothing to show. Note the musician MODAL is not a route at all —
 //! only the `contextual` branch navigates; `weak`/`none` publish a document
 //! that a global overlay renders (`musician_qt.rs`).
+//!
+//! `purchase-album` is in that same context-carrying class (its album id lives
+//! in the purchases controller, not in the id), and `purchases` is left out of
+//! the restore set for a DIFFERENT reason: it is opt-in and ships hidden
+//! (`show_purchases`, default false), so restoring onto it could open the app
+//! on a surface whose own entry point is switched off. Neither is in
+//! `VIEW_TO_PREF` below, so `startup_view()` can never resolve to either — and
+//! neither is offered by the Startup page dropdown, whose own list
+//! (`settings_qt::STARTUP_PAGE_VALUES`) would have to grow a matching entry
+//! first. The Slint build DOES restore `purchases` (`qbz/src/main.rs:637`);
+//! bringing that across is an additive change that needs both halves.
 //!
 //! `nowplaying` is KIOSK-ONLY (2026-08-02 kiosk-port contract §3): it is the
 //! NavRail's fifth tile and the route the kiosk's full-screen player lives on.

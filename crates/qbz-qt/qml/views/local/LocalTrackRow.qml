@@ -156,7 +156,10 @@ Item {
     // brand marks.
     SourceIcon {
         visible: (root.item.source || "") !== ""
-        kind: root.item.source || ""
+        // `sourceRaw` FIRST (contract §D.1): it carries `qobuz_purchase`, which
+        // `source` folds into "offline" so the source chips still filter it.
+        // A purchased track's row is gold; a plain download's is not.
+        kind: root.item.sourceRaw || root.item.source || ""
         // .slint:722 — local 15, the marks 16. `localTint` muted is the rule
         // SourceGlyph.slint:6-8 calls load-bearing (never accent).
         glyphSize: 15

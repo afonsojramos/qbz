@@ -158,6 +158,31 @@ Rectangle {
     // section dropdown (on hover and on click), and the ENTRIES navigate.
     readonly property var navSections: navFlyout.sections
 
+    /// The settings snapshot, try-parsed. `settingsJson` is `"{}"` before the
+    /// first publish, and a bare `JSON.parse` throwing on that frame would take
+    /// the whole header down rather than just one entry.
+    readonly property var settingsDoc: {
+        try { return JSON.parse(QbzBridge.settingsJson) } catch (e) { return ({}) }
+    }
+
+    /// Purchases in the TITLE BAR — the third row of the §7.1 truth table.
+    ///
+    /// This is the EXACT COMPLEMENT of `Sidebar.qml`'s `purchasesVisible`, and
+    /// it has to be, because that property WITHDRAWS the sidebar row for this
+    /// configuration. Until this existed the entry was withdrawn from one host
+    /// and offered by none: with `show_purchases` and `nav_tb_purchases` both on
+    /// and a custom title bar, Purchases simply had no way in.
+    ///
+    /// `nav_tb_purchases` only RELOCATES; `show_purchases` is the master gate.
+    /// Under system chrome or with no title bar there is nowhere to relocate TO,
+    /// so the sidebar keeps it and this stays false.
+    readonly property bool purchasesInHeader:
+        root.settingsDoc.showPurchases === true
+        && !QbzSession.offline
+        && root.settingsDoc.navTbPurchases === true
+        && !QbzShell.systemTitleBar
+        && !QbzShell.hideTitleBar
+
     // Highlighted section — derived from the live view (see NavFlyout), OR'd
     // in the triggers with "my menu is open" (Slint highlights off
     // HeaderMenuState.open-index).
@@ -173,6 +198,59 @@ Rectangle {
     // Full text tab (HeaderBar.slint NavTab): 30px tall, radius sm, icon 14
     // (dropped under 1140px), label 11px — semibold + elevated fill when the
     // section is the current view.
+    /// The title-bar Purchases entry. Deliberately NOT a `NavTab`: that
+    /// component is built around a section object and its click opens the
+    /// flyout, while Purchases navigates straight to its route.
+    component PurchaseTab: Rectangle {
+        id: purchaseTab
+        property bool showIcon: true
+        /// Icon-only, to sit beside the compact section buttons.
+        property bool compact: false
+        readonly property bool isActive:
+            QbzShell.currentView === "purchases" || QbzShell.currentView === "purchase-album"
+
+        height: 30
+        width: purchaseRow.implicitWidth
+        radius: theme.radiusSm
+        color: purchaseTab.isActive ? theme.surfaceElevated
+            : purchaseArea.containsMouse ? theme.surfaceHover : "transparent"
+
+        Row {
+            id: purchaseRow
+            height: parent.height
+            leftPadding: purchaseTab.compact ? 8 : (purchaseTab.showIcon ? 9 : 11)
+            rightPadding: purchaseTab.compact ? 8 : 11
+            spacing: 6
+            QbzIcon {
+                visible: purchaseTab.showIcon
+                anchors.verticalCenter: parent.verticalCenter
+                name: "shopping-bag"
+                width: 16
+                height: 16
+                tintName: purchaseTab.isActive ? "primary" : "muted"
+            }
+            Text {
+                visible: !purchaseTab.compact
+                anchors.verticalCenter: parent.verticalCenter
+                text: QbzSession.tr("Purchases", QbzSession.trRev)
+                color: purchaseTab.isActive ? theme.textPrimary : theme.textMuted
+                font.pixelSize: theme.fontLegal
+                font.weight: theme.weightMedium
+            }
+        }
+
+        MouseArea {
+            id: purchaseArea
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            // Never touches `navFlyout.triggerHovered`. Setting it while another
+            // section's panel is open marks the flyout as hovered and halts its
+            // 1 s idle-close, leaving that panel hanging open under the pointer.
+            onClicked: QbzShell.navigateTo("purchases")
+        }
+    }
+
     component NavTab: Rectangle {
         id: navTab
         property var section: null
@@ -336,6 +414,14 @@ Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                 }
             }
+            // Purchases is a DIRECT destination, not a section: it has no
+            // flyout and no entries, so it cannot ride the Repeater above —
+            // NavTab's click opens a panel. Hence its own tab.
+            PurchaseTab {
+                visible: root.purchasesInHeader
+                showIcon: root.width >= 1140
+                anchors.verticalCenter: parent.verticalCenter
+            }
         }
 
         // Compact section nav — while the sidebar is fully closed (so the
@@ -355,6 +441,13 @@ Rectangle {
                     visible: !(modelData.qobuz && QbzSession.offline)
                     anchors.verticalCenter: parent.verticalCenter
                 }
+            }
+            // The same direct entry, icon-only, so the compact form is not the
+            // one configuration where Purchases disappears again.
+            PurchaseTab {
+                visible: root.purchasesInHeader
+                compact: true
+                anchors.verticalCenter: parent.verticalCenter
             }
             // Thin separator + the playlists flyout button — ONLY while the
             // sidebar is really closed. In the opt-in always-compact mode the

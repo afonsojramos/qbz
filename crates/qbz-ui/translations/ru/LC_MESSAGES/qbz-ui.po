@@ -3737,6 +3737,9 @@ msgstr "Не удалось начать загрузку. Повторите п
 msgid "No downloadable formats available"
 msgstr "Нет форматов, доступных для скачивания"
 
+msgid "Download goodies"
+msgstr "Скачать бонусы"
+
 # Playlist "Suggested Songs" section (T8)
 msgid "Suggested songs"
 msgstr "Рекомендованные треки"

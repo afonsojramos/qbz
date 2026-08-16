@@ -174,7 +174,11 @@ Rectangle {
             // `cloud-download` for an offline copy.
             SourceIcon {
                 visible: (root.item.source || "") !== ""
-                kind: root.item.source || ""
+                // `sourceRaw` FIRST (contract §D.1): it carries
+                // `qobuz_purchase`, which `source` folds into "offline" for the
+                // benefit of the source chips. Without this the LIST mode of
+                // the very same album loses the gold mark the GRID shows.
+                kind: root.item.sourceRaw || root.item.source || ""
                 // .slint:319 — local 15, the marks 16; muted local tint.
                 glyphSize: 15
                 plexSize: 16

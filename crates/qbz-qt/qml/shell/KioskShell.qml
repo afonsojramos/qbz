@@ -70,9 +70,18 @@ Rectangle {
     // views) keep mounting offline and are deliberately absent below.
     //
     // Two arms of the reference's predicate have no counterpart here:
-    //   - musician / award / award-albums / purchases / purchase-album /
-    //     location are ABSENT-BY-RULING (contract R1) — there is no Qt view
-    //     and no Qt route id for them, so they can never be `currentView`.
+    //   - award / award-albums / location are ABSENT-BY-RULING (contract R1) —
+    //     there is no Qt view and no Qt route id for them, so they can never be
+    //     `currentView`.
+    //     (This list USED to include musician and the two purchases routes. It
+    //     was wrong about both by the time anyone read it: ContentRouter mounts
+    //     `musician`, `purchases` and `purchase-album`, and nav_qt.rs lists all
+    //     three ids. Corrected 2026-08-16 — a stale absence claim is the kind of
+    //     comment that gets cited as authority later.)
+    //     Purchases needs no arm here regardless: it is gated OFF while offline
+    //     at both of its entry points (Sidebar's `purchasesVisible` and
+    //     HeaderBar's `purchasesInHeader` both require `!QbzSession.offline`),
+    //     so a kiosk session cannot reach it in the first place.
     //   - PlaylistState.offline-subset (the D11.a "mixed Qobuz playlist
     //     rendered from its local sidecar rows" flag, state.slint:2183) has
     //     NO Qt member: playlist_qt.rs's PlaylistDoc carries isLocalPlaylist

@@ -330,7 +330,18 @@ Rectangle {
                 if (!fok) continue
             }
             if (sAny) {
+                // The chips are keyed off the FOLDED word, which is why
+                // local_rows.rs keeps folding `qobuz_purchase` into "offline"
+                // — a purchased album IS a Qobuz download as far as this row
+                // of chips is concerned, and the badge reads `sourceRaw`
+                // instead of splitting the bucket.
+                //
+                // The normalisation below is the reference's §10-H bug kept
+                // closed: Tauri's three arms never mention `qobuz_purchase`,
+                // so a raw word reaching here matches no chip and ticking ANY
+                // source filter hides every purchased album, silently.
                 var src = (r.source || "local").toLowerCase()
+                if (src === "qobuz_purchase" || src === "qobuz_download") src = "offline"
                 if (!filter[src]) continue
             }
             out.push(r)

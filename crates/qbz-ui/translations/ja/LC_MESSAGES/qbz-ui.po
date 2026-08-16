@@ -3713,6 +3713,9 @@ msgstr "ダウンロードを開始できませんでした。もう一度お試
 msgid "No downloadable formats available"
 msgstr "ダウンロード可能なフォーマットがありません"
 
+msgid "Download goodies"
+msgstr "特典をダウンロード"
+
 # Playlist "Suggested Songs" section (T8)
 msgid "Suggested songs"
 msgstr "おすすめの曲"

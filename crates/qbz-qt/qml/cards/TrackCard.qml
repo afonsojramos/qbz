@@ -147,7 +147,11 @@ Rectangle {
                 radius: 4
                 color: "#b3000000"
                 SourceIcon {
-                    kind: root.item.source || ""
+                    // `sourceRaw` FIRST (contract §D.1): local rows carry
+                    // `qobuz_purchase` there, and `source` folds it into
+                    // "offline" for the source chips. Feed rows publish no
+                    // `sourceRaw` at all, so they fall through unchanged.
+                    kind: root.item.sourceRaw || root.item.source || ""
                     // .slint:191-193 — plex 16, qobuz 18, local 14. "offline"
                     // is the Qt word for a Qobuz download (local_rows.rs
                     // `badge_source`); the .slint's local-library track rows

@@ -3863,6 +3863,9 @@ msgstr "Starten van download mislukt. Probeer het opnieuw."
 msgid "No downloadable formats available"
 msgstr "Geen downloadbare formaten beschikbaar"
 
+msgid "Download goodies"
+msgstr "Extra's downloaden"
+
 msgid "Suggested songs"
 msgstr "Voorgestelde nummers"
 

@@ -96,7 +96,7 @@ Item {
             : QbzShell.currentView === "labelreleases" ? "../views/LabelReleasesView.qml"
             // Artist page > a release section > "See discography", and the
             // album page's "From the same artist" View all. Same two-file
-            // contract as the rest of this chain (nav_qt.rs:9-16):
+            // contract as the rest of this chain (nav_qt.rs:9-19):
             // artist_releases_qt::open records the id, this arm mounts it.
             // Forgetting the arm is NOT a crash — the ternary falls through
             // to "" and the pane goes blank with nothing logged, i.e. the
@@ -138,11 +138,24 @@ Item {
             : QbzShell.currentView === "blacklist" ? "../views/BlacklistManagerView.qml"
             // Sidebar > Playlists ⋯ > Manage playlists. Not a sidebar
             // section — playlist_manager_qt::navigate() records the route.
-            // The route is a TWO-FILE contract (nav_qt.rs:9-16): the caller
+            // The route is a TWO-FILE contract (nav_qt.rs:9-19): the caller
             // records the id, this arm mounts it, and the failure mode for a
             // missing arm is a BLANK content pane, logged nowhere.
             : QbzShell.currentView === "playlistmanager" ? "../views/PlaylistManagerView.qml"
-            // KIOSK-ONLY route (nav_qt.rs:24-29): the NavRail's fifth tile,
+            // Purchases — the opt-in Qobuz store surface (Settings >
+            // Appearance > Show Purchases, default OFF). The sidebar's direct
+            // row records "purchases"; a purchased album's card records
+            // "purchase-album" through QbzPurchases.openAlbum(id), which holds
+            // the id — the route carries none, exactly like "localalbum".
+            //
+            // BOTH arms land in the same edit on purpose. This chain's failure
+            // mode is a blank pane logged nowhere, and Purchases is the one
+            // feature nobody on this team can smoke-test (the owner's region
+            // does not sell it, so the account returns an empty list forever):
+            // a missing arm here would first be seen by a stranger.
+            : QbzShell.currentView === "purchases" ? "../views/PurchasesView.qml"
+            : QbzShell.currentView === "purchase-album" ? "../views/PurchaseAlbumView.qml"
+            // KIOSK-ONLY route (nav_qt.rs:46-51): the NavRail's fifth tile,
             // the full-screen player. The desktop shell has no equivalent —
             // its transport is the persistent bar — so outside kiosk this id
             // falls through to "" and the pane is blank, which is the desktop

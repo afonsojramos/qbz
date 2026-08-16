@@ -73,6 +73,12 @@ mod playlist_picker_bridge;
 mod playlist_manager_bridge;
 mod folder_edit_bridge;
 mod playlist_edit_bridge;
+// Purchases (2026-08-15 purchases contract §G.1): the QbzPurchases singleton —
+// two documents (list + album detail) and a publish counter. Its controller
+// half is `purchases_qt` below, a PLAIN module. This file DOES belong in
+// build.rs's rust_files (lane D owns that edit); without it the QML singleton
+// silently does not exist.
+mod purchases_bridge;
 // Playlist Importer (public Spotify / Apple Music / Tidal / Deezer playlists).
 // Its own singleton: a separate domain from both the playlist detail and the
 // manager, opened from two shell surfaces that outlive each other, and its
@@ -258,6 +264,11 @@ mod playlist_manager_rows;
 // no #[cxx_qt::bridge], so it must NOT appear in build.rs's rust_files.
 mod playlist_edit_qt;
 mod playlist_qt;
+// Purchases controller (2026-08-15 purchases contract): the two screens' state,
+// the FRONTEND album-download loop (concurrency 1, cancellable, per-track
+// progress) and the format re-scoping. Plain module — it declares no
+// #[cxx_qt::bridge], so it must NOT appear in build.rs's rust_files.
+mod purchases_qt;
 mod queue_qt;
 mod search_qt;
 // Immersive Suggestions controller (2026-08-02 immersive-port contract §4.5,
@@ -786,6 +797,10 @@ pub(crate) fn do_logout() {
         // The local-library documents are per-user; a later login must not
         // inherit the previous user's cached tree.
         local_library_qt::reset();
+        // Purchases likewise: the list, the open album detail and the in-memory
+        // download statuses are all scoped to the account that bought them.
+        // Leaving them behind would show the next user someone else's library.
+        purchases_qt::reset();
         // A later login must re-fetch Home + Library (new user, fresh data)
         // and re-warm the favourite-id cache that `auth_qt::logout` just
         // emptied — otherwise the next account's hearts stay blank until it
@@ -2092,6 +2107,12 @@ pub(crate) fn apply_language(code: String) {
     // card's (always empty) subtitle — so it re-translates by itself and a
     // republish would be dead code.
     musician_qt::republish();
+    // Purchases, for the same reason: both of its documents carry exactly one
+    // Rust-translated string (the load-error line), and a string travelling as
+    // data cannot be reached by `trRev`. A no-op unless a purchase screen is
+    // standing in its error state — which is also the only state the owner's
+    // own account can produce, so it is the one worth getting right.
+    purchases_qt::republish();
     let (view, id) = LAST_DETAIL.lock().unwrap().clone();
     if !id.is_empty() {
         match view.as_str() {

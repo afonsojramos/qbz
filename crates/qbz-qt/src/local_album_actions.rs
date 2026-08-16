@@ -37,7 +37,8 @@ use serde::Serialize;
 use crate::local_bridge::ui;
 use crate::local_playback::{local_queue_track, play_local_file, play_plex_track, plex_rating_key};
 use crate::local_rows::{
-    album_key, badge_source, map_track, tier_of, to_json, total_duration, AlbumRow, TrackRow,
+    album_key, badge_source, badge_source_raw, map_track, tier_of, to_json, total_duration,
+    AlbumRow, TrackRow,
 };
 use crate::local_state::{state, with_art};
 
@@ -248,6 +249,7 @@ fn album_header(id: &str, tracks: &[LocalTrack]) -> AlbumRow {
         format: best.format.to_string(),
         art_key: album_key(id),
         source: badge_source(first.source.as_deref()),
+        source_raw: badge_source_raw(first.source.as_deref()),
         directory_path: card.as_ref().map(|c| c.directory_path.clone()).unwrap_or_default(),
         folder_count: card.map(|c| c.folder_count).unwrap_or(0),
     }

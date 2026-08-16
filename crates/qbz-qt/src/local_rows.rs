@@ -9,6 +9,16 @@
 //! values app-wide: `"local"` (a user file), `"offline"` (a Qobuz download —
 //! the Slint's raw `qobuz_download`), `"plex"` (a Plex-cache row). QML keys
 //! its badge glyph/tint off this string.
+//!
+//! `sourceRaw` rides ALONGSIDE it and is the exception that proves the fold is
+//! lossy: a scanned file that matches a `downloaded_purchases` row is stamped
+//! `qobuz_purchase` in the DB (`database.rs:1105-1120`), `source` folds that
+//! into `"offline"` so it keeps filtering under the Offline chip, and
+//! `sourceRaw` carries the word itself so the badge can draw the GOLD Qobuz
+//! mark. Two fields because the filter and the badge want different answers
+//! from the same column. It is emitted ONLY when it says something new, so on
+//! a library with no purchases every published row is byte-identical to what
+//! it was before.
 
 use std::collections::HashMap;
 
@@ -42,6 +52,10 @@ pub struct AlbumRow {
     pub art_key: String,
     /// "local" | "offline" | "plex" (the source badge).
     pub source: String,
+    /// `"qobuz_purchase"`, or empty (omitted from the JSON). See the module
+    /// header: the badge prefers this, every filter keeps reading `source`.
+    #[serde(rename = "sourceRaw", skip_serializing_if = "String::is_empty")]
+    pub source_raw: String,
     #[serde(rename = "directoryPath")]
     pub directory_path: String,
     /// Number of distinct contributing folders (metadata mode only; > 1 is
@@ -82,6 +96,10 @@ pub struct TrackRow {
     pub art_path: String,
     /// "local" | "offline" | "plex" (the source badge).
     pub source: String,
+    /// `"qobuz_purchase"`, or empty (omitted from the JSON). See the module
+    /// header: the badge prefers this, every filter keeps reading `source`.
+    #[serde(rename = "sourceRaw", skip_serializing_if = "String::is_empty")]
+    pub source_raw: String,
     pub explicit: bool,
     #[serde(rename = "isFavorite")]
     pub is_favorite: bool,
@@ -220,11 +238,39 @@ pub fn artist_key(name: &str) -> String {
 }
 
 /// The badge value for a raw `qbz_library` source column.
+///
+/// `qobuz_purchase` folds into `"offline"` DELIBERATELY and must keep doing
+/// so: this value is what the Local Library's source chips filter on
+/// (`LocalLibraryView.qml`'s `applyFilter`), and a purchased album is a Qobuz
+/// download — giving it a fourth bucket would make it vanish the moment the
+/// user ticks any source chip. The distinction the fold loses is restored
+/// beside it by `badge_source_raw`, not by widening this function.
 pub fn badge_source(raw: Option<&str>) -> String {
     match raw {
         Some("plex") => "plex".into(),
         Some("qobuz_download") | Some("qobuz_purchase") => "offline".into(),
         _ => "local".into(),
+    }
+}
+
+/// The raw source word the BADGE needs, or empty when the folded value above
+/// already says everything.
+///
+/// Only `qobuz_purchase` qualifies today: it is the one raw value with a badge
+/// of its own (`controls/SourceIcon.qml:75` draws the Qobuz mark in gold for
+/// it) that `badge_source` destroys. `"user"` and `"qobuz_download"` are NOT
+/// echoed here on purpose — they have no badge the folded value does not
+/// already produce, and handing four QML consumers a second spelling of a
+/// value they already handle is how the two drift apart.
+///
+/// Contract §9.4: this word is preserved on SCANNED LOCAL rows only. The
+/// remote purchases feed (`library_qt::fetch_purchases`) keeps publishing
+/// `"qobuz"` — it never consults the download registry, so stamping it there
+/// would badge every purchase the user merely OWNS as locally downloaded.
+pub fn badge_source_raw(raw: Option<&str>) -> String {
+    match raw {
+        Some("qobuz_purchase") => "qobuz_purchase".into(),
+        _ => String::new(),
     }
 }
 
@@ -252,6 +298,7 @@ pub fn map_album(a: LocalAlbum, art: &mut HashMap<String, String>) -> AlbumRow {
         track_count: a.track_count,
         art_key: key,
         source: badge_source(Some(a.source.as_str())),
+        source_raw: badge_source_raw(Some(a.source.as_str())),
         directory_path: a.directory_path,
         all_artists: a.all_artists,
         folder_count,
@@ -283,6 +330,7 @@ pub fn map_track(t: &LocalTrack, art: &mut HashMap<String, String>) -> TrackRow 
         art_key: key,
         art_path: String::new(),
         source: badge_source(t.source.as_deref()),
+        source_raw: badge_source_raw(t.source.as_deref()),
         explicit: false,
         is_favorite: false,
     }

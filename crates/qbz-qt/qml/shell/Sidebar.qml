@@ -50,6 +50,12 @@
 // nothing uses it today (a row that clicks into nothing is a defect, not a
 // stub). Its leading glyph goes through shell/NavSectionGlyph.qml, because My
 // QBZ can carry a user-supplied icon (SidebarNavRow `raw-icon`).
+// PURCHASES is the one row in that block that is NOT a section: it is a
+// DirectRow (SidebarDirectRow) — no dropdown, no catalog entry, it just
+// navigates — and it is triple-gated (opt-in `show_purchases`, hidden while
+// offline, and relocated to the custom title bar by `nav_tb_purchases`).
+// Both prefs default OFF, so on a stock install this block is still the same
+// four section rows it has always been.
 // The playlist/folder tree below the nav IS live (sidebar_qt.rs: load, sort,
 // search, expand/collapse, drag-drop target), and so is everything the "..."
 // menu offers: New folder opens QbzFolderEdit's create panel (the small
@@ -111,6 +117,35 @@ Rectangle {
     // keep the highlight honest. Slint additionally highlights the row whose
     // menu is open — the rows OR `navFlyout.openId` in for that.
     readonly property string activeNav: navFlyout.activeSection
+
+    // ---- Purchases row gating (contract §7.1, Sidebar.slint:794-805) -----
+    // NO new bridge property is needed. `settings_bool`'s tail is
+    // unconditional on success — `publish_snapshot()` re-serialises the WHOLE
+    // settings document after every successful write (settings_qt.rs:2278-2285)
+    // — and both prefs are already in it (`showPurchases` / `navTbPurchases`,
+    // :1446-1449). So the two Appearance toggles reach this row through
+    // QbzBridge.settingsJson and nothing else is wired.
+    //
+    // GUARDED parse, the NavFlyout.qml:65-70 precedent: a bare JSON.parse in a
+    // binding throws on the pre-publish frame and would take the whole sidebar
+    // down with it, not just this row.
+    readonly property var settingsDoc: {
+        try { return JSON.parse(QbzBridge.settingsJson) } catch (e) { return ({}) }
+    }
+    // `show_purchases` is the MASTER gate; `nav_tb_purchases` only RELOCATES
+    // the entry to the custom title bar — and it can only relocate it when
+    // there IS one. Under the system chrome, or with no title bar at all, the
+    // entry stays here (the truth table's fourth row): the Appearance toggle
+    // is disabled in those states, but a `true` set earlier survives the
+    // switch, and honouring it then would make Purchases unreachable.
+    // Both prefs default false — Purchases ships hidden.
+    readonly property bool purchasesVisible:
+        root.settingsDoc.showPurchases === true
+        && !QbzSession.offline
+        && !(root.settingsDoc.navTbPurchases === true
+             && !QbzShell.systemTitleBar
+             && !QbzShell.hideTitleBar)
+
     // Playlist tree state (phase 7).
     property bool searchOpen: false
     property bool playlistsCollapsed: false
@@ -392,6 +427,78 @@ Rectangle {
         }
     }
 
+    // A DIRECT destination row — the port of SidebarDirectRow
+    // (Sidebar.slint:646-685). Same 34px metrics, same radius, same lit
+    // treatment as NavRow above; what it does NOT have is the flyout. It
+    // navigates on click, so there is no catalog `section` behind it — which
+    // is also why the glyph goes to QbzIcon directly rather than through
+    // shell/NavSectionGlyph.qml (that component's whole input IS a section).
+    // `shopping-bag` is a registered tint master (icon_tint_qt.rs:261), so it
+    // is available in every tint under all 36 themes.
+    //
+    // IT MUST NEVER TOUCH `navFlyout.triggerHovered`, and the reason is the
+    // opposite of the obvious one. The idle-close timer is
+    // `running: panel.visible && !panel.menuHovered` (NavFlyout.qml:285), so
+    // with nothing open the flag pins nothing. The hazard is setting it while
+    // ANOTHER section's panel IS open: it feeds `menuHovered` (:368-369),
+    // which halts the 1s idle-close and leaves that flyout hanging open for as
+    // long as the pointer rests on this row. Hovering a direct row is not a
+    // flyout event at all.
+    component DirectRow: Rectangle {
+        id: directRow
+        // A QbzIcon glyph name (not a section) and its label.
+        property string iconName: ""
+        property string label: ""
+        property bool active: false
+        signal activated()
+
+        readonly property bool lit: directRow.active || directArea.containsMouse
+
+        width: parent ? parent.width : 0
+        // Mini: the SAME square track the nav rows use, so a direct row and a
+        // section row cannot land on different centre lines.
+        height: root.mini ? theme.sidebarMiniRow : 34
+        radius: 6
+        color: directRow.lit ? theme.surfaceHover : "transparent"
+
+        Row {
+            anchors.fill: parent
+            anchors.leftMargin: root.mini ? 0 : 8
+            anchors.rightMargin: root.mini ? 0 : 8
+            spacing: 10
+
+            Item {
+                width: root.mini ? parent.width : 16
+                height: parent.height
+                QbzIcon {
+                    name: directRow.iconName
+                    width: 16
+                    height: 16
+                    anchors.centerIn: parent
+                    tintName: directRow.lit ? "textPrimary" : "secondary"
+                }
+            }
+            Text {
+                visible: !root.mini
+                height: parent.height
+                width: parent.width - (root.mini ? 0 : 26)
+                text: directRow.label
+                color: directRow.lit ? theme.textPrimary : theme.textSecondary
+                font.pixelSize: 13
+                font.weight: theme.weightMedium
+                verticalAlignment: Text.AlignVCenter
+                elide: Text.ElideRight
+            }
+        }
+        MouseArea {
+            id: directArea
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: directRow.activated()
+        }
+    }
+
     Column {
         anchors.fill: parent
         // Mini left/right are ASYMMETRIC on purpose — see `miniPadLeft` at the
@@ -429,6 +536,26 @@ Rectangle {
                     section: modelData
                     visible: !(modelData.qobuz && QbzSession.offline)
                 }
+            }
+
+            // Purchases — LAST in the block and the only non-section row here
+            // (Sidebar.slint:794-805). Opt-in, hidden while offline (the
+            // surface needs the Qobuz session), and ACTIVE on both purchase
+            // routes so the highlight survives the click into a purchased
+            // album's detail.
+            //
+            // The click only navigates. Entering the list is the VIEW's job:
+            // `openList()` pairs with `leave()` on the view's own
+            // mount/unmount (§G.1), and Back reaches this route without ever
+            // passing through this row — a row that pre-loaded would leave the
+            // history path unloaded and double-fetch the direct path.
+            DirectRow {
+                visible: root.purchasesVisible
+                iconName: "shopping-bag"
+                label: QbzSession.tr("Purchases", QbzSession.trRev)
+                active: QbzShell.currentView === "purchases"
+                    || QbzShell.currentView === "purchase-album"
+                onActivated: QbzShell.navigateTo("purchases")
             }
         }
 
