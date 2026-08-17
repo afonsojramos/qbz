@@ -17,6 +17,11 @@ import "../../theme"
 Item {
     id: root
 
+    /// The tab's own left/right breathing room. Named because the scrollbar
+    /// has to CANCEL it (see the QbzScrollBar at the bottom of the list) —
+    /// with the number written twice, moving one would silently misalign it.
+    readonly property int sideInset: 32
+
     property var view: null
 
     QbzTheme { id: theme }
@@ -98,8 +103,8 @@ Item {
     QbzSkeleton {
         variant: "rowList"
         anchors.fill: parent
-        anchors.leftMargin: 32
-        anchors.rightMargin: 32
+        anchors.leftMargin: root.sideInset
+        anchors.rightMargin: root.sideInset
         anchors.topMargin: 12
         visible: QbzLocal.localTracksLoading
         rowH: root.rowH
@@ -122,8 +127,8 @@ Item {
 
     Column {
         anchors.fill: parent
-        anchors.leftMargin: 32
-        anchors.rightMargin: 32
+        anchors.leftMargin: root.sideInset
+        anchors.rightMargin: root.sideInset
         anchors.topMargin: 12
         spacing: 8
         visible: !QbzLocal.localTracksLoading && root.view.tracksVisible.length > 0
@@ -285,7 +290,19 @@ Item {
             }
             QbzScrollBar {
                 anchors.right: parent.right
-                anchors.rightMargin: root.view.tracksGroup === "name" ? 22 : 4
+                // The bar belongs on the VIEW edge, not on the content edge.
+                // Its parent sits inside the tab's 32px inset, so a plain 4px
+                // margin put the bar 36px from the window — a visibly wide
+                // empty channel with nothing in it (owner, 2026-08-16). The
+                // negative margin cancels the inset and leaves the same 4px
+                // gap the other lists have; the ROWS keep their inset.
+                //
+                // The "name" arm is untouched on purpose: there the alpha
+                // strip owns the right edge at the inset, and 22 is what
+                // clears it. Pushing the bar out there would jump it past the
+                // strip.
+                anchors.rightMargin: root.view.tracksGroup === "name"
+                    ? 22 : 4 - root.sideInset
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
                 target: list
