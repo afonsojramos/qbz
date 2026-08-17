@@ -670,6 +670,8 @@ pub fn dismiss_artist(artist_id: String, artist_name: String, image_url: String)
     };
     if !artist_name.is_empty() {
         crate::reco_dismiss_qt::dismiss(id, &artist_name, &image_url);
+        // Leave the rails NOW, not on the next rebuild.
+        crate::recommendations_qt::apply_dismissal(&artist_id);
         republish_all();
         // INFO, like the reference (`main.rs:12996-13002`).
         crate::toast_qt::info(qbz_i18n::t_args(
@@ -696,6 +698,10 @@ pub fn dismiss_artist(artist_id: String, artist_name: String, image_url: String)
         };
         let image = if image.is_empty() { image_url } else { image };
         crate::reco_dismiss_qt::dismiss(id, &name, &image);
+        // Same live drop as the named arm. This branch is the one a search or
+        // pinned-rail card takes (no display name on the card), and it lands
+        // one network round-trip later — the card must still go.
+        crate::recommendations_qt::apply_dismissal(&id.to_string());
         republish_all();
         // Unresolvable name falls back to the generic line, exactly as the
         // reference's non-reco branch does (`main.rs:13026-13033`).

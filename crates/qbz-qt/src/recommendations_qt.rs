@@ -33,13 +33,16 @@
 //! republishes the whole document. Rows that have not resolved yet are absent
 //! rather than empty, which is what the view needs anyway.
 //!
-//! ## POC-NOTEs vs the Slint controller
-//! - "Not interested" (reco dismissals) has no seam in this port, so the
-//!   retained per-rail overflow that Slint keeps for live backfill is dropped;
-//!   `compose_artist_rails` is still the composition choke point (exclusions +
-//!   cross-rail dedup + display cap), fed with the followed-artist id set.
-//! - The blacklist and reco-dismissal stores are not opened by this port, so
-//!   the exclusion set is the followed-artist ids only.
+//! ## Deltas vs the Slint controller
+//! - "Not interested" IS wired: the dismissal ids join the exclusion set fed
+//!   to `compose_artist_rails` (the composition choke point — exclusions +
+//!   cross-rail dedup + display cap), and [`apply_dismissal`] drops the card
+//!   from the cached rails on the click. What is NOT ported is Slint's
+//!   retained per-rail overflow, so the freed slot backfills on the next
+//!   refresh rather than instantly.
+//! - The artist BLACKLIST store is still not consulted here (the reco
+//!   dismissal store is a different one); the exclusion set is followed
+//!   artists + dismissals.
 //! - `LocalHistory.known_artist_ids` comes from the user's followed artists
 //!   (the port has no local `reco` play-vector store); it seeds the "Deep cuts
 //!   from artists you know" row exactly as the reference does with its larger
@@ -311,6 +314,39 @@ pub(crate) fn apply_pin_change(kind: &str, id: &str, pinned: bool) {
     });
 }
 
+/// "Not interested": drop the artist from the cached rails RIGHT NOW.
+///
+/// The exclusion set above keeps a dismissed artist out of every future
+/// rebuild; this is what makes the card leave the rail on the CLICK instead of
+/// on the next one. The card's own comment used to say the rail would shed it
+/// "on the next publish" — it never did, because nothing filtered on publish
+/// either.
+///
+/// No backfill from a retained overflow (the reference keeps one per rail):
+/// this port drops the overflow at composition, so the rail simply gets one
+/// card shorter until the next refresh re-composes it from the pool. A hole is
+/// not offered — the card is REMOVED, not blanked.
+///
+/// Un-dismissing (Settings > Blacklist > Recommendations) does not restore the
+/// card live: there is nothing cached to restore it from. It comes back with
+/// the next reco refresh, which is also what the reference does.
+pub(crate) fn apply_dismissal(artist_id: &str) {
+    if !LOADED.load(Ordering::SeqCst) {
+        return;
+    }
+    mutate(|rows| {
+        for list in [
+            &mut rows.rec_artists_common,
+            &mut rows.rec_artists_recent,
+            &mut rows.top_artists,
+        ] {
+            list.retain(|card| card.id != artist_id);
+        }
+    });
+    // `false`: no cover download pass — nothing new appeared, a card left.
+    publish_snapshot(false);
+}
+
 /// Favourite twin of [`apply_pin_change`] for this tab's cache.
 ///
 /// The reco document is published again on every tab re-entry, cover landing
@@ -451,7 +487,14 @@ async fn run(force: bool) {
         None
     };
 
-    let followed = followed_artist_ids().await;
+    // The exclusion set is followed artists PLUS the reco dismissals. The
+    // dismissals half was missing: "Not interested" wrote the store, toasted,
+    // and NOTHING ever read `reco_dismiss_qt::ids_snapshot()` — the artist came
+    // back on the very next rebuild (owner, 2026-08-16). It is the exclusion
+    // set, not a post-filter, so the composition choke point can backfill the
+    // freed slot from the pool instead of leaving a hole.
+    let mut followed = followed_artist_ids().await;
+    followed.extend(crate::reco_dismiss_qt::ids_snapshot());
     let catalog = crate::external_reco_qt::CoreRecoCatalog {
         runtime: crate::app(),
     };

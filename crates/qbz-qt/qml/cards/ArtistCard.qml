@@ -56,12 +56,25 @@ Rectangle {
     property string followKind: "artist"
 
     // --- "Not interested" (the reco-scoped dismissal) --------------------
-    // LIVE since QbzBlacklist landed: `dismissArtist(id, name, imageUrl)`
-    // writes the reco-dismissal store (NOT the artist blacklist). Kept as a
-    // property, not inlined, so a host whose `item.id` is not a Qobuz artist
-    // id can turn it off. Live BACKFILL is out of scope — the card leaves the
-    // rails on the next publish, not on the click (src/recommendations_qt.rs
-    // documents the retained-overflow drop).
+    // `dismissArtist(id, name, imageUrl)` writes the reco-dismissal store (NOT
+    // the artist blacklist). Kept as a property, not inlined, so a host whose
+    // `item.id` is not a Qobuz artist id can turn it off.
+    //
+    // The card now LEAVES THE RAIL ON THE CLICK: `blacklist_qt::dismiss_artist`
+    // calls `recommendations_qt::apply_dismissal`, which drops it from the
+    // cached rails and republishes. What this comment used to promise — "the
+    // card leaves the rails on the next publish" — never happened, because
+    // nothing read the dismissal store on publish either; the artist came
+    // straight back. The ids are part of the reco exclusion set now.
+    //
+    // OWNER RULING (2026-08-16): the live drop is for the RECOMMENDATIONS
+    // rails and nothing else. "This is not a blacklist or a general hide,
+    // only for recommendations." This card is also mounted by Search, Label,
+    // Artist Scene, Home and the Library grid; dismissing from one of those
+    // persists and takes effect in Recommendations, but the card you clicked
+    // stays where it is — deliberately. Do NOT "finish" this by making the
+    // artist vanish from Search or Library; hiding an artist app-wide is the
+    // BLACKLIST, a different store and a different row.
     //
     // `hasFollowSeam` is GONE, and the header comment it carried ("There is
     // NO artist-follow invokable on the Qt bridge") was simply wrong:
