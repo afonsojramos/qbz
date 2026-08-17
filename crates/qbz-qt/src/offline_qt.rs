@@ -122,13 +122,23 @@ fn cached_ids() -> &'static StdMutex<HashSet<u64>> {
     CACHED_IDS.get_or_init(|| StdMutex::new(HashSet::new()))
 }
 
-/// True if `track_id` (string form, as the rows carry it) has a ready offline
-/// copy. Used to seed each track row's cache status at document build time.
+/// True if `track_id` has a ready offline copy. Used to seed each track row's
+/// cache status at document build time — the rows carry the id as a STRING, so
+/// this is the string-keyed front door onto [`is_cached_id`].
 pub fn is_cached(track_id: &str) -> bool {
-    let Ok(id) = track_id.parse::<u64>() else {
-        return false;
-    };
-    cached_ids().lock().map(|s| s.contains(&id)).unwrap_or(false)
+    track_id.parse::<u64>().map(is_cached_id).unwrap_or(false)
+}
+
+/// [`is_cached`] for an id the caller already holds as a number — the QUEUE
+/// path. `QueueTrack.id` is a `u64`, and the unavailability drop predicate
+/// (`playback_qt::queue_track_unavailable`) asks this question for EVERY row of
+/// every queue build; routing it through `is_cached` would format a string per
+/// row only to parse it straight back. Same set, same lock, no allocation.
+pub fn is_cached_id(track_id: u64) -> bool {
+    cached_ids()
+        .lock()
+        .map(|s| s.contains(&track_id))
+        .unwrap_or(false)
 }
 
 /// Drop the whole session set — after a cache purge, where marking each id

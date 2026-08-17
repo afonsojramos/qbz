@@ -1003,6 +1003,12 @@ fn to_row(track: &Track) -> TrackRow {
             .unwrap_or_default(),
         is_favorite: crate::fav_cache_qt::is_favorite("track", &track.id.to_string()),
         cache_status: if crate::offline_qt::is_cached(&track.id.to_string()) { 3 } else { 0 },
+        // NOT covered by `..default()`: that would leave every For You / mix row
+        // affirmatively claiming to be available, while `to_queue_track` two
+        // functions down reads the real value — the row and the queue built from
+        // the SAME track would disagree, which is the one thing the row model
+        // exists to prevent.
+        not_streamable: !track.is_streamable(),
         ..TrackRow::default()
     }
 }
@@ -1056,7 +1062,9 @@ pub(crate) fn to_queue_track(track: &Track) -> QueueTrack {
         is_local: false,
         album_id: album_key.clone(),
         artist_id: track.performer.as_ref().map(|p| p.id),
-        streamable: track.streamable,
+        // §3.1: absence is resolved in ONE place. `is_streamable()` reads a
+        // missing key as AVAILABLE — only an explicit `false` marks a pull.
+        streamable: track.is_streamable(),
         source: Some("qobuz".to_string()),
         parental_warning: track.parental_warning,
         source_item_id_hint: album_key,

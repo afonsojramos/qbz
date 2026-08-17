@@ -1274,6 +1274,20 @@ fn parse_top_track(index: usize, raw: &Value) -> TrackRow {
         .and_then(|a| a.get("maximum_sampling_rate"))
         .and_then(|v| v.as_f64())
         .or_else(|| raw.get("maximum_sampling_rate").and_then(|v| v.as_f64()));
+    // Parsed from raw JSON, so the key is read directly, with the nested
+    // `rights` object as a fallback — the label payload is the least documented
+    // of the three track shapes and Qobuz uses both spellings elsewhere.
+    // `unwrap_or(true)` is §3.1 spelled out at the parse site: a missing key
+    // means the endpoint was terse, never that the track is dead.
+    let not_streamable = !raw
+        .get("streamable")
+        .and_then(|v| v.as_bool())
+        .or_else(|| {
+            raw.get("rights")
+                .and_then(|r| r.get("streamable"))
+                .and_then(|v| v.as_bool())
+        })
+        .unwrap_or(true);
     TrackRow {
         is_favorite: id.parse::<u64>().map(crate::fav_cache_qt::contains_track).unwrap_or(false),
         cache_status: if crate::offline_qt::is_cached(&id) { 3 } else { 0 },
@@ -1301,6 +1315,7 @@ fn parse_top_track(index: usize, raw: &Value) -> TrackRow {
         work_composer_name: String::new(),
         work_composer_id: String::new(),
         artwork_url,
+        not_streamable,
     }
 }
 
@@ -1424,7 +1439,9 @@ fn track_row_to_queue(row: &TrackRow) -> QueueTrack {
             Some(row.album_id.clone())
         },
         artist_id: row.artist_id.parse::<u64>().ok(),
-        streamable: true,
+        // D5: carried from the row (see `parse_top_track`). Hardcoding `true`
+        // here discarded an answer the label payload had already given us.
+        streamable: !row.not_streamable,
         source: Some("qobuz".to_string()),
         parental_warning: row.explicit,
         source_item_id_hint: None,

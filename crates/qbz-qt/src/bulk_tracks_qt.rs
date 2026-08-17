@@ -80,7 +80,9 @@ fn queue_track(track: &Track) -> qbz_models::QueueTrack {
         is_local: false,
         album_id: album_key.clone(),
         artist_id: track.performer.as_ref().map(|p| p.id),
-        streamable: track.streamable,
+        // §3.1: absence is resolved in ONE place. `is_streamable()` reads a
+        // missing key as AVAILABLE — only an explicit `false` marks a pull.
+        streamable: track.is_streamable(),
         source: Some("qobuz".to_string()),
         parental_warning: track.parental_warning,
         source_item_id_hint: album_key,

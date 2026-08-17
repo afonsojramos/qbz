@@ -101,6 +101,21 @@ pub struct TrackRow {
     /// from the session cached-id set, Slint `album.rs:583`.
     #[serde(rename = "cacheStatus")]
     pub cache_status: i32,
+    /// Qobuz PULLED this track (`streamable: false` — contract §5.1). Shared by
+    /// the ALBUM, ARTIST and LABEL track lists, which all render through
+    /// `qml/rows/TrackRow.qml`, so one field covers three surfaces.
+    ///
+    /// Absence from the API is NOT this: each of the three builders resolves it
+    /// through the rule of §3.1 — a missing key reads as AVAILABLE. Greying out
+    /// an entire catalogue because one endpoint was terse is the failure mode
+    /// that would sink this feature, and it is why none of the three writes a
+    /// bare `unwrap_or(false)`.
+    ///
+    /// Not `skip_serializing_if`: this is a render input on the busiest
+    /// delegate in the app and it serializes unconditionally, like its
+    /// neighbours `isFavorite` and `cacheStatus`.
+    #[serde(rename = "qobuzUnavailable")]
+    pub not_streamable: bool,
 }
 
 /// `Deserialize` rides along with `Serialize` so a card can be read BACK out of
@@ -528,6 +543,11 @@ fn map_track(track: &Track) -> TrackRow {
         } else {
             0
         },
+        // §5.1 via §3.1's single interpreter of absence. The live capture
+        // confirms `/album/get` carries the flat key on every track item, so on
+        // THIS endpoint the answer is real rather than inferred — which is what
+        // makes the owner's known-bad album a usable smoke.
+        not_streamable: !track.is_streamable(),
     }
 }
 

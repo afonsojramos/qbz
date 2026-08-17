@@ -63,6 +63,24 @@ pub struct QueueRow {
     /// gates on `item.is-ephemeral`.
     #[serde(rename = "isEphemeral")]
     pub is_ephemeral: bool,
+    /// The API said `streamable: false` for THIS track (#638-adjacent, the
+    /// unavailable-tracks port). Distinct from a broken local ref.
+    ///
+    /// The queue panel is where this matters MOST, not least: both queue seams
+    /// filter pulled tracks out, so the only way one reaches this list is the
+    /// path that bypasses them BY DESIGN — a session restored from disk
+    /// (`playback_driver`'s `set_queue_with_order`). Without this field the
+    /// backstop's own shopfront renders a dead row as a perfectly normal one,
+    /// which is exactly the "learns by clicking" failure the feature exists to
+    /// remove.
+    #[serde(rename = "qobuzUnavailable")]
+    pub qobuz_unavailable: bool,
+    /// Offline-cache state, same encoding as `album_qt::TrackRow::cache_status`
+    /// (`3` = downloaded). Paired with the flag above: a pulled track we
+    /// already downloaded still plays from disk and must NOT get the dead
+    /// treatment.
+    #[serde(rename = "cacheStatus")]
+    pub cache_status: i32,
 }
 
 #[derive(Default, Serialize)]
@@ -203,6 +221,15 @@ fn row_from(track: &QueueTrack, favorites: &HashSet<u64>) -> QueueRow {
         // reached the queue without one.
         is_ephemeral: track.source.as_deref() == Some("ephemeral")
             || crate::local_ephemeral::is_ephemeral_id(track.id as i64),
+        // `QueueTrack.streamable` defaults TRUE (unlike catalog `Track`), so a
+        // row that never learned its availability reads as available — the
+        // permissive direction, deliberately.
+        qobuz_unavailable: !track.is_local && !track.streamable,
+        cache_status: if crate::offline_qt::is_cached(&track.id.to_string()) {
+            3
+        } else {
+            0
+        },
     }
 }
 
@@ -737,12 +764,19 @@ pub async fn insert_dragged_track(
     track_id: u64,
     to_slot: usize,
 ) -> Result<(), String> {
-    let qt = crate::playback_qt::stamped(
+    // NOT `.expect("one track in, one track out")` any more: the enqueue seam
+    // filters now (F2 + D5), so one row in can legitimately be ZERO rows out —
+    // and a DRAG of a pulled track into the queue would have PANICKED. The seam
+    // has already toasted the reason.
+    let Some(qt) = crate::playback_qt::stamped(
         vec![crate::playback_qt::queue_track_for(runtime, track_id).await?],
         None,
     )
     .pop()
-    .expect("one track in, one track out");
+    else {
+        log::info!("[qbz-qt] queue: dragged track {track_id} was filtered out");
+        return Ok(());
+    };
 
     // QConnect CONTROLLER mode (contract §7): the peer owns the queue, so the
     // insert is routed there — AT THE DROPPED POSITION. `CtrlSrvrQueueInsertTracks`
@@ -801,8 +835,16 @@ pub async fn play_history(runtime: &Arc<AppRuntime<LoggingAdapter>>, index: usiz
     // Through the stamping seam: a history row already carries the origin it
     // was played from, so it survives the replay; a legacy row with none falls
     // back to its own album instead of publishing a dead layers glyph.
-    crate::playback_qt::set_queue_stamped(runtime, vec![track.clone()], Some(0), None).await;
-    crate::playback_qt::play_queue_track_public(runtime, track.id).await;
+    // F1: a history row can be a track Qobuz pulled since it played, or an
+    // artist blocked since. Replaying the id the seam just dropped is silence
+    // with no toast — the exact failure this return value exists to end.
+    let Some(anchor) =
+        crate::playback_qt::set_queue_stamped(runtime, vec![track], Some(0), None).await
+    else {
+        log::info!("[qbz-qt] queue: history row {index} is no longer playable");
+        return;
+    };
+    crate::playback_qt::play_queue_track_public(runtime, anchor.track_id).await;
 }
 
 /// Empty the queue — `queue.rs::clear` verbatim.

@@ -5195,3 +5195,60 @@ msgstr "Sélectionnez un artiste pour voir ses albums"
 
 msgid "{} / {} artists"
 msgstr "{} / {} artistes"
+
+# --- Unavailable tracks + replacement search (Qt port, contract 2026-08-17
+# §8-6). "Unavailable" and "This track is no longer available" already
+# exist in this file and are REUSED by the render and the reactive skip toast
+# — nothing below twins them.
+#
+# The skipped-tracks toast is a plural PAIR, per the convention already set by
+# "Scan complete ({} file skipped)" and "{} duplicate skipped": the queue build
+# drops N rows at once, and a singular-only string reads wrong in every locale
+# with plural rules. Russian carries all three forms.
+#
+# "No longer on Qobuz — playing your downloaded copy" is the cached-but-pulled
+# state (contract §5.3/F5): the track left the catalogue but the user owns a
+# downloaded copy, so it still plays. It cannot fold into "This track is no
+# longer available" — that sentence would be a lie on a row playing right now.
+#
+# Em dash is U+2014 with spaces on both sides, as everywhere else in this file.
+msgid "Find available version"
+msgstr "Trouver une version disponible"
+
+msgid "Replace unavailable track"
+msgstr "Remplacer le titre indisponible"
+
+msgid "No available version found"
+msgstr "Aucune version disponible trouvée"
+
+msgid "Track replaced"
+msgstr "Titre remplacé"
+
+msgid "Could not replace the track"
+msgstr "Échec du remplacement du titre"
+
+msgid "The replacement was added at the end of the playlist"
+msgstr "Le remplacement a été ajouté à la fin de la playlist"
+
+msgid "{} track skipped — no longer available"
+msgid_plural "{} tracks skipped — no longer available"
+msgstr[0] "{} titre ignoré — plus disponible"
+msgstr[1] "{} titres ignorés — plus disponibles"
+
+msgid "No longer on Qobuz — playing your downloaded copy"
+msgstr "Plus disponible sur Qobuz — lecture de votre copie téléchargée"
+
+msgid "Exact match"
+msgstr "Correspondance exacte"
+
+msgid "Low confidence"
+msgstr "Faible confiance"
+
+msgid "Replace"
+msgstr "Remplacer"
+
+msgid "Replacing..."
+msgstr "Remplacement…"
+
+msgid "The replacement takes the unavailable track's place in the playlist."
+msgstr "Le remplacement prend la place du titre indisponible dans la playlist."

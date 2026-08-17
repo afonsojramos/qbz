@@ -13,7 +13,9 @@
 // duration, qualityTier, qualityDetail, explicit, isFavorite, artPath? }
 // (plus playlistTrackId for the remove-from-playlist arm, and the OPTIONAL
 // `source` / `unavailable` a mixed-source producer carries — the Add to
-// playlist gate below is the one arm that reads them). `qualityDetail`
+// playlist gate below is the one arm that reads them, plus the OPTIONAL
+// `qobuzUnavailable`, which is a DIFFERENT thing from `unavailable` and is
+// documented where it is read). `qualityDetail`
 // is the bare exact-quality string ("16-bit / 44.1 kHz"); when a producer
 // does not carry it yet the badge degrades to the tier label alone rather
 // than to a blank cell. `item.isFavorite` SEEDS the row's own `favorite`
@@ -30,7 +32,9 @@
 // dragStart — the #589 reorder pre-hook), mixtapeRequested() (the host
 // builds the MyQBZ AddItem payload), goToRequested(kind) (only when
 // `routeGoToExternally` is set), playlistAddRequested() (only when
-// `routePlaylistAddExternally` is set — the local-mode "Add to playlist").
+// `routePlaylistAddExternally` is set — the local-mode "Add to playlist"),
+// replaceRequested() (only when `routeReplaceExternally` is set — the
+// "Find available version" repair for a track Qobuz pulled).
 // Favorite toggling, Go-to-artist/album, Share and Track info are
 // identical on every site — handled internally. The row BODY is the drag
 // source (6px threshold, ghost + sidebar drops in main.rs) and its RIGHT
@@ -58,6 +62,11 @@
 // labelled columns, so every label sat right of the column it named).
 
 import QtQuick
+// Qt's own attached ToolTip, for the pulled-track glyphs ONLY. The shell's
+// shared bubble (controls/QbzTooltip.qml) is reached by naming the AppShell
+// instance, which a recycled delegate cannot do — the same trade
+// controls/QbzMultiSelectBar.qml and views/AlbumView.qml already made.
+import QtQuick.Controls
 import com.blitzfc.qbz
 import "../controls"
 import "../immersive"
@@ -162,6 +171,50 @@ Rectangle {
             if (trackId === (root.item.id || "")) root.cacheStatus = status
         }
     }
+
+    // --- PULLED FROM THE QOBUZ CATALOGUE (contract §5.2) ------------------
+    // `item.qobuzUnavailable` is the API saying `streamable: false` for THIS
+    // track. The producer stamps it from `qbz_models::Track::is_streamable()`
+    // — never from an absent key (that is exactly what the contract's §3.1
+    // `Option<bool>` exists to keep apart), never from a 403, never from a
+    // network error. A producer that does not carry the field yet leaves it
+    // `undefined`, which reads as "available" here: absence is not a claim.
+    //
+    // It is a NEW field and deliberately NOT `item.unavailable`, which this
+    // file already reads a few lines below. That one is a BROKEN LOCAL REF (a
+    // Plex key the cache does not know, a stored id outside the catalog
+    // range). The two look alike and behave oppositely: a broken ref stays
+    // fully SELECTABLE so the user can delete it and can never heal on its
+    // own, while a pulled Qobuz track is inert and CAN be repaired by the
+    // replacement search. One flag for both would collapse two treatments into
+    // whichever was written last.
+    readonly property bool pulled: root.item.qobuzUnavailable === true
+
+    /// THE DEAD ROW — dim, inert, alert glyph.
+    ///
+    /// `cacheStatus === 3` (downloaded) is excluded on purpose: a pulled track
+    /// the user already downloaded STILL PLAYS. `qbz-core/src/core.rs:716`
+    /// resolves the offline tier before any network call and before any
+    /// availability question, so the file on disk is served regardless of what
+    /// the catalogue says. Treating it as dead would take away a song the user
+    /// owns — a worse bug than the one this treatment fixes, and it would bite
+    /// hardest in offline mode. It gets `pulledCached` below instead.
+    readonly property bool pulledDead: root.pulled && root.cacheStatus !== 3
+
+    /// Pulled from the catalogue, but playable from the downloaded copy. Keeps
+    /// its play cell, its heart and its click; gains only an honest badge,
+    /// because the user still needs to know the track is gone from Qobuz —
+    /// the moment they clear the download it dies.
+    readonly property bool pulledCached: root.pulled && root.cacheStatus === 3
+
+    /// "Find available version" — HOST-routed, the `routeGoToExternally`
+    /// idiom. Only the host knows which playlist is open, whether the user
+    /// OWNS it (Qobuz refuses a write to anyone else's) and that the row is a
+    /// catalog membership rather than a local ref. Default off, so no other
+    /// surface grows the entry.
+    property bool routeReplaceExternally: false
+    signal replaceRequested()
+    readonly property bool hasReplaceSeam: root.pulled && root.routeReplaceExternally
 
     // --- Add to playlist -------------------------------------------------
     // LIVE since QbzPlaylistPicker landed. It is NOT a flat constant, because
@@ -307,7 +360,13 @@ Rectangle {
     width: parent ? parent.width : 0
     height: 50
     radius: 8
-    color: hovered ? rowHoverBg : (zebra && number % 2 === 0 ? "#07ffffff" : "transparent")
+    // Hover fill is OFF on a dead row (views/purchases/PurchaseListRow.qml
+    // does the same on its unavailable rows): a row that lights up under the
+    // pointer reads as clickable, and this one is not. The zebra stripe stays
+    // — it is structure, not affordance.
+    color: (hovered && !root.pulledDead)
+        ? rowHoverBg
+        : (zebra && number % 2 === 0 ? "#07ffffff" : "transparent")
 
     // `playArea` is in here for the reason TrackPlayCell.slint:76-79 spells
     // out: the cell owns a hover-enabled area of its own, and "Slint's
@@ -426,6 +485,12 @@ Rectangle {
         anchors.leftMargin: cols.padH
         anchors.rightMargin: cols.padH
         spacing: cols.gap
+        // THE DIM (contract §5.2). On the Row, not on `root`: the row's menu
+        // and its now-playing edge mark are siblings of this item, and neither
+        // should fade. 0.5 is views/purchases/PurchaseListRow.qml's value —
+        // the only precedent for this state in the tree, so the two screens
+        // agree.
+        opacity: root.pulledDead ? 0.5 : 1.0
 
         // --- Reorder gutter (primitives/TrackRow.slint:270-311) ----------
         // The LEADING cell on a reorderable list: a 22px column with an
@@ -503,7 +568,10 @@ Rectangle {
             // :93) — the playing row keeps the affordance at rest, which is
             // what the accent ring is FOR. The port showed it on hover only,
             // so the ring never appeared.
-            readonly property bool showOverlay: root.hovered || root.isActive
+            // A dead row never offers the play disc: the affordance IS the
+            // claim that clicking does something.
+            readonly property bool showOverlay: (root.hovered || root.isActive)
+                && !root.pulledDead
             // `accent-ring` (:108): the playing row's static form — only with
             // the animation pref OFF; with it ON the eq bars carry the state.
             readonly property bool accentRing: !root.playIndicatorAnim
@@ -550,11 +618,58 @@ Rectangle {
                 }
             }
             Text {
-                visible: !playCell.showOverlay && !root.selectMode
+                visible: !playCell.showOverlay && !root.selectMode && !root.pulledDead
                 anchors.centerIn: parent
                 text: root.number
                 color: theme.textMuted
                 font.pixelSize: 13
+            }
+            // PULLED FROM THE CATALOGUE — the alert glyph takes the track
+            // number's slot, so the leading column still says "what this row
+            // is" and nothing reflows.
+            //
+            // `circle-alert`, NOT `triangle-alert` (contract §A F11): the
+            // download column of THIS row already draws `triangle-alert` for
+            // `cacheStatus === 4` (a failed cache), and two identical glyphs
+            // meaning two different things on one 50px row is a defect, not a
+            // style. `circle-alert` is also what the Tauri frontend used for
+            // exactly this state (TrackRow.svelte's CircleAlert), so the
+            // meaning is not being invented here. Both glyphs exist in every
+            // tint dir (qml/assets/icons/*/circle-alert.svg).
+            //
+            // A Loader, so a normal row instantiates NOTHING — not the glyph,
+            // not the MouseArea, and not the attached ToolTip, which is a
+            // QObject per item the moment it is referenced. A 16K-row list
+            // must not pay for a state a handful of rows are ever in.
+            Loader {
+                anchors.centerIn: parent
+                width: 20
+                height: 20
+                active: root.pulledDead && !root.selectMode
+                visible: active
+                sourceComponent: Item {
+                    QbzIcon {
+                        anchors.centerIn: parent
+                        name: "circle-alert"
+                        width: 15
+                        height: 15
+                        tintName: "favorite"
+                    }
+                    MouseArea {
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        // No cursorShape override: an Arrow over an inert row
+                        // is the honest signal, and PurchaseListRow.qml does
+                        // the same on its unavailable rows.
+                        ToolTip.visible: containsMouse
+                        ToolTip.delay: 300
+                        // REUSED msgid — already translated in all 7
+                        // translated locales (es:3658); it is the same
+                        // sentence the reactive skip path toasts.
+                        ToolTip.text: QbzSession.tr(
+                            "This track is no longer available", QbzSession.trRev)
+                    }
+                }
             }
             Rectangle {
                 visible: playCell.showOverlay && !root.showBars && !root.selectMode
@@ -592,7 +707,12 @@ Rectangle {
                 // it would swallow the checkbox's press. Disabling it in
                 // select mode is what hands the cell over (the play
                 // affordance is invisible there anyway).
-                enabled: !root.selectMode
+                //
+                // The cell is its OWN click target (TrackPlayCell.slint
+                // :234-243), so disabling the row body is not enough: without
+                // the `pulledDead` term, clicking the alert glyph would start
+                // a play that cannot succeed.
+                enabled: !root.selectMode && !root.pulledDead
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
                 onClicked: {
@@ -639,11 +759,16 @@ Rectangle {
                 spacing: 6
                 Text {
                     text: root.item.title || ""
-                    color: theme.textPrimary
+                    // Muted, not just dimmed: the Row's 0.5 opacity fades the
+                    // whole cell uniformly, and the TITLE is the part that has
+                    // to stop reading as live content.
+                    color: root.pulledDead ? theme.textMuted : theme.textPrimary
                     font.pixelSize: 14
                     font.weight: theme.weightMedium
                     elide: Text.ElideRight
-                    width: Math.min(implicitWidth, parent.parent.width - (root.item.explicit ? 22 : 0))
+                    width: Math.min(implicitWidth, parent.parent.width
+                        - (root.item.explicit ? 22 : 0)
+                        - (root.pulledCached ? 22 : 0))
                 }
                 Rectangle {
                     visible: root.item.explicit === true
@@ -658,6 +783,50 @@ Rectangle {
                         color: theme.textMuted
                         font.pixelSize: 10
                         font.weight: theme.weightSemibold
+                    }
+                }
+                // CACHED BUT PULLED (contract §5.3, finding F5). Qobuz removed
+                // the track, but the user DOWNLOADED it and `qbz-core` resolves
+                // the offline tier before any availability question, so it
+                // still plays perfectly. This row is therefore NOT the dead
+                // row — it keeps its play cell, its heart and its click, and
+                // all it gains is an honest badge, because the user still needs
+                // to know it is gone from the catalogue: the moment they clear
+                // the download, it dies.
+                //
+                // `cloud-off`, which reads as "not in the cloud any more" and
+                // collides with nothing on this row (the download column shows
+                // `circle-check-big` for the copy that makes this state
+                // possible). Loader for the same per-row cost reason as the
+                // dead glyph above.
+                Loader {
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 16
+                    height: 16
+                    active: root.pulledCached
+                    visible: active
+                    sourceComponent: Item {
+                        QbzIcon {
+                            anchors.centerIn: parent
+                            name: "cloud-off"
+                            width: 14
+                            height: 14
+                            tintName: "muted"
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            ToolTip.visible: containsMouse
+                            ToolTip.delay: 300
+                            // NEW msgid — the one string this state needs and
+                            // the catalogs do not carry (the i18n lane adds it
+                            // to all eight). Not foldable into "This track is
+                            // no longer available": that sentence would be a
+                            // lie on a row that is playing right now.
+                            ToolTip.text: QbzSession.tr(
+                                "No longer on Qobuz — playing your downloaded copy",
+                                QbzSession.trRev)
+                        }
                     }
                 }
             }
@@ -756,6 +925,15 @@ Rectangle {
             anchors.verticalCenter: parent.verticalCenter
             color: favArea.containsMouse ? theme.surfaceElevated : "transparent"
             QbzIcon {
+                // The SLOT stays (the cell keeps its `visible` arm) and only
+                // the glyph goes. Hiding the whole cell would collapse it out
+                // of the Row and shift every column left of it — and
+                // rows/TrackListHeader.qml lays out from the same TrackCols
+                // object, so the header would no longer name the columns under
+                // it. Suppressing the affordance without moving the grid is
+                // what the reference did too (Tauri PlaylistDetailView
+                // :2712-2713).
+                visible: !root.pulledDead
                 anchors.centerIn: parent
                 name: root.favorite ? "heart-filled" : "heart"
                 width: 16
@@ -772,8 +950,10 @@ Rectangle {
                 // TrackRow.slint:527/558/623/688 — the in-row controls stand
                 // down in select mode so their click reaches the row body.
                 // Without it, aiming at a row and hitting the heart
-                // un-favourites a track the user meant to tick.
-                enabled: !root.selectMode
+                // un-favourites a track the user meant to tick. A dead row's
+                // heart is not drawn at all (above), so the area under it must
+                // not stay live either.
+                enabled: !root.selectMode && !root.pulledDead
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
                 onClicked: root.toggleFavorite()
@@ -793,7 +973,10 @@ Rectangle {
             anchors.verticalCenter: parent.verticalCenter
 
             QbzIcon {
-                visible: root.cacheStatus === 0
+                // A pulled track has no file url to fetch, so the download
+                // affordance could only ever fail — the slot keeps its width
+                // (see the favourite cell for why) and loses its glyph.
+                visible: root.cacheStatus === 0 && !root.pulledDead
                 anchors.centerIn: parent
                 name: "cloud-download"
                 width: 16
@@ -814,7 +997,9 @@ Rectangle {
                 tintName: "accent"
             }
             QbzIcon {
-                visible: root.cacheStatus === 4
+                // Never alongside the pulled-track alert in the number cell:
+                // one row, one alert.
+                visible: root.cacheStatus === 4 && !root.pulledDead
                 anchors.centerIn: parent
                 name: "triangle-alert"
                 width: 16
@@ -824,7 +1009,7 @@ Rectangle {
             MouseArea {
                 id: dlArea
                 anchors.fill: parent
-                enabled: root.hasOfflineCacheSeam && !root.selectMode
+                enabled: root.hasOfflineCacheSeam && !root.selectMode && !root.pulledDead
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
                 onClicked: {
@@ -870,20 +1055,35 @@ Rectangle {
     function menuModel() {
         var t = QbzSession.tr
         var r = QbzSession.trRev
-        var m = [
-            { "label": t("Play now", r), "icon": "play-fill", "action": "play" },
-            { "label": t("Play next", r), "icon": "list-start", "action": "next" },
-        ]
-        // #442 "Play later" — the end of the MANUAL block (after everything
-        // already queued by hand, before the source resumes).
-        if (root.menuShowLater)
-            m.push({ "label": t("Play later", r), "icon": "list-plus", "action": "later" })
-        m.push({ "label": t("Add to queue", r), "icon": "list-end", "action": "queue" })
+        var m = []
+        // A DEAD row does not get transport entries. D5 keeps an unavailable
+        // track out of the queue at the seam, so "Play next" here would render
+        // and do nothing — the rendered-and-inert defect the `has*Seam`
+        // constants above already refuse ("OFF = the row is not built at all").
+        // The row keeps its menu because the menu is the ONLY way to reach the
+        // repair, which is exactly why the row must stay right-clickable.
+        if (!root.pulledDead) {
+            m.push({ "label": t("Play now", r), "icon": "play-fill", "action": "play" })
+            m.push({ "label": t("Play next", r), "icon": "list-start", "action": "next" })
+            // #442 "Play later" — the end of the MANUAL block (after everything
+            // already queued by hand, before the source resumes).
+            if (root.menuShowLater)
+                m.push({ "label": t("Play later", r), "icon": "list-plus", "action": "later" })
+            m.push({ "label": t("Add to queue", r), "icon": "list-end", "action": "queue" })
+        }
+        // THE REPAIR. First entry on a dead row, because it is the only reason
+        // that row's menu is worth opening at all. Host-routed — see
+        // `routeReplaceExternally`.
+        if (root.hasReplaceSeam)
+            m.push({ "label": t("Find available version", r), "icon": "refresh-cw",
+                     "action": "find-replacement" })
         if (root.hasRadioSeam) {
             m.push({ "label": t("Create QBZ radio", r), "icon": "radio", "action": "radio-qbz" })
             m.push({ "label": t("Create Qobuz radio", r), "icon": "radio", "action": "radio-qobuz" })
         }
-        if (root.menuShowFavorite)
+        // The menu and the heart cell agree: neither offers the favourite on a
+        // dead row.
+        if (root.menuShowFavorite && !root.pulledDead)
             m.push({ "label": root.favorite ? t("Remove from Library", r) : t("Add to Library", r),
                      "icon": root.favorite ? "heart-filled" : "heart", "action": "favorite" })
         if (root.hasMixtapeSeam)
@@ -897,12 +1097,20 @@ Rectangle {
             m.push({ "label": t("Share Qobuz link", r), "icon": "link", "action": "share-qobuz" })
         if (root.hasSonglinkSeam)
             m.push({ "label": t("Share Song.link", r), "icon": "link", "action": "share-songlink" })
-        if (root.hasOfflineCacheSeam) {
+        // The dead row offers no cache action at all (there is no stream url
+        // left to fetch), and the cached-but-pulled row must not be able to
+        // destroy its only copy with a refresh.
+        if (root.hasOfflineCacheSeam && !root.pulledDead) {
             // TrackContextMenu.slint:174-199 — the offline block tracks the
             // row's live status: not-cached rows get the download arm, ready
             // rows get refresh + remove.
             if (root.cacheStatus === 3) {
-                m.push({ "label": t("Refresh offline copy", r), "icon": "refresh-cw", "action": "recache" })
+                // A REFRESH on a pulled track would re-fetch a stream url that
+                // no longer exists and can only end with the copy gone — the
+                // one copy that is still playing. Remove stays: the user may
+                // legitimately want the disk space, and it is their call.
+                if (!root.pulledCached)
+                    m.push({ "label": t("Refresh offline copy", r), "icon": "refresh-cw", "action": "recache" })
                 m.push({ "label": t("Remove offline copy", r), "icon": "trash-2", "action": "uncache", "danger": true })
             } else {
                 m.push({ "label": t("Make available offline", r), "icon": "cloud-download", "action": "cache" })
@@ -943,6 +1151,12 @@ Rectangle {
             else if (root.catalogRow && !root.localSourceRow)
                 QbzPlaylistPicker.openForTrack(root.item.id)
         }
+        // "Find available version" — the HOST answers: only it knows the
+        // playlist id, whether the user owns it, and that this row is a
+        // catalog membership. `hasReplaceSeam` already gates the entry on the
+        // host having taken the routing, so there is no internal arm to fall
+        // through to.
+        else if (a === "find-replacement") root.replaceRequested()
         else if (a === "remove") root.removeRequested()
         else if (a === "cache") QbzPlayer.cacheTrack(root.item.id)
         else if (a === "uncache") QbzPlayer.uncacheTrack(root.item.id)
@@ -1057,7 +1271,10 @@ Rectangle {
         propagateComposedEvents: true
         // Right press opens the SAME menu as ⋯ (rowMenu), at the pointer.
         acceptedButtons: Qt.LeftButton | Qt.RightButton
-        cursorShape: (root.clickPlays || root.selectMode) ? Qt.PointingHandCursor : Qt.ArrowCursor
+        // An Arrow over a dead row, whatever the surface's click policy — the
+        // pointer must not promise a play that is blocked below.
+        cursorShape: (!root.pulledDead && (root.clickPlays || root.selectMode))
+            ? Qt.PointingHandCursor : Qt.ArrowCursor
         // Keep the grab so the enclosing Flickable cannot turn our drag into a
         // scroll — see the block above.
         //
@@ -1095,8 +1312,11 @@ Rectangle {
             // Only a LEFT press drags — a right press is the context gesture.
             // Dragging a row onto a sidebar playlist is off in select mode
             // (TrackRow.slint keeps the whole body as a selection target).
+            // A dead row is not a drag source either: dropping it on a sidebar
+            // playlist would add a track that cannot play, which is precisely
+            // the state this treatment exists to stop spreading.
             if (!pressed || !(pressedButtons & Qt.LeftButton) || !root.draggable
-                || root.selectMode) return
+                || root.selectMode || root.pulledDead) return
             const g = mapToItem(null, mouse.x, mouse.y)
             const dx = mouse.x - root.downPos.x
             const dy = mouse.y - root.downPos.y
@@ -1139,6 +1359,23 @@ Rectangle {
                 mouse.accepted = true
                 return
             }
+            // THE CLICK IS BLOCKED UP FRONT (D4): no request, no toast, no
+            // error — the row already SAYS it is dead, so clicking it must be
+            // a no-op rather than a failure the user has to read. The right
+            // press never reaches here (it returns above), so the context menu
+            // — the only route to the replacement action — still opens.
+            //
+            // AFTER the select-mode arm, not before it: in select mode a click
+            // means "tick this row", not "play it", so blocking it there would
+            // buy nothing (no play is issued either way) while leaving the row
+            // half-selectable — its checkbox has its own live MouseArea in the
+            // leading cell, and the bulk bar's "Select all" reaches it
+            // regardless. A row the user cannot tick by clicking but CAN tick
+            // by hitting the 14px disc is the worse of the two states.
+            if (root.pulledDead) {
+                mouse.accepted = true
+                return
+            }
             if (wasDragging) {
                 mouse.accepted = true
             } else if (root.clickPlays) {
@@ -1157,6 +1394,10 @@ Rectangle {
             // toggled twice by then, which lands back where it started, so the
             // double-click must not add a third.
             if (root.selectMode)
+                return
+            // The album view plays on DOUBLE-click (clickPlays:false there),
+            // so the single-click block above is not enough on its own.
+            if (root.pulledDead)
                 return
             if (mouse.button === Qt.LeftButton)
                 root.playRequested()

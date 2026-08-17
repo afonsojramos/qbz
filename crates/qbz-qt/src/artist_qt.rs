@@ -544,6 +544,16 @@ fn map_track(index: usize, track: PageArtistTrack) -> TrackRow {
         .unwrap_or_default();
     let bit_depth = track.audio_info.as_ref().and_then(|a| a.maximum_bit_depth);
     let sample_rate = track.audio_info.as_ref().and_then(|a| a.maximum_sampling_rate);
+    // /artist/page reports availability on the nested `rights` object, not as a
+    // flat key — the same read `playback_qt::artist_top_queue_tracks` (:731)
+    // already does when it builds the queue row from this payload. `unwrap_or
+    // (true)` is §3.1's rule at the parse site: a thin page payload must never
+    // grey out an artist's whole track list.
+    let not_streamable = !track
+        .rights
+        .as_ref()
+        .and_then(|r| r.streamable)
+        .unwrap_or(true);
     TrackRow {
         is_favorite: crate::fav_cache_qt::contains_track(track.id),
         id: track.id.to_string(),
@@ -568,6 +578,7 @@ fn map_track(index: usize, track: PageArtistTrack) -> TrackRow {
         work_composer_name: String::new(),
         work_composer_id: String::new(),
         artwork_url,
+        not_streamable,
     }
 }
 
@@ -900,7 +911,10 @@ fn track_row_to_queue(row: &TrackRow) -> QueueTrack {
             Some(row.album_id.clone())
         },
         artist_id: row.artist_id.parse::<u64>().ok(),
-        streamable: true,
+        // D5: carried from the row, which read it off `/artist/page`'s nested
+        // `rights.streamable` (see `map_track`). Hardcoding `true` here threw
+        // away an answer the payload had already given us.
+        streamable: !row.not_streamable,
         source: Some("qobuz".to_string()),
         parental_warning: row.explicit,
         source_item_id_hint: None,

@@ -5203,3 +5203,60 @@ msgstr "Selecciona un artista para ver sus álbumes"
 
 msgid "{} / {} artists"
 msgstr "{} / {} artistas"
+
+# --- Unavailable tracks + replacement search (Qt port, contract 2026-08-17
+# §8-6). "Unavailable" and "This track is no longer available" already
+# exist in this file and are REUSED by the render and the reactive skip toast
+# — nothing below twins them.
+#
+# The skipped-tracks toast is a plural PAIR, per the convention already set by
+# "Scan complete ({} file skipped)" and "{} duplicate skipped": the queue build
+# drops N rows at once, and a singular-only string reads wrong in every locale
+# with plural rules. Russian carries all three forms.
+#
+# "No longer on Qobuz — playing your downloaded copy" is the cached-but-pulled
+# state (contract §5.3/F5): the track left the catalogue but the user owns a
+# downloaded copy, so it still plays. It cannot fold into "This track is no
+# longer available" — that sentence would be a lie on a row playing right now.
+#
+# Em dash is U+2014 with spaces on both sides, as everywhere else in this file.
+msgid "Find available version"
+msgstr "Buscar versión disponible"
+
+msgid "Replace unavailable track"
+msgstr "Reemplazar pista no disponible"
+
+msgid "No available version found"
+msgstr "No se encontró ninguna versión disponible"
+
+msgid "Track replaced"
+msgstr "Pista reemplazada"
+
+msgid "Could not replace the track"
+msgstr "No se pudo reemplazar la pista"
+
+msgid "The replacement was added at the end of the playlist"
+msgstr "El reemplazo se agregó al final de la lista de reproducción"
+
+msgid "{} track skipped — no longer available"
+msgid_plural "{} tracks skipped — no longer available"
+msgstr[0] "Se omitió {} pista — ya no está disponible"
+msgstr[1] "Se omitieron {} pistas — ya no están disponibles"
+
+msgid "No longer on Qobuz — playing your downloaded copy"
+msgstr "Ya no está en Qobuz — reproduciendo tu copia descargada"
+
+msgid "Exact match"
+msgstr "Coincidencia exacta"
+
+msgid "Low confidence"
+msgstr "Coincidencia dudosa"
+
+msgid "Replace"
+msgstr "Reemplazar"
+
+msgid "Replacing..."
+msgstr "Reemplazando..."
+
+msgid "The replacement takes the unavailable track's place in the playlist."
+msgstr "El reemplazo ocupa el lugar de la pista no disponible en la lista."

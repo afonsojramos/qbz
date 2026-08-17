@@ -183,6 +183,15 @@ pub fn local_queue_track(t: &LocalTrack) -> QueueTrack {
             t.album_group_key.clone()
         }),
         artist_id: None,
+        // GENUINELY always true, and this is not a stub (contract §5.3 F5).
+        // This row is a FILE ON DISK — a local scan, a Plex item, or a
+        // `qobuz_download` — and Qobuz's streaming rights do not reach it.
+        // `qbz-core` takes the offline tier BEFORE it asks any availability
+        // question (core.rs:716), which is exactly why a track Qobuz PULLED
+        // still plays from here. Marking these `false` would delete the user's
+        // own downloads from the queue — a worse bug than the one D5 fixes, and
+        // it would bite hardest in offline mode, where this is the only copy
+        // that exists.
         streamable: true,
         source: Some(src.to_string()),
         parental_warning: false,
@@ -494,7 +503,19 @@ pub(crate) async fn play_rows(
     // Through the SHARED seam (not `core().set_queue`) so the origin is derived
     // from the queue: one album -> ("album", group_key), a mixed folder queue ->
     // nothing, and the per-track album fallback lands it on the same view.
-    crate::playback_qt::set_queue_stamped(runtime, queue, Some(start), None).await;
+    // Local rows are never dropped by the seam — `local_queue_track` sets
+    // `streamable: true` (a file on disk is outside Qobuz's rights) and
+    // `is_track_blacklisted` fails open for any source that is not "qobuz" — so
+    // the anchor always comes back and always names `first`. Answered anyway
+    // rather than discarded with a `let _`: the day a Qobuz row reaches this
+    // path, this returns instead of trying to play a track the core dropped.
+    if crate::playback_qt::set_queue_stamped(runtime, queue, Some(start), None)
+        .await
+        .is_none()
+    {
+        log::warn!("[qbz-qt] local play: the queue was filtered to nothing");
+        return;
+    }
     crate::playback_qt::publish_queue(runtime).await;
     play_audible(runtime, &first).await;
     crate::playback_qt::refresh_now_playing(runtime).await;

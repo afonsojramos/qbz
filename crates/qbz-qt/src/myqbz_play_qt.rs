@@ -341,9 +341,18 @@ pub(crate) async fn play_all_tracks(
         ));
         return;
     }
-    let first_id = tracks[0].id;
     // Context `None` — `derive_context` infers album-or-artist (T16).
-    crate::playback_qt::set_queue_stamped(runtime, tracks, Some(0), None).await;
+    // F1: the anchor comes back from the seam, never from `tracks[0]`.
+    let Some(anchor) =
+        crate::playback_qt::set_queue_stamped(runtime, tracks, Some(0), None).await
+    else {
+        // The seam already toasted the count and left the previous queue alone.
+        // `set_queue_source_collection` and `touch_play` below are bookkeeping
+        // for a play that did not happen, so they are skipped with it.
+        log::info!("[qbz-qt] myqbz_play: every track of {collection_id} was filtered");
+        return;
+    };
+    let first_id = anchor.track_id;
     runtime
         .runtime()
         .set_queue_source_collection(Some(collection_id.to_string()))
@@ -492,6 +501,13 @@ pub(crate) fn item_action(source_item_id: String, action: String) {
         // are idempotent (filter drops nothing twice; stamping skips
         // pre-stamped tracks).
         let tracks = crate::playback_qt::stamped(tracks, None);
+        // The seam can empty a batch that was non-empty on entry. Guarding here
+        // covers all four arms below — including the Play arm's `tracks[0]`,
+        // which is a LIVE index panic today for a batch the blacklist empties.
+        if tracks.is_empty() {
+            log::info!("[qbz-qt] myqbz_play: the item's tracks were all filtered");
+            return;
+        }
 
         // QConnect CONTROLLER mode (contract §7): route the add to the peer's
         // queue — mode-matched to the row's LOCAL placement. Early-returns
@@ -515,8 +531,14 @@ pub(crate) fn item_action(source_item_id: String, action: String) {
             RowMode::Play => {
                 // Replace-play this ONE item — no queue-source stamp, no
                 // touch_play (per-row action, not "play the whole collection").
-                let first_id = tracks[0].id;
-                crate::playback_qt::set_queue_stamped(&runtime, tracks, Some(0), None).await;
+                // F1: the anchor comes back from the seam.
+                let Some(anchor) =
+                    crate::playback_qt::set_queue_stamped(&runtime, tracks, Some(0), None).await
+                else {
+                    log::info!("[qbz-qt] myqbz_play: the item's tracks were all filtered");
+                    return;
+                };
+                let first_id = anchor.track_id;
                 // QConnect CONTROLLER mode (§7): route the play to the peer
                 // (after the funnel, before the local audible step).
                 if crate::playback_qt::route_play_to_peer(&runtime, first_id).await {
@@ -627,6 +649,13 @@ fn bulk_enqueue_inner(items: Vec<MixtapeCollectionItem>, mode: BulkEnqueueMode) 
             return;
         }
         let tracks = crate::playback_qt::stamped(tracks, None);
+        // The emptiness check above ran BEFORE the seam, so re-ask after it:
+        // routing an empty batch to a peer and calling `add_tracks(vec![])`
+        // would be a no-op dressed up as an action. The seam already said why.
+        if tracks.is_empty() {
+            log::info!("[qbz-qt] myqbz_play: every selected track was filtered");
+            return;
+        }
 
         // QConnect CONTROLLER mode (contract §7): route the add to the peer's
         // queue — mode-matched to the bulk bar's LOCAL placement (Next /
@@ -737,8 +766,17 @@ pub(crate) fn play_inline_track(
 
         match mode {
             InlineTrackMode::Play => {
-                let first_id = track.id;
-                crate::playback_qt::set_queue_stamped(&runtime, vec![track], Some(0), None).await;
+                // F1: the anchor comes back from the seam. No extra toast here —
+                // the seam already raised the skipped-tracks one, and this
+                // module's toast slot is single-shot (a second would replace it).
+                let Some(anchor) =
+                    crate::playback_qt::set_queue_stamped(&runtime, vec![track], Some(0), None)
+                        .await
+                else {
+                    log::info!("[qbz-qt] myqbz_play: inline track {track_id} is not playable");
+                    return;
+                };
+                let first_id = anchor.track_id;
                 // QConnect CONTROLLER mode (§7): route the play to the peer
                 // (after the funnel, before the local audible step).
                 if crate::playback_qt::route_play_to_peer(&runtime, first_id).await {

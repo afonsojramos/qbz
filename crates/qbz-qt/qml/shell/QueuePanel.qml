@@ -320,6 +320,22 @@ Rectangle {
         property bool reorderable: false
 
         readonly property bool hovered: qrArea.containsMouse || menuArea.containsMouse
+        /// Pulled from the catalogue, and not playable from disk. D5 keeps
+        /// these out of a queue BUILD, so the only way one reaches this list is
+        /// a session restored from disk or a listing whose endpoint never
+        /// reported availability — the two cases the reactive backstop exists
+        /// for. Rare is not never, and an unmarked dead row in the queue is the
+        /// same lie D4 forbids everywhere else.
+        ///
+        /// `cacheStatus` is read the same way rows/TrackRow.qml reads it and
+        /// for the same reason (a pulled track the user DOWNLOADED still plays
+        /// — contract §5.3/F5). `queue_qt::QueueRow` does not carry the field
+        /// today, so it reads `undefined !== 3` = true and a downloaded-but-
+        /// pulled queue row would be dimmed; the cost of that is cosmetic
+        /// (nothing here gates playback on it) and it corrects itself the day
+        /// the producer carries it.
+        readonly property bool pulledDead: row.qobuzUnavailable === true
+            && row.cacheStatus !== 3
         readonly property bool isActive: inQueue && QbzPlayer.npTrackId !== "" && QbzPlayer.npTrackId === row.id
         readonly property bool dragSource: reorderable && root.reorderActive
             && root.reorderFrom === rowIndex
@@ -333,11 +349,14 @@ Rectangle {
 
         height: 44
         radius: theme.radiusSm
-        color: hovered ? theme.surfaceHover
+        color: (hovered && !qrRoot.pulledDead) ? theme.surfaceHover
              : (rowIndex % 2 === 1 ? "#592a2a2a" : "transparent")
         border.width: dragSource ? 1 : 0
         border.color: theme.accent
-        opacity: dragSource ? 0.4 : 1.0
+        // The dead-row dim rides the SAME channel as the drag-source dim so the
+        // two cannot fight; a dragged dead row is dimmer still, which is
+        // harmless and honest.
+        opacity: dragSource ? 0.4 : (qrRoot.pulledDead ? 0.5 : 1.0)
 
         Row {
             anchors.fill: parent
@@ -358,7 +377,7 @@ Rectangle {
                 readonly property bool marked: qrRoot.inQueue
                     && root.stopAfterId !== "" && row.id === root.stopAfterId
                 Text {
-                    visible: !parent.marked
+                    visible: !parent.marked && !qrRoot.pulledDead
                     anchors.centerIn: parent
                     width: parent.width
                     text: rowIndex + 1 + (doc.page || 0) * 40
@@ -373,6 +392,25 @@ Rectangle {
                     width: 13
                     height: 13
                     tintName: "accent"
+                }
+                // Same glyph and the same reason as rows/TrackRow.qml: the
+                // alert takes the number's slot so the list does not reflow,
+                // and it is `circle-alert` rather than `triangle-alert` to stay
+                // clear of the cache-failed meaning that row's download column
+                // gives the triangle.
+                //
+                // The stop-after marker wins the slot when both apply — it is
+                // a marker the USER placed on this exact row and removing it
+                // silently would be worse than leaving one dead row unglyphed
+                // (the dim still marks it, and D5 means the pair is close to
+                // unreachable anyway).
+                QbzIcon {
+                    visible: qrRoot.pulledDead && !parent.marked
+                    anchors.centerIn: parent
+                    name: "circle-alert"
+                    width: 13
+                    height: 13
+                    tintName: "favorite"
                 }
             }
             Rectangle {
@@ -563,7 +601,9 @@ Rectangle {
             // content) as rows/TrackRow.qml's trArea.
             z: -1
             hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
+            // Arrow on a dead row, for the reason rows/TrackRow.qml gives: the
+            // pointer must not promise a play the click below refuses.
+            cursorShape: qrRoot.pulledDead ? Qt.ArrowCursor : Qt.PointingHandCursor
             // THE reason drag-reorder scrolled instead of reordering: the
             // enclosing Flickable filters its children's mouse events and
             // grabs the press once the pointer moves past
@@ -626,6 +666,13 @@ Rectangle {
                     qrArea.suppressClick = false
                     return
                 }
+                // D4 again: a dead row is inert on click. The ⋯ menu is
+                // untouched, so "Remove from queue" — the one thing the user
+                // actually wants to do with this row — still works, and the
+                // press-drag reorder above still works too (it commits before
+                // this handler ever runs).
+                if (qrRoot.pulledDead)
+                    return
                 if (inQueue) QbzQueue.queuePlayUpcoming(rowIndex)
                 else QbzQueue.queuePlayHistory(rowIndex)
             }

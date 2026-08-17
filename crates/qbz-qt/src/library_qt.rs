@@ -87,6 +87,19 @@ pub struct FeedItem {
     pub sample_rate: Option<f64>,
     #[serde(rename = "isFavorite")]
     pub is_favorite: bool,
+    /// Qobuz PULLED this track (`streamable: false` — contract §5.1). Track
+    /// rows only; meaningless on album / artist / playlist rows and skipped
+    /// when false, so the ~10k-row feed JSON does not grow a key per row.
+    ///
+    /// BOTH feed -> queue builders read it (`feed_track_to_queue` below and
+    /// `playback_qt::feed_queue_track`), for the same reason they both read
+    /// `bit_depth`: the two must not disagree about what a row is.
+    #[serde(
+        default,
+        rename = "qobuzUnavailable",
+        skip_serializing_if = "std::ops::Not::not"
+    )]
+    pub not_streamable: bool,
     pub genre: String,
     pub year: String,
     pub duration: String,
@@ -327,6 +340,12 @@ fn mmss(secs: u32) -> String {
 // ---- mappers (favorites.rs / album_map.rs / search.rs ports) --------------
 
 fn map_track(track: Track) -> FeedItem {
+    // §5.1 via §3.1's single interpreter of absence, read HERE and not down in
+    // the literal: `is_streamable()` borrows the whole `Track`, and the very
+    // next line moves a field out of it. A favourited track Qobuz later pulled
+    // is one of the most likely places a user meets this — they hearted it
+    // while it was still there.
+    let not_streamable = !track.is_streamable();
     let mut title = track.title;
     if let Some(version) = track.version.as_ref().filter(|v| !v.is_empty()) {
         title = format!("{title} ({version})");
@@ -378,6 +397,7 @@ fn map_track(track: Track) -> FeedItem {
         explicit: track.parental_warning,
         image_url: artwork_url,
         is_favorite: true,
+        not_streamable,
         ..Default::default()
     }
     .keyed()
@@ -1647,7 +1667,10 @@ pub(crate) fn feed_track_to_queue(item: &FeedItem) -> Option<QueueTrack> {
             Some(item.album_id.clone())
         },
         artist_id: item.artist_id.parse::<u64>().ok(),
-        streamable: true,
+        // D5: the feed row's own answer. Twin of `playback_qt::feed_queue_track`
+        // over the SAME `FeedItem` — both read this field rather than hardcoding
+        // a yes, so a Library row and a queue row cannot disagree.
+        streamable: !item.not_streamable,
         source: Some("qobuz".to_string()),
         parental_warning: item.explicit,
         source_item_id_hint: None,
@@ -1698,8 +1721,10 @@ fn order_by_visible(
 ///
 /// Fire-and-forget like every other `*_qt` play entry point (`label_qt::
 /// play_track`): the queue is built synchronously off the feed, the play is
-/// spawned. Blacklisted rows are dropped and the start index remapped inside
-/// `playback_qt::set_queue_stamped`, so nothing to do here.
+/// spawned. Blacklisted rows AND rows Qobuz pulled (contract §5.3 D5) are
+/// dropped inside `playback_qt::set_queue_stamped`, which also remaps the start
+/// index and hands back the id it actually anchored on — so nothing to do here
+/// beyond passing the list through `play_track_list`.
 /// Library header "Play all tracks" / "Shuffle all tracks" — the visible set
 /// as the queue, from the top (`FavoritesActions.play_all_tracks` /
 /// `shuffle_tracks`).

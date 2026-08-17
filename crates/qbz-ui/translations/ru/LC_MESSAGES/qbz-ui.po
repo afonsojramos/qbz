@@ -5212,3 +5212,62 @@ msgstr "Выберите исполнителя, чтобы увидеть ег�
 
 msgid "{} / {} artists"
 msgstr "{} / {} исполнителей"
+
+# --- Unavailable tracks + replacement search (Qt port, contract 2026-08-17
+# §8-6). "Unavailable" and "This track is no longer available" already
+# exist in this file and are REUSED by the render and the reactive skip toast
+# — nothing below twins them.
+#
+# The skipped-tracks toast is a plural PAIR, per the convention already set by
+# "Scan complete ({} file skipped)" and "{} duplicate skipped": the queue build
+# drops N rows at once, and a singular-only string reads wrong in every locale
+# with plural rules. Russian carries all three forms.
+#
+# "No longer on Qobuz — playing your downloaded copy" is the cached-but-pulled
+# state (contract §5.3/F5): the track left the catalogue but the user owns a
+# downloaded copy, so it still plays. It cannot fold into "This track is no
+# longer available" — that sentence would be a lie on a row playing right now.
+#
+# Em dash is U+2014 with spaces on both sides, as everywhere else in this file.
+# nplurals=3 — all three forms, like every other plural entry in this file.
+msgid "Find available version"
+msgstr "Найти доступную версию"
+
+msgid "Replace unavailable track"
+msgstr "Заменить недоступный трек"
+
+msgid "No available version found"
+msgstr "Доступная версия не найдена"
+
+msgid "Track replaced"
+msgstr "Трек заменён"
+
+msgid "Could not replace the track"
+msgstr "Не удалось заменить трек"
+
+msgid "The replacement was added at the end of the playlist"
+msgstr "Замена добавлена в конец плейлиста"
+
+msgid "{} track skipped — no longer available"
+msgid_plural "{} tracks skipped — no longer available"
+msgstr[0] "Пропущен {} трек — он больше недоступен"
+msgstr[1] "Пропущено {} трека — они больше недоступны"
+msgstr[2] "Пропущено {} треков — они больше недоступны"
+
+msgid "No longer on Qobuz — playing your downloaded copy"
+msgstr "Больше нет в Qobuz — воспроизводится скачанная копия"
+
+msgid "Exact match"
+msgstr "Точное совпадение"
+
+msgid "Low confidence"
+msgstr "Низкая точность"
+
+msgid "Replace"
+msgstr "Заменить"
+
+msgid "Replacing..."
+msgstr "Замена…"
+
+msgid "The replacement takes the unavailable track's place in the playlist."
+msgstr "Замена займёт место недоступного трека в плейлисте."

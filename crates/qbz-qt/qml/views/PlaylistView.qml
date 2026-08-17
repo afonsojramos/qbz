@@ -902,6 +902,33 @@ Rectangle {
                     // queue id — or 0 on an unresolved one — and the removal
                     // has to be keyed on the id the position map knows.
                     onRemoveRequested: QbzBridge.playlistRemoveTrack(String(item.id))
+                    // "Find available version" (contract §6.1) — the ONE
+                    // surface that offers it, and the gate is the reference's:
+                    // a QOBUZ playlist the signed-in user OWNS. Qobuz refuses
+                    // a write to anyone else's playlist, so offering it there
+                    // would be a dead action; a LOCAL playlist's rows are not
+                    // catalog memberships at all, and a mixed local/plex row in
+                    // this same view carries its own `source` word, which is
+                    // why the third term reads the row and not just the doc.
+                    routeReplaceExternally: root.isOwner && !root.isLocal
+                        && (modelData.source || "") === ""
+                    // Everything Rust needs, in ONE JSON object (the
+                    // `QbzMyQbzAdd.open(JSON.stringify(...))` idiom). No row
+                    // INDEX is passed on purpose: `index` here is the index
+                    // into the DISPLAYED list, which under a search filter or a
+                    // non-default sort is not the playlist's own order — the
+                    // reposition step derives the real slot from the
+                    // authoritative playlist it re-fetches anyway.
+                    onReplaceRequested: QbzTrackReplace.open(JSON.stringify({
+                        "playlistId": String(root.doc.id || ""),
+                        "playlistTrackId": String(item.playlistTrackId || item.id),
+                        "trackId": String(item.id),
+                        "title": item.title || "",
+                        "artist": item.artist || "",
+                        "album": item.album || "",
+                        "isrc": item.isrc || "",
+                        "durationSecs": item.durationSecs || 0
+                    }))
                     // "Add to playlist" — this view serves BOTH a Qobuz
                     // playlist and a LOCAL one (`local_playlist_qt::load`
                     // publishes into this same document through

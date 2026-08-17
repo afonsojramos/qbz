@@ -5180,3 +5180,60 @@ msgstr "アーティストを選択してアルバムを表示します"
 
 msgid "{} / {} artists"
 msgstr "{} / {} 組のアーティスト"
+
+# --- Unavailable tracks + replacement search (Qt port, contract 2026-08-17
+# §8-6). "Unavailable" and "This track is no longer available" already
+# exist in this file and are REUSED by the render and the reactive skip toast
+# — nothing below twins them.
+#
+# The skipped-tracks toast is a plural PAIR, per the convention already set by
+# "Scan complete ({} file skipped)" and "{} duplicate skipped": the queue build
+# drops N rows at once, and a singular-only string reads wrong in every locale
+# with plural rules. Russian carries all three forms.
+#
+# "No longer on Qobuz — playing your downloaded copy" is the cached-but-pulled
+# state (contract §5.3/F5): the track left the catalogue but the user owns a
+# downloaded copy, so it still plays. It cannot fold into "This track is no
+# longer available" — that sentence would be a lie on a row playing right now.
+#
+# Em dash is U+2014 with spaces on both sides, as everywhere else in this file.
+# nplurals=1 — one form, like every other plural entry in this file.
+msgid "Find available version"
+msgstr "利用可能なバージョンを探す"
+
+msgid "Replace unavailable track"
+msgstr "利用できないトラックを置き換え"
+
+msgid "No available version found"
+msgstr "利用可能なバージョンが見つかりませんでした"
+
+msgid "Track replaced"
+msgstr "トラックを置き換えました"
+
+msgid "Could not replace the track"
+msgstr "トラックの置き換えに失敗しました"
+
+msgid "The replacement was added at the end of the playlist"
+msgstr "代わりのトラックはプレイリストの最後に追加されました"
+
+msgid "{} track skipped — no longer available"
+msgid_plural "{} tracks skipped — no longer available"
+msgstr[0] "{}トラックをスキップしました — 利用できなくなりました"
+
+msgid "No longer on Qobuz — playing your downloaded copy"
+msgstr "Qobuz にはもうありません — ダウンロード済みのコピーを再生します"
+
+msgid "Exact match"
+msgstr "完全一致"
+
+msgid "Low confidence"
+msgstr "確度が低い"
+
+msgid "Replace"
+msgstr "置き換える"
+
+msgid "Replacing..."
+msgstr "置き換え中…"
+
+msgid "The replacement takes the unavailable track's place in the playlist."
+msgstr "置き換えた曲は、再生できない曲の位置に入ります。"

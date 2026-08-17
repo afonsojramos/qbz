@@ -207,6 +207,17 @@ pub struct TrackRow {
     pub art_path: String,
     #[serde(rename = "isFavorite")]
     pub is_favorite: bool,
+    /// Qobuz PULLED this track (`streamable: false` — contract §5.1). Search is
+    /// the one surface the Tauri reference never treated (§4.2) and D4 does not
+    /// exempt it: a dead row here is as clickable and as silent as anywhere
+    /// else. Search payloads DO carry the flat key (all 10 in
+    /// `qobuz-api/search-results-response.json`).
+    #[serde(
+        default,
+        rename = "qobuzUnavailable",
+        skip_serializing_if = "std::ops::Not::not"
+    )]
+    pub not_streamable: bool,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -389,6 +400,8 @@ fn map_track(track: &Track) -> TrackRow {
         ),
         explicit: track.parental_warning,
         art_url: artwork_url,
+        // §5.1 via §3.1's single interpreter of absence.
+        not_streamable: !track.is_streamable(),
         ..Default::default()
     }
 }

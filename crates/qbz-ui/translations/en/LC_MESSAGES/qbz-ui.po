@@ -808,3 +808,62 @@ msgstr "Tunnel Flow"
 # --- Purchases (Slice 13, Qt port) ---
 msgid "Download goodies"
 msgstr "Download goodies"
+
+# --- Unavailable tracks + replacement search (Qt port, contract 2026-08-17
+# §8-6). "Unavailable" and "This track is no longer available" already
+# exist in this file and are REUSED by the render and the reactive skip toast
+# — nothing below twins them.
+#
+# The skipped-tracks toast is a plural PAIR, per the convention already set by
+# "Scan complete ({} file skipped)" and "{} duplicate skipped": the queue build
+# drops N rows at once, and a singular-only string reads wrong in every locale
+# with plural rules. Russian carries all three forms.
+#
+# "No longer on Qobuz — playing your downloaded copy" is the cached-but-pulled
+# state (contract §5.3/F5): the track left the catalogue but the user owns a
+# downloaded copy, so it still plays. It cannot fold into "This track is no
+# longer available" — that sentence would be a lie on a row playing right now.
+#
+# Em dash is U+2014 with spaces on both sides, as everywhere else in this file.
+# en is the source-language stub: msgstr == msgid, as every batch that
+# introduced a genuinely new msgid here has done.
+msgid "Find available version"
+msgstr "Find available version"
+
+msgid "Replace unavailable track"
+msgstr "Replace unavailable track"
+
+msgid "No available version found"
+msgstr "No available version found"
+
+msgid "Track replaced"
+msgstr "Track replaced"
+
+msgid "Could not replace the track"
+msgstr "Could not replace the track"
+
+msgid "The replacement was added at the end of the playlist"
+msgstr "The replacement was added at the end of the playlist"
+
+msgid "{} track skipped — no longer available"
+msgid_plural "{} tracks skipped — no longer available"
+msgstr[0] "{} track skipped — no longer available"
+msgstr[1] "{} tracks skipped — no longer available"
+
+msgid "No longer on Qobuz — playing your downloaded copy"
+msgstr "No longer on Qobuz — playing your downloaded copy"
+
+msgid "Exact match"
+msgstr "Exact match"
+
+msgid "Low confidence"
+msgstr "Low confidence"
+
+msgid "Replace"
+msgstr "Replace"
+
+msgid "Replacing..."
+msgstr "Replacing..."
+
+msgid "The replacement takes the unavailable track's place in the playlist."
+msgstr "The replacement takes the unavailable track's place in the playlist."

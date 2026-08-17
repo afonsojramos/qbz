@@ -31,7 +31,10 @@
 //!   id-confusion class `playlist_picker_qt.rs`'s header exists to prevent.
 //! - `unavailable` rows carry a ref that cannot resolve at all; they render
 //!   honestly and every "copy this track somewhere" affordance must be absent
-//!   on them.
+//!   on them. `notStreamable` is a DIFFERENT thing and lives beside it: Qobuz
+//!   pulled the recording. That one can heal, it is the only one the
+//!   replacement search can act on, and a row carrying it plus
+//!   `cacheStatus == 3` is not dead at all — it plays from the download.
 //!
 //! POC-NOTEs:
 //! - The custom drag order persists to a per-user `playlist_orders.json`
@@ -118,6 +121,45 @@ pub struct PlaylistTrackRow {
     /// is broken rather than just that something is.
     #[serde(default, rename = "unavailableRef", skip_serializing_if = "String::is_empty")]
     pub unavailable_ref: String,
+    /// Qobuz PULLED this track: the catalog reports `streamable: false` for it
+    /// (contract §5.1). DISTINCT from [`Self::unavailable`] above, and the two
+    /// must never be merged (§2): that one is a broken LOCAL ref — a Plex key
+    /// the cache does not know, a stored id outside the catalog range — which
+    /// can never heal, has no replacement, and says nothing about the Qobuz
+    /// catalogue. This one names a recording Qobuz removed: it CAN come back
+    /// (rights are restored), and it is the only one of the two the replacement
+    /// search can act on. A row can carry either, and their treatments differ.
+    ///
+    /// Absence from the API is NOT this. `qbz_models::Track::is_streamable()`
+    /// reads a missing key as AVAILABLE (§3.1), so an endpoint that stays quiet
+    /// leaves this `false` and the row renders normally — greying out a whole
+    /// view because one endpoint was terse is the failure that would sink the
+    /// feature.
+    #[serde(
+        default,
+        rename = "qobuzUnavailable",
+        skip_serializing_if = "std::ops::Not::not"
+    )]
+    pub not_streamable: bool,
+    /// The recording identifier, carried so the replacement search's ISRC
+    /// short-circuit can fire (`qbz-playlist-import/src/match_qobuz.rs:156-159`
+    /// scores an ISRC hit 1.0). That is the owner's "a veces cambia el ID del
+    /// álbum" case: same recording, new catalog id, identical ISRC — an exact
+    /// relink needing no human judgement. Without it the feature degrades to
+    /// title/artist scoring and loses the one CERTAIN match. The live capture
+    /// confirms a pulled track keeps it
+    /// (`album-get-unavailable-track-captured-2026-08-17.json`: `SEWCE0900201`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub isrc: String,
+    /// Offline-cache status at build time (0 none / 3 ready) — the twin of
+    /// `album_qt::TrackRow::cache_status`. Playlist rows never carried it, so
+    /// `TrackRow.qml:154` read `undefined` and fell back to 0 on every playlist
+    /// row. That was cosmetic until F5: a PULLED track that is already
+    /// DOWNLOADED still plays from disk and must render as "no longer on Qobuz —
+    /// playing your downloaded copy", not as dead, and the row cannot tell the
+    /// two apart without this.
+    #[serde(default, rename = "cacheStatus")]
+    pub cache_status: i32,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -496,7 +538,18 @@ pub(crate) fn map_track(track: &Track) -> PlaylistTrackRow {
         // click sent `favorite/delete`, REMOVING it from the library.
         is_favorite: crate::fav_cache_qt::contains_track(track.id),
         id: track.id.to_string(),
-        playlist_track_id: track.id,
+        // The MEMBERSHIP id, which is NOT the catalog id. This used to be
+        // `track.id`, and the two are different numbers for the same row: the
+        // catalog id names the recording, `playlist_track_id` names THIS row's
+        // slot in THIS playlist. Qobuz's `playlist/deleteTracks` and
+        // `playlist/updateTracksPosition` both take the membership id, so the
+        // old value made "remove from playlist" address a row that does not
+        // exist and made the replacement flow's reposition silently never fire
+        // (it looks the dead row up BY this id and found nothing).
+        //
+        // Falls back to the catalog id only when the endpoint omits it, which
+        // is what the previous code assumed unconditionally.
+        playlist_track_id: track.playlist_track_id.unwrap_or(track.id),
         title,
         artist,
         artist_id,
@@ -519,6 +572,20 @@ pub(crate) fn map_track(track: &Track) -> PlaylistTrackRow {
         art_url: album
             .and_then(|a| a.image.best().cloned())
             .unwrap_or_default(),
+        // §5.1: the API's own answer, resolved through the ONE helper that is
+        // allowed to interpret absence (§3.1). Playlists are the surface the
+        // owner says pulled tracks show up on MOST, which is why this row model
+        // is the first one plumbed.
+        not_streamable: !track.is_streamable(),
+        // Carried for §6's ISRC short-circuit; see the field's doc comment.
+        isrc: track.isrc.clone().unwrap_or_default(),
+        // F5: a pulled track we already downloaded is NOT dead. The same O(1)
+        // session-set read `album_qt` / `artist_qt` / `label_qt` rows use.
+        cache_status: if crate::offline_qt::is_cached(&track.id.to_string()) {
+            3
+        } else {
+            0
+        },
         ..Default::default()
     }
 }
@@ -575,7 +642,13 @@ fn row_to_queue(row: &PlaylistTrackRow) -> QueueTrack {
             Some(row.album_id.clone())
         },
         artist_id: row.artist_id.parse::<u64>().ok(),
-        streamable: true,
+        // D5: the row's own answer, not a hardcoded yes. This function is the
+        // ONLY thing between a playlist row and the queue, so `true` here made
+        // both seams blind on the surface where the owner says pulled tracks
+        // turn up MOST. A LOCAL/Plex row never sets `not_streamable` (nothing on
+        // that path does), so a file on disk still queues — which is correct:
+        // Qobuz's streaming rights do not reach it.
+        streamable: !row.not_streamable,
         source: Some(if is_local_row {
             provenance.to_string()
         } else {
@@ -1580,6 +1653,12 @@ pub async fn enqueue_playlist_by_id(
         queue_for(runtime, playlist_id).await?,
         crate::playback_qt::PlayContext::playlist(&playlist_id.to_string()),
     );
+    // Empty after the seam: nothing to route, nothing to insert. The seam has
+    // already toasted how many rows it dropped.
+    if tracks.is_empty() {
+        log::info!("[qbz-qt] enqueue_playlist {playlist_id}: every track was filtered");
+        return Ok(());
+    }
     // QConnect CONTROLLER mode (contract §7): route the add to the peer's
     // queue — early-returns when handled, so the local insert + sync tail
     // below only run in local/renderer mode.
@@ -1715,8 +1794,18 @@ async fn play_queue_at(
         return Err("playlist has no playable tracks".to_string());
     }
     let start = start.min(tracks.len() - 1);
-    let first_id = tracks[start].id;
-    crate::playback_qt::set_queue_stamped(runtime, tracks, Some(start), context).await;
+    // F1 (contract §5.3): the anchor is whatever survived the seam's filter at
+    // the remapped index. This is the playlist path, and playlists are where
+    // the owner says pulled tracks show up MOST — reading the id off the
+    // pre-filter list here is the difference between "skips the dead track" and
+    // "plays nothing, says nothing".
+    let Some(anchor) =
+        crate::playback_qt::set_queue_stamped(runtime, tracks, Some(start), context).await
+    else {
+        log::info!("[qbz-qt] playlist play: every track was filtered, queue untouched");
+        return Ok(());
+    };
+    let first_id = anchor.track_id;
     crate::queue_qt::publish(runtime).await;
     // QConnect CONTROLLER mode (§7): route the play to the peer (after the
     // funnel, before the local audible step).
@@ -1775,9 +1864,15 @@ pub async fn enqueue_track(
     let row = with_doc(|d| d.tracks.iter().find(|t| t.id == track_id).cloned())
         .flatten()
         .ok_or_else(|| format!("track {track_id} not in the open playlist"))?;
-    let qt = crate::playback_qt::stamped(vec![row_to_queue(&row)], open_context())
-        .pop()
-        .expect("one row in, one row out");
+    // NOT `.expect("one row in, one row out")` any more: the enqueue seam
+    // filters now (F2 + D5), so one row in can legitimately be ZERO rows out.
+    // The `expect` would have PANICKED on a right-click of a pulled row — the
+    // exact row the owner's smoke right-clicks to reach the replacement action.
+    let Some(qt) = crate::playback_qt::stamped(vec![row_to_queue(&row)], open_context()).pop()
+    else {
+        log::info!("[qbz-qt] playlist enqueue: track {track_id} was filtered out");
+        return Ok(());
+    };
     // QConnect CONTROLLER mode (contract §7): route the add to the peer's
     // queue — early-returns when handled, so the local insert + sync tail
     // below only run in local/renderer mode.

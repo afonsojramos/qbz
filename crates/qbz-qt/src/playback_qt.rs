@@ -29,9 +29,13 @@
 //! - Gapless prefetch: the engine raises `gapless_ready` ~10s out and this
 //!   module now answers it with `play_next` (both the streaming and the
 //!   local/DSD arms), so transitions are sample-accurate again.
-//! - Blacklist filtering of the QUEUE (#1) — `filter_blacklisted_queue` +
+//! - Blacklist filtering of the QUEUE (#1) + the unavailability drop (contract
+//!   2026-08-17 §5.3 D5) — `filter_unplayable_queue` behind
 //!   `set_queue_stamped` / `stamped`, the two seams every play/enqueue path
-//!   already went through.
+//!   already went through. Both seams DROP; `set_queue_stamped` additionally
+//!   returns the surviving anchor, because a caller that computes its own
+//!   `first_id` off the pre-filter list plays a track the core does not hold
+//!   (F1 — silent, and reachable today through the blacklist alone).
 //! - The bounded skip-unavailable walk (#2) — `auto_skip_unavailable`.
 //! - Volume persistence (#3) — persisted on drag-end, restored at shell entry.
 //! - The stream-failure toast with the Flatpak/Snap ALSA rewrite (#7) —
@@ -311,44 +315,146 @@ fn queue_track_blacklisted(track: &QueueTrack) -> bool {
     )
 }
 
-/// Drop blacklisted entries from a freshly-built queue AND remap the start
-/// index onto the surviving track (playback.rs:2634-2641 `filter_blacklisted_queue`).
+/// THE unavailable drop predicate for a built queue row (contract §5.1 with the
+/// §5.3 / F5 exemption). Two halves, and the second is what keeps this feature
+/// from becoming a worse bug than the one it fixes:
 ///
-/// The Slint applies this at ~18 separate builder sites. This port funnels every
-/// play path through `set_queue_stamped`, so it needs exactly one — which is
-/// also why its absence was total rather than partial: the store was open and
-/// the manager worked, but nothing between the two ever asked.
+/// 1. `!track.streamable` — the API said `streamable: false` for this track.
+///    `QueueTrack.streamable` defaults **true** (`qbz-models/src/playback.rs`
+///    `default_streamable`), so a builder that never learned the answer fails
+///    OPEN and the track plays. That default is deliberate, not laziness:
+///    refusing to play because an endpoint was terse is strictly worse than
+///    playing something that turns out to be dead, and the reactive
+///    `auto_skip_unavailable` walk still catches the second case.
+/// 2. `&& !is_cached_id(..)` — minus the tracks we already downloaded.
+///    `qbz-core`'s play resolution takes the offline tier BEFORE any network
+///    call and before any availability question, and every Qt play hands the
+///    handle down (`play_resolved_offline_aware`), so a track Qobuz pulled from
+///    the catalogue plays perfectly from disk TODAY. Dropping it would take
+///    away a song the user deliberately downloaded, and it would bite hardest
+///    in offline mode, where that copy is the only one that exists. The Slint
+///    reference gates on exactly this (`crates/qbz/src/playback.rs:426`).
+///
+/// LOCAL / Plex rows can never be dropped here, and that is not luck: their
+/// builder (`local_playback::local_queue_track`) sets `streamable: true`
+/// because a file on disk is outside Qobuz's streaming rights entirely.
+fn queue_track_unavailable(track: &QueueTrack) -> bool {
+    // Clause 2 (D3): a track the player already found terminally unavailable
+    // THIS RUN counts as dead even while the API keeps advertising it as
+    // streamable — which is the owner's test case exactly, since `/album/get`
+    // is honest but plenty of rows only fail at the stream-url step. The cache
+    // exemption applies to both clauses: downloaded bytes play regardless.
+    let dead = !track.streamable || crate::track_replace_qt::session_unavailable::contains(track.id);
+    dead && !crate::offline_qt::is_cached_id(track.id)
+}
+
+/// Why rows were dropped, counted per reason. The two are NOT interchangeable
+/// and must not collapse into one number: a blacklist drop is what the user
+/// asked for and stays SILENT, while an unavailability drop is news they never
+/// asked for and owes them a toast (D4 — "el usuario siempre debe saber"). One
+/// counter would force one policy on both.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct QueueDrops {
+    /// Dropped by the artist blacklist. Silent by design.
+    pub blacklisted: usize,
+    /// Dropped because Qobuz pulled the track AND we hold no offline copy.
+    pub unavailable: usize,
+}
+
+/// The ONE toast a queue build owes when it silently shortened itself
+/// (§5.3). Once per build, never once per track — an album with six pulled
+/// tracks must not raise six toasts.
+///
+/// PLURAL msgid pair, per acceptance §8-6: a singular-only string reads wrong
+/// in every locale with plural rules, Russian worst of all. The pair follows
+/// the catalog's existing convention (`"{} duplicate skipped"` /
+/// `"{} duplicates skipped"`). The i18n lane lands it in all EIGHT locales;
+/// nothing else in this module is a new msgid.
+fn toast_unavailable_dropped(count: usize) {
+    if count == 0 {
+        return;
+    }
+    crate::toast_qt::info(qbz_i18n::tf(
+        "{} track skipped — no longer available",
+        "{} tracks skipped — no longer available",
+        count as i64,
+        &[&count.to_string()],
+    ));
+}
+
+/// Drop the rows that must never reach the queue AND remap the start index onto
+/// the surviving track (playback.rs:2634-2641 `filter_blacklisted_queue`, plus
+/// the unavailability drop of contract §5.3 D5).
+///
+/// The Slint applies the blacklist at ~18 separate builder sites. This port
+/// funnels every play path through `set_queue_stamped`, so it needs exactly one
+/// — which is also why its absence was total rather than partial: the store was
+/// open and the manager worked, but nothing between the two ever asked.
 ///
 /// The start remap is the part the Slint gets for free by filtering before it
 /// computes the index. Here the caller has already picked an index into the
 /// UNFILTERED list, so dropping rows ahead of it would silently start the wrong
 /// track. The clicked row surviving is the common case; when the clicked row is
-/// itself blocked, the walk lands on the next survivor, which is what the user
-/// asking for "play from here" means once "here" is hidden.
-fn filter_blacklisted_queue(
+/// itself dropped, the walk lands on the next survivor, which is what the user
+/// asking for "play from here" means once "here" is gone.
+///
+/// Renamed from `filter_blacklisted_queue`: it now drops for two reasons and
+/// the old name named only one of them.
+fn filter_unplayable_queue(
     tracks: Vec<QueueTrack>,
     start: Option<usize>,
-) -> (Vec<QueueTrack>, Option<usize>) {
-    let (kept, start) = filter_queue_with(tracks, start, queue_track_blacklisted);
-    (kept, start)
+) -> (Vec<QueueTrack>, Option<usize>, QueueDrops) {
+    let (kept, start, dropped) = filter_queue_with(
+        tracks,
+        start,
+        queue_track_blacklisted,
+        queue_track_unavailable,
+    );
+    if dropped.blacklisted > 0 {
+        log::info!(
+            "[qbz-qt] blacklist: dropped {} track(s) from the queue",
+            dropped.blacklisted
+        );
+    }
+    if dropped.unavailable > 0 {
+        log::info!(
+            "[qbz-qt] unavailable: dropped {} pulled track(s) from the queue",
+            dropped.unavailable
+        );
+    }
+    (kept, start, dropped)
 }
 
 /// The pure half, split out so the index remap is unit-testable without a bound
-/// session (the blacklist store needs one). `drop` decides; everything else is
-/// arithmetic.
+/// session (the blacklist store needs one). The two predicates decide;
+/// everything else is arithmetic, and that arithmetic is unchanged.
+///
+/// TWO predicates, not one OR'd closure, because the caller has to know WHICH
+/// one claimed each row (see [`QueueDrops`]). `blacklisted` is tested FIRST and
+/// wins ties: a pulled track by an artist the user blocked is a row they
+/// already chose not to see, and toasting "1 track skipped" for it would
+/// announce exactly the content the blacklist exists to hide.
+///
+/// The log line that used to live here moved to `filter_unplayable_queue`: it
+/// said "blacklist", which a second reason turns into a lie.
 fn filter_queue_with<T>(
     tracks: Vec<T>,
     start: Option<usize>,
-    drop: impl Fn(&T) -> bool,
-) -> (Vec<T>, Option<usize>) {
+    blacklisted: impl Fn(&T) -> bool,
+    unavailable: impl Fn(&T) -> bool,
+) -> (Vec<T>, Option<usize>, QueueDrops) {
     let clicked = start.unwrap_or(0);
     let mut kept = Vec::with_capacity(tracks.len());
     // Surviving index for the clicked row, or for the first survivor after it.
     let mut new_start: Option<usize> = None;
-    let mut dropped = 0usize;
+    let mut dropped = QueueDrops::default();
     for (i, track) in tracks.into_iter().enumerate() {
-        if drop(&track) {
-            dropped += 1;
+        if blacklisted(&track) {
+            dropped.blacklisted += 1;
+            continue;
+        }
+        if unavailable(&track) {
+            dropped.unavailable += 1;
             continue;
         }
         if new_start.is_none() && i >= clicked {
@@ -356,32 +462,81 @@ fn filter_queue_with<T>(
         }
         kept.push(track);
     }
-    if dropped > 0 {
-        log::info!("[qbz-qt] blacklist: dropped {dropped} track(s) from the queue");
-    }
-    // Every survivor sits BEFORE the clicked row (the whole tail was blocked):
+    // Every survivor sits BEFORE the clicked row (the whole tail was dropped):
     // start at the last one rather than past the end.
     let start = new_start
         .or_else(|| kept.len().checked_sub(1))
         .filter(|_| !kept.is_empty());
-    (kept, start)
+    (kept, start, dropped)
+}
+
+/// What the queue seam actually published: the start index AFTER the filter,
+/// and the id of the track sitting at it.
+///
+/// F1, and it is a blocker (contract §5.3). Every caller used to read `first_id`
+/// from the UNFILTERED list, hand the list to this seam, and then play the id
+/// the seam had just dropped. `play_track_resolved` returns `Err`, the caller
+/// `log::error!`s it, and the USER GETS SILENCE with no toast. That is not a
+/// hypothetical introduced by the availability work — it is reachable today
+/// through the artist blacklist: click a blocked artist's album and nothing
+/// plays. Returning the post-filter anchor is what makes "the id the caller
+/// plays" and "the queue the core holds" one list again.
+///
+/// `None` means NOTHING survived. The caller must not play and must not report
+/// an error: the seam has already told the user why (the skipped toast) and has
+/// already left the previous queue untouched rather than publishing an empty
+/// one over it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct QueueStart {
+    /// Index into the queue the core now holds.
+    pub index: usize,
+    /// The track at `index` — the id to hand to `play_resolved_offline_aware`
+    /// and to `route_play_to_peer`.
+    pub track_id: u64,
 }
 
 /// The ONLY `core().set_queue` call in this module — every play path goes
-/// through it, so the origin can never be dropped on the floor, and (since
-/// PARITY-DEBT #1) neither can the blacklist.
+/// through it, so the origin can never be dropped on the floor, and neither can
+/// the blacklist (PARITY-DEBT #1) nor a track Qobuz pulled (contract §5.3 D5).
+///
+/// Returns the surviving anchor; see [`QueueStart`] for why no caller may
+/// compute it itself any more.
 pub(crate) async fn set_queue_stamped(
     runtime: &Arc<AppRuntime<LoggingAdapter>>,
     tracks: Vec<QueueTrack>,
     start: Option<usize>,
     context: Option<PlayContext>,
-) {
+) -> Option<QueueStart> {
+    let asked = tracks.len();
     // Filter BEFORE stamping: a dropped row needs no origin, and the start
     // index has to be remapped against the list the core actually receives.
-    let (mut tracks, start) = filter_blacklisted_queue(tracks, start);
+    let (mut tracks, start, dropped) = filter_unplayable_queue(tracks, start);
+    // Everything was filtered out of a non-empty build: do NOT publish an empty
+    // queue over whatever is playing (§5.3, last bullet). Say why and leave the
+    // core alone — wiping a working queue because the new one was all-dead is a
+    // second failure stacked on the first.
+    if tracks.is_empty() && asked > 0 {
+        log::info!(
+            "[qbz-qt] set_queue: all {asked} track(s) filtered ({} blacklisted, {} unavailable) \
+             — keeping the previous queue",
+            dropped.blacklisted,
+            dropped.unavailable
+        );
+        toast_unavailable_dropped(dropped.unavailable);
+        return None;
+    }
     stamp_context(&mut tracks, context);
     warn_dead_context(&tracks, "set_queue");
+    // Read the anchor off the list the CORE receives, not off the caller's —
+    // that difference IS F1. Computed before the move into `set_queue`.
+    let anchor = start.and_then(|index| {
+        tracks.get(index).map(|track| QueueStart {
+            index,
+            track_id: track.id,
+        })
+    });
     runtime.core().set_queue(tracks, start).await;
+    toast_unavailable_dropped(dropped.unavailable);
     // QConnect (contract §6.3, Slint playback.rs:3697-3703): when WE are the
     // active renderer, push the new queue to the session immediately so a
     // controller's UI reflects the freshly-built queue — covers infinite-play
@@ -390,6 +545,7 @@ pub(crate) async fn set_queue_stamped(
     if let Some(svc) = crate::qconnect_qt::service() {
         svc.sync_local_queue_if_changed().await;
     }
+    anchor
 }
 
 /// Same guarantee for the ADD paths (play-next / add-to-queue): appended tracks
@@ -400,20 +556,44 @@ pub(crate) async fn set_queue_stamped(
 /// other modules and must be able to reach the SAME stamping seam — a private
 /// helper is what forced them to hand-roll their context in the first place.
 pub(crate) fn stamped(tracks: Vec<QueueTrack>, context: Option<PlayContext>) -> Vec<QueueTrack> {
-    // Same blacklist drop as `set_queue_stamped` — play-next / add-to-queue /
-    // play-later must not be the back door that puts a blocked artist in the
-    // queue. No start index to remap here: these APPEND.
-    let before = tracks.len();
+    // The SECOND seam (F2). `set_queue_stamped` guards the REPLACE paths; this
+    // guards play-next / play-later / add-to-queue, and its own reason for
+    // existing is that enqueue "must not be the back door" for the blacklist.
+    // D5 makes the same demand of a pulled track: a row the user cannot click
+    // in the list must not be reachable by dragging it into the queue either.
+    // No start index to remap here — these APPEND.
+    let mut dropped = QueueDrops::default();
     let mut tracks: Vec<QueueTrack> = tracks
         .into_iter()
-        .filter(|t| !queue_track_blacklisted(t))
+        .filter(|t| {
+            if queue_track_blacklisted(t) {
+                dropped.blacklisted += 1;
+                return false;
+            }
+            if queue_track_unavailable(t) {
+                dropped.unavailable += 1;
+                return false;
+            }
+            true
+        })
         .collect();
-    if tracks.len() < before {
+    if dropped.blacklisted > 0 {
         log::info!(
             "[qbz-qt] blacklist: dropped {} track(s) from an enqueue",
-            before - tracks.len()
+            dropped.blacklisted
         );
     }
+    if dropped.unavailable > 0 {
+        log::info!(
+            "[qbz-qt] unavailable: dropped {} pulled track(s) from an enqueue",
+            dropped.unavailable
+        );
+    }
+    // Idempotent with the seam below it: `myqbz_play_qt` stamps and THEN calls
+    // `set_queue_stamped`, whose second pass finds nothing left to drop and so
+    // raises no second toast. That module's existing "both passes are
+    // idempotent" comment stays true.
+    toast_unavailable_dropped(dropped.unavailable);
     stamp_context(&mut tracks, context);
     warn_dead_context(&tracks, "enqueue");
     tracks
@@ -668,7 +848,9 @@ pub(crate) async fn fetch_album_queue(
             is_local: false,
             album_id: Some(album.id.clone()),
             artist_id: track.performer.as_ref().map(|p| p.id),
-            streamable: track.streamable,
+            // §3.1: absence is resolved in ONE place. `is_streamable()` reads a
+            // missing key as AVAILABLE — only an explicit `false` marks a pull.
+            streamable: track.is_streamable(),
             source: Some("qobuz".to_string()),
             parental_warning: track.parental_warning,
             source_item_id_hint: Some(album.id.clone()),
@@ -765,8 +947,19 @@ pub async fn play_artist(runtime: &Arc<AppRuntime<LoggingAdapter>>, artist_id: &
     let top: Vec<QueueTrack> =
         artist_top_queue_tracks(page.top_tracks.as_deref().unwrap_or(&[]), artist_id, &artist_name);
     if !top.is_empty() {
-        let first_id = top[0].id;
-        set_queue_stamped(runtime, top, Some(0), PlayContext::artist(artist_id)).await;
+        // F1: the anchor comes back from the seam, never from `top` — the
+        // filter may have dropped `top[0]`.
+        let Some(anchor) =
+            set_queue_stamped(runtime, top, Some(0), PlayContext::artist(artist_id)).await
+        else {
+            // Every popular track was filtered. The seam already toasted the
+            // count; falling through to the discography below is not possible
+            // (`top` is consumed by the seam) and is not worth restructuring
+            // for a case that means the artist's whole top list is dead.
+            log::info!("[qbz-qt] play_artist {artist_id}: every popular track was filtered");
+            return Ok(());
+        };
+        let first_id = anchor.track_id;
         publish_queue(runtime).await;
         // QConnect CONTROLLER mode (§7): a peer owns playback — route the play
         // to it AFTER the funnel, never run the local audible step.
@@ -807,7 +1000,6 @@ pub async fn play_artist(runtime: &Arc<AppRuntime<LoggingAdapter>>, artist_id: &
         return Err(format!("artist {artist_id} studio discography produced no playable tracks"));
     }
     log::info!("[qbz-qt] artist-play {artist_id}: discography fallback, {} tracks", queue.len());
-    let first_id = queue[0].id;
     // The discography queue arrives pre-stamped per ALBUM (fetch_album_queue);
     // the artist origin is what the user launched, so it wins here — the
     // explicit context overrides the per-album stamp for the whole queue.
@@ -815,7 +1007,15 @@ pub async fn play_artist(runtime: &Arc<AppRuntime<LoggingAdapter>>, artist_id: &
         track.context_kind = None;
         track.context_id = None;
     }
-    set_queue_stamped(runtime, queue, Some(0), PlayContext::artist(artist_id)).await;
+    // F1: the anchor is read off the queue the core received.
+    let Some(anchor) =
+        set_queue_stamped(runtime, queue, Some(0), PlayContext::artist(artist_id)).await
+    else {
+        return Err(format!(
+            "artist {artist_id} discography resolved to no playable tracks"
+        ));
+    };
+    let first_id = anchor.track_id;
     publish_queue(runtime).await;
     // QConnect CONTROLLER mode (§7): route the play to the peer (after the
     // funnel, before the local audible step).
@@ -862,6 +1062,12 @@ pub async fn enqueue_album(
         fetch_album_queue(runtime, album_id).await?,
         PlayContext::album(album_id),
     );
+    // Empty after the seam: nothing to route, nothing to insert. The seam has
+    // already toasted how many rows it dropped.
+    if tracks.is_empty() {
+        log::info!("[qbz-qt] enqueue_album {album_id}: every track was filtered");
+        return Ok(());
+    }
     log::info!("[qbz-qt] enqueue_album {album_id} ({mode}): {} tracks", tracks.len());
     // QConnect CONTROLLER mode (contract §7): route the add to the peer's
     // queue — early-returns when handled, so the local insert + sync tail
@@ -917,9 +1123,19 @@ pub async fn play_album_from(
     log::info!("[qbz-qt] play_album: resolving {album_id} (start {start_index})");
     let tracks = fetch_album_queue(runtime, album_id).await?;
     let start = start_index.min(tracks.len() - 1);
-    let first_id = tracks[start].id;
     let count = tracks.len();
-    set_queue_stamped(runtime, tracks, Some(start), PlayContext::album(album_id)).await;
+    // F1: the id to play is whatever SURVIVED at the remapped index. Reading
+    // `tracks[start].id` here and playing it after the seam is the defect the
+    // owner's acceptance test 7 catches — "play the album and skip the dead
+    // track" used to do nothing at all, silently, because the play call was
+    // handed an id the core no longer held.
+    let Some(anchor) =
+        set_queue_stamped(runtime, tracks, Some(start), PlayContext::album(album_id)).await
+    else {
+        log::info!("[qbz-qt] play_album {album_id}: every track was filtered, queue untouched");
+        return Ok(());
+    };
+    let first_id = anchor.track_id;
     publish_queue(runtime).await;
     log::info!("[qbz-qt] play_album: queue set ({count} tracks), playing track {first_id}");
     // QConnect CONTROLLER mode (§7): route the play to the peer (after the
@@ -955,8 +1171,17 @@ pub async fn play_album_from_track(
     }
     let tracks = fetch_album_queue(runtime, album_id).await?;
     let start = tracks.iter().position(|t| t.id == track_id).unwrap_or(0);
-    let first_id = tracks[start].id;
-    set_queue_stamped(runtime, tracks, Some(start), PlayContext::album(album_id)).await;
+    // F1: the anchor comes from the seam. Clicking the album's DEAD row lands
+    // on the next survivor rather than playing an id the core dropped.
+    let Some(anchor) =
+        set_queue_stamped(runtime, tracks, Some(start), PlayContext::album(album_id)).await
+    else {
+        log::info!(
+            "[qbz-qt] play_album_from_track {album_id}: every track was filtered, queue untouched"
+        );
+        return Ok(());
+    };
+    let first_id = anchor.track_id;
     publish_queue(runtime).await;
     // QConnect CONTROLLER mode (§7): route the play to the peer (after the
     // funnel, before the local audible step).
@@ -1074,8 +1299,14 @@ pub async fn play_track_list_in(
         (tracks, start)
     };
     let start = start.min(tracks.len() - 1);
-    let first_id = tracks[start].id;
-    set_queue_stamped(runtime, tracks, Some(start), context).await;
+    // F1: the anchor comes from the seam. `Err` and not `Ok` when nothing
+    // survives, deliberately: `try_infinite_refill` reads this Result to decide
+    // whether a radio actually started, and an `Ok` over an empty publish would
+    // make it report a chain that never played.
+    let Some(anchor) = set_queue_stamped(runtime, tracks, Some(start), context).await else {
+        return Err("every track in the list was filtered (blacklist / unavailable)".to_string());
+    };
+    let first_id = anchor.track_id;
     publish_queue(runtime).await;
     // QConnect CONTROLLER mode (§7): route the play to the peer (after the
     // funnel, before the local audible step).
@@ -1101,8 +1332,10 @@ pub async fn play_track_list_in(
 /// intended behaviour and chains: each radio's end re-seeds the next one, which
 /// is what makes it infinite rather than one extra radio.
 ///
-/// `play_track_list` runs the queue through `filter_blacklisted_queue`, so a
-/// radio made entirely of blocked artists cannot come back as playback.
+/// `play_track_list` runs the queue through `filter_unplayable_queue`, so a
+/// radio made entirely of blocked artists — or of tracks Qobuz has pulled —
+/// cannot come back as playback: the seam publishes nothing and
+/// `play_track_list_in` returns `Err`, which this fn reports as "no chain".
 async fn try_infinite_refill(
     runtime: &Arc<AppRuntime<LoggingAdapter>>,
     seed_track_id: u64,
@@ -1171,6 +1404,13 @@ pub async fn enqueue_track_list_mode(
         return Err("empty track list".to_string());
     }
     let tracks = stamped(tracks, None);
+    // The seam can empty a batch that was non-empty on entry (the check above
+    // ran BEFORE the filter). Stop here rather than routing an empty add to a
+    // peer and calling `add_tracks(vec![])`: the seam already said why.
+    if tracks.is_empty() {
+        log::info!("[qbz-qt] enqueue_track_list_mode: every track was filtered");
+        return Ok(());
+    }
     // QConnect CONTROLLER mode (contract §7): route the add to the peer's
     // queue — early-returns when handled, so the local insert + sync tail
     // below only run in local/renderer mode.
@@ -1373,7 +1613,11 @@ fn feed_queue_track(track_id: u64) -> Result<QueueTrack, String> {
             Some(item.album_id.clone())
         },
         artist_id: item.artist_id.parse::<u64>().ok(),
-        streamable: true,
+        // D5: the feed row's own answer. Twin of
+        // `library_qt::feed_track_to_queue` over the SAME `FeedItem` — the two
+        // must not disagree about what a row is, which is the whole reason both
+        // read the same field instead of hardcoding a yes.
+        streamable: !item.not_streamable,
         source: Some("qobuz".to_string()),
         parental_warning: item.explicit,
         source_item_id_hint: None,
@@ -1443,7 +1687,9 @@ async fn catalog_queue_track(
         is_local: false,
         album_id: album_key.clone(),
         artist_id: track.performer.as_ref().map(|p| p.id),
-        streamable: track.streamable,
+        // §3.1: absence is resolved in ONE place. `is_streamable()` reads a
+        // missing key as AVAILABLE — only an explicit `false` marks a pull.
+        streamable: track.is_streamable(),
         source: Some("qobuz".to_string()),
         parental_warning: track.parental_warning,
         source_item_id_hint: album_key,
@@ -1484,17 +1730,24 @@ pub async fn play_single_track(
     let qt = queue_track_for(runtime, track_id).await?;
     // Bare single-track play: no container origin, so the derive falls to the
     // track's own album — same landing spot as the Slint fallback.
-    set_queue_stamped(runtime, vec![qt], Some(0), None).await;
+    // F1 in its smallest form: when the seam drops this one row there is
+    // nothing to play, and the previous queue keeps going. `track_id` is the id
+    // the CALLER asked for; the anchor is the id the core actually holds.
+    let Some(anchor) = set_queue_stamped(runtime, vec![qt], Some(0), None).await else {
+        log::info!("[qbz-qt] play_single_track: {track_id} was filtered, queue untouched");
+        return Ok(());
+    };
+    let first_id = anchor.track_id;
     publish_queue(runtime).await;
-    log::info!("[qbz-qt] play_single_track: playing {track_id}");
+    log::info!("[qbz-qt] play_single_track: playing {first_id}");
     // QConnect CONTROLLER mode (§7): route the play to the peer (after the
     // funnel, before the local audible step).
-    if route_play_to_peer(runtime, track_id).await {
+    if route_play_to_peer(runtime, first_id).await {
         return Ok(());
     }
-    play_resolved_offline_aware(runtime, track_id, 0)
+    play_resolved_offline_aware(runtime, first_id, 0)
         .await
-        .map_err(|e| format!("play_track {track_id} failed: {e}"))?;
+        .map_err(|e| format!("play_track {first_id} failed: {e}"))?;
     refresh_now_playing(runtime).await;
     Ok(())
 }
@@ -1507,9 +1760,15 @@ pub async fn enqueue_single_track(
     track_id: u64,
     mode: &str,
 ) -> Result<(), String> {
-    let qt = stamped(vec![queue_track_for(runtime, track_id).await?], None)
-        .pop()
-        .expect("one track in, one track out");
+    // NOT `.expect("one track in, one track out")` any more: since the enqueue
+    // seam filters (F2 + D5), one row in can legitimately be ZERO rows out — a
+    // blocked artist, or a track Qobuz pulled that we hold no download for. The
+    // `expect` would have turned that into a PANIC on a menu click. The seam has
+    // already toasted the reason, so this is a quiet Ok.
+    let Some(qt) = stamped(vec![queue_track_for(runtime, track_id).await?], None).pop() else {
+        log::info!("[qbz-qt] enqueue_single_track: {track_id} was filtered out");
+        return Ok(());
+    };
     // QConnect CONTROLLER mode (contract §7): route the add to the peer's
     // queue — early-returns when handled, so the local insert + sync tail
     // below only run in local/renderer mode.
@@ -1735,7 +1994,7 @@ async fn play_queue_track(
         // how a failed advance left a stale card over a silent player.
         refresh_now_playing(runtime).await;
         publish_queue(runtime).await;
-        auto_skip_unavailable(runtime, e).await;
+        auto_skip_unavailable(runtime, e, Some(track_id)).await;
         return;
     }
     // A track actually started: the consecutive-skip budget is spent per RUN of
@@ -1784,6 +2043,7 @@ const MAX_UNAVAILABLE_SKIPS: u32 = 5;
 fn auto_skip_unavailable<'a>(
     runtime: &'a Arc<AppRuntime<LoggingAdapter>>,
     error: String,
+    failed_track_id: Option<u64>,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
     Box::pin(async move {
         // A 403 / back-off is not this track's fault: stop cleanly and say so
@@ -1797,6 +2057,14 @@ fn auto_skip_unavailable<'a>(
         // already retried it. Do not skip a good track over a network blip.
         if !is_terminal_unavailable(&error) {
             return;
+        }
+        // §5.1 clause 2 (D3): remember it for the rest of the run, so the queue
+        // filter stops offering it to the player. The API flag covers the
+        // tracks Qobuz already admits are gone; THIS covers the ones it still
+        // advertises as streamable and then refuses to serve — which is exactly
+        // what the owner's test track does at the stream-url step.
+        if let Some(id) = failed_track_id {
+            crate::track_replace_qt::session_unavailable::mark(id);
         }
         crate::toast_qt::warning(qbz_i18n::t("This track is no longer available"));
 
@@ -3088,7 +3356,8 @@ mod tests {
     /// the one the user clicked — silently, and only when something was blocked.
     #[test]
     fn start_index_follows_the_clicked_track() {
-        let (kept, start) = filter_queue_with(vec![0, 1, 2, 3, 4], Some(2), |n| n % 2 == 1);
+        let (kept, start, _) =
+            filter_queue_with(vec![0, 1, 2, 3, 4], Some(2), |n| n % 2 == 1, |_| false);
         assert_eq!(kept, vec![0, 2, 4]);
         assert_eq!(start, Some(1)); // the 2 moved from index 2 to index 1
     }
@@ -3096,7 +3365,8 @@ mod tests {
     /// Clicking a row that is itself blocked lands on the next survivor.
     #[test]
     fn a_blocked_clicked_row_falls_forward() {
-        let (kept, start) = filter_queue_with(vec![0, 1, 2, 3], Some(1), |n| n % 2 == 1);
+        let (kept, start, _) =
+            filter_queue_with(vec![0, 1, 2, 3], Some(1), |n| n % 2 == 1, |_| false);
         assert_eq!(kept, vec![0, 2]);
         assert_eq!(start, Some(1)); // the 1 was dropped, so start on the 2
     }
@@ -3105,7 +3375,8 @@ mod tests {
     /// (an out-of-range index is what makes the core start nothing at all).
     #[test]
     fn a_fully_blocked_tail_clamps_to_the_last_survivor() {
-        let (kept, start) = filter_queue_with(vec![0, 1, 3, 5], Some(2), |n| n % 2 == 1);
+        let (kept, start, _) =
+            filter_queue_with(vec![0, 1, 3, 5], Some(2), |n| n % 2 == 1, |_| false);
         assert_eq!(kept, vec![0]);
         assert_eq!(start, Some(0));
     }
@@ -3113,7 +3384,8 @@ mod tests {
     /// Everything blocked: an empty queue carries NO start index.
     #[test]
     fn everything_blocked_yields_no_start() {
-        let (kept, start) = filter_queue_with(vec![1, 3, 5], Some(1), |n| n % 2 == 1);
+        let (kept, start, _) =
+            filter_queue_with(vec![1, 3, 5], Some(1), |n| n % 2 == 1, |_| false);
         assert!(kept.is_empty());
         assert_eq!(start, None);
     }
@@ -3122,8 +3394,50 @@ mod tests {
     /// user without a blacklist takes.
     #[test]
     fn nothing_blocked_is_identity() {
-        let (kept, start) = filter_queue_with(vec![0, 2, 4], Some(2), |_| false);
+        let (kept, start, _) = filter_queue_with(vec![0, 2, 4], Some(2), |_| false, |_| false);
         assert_eq!(kept, vec![0, 2, 4]);
         assert_eq!(start, Some(2));
+    }
+
+    /// Acceptance §8-5: a build containing dead tracks drops them AND re-maps
+    /// the start index to the track the user actually clicked. Same arithmetic
+    /// as the blacklist, different predicate — which is why the helper took a
+    /// second closure instead of a rewrite.
+    #[test]
+    fn unavailable_rows_drop_and_remap_the_start_index() {
+        // Rows 1 and 3 are "pulled"; the user clicked row 4.
+        let (kept, start, dropped) = filter_queue_with(
+            vec![0, 1, 2, 3, 4],
+            Some(4),
+            |_| false,
+            |n| *n == 1 || *n == 3,
+        );
+        assert_eq!(kept, vec![0, 2, 4]);
+        assert_eq!(start, Some(2)); // the 4 moved from index 4 to index 2
+        assert_eq!(dropped.unavailable, 2);
+        assert_eq!(dropped.blacklisted, 0);
+    }
+
+    /// The two reasons are counted apart because only ONE of them speaks: the
+    /// blacklist drop is what the user asked for, the unavailability drop is
+    /// news. A single counter would force one policy on both.
+    #[test]
+    fn the_two_drop_reasons_are_counted_separately() {
+        let (kept, _, dropped) =
+            filter_queue_with(vec![0, 1, 2, 3], Some(0), |n| *n == 1, |n| *n == 2);
+        assert_eq!(kept, vec![0, 3]);
+        assert_eq!(dropped.blacklisted, 1);
+        assert_eq!(dropped.unavailable, 1);
+    }
+
+    /// A row that is BOTH blocked and pulled counts as blacklisted, so no toast
+    /// is raised for it: "1 track skipped" would tell the user about exactly the
+    /// content the blacklist exists to keep off their screen.
+    #[test]
+    fn blacklist_wins_the_tie_and_stays_silent() {
+        let (kept, _, dropped) = filter_queue_with(vec![0, 1], Some(0), |n| *n == 1, |n| *n == 1);
+        assert_eq!(kept, vec![0]);
+        assert_eq!(dropped.blacklisted, 1);
+        assert_eq!(dropped.unavailable, 0);
     }
 }
