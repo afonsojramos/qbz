@@ -245,7 +245,16 @@ Rectangle {
     /// (`local_playlist_qt::local_picker_ref_for_row`).
     property bool routePlaylistAddExternally: false
     signal playlistAddRequested()
-    property bool hasPlaylistAddSeam: root.item.unavailable === true
+    /// OFF for a ref that cannot resolve (`unavailable`) AND for a track Qobuz
+    /// pulled (`pulled`) — both would SPREAD a row that cannot play.
+    ///
+    /// `pulled`, not `pulledDead`: a downloaded copy plays for THIS user on
+    /// THIS machine, but what gets stored in the playlist is the Qobuz catalog
+    /// id, which is dead for every other surface, every other device and
+    /// everyone the playlist is shared with. Seeding that is the one thing
+    /// worth refusing outright — the user can still repair the row where it
+    /// already lives.
+    property bool hasPlaylistAddSeam: (root.item.unavailable === true || root.pulled)
         ? false
         : (root.routePlaylistAddExternally
             || (root.catalogRow && !root.localSourceRow))
@@ -254,7 +263,10 @@ Rectangle {
     // itemType/source, which is why the payload is built by the host (see
     // `mixtapeRequested` below). Not `readonly`: a host whose ids are not
     // Qobuz/local mixtape-addressable can turn it back off.
-    property bool hasMixtapeSeam: true
+    /// Same rule as `hasPlaylistAddSeam`: a mixtape stores the catalog id too,
+    /// so a pulled track added to one is a row that resolves to nothing the
+    /// next time the collection is played.
+    property bool hasMixtapeSeam: !root.pulled
 
     signal playRequested()
     signal enqueueRequested(string mode)
@@ -1039,7 +1051,7 @@ Rectangle {
                 anchors.fill: parent
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
-                onClicked: function (mouse) { rowMenu.openAtCursor(moreArea, mouse.x, mouse.y) }
+                onClicked: function (mouse) { root.openRowMenu(moreArea, mouse.x, mouse.y) }
             }
         }
     }
@@ -1052,6 +1064,19 @@ Rectangle {
 
     // TrackContextMenu.slint, in its order. Every row here reaches a live
     // seam; the seamless ones are gated off above.
+    /// Open the row menu, unless it would come up EMPTY.
+    ///
+    /// A pulled track refuses transport, favourite, playlist/mixtape add, both
+    /// share links, track info and the cache actions, so on a surface that does
+    /// not offer the repair — an album page, search results — nothing is left.
+    /// An empty popup is worse than no popup: it reads as a broken control
+    /// rather than as "there is nothing to do with this row".
+    function openRowMenu(anchor, x, y) {
+        if (root.menuModel().length === 0)
+            return
+        rowMenu.openAtCursor(anchor, x, y)
+    }
+
     function menuModel() {
         var t = QbzSession.tr
         var r = QbzSession.trRev
@@ -1093,9 +1118,13 @@ Rectangle {
         if (root.menuShowRemove)
             m.push({ "label": t("Remove from playlist", r), "icon": "trash-2",
                      "action": "remove", "danger": true })
-        if (root.menuShowShare)
+        // Neither share link survives a pull: the Qobuz page for a withdrawn
+        // track is gone, and Song.link resolves THROUGH it. Both rendered and
+        // led nowhere, which is the same rendered-and-inert defect the
+        // transport entries above are refused for.
+        if (root.menuShowShare && !root.pulled)
             m.push({ "label": t("Share Qobuz link", r), "icon": "link", "action": "share-qobuz" })
-        if (root.hasSonglinkSeam)
+        if (root.hasSonglinkSeam && !root.pulled)
             m.push({ "label": t("Share Song.link", r), "icon": "link", "action": "share-songlink" })
         // The dead row offers no cache action at all (there is no stream url
         // left to fetch), and the cached-but-pulled row must not be able to
@@ -1120,7 +1149,9 @@ Rectangle {
             m.push({ "label": t("Go to album", r), "icon": "disc-3", "action": "go-album" })
         if (root.menuShowGoTo && root.item.artistId)
             m.push({ "label": t("Go to artist", r), "icon": "user", "action": "go-artist" })
-        if (root.menuShowTrackInfo)
+        // Track info needs the catalog record the pull took away, so the modal
+        // opens on nothing.
+        if (root.menuShowTrackInfo && !root.pulled)
             m.push({ "label": t("Track info", r), "icon": "info", "action": "track-info" })
         return m
     }
@@ -1302,7 +1333,7 @@ Rectangle {
                 // TrackRow.slint:201 — the row menu is suppressed in
                 // multi-select mode (a right-click toggles nothing there).
                 if (root.showMenu && !root.selectMode)
-                    rowMenu.openAtCursor(trArea, mouse.x, mouse.y)
+                    root.openRowMenu(trArea, mouse.x, mouse.y)
                 mouse.accepted = true
                 return
             }

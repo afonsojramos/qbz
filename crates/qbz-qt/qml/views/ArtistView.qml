@@ -1478,8 +1478,8 @@ Rectangle {
                 // "Play next" here would render and no-op — the
                 // rendered-and-inert defect this menu's own header refuses
                 // ("ABSENT, not dead"). The row keeps its menu because the
-                // rest of it (add to playlist / mixtape, go-to) still works and
-                // because a right-clickable dead row is what §5.2 asks for.
+                // rest of it (go-to) still works and because a right-clickable
+                // dead row is what §5.2 asks for.
                 if (!popRow.pulledDead) {
                     m.push({ "label": t("Play now", r), "icon": "play-fill", "action": "play" })
                     m.push({ "label": t("Play next", r), "icon": "list-start", "action": "next" })
@@ -1488,8 +1488,16 @@ Rectangle {
                     m.push({ "label": fav ? t("Remove from Library", r) : t("Add to Library", r),
                              "icon": fav ? "heart-filled" : "heart", "action": "favorite" })
                 }
-                m.push({ "label": t("Add to mixtape", r), "icon": "cassette-tape", "action": "mixtape" })
-                m.push({ "label": t("Add to playlist", r), "icon": "list-music", "action": "add-to-playlist" })
+                // A pulled track is refused BOTH containers, and on `pulled`
+                // rather than `pulledDead`: a downloaded copy plays for this
+                // user on this machine, but what a playlist or a mixtape stores
+                // is the Qobuz catalog id, which resolves to nothing everywhere
+                // else. Seeding a dead row into a collection is the one thing
+                // worth refusing outright.
+                if (!popRow.pulled) {
+                    m.push({ "label": t("Add to mixtape", r), "icon": "cassette-tape", "action": "mixtape" })
+                    m.push({ "label": t("Add to playlist", r), "icon": "list-music", "action": "add-to-playlist" })
+                }
                 // The offline block goes with the transport, and for the same
                 // reason: a pulled track has no stream url left, so the
                 // download arm would fail and a REFRESH would destroy the only
