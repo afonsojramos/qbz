@@ -90,6 +90,15 @@ pub mod qbz_home {
         #[qproperty(bool, label_loading)]
         #[qproperty(QString, label_releases_json)]
         #[qproperty(bool, label_releases_loading)]
+        // --- Award landing + "See all" listing (src/award_qt.rs) ----------
+        // Awards ride THIS bridge, not one of their own, because they are the
+        // label pair's sibling in every respect (same two-route shape, same
+        // controller-in-its-own-file split) and the album sidebar already
+        // reaches labels through `QbzHome`. One domain, one place to look.
+        #[qproperty(QString, award_json)]
+        #[qproperty(bool, award_loading)]
+        #[qproperty(QString, award_albums_json)]
+        #[qproperty(bool, award_albums_loading)]
 
         type QbzHome = super::QbzHomeRust;
 
@@ -225,6 +234,32 @@ pub mod qbz_home {
         #[qinvokable]
         fn label_releases_search(self: Pin<&mut QbzHome>, query: QString);
 
+        // --- Award landing -------------------------------------------------
+        /// Album sidebar laurel (with an id), an "Other awards" card, or the
+        /// all-awards dropdown. `fallback_name` paints the hero until
+        /// `/award/page` answers — and stays as the hero when that endpoint
+        /// omits the award, which it may.
+        #[qinvokable]
+        fn open_award(self: Pin<&mut QbzHome>, award_id: QString, fallback_name: QString);
+        /// The album sidebar's other arm: Qobuz gave a NAME and no id.
+        /// Resolves through the catalog / an `/award/explore` crawl, then
+        /// opens — or toasts, rather than opening a page that cannot load.
+        #[qinvokable]
+        fn open_award_by_name(self: Pin<&mut QbzHome>, name: QString);
+        #[qinvokable]
+        fn award_retry(self: Pin<&mut QbzHome>);
+        #[qinvokable]
+        fn award_follow(self: Pin<&mut QbzHome>);
+        /// "See All" — push the listing route and load its first page.
+        #[qinvokable]
+        fn award_open_albums(self: Pin<&mut QbzHome>);
+        #[qinvokable]
+        fn award_albums_load_more(self: Pin<&mut QbzHome>);
+        /// Client-side filter over what is loaded (the reference never
+        /// re-queries for this box either).
+        #[qinvokable]
+        fn award_albums_search(self: Pin<&mut QbzHome>, query: QString);
+
         /// A batch of For You covers landed: a JSON `{ "<artUrl>": "<file://
         /// path>" }` patch. Per-URL, so the rails patch the TILES instead of
         /// taking a new `radioStationsJson` / `spotlightJson` document — a
@@ -278,6 +313,10 @@ pub struct QbzHomeRust {
     label_loading: bool,
     label_releases_json: QString,
     label_releases_loading: bool,
+    award_json: QString,
+    award_loading: bool,
+    award_albums_json: QString,
+    award_albums_loading: bool,
 }
 
 impl Default for QbzHomeRust {
@@ -309,6 +348,10 @@ impl Default for QbzHomeRust {
             label_loading: false,
             label_releases_json: QString::from("{}"),
             label_releases_loading: false,
+            award_json: QString::from("{}"),
+            award_loading: false,
+            award_albums_json: QString::from("{}"),
+            award_albums_loading: false,
         }
     }
 }
@@ -442,6 +485,28 @@ impl qbz_home::QbzHome {
     /// exactly like `QbzArtist::share`.
     pub fn label_share(self: Pin<&mut Self>, label_id: QString) {
         crate::share_qt::share_label(label_id.to_string());
+    }
+
+    pub fn open_award(self: Pin<&mut Self>, award_id: QString, fallback_name: QString) {
+        crate::award_qt::open_award(award_id.to_string(), fallback_name.to_string());
+    }
+    pub fn open_award_by_name(self: Pin<&mut Self>, name: QString) {
+        crate::award_qt::open_award_by_name(name.to_string());
+    }
+    pub fn award_retry(self: Pin<&mut Self>) {
+        crate::award_qt::retry();
+    }
+    pub fn award_follow(self: Pin<&mut Self>) {
+        crate::award_qt::toggle_follow();
+    }
+    pub fn award_open_albums(self: Pin<&mut Self>) {
+        crate::award_qt::open_albums();
+    }
+    pub fn award_albums_load_more(self: Pin<&mut Self>) {
+        crate::award_qt::albums_load_more();
+    }
+    pub fn award_albums_search(self: Pin<&mut Self>, query: QString) {
+        crate::award_qt::albums_search(query.to_string());
     }
 
     // --- Discover > For You: mixes / radio / spotlight ---------------------

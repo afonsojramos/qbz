@@ -359,7 +359,7 @@ fn main() {
             // (myqbz_qt.rs, blacklist_qt.rs, toast_qt.rs, …) are plain
             // modules and must NOT be listed — only files that declare a
             // #[cxx_qt::bridge] mod belong in this array.
-            rust_files: &["src/bridge.rs", "src/session_bridge.rs", "src/shell_bridge.rs", "src/player_bridge.rs", "src/queue_bridge.rs", "src/home_bridge.rs", "src/viz_bridge.rs", "src/immersive_bridge.rs", "src/shader_scene_bridge.rs", "src/suggestions_bridge.rs", "src/hotkeys_bridge.rs", "src/search_bridge.rs", "src/local_bridge.rs", "src/library_bridge.rs", "src/album_bridge.rs", "src/artist_bridge.rs", "src/scene_bridge.rs", "src/musician_bridge.rs", "src/lyrics_qt.rs", "src/icon_tint_qt.rs", "src/cast_bridge.rs", "src/myqbz_bridge.rs", "src/myqbz_add_bridge.rs", "src/disco_bridge.rs", "src/blacklist_bridge.rs", "src/playlist_picker_bridge.rs", "src/playlist_manager_bridge.rs", "src/playlist_import_bridge.rs", "src/dac_wizard_bridge.rs", "src/folder_edit_bridge.rs", "src/playlist_edit_bridge.rs", "src/qconnect_bridge.rs", "src/kiosk_nav_bridge.rs", "src/mini_bridge.rs", "src/tray_bridge.rs", "src/about_bridge.rs", "src/purchases_bridge.rs"],
+            rust_files: &["src/bridge.rs", "src/session_bridge.rs", "src/shell_bridge.rs", "src/player_bridge.rs", "src/queue_bridge.rs", "src/home_bridge.rs", "src/viz_bridge.rs", "src/immersive_bridge.rs", "src/shader_scene_bridge.rs", "src/suggestions_bridge.rs", "src/hotkeys_bridge.rs", "src/search_bridge.rs", "src/local_bridge.rs", "src/library_bridge.rs", "src/album_bridge.rs", "src/artist_bridge.rs", "src/scene_bridge.rs", "src/musician_bridge.rs", "src/lyrics_qt.rs", "src/icon_tint_qt.rs", "src/cast_bridge.rs", "src/myqbz_bridge.rs", "src/myqbz_add_bridge.rs", "src/disco_bridge.rs", "src/blacklist_bridge.rs", "src/playlist_picker_bridge.rs", "src/playlist_manager_bridge.rs", "src/playlist_import_bridge.rs", "src/dac_wizard_bridge.rs", "src/folder_edit_bridge.rs", "src/playlist_edit_bridge.rs", "src/qconnect_bridge.rs", "src/kiosk_nav_bridge.rs", "src/mini_bridge.rs", "src/tray_bridge.rs", "src/about_bridge.rs", "src/purchases_bridge.rs", "src/offline_manager_bridge.rs"],
             qml_files: &[
                 "qml/LoginScreen.qml",
                 "qml/Main.qml",
@@ -660,6 +660,17 @@ fn main() {
                 // screen, not one row. Both are invisible to cargo check and to
                 // both audit scripts, and `show_purchases` defaults OFF, so
                 // neither would be noticed by anyone who never turns it on.
+                // Offline Cache Manager (route "offlinemanager") — reached
+                // only from Settings > Offline. A route view missing from this
+                // array is absent from the qrc and the router mounts NOTHING:
+                // a blank pane, invisible to cargo check and to both audits.
+                "qml/views/OfflineManagerView.qml",
+                // Awards (routes "award" and "awardalbums"). Both are route
+                // views: absent from the qrc, the router mounts NOTHING and
+                // the pane is blank — invisible to cargo check and to both
+                // audits.
+                "qml/views/AwardView.qml",
+                "qml/views/AwardAlbumsView.qml",
                 "qml/views/PurchasesView.qml",
                 "qml/views/PurchaseAlbumView.qml",
                 "qml/views/purchases/PurchaseAlbumsCollection.qml",

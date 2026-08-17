@@ -46,7 +46,14 @@ Rectangle {
     readonly property var album: JSON.parse(QbzAlbum.albumJson)
     readonly property var header: album.header || ({})
     readonly property var tracks: album.tracks || []
-    readonly property var awards: album.awards || []
+    // `header.awards`, NOT `album.awards`. It is a field of AlbumHeader
+    // (src/album_qt.rs:171), not of AlbumViewData — read one level too high it
+    // is `undefined`, `|| []` swallows that, and the AWARDS block simply never
+    // renders. Which is what it did, for every album, since the block was
+    // written: an empty Repeater draws nothing and reports nothing, and
+    // `hasSidebar` counted the same empty list, so an album whose ONLY sidebar
+    // content was its awards showed no sidebar at all.
+    readonly property var awards: header.awards || []
     property var coverMap: ({})
     // Client-side track search (AlbumActions.search equivalent).
     property string trackQuery: ""
@@ -1162,7 +1169,13 @@ Rectangle {
                             iconName: "disc"
                             gradA: "#6366f1"
                             gradB: "#8b5cf6"
-                            // POC-NOTE: no label view yet.
+                            // The label page HAS existed for a long time — the
+                            // header chip above (:691) has been opening it all
+                            // along. This card carried a "no label view yet"
+                            // note and no handler, so the sidebar's LABEL entry
+                            // looked clickable (it hovers) and did nothing.
+                            onClicked: if ((header.labelId || "") !== "")
+                                QbzHome.openLabel(header.labelId)
                         }
                     }
                     Column {
@@ -1178,7 +1191,19 @@ Rectangle {
                                 iconName: "award"
                                 gradA: "#b45309"
                                 gradB: "#eab308"
-                                // POC-NOTE: no award view yet.
+                                // `modelData` is the (id, name) pair
+                                // album_qt publishes. Qobuz omits the id on
+                                // some /album/get entries, so with one we open
+                                // directly and without one we hand the NAME to
+                                // the resolver — 1:1 with the reference's
+                                // "open" / "resolve-open" split
+                                // (AlbumPageView.slint:1049-1055).
+                                onClicked: {
+                                    if ((modelData[0] || "") !== "")
+                                        QbzHome.openAward(modelData[0], modelData[1] || "")
+                                    else if ((modelData[1] || "") !== "")
+                                        QbzHome.openAwardByName(modelData[1])
+                                }
                             }
                         }
                     }

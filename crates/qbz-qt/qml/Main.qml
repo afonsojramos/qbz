@@ -348,6 +348,13 @@ ApplicationWindow {
         // side. The wizard is the loudest case after QbzBlacklist, because its
         // first step ends on "Checking your audio stack…" forever.
         QbzDacWizard.boot()
+        // Offline Cache Manager. Nothing to seed — the view is unmounted until
+        // the Settings row opens it — but without this line the manager's very
+        // first publish is dropped and the view sits on its spinner forever:
+        // `managerLoading` DEFAULTS to true precisely so the empty state does
+        // not flash, which turns a missing boot() into a permanent spinner
+        // with nothing logged on either side.
+        QbzOffline.boot()
         // Miniplayer (2026-08-03 miniplayer/tray contract, block B1). Booted
         // like every other domain singleton, after QbzSession: `boot()` is what
         // registers the Qt-thread hop, and without it `mini_bridge::ui()` is a

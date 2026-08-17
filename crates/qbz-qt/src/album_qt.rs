@@ -592,7 +592,9 @@ pub async fn load_album(runtime: &Arc<AppRuntime<LoggingAdapter>>, album_id: &st
         .map(qbz_text_utils::strip_html::strip_html)
         .unwrap_or_default();
     let description_short = truncate_words(&description, 360);
-    let awards = album
+    // Annotated: `remember_awards` takes a slice, and without the explicit
+    // Vec here inference picks the unsized slice type off that call.
+    let awards: Vec<(String, String)> = album
         .awards
         .as_deref()
         .unwrap_or_default()
@@ -600,6 +602,12 @@ pub async fn load_album(runtime: &Arc<AppRuntime<LoggingAdapter>>, album_id: &st
         .map(|a| (a.id.clone().unwrap_or_default(), a.name.clone()))
         .filter(|(_, n)| !n.is_empty())
         .collect();
+    // Feed the award name->id catalog. Qobuz omits the id on some
+    // `/album/get` entries, so the sidebar can only offer a NAME for those —
+    // harvesting the ones it DOES name here is what lets the resolver answer
+    // without an `/award/explore` crawl (award_qt.rs, "the name -> id
+    // resolver").
+    crate::award_qt::remember_awards(&awards);
     let title = crate::album_qt::format_album_title(&album.title, album.version.as_deref());
 
     // Pick the booklet goody: prefer the PDF format id (21), else the first

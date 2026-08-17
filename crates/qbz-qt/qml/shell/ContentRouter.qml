@@ -136,6 +136,17 @@ Item {
             // Settings > Blacklist > Manage. Not reachable from the
             // sidebar — blacklist_qt::open_manager records the route.
             : QbzShell.currentView === "blacklist" ? "../views/BlacklistManagerView.qml"
+            // Settings > Offline > Manage offline cache > Open manager. Same
+            // shape as the blacklist arm above: not a sidebar section, and
+            // offline_manager_qt::open() is what records the route.
+            : QbzShell.currentView === "offlinemanager" ? "../views/OfflineManagerView.qml"
+            // Awards — reached from the album sidebar's laurel, an "Other
+            // awards" card or the landing page's all-awards dropdown. Both
+            // routes are recorded by award_qt (open_award / open_albums); the
+            // id lives in the controller, not in the route, exactly like
+            // "label" / "labelreleases" next to them.
+            : QbzShell.currentView === "award" ? "../views/AwardView.qml"
+            : QbzShell.currentView === "awardalbums" ? "../views/AwardAlbumsView.qml"
             // Sidebar > Playlists ⋯ > Manage playlists. Not a sidebar
             // section — playlist_manager_qt::navigate() records the route.
             // The route is a TWO-FILE contract (nav_qt.rs:9-19): the caller

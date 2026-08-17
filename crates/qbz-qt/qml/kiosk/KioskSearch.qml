@@ -395,7 +395,14 @@ Rectangle {
 
                         QbzIcon {
                             id: crownGlyph
-                            name: "award"
+                            // "crown", like its desktop twin
+                            // (SearchView.qml:546). This said "award" and drew
+                            // a MICROPHONE — the asset under that name was
+                            // lucide's mic. SearchView routed around it years
+                            // ago and left a note; kiosk was missed. The asset
+                            // is a laurel now, which is right for an AWARD and
+                            // still wrong for "Most popular".
+                            name: "crown"
                             width: 18
                             height: 18
                             tintName: "warning"
