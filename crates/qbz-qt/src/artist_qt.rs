@@ -432,12 +432,12 @@ pub(crate) fn map_release(release: &PageArtistRelease) -> AlbumCardData {
             .as_ref()
             .map(|g| g.name.clone())
             .unwrap_or_default(),
-        year: release
-            .dates
-            .as_ref()
-            .and_then(|d| d.original.as_deref())
-            .and_then(|s| s.get(..4).map(|y| y.to_string()))
-            .unwrap_or_default(),
+        // Localized "Sep 2, 2021" like every other card in the app — this
+        // slot is display text, not a sort key (the numeric-year sites in
+        // this file and in myqbz_builder_fetch keep their `i32` on purpose).
+        year: qbz_text_utils::dates::release_label(
+            release.dates.as_ref().and_then(|d| d.original.as_deref()),
+        ),
         quality_tier: home_qt::quality_tier_from_depth(bit_depth).to_string(),
         quality_detail: home_qt::quality_detail_from_parts(bit_depth, sample_rate),
         art_url: crate::cover_artwork_qt::prefer_album_cover(

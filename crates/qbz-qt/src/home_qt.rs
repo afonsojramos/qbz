@@ -1207,11 +1207,15 @@ pub(crate) fn quality_detail_from_parts(bit_depth: Option<u32>, sample_rate: Opt
 
 /// Flat-Album card mapping (foryou.rs `map_album`).
 pub(crate) fn map_flat_album(album: Album) -> HomeCard {
-    let year = album
-        .release_date_original
-        .as_deref()
-        .and_then(|s| s.get(..4).map(|y| y.to_string()))
-        .unwrap_or_default();
+    // "Sep 2, 2021", not "2021". The card's `year` slot is a DISPLAY string
+    // and every other mapper in the port already localizes it through
+    // `release_label` (`map_recent_album` right below says so in as many
+    // words); this one sliced the first four characters, so the four biggest
+    // album surfaces — Discover, the label pages, the award pages and
+    // DiscoverBrowse — showed a bare year while Home showed a date. Same
+    // formatter, so a source that only has "2025" still falls back to the
+    // year on its own.
+    let year = qbz_text_utils::dates::release_label(album.release_date_original.as_deref());
     let quality_tier = match album.maximum_bit_depth {
         Some(d) if d >= 24 => "hires",
         Some(_) => "cd",
@@ -1237,6 +1241,10 @@ pub(crate) fn map_flat_album(album: Album) -> HomeCard {
         artist: album.artist.name,
         artist_id: album.artist.id.to_string(),
         year,
+        // Never set here before, so the hover meta's genre line was empty on
+        // every card this mapper feeds — the card renders it, the collection
+        // passes it, the document simply had nothing in it.
+        genre: album.genre.map(|g| g.name).unwrap_or_default(),
         quality_tier,
         quality_label,
         // The list arm's QualityBadgeFull renders the bare exact-quality
