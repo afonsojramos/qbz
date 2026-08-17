@@ -3418,8 +3418,14 @@ Rectangle {
                             topMenu.close()
                             var a = modelData.action
                             if (a === "shuffle-all") QbzPlayer.playArtistTop(true)
-                            else if (a === "next-all") QbzPlayer.playArtistTop(false)
-                            else if (a === "queue-all") QbzPlayer.enqueueArtistTop()
+                            // "Play all next" INSERTS at the cursor; it does
+                            // not replay the artist. It used to call
+                            // playArtistTop(false) — "Play all" — so the row
+                            // labelled "next" wiped the queue and started
+                            // over (ArtistPageView's twin in Slint enqueues,
+                            // main.rs:15301).
+                            else if (a === "next-all") QbzPlayer.enqueueArtistTop("next")
+                            else if (a === "queue-all") QbzPlayer.enqueueArtistTop("queue")
                             else if (a === "playlist-all") {
                                 // ArtistPageView.slint:797-802
                                 // `top-tracks-menu-action("playlist-all")` —

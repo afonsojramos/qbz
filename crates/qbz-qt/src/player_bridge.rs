@@ -207,9 +207,16 @@ pub mod qbz_player {
         /// ArtistView "Play all" (shuffle=false) / "Shuffle all" (true).
         #[qinvokable]
         fn play_artist_top(self: Pin<&mut QbzPlayer>, shuffle: bool);
-        /// ArtistView ⋯ "Add all to queue" — appends the top-tracks queue.
+        /// ArtistView ⋯ "Play all next" / "Add all to queue" — the top-tracks
+        /// queue through the shared insertion funnel. `mode` is "next"
+        /// (insert at the cursor) | "later" | anything else (append).
+        ///
+        /// It takes a MODE because the menu has both rows and only one of
+        /// them was reachable: `next-all` was wired to `play_artist_top`,
+        /// which REPLACES the queue and starts playing. Asking to queue an
+        /// artist next wiped whatever was queued.
         #[qinvokable]
-        fn enqueue_artist_top(self: Pin<&mut QbzPlayer>);
+        fn enqueue_artist_top(self: Pin<&mut QbzPlayer>, mode: QString);
         /// Artist-card overlay play (ArtistGridCard): Popular tracks,
         /// falling back to the studio discography (playback.rs play_artist).
         #[qinvokable]
@@ -470,8 +477,8 @@ impl qbz_player::QbzPlayer {
         crate::play_artist_top(shuffle);
     }
 
-    pub fn enqueue_artist_top(self: Pin<&mut Self>) {
-        crate::enqueue_artist_top();
+    pub fn enqueue_artist_top(self: Pin<&mut Self>, mode: QString) {
+        crate::enqueue_artist_top(mode.to_string());
     }
 
     pub fn play_artist_card(self: Pin<&mut Self>, artist_id: QString) {

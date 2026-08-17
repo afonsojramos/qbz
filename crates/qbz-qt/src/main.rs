@@ -1436,13 +1436,17 @@ pub(crate) fn play_artist_top(shuffle: bool) {
     });
 }
 
-/// ArtistView ⋯ "Add all to queue".
-pub(crate) fn enqueue_artist_top() {
+/// ArtistView ⋯ "Play all next" ("next") / "Add all to queue" ("queue").
+///
+/// Both rows land here now. The append-only body this shim used to hold was
+/// the reason `playback_qt::enqueue_artist_top_mode` — written for exactly
+/// this, and the reference's own shape (`main.rs:15301`,
+/// `enqueue_artist_top_selected(.., next: true)`) — had no caller at all.
+pub(crate) fn enqueue_artist_top(mode: String) {
     let runtime = app();
     spawn(async move {
-        let (queue, _) = artist_qt::top_queue(None);
-        if let Err(e) = playback_qt::enqueue_track_list(&runtime, queue).await {
-            log::error!("[qbz-qt] enqueue_artist_top failed: {e}");
+        if let Err(e) = playback_qt::enqueue_artist_top_mode(&runtime, &mode).await {
+            log::error!("[qbz-qt] enqueue_artist_top ({mode}) failed: {e}");
         }
     });
 }
