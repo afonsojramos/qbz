@@ -2678,6 +2678,61 @@ impl QobuzClient {
         Ok(())
     }
 
+    /// Move tracks WITHIN a playlist — `/playlist/updateTracksPosition`.
+    ///
+    /// `playlist_track_ids` are MEMBERSHIP ids, the same id space
+    /// [`Self::remove_tracks_from_playlist`] takes — not catalog track ids.
+    /// `insert_before` is the 0-based slot the moved rows must land in front
+    /// of, counted against the playlist AS IT IS at call time.
+    ///
+    /// # Provenance, because this one is not in the current spec
+    ///
+    /// The argument shape is the DESKTOP web-player capture's
+    /// (`qbz-nix-docs/qobuz-api-delta-desktop-8.2.0-b015.md:95` —
+    /// `{playlist_id, playlist_track_ids, insert_before}`). The decompiled
+    /// Android route table lists the same path, and that entry is corroboration
+    /// and nothing more: CLAUDE.md forbids inferring endpoints from it.
+    ///
+    /// GET + [`Self::signed_get_auth`], exactly like the two neighbours this
+    /// call is sequenced with. The capture records a POST, but every playlist
+    /// write in this client is a signed GET against api.json/0.2 — including
+    /// `addTracks` and `deleteTracks`, whose captures were POSTs too — and the
+    /// signature method name follows the same `<namespace><Method>` rule the
+    /// neighbours use, hence `playlistupdateTracksPosition`.
+    ///
+    /// The exact reading of `insert_before` is the ONE part of this verb no
+    /// capture in the repo pins down, so the request is logged in full at debug
+    /// level and callers must treat a successful-but-wrong move as cosmetic —
+    /// never as a reason to abort a repair that already landed.
+    pub async fn update_playlist_tracks_position(
+        &self,
+        playlist_id: u64,
+        playlist_track_ids: &[u64],
+        insert_before: u32,
+    ) -> Result<()> {
+        let url = endpoints::build_url(paths::PLAYLIST_UPDATE_TRACKS_POSITION);
+        let track_ids_str = playlist_track_ids
+            .iter()
+            .map(|id| id.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        log::debug!(
+            "[API] updateTracksPosition playlist_id={} playlist_track_ids={} insert_before={}",
+            playlist_id,
+            track_ids_str,
+            insert_before
+        );
+
+        self.signed_get_auth(&url, "playlistupdateTracksPosition", &[
+            ("playlist_id", playlist_id.to_string()),
+            ("playlist_track_ids", track_ids_str),
+            ("insert_before", insert_before.to_string()),
+        ])
+        .await?;
+
+        Ok(())
+    }
+
     /// Update playlist metadata
     pub async fn update_playlist(
         &self,
