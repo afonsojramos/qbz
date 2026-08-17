@@ -2591,6 +2591,60 @@ pub(crate) fn emit_library_favorite(kind: &str, id: &str, value: bool) {
     search_qt::apply_favorite_change(kind, id, value);
 }
 
+/// Dev navigation driver — `QBZ_QT_NAV_BENCH=home,library,home,settings`.
+///
+/// Two jobs, both of which the project had to do by hand before:
+///
+///  1. **Measuring a route change.** The cost of a mount is wall-clock on the
+///     UI thread, so it cannot be read off a `cargo test` or a static audit;
+///     it needs the real app to actually navigate. Paired with
+///     `QT_LOGGING_RULES="qbz.nav.timing.info=true"` (the probes in
+///     ContentRouter.qml / HomeView.qml) this prints what each hop cost.
+///  2. **Mounting views the offscreen gate never reaches.** That gate keys off
+///     `QbzShell.currentView` and nobody navigates during it, so it only ever
+///     instantiates the startup view — which is how two entirely unloadable
+///     modals and a live `ReferenceError` survived fifteen parity rounds. A
+///     hop list makes those load errors fire where the gate can see them.
+///
+/// Runs only when the variable is set, off its own thread, and starts after
+/// the first home publish so the hops land on a populated app rather than on
+/// empty documents. `QBZ_QT_NAV_BENCH_MS` (default 4000) is the dwell per hop:
+/// long enough for the mount, its artwork republish and the settle to finish
+/// before the next hop muddies the log.
+fn nav_bench_if_requested() {
+    let Ok(list) = std::env::var("QBZ_QT_NAV_BENCH") else {
+        return;
+    };
+    let hops: Vec<String> = list
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect();
+    if hops.is_empty() {
+        return;
+    }
+    let dwell = std::env::var("QBZ_QT_NAV_BENCH_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(4000);
+    std::thread::Builder::new()
+        .name("qbz-qt-nav-bench".to_string())
+        .spawn(move || {
+            for hop in hops {
+                std::thread::sleep(std::time::Duration::from_millis(dwell));
+                log::info!("[qbz-qt][navbench] -> {hop}");
+                // `navigate_to` is the SAME entry point a sidebar click uses
+                // (it records history and republishes `currentView`), so the
+                // hop exercises the real route path, per-view load arms
+                // included — not a shortcut that writes the property directly.
+                navigate_to(&hop);
+            }
+            log::info!("[qbz-qt][navbench] done");
+        })
+        .ok();
+}
+
 /// `reloadHome()` invokable / auto-load worker: fetch + publish + artwork.
 pub(crate) fn reload_home() {
     if offline_fwd::engine().status().is_offline() {
@@ -2620,6 +2674,7 @@ pub(crate) fn reload_home() {
                 // whatever was restored this boot did not kill it — clear the
                 // crash chain for the next start.
                 nav_qt::mark_startup_healthy();
+                nav_bench_if_requested();
                 log::info!(
                     "[qbz-qt] home published: {}+{}+{} sections, {} cards, {} artwork misses",
                     sections.home.len(),
