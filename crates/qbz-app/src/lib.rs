@@ -1,3 +1,4 @@
+pub mod device_cap;
 pub mod diagnostics;
 pub mod memory_watchdog;
 pub mod offline_mode;
