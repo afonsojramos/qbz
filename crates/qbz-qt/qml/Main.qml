@@ -340,6 +340,13 @@ ApplicationWindow {
         // importer makes (the whole progress panel, the log, the summary) is
         // dropped on the floor with nothing logged on either side.
         QbzPlaylistImport.boot()
+        // "Find available version" (2026-08-17 unavailable-tracks contract §6).
+        // Nothing to seed — the modal is closed until a playlist row's context
+        // menu opens it — but without this line every publish the controller
+        // makes is dropped on the floor: the modal would open empty and keep
+        // spinning, since its `loading` flag is only ever taken down by a
+        // publish.
+        QbzTrackReplace.boot()
         // HiFi Wizard. Nothing to seed — the modal is closed until the
         // Settings > Audio row opens it — but without this line every publish
         // the wizard makes is dropped on the floor: the health verdict, the

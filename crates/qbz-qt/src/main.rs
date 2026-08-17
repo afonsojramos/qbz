@@ -84,6 +84,14 @@ mod purchases_bridge;
 // manager, opened from two shell surfaces that outlive each other, and its
 // modal must survive the one that opened it (05 §5.8).
 mod playlist_import_bridge;
+// "Find available version" (2026-08-17 unavailable-tracks contract §6): the
+// QbzTrackReplace singleton — the replacement modal for a track Qobuz pulled
+// from the catalogue. Its own singleton for the same reason as its modal
+// neighbours: it is mounted once in AppShell, and its apply reloads the
+// playlist underneath it. Its controller half is `track_replace_qt` below, a
+// PLAIN module. This file DOES belong in build.rs's rust_files; without it the
+// QML singleton silently does not exist.
+mod track_replace_bridge;
 // HiFi Wizard (DAC setup). Its own singleton rather than more surface on
 // QbzBridge: the wizard is one self-contained modal whose document nobody else
 // reads, and its read-back ticks every 1.5 s while the test plays — routing
@@ -267,6 +275,11 @@ mod playlist_manager_rows;
 // no #[cxx_qt::bridge], so it must NOT appear in build.rs's rust_files.
 mod playlist_edit_qt;
 mod playlist_qt;
+// The replacement-search controller (2026-08-17 unavailable-tracks contract
+// §6): ISRC short-circuit, the ranked text search, and the add -> reposition ->
+// remove apply order. Plain module — it declares no #[cxx_qt::bridge], so it
+// must NOT appear in build.rs's rust_files.
+mod track_replace_qt;
 // Purchases controller (2026-08-15 purchases contract): the two screens' state,
 // the FRONTEND album-download loop (concurrency 1, cancellable, per-track
 // progress) and the format re-scoping. Plain module — it declares no

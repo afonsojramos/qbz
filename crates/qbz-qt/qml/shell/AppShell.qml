@@ -701,6 +701,19 @@ Rectangle {
     PlaylistImportModal {
         anchors.fill: parent
     }
+    // TrackReplacementModal — "Find available version" for a track Qobuz
+    // pulled from the catalogue (2026-08-17 unavailable-tracks contract §6),
+    // opened from the playlist row's context menu.
+    //
+    // Out here for the strongest form of its neighbours' reason: the apply
+    // RELOADS the playlist underneath it (`refresh_after_membership_change`),
+    // so a modal parented into the playlist view would be destroyed by its own
+    // success — while a write is still settling. Self-gates on
+    // QbzTrackReplace.replaceJson, so while closed it is an invisible,
+    // non-interactive Item.
+    TrackReplacementModal {
+        anchors.fill: parent
+    }
     MyQbzModals {
         anchors.fill: parent
     }
