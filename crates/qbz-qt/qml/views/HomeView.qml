@@ -67,6 +67,25 @@ Rectangle {
 
     QbzTheme { id: theme }
 
+    // ---- mount stopwatch (same category as ContentRouter's) --------------
+    // OFF unless QT_LOGGING_RULES="qbz.nav.timing.info=true". It exists to
+    // attribute a Home mount: this view declares FOUR Discover tabs and QML
+    // instantiates all four (`visible: false` hides a Column, it does not stop
+    // it from being built), so the question "how much of the wait is the three
+    // tabs nobody asked for" needs per-tab numbers, not a single total.
+    LoggingCategory {
+        id: homeTiming
+        name: "qbz.nav.timing"
+        defaultLogLevel: LoggingCategory.Warning
+    }
+    // A property initialiser runs during creation, so this is stamped near the
+    // start of the mount rather than at the end of it like Component.onCompleted.
+    property double _mountT0: Date.now()
+    function _stampTab(id, count) {
+        console.info(homeTiming, "[hometiming] tab " + id + " (" + count
+                     + " sections) done at +" + (Date.now() - root._mountT0) + "ms")
+    }
+
     // Reparsed whenever Rust republishes the JSON documents (one per
     // Discover tab — phase 13).
     readonly property var sections: JSON.parse(QbzHome.homeSectionsJson)
@@ -589,8 +608,17 @@ Rectangle {
                             id: trackRowComp
                             TrackSlimRow { card: modelData }
                         }
+                        // `active` matters as much as `sourceComponent`: the
+                        // Repeater above is fed the WHOLE item list, and the
+                        // rows past `total` were being built in full and then
+                        // hidden by the delegate's `visible`. A hidden row
+                        // costs exactly as much to construct as a shown one —
+                        // it just never repays it. `sectionData.items` can run
+                        // several times `total` (24), so this is most of the
+                        // grid.
                         Loader {
                             anchors.fill: parent
+                            active: index < sgrid.total
                             sourceComponent: sgrid.tracks ? trackRowComp : albumRowComp
                         }
                     }
@@ -1390,10 +1418,46 @@ Rectangle {
                 spacing: 40
 
                 // ===== Home tab ==========================================
-                Column {
-                    id: homeTab
-                    visible: root.activeTab === "home"
+                //
+                // ONE TAB EXISTS AT A TIME — and the `Loader` is what makes
+                // that true. The four tab bodies used to be four sibling
+                // Columns gated on `visible:`, which hides a Column but does
+                // NOT stop QML from building it: every Repeater under every
+                // tab still instantiated every rail and every card. Measured
+                // on this account (9 + 7 + 12 sections, 423 cards), a Home
+                // mount spent ~360 of its ~410 ms inside the tab columns, and
+                // three quarters of those sections belonged to tabs nobody was
+                // looking at. The proof was the per-tab stamp below firing for
+                // `forYou` and `editorPicks` while they were invisible.
+                //
+                // This is also what the REFERENCE does, and the port had
+                // simply diverged: HomeView.slint:321 runs ONE repeater whose
+                // model is picked by a ternary on the active tab, and mounts
+                // For You / Recommendations behind `if` (:579, :608). Its own
+                // comment — "the For You tab's lists are pushed empty so this
+                // repeater renders nothing for it" — is the same rule stated
+                // from the data side.
+                //
+                // SYNCHRONOUS on purpose (`asynchronous` is left at its
+                // default). Async incubation is time-sliced: it does not
+                // remove the work, it spreads it over more frames, which is
+                // why the router-level experiment made the app dramatically
+                // worse and was reverted the same day. See ContentRouter.qml.
+                //
+                // The trade is that switching tabs now builds the tab you
+                // switch TO, instead of it being pre-built. That is the right
+                // way round: a mount happens on every navigation into
+                // Discover, a tab switch only when asked for, and one tab
+                // costs a quarter of four.
+                Loader {
                     width: parent.width - 64
+                    active: root.activeTab === "home"
+                    // Without this the Column reserves a spacing slot for an
+                    // inactive Loader (it is a zero-size but VISIBLE child),
+                    // leaving a 40px gap above the active tab.
+                    visible: active
+                    sourceComponent: Column {
+                    width: parent.width
                     spacing: 40
 
                     // Loading skeleton (HomeSkeleton: two shimmer rows). The
@@ -1450,30 +1514,44 @@ Rectangle {
 
                     // Section rails.
                     SectionRails { sectionsModel: root.sections; tabId: "home" }
+                    Component.onCompleted: root._stampTab("home", root.sections.length)
+                    }
                 }
 
                 // ===== Editor's Picks (phase 13) ========================
-                Column {
-                    visible: root.activeTab === "editorPicks"
+                // Loader-gated for the reason spelled out on the Home tab.
+                Loader {
                     width: parent.width - 64
-                    spacing: 40
-                    TabSkeleton {
-                        visible: QbzHome.homeLoading && root.editorSections.length === 0
-                        phase: root.skelPhase
+                    active: root.activeTab === "editorPicks"
+                    visible: active
+                    sourceComponent: Column {
+                        width: parent.width
+                        spacing: 40
+                        TabSkeleton {
+                            visible: QbzHome.homeLoading && root.editorSections.length === 0
+                            phase: root.skelPhase
+                        }
+                        SectionRails { sectionsModel: root.editorSections; tabId: "editorPicks" }
+                        Component.onCompleted: root._stampTab("editorPicks", root.editorSections.length)
                     }
-                    SectionRails { sectionsModel: root.editorSections; tabId: "editorPicks" }
                 }
 
                 // ===== For You (phase 13) =================================
-                Column {
-                    visible: root.activeTab === "forYou"
+                // Loader-gated for the reason spelled out on the Home tab.
+                Loader {
                     width: parent.width - 64
-                    spacing: 40
-                    TabSkeleton {
-                        visible: QbzHome.homeLoading && root.forYouSections.length === 0
-                        phase: root.skelPhase
+                    active: root.activeTab === "forYou"
+                    visible: active
+                    sourceComponent: Column {
+                        width: parent.width
+                        spacing: 40
+                        TabSkeleton {
+                            visible: QbzHome.homeLoading && root.forYouSections.length === 0
+                            phase: root.skelPhase
+                        }
+                        SectionRails { sectionsModel: root.forYouSections; tabId: "forYou" }
+                        Component.onCompleted: root._stampTab("forYou", root.forYouSections.length)
                     }
-                    SectionRails { sectionsModel: root.forYouSections; tabId: "forYou" }
                 }
 
                 // ===== Recommendations (external reco engine) =============
@@ -1483,44 +1561,52 @@ Rectangle {
                 // later entry repaints from memory / the engine's own result
                 // cache, so reopening Discover costs no external traffic.
                 //
-                // The load is kicked BOTH on mount and on becoming visible:
-                // the view is instantiated while Home is the active tab, so a
-                // visible-only hook would be thrown away on the mount pass and
-                // a mount-only hook would never fire for a tab switch.
-                Column {
-                    id: recoTab
-                    visible: root.activeTab === "recommendations"
+                // Loader-gated like the other three (see the Home tab), and
+                // the gate SIMPLIFIED the lazy-load hook it used to need. The
+                // old pair — `Component.onCompleted` plus `onVisibleChanged`,
+                // both funnelled through a `kick()` that re-checked
+                // `visible` — existed only because this Column was built
+                // eagerly while Home was the active tab: the mount fired too
+                // early to mean anything, so a second hook had to catch the
+                // tab actually being shown. Now the component does not exist
+                // until the tab is selected, so mounting IS being selected and
+                // one `Component.onCompleted` says it exactly.
+                Loader {
                     width: parent.width - 64
-                    spacing: 40
-
-                    function kick() {
-                        if (recoTab.visible)
-                            QbzHome.loadRecommendations()
-                    }
-                    Component.onCompleted: recoTab.kick()
-                    onVisibleChanged: recoTab.kick()
-
-                    // Same two-row shimmer as the other tabs, while the first
-                    // build is in flight and nothing has painted yet.
-                    TabSkeleton {
-                        visible: QbzHome.recoLoading && root.recoSections.length === 0
-                        phase: root.skelPhase
-                    }
-
-                    // Rails resolve progressively — a row that is still
-                    // building, or whose service is not connected, is simply
-                    // ABSENT from the document (never an empty frame).
-                    SectionRails { sectionsModel: root.recoSections; tabId: "recommendations" }
-
-                    // Nothing built and nothing in flight: the Slint empty
-                    // state, verbatim msgids.
-                    QbzEmptyState {
-                        visible: !QbzHome.recoLoading && root.recoSections.length === 0
+                    active: root.activeTab === "recommendations"
+                    visible: active
+                    sourceComponent: Column {
                         width: parent.width
-                        title: QbzSession.tr("No recommendations yet", QbzSession.trRev)
-                        body: QbzSession.tr("Connect Last.fm or ListenBrainz in Settings, or play more music, to get personalized recommendations.", QbzSession.trRev)
-                        actionLabel: QbzSession.tr("Open Settings", QbzSession.trRev)
-                        onActionClicked: QbzShell.navigateTo("settings")
+                        spacing: 40
+
+                        // Every later entry repaints from memory / the
+                        // engine's own result cache, so re-selecting the tab
+                        // costs no external traffic even though the component
+                        // is rebuilt.
+                        Component.onCompleted: QbzHome.loadRecommendations()
+
+                        // Same two-row shimmer as the other tabs, while the
+                        // first build is in flight and nothing has painted yet.
+                        TabSkeleton {
+                            visible: QbzHome.recoLoading && root.recoSections.length === 0
+                            phase: root.skelPhase
+                        }
+
+                        // Rails resolve progressively — a row that is still
+                        // building, or whose service is not connected, is
+                        // simply ABSENT from the document (never an empty frame).
+                        SectionRails { sectionsModel: root.recoSections; tabId: "recommendations" }
+
+                        // Nothing built and nothing in flight: the Slint empty
+                        // state, verbatim msgids.
+                        QbzEmptyState {
+                            visible: !QbzHome.recoLoading && root.recoSections.length === 0
+                            width: parent.width
+                            title: QbzSession.tr("No recommendations yet", QbzSession.trRev)
+                            body: QbzSession.tr("Connect Last.fm or ListenBrainz in Settings, or play more music, to get personalized recommendations.", QbzSession.trRev)
+                            actionLabel: QbzSession.tr("Open Settings", QbzSession.trRev)
+                            onActionClicked: QbzShell.navigateTo("settings")
+                        }
                     }
                 }
             }

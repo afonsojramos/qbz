@@ -812,25 +812,37 @@ Rectangle {
                 onActionClicked: QbzShell.navigateTo("settings")
             }
 
-            LocalAlbumsTab {
+            // ONE TAB EXISTS AT A TIME. These four were sibling mounts gated
+            // on `visible:`, which hides an item but does not stop QML from
+            // building it — so every entry into Local Library instantiated all
+            // four tab bodies and their views' first screenful of delegates,
+            // to show one. The same divergence measured in HomeView.qml (see
+            // the Home tab there for the numbers and for why `asynchronous` is
+            // NOT the answer); the Tracks tab is the one that makes it matter
+            // here, being the 16K-row view.
+            //
+            // `active` also carries the tab's own precondition: with no local
+            // library there is nothing to build, and the empty state above is
+            // what shows instead.
+            Loader {
                 anchors.fill: parent
-                visible: QbzLocal.localAvailable && root.activeTab === "albums"
-                view: root
+                active: QbzLocal.localAvailable && root.activeTab === "albums"
+                sourceComponent: LocalAlbumsTab { view: root }
             }
-            LocalArtistsTab {
+            Loader {
                 anchors.fill: parent
-                visible: QbzLocal.localAvailable && root.activeTab === "artists"
-                view: root
+                active: QbzLocal.localAvailable && root.activeTab === "artists"
+                sourceComponent: LocalArtistsTab { view: root }
             }
-            LocalFoldersTab {
+            Loader {
                 anchors.fill: parent
-                visible: QbzLocal.localAvailable && root.activeTab === "folders"
-                view: root
+                active: QbzLocal.localAvailable && root.activeTab === "folders"
+                sourceComponent: LocalFoldersTab { view: root }
             }
-            LocalTracksTab {
+            Loader {
                 anchors.fill: parent
-                visible: QbzLocal.localAvailable && root.activeTab === "tracks"
-                view: root
+                active: QbzLocal.localAvailable && root.activeTab === "tracks"
+                sourceComponent: LocalTracksTab { view: root }
             }
         }
     }

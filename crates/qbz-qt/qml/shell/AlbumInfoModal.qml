@@ -476,17 +476,28 @@ Popup {
                                     width: flick.width - 18
                                     spacing: 0
 
-                                    Column {
-                                        visible: root.activeTab === "credits"
+                                    // Loader-gated, not `visible:`-gated: a
+                                    // hidden Column is still BUILT, so opening
+                                    // this modal on the Description tab was
+                                    // constructing one CreditTrackRow per
+                                    // track of the album regardless — the
+                                    // whole point of a credits tab being that
+                                    // a box set has a lot of them.
+                                    Loader {
                                         width: parent.width
-                                        spacing: 0
-                                        Repeater {
-                                            model: root.doc.tracks || []
-                                            delegate: CreditTrackRow {
-                                                required property var modelData
-                                                required property int index
-                                                track: modelData
-                                                isLast: index === (root.doc.tracks || []).length - 1
+                                        active: root.activeTab === "credits"
+                                        visible: active
+                                        sourceComponent: Column {
+                                            width: parent.width
+                                            spacing: 0
+                                            Repeater {
+                                                model: root.doc.tracks || []
+                                                delegate: CreditTrackRow {
+                                                    required property var modelData
+                                                    required property int index
+                                                    track: modelData
+                                                    isLast: index === (root.doc.tracks || []).length - 1
+                                                }
                                             }
                                         }
                                     }

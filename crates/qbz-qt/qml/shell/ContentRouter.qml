@@ -66,14 +66,62 @@ Item {
     // On a top-level tab the user expects to be instant, that trade is simply
     // the wrong one.
     //
-    // The real fix is NOT here: it is to stop rebuilding these views at all
-    // (keep the top-level tabs alive across navigation) and to make the heavy
-    // views build incrementally. Until one of those exists, synchronous is the
-    // honest behaviour — the same one that shipped before 2026-08-13.
+    // WHAT THE REAL FIX TURNED OUT TO BE — and this paragraph used to say the
+    // opposite, so read it before acting on a memory of it. It claimed the
+    // answer was to "keep the top-level tabs alive across navigation". That is
+    // wrong, and it was wrong on the evidence available at the time: BOTH
+    // references destroy and re-create the view exactly like this Loader does.
+    // Slint gates every view on `if NavState.view == ...` (AppShell.slint:426),
+    // which destroys the element tree; Tauri used `{#if activeView === 'home'}`
+    // (+page.svelte:6286), which removes it from the DOM — and Tauri even
+    // REFETCHES from the network on mount and still transitions instantly.
+    // Neither gets its speed from caching the view.
+    //
+    // What they both do is keep the MOUNT proportional to one viewport, and
+    // that is where this port had diverged. Measured 2026-08-17 by driving the
+    // real app (`QBZ_QT_NAV_BENCH`, the probe below, and a frame-by-frame read
+    // of a screen recording): a click on Discover froze the UI thread for
+    // 1.52 s — not slow, FROZEN, zero pixels changing anywhere in the window —
+    // where the Slint build painted the same page, artwork included, in a
+    // single frame. Inside that time HomeView was building all FOUR of its
+    // Discover tabs, because `visible: false` hides an item and does not stop
+    // QML from instantiating it, so 19 of 28 section rails belonged to tabs
+    // nobody was looking at. Slint runs ONE repeater whose model is chosen by
+    // a ternary (HomeView.slint:321) and mounts the rest behind `if`.
+    //
+    // So the rule is about the SIZE of a mount, not its lifetime: a view may
+    // be rebuilt freely as long as it only builds what is on screen. That rule
+    // is now enforced statically — qml_eager_tab_audit.py runs in qt-run.sh
+    // and fails the build on a heavy per-tab body gated only by `visible:`.
+    // Synchronous stays, and is correct.
+    // Route-change stopwatch. OFF by default (a LoggingCategory at Warning
+    // emits nothing at Info), so the only cost on a normal run is one
+    // Date.now() per route change. Turn it on with:
+    //
+    //     QT_LOGGING_RULES="qbz.nav.timing.info=true" ./target/release/qbz
+    //
+    // It answers the question no static gate can: of the wall-clock between
+    // the click and a usable page, how much is QML instantiation (`built`)
+    // versus everything the event loop still owes afterwards (`to-idle`).
+    LoggingCategory {
+        id: navTiming
+        name: "qbz.nav.timing"
+        defaultLogLevel: LoggingCategory.Warning
+    }
+    property double _routeT0: 0
+    // Stamped from INSIDE the source binding rather than from a
+    // currentViewChanged handler: binding re-evaluation and signal handlers
+    // have no guaranteed order, and this way the stamp is by construction the
+    // last thing before the Loader instantiates.
+    function _stampRoute(path) {
+        root._routeT0 = Date.now()
+        return path
+    }
+
     Loader {
         id: viewLoader
         anchors.fill: parent
-        source: QbzShell.currentView === "home"
+        source: root._stampRoute(QbzShell.currentView === "home"
                 ? (root.kiosk ? "../kiosk/KioskDiscover.qml" : "../views/HomeView.qml")
             : QbzShell.currentView === "library"
                 ? (root.kiosk ? "../kiosk/KioskLibrary.qml" : "../views/LibraryView.qml")
@@ -171,7 +219,23 @@ Item {
             // its transport is the persistent bar — so outside kiosk this id
             // falls through to "" and the pane is blank, which is the desktop
             // behaviour before this router existed.
-            : root.kiosk && QbzShell.currentView === "nowplaying" ? "../kiosk/KioskNowPlaying.qml" : ""
+            : root.kiosk && QbzShell.currentView === "nowplaying" ? "../kiosk/KioskNowPlaying.qml" : "")
+
+        onLoaded: {
+            var built = Date.now() - root._routeT0
+            console.info(navTiming, "[navtiming] " + QbzShell.currentView
+                         + " built=" + built + "ms")
+            // One more turn of the event loop: everything the mount deferred
+            // (layout, the first delegate refills, the pending property
+            // updates) has run by the time this fires, so the delta is the
+            // honest "how long until the page stops owing work" number.
+            var t0 = root._routeT0
+            var view = QbzShell.currentView
+            Qt.callLater(function () {
+                console.info(navTiming, "[navtiming] " + view
+                             + " to-idle=" + (Date.now() - t0) + "ms")
+            })
+        }
     }
 
     // MyQbzGridView serves BOTH the "mixtapes" and "collections" routes
