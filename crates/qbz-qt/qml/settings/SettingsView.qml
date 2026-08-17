@@ -276,6 +276,10 @@ Item {
                             visible: root.section === 3
                             width: parent.width
                             doc: root.doc
+                            // "Clear all" purges every downloaded track and
+                            // there is no undo — same treatment as the Local
+                            // Library danger zone below.
+                            confirmHost: confirmHost
                         }
                         LocalLibrarySettings {
                             visible: root.section === 4

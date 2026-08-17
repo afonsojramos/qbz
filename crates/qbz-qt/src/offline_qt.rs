@@ -83,6 +83,19 @@ pub async fn activate(user_id: u64) {
     load_cached_ids().await;
 }
 
+/// Persist the cache size limit (bytes) next to `index.db`, so the manager's
+/// edit-limit survives a restart. 1:1 with `crates/qbz/src/offline.rs:89-96` —
+/// SAME file name in the SAME per-user directory, which is what lets the two
+/// frontends share one limit instead of quietly disagreeing about it.
+pub async fn persist_limit(bytes: u64) {
+    if let Some(off) = get().await {
+        let path = limit_file(&off.get_cache_path());
+        if let Err(e) = std::fs::write(&path, bytes.to_string()) {
+            log::warn!("[qbz-qt] offline: persist limit failed: {e}");
+        }
+    }
+}
+
 /// Tear down the offline cache on logout.
 pub async fn deactivate() {
     if let Some(state) = slot().lock().await.take() {
@@ -116,6 +129,15 @@ pub fn is_cached(track_id: &str) -> bool {
         return false;
     };
     cached_ids().lock().map(|s| s.contains(&id)).unwrap_or(false)
+}
+
+/// Drop the whole session set — after a cache purge, where marking each id
+/// individually would mean walking a list the purge already threw away
+/// (Slint `clear_all`: `cached_ids().lock().clear()`).
+pub fn clear_cached_ids() {
+    if let Ok(mut s) = cached_ids().lock() {
+        s.clear();
+    }
 }
 
 pub fn mark_cached(track_id: u64, cached: bool) {

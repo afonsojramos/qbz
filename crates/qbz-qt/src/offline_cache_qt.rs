@@ -77,7 +77,33 @@ pub fn row_sink() -> CacheEventSink {
 }
 
 /// Build the DB row metadata from a catalog track (Slint `track_cache_info`).
-fn track_cache_info(track: &qbz_models::Track) -> TrackCacheInfo {
+///
+/// `album_fallback` is `(id, title)` of the album this batch came FROM, used
+/// only when the track carries no nested album of its own.
+///
+/// THAT IS NOT AN EDGE CASE — it is the album path's normal state. A `Track`
+/// inside an `/album/get` payload has no nested `album` object (the envelope
+/// would be repeating itself), so `cache_album` produced rows with
+/// `album = NULL, album_id = NULL` for every track it ever queued. Measured on
+/// a real index: 34 of 46 rows, three complete albums, all NULL — everything
+/// downloaded through the album button since the CMAF path landed.
+///
+/// The damage is not cosmetic. `album_id` is the key `remove_album`,
+/// `redownload_album` and the downloaded-album registry all look rows up by,
+/// so an album cached this way could not be removed, refreshed or recognised
+/// as downloaded, and the Offline Manager could not group it. The reference
+/// has the identical bug (`offline_cache.rs:149-150` + `:311`).
+fn track_cache_info(
+    track: &qbz_models::Track,
+    album_fallback: Option<&(String, String)>,
+) -> TrackCacheInfo {
+    let (album, album_id) = match track.album.as_ref() {
+        Some(a) => (Some(a.title.clone()), Some(a.id.clone())),
+        None => match album_fallback {
+            Some((id, title)) => (Some(title.clone()), Some(id.clone())),
+            None => (None, None),
+        },
+    };
     TrackCacheInfo {
         track_id: track.id,
         title: track.title.clone(),
@@ -86,8 +112,8 @@ fn track_cache_info(track: &qbz_models::Track) -> TrackCacheInfo {
             .as_ref()
             .map(|p| p.name.clone())
             .unwrap_or_default(),
-        album: track.album.as_ref().map(|a| a.title.clone()),
-        album_id: track.album.as_ref().map(|a| a.id.clone()),
+        album,
+        album_id,
         duration_secs: track.duration as u64,
         quality: "UltraHiRes".to_string(),
         bit_depth: track.maximum_bit_depth,
@@ -126,7 +152,8 @@ pub fn cache_track(id: u64) {
                 return;
             }
         };
-        let info = track_cache_info(&track);
+        // A `/track/get` payload DOES carry its album, so no fallback here.
+        let info = track_cache_info(&track, None);
         let file_path = off.track_file_path(id, "flac");
         let file_path_str = file_path.to_string_lossy().to_string();
 
@@ -159,6 +186,16 @@ pub fn cache_track(id: u64) {
 /// Cache a batch of already-fetched catalog tracks (album flow, multi-select
 /// bulk "Make available offline"; Slint `cache_tracks`).
 pub fn cache_tracks(tracks: Vec<qbz_models::Track>) {
+    cache_tracks_with_album(tracks, None)
+}
+
+/// [`cache_tracks`] for a batch that came out of ONE album document, whose
+/// `(album_id, album_title)` stamps every row that has no nested album of its
+/// own — see `track_cache_info`.
+pub fn cache_tracks_with_album(
+    tracks: Vec<qbz_models::Track>,
+    album_fallback: Option<(String, String)>,
+) {
     if tracks.is_empty() {
         return;
     }
@@ -186,7 +223,7 @@ pub fn cache_tracks(tracks: Vec<qbz_models::Track>) {
         let count = tracks.len();
         for track in &tracks {
             let id = track.id;
-            let info = track_cache_info(track);
+            let info = track_cache_info(track, album_fallback.as_ref());
             let file_path = off.track_file_path(id, "flac");
             let file_path_str = file_path.to_string_lossy().to_string();
             {
@@ -231,7 +268,10 @@ pub fn cache_album(album_id: String) {
             crate::toast_qt::error(qbz_i18n::t("This album has no playable tracks"));
             return;
         }
-        cache_tracks(tracks);
+        // Stamp the album identity from the document we just fetched. Without
+        // it every row lands with a NULL album_id and the album becomes
+        // unremovable, unrefreshable and ungroupable — see `track_cache_info`.
+        cache_tracks_with_album(tracks, Some((album.id.clone(), album.title.clone())));
     });
 }
 
@@ -266,6 +306,122 @@ pub fn redownload_album(album_id: String, failed_only: bool) {
             push_status(id, 1, 0.0);
             spawn_download(&off, id);
         }
+        crate::offline_manager_qt::refresh_if_open().await;
+    });
+}
+
+/// Re-download ONE track (Slint `redownload_track`): reset its row and spawn
+/// the download, skipping a copy that is already in flight.
+///
+/// Distinct from `refresh_cached` below, which DELETES the copy first: this
+/// keeps the row (and its place in the index) and re-fetches into it, which is
+/// what the manager's per-row refresh and its bulk arm want — a failed row has
+/// nothing on disk to delete, and deleting a ready one would drop the user's
+/// only copy if the network is gone by the time the fetch runs.
+pub fn redownload_track(id: u64) {
+    crate::spawn(async move {
+        let Some(off) = offline_qt::get().await else {
+            return;
+        };
+        {
+            let guard = off.db.lock().await;
+            let Some(db) = guard.as_ref() else {
+                return;
+            };
+            if let Ok(Some(t)) = db.get_track(id) {
+                if matches!(t.status, qbz_offline_cache::OfflineCacheStatus::Downloading) {
+                    return;
+                }
+            }
+            let _ = db.reset_track_for_redownload(id);
+        }
+        push_status(id, 1, 0.0);
+        spawn_download(&off, id);
+        crate::offline_manager_qt::refresh_if_open().await;
+    });
+}
+
+/// Remove EVERY offline copy of an album (Slint `remove_album`): the shared
+/// maintenance sweep does the DB rows + the on-disk bundles, then the library
+/// rows and the session set follow it.
+pub fn remove_album(album_id: String) {
+    crate::spawn(async move {
+        let Some(off) = offline_qt::get().await else {
+            return;
+        };
+        let report = {
+            let guard = off.db.lock().await;
+            let Some(db) = guard.as_ref() else {
+                return;
+            };
+            let root = std::path::PathBuf::from(off.get_cache_path());
+            qbz_offline_cache::maintenance::remove_album_cached_tracks(db, &root, &album_id)
+        };
+        let report = match report {
+            Ok(r) => r,
+            Err(e) => {
+                log::error!("[qbz-qt] remove album {album_id} failed: {e}");
+                return;
+            }
+        };
+        {
+            let guard = off.library_db.lock().await;
+            if let Some(db) = guard.as_ref() {
+                for id in &report.removed_track_ids {
+                    let _ = db.remove_qobuz_cached_track(*id);
+                }
+            }
+        }
+        for id in &report.removed_track_ids {
+            offline_qt::mark_cached(*id, false);
+            push_status(*id, 0, 0.0);
+        }
+        crate::toast_qt::success(qbz_i18n::t("Removed album from offline"));
+        crate::offline_manager_qt::refresh_if_open().await;
+    });
+}
+
+/// Open the cache directory in the desktop file manager (Slint `open_folder`).
+///
+/// `xdg-open` / `open` by hand rather than the `rfd` used elsewhere in the
+/// port: rfd opens a PICKER, and this row is "show me the folder". Same two
+/// binaries the reference shells out to.
+pub fn open_folder() {
+    crate::spawn(async move {
+        let Some(off) = offline_qt::get().await else {
+            return;
+        };
+        let path = off.get_cache_path();
+        let opener = if cfg!(target_os = "macos") {
+            "open"
+        } else {
+            "xdg-open"
+        };
+        if let Err(e) = std::process::Command::new(opener).arg(&path).spawn() {
+            log::warn!("[qbz-qt] open offline folder failed: {e}");
+        }
+    });
+}
+
+/// Clear the WHOLE offline cache — DB rows, on-disk bundles and the library
+/// rows (Slint `clear_all`).
+///
+/// The Settings copy is precise about the blast radius and so is this: it
+/// removes the cached AUDIO. Purchased downloads live in the user's own music
+/// folder and are not touched by `purge_all_cached_files`.
+pub fn clear_all() {
+    crate::spawn(async move {
+        let Some(off) = offline_qt::get().await else {
+            return;
+        };
+        if let Err(e) = qbz_offline_cache::purge_all_cached_files(&off, &off.library_db).await {
+            log::error!("[qbz-qt] clear offline cache failed: {e}");
+            crate::toast_qt::error(qbz_i18n::t("Couldn't clear the cache"));
+            return;
+        }
+        offline_qt::clear_cached_ids();
+        crate::toast_qt::success(qbz_i18n::t("Cache cleared"));
+        crate::offline_manager_qt::refresh_if_open().await;
     });
 }
 
@@ -273,6 +429,7 @@ pub fn redownload_album(album_id: String, failed_only: bool) {
 pub fn remove_cached(id: u64) {
     crate::spawn(async move {
         remove_cached_inner(id, true).await;
+        crate::offline_manager_qt::refresh_if_open().await;
     });
 }
 

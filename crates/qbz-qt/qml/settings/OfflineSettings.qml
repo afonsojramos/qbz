@@ -8,11 +8,13 @@
 // `OfflineModeEngine::set_induced` (which also takes the #279 stream-first
 // snapshot).
 //
-// Not shipped (no backend seam in this port — see settings_qt/offline.rs):
-// - "Check now": the connectivity actor is private to offline_fwd.rs, so a
-//   re-probe cannot be triggered from here. The status itself is live.
-// - The whole OFFLINE CACHE group (Open manager / Open folder / Clear all):
-//   the port never brings up OfflineCacheState, so all three would be dead.
+// "Check now" IS shipped (`offline-recheck`); so is the live tri-state status
+// line (QbzSession.offlineMode / captivePortal) and the lyrics-cache row.
+//
+// Still missing: the whole OFFLINE CACHE group (Open manager / Open folder /
+// Clear all). What blocks it is the MANAGER VIEW, which has no Qt counterpart
+// yet — not the engine: `offline_cache_qt.rs` already runs the downloads from
+// the album page and the track row.
 
 import QtQuick
 import com.blitzfc.qbz
@@ -24,6 +26,10 @@ Column {
 
     property var doc: ({})
     readonly property var off: doc.offline || ({})
+    /// The view-level SettingsConfirmHost (SettingsView.qml). Null in previews
+    /// — the Clear-all row guards, so a preview degrades to the unconfirmed
+    /// call rather than swallowing the click.
+    property var confirmHost: null
 
     QbzTheme { id: theme }
 
@@ -65,6 +71,56 @@ Column {
             text: QbzSession.tr("Check now", QbzSession.trRev)
             enabled: QbzSession.offlineMode !== 2
             onClicked: QbzBridge.settingsString("offline-recheck", "")
+        }
+    }
+
+    SettingsSpacer { }
+    SettingsDivider { }
+    SettingsSpacer { }
+
+    // ========================== OFFLINE CACHE ============================
+    // The downloads half: the manager view plus the two whole-cache actions.
+    // All three ride QbzOffline, the same bridge the manager view uses —
+    // "Open folder" and "Clear all" are the manager's own stats-bar buttons,
+    // offered here too exactly as the reference offers them
+    // (OfflineSettings.slint:135-167).
+    GroupHeader { text: QbzSession.tr("OFFLINE CACHE", QbzSession.trRev) }
+    SettingRow {
+        label: QbzSession.tr("Manage offline cache", QbzSession.trRev)
+        description: QbzSession.tr("Browse and manage your downloaded tracks and albums.", QbzSession.trRev)
+        SettingsButton {
+            text: QbzSession.tr("Open manager", QbzSession.trRev)
+            onClicked: QbzOffline.openManager()
+        }
+    }
+    SettingRow {
+        label: QbzSession.tr("Cache folder", QbzSession.trRev)
+        description: QbzSession.tr("Open the folder where offline tracks are stored on disk.", QbzSession.trRev)
+        SettingsButton {
+            text: QbzSession.tr("Open folder", QbzSession.trRev)
+            onClicked: QbzOffline.openFolder()
+        }
+    }
+    SettingRow {
+        label: QbzSession.tr("Clear cache", QbzSession.trRev)
+        description: QbzSession.tr("Frees up cached data. Your downloaded albums are kept — remove those from the offline manager above.", QbzSession.trRev)
+        SettingsButton {
+            danger: true
+            text: QbzSession.tr("Clear all", QbzSession.trRev)
+            // ONE prompt before the purge. The reference fires straight from
+            // the button; this port confirms every destructive settings row,
+            // and undoing this one means re-downloading the whole cache.
+            onClicked: {
+                if (!root.confirmHost) {
+                    QbzOffline.clearAll()
+                    return
+                }
+                root.confirmHost.ask(
+                    QbzSession.tr("Clear cache", QbzSession.trRev),
+                    QbzSession.tr("Frees up cached data. Your downloaded albums are kept — remove those from the offline manager above.", QbzSession.trRev),
+                    QbzSession.tr("Clear all", QbzSession.trRev),
+                    function () { QbzOffline.clearAll() })
+            }
         }
     }
 
