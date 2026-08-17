@@ -53,6 +53,11 @@ Popup {
     // published document answers for this id — belt-and-braces next to the
     // Rust generation guard (album_info_qt.rs): a late doc for a previous
     // album must never render inside this one's page.
+    //
+    // This is an EXACT string comparison, so it can only ever be safe because
+    // the publisher stamps `albumId` with the id it was asked for rather than
+    // the one /album/get echoed back (album_info_qt.rs::map). Do not "fix"
+    // that to the API's id: any divergence blanks this card with no log.
     property string requestedId: ""
 
     // --- Actions ---------------------------------------------------------

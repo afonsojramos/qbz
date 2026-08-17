@@ -163,7 +163,18 @@ fn map_track(index: usize, t: &Track, album_artist: &str) -> InfoTrack {
     }
 }
 
-fn map(album: Album) -> AlbumInfoDoc {
+/// Is this a Qobuz CATALOG album id?
+///
+/// Qobuz album ids are opaque ASCII-alphanumeric strings and only a minority
+/// of them are digits-only: of the 139 ids in the captured fixtures
+/// (`qbz-nix-docs/qobuz-api/`), **114 are alphanumeric** (`vy32kidwrer67`) and
+/// 25 are barcode-shaped (`0886446573373`). A local/Plex key is never that:
+/// it is a filesystem path or a `plex:<rating key>`.
+fn is_catalog_album_id(id: &str) -> bool {
+    !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric())
+}
+
+fn map(album: Album, requested_id: &str) -> AlbumInfoDoc {
     let album_artist = album.artist.name.clone();
     let (label, label_id) = match album.label.as_ref() {
         Some(l) => (l.name.clone(), l.id.to_string()),
@@ -198,9 +209,22 @@ fn map(album: Album) -> AlbumInfoDoc {
         .unwrap_or_default();
     let has_review = !review.trim().is_empty();
 
+    // The REQUESTED id, not `album.id`. The QML holds its data overlay until
+    // the published document answers for the album the user asked about, so an
+    // id that came back in any other shape would leave the card blank forever
+    // with nothing in the log — the exact-string-equality trap. The requested
+    // id is also the right playback context: it is the one AlbumView itself
+    // uses for `playAlbumFrom`.
+    if album.id != requested_id {
+        log::warn!(
+            "[qbz-qt] album info: /album/get returned id '{}' for requested '{requested_id}'",
+            album.id
+        );
+    }
+
     AlbumInfoDoc {
         error: String::new(),
-        album_id: album.id.clone(),
+        album_id: requested_id.to_string(),
         title: crate::album_qt::format_album_title(&album.title, album.version.as_deref()),
         artist: album_artist.clone(),
         art_url: album.image.best().cloned().unwrap_or_default(),
@@ -239,9 +263,17 @@ fn publish(doc: &AlbumInfoDoc, loading: bool) {
 /// fetch in flight, and without the guard a slow A publishes ITS document
 /// over B's loading state — the modal then shows album A's credits inside
 /// album B's page (seen in smoke 2026-08-10).
+///
+/// The id guard used to be `album_id.parse::<u64>()`, which had the predicate
+/// backwards: it rejected the 4-in-5 Qobuz albums whose id is alphanumeric
+/// while admitting local row ids. A rejected open returns before touching the
+/// bridge, so the modal kept whatever document was there — the previous
+/// album's, or, once the QML started holding its overlay until the ids match,
+/// an empty card. Neither said a word above debug level. That is the whole of
+/// "only the first album info of a session opens".
 pub fn open(album_id: String) {
-    if album_id.parse::<u64>().is_err() {
-        log::debug!("[qbz-qt] album info skipped for non-catalog id '{album_id}'");
+    if !is_catalog_album_id(&album_id) {
+        log::warn!("[qbz-qt] album info skipped for non-catalog id '{album_id}'");
         return;
     }
     let generation = INFO_GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
@@ -257,7 +289,7 @@ pub fn open(album_id: String) {
         match runtime.core().get_album(&album_id).await {
             Ok(album) => {
                 if generation == INFO_GENERATION.load(std::sync::atomic::Ordering::SeqCst) {
-                    publish(&map(album), false);
+                    publish(&map(album, &album_id), false);
                 }
             }
             Err(e) => {
@@ -277,3 +309,41 @@ pub fn open(album_id: String) {
 
 /// Monotonic open counter — see `open`.
 static INFO_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+#[cfg(test)]
+mod tests {
+    use super::is_catalog_album_id;
+
+    /// The regression. Every one of these is a real Qobuz album id: the first
+    /// came out of the owner's own log (`cortinilla click 0: … id=vy32kidwrer67`),
+    /// the rest out of the captured fixtures. The old `parse::<u64>()` guard
+    /// rejected all four, and rejecting means the modal never gets a document.
+    #[test]
+    fn alphanumeric_qobuz_ids_are_catalog_ids() {
+        for id in [
+            "vy32kidwrer67",
+            "cruwlxfl0d9ib",
+            "ntn9yk9hil11t",
+            "aev97320zm00a",
+        ] {
+            assert!(is_catalog_album_id(id), "{id} must reach /album/get");
+        }
+    }
+
+    /// Barcode-shaped ids (the minority the old guard DID accept) still pass.
+    #[test]
+    fn barcode_shaped_ids_are_catalog_ids() {
+        assert!(is_catalog_album_id("0886446573373"));
+    }
+
+    /// The backstop the guard actually exists for: local library paths and
+    /// Plex keys, which the old numeric predicate let through.
+    #[test]
+    fn local_and_plex_keys_are_rejected() {
+        assert!(!is_catalog_album_id(""));
+        assert!(!is_catalog_album_id("plex:12345"));
+        assert!(!is_catalog_album_id("/home/u/Music/Artist/Album"));
+        assert!(!is_catalog_album_id("C:\\Music\\Album"));
+        assert!(!is_catalog_album_id("Artist - Album (2021)"));
+    }
+}
