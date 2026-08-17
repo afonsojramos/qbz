@@ -198,11 +198,6 @@ Row {
         spacing: 8
         height: parent.height
 
-        QbzNavButton {
-            anchors.verticalCenter: parent.verticalCenter
-            name: "square-check-big"
-            onClicked: root.view.toggleTracksMultiSelect()
-        }
         LocalSearchBox {
             anchors.verticalCenter: parent.verticalCenter
             placeholder: QbzSession.tr("Search", QbzSession.trRev)
@@ -240,6 +235,17 @@ Row {
             // made it reset on every restart (PARITY-DEBT #13). No re-query —
             // grouping is a client-side reorder, not a new ORDER BY.
             onSelected: function (i) { QbzLocal.tracksSetGroup(root.tracksGroupIds[i]) }
+        }
+        // Multi-select LAST — never to the LEFT of a search box. The expandable
+        // field keeps a 30px footprint and grows its inner box LEFT
+        // (QbzLineEdit.qml:157-161, `x: root.width - width`), so anything
+        // positioned before it is covered while the search is open and cannot
+        // be clicked. This button used to lead the row and was exactly that.
+        // Same slot the Albums group puts it in, so the two tabs also agree.
+        QbzNavButton {
+            anchors.verticalCenter: parent.verticalCenter
+            name: "square-check-big"
+            onClicked: root.view.toggleTracksMultiSelect()
         }
     }
 
