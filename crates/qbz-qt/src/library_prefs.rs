@@ -15,11 +15,11 @@
 //!    so a concurrent reader sees the whole old document or the whole new one,
 //!    and any key the Slint gains later survives our writes untouched.
 //!
-//! `all_local_scope` is one such key: it is PARITY-DEBT #6 (the Settings row
-//! and the `all` branch of the feed are not ported), so nothing here ever sets
-//! it — but because the writer merges instead of replacing, a scope the user
-//! picked in the Slint build is preserved rather than reset to "favorites" on
-//! the first toolbar click here.
+//! `all_local_scope` used to be read-only here (PARITY-DEBT #6: neither the
+//! Settings row nor the `all` branch of the feed were ported). Both landed
+//! together — the Settings > Local Library > LIBRARY › ALL row writes it and
+//! `library_qt::all_local_feed_blocking` reads it — so the key is now fully
+//! live on this side too, and still co-owned with the Slint build.
 //!
 //! Transport to QML is ONE json document on `QbzLibrary.libraryPrefsJson`
 //! (camelCase keys, the port's QML convention), seeded at `boot()`; QML writes
@@ -49,8 +49,8 @@ pub struct Prefs {
     /// Library "All": include local files + Plex in the feed. Default ON.
     #[serde(default = "d_true")]
     pub all_show_local: bool,
-    /// Library "All": what "local" means — "favorites" | "all". Read and
-    /// PRESERVED here, never written (PARITY-DEBT #6).
+    /// Library "All": what "local" means — "favorites" (hearted items only)
+    /// or "all" (the entire local library + Plex).
     #[serde(default = "d_favorites")]
     pub all_local_scope: String,
 }
@@ -104,8 +104,9 @@ pub fn read() -> Prefs {
 /// The document QML seeds its toolbar state from (camelCase, the port's QML
 /// convention — the disk keys stay snake_case for the Slint).
 ///
-/// `allLocalScope` rides along read-only so a later round can wire the feed's
-/// `all` branch without a second transport.
+/// `allLocalScope` rides the same document: the Settings row reads it from
+/// here and writes it back through `set`, so the feed's scope needs no
+/// transport of its own.
 pub fn to_json() -> String {
     let p = read();
     serde_json::json!({
@@ -120,6 +121,26 @@ pub fn to_json() -> String {
         "allLocalScope": p.all_local_scope,
     })
     .to_string()
+}
+
+/// Anything that is not exactly `"all"` means `"favorites"` — the reference
+/// normalizes the same way (`main.rs:22561-22565`). Both the writer and the
+/// reader go through this, so a stray value can never leave the feed in a
+/// third, unhandled state.
+fn normalize_scope(value: &str) -> &'static str {
+    if value == "all" {
+        "all"
+    } else {
+        "favorites"
+    }
+}
+
+/// What "local" means in the Library "All" feed: `"favorites"` (hearted items
+/// only, webplayer parity) or `"all"` (the entire local library + Plex).
+/// `library_qt`'s feed builder asks this on every rebuild — 1:1 with
+/// `favorites_prefs::local_scope()`.
+pub fn local_scope() -> String {
+    normalize_scope(&read().all_local_scope).to_string()
 }
 
 /// Read-modify-write ONE key. `edit` sees the prefs as they are on disk RIGHT
@@ -164,6 +185,7 @@ pub fn set(key: &str, value: &str) {
         "artistsGroup" => update(|p| p.artists_group = v == "alpha" || v == "true"),
         "artistsView" => update(|p| p.artists_view = v),
         "allShowLocal" => update(|p| p.all_show_local = v == "true"),
+        "allLocalScope" => update(|p| p.all_local_scope = normalize_scope(&v).to_string()),
         other => log::warn!("[qbz-qt] library pref: unknown key '{other}' (value '{value}')"),
     }
 }
@@ -193,6 +215,17 @@ mod tests {
         assert_eq!(p.albums_view, "list");
         assert_eq!(p.albums_sort, "default");
         assert!(p.all_show_local);
+    }
+
+    /// Only "all" widens the scope. The reader normalizes too, so a document
+    /// hand-edited (or written by a future Slint value) still lands on one of
+    /// the two branches the feed actually implements.
+    #[test]
+    fn only_all_widens_the_local_scope() {
+        assert_eq!(normalize_scope("all"), "all");
+        for other in ["favorites", "", "ALL", "everything", " all"] {
+            assert_eq!(normalize_scope(other), "favorites", "input {other:?}");
+        }
     }
 
     #[test]

@@ -3,25 +3,23 @@
 // PlexSettings.qml, mounted at the bottom exactly where the Slint has it).
 //
 // Group order is the Slint's: LIBRARY FOLDERS (toolbar + filter + table +
-// scan progress, in LibraryFolderTable.qml) · ALBUMS VIEW · MAINTENANCE ·
-// DANGER ZONE · PLEX (PlexSettings.qml).
+// scan progress, in LibraryFolderTable.qml) · ALBUMS VIEW · LIBRARY › ALL ·
+// MAINTENANCE · DANGER ZONE · PLEX (PlexSettings.qml).
 //
 // Wiring: the folder table + the scan ride the settings document
 // (settings_qt/library.rs over `qbz_library`'s own scan engine); the album
 // grouping row drives the SAME QbzLocal.setAlbumMode the Local Library
 // header dropdown uses, so both stay one setting.
 //
-// Deltas vs the Slint (deliberate, no dead rows):
-// - "Add folder" is a path field + button, not the native folder chooser
-//   (no picker seam in this port — settings_qt/library.rs explains).
-// - No per-folder EDIT affordance: LibFolderEditModal (alias + network
-//   overrides) is not ported, so the pencil would open nothing.
-// - "Local items in Library All" is NOT shipped: library_qt.rs documents the
-//   "all" scope as not wired, so the selector would persist a preference no
-//   consumer reads.
-// - The folder table scrolls with the page instead of in a capped 360px
-//   inner scroller (a nested Flickable inside the settings Flickable is a
-//   scroll trap).
+// The whole section is shipped, including the three rows this header used to
+// list as cut: "Add folder" opens the NATIVE chooser (`library-pick-folder` ->
+// rfd), the per-folder pencil opens LibFolderEditModal.qml (mounted at
+// SettingsView.qml:330), and LIBRARY > ALL picks the local scope that
+// `library_qt::all_local_feed_blocking` now honours.
+//
+// ONE delta vs the Slint, deliberate: the folder table scrolls with the page
+// instead of in a capped 360px inner scroller (a nested Flickable inside the
+// settings Flickable is a scroll trap).
 
 import QtQuick
 import com.blitzfc.qbz
@@ -70,6 +68,46 @@ Column {
             // Same setting as the Albums-tab header dropdown (one store).
             currentIndex: QbzLocal.localAlbumMode === "metadata" ? 1 : 0
             onSelected: function (i) { QbzLocal.setAlbumMode(i === 1 ? "metadata" : "folder") }
+        }
+    }
+
+    Item { width: 1; height: 22 }
+
+    // =========================== LIBRARY › ALL ===========================
+    // The All view's toolbar hard-drive toggle filters local items in or out;
+    // THIS row picks what "local" MEANS in that feed (owner 2026-07-24).
+    // LocalLibrarySettings.slint:451-473.
+    //
+    // It rides `QbzLibrary.libraryPrefsJson` rather than the settings document
+    // — the key lives in favorites_ui.json with the rest of the Library
+    // toolbar state (co-owned with the Slint build), and that document already
+    // carries it. Changing the scope re-navigates in the reference
+    // (`main.rs:22570`); here the equivalent is reloadLibrary(), because the
+    // feed is built once and cached.
+    GroupHeader { text: QbzSession.tr("LIBRARY › ALL", QbzSession.trRev) }
+    SettingRow {
+        label: QbzSession.tr("Local items in Library All", QbzSession.trRev)
+        description: QbzSession.tr("Favorited items only: what you hearted. Entire local library: every folder and Plex album, artist and track.", QbzSession.trRev)
+        QbzSelect {
+            menuWidth: 210
+            sm: true
+            options: [
+                QbzSession.tr("Favorited items only", QbzSession.trRev),
+                QbzSession.tr("Entire local library", QbzSession.trRev)
+            ]
+            currentIndex: {
+                var raw = QbzLibrary.libraryPrefsJson
+                if (raw && raw.length > 2) {
+                    try {
+                        return JSON.parse(raw).allLocalScope === "all" ? 1 : 0
+                    } catch (e) { /* fall through */ }
+                }
+                return 0
+            }
+            onSelected: function (i) {
+                QbzLibrary.setLibraryPref("allLocalScope", i === 1 ? "all" : "favorites")
+                QbzLibrary.reloadLibrary()
+            }
         }
     }
 

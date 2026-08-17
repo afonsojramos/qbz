@@ -18,10 +18,11 @@
 //! - Artist/album blacklist filtering: skipped (store not open).
 //! - Genre filter ("library-all" context): skipped (genre_filter glue is
 //!   Slint-side; the toolbar button is an inert stub).
-//! - Local scope "all" (the whole local library in the feed): NOT wired —
-//!   it needs the qbz-library scan DB, which the POC never opens. The
-//!   show-local toggle and the "favorites" scope (hearted local items) work
-//!   via the LocalFavoritesService (now initialized, per owner).
+//! - Local scope: BOTH branches are live. "favorites" (hearted local items)
+//!   comes from the LocalFavoritesService; "all" (the whole local library +
+//!   Plex) is `all_local_feed_blocking` below, over the same `library.db`
+//!   queries the Local Library tabs run. The Settings row that picks between
+//!   them is Local Library > LIBRARY › ALL (`library_prefs::local_scope`).
 //! - Playlist follow/copy affordances: a feed row's heart is the qbz-LOCAL
 //!   library.db flag (`toggle_playlist_favorite` — Qobuz has no
 //!   `playlist_ids` favorite param); subscribe/unsubscribe of a FOREIGN
@@ -30,6 +31,7 @@
 //! - Purchase download states / Play purchases / multi-select / group
 //!   modes / alpha jumps: out of scope.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
@@ -150,6 +152,23 @@ pub struct LibraryData {
 }
 
 static LIBRARY: Mutex<Option<LibraryData>> = Mutex::new(None);
+
+/// The RAW local rows behind the feed's `source: "local" | "plex"` tracks,
+/// keyed by the same row id the feed row carries.
+///
+/// It exists because a feed row cannot be turned into a playable local queue
+/// track: `local_playback::local_queue_track` needs the file path, the Plex
+/// rating key, the CUE offsets and the real source discriminator, and a
+/// `FeedItem` carries none of those. The Tracks tab solves the identical
+/// problem the identical way (`local_state`'s `tracks_raw`) — this is that
+/// cache for the Library "All" feed.
+///
+/// Refilled wholesale by every `load_library`, so it can never outlive the
+/// feed it belongs to. LOCK ORDER: never taken while `LIBRARY` is being
+/// written; `feed_track_to_queue` reads it under `LIBRARY`, so writes here
+/// always happen first and separately.
+static LOCAL_RAW: std::sync::LazyLock<Mutex<HashMap<i64, qbz_library::LocalTrack>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
 fn rank(i: usize, n: usize) -> f32 {
     if n <= 1 {
@@ -710,25 +729,40 @@ pub async fn load_library(runtime: &Arc<AppRuntime<LoggingAdapter>>) -> Result<u
         .keyed());
     }
 
-    // Local favorites layer (show-local default ON; scope "favorites" —
-    // see module docs for the "all" scope cut).
-    let locals = local_favorites_list();
-    let n = locals.len();
-    for (i, lf) in locals.into_iter().enumerate() {
-        feed.push(FeedItem {
-            kind: lf.kind,
-            group: "local".into(),
-            source: lf.source,
-            subtitle: lf.subtitle,
-            artist: lf.artist.clone(),
-            image_url: lf.artwork_url,
-            is_favorite: true,
-            added_rank: rank(i, n),
-            id: lf.id,
-            title: lf.title,
-            ..Default::default()
+    // Local + Plex layer (show-local default ON; it bypasses the three Qobuz
+    // source switches). The Settings scope picks the CONTENT: "favorites" =
+    // hearted items only (webplayer parity), "all" = the entire local library.
+    // library_all.rs:300-331.
+    if crate::library_prefs::local_scope() == "all" {
+        match tokio::task::spawn_blocking(all_local_feed_blocking).await {
+            Ok(items) => feed.extend(items),
+            Err(e) => log::error!("[qbz-qt] all-local feed load failed: {e}"),
         }
-        .keyed());
+    } else {
+        // The raw-row cache belongs to the "all" branch; a scope flipped back
+        // to "favorites" must not leave the previous build's rows behind for
+        // `feed_track_to_queue` to resolve against.
+        if let Ok(mut raw) = LOCAL_RAW.lock() {
+            raw.clear();
+        }
+        let locals = local_favorites_list();
+        let n = locals.len();
+        for (i, lf) in locals.into_iter().enumerate() {
+            feed.push(FeedItem {
+                kind: lf.kind,
+                group: "local".into(),
+                source: lf.source,
+                subtitle: lf.subtitle,
+                artist: lf.artist.clone(),
+                image_url: lf.artwork_url,
+                is_favorite: true,
+                added_rank: rank(i, n),
+                id: lf.id,
+                title: lf.title,
+                ..Default::default()
+            }
+            .keyed());
+        }
     }
 
     // Merge by recency proxy (stable — equal ranks keep source order).
@@ -754,6 +788,243 @@ pub async fn load_library(runtime: &Arc<AppRuntime<LoggingAdapter>>) -> Result<u
     };
     *LIBRARY.lock().unwrap() = Some(LibraryData { feed, counts });
     Ok(all_total as usize)
+}
+
+/// The `"all"` local scope: the ENTIRE local library (plus Plex when the
+/// integration is on) as feed rows — albums, artists and tracks — instead of
+/// just the hearted ones. Port of `crates/qbz/src/library_all.rs:348-516`
+/// (`all_local_blocking`), over the very queries the Local Library tabs run,
+/// so the two views can never disagree about what is in the library.
+///
+/// Blocking by construction (rusqlite): the caller wraps it in
+/// `spawn_blocking`.
+///
+/// TWO deliberate deltas from the reference, both because the Qt side already
+/// had the better primitive:
+///  - the local↔Plex artist merge keys on `local_artist_match::normalize_artist`
+///    (lowercase + diacritic fold + punctuation collapse) rather than a raw
+///    `trim().to_lowercase()`. That is PARITY-DEBT #7, already fixed for the
+///    Artists tab: without it "Sigur Rós" and "Sigur Ros" are two rows.
+///  - the quality badge comes from `local_rows::tier_of` +
+///    `home_qt::quality_detail_from_parts`, the pair every other local surface
+///    in this port uses.
+///
+/// It also fills [`LOCAL_RAW`], without which none of these track rows would
+/// be playable — see that static.
+fn all_local_feed_blocking() -> Vec<FeedItem> {
+    use crate::local_rows::tier_of;
+    use crate::local_state::{group_mode, with_db, TRACKS_PAGE};
+
+    /// `FeedItem::sample_rate` is kHz (it feeds the NPB AudioStamp through
+    /// `feed_track_to_queue`), while `qbz_library` stores Hz on both the album
+    /// and the track. `local_queue_track` does the identical conversion for the
+    /// queue side; skipping it here renders "44100 kHz" on the stamp.
+    fn khz(hz: f64) -> f64 {
+        if hz >= 1000.0 {
+            hz / 1000.0
+        } else {
+            hz
+        }
+    }
+
+    let t0 = Instant::now();
+    let mut out: Vec<FeedItem> = Vec::new();
+    let plex_on = crate::local_plex::is_enabled();
+    let plex_path = crate::local_plex::cache_db_path();
+    let mode = group_mode();
+
+    // The hearts, once. The reference asks the store per row
+    // (`local_favorites::is_favorite`); at "entire local library" scale that
+    // is one lock per row, so the key set is snapshotted instead.
+    let hearts: std::collections::HashSet<(String, String)> = local_favorites_list()
+        .into_iter()
+        .map(|f| (f.kind, f.id))
+        .collect();
+    let hearted = |kind: &str, id: &str| hearts.contains(&(kind.to_string(), id.to_string()));
+
+    // Plex tracks ride TWO sections (the artist names and the track list), so
+    // the bounded set is fetched ONCE — the Tracks tab's page-1 merge.
+    let plex_tracks: Vec<qbz_library::LocalTrack> = if plex_on {
+        crate::local_plex::search_tracks("")
+    } else {
+        Vec::new()
+    };
+
+    // --- Albums: the Albums tab's own full-load page (the query folds the
+    // Plex union in when the cache path is passed). ---
+    let albums = with_db(|db| {
+        db.get_albums_metadata_page(
+            0,
+            100_000,
+            None,
+            "artist",
+            "asc",
+            /* include_qobuz_downloads */ true,
+            /* exclude_network_folders */ false,
+            plex_path.as_deref(),
+            mode,
+        )
+        .map(|p| p.albums)
+    })
+    .unwrap_or_default();
+    let n = albums.len();
+    for (i, a) in albums.into_iter().enumerate() {
+        let source = if a.id.starts_with("plex:") { "plex" } else { "local" };
+        out.push(
+            FeedItem {
+                kind: "album".into(),
+                group: "local".into(),
+                source: source.into(),
+                subtitle: a.artist.clone(),
+                artist: a.artist,
+                image_url: a.artwork_path.unwrap_or_default(),
+                quality_tier: tier_of(&a.format, a.bit_depth, a.sample_rate).into(),
+                quality_detail: home_qt::quality_detail_from_parts(a.bit_depth, Some(a.sample_rate)),
+                bit_depth: a.bit_depth,
+                sample_rate: Some(khz(a.sample_rate)),
+                is_favorite: hearted("album", &a.id),
+                year: a.year.map(|y| y.to_string()).unwrap_or_default(),
+                added_rank: rank(i, n),
+                id: a.id,
+                title: a.title,
+                ..Default::default()
+            }
+            .keyed(),
+        );
+    }
+
+    // --- Artists: the on-disk names, plus names that exist ONLY on Plex
+    // tracks. An artist present in both counts once, and the local spelling
+    // wins (it is the one with albums behind it). ---
+    let local_names: Vec<String> = with_db(|db| {
+        db.get_artists_with_filter(
+            /* include_qobuz_downloads */ true,
+            /* exclude_network_folders */ false,
+        )
+    })
+    .unwrap_or_default()
+    .into_iter()
+    .map(|a| a.name)
+    .filter(|n| !n.trim().is_empty())
+    .collect();
+    let local_keys: std::collections::HashSet<String> = local_names
+        .iter()
+        .map(|n| crate::local_artist_match::normalize_artist(n))
+        .collect();
+    let mut names = local_names;
+    {
+        let mut seen = local_keys.clone();
+        for t in &plex_tracks {
+            let name = t.artist.trim();
+            if !name.is_empty() && seen.insert(crate::local_artist_match::normalize_artist(name)) {
+                names.push(name.to_string());
+            }
+        }
+    }
+    names.sort_by_key(|n| n.to_lowercase());
+    let n = names.len();
+    for (i, name) in names.into_iter().enumerate() {
+        let source = if local_keys.contains(&crate::local_artist_match::normalize_artist(&name)) {
+            "local"
+        } else {
+            "plex"
+        };
+        out.push(
+            FeedItem {
+                kind: "artist".into(),
+                group: "local".into(),
+                source: source.into(),
+                is_favorite: hearted("artist", &name),
+                added_rank: rank(i, n),
+                id: name.clone(),
+                title: name,
+                ..Default::default()
+            }
+            .keyed(),
+        );
+    }
+
+    // --- Tracks: the local pages (the SQL already excludes offline-cache
+    // copies) plus the Plex set fetched above. The 200k ceiling is the
+    // reference's — a runaway library must not take the feed build with it. ---
+    let mut tracks: Vec<qbz_library::LocalTrack> = Vec::new();
+    let mut offset = 0u64;
+    loop {
+        let Some(rows) = with_db(|db| {
+            db.search_with_filter_page(
+                "",
+                offset,
+                TRACKS_PAGE,
+                /* include_qobuz_downloads */ false,
+                /* exclude_network_folders */ false,
+                "default",
+            )
+        }) else {
+            break;
+        };
+        let full = rows.len() as u64 == TRACKS_PAGE;
+        tracks.extend(rows);
+        if !full || tracks.len() >= 200_000 {
+            break;
+        }
+        offset += TRACKS_PAGE;
+    }
+    tracks.extend(plex_tracks);
+
+    // The raw rows FIRST: `feed_track_to_queue` resolves against this map, and
+    // publishing feed rows that cannot be played is the failure this closes.
+    if let Ok(mut raw) = LOCAL_RAW.lock() {
+        raw.clear();
+        raw.reserve(tracks.len());
+        for t in &tracks {
+            raw.insert(t.id, t.clone());
+        }
+    }
+
+    let n = tracks.len();
+    for (i, t) in tracks.into_iter().enumerate() {
+        let source = match t.source.as_deref() {
+            Some("plex") => "plex",
+            // Belt: the SQL above already excludes them, and an offline copy
+            // is a QOBUZ row wearing a local file — it must not enter the feed
+            // as a local one.
+            Some("qobuz_download") => continue,
+            _ => "local",
+        };
+        let id = t.id.to_string();
+        out.push(
+            FeedItem {
+                kind: "track".into(),
+                group: "local".into(),
+                source: source.into(),
+                subtitle: t.artist.clone(),
+                artist: t.artist,
+                album: t.album_group_title,
+                album_id: t.album_group_key,
+                image_url: t.artwork_path.unwrap_or_default(),
+                quality_tier: tier_of(&t.format, t.bit_depth, t.sample_rate).into(),
+                quality_detail: home_qt::quality_detail_from_parts(t.bit_depth, Some(t.sample_rate)),
+                bit_depth: t.bit_depth,
+                sample_rate: Some(khz(t.sample_rate)),
+                is_favorite: hearted("track", &id),
+                genre: t.genre.unwrap_or_default(),
+                year: t.year.map(|y| y.to_string()).unwrap_or_default(),
+                duration: crate::local_rows::mmss(t.duration_secs),
+                added_rank: rank(i, n),
+                id,
+                title: t.title,
+                ..Default::default()
+            }
+            .keyed(),
+        );
+    }
+
+    log::info!(
+        "[qbz-qt][perf] all-local feed: {:?} ({} rows)",
+        t0.elapsed(),
+        out.len()
+    );
+    out
 }
 
 /// Purchases via the offline-cache crate's pass-through (best-effort).
@@ -1315,11 +1586,39 @@ pub(crate) fn apply_pin_change(kind: &str, id: &str, pinned: bool) {
 /// is private to `playback_qt`); the follow-up is to make ONE of them
 /// `pub(crate)` and delete the other.
 ///
-/// `None` for a non-Qobuz row: local / Plex favourites carry a path or a group
-/// key as their id, not a numeric one, and must not be resolved through the
-/// Qobuz track resolver. The Slint cannot hit this at all — `FAV_CURRENT` is
-/// Qobuz-only — so dropping them is the same queue it would have built.
+/// A `local` / `plex` row is NOT resolved here — it goes to
+/// `local_playback::local_queue_track` through the [`LOCAL_RAW`] cache, which
+/// is the only thing that knows its file path, its Plex rating key and its
+/// real source discriminator.
+///
+/// That branch is load-bearing, not defensive. The `"all"` local scope emits
+/// `local_tracks.id` — a small integer — as the row id, and this function's
+/// first line parses the id as a u64: without the branch, clicking a local
+/// track would have queued the QOBUZ track that happens to carry that number.
+/// The old doc here assumed every local row's id was a path and could only be
+/// dropped; that was true of the hearted-only feed, and stopped being true the
+/// moment the whole library could enter it.
+///
+/// `None` when the row cannot be resolved (a hearted local row while the scope
+/// is "favorites" has no raw row cached). Dropping it is the same queue the
+/// Slint builds — its `FAV_CURRENT` is Qobuz-only — and it is strictly better
+/// than resolving it as somebody else's track.
 pub(crate) fn feed_track_to_queue(item: &FeedItem) -> Option<QueueTrack> {
+    if item.source == "local" || item.source == "plex" {
+        let row_id = item.id.parse::<i64>().ok()?;
+        let raw = LOCAL_RAW.lock().ok()?.get(&row_id).cloned();
+        return match raw {
+            Some(t) => Some(crate::local_playback::local_queue_track(&t)),
+            None => {
+                log::debug!(
+                    "[qbz-qt] library feed: local row {} ({}) has no raw track cached",
+                    item.id,
+                    item.title
+                );
+                None
+            }
+        };
+    }
     let id = item.id.parse::<u64>().ok()?;
     Some(QueueTrack {
         id,
@@ -1471,6 +1770,28 @@ mod tests {
             duration: "3:07".into(),
             ..Default::default()
         }
+    }
+
+    /// The branch that keeps a local row out of the Qobuz resolver. A local
+    /// track id is a `local_tracks.id` — a small integer that is ALSO a valid
+    /// Qobuz track id — so the guard cannot be "does it parse as a number":
+    /// it has to be the source. With no raw row cached the row is dropped,
+    /// which is the queue the Slint builds; what must never happen is a
+    /// `QueueTrack` with `source: "qobuz"` and this id.
+    #[test]
+    fn a_local_row_is_never_resolved_as_a_qobuz_track() {
+        for source in ["local", "plex"] {
+            let mut item = track("42", "Ghost in the Machine");
+            item.source = source.into();
+            assert!(
+                feed_track_to_queue(&item).is_none(),
+                "{source} row with no cached raw track must drop, not resolve"
+            );
+        }
+        // The control: the same numeric id from a Qobuz row still resolves.
+        let mut qobuz = track("42", "Ghost in the Machine");
+        qobuz.source = "qobuz".into();
+        assert_eq!(feed_track_to_queue(&qobuz).expect("qobuz row").id, 42);
     }
 
     fn album(id: &str) -> FeedItem {

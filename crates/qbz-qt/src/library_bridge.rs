@@ -191,8 +191,18 @@ impl qbz_library_bridge::QbzLibrary {
             .set_library_prefs_json(QString::from(prefs.as_str()));
     }
 
-    pub fn set_library_pref(self: Pin<&mut Self>, key: QString, value: QString) {
+    pub fn set_library_pref(mut self: Pin<&mut Self>, key: QString, value: QString) {
         crate::library_prefs::set(&key.to_string(), &value.to_string());
+        // Republish the document. The toolbar does not need it (each control
+        // owns its own live state and only SEEDS from here), but the Settings
+        // row for `allLocalScope` BINDS to it — without this its `currentIndex`
+        // would keep answering with the value that was on disk at boot and the
+        // select would snap back after every pick. Cheap: one small json read,
+        // and it also makes the seed self-healing when the Slint build writes
+        // the same file underneath us.
+        let prefs = crate::library_prefs::to_json();
+        self.as_mut()
+            .set_library_prefs_json(QString::from(prefs.as_str()));
     }
 
     pub fn library_bulk_action(
