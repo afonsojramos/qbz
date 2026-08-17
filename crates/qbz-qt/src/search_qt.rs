@@ -326,9 +326,21 @@ fn map_album(album: &Album) -> CardRow {
             .map(|g| g.name)
             .filter(|n| !n.is_empty())
             .unwrap_or_default(),
-        year: year_of(album.release_date_original.as_deref()),
-        quality_tier: tier(album.maximum_bit_depth).to_string(),
-        quality_label: quality_label(album.maximum_bit_depth, album.maximum_sampling_rate),
+        // BOTH shapes, through the shared readers. `search_albums` returns the
+        // very same `SearchResultsPage<Album>` that `/award/getAlbums` does,
+        // and that endpoint answers with the NESTED fields only — a flat-only
+        // read there produced cards with no date and no badge (owner smoke on
+        // the award grid, 2026-08-16). Same container, same exposure.
+        year: year_of(crate::home_qt::album_release_date(album).as_deref()),
+        quality_tier: crate::home_qt::album_quality_tier(
+            album,
+            crate::home_qt::album_audio_parts(album).0,
+        )
+        .to_string(),
+        quality_label: {
+            let (bd, sr) = crate::home_qt::album_audio_parts(album);
+            quality_label(bd, sr)
+        },
         art_url: crate::cover_artwork_qt::prefer_album_cover(
             &album.id,
             // Search-result album grid card: full variant (best()) — the

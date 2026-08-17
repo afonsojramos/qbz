@@ -1206,6 +1206,59 @@ pub(crate) fn quality_detail_from_parts(bit_depth: Option<u32>, sample_rate: Opt
 // ---------------------------------------------------------------------------
 
 /// Flat-Album card mapping (foryou.rs `map_album`).
+/// The album's release date, reading BOTH shapes: the nested `dates`
+/// (original > download > stream) first, then the flat
+/// `release_date_original`.
+///
+/// It is a shared helper because the chain is not optional trivia — an
+/// endpoint that answers with only the nested form (`/award/getAlbums` does,
+/// and it shares its `SearchResultsPage<Album>` container with the search
+/// endpoints) leaves a flat-only reader with no date at all, and the symptom
+/// is a card that quietly renders one line short. 1:1 with the reference's
+/// `album_map::map_album`.
+pub(crate) fn album_release_date(album: &Album) -> Option<String> {
+    album
+        .dates
+        .as_ref()
+        .and_then(|d| {
+            d.original
+                .clone()
+                .or_else(|| d.download.clone())
+                .or_else(|| d.stream.clone())
+        })
+        .or_else(|| album.release_date_original.clone())
+}
+
+/// `(bit_depth, sample_rate)` reading BOTH shapes: nested `audio_info` first,
+/// then the flat pair. Same reason as [`album_release_date`].
+pub(crate) fn album_audio_parts(album: &Album) -> (Option<u32>, Option<f64>) {
+    (
+        album
+            .audio_info
+            .as_ref()
+            .and_then(|a| a.maximum_bit_depth)
+            .or(album.maximum_bit_depth),
+        album
+            .audio_info
+            .as_ref()
+            .and_then(|a| a.maximum_sampling_rate)
+            .or(album.maximum_sampling_rate),
+    )
+}
+
+/// Quality tier for an ALBUM, with the hi-res FLAGS as the last resort: a
+/// payload can say "this is hi-res" without saying how, and a depth-only
+/// match answers "" — no badge — for exactly that case
+/// (`album_map::tier_hires`). `> 16`, not `>= 24`: a 20-bit master is hi-res.
+pub(crate) fn album_quality_tier(album: &Album, bit_depth: Option<u32>) -> &'static str {
+    match bit_depth {
+        Some(b) if b > 16 => "hires",
+        Some(_) => "cd",
+        None if album.hires || album.hires_streamable => "hires",
+        None => "",
+    }
+}
+
 pub(crate) fn map_flat_album(album: Album) -> HomeCard {
     // "Sep 2, 2021", not "2021". The card's `year` slot is a DISPLAY string
     // and every other mapper in the port already localizes it through
@@ -1223,40 +1276,9 @@ pub(crate) fn map_flat_album(album: Album) -> HomeCard {
     //
     // Date: nested `dates` first (original > download > stream), else the flat
     // `release_date_original`.
-    let date = album
-        .dates
-        .as_ref()
-        .and_then(|d| {
-            d.original
-                .clone()
-                .or_else(|| d.download.clone())
-                .or_else(|| d.stream.clone())
-        })
-        .or_else(|| album.release_date_original.clone());
-    let year = qbz_text_utils::dates::release_label(date.as_deref());
-
-    // Quality: `audio_info` first, then the flat pair.
-    let bit_depth = album
-        .audio_info
-        .as_ref()
-        .and_then(|a| a.maximum_bit_depth)
-        .or(album.maximum_bit_depth);
-    let sample_rate = album
-        .audio_info
-        .as_ref()
-        .and_then(|a| a.maximum_sampling_rate)
-        .or(album.maximum_sampling_rate);
-    // And the TIER falls back to the hi-res FLAGS when no depth came at all
-    // (`album_map::tier_hires`): a payload can say "this is hi-res" without
-    // saying how, and the old `match` answered "" — no badge — for exactly
-    // that case. `> 16`, not `>= 24`: 20-bit masters are hi-res too.
-    let quality_tier = match bit_depth {
-        Some(b) if b > 16 => "hires",
-        Some(_) => "cd",
-        None if album.hires || album.hires_streamable => "hires",
-        None => "",
-    }
-    .to_string();
+    let year = qbz_text_utils::dates::release_label(album_release_date(&album).as_deref());
+    let (bit_depth, sample_rate) = album_audio_parts(&album);
+    let quality_tier = album_quality_tier(&album, bit_depth).to_string();
     let quality_label = match (bit_depth, sample_rate) {
         (Some(bd), Some(sr)) => format!("{}-bit / {} kHz", bd, sr),
         _ => String::new(),
