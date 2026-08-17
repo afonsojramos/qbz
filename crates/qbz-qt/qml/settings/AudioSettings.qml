@@ -5,10 +5,10 @@
 // truth. The audio path itself is PROTECTED: this panel only calls the
 // settings keys settings_qt.rs already dispatches.
 //
-// Not shipped (no backend seam in this port — see settings_qt.rs):
-// - "Detected device limit" + its fallback disclosure (#638): the device-cap
-//   probe (`device_cap.rs`) is Slint glue that was never ported, so there is
-//   no measured value to show.
+// "Detected device limit" + its fallback disclosure (#638 fix 3) ARE shipped
+// (2026-08-17): the probe moved out of the Slint binary crate into
+// `qbz-app::device_cap`, and both rows read the cap cache off the settings
+// document. They are read-only by design — see the comment at the rows.
 //
 // The HiFi Wizard IS shipped (2026-08-11): the last row of OUTPUT opens
 // settings/DacWizardModal.qml, mounted at the SettingsView root. Its logic
@@ -49,6 +49,37 @@ Column {
             checked: root.doc.limitQualityToDevice === true
             onToggled: function (v) { QbzBridge.settingsBool("limit-quality-to-device", v) }
         }
+    }
+    // Read-only detected line — deliberately NOT a control (#638 fix 3): a Hz
+    // dropdown was the documented root-cause trap (it promised rates the app
+    // cannot request; Qobuz sells four discrete tiers), and with real detection
+    // there is nothing left to pick. The value is Rust-composed from the probe
+    // ("192 kHz · Hi-Res+") and is empty while nothing is cached, which is what
+    // hides the row rather than showing a blank value.
+    SettingRow {
+        visible: root.doc.limitQualityToDevice === true
+                 && (root.doc.deviceCapSummary || "") !== ""
+        label: QbzSession.tr("Detected device limit", QbzSession.trRev)
+        Text {
+            text: root.doc.deviceCapSummary || ""
+            color: theme.textPrimary
+            font.pixelSize: theme.fontBody
+            font.weight: theme.weightMedium
+            verticalAlignment: Text.AlignVCenter
+        }
+    }
+    // Fallback disclosure (#638 Decision B): plain informative copy — no
+    // warning icon, no error styling. The cap still applies on the assumed
+    // common set; it just is not measured truth for this hardware.
+    Text {
+        visible: root.doc.limitQualityToDevice === true
+                 && (root.doc.deviceCapSummary || "") !== ""
+                 && root.doc.deviceCapDetected === false
+        width: parent.width
+        text: QbzSession.tr("Your device's exact limits could not be read on this system, so a common set is assumed. The cap still applies, but may not match your hardware exactly.", QbzSession.trRev)
+        color: theme.textMuted
+        font.pixelSize: 12
+        wrapMode: Text.WordWrap
     }
 
     SettingsSpacer { }

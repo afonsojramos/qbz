@@ -556,6 +556,25 @@ fn on_session_entered() {
     // Every caller of this function is one genuine session entry, so this is
     // the one place that sees them all.
     reset_session_latches();
+    // Phase 1b: seed the local device-cap cache (#638 fix 3) as early in the
+    // session as possible, so the first governed play resolves against the cap
+    // and the Settings "Detected device limit" row is filled on first open.
+    // Instant no-op while the toggle is off, which is the default.
+    //
+    // Spawned, not awaited — the probe shells out to `pw-dump` and this
+    // function runs on the Qt thread. The documented consequence (same trade
+    // the reference accepts): a session-restore play that beats the refresh
+    // gets ONE uncapped track. It self-heals on the next play.
+    //
+    // The republish is NOT optional. The boot snapshot is spawned separately
+    // and can serialize BEFORE this probe lands, so without a publish of our
+    // own the Settings row stays absent for a user who already had the toggle
+    // on — until some unrelated mutation happens to republish. Nothing else
+    // re-runs on probe completion.
+    spawn(async {
+        settings_qt::refresh_device_cap(&app()).await;
+        settings_qt::publish_snapshot().await;
+    });
     // Phase 2: the shell mounts on the (only) "home" view; seed the nav
     // history and push the current now-playing model onto the bar.
     nav_qt::record(&nav_qt::shell_entry_view());

@@ -12,9 +12,12 @@
 //! streaming-only, backend switch).
 //!
 //! Not wired yet:
-//! - Detected device limit row (#638): the probe + its cache live in
-//!   `crate::device_cap` (Slint glue) — not ported; the row stays hidden.
 //! - The bit-perfect force-100 volume cascade.
+//!
+//! The Detected device limit row (#638 fix 3) IS wired (2026-08-17): the probe
+//! and its cache moved out of the Slint binary crate into
+//! `qbz_app::device_cap`, `refresh_device_cap` below owns the six explicit
+//! triggers, and the row reads the cache off the snapshot.
 //!
 //! (The HiFi Wizard, the JACK banner and settings export/import were on this
 //! list and are all shipped now — `qml/settings/DacWizardModal.qml`,
@@ -83,6 +86,60 @@ fn with_audio<T>(f: impl FnOnce(&AudioSettingsStore) -> Result<T, String>) -> Re
 /// enumeration + integrations) and is far too heavy for a track change.
 pub fn audio_settings() -> qbz_audio::settings::AudioSettings {
     with_audio(|s| s.get_settings()).unwrap_or_default()
+}
+
+/// Re-probe the local output device and refresh the #638 fix-3 cap cache.
+///
+/// **ORDERING — persist → refresh → publish, and Qt has a hazard Slint does
+/// not.** The refresh must re-READ the settings (hence no arguments: it reads
+/// the store itself), so every caller persists FIRST. It must also run
+/// **before `apply_audio`**, not merely before the handler's closing
+/// `publish_snapshot`: `apply_audio` ends with its own `publish_settings`
+/// (see below), an earlier serialize that would ship the STALE summary and
+/// win the race. The symptom of getting this wrong is "the row is right, but
+/// only after you reopen Settings".
+///
+/// **The cache drop (contract D3), and its one hard-won exception.** A cap
+/// change moves the effective request tier by exactly the mechanism a
+/// streaming-quality change does, and the audio cache is quality-BLIND: local
+/// play accepts any cached entry that is not below the request. So bytes
+/// fetched before the cap must not keep serving, or the feature is observably
+/// inert on every track already played this session.
+///
+/// The exception is the FIRST refresh of the process, and skipping it is not
+/// an optimisation. `clear_audio_cache` is not an L1 drop — it reaches
+/// `PlaybackCache::clear`, which unlinks every `<id>.audio` file on disk
+/// (hundreds of MB to GBs). The cap cache starts empty, so at boot every
+/// `None -> Some(tier)` reads as a change, and a naive comparison here wiped
+/// the entire disk cache on EVERY launch with the toggle on, logging it as a
+/// legitimate tier change. `device_cap` classifies the refresh instead
+/// (`CapChange`), which also stops a superseded concurrent refresh from being
+/// misattributed to this one.
+///
+/// The probe itself (`pw-dump` subprocess + `/proc/asound` reads) runs inside
+/// `spawn_blocking` down in `device_cap`, and is an instant no-op while the
+/// toggle is off — which is the default, so the common path costs nothing.
+pub(crate) async fn refresh_device_cap(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
+    use qbz_app::device_cap::CapChange;
+    let audio = audio_settings();
+    let change = qbz_app::device_cap::refresh(
+        audio.limit_quality_to_device,
+        audio.output_device.clone(),
+        // D7: enumerate the "System default" sink through the backend that is
+        // actually playing, not always through PipeWire.
+        audio.backend_type,
+    )
+    .await;
+    match change {
+        CapChange::Changed => {
+            log::info!("[qbz-qt] device cap: request tier changed — clearing audio cache");
+            runtime.core().player().clear_audio_cache();
+        }
+        CapChange::Seeded => {
+            log::info!("[qbz-qt] device cap: seeded for this process — audio cache left intact");
+        }
+        CapChange::Unchanged => {}
+    }
 }
 
 /// Whether `InfiniteRadio` autoplay is on — the queue footer's ∞ state and the
@@ -1333,6 +1390,16 @@ pub struct SettingsDoc {
     pub dsd_mode_index: i32,
     #[serde(rename = "limitQualityToDevice")]
     pub limit_quality_to_device: bool,
+    /// #638 fix 3 — the composed "Detected device limit" value, e.g.
+    /// `"192 kHz · Hi-Res+"`. EMPTY means no cap is active, and the row hides
+    /// on that rather than rendering a blank value.
+    #[serde(rename = "deviceCapSummary")]
+    pub device_cap_summary: String,
+    /// False = the probe fell back to the common rate set, so the row shows
+    /// its caveat. True while no cap is active, which keeps that caveat from
+    /// flashing before the first refresh lands.
+    #[serde(rename = "deviceCapDetected")]
+    pub device_cap_detected: bool,
     #[serde(rename = "exclusiveMode")]
     pub exclusive_mode: bool,
     #[serde(rename = "reserveDac")]
@@ -1711,6 +1778,12 @@ pub async fn publish_snapshot() {
     // funnels through here, so they refresh with the settings and never poll.
     crate::output_labels::publish(&audio_settings);
 
+    // #638 fix 3 — read the cap cache, never probe here. `publish_snapshot`
+    // runs on every settings mutation and on every Settings open; the probe is
+    // a `pw-dump` subprocess and belongs only on the six explicit triggers
+    // (`refresh_device_cap`). This is two uncontended lock reads.
+    let (device_cap_summary, device_cap_detected) = qbz_app::device_cap::summary();
+
     let doc = tokio::task::spawn_blocking(move || {
         let backend_types = BackendManager::available_backends();
         let current_backend = audio_settings.backend_type.unwrap_or_default();
@@ -1782,6 +1855,8 @@ pub async fn publish_snapshot() {
                 .position(|v| *v == audio_settings.dsd_mode)
                 .unwrap_or(0) as i32,
             limit_quality_to_device: audio_settings.limit_quality_to_device,
+            device_cap_summary,
+            device_cap_detected,
             exclusive_mode: audio_settings.exclusive_mode,
             reserve_dac: audio_settings.reserve_dac_while_running,
             dac_passthrough: audio_settings.dac_passthrough,
@@ -2297,6 +2372,13 @@ pub async fn settings_bool(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &str,
     match outcome {
         Ok(apply) => {
             let apply = if cascaded { Apply::Reinit } else { apply };
+            // #638 fix 3, trigger 2 — the "Limit quality to device" toggle.
+            // AFTER the persist above (the probe re-reads the flag) and BEFORE
+            // `apply_audio`, which publishes the document on its own way out;
+            // see `refresh_device_cap` for why that ordering is load-bearing.
+            if key == "limit-quality-to-device" {
+                refresh_device_cap(runtime).await;
+            }
             apply_audio(runtime, apply);
             publish_snapshot().await;
         }
@@ -2377,6 +2459,11 @@ pub async fn settings_select(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &st
             // transition that renegotiates the stream mid-album (a rate change);
             // the format-match guard above should already refuse those.
             let _ = with_audio(|s| s.set_output_device(None));
+            // #638 fix 3, trigger 3 — a backend switch resets the device to
+            // the system default, so the cap's subject changed even though the
+            // device SELECTION did not. D7 also makes the new backend the one
+            // that resolves that default.
+            refresh_device_cap(runtime).await;
             apply_audio(runtime, Apply::Reinit);
         }
         "device" => {
@@ -2392,6 +2479,8 @@ pub async fn settings_select(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &st
                 log::error!("[qbz-qt] persist output device failed: {e}");
                 return;
             }
+            // #638 fix 3, trigger 4 — a different DAC has a different ceiling.
+            refresh_device_cap(runtime).await;
             apply_audio(runtime, Apply::Reinit);
         }
         "dsd-mode" => {
@@ -2737,6 +2826,11 @@ pub async fn settings_reset(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
     // untouched"). This port used to force it back to `hires_plus`, so a
     // user on a metered connection who reset their AUDIO settings silently
     // got hi-res streaming again.
+    //
+    // #638 fix 3, trigger 5 — the reset turns "Limit quality to device" off,
+    // so this refresh is the one that CLEARS the cap (and, through the
+    // before/after comparison, drops the tier-keyed cache the old cap filled).
+    refresh_device_cap(runtime).await;
     apply_audio(runtime, Apply::Reinit);
     publish_snapshot().await;
 }
@@ -2751,6 +2845,13 @@ pub async fn refresh_devices(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
         log::warn!("[qbz-qt] release device failed: {e}");
     }
     invalidate_device_cache();
+    // #638 fix 3, trigger 6 — Qt-only, and the easiest of the six to miss.
+    // This button exists precisely for hotplug: the hardware behind the
+    // selection can change without the SELECTION changing, which is the case
+    // a device-change trigger cannot see. It matters most under "System
+    // default". Placed after the re-enumeration so the probe reads the new
+    // device list, and before the publish so the row lands settled.
+    refresh_device_cap(runtime).await;
     publish_snapshot().await;
 }
 
