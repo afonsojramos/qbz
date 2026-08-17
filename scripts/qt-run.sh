@@ -141,7 +141,7 @@ fi
 if [[ "${NO_AUDIT:-0}" != 1 ]]; then
   if [[ -d "${AUDIT_DIR}" ]] && command -v python3 >/dev/null 2>&1; then
     audit_abs="$(pwd)/${QT_CRATE}"
-    for a in qml_resolution_audit.py qml_singleton_xref.py; do
+    for a in qml_resolution_audit.py qml_singleton_xref.py qml_eager_tab_audit.py; do
       [[ -r "${AUDIT_DIR}/${a}" ]] || { warn "audit ${a} not found — skipped"; continue; }
       if ! python3 "${AUDIT_DIR}/${a}" "${audit_abs}"; then
         die "${a} FAILED — fix it before burning a build (QML resolves lazily; this is what cargo cannot tell you)."
