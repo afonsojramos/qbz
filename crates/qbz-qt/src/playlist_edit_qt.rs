@@ -192,13 +192,10 @@ pub(crate) fn open(id: &str) {
     if id.is_empty() {
         return;
     }
-    if crate::local_playlist_qt::is_local_id(&id) {
-        open_local(id);
-    } else {
-        match id.parse::<u64>() {
-            Ok(pid) => open_qobuz(id, pid),
-            Err(_) => log::warn!("[qbz-qt] playlist editor: unusable id"),
-        }
+    match crate::local_playlist_qt::PlaylistRef::parse(&id) {
+        Some(crate::local_playlist_qt::PlaylistRef::Local(local)) => open_local(local),
+        Some(crate::local_playlist_qt::PlaylistRef::Qobuz(pid)) => open_qobuz(id, pid),
+        None => log::warn!("[qbz-qt] playlist editor: unusable id"),
     }
 }
 

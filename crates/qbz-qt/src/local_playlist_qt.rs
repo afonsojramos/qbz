@@ -47,6 +47,14 @@ type Runtime = Arc<AppRuntime<LoggingAdapter>>;
 /// `local:<uuid>` string. Qobuz-bound calls take `u64` only, so a local ref is
 /// unrepresentable there BY CONSTRUCTION — which is what stops a `local:` id
 /// from ever reaching an endpoint that would read it as a catalog number.
+///
+/// It is the ONE place that classification happens. Every playlist mutation
+/// used to hand-roll it as `is_local_id(id)` then a separate `parse::<u64>()`,
+/// nine times — correct at each site, but it left "a ref classified by the
+/// wrong half" representable, and the id-space hazard behind it has already
+/// produced real bugs here (a LocalLibrary row id is a small integer that
+/// parses as a perfectly valid Qobuz id, it just means a different track).
+/// A new call site gets the guard for free; it cannot forget the test.
 #[derive(Debug, Clone)]
 pub enum PlaylistRef {
     Qobuz(u64),
@@ -245,39 +253,19 @@ pub fn add_local_refs_blocking(id: &str, refs: &[String]) -> usize {
 
 // ──────────────────────────── custom artwork ────────────────────────────
 
-/// Copy `src` into the artwork cache and store it as this playlist's custom
-/// artwork. Returns the stored path. Blocking.
-pub fn set_custom_artwork_blocking(id: &str, src: &str) -> Option<String> {
-    let cache = qbz_library::get_artwork_cache_dir();
-    std::fs::create_dir_all(&cache).ok()?;
-    let ext = std::path::Path::new(src)
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("jpg");
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let suffix = id.trim_start_matches(repo::LOCAL_PLAYLIST_PREFIX);
-    let dest = cache.join(format!("local_playlist_{suffix}_{ts}.{ext}"));
-    if let Err(e) = std::fs::copy(src, &dest) {
-        log::error!("[qbz-qt] copy local playlist artwork failed: {e}");
-        return None;
-    }
-    let dest_str = dest.to_string_lossy().to_string();
-    match with_db(true, |db| {
-        Ok(db.with_connection(|conn| repo::set_custom_artwork(conn, id, Some(&dest_str))))
-    }) {
-        Some(Ok(())) => Some(dest_str),
-        Some(Err(e)) => {
-            log::error!("[qbz-qt] store local playlist artwork failed: {e}");
-            None
-        }
-        None => None,
-    }
-}
+// There is deliberately NO `set_custom_artwork_blocking` twin of the clear
+// below. Writing this column was the port's original plan and it was never
+// called: the cover menu persists to `custom_playlist_covers.json` through
+// `cover_artwork_qt`, which is the ONE store both the sidebar and this
+// module's doc now read. A second writer would recreate exactly the split
+// that made a freshly picked cover invisible on its own page.
 
-/// Clear this playlist's custom artwork. Blocking.
+/// Clear a local playlist's custom artwork from the `library.db` column.
+///
+/// Kept, and called from `cover_artwork_qt::remove_custom_playlist_cover`,
+/// purely so "Remove cover" can clear a cover an EARLIER build stored here —
+/// the doc still reads this column as a fallback. Nothing writes it.
+/// Blocking.
 pub fn clear_custom_artwork_blocking(id: &str) {
     with_db(true, |db| {
         Ok(db.with_connection(|conn| repo::set_custom_artwork(conn, id, None)))
@@ -774,15 +762,33 @@ pub async fn load(runtime: &Runtime, playlist_id: &str) -> bool {
     .await
     .unwrap_or_default();
 
+    // Custom cover — read the SAME store the header menu writes.
+    //
+    // This doc used to read only `library.db`'s `custom_artwork_path`, which
+    // nothing in Qt writes any more: the menu on this very page persists to
+    // `custom_playlist_covers.json` through `cover_artwork_qt` (that split is
+    // deliberate — a `playlists` key inside the shared `custom_artwork.json`
+    // would be dropped by the other build's next write). So on a LOCAL
+    // playlist a cover the user just picked appeared in the sidebar and never
+    // in this header, and `has_custom_cover` stayed false, which meant the
+    // menu only ever offered "Add cover" — "Remove" was unreachable.
+    //
+    // The DB column survives as a READ fallback so a cover stored there by an
+    // earlier build is not silently lost; `clear_custom_artwork_blocking` is
+    // what lets Remove clear one of those.
+    let custom_cover = crate::cover_artwork_qt::playlist_cover(&id).or_else(|| {
+        header
+            .custom_artwork_path
+            .clone()
+            .filter(|p| !p.is_empty())
+    });
+
     let doc = PlaylistDoc {
         id: header.id.clone(),
         name: header.name.clone(),
         description: header.description.clone().unwrap_or_default(),
-        cover_path: header
-            .custom_artwork_path
-            .clone()
-            .filter(|p| !p.is_empty())
-            .unwrap_or_default(),
+        cover_path: custom_cover.clone().unwrap_or_default(),
+        has_custom_cover: custom_cover.is_some(),
         covers,
         track_count: display.len() as i32,
         total_duration: total_duration_label(&rows),
@@ -860,7 +866,6 @@ async fn play_in(runtime: &Runtime, start_row_id: &str, shuffle: bool) {
             .unwrap_or(0)
     };
     runtime.core().set_queue_offline_only(offline_only);
-    let first_id = queue[start].id;
     // The "playing from" origin is ("playlist", <local:uuid>) — the reference
     // stamps it on BOTH local play paths (`local_playlist.rs:1578` play_all /
     // Shuffle and `:1599` play_from_visible), with the explicit note that "the
@@ -874,14 +879,22 @@ async fn play_in(runtime: &Runtime, start_row_id: &str, shuffle: bool) {
     // drew the album glyph pointing at a local `album_group_key` instead of the
     // playlist. It also made the row click REGRESS once main.rs started routing
     // it here — `playlist_qt::play_track` had been stamping `open_context()`.
-    crate::playback_qt::set_queue_stamped(
+    // F1: the anchor comes back from the seam. A local playlist's rows are
+    // MIXED — it can hold real Qobuz tracks beside local files — so the filter
+    // genuinely fires here, and reading the id off the pre-filter list would
+    // replay one the core just dropped.
+    let Some(anchor) = crate::playback_qt::set_queue_stamped(
         runtime,
         queue,
         Some(start),
         crate::playback_qt::PlayContext::playlist(&playlist_id),
     )
-    .await;
-    crate::playback_qt::play_queue_track_public(runtime, first_id).await;
+    .await
+    else {
+        log::info!("[qbz-qt] local playlist play: every track was filtered, queue untouched");
+        return;
+    };
+    crate::playback_qt::play_queue_track_public(runtime, anchor.track_id).await;
 }
 
 /// Remove the open detail's row by display id, then reload.

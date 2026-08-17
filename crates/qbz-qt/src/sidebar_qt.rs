@@ -696,19 +696,22 @@ pub fn move_playlist_optimistic(id: &str, folder_id: &str) {
         return;
     };
     let target = (!folder_id.is_empty()).then(|| folder_id.to_string());
-    if crate::local_playlist_qt::is_local_id(id) {
-        if let Some(p) = data.locals.iter_mut().find(|p| p.id == id) {
-            p.folder_id = target;
+    use crate::local_playlist_qt::PlaylistRef;
+    match PlaylistRef::parse(id) {
+        Some(PlaylistRef::Local(local)) => {
+            if let Some(p) = data.locals.iter_mut().find(|p| p.id == local) {
+                p.folder_id = target;
+            }
         }
-    } else if let Ok(pid) = id.parse::<u64>() {
-        match target {
+        Some(PlaylistRef::Qobuz(pid)) => match target {
             Some(fid) => {
                 data.folder_map.insert(pid, fid);
             }
             None => {
                 data.folder_map.remove(&pid);
             }
-        }
+        },
+        None => {}
     }
 }
 

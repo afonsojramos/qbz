@@ -481,6 +481,13 @@ pub fn remove_custom_playlist_cover(playlist_id: String) {
             if store.playlists.remove(&id).is_some() {
                 write_playlist_store(&store);
             }
+            // A LOCAL playlist's doc also falls back to `library.db`'s
+            // `custom_artwork_path` for covers an earlier build stored there.
+            // Clearing only this JSON store would leave such a cover on
+            // screen with the menu insisting it had been removed.
+            if crate::local_playlist_qt::is_local_id(&id) {
+                crate::local_playlist_qt::clear_custom_artwork_blocking(&id);
+            }
         })
         .await;
         crate::open_playlist(playlist_id);

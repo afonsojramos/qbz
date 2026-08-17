@@ -390,8 +390,11 @@ pub fn pick(playlist_id: &str) {
 
     // Cases 1 and 2 — LOCAL playlist target: the write goes to the library.db
     // repo, which works offline and without a Qobuz account (D7 routing).
-    if crate::local_playlist_qt::is_local_id(playlist_id) {
-        let target = playlist_id.to_string();
+    // Routed through `PlaylistRef`, the same guard idiom this module's header
+    // cites for its own `Payload` enum: the Qobuz half below cannot be handed
+    // anything but a ref that already failed the local test.
+    let target_ref = crate::local_playlist_qt::PlaylistRef::parse(playlist_id);
+    if let Some(crate::local_playlist_qt::PlaylistRef::Local(target)) = target_ref.clone() {
         let open_target = target.clone();
         // The target name is already resolved above; closing now matches the
         // reference, which drops the modal before the write starts.
@@ -420,7 +423,7 @@ pub fn pick(playlist_id: &str) {
         return;
     }
 
-    let Ok(pid) = playlist_id.parse::<u64>() else {
+    let Some(crate::local_playlist_qt::PlaylistRef::Qobuz(pid)) = target_ref else {
         return;
     };
 
