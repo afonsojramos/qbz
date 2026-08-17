@@ -24,13 +24,21 @@
 //! normalisation point, and the source of a row always comes from the ROW.
 //!
 //! STILL OPEN, and NOT this stage's job: every `Play` arm below starts the
-//! first track with `core().play_track_resolved`, which is the Qobuz-only
-//! entry (`qbz-core/src/core.rs:730-736` errors "No Qobuz client available").
-//! A local or Plex first track therefore still fails AT THE PLAYER even though
-//! it now resolves. That router is design 02 §9 stage 3
-//! (`SourceRegistry::playback` → `PlaybackTicket`), which owns both copies of
-//! `play_audible` as well; nothing here should grow a source branch to
-//! anticipate it.
+//! first track through `playback_qt::play_resolved_offline_aware`, whose
+//! network arm is the Qobuz-only entry (`qbz-core/src/core.rs` errors "No
+//! Qobuz client available"). A local or Plex first track therefore still
+//! fails AT THE PLAYER even though it now resolves. That router is design 02
+//! §9 stage 3 (`SourceRegistry::playback` → `PlaybackTicket`), which owns both
+//! copies of `play_audible` as well; nothing here should grow a source branch
+//! to anticipate it.
+//!
+//! One sharp edge that arrived with the funnel (2026-08-17, #638 fix 3): the
+//! funnel consults the OFFLINE cache before the network, keyed on the raw
+//! `u64`. A `local_tracks` rowid and a Plex rating_key live in the same small
+//! -integer space as older Qobuz ids, so a collision would play the wrong
+//! track instead of failing cleanly — the same id-space hazard that produced
+//! the `feed_track_to_queue` bug. Ephemeral ids cannot collide (they start at
+//! 2^48). The real fix is stage 3's source-aware routing, not a guard here.
 //!
 //! Contract, all load-bearing and 1:1 with the reference:
 //! - "Resolve all" uses the collection's persisted `play_mode`; the hero
@@ -346,10 +354,12 @@ pub(crate) async fn play_all_tracks(
     // regardless of where the audio plays (the Slint collection-play flow
     // records it on the routed path too).
     if !crate::playback_qt::route_play_to_peer(runtime, first_id).await {
-        if let Err(e) = runtime
-            .core()
-            .play_track_resolved(first_id, crate::playback_qt::current_quality(), None, None, 0)
-            .await
+        if let Err(e) = crate::playback_qt::play_resolved_offline_aware(
+            runtime,
+            first_id,
+            0,
+        )
+        .await
         {
             log::error!("[qbz-qt] myqbz_play: play_track {first_id} failed: {e}");
         }
@@ -512,16 +522,12 @@ pub(crate) fn item_action(source_item_id: String, action: String) {
                 if crate::playback_qt::route_play_to_peer(&runtime, first_id).await {
                     return;
                 }
-                if let Err(e) = runtime
-                    .core()
-                    .play_track_resolved(
-                        first_id,
-                        crate::playback_qt::current_quality(),
-                        None,
-                        None,
-                        0,
-                    )
-                    .await
+                if let Err(e) = crate::playback_qt::play_resolved_offline_aware(
+                    &runtime,
+                    first_id,
+                    0,
+                )
+                .await
                 {
                     log::error!("[qbz-qt] myqbz_play: play_track {first_id} failed: {e}");
                 }
@@ -738,16 +744,12 @@ pub(crate) fn play_inline_track(
                 if crate::playback_qt::route_play_to_peer(&runtime, first_id).await {
                     return;
                 }
-                if let Err(e) = runtime
-                    .core()
-                    .play_track_resolved(
-                        first_id,
-                        crate::playback_qt::current_quality(),
-                        None,
-                        None,
-                        0,
-                    )
-                    .await
+                if let Err(e) = crate::playback_qt::play_resolved_offline_aware(
+                    &runtime,
+                    first_id,
+                    0,
+                )
+                .await
                 {
                     log::error!("[qbz-qt] myqbz_play: play_track {first_id} failed: {e}");
                 }

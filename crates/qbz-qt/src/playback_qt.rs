@@ -73,8 +73,52 @@ pub fn set_streaming_quality(key: &str) {
     *POC_QUALITY.write().unwrap() = quality_for_key(key);
 }
 
+/// The raw streaming-quality PREFERENCE, uncapped.
+///
+/// Three callers, and that is the whole list by design: the capped resolver
+/// below, and `cast_qt::effective_cast_quality`, which must NEVER see the
+/// local cap (#638: the local DAC is not in a cast's signal path). Every
+/// LOCAL play goes through `local_playback_quality` instead — reach for this
+/// one only if you can say why a cap must not apply.
 pub(crate) fn current_quality() -> Quality {
     *POC_QUALITY.read().unwrap()
+}
+
+/// The request tier for LOCAL playback + the cause that shaped it — the one
+/// place the preference and the detected device cap (#638 fix 3) are
+/// reconciled. Port of `crates/qbz/src/playback.rs local_playback_quality`.
+///
+/// Costs two uncontended `RwLock` reads (`POC_QUALITY` + the device-cap
+/// cache), so it is safe to resolve per play; nothing here reads a file or
+/// probes hardware. That is what lets the play funnel own the decision
+/// instead of taking it as a parameter.
+pub(crate) fn local_playback_quality() -> (Quality, qbz_models::QualityLimit) {
+    reconcile_device_cap(current_quality(), qbz_app::device_cap::cap().map(|(t, _)| t))
+}
+
+/// The decision itself, lifted out of the two lock reads so it is testable.
+/// Port of the match in `crates/qbz/src/playback.rs local_playback_quality`.
+fn reconcile_device_cap(pref: Quality, cap: Option<Quality>) -> (Quality, qbz_models::QualityLimit) {
+    use qbz_models::QualityLimit;
+    match cap {
+        Some(cap) if cap < pref => (cap, QualityLimit::LocalDeviceCap),
+        // The TIE arm, and it is not redundant: when the cap equals the
+        // preference and both are below Hi-Res+, the device is the more
+        // specific and more surprising of the two causes, so it is the one the
+        // badge tooltip names. Without this the user reads "your preference"
+        // while the real reason they cannot go higher is the DAC.
+        Some(cap) if cap == pref && cap < Quality::UltraHiRes => {
+            (pref, QualityLimit::LocalDeviceCap)
+        }
+        _ => (
+            pref,
+            if pref < Quality::UltraHiRes {
+                QualityLimit::Preference
+            } else {
+                QualityLimit::None
+            },
+        ),
+    }
 }
 
 // Mute bookkeeping (mirrors playback.rs MUTED / PREMUTE_VOLUME: there is no
@@ -449,17 +493,40 @@ pub(crate) async fn route_track_to_peer(track: &QueueTrack, mode: &str) -> bool 
     }
 }
 
-/// The one funnel every local play goes through. Hands the play path the
-/// ACTIVE offline cache + the row-status sink (Slint passes both through
-/// `play_track_resolved`; this port used to pass `None, None`, which made
-/// the offline tier unreachable — downloaded tracks always streamed).
-/// With no active cache this degrades to exactly the old behaviour.
+/// The one funnel every local play goes through. It OWNS four decisions so
+/// no caller has to remember them:
+///
+/// 1. the request tier — `local_playback_quality()`, which is where the
+///    detected device cap (#638 fix 3) applies. It used to be a PARAMETER,
+///    which is why seven callers pasted the same `current_quality()` and four
+///    others bypassed the funnel entirely;
+/// 2. the ACTIVE offline cache handle, and
+/// 3. the row-status sink (Slint passes both through `play_track_resolved`;
+///    this port used to pass `None, None`, which made the offline tier
+///    unreachable — downloaded tracks always streamed);
+/// 4. session resume — and note this one is NOT gated on the offline cache:
+///    a caller passing 0 gets the restore stash consumed if it is armed for
+///    this exact track (once only). That matches the reference, whose audible
+///    play calls `take_resume_for` unconditionally.
+///
+/// KNOWN LIMIT, and it is the honest reading of "the funnel owns the tier":
+/// it owns the tier we REQUEST. An offline copy already on disk is served
+/// verbatim — `qbz-core` ignores the quality argument on that branch, because
+/// downloads are always taken at the top tier. So a capped device still gets
+/// the full-rate bytes of a track the user downloaded. Same on the reference;
+/// fixing it means transcoding or a second download, neither of which this
+/// row is allowed to decide.
+///
+/// NOT its job: `route_play_to_peer`. Two call-site shapes forbid hoisting it
+/// here — `play_queue_track` needs the peer route BEFORE its local-file
+/// branch, and the MyQBZ collection play deliberately does not early-return on
+/// a routed play (its `touch_play` bookkeeping runs either way).
 pub(crate) async fn play_resolved_offline_aware(
     runtime: &Arc<AppRuntime<LoggingAdapter>>,
     track_id: u64,
-    quality: qbz_models::Quality,
     start_position_secs: u64,
 ) -> Result<(), String> {
+    let quality = local_playback_quality().0;
     let off = crate::offline_qt::get().await;
     let sink = off.as_ref().map(|_| crate::offline_cache_qt::row_sink());
     // Session resume: if this is the track restored at launch, start it at the
@@ -706,7 +773,7 @@ pub async fn play_artist(runtime: &Arc<AppRuntime<LoggingAdapter>>, artist_id: &
         if route_play_to_peer(runtime, first_id).await {
             return Ok(());
         }
-        play_resolved_offline_aware(runtime, first_id, current_quality(), 0)
+        play_resolved_offline_aware(runtime, first_id, 0)
             .await
             .map_err(|e| format!("play_track {first_id} failed: {e}"))?;
         refresh_now_playing(runtime).await;
@@ -755,7 +822,7 @@ pub async fn play_artist(runtime: &Arc<AppRuntime<LoggingAdapter>>, artist_id: &
     if route_play_to_peer(runtime, first_id).await {
         return Ok(());
     }
-    play_resolved_offline_aware(runtime, first_id, current_quality(), 0)
+    play_resolved_offline_aware(runtime, first_id, 0)
         .await
         .map_err(|e| format!("play_track {first_id} failed: {e}"))?;
     refresh_now_playing(runtime).await;
@@ -860,7 +927,7 @@ pub async fn play_album_from(
     if route_play_to_peer(runtime, first_id).await {
         return Ok(());
     }
-    play_resolved_offline_aware(runtime, first_id, current_quality(), 0)
+    play_resolved_offline_aware(runtime, first_id, 0)
         .await
         .map_err(|e| format!("play_track {first_id} failed: {e}"))?;
     log::info!("[qbz-qt] play_album: play_track_resolved started for {first_id}");
@@ -896,7 +963,7 @@ pub async fn play_album_from_track(
     if route_play_to_peer(runtime, first_id).await {
         return Ok(());
     }
-    play_resolved_offline_aware(runtime, first_id, current_quality(), 0)
+    play_resolved_offline_aware(runtime, first_id, 0)
         .await
         .map_err(|e| format!("play_track {first_id} failed: {e}"))?;
     refresh_now_playing(runtime).await;
@@ -1015,7 +1082,7 @@ pub async fn play_track_list_in(
     if route_play_to_peer(runtime, first_id).await {
         return Ok(());
     }
-    play_resolved_offline_aware(runtime, first_id, current_quality(), 0)
+    play_resolved_offline_aware(runtime, first_id, 0)
         .await
         .map_err(|e| format!("play_track {first_id} failed: {e}"))?;
     refresh_now_playing(runtime).await;
@@ -1425,7 +1492,7 @@ pub async fn play_single_track(
     if route_play_to_peer(runtime, track_id).await {
         return Ok(());
     }
-    play_resolved_offline_aware(runtime, track_id, current_quality(), 0)
+    play_resolved_offline_aware(runtime, track_id, 0)
         .await
         .map_err(|e| format!("play_track {track_id} failed: {e}"))?;
     refresh_now_playing(runtime).await;
@@ -1659,7 +1726,7 @@ async fn play_queue_track(
         return;
     }
     if let Err(e) =
-        play_resolved_offline_aware(runtime, track_id, current_quality(), start_position_secs)
+        play_resolved_offline_aware(runtime, track_id, start_position_secs)
         .await
     {
         log::error!("[qbz-qt] playback: play_track {track_id} failed: {e}");
@@ -2519,13 +2586,31 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                         let runtime = runtime.clone();
                         let next_id = next.id;
                         tokio::spawn(async move {
-                            // L1/L2 player cache -> network. The offline tier is
-                            // `None` here for the same reason every other play
-                            // path in this module passes `None`: this port opens
-                            // no offline-cache index.
+                            // Shared tier-walk: L1/L2 (player cache) -> OFFLINE
+                            // -> network, then hand the bytes to play_next. The
+                            // offline handle and the row sink are the same two
+                            // `play_resolved_offline_aware` supplies; passing
+                            // `None, None` here (under a comment claiming this
+                            // port opens no offline index — the funnel above
+                            // does) made a DOWNLOADED next track re-download for
+                            // gapless, and fail outright with no network.
+                            let off = crate::offline_qt::get().await;
+                            let sink = off.as_ref().map(|_| crate::offline_cache_qt::row_sink());
                             if let Some(data) = runtime
                                 .core()
-                                .fetch_for_gapless_resolved(next_id, current_quality(), None, None)
+                                .fetch_for_gapless_resolved(
+                                    next_id,
+                                    // The gapless next track is LOCAL playback,
+                                    // so it resolves against the same capped
+                                    // tier as the audible play (Slint twin:
+                                    // playback.rs:5404). Prefetching at a
+                                    // higher tier than the funnel would request
+                                    // is exactly how a quality-blind cache
+                                    // leaks an uncapped stream to the DAC.
+                                    local_playback_quality().0,
+                                    off.as_deref(),
+                                    sink.as_ref(),
+                                )
                                 .await
                             {
                                 let player = runtime.core().player();
@@ -2762,7 +2847,146 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{filter_queue_with, stream_error_text, xorshift_shuffle_seeded};
+    use super::{
+        filter_queue_with, reconcile_device_cap, stream_error_text, xorshift_shuffle_seeded,
+    };
+    use qbz_models::{Quality, QualityLimit};
+
+    // --- #638 fix 3: the request tier reconciles preference against the
+    // detected local device cap. -------------------------------------------
+
+    #[test]
+    fn with_no_cap_the_preference_governs_and_names_itself() {
+        assert_eq!(
+            reconcile_device_cap(Quality::UltraHiRes, None),
+            (Quality::UltraHiRes, QualityLimit::None)
+        );
+        // Below Hi-Res+ with no cap, the cause is the preference — that is
+        // what the badge tooltip says when nothing else is limiting.
+        assert_eq!(
+            reconcile_device_cap(Quality::HiRes, None),
+            (Quality::HiRes, QualityLimit::Preference)
+        );
+    }
+
+    #[test]
+    fn a_cap_below_the_preference_clamps_and_blames_the_device() {
+        assert_eq!(
+            reconcile_device_cap(Quality::UltraHiRes, Some(Quality::Lossless)),
+            (Quality::Lossless, QualityLimit::LocalDeviceCap)
+        );
+        assert_eq!(
+            reconcile_device_cap(Quality::UltraHiRes, Some(Quality::HiRes)),
+            (Quality::HiRes, QualityLimit::LocalDeviceCap)
+        );
+    }
+
+    /// THE TIE ARM. A 96 kHz DAC with the preference already at Hi-Res
+    /// requests the same tier either way, so the clamp is invisible — but the
+    /// CAUSE is not, and the device is the more specific and more surprising
+    /// of the two. Drop this arm and the tooltip tells the user their
+    /// preference is the ceiling while the real ceiling is their hardware.
+    #[test]
+    fn a_cap_equal_to_the_preference_still_blames_the_device_below_hi_res_plus() {
+        assert_eq!(
+            reconcile_device_cap(Quality::HiRes, Some(Quality::HiRes)),
+            (Quality::HiRes, QualityLimit::LocalDeviceCap)
+        );
+        assert_eq!(
+            reconcile_device_cap(Quality::Lossless, Some(Quality::Lossless)),
+            (Quality::Lossless, QualityLimit::LocalDeviceCap)
+        );
+    }
+
+    /// The tie at the TOP is the exception: Hi-Res+ capped at Hi-Res+ is not a
+    /// limit at all, and claiming the device limits you there would be a lie.
+    #[test]
+    fn a_tie_at_hi_res_plus_is_not_a_limit() {
+        assert_eq!(
+            reconcile_device_cap(Quality::UltraHiRes, Some(Quality::UltraHiRes)),
+            (Quality::UltraHiRes, QualityLimit::None)
+        );
+    }
+
+    /// A cap ABOVE the preference must not raise the request. The user asked
+    /// for less; a capable DAC is not permission to spend their bandwidth.
+    #[test]
+    fn a_cap_above_the_preference_never_raises_it() {
+        assert_eq!(
+            reconcile_device_cap(Quality::Lossless, Some(Quality::UltraHiRes)),
+            (Quality::Lossless, QualityLimit::Preference)
+        );
+    }
+
+    /// THE #638 TRAP, pinned as a source audit because no runtime test can
+    /// reach it: `current_quality()` is the UNCAPPED preference, and exactly
+    /// two places may read it — the capped resolver in this module, and
+    /// `cast_qt::effective_cast_quality`, which must never see the local cap
+    /// (the local DAC is not in a cast's signal path; capping it there is
+    /// bug #638 in reverse — a 48 kHz DAC silently capping a 192 kHz DLNA
+    /// renderer).
+    ///
+    /// A new play path that reaches for `current_quality()` instead of the
+    /// funnel fails here, by name, instead of shipping an uncapped request
+    /// that no static gate and no smoke of an unrelated view would catch.
+    #[test]
+    fn only_the_resolver_and_the_cast_path_read_the_uncapped_preference() {
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut offenders: Vec<String> = Vec::new();
+        let mut walk = vec![src];
+        while let Some(dir) = walk.pop() {
+            for entry in std::fs::read_dir(&dir).expect("read src dir") {
+                let path = entry.expect("dir entry").path();
+                if path.is_dir() {
+                    walk.push(path);
+                    continue;
+                }
+                if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                    continue;
+                }
+                let name = path.file_name().unwrap().to_string_lossy().to_string();
+                let body = std::fs::read_to_string(&path).expect("read source");
+                // Production code only — a test module naming the function
+                // (this one does, twice) is not a call site.
+                let body = match body.find("\n#[cfg(test)]") {
+                    Some(cut) => &body[..cut],
+                    None => &body[..],
+                };
+                for (i, line) in body.lines().enumerate() {
+                    // Skip the definition, doc comments and ordinary comments —
+                    // this audits CALLS, not prose about them.
+                    let t = line.trim_start();
+                    if t.starts_with("//") || t.starts_with("fn ") || t.starts_with("pub(crate) fn ")
+                    {
+                        continue;
+                    }
+                    if line.contains("current_quality()") {
+                        offenders.push(format!("{name}:{}", i + 1));
+                    }
+                }
+            }
+        }
+        // playback_qt.rs: the one read inside `local_playback_quality`.
+        // cast_qt.rs: `effective_cast_quality`, which MUST stay uncapped.
+        let allowed = ["playback_qt.rs:", "cast_qt.rs:"];
+        let unexpected: Vec<&String> = offenders
+            .iter()
+            .filter(|o| !allowed.iter().any(|a| o.starts_with(a)))
+            .collect();
+        assert!(
+            unexpected.is_empty(),
+            "these read the UNCAPPED streaming preference instead of going through the play \
+             funnel / `local_playback_quality` — see #638 fix 3: {unexpected:?}"
+        );
+        // And the two allowed files read it exactly once each: a second read
+        // in playback_qt.rs means the funnel was bypassed again.
+        assert_eq!(
+            offenders.len(),
+            2,
+            "expected exactly two reads of `current_quality()` (the resolver + the cast path), \
+             found: {offenders:?}"
+        );
+    }
 
     // --- PARITY-DEBT #17: the shuffle flag reorders, it does not switch mode
     //

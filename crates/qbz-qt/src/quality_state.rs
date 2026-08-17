@@ -14,11 +14,11 @@
 //!   - the REQUESTED tier + its request-time cause (`REQUESTED_*`), which
 //!     names WHY the delivered stream is below that max.
 //!
-//! POC-NOTE (deliberate cut, named): `crate::device_cap` (the #638 fix-3
-//! detected-device ceiling) is not wired in the Qt POC — `settings_qt.rs`
-//! says so for the settings row and the same applies here. So
-//! `local_playback_quality` only ever reports `Preference` / `None`, never
-//! `LocalDeviceCap`. When the probe lands, that one function is the seam.
+//! The detected-device ceiling (#638 fix 3) IS wired: the request tier and its
+//! cause both come from `playback_qt::local_playback_quality`, which reconciles
+//! the streaming preference against `qbz_app::device_cap::cap()`. So
+//! `LocalDeviceCap` is a cause this module really reports, and the badge
+//! tooltip names the output device rather than the preference.
 
 use std::sync::atomic::{AtomicI32, AtomicU32, Ordering};
 
@@ -70,19 +70,14 @@ pub fn seed_track(bit_depth: Option<u32>, sample_rate: Option<f64>, governed: bo
     }
 }
 
-/// The request tier + the cause that shaped it, for the current settings
-/// (`playback.rs` `local_playback_quality`, minus the un-wired device cap).
-fn local_playback_quality() -> (Quality, QualityLimit) {
-    let pref = crate::playback_qt::current_quality();
-    (
-        pref,
-        if pref < Quality::UltraHiRes {
-            QualityLimit::Preference
-        } else {
-            QualityLimit::None
-        },
-    )
-}
+/// The request tier + the cause that shaped it, for the current settings.
+///
+/// It is the SAME function the play funnel resolves with
+/// (`playback_qt::local_playback_quality`), not a parallel copy — a badge that
+/// reports a tier the play path did not request is worse than no badge. This
+/// module used to keep its own cap-free copy, which is exactly how it drifted:
+/// the seed said `Preference` while the request was governed by the device.
+use crate::playback_qt::local_playback_quality;
 
 // ---------------------------------------------------------------------------
 // The arithmetic (ported verbatim from playback.rs)

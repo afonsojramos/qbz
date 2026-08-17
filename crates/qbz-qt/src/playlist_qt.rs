@@ -1723,11 +1723,13 @@ async fn play_queue_at(
     if crate::playback_qt::route_play_to_peer(runtime, first_id).await {
         return Ok(());
     }
-    runtime
-        .core()
-        .play_track_resolved(first_id, crate::playback_qt::current_quality(), None, None, 0)
-        .await
-        .map_err(|e| format!("play_track {first_id} failed: {e}"))?;
+    crate::playback_qt::play_resolved_offline_aware(
+        runtime,
+        first_id,
+        0,
+    )
+    .await
+    .map_err(|e| format!("play_track {first_id} failed: {e}"))?;
     crate::playback_qt::refresh_now_playing(runtime).await;
     Ok(())
 }
