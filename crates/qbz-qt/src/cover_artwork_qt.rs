@@ -433,13 +433,11 @@ pub fn playlist_cover(playlist_id: &str) -> Option<String> {
     load_playlist_store().playlists.get(playlist_id).cloned()
 }
 
-/// Playlist twin of [`prefer_album_cover`].
-pub fn prefer_playlist_cover(playlist_id: &str, fallback_url: String) -> String {
-    match playlist_cover(playlist_id) {
-        Some(p) if std::path::Path::new(&p).is_file() => p,
-        _ => fallback_url,
-    }
-}
+// No `prefer_playlist_cover` twin of `prefer_album_cover`: the one consumer
+// that would want it (`library_qt::playlist_cover_urls`) returns a Vec of
+// cover refs, not a single fallback string, so it applies the same
+// override-then-is_file rule itself over the mosaic. A wrapper nothing can
+// call is the shape the album twin has six real call sites for.
 
 /// Playlist header "Add/Change cover": native picker, persist, re-open the
 /// playlist so every surface repaints from the override.

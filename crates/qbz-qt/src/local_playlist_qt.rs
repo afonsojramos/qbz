@@ -408,25 +408,13 @@ pub fn open_id() -> Option<String> {
     CURRENT_META.lock().ok()?.as_ref().map(|(id, _)| id.clone())
 }
 
-/// The ready, SOURCE-AWARE QueueTrack of an open-detail row by display id.
-/// `None` for unplayable rows and for any id while no local detail is open.
-pub fn queue_track_for_row(id: &str) -> Option<QueueTrack> {
-    let queue = CURRENT_QUEUE.lock().ok()?;
-    queue.iter().find(|q| q.id.to_string() == id).cloned()
-}
-
-/// The Plex rating key of an open-detail row by display id. Resolved Plex rows
-/// carry a NUMERIC synthetic id in the model; the string key only lives in the
-/// queue snapshot's `source_item_id_hint`, which is how the drag and picker
-/// paths recover it instead of mis-typing the numeric id as a catalog id.
-pub fn plex_key_for_row(id: &str) -> Option<String> {
-    let queue = CURRENT_QUEUE.lock().ok()?;
-    queue
-        .iter()
-        .find(|q| q.id.to_string() == id)
-        .filter(|q| q.source.as_deref() == Some("plex"))
-        .and_then(|q| q.source_item_id_hint.clone())
-}
+// `queue_track_for_row` and `plex_key_for_row` lived here and are GONE: they
+// read the open-detail queue snapshot to build a playable QueueTrack, which is
+// what `playlist_qt::row_to_queue` already does for BOTH kinds of playlist —
+// and does better, because a local detail adopts its rows into that shared
+// page (`adopt_doc`) and `row_to_queue` types them from `row.source`, the
+// guard that keeps a library rowid off the QConnect wire as a catalog id.
+// `CURRENT_QUEUE` stays: `local_picker_ref_for_row` below is its live reader.
 
 /// Local-mode picker ref for an open-detail row: `"plex:<key>"` for resolved
 /// Plex rows, `"<library row id>"` for local file rows and for OFFLINE-CACHE

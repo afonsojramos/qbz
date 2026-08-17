@@ -125,7 +125,6 @@ struct SidebarLocal {
     id: String,
     name: String,
     folder_id: Option<String>,
-    hidden: bool,
     covers: Vec<String>,
 }
 
@@ -286,7 +285,6 @@ pub async fn load(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
             id: p.id,
             name: p.name,
             folder_id: p.folder_id,
-            hidden: p.hidden,
         })
         .collect();
     log::debug!("[qbz-qt] sidebar load: {} local playlist(s)", locals.len());

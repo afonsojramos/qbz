@@ -980,7 +980,7 @@ fn build_jump_tabs(doc: &LabelDoc) -> Vec<JumpTab> {
         id: "about".to_string(),
         label: qbz_i18n::t("About"),
     }];
-    let mut push = |tabs: &mut Vec<JumpTab>, id: &str, msgid: &str, present: bool| {
+    let push = |tabs: &mut Vec<JumpTab>, id: &str, msgid: &str, present: bool| {
         if present {
             tabs.push(JumpTab {
                 id: id.to_string(),

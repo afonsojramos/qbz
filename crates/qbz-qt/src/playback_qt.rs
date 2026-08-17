@@ -1084,15 +1084,7 @@ async fn try_infinite_refill(
     }
 }
 
-/// Append a pre-built queue to the current one ("Add all to queue").
-pub async fn enqueue_track_list(
-    runtime: &Arc<AppRuntime<LoggingAdapter>>,
-    tracks: Vec<QueueTrack>,
-) -> Result<(), String> {
-    enqueue_track_list_mode(runtime, tracks, "queue").await
-}
-
-/// `enqueue_track_list` with the three insertion modes the row/card menus use,
+/// The three insertion modes the row/card menus use,
 /// mirroring `enqueue_album`: "next" inserts at the cursor (fed REVERSED so a
 /// multi-track insert keeps its order), "later" appends to the manual block's
 /// tail, anything else appends.
@@ -1100,6 +1092,9 @@ pub async fn enqueue_track_list(
 /// Exists because ArtistView's ⋯ menu has BOTH "Play all next" and "Add all to
 /// queue" and the port wired them to the same append (the Slint arm for
 /// `next-all` is `enqueue_artist_top_selected(.., next: true)`, main.rs:15301).
+/// Its append-only wrapper `enqueue_track_list` is gone with that miswiring —
+/// "queue" through this funnel IS the append, and a second name for it was
+/// what let the mode-less call site look correct.
 pub async fn enqueue_track_list_mode(
     runtime: &Arc<AppRuntime<LoggingAdapter>>,
     tracks: Vec<QueueTrack>,
@@ -1269,6 +1264,15 @@ fn feed_queue_track(track_id: u64) -> Result<QueueTrack, String> {
     })
     .flatten()
     .ok_or_else(|| format!("track {track_id} not in the library feed"))?;
+    // A local / Plex feed row is a LOCAL queue track — file path, Plex rating
+    // key, real source — and `library_qt` owns the raw-row cache that knows
+    // them. Falling through would rebuild it below as a Qobuz track wearing
+    // the same numeric id, which is somebody else's song (see
+    // `library_qt::feed_track_to_queue`, the twin of this function).
+    if item.source == "local" || item.source == "plex" {
+        return crate::library_qt::feed_track_to_queue(&item)
+            .ok_or_else(|| format!("local track {track_id} has no raw row cached"));
+    }
     let duration_secs = {
         let mut parts = item.duration.split(':');
         parts.next().and_then(|m| m.parse::<u64>().ok()).unwrap_or(0) * 60
