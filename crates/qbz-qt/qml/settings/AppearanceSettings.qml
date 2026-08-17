@@ -8,13 +8,13 @@
 // (theme_qt.rs) and themeSet() repaints the whole app through QbzTheme.qml
 // (the Slint theme::push_colors equivalent).
 //
-// Not shipped (no backend seam in this port):
-// - The "Auto (dynamic)" custom-image picker ("Select Image..." + the
-//   "Detected: <desktop>" line): there is no file-chooser seam here, so the
-//   button would do nothing. The Source dropdown still persists all three
-//   values (the shared ui_prefs key the Slint reads).
-// - The commented-out Slint blocks (immersive background / panels / FPS,
-//   window-title template) stay out, 1:1 the owner's cut.
+// The "Auto (dynamic)" block is complete: Source · Select Image... (native
+// rfd picker through `settingsString("auto-theme-select-image")`) · the
+// "Detected: <desktop>" hint · Regenerate.
+//
+// Not shipped, 1:1 the owner's cut: the commented-out Slint blocks (immersive
+// background / panels / FPS, window-title template). If the owner reopens the
+// immersive block in Slint, it gets ported on both sides at once.
 
 import QtQuick
 import com.blitzfc.qbz
@@ -123,6 +123,34 @@ Column {
             currentIndex: root.doc.autoThemeSourceIndex || 0
             onSelected: function (i) { QbzBridge.settingsSelect("auto-theme-source", i) }
         }
+    }
+    // "Custom Image" only (source index 2) — AppearanceSettings.slint:283-292.
+    // The row's LABEL is the picked path, which is how the reference shows
+    // what is currently in use; with nothing picked it repeats the button's
+    // text. Both strings already exist in the catalogs.
+    SettingRow {
+        visible: QbzShell.themeSlug === "auto"
+            && (root.doc.autoThemeSourceIndex || 0) === 2
+        label: (root.doc.autoThemeImagePath || "") !== ""
+            ? root.doc.autoThemeImagePath
+            : QbzSession.tr("Select Image...", QbzSession.trRev)
+        SettingsButton {
+            text: QbzSession.tr("Select Image...", QbzSession.trRev)
+            // The action seam for button rows is settingsString with an empty
+            // payload — the `library-pick-folder` precedent
+            // (LibraryFolderTable.qml:111).
+            onClicked: QbzBridge.settingsString("auto-theme-select-image", "")
+        }
+    }
+    // The detected desktop, with the experimental caveat under it
+    // (`:294-297`). Hint only — no control, and it hides when the shared
+    // detector cannot name a desktop.
+    SettingRow {
+        visible: QbzShell.themeSlug === "auto"
+            && (root.doc.autoThemeDetectedDe || "") !== ""
+        label: QbzSession.tr("Detected: ", QbzSession.trRev)
+            + (root.doc.autoThemeDetectedDe || "")
+        description: QbzSession.tr("Experimental: theme may not match your system exactly.", QbzSession.trRev)
     }
     SettingRow {
         visible: QbzShell.themeSlug === "auto"

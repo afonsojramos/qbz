@@ -17,7 +17,9 @@
 //! Still omitted (no view reads them yet; each is a mechanical
 //! `init_for_user(&dir)` when its view lands): `reco` (+train_async),
 //! `external_reco`, `qbz_reco::ArtistVectorStore`, `discover_prefs`,
-//! `session_persist`, `lyrics`. Also omitted: the subscription purge
+//! `lyrics`. (`session_persist` came OFF this list when the queue-restore
+//! landed — it is bound below at all three activation points.) Also omitted:
+//! the subscription purge
 //! consumer (`spawn_subscription_purge_check`) — it needs the offline
 //! cache, which IS wired now (`offline_qt::activate` runs in
 //! `bind_per_user_stores`); the purge consumer is its own TODO.

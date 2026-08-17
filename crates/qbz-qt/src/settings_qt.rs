@@ -11,11 +11,14 @@
 //! and the cross-setting cascades from settings.rs (dac-passthrough,
 //! streaming-only, backend switch).
 //!
-//! POC-NOTEs:
+//! Not wired yet:
 //! - Detected device limit row (#638): the probe + its cache live in
-//!   `crate::device_cap` (Slint glue) — not wired; the row stays hidden.
-//! - HiFi Wizard, JACK banner (no JACK in the POC build), settings
-//!   export/import, the bit-perfect force-100 volume cascade: not wired.
+//!   `crate::device_cap` (Slint glue) — not ported; the row stays hidden.
+//! - The bit-perfect force-100 volume cascade.
+//!
+//! (The HiFi Wizard, the JACK banner and settings export/import were on this
+//! list and are all shipped now — `qml/settings/DacWizardModal.qml`,
+//! `AudioSettings.qml:70-78` and `settings_qt/devtools.rs`.)
 //! - qconnect startup/device-name persist to the SAME qconnect_settings.db
 //!   (wired) but do NOT drive a live QConnect service (none in the POC) —
 //!   they take effect on the next connection, like upstream.
@@ -1386,6 +1389,15 @@ pub struct SettingsDoc {
     pub auto_theme_sources: Vec<String>,
     #[serde(rename = "autoThemeSourceIndex")]
     pub auto_theme_source_index: i32,
+    /// The picked image for `auto_theme_source == "image"`, or "". Only the
+    /// LABEL of the "Select Image..." row (AppearanceSettings.slint:284-286);
+    /// `theme_qt::auto_source` reads the pref itself.
+    #[serde(rename = "autoThemeImagePath")]
+    pub auto_theme_image_path: String,
+    /// "KDE Plasma" / "GNOME" / … — the hint row's subject. Empty means the
+    /// detector could not name one, and the row hides (`:294`).
+    #[serde(rename = "autoThemeDetectedDe")]
+    pub auto_theme_detected_de: String,
     #[serde(rename = "intelligentSearch")]
     pub intelligent_search: bool,
     pub languages: Vec<String>,
@@ -1816,6 +1828,13 @@ pub async fn publish_snapshot() {
                 &pref_str("auto_theme_source", "system"),
                 0,
             ),
+            auto_theme_image_path: pref_str("auto_theme_image_path", ""),
+            // The SHARED detector (`qbz_theme::auto::detect_desktop_environment`),
+            // the same one the generator itself consults — a second guess here
+            // could name a desktop the palette did not come from.
+            auto_theme_detected_de: qbz_theme::auto::detect_desktop_environment()
+                .display_name()
+                .to_string(),
             intelligent_search: pref_bool("intelligent_search", true),
             languages: LANGUAGE_LABELS.iter().map(|l| qbz_i18n::t(l)).collect(),
             language_index: index_of(LANGUAGE_VALUES, &pref_str("language", "auto"), 0),
@@ -2618,6 +2637,39 @@ pub async fn settings_string(key: &str, value: String) {
                 library::change_folder_path(id).await;
             }
             return;
+        }
+        // Appearance > Auto (dynamic) > "Select Image...". The native picker,
+        // then persist BOTH the path and `source = image` before regenerating
+        // — `theme_qt::auto_source` re-reads the prefs, so the order matters
+        // (1:1 with `crates/qbz/src/auto_theme.rs:108-140`). Cancel is a no-op
+        // with no toast, like every other picker in the port.
+        //
+        // The reader has been here the whole time (`theme_qt.rs:90` builds
+        // `AutoSource::Image` from `auto_theme_image_path`); what was missing
+        // was any way for a user to WRITE it, which made "Custom Image" a
+        // source you could select and never supply.
+        "auto-theme-select-image" => {
+            let Some(file) = rfd::AsyncFileDialog::new()
+                .set_title(&qbz_i18n::t("Select Image..."))
+                .add_filter(
+                    &qbz_i18n::t("Image"),
+                    &["png", "jpg", "jpeg", "webp", "bmp", "tiff"],
+                )
+                .pick_file()
+                .await
+            else {
+                return;
+            };
+            let path = file.path().to_string_lossy().to_string();
+            save_pref("auto_theme_image_path", serde_json::json!(path));
+            save_pref("auto_theme_source", serde_json::json!("image"));
+            // Repaint now when the auto theme is the one on screen — the same
+            // arm the source dropdown takes; picking an image and seeing
+            // nothing change until the next launch is the defect that row
+            // already had.
+            if crate::theme_qt::current_slug() == "auto" {
+                crate::theme_qt::publish_theme();
+            }
         }
         "library-pick-folder" => {
             // Native chooser, then the SAME add path as the typed field —

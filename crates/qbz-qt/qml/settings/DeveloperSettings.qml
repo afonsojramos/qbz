@@ -4,11 +4,13 @@
 // Shipped, in the Slint's order: QOBUZ CONNECT · LOGS · SETTINGS PORTABILITY.
 //
 // Deltas vs the Slint (no dead rows):
-// - LOGS opens the on-disk log FILE (qbz_log's file sink) instead of the
-//   in-app log viewer overlay (copy / redact / upload), which is not ported.
-// - "Export settings…" writes the bundle immediately with auth EXCLUDED; the
-//   SettingsExportModal's include-auth gate (default OFF) is not ported, so
-//   the safe default is the only behaviour.
+// - LOGS offers TWO buttons where the Slint has one: "View logs" opens the
+//   in-app viewer (copy / redact / upload) and "Open log file" hands the
+//   on-disk sink to the desktop.
+// - "Export settings…" carries its include-auth gate INLINE (the
+//   "Include sign-in credentials" switch, default OFF and reset on hide)
+//   instead of inside a SettingsExportModal. The modal is a wrapper; the
+//   security decision it guards is the same one, in the same place.
 // - The inline DiagnosticsPanel is ported and mounted last, as in the
 //   reference — with the GTK/WebKit/GSK/GDK rows CUT, because in a Qt process
 //   they can only read "—" and their saved column would come from a file this

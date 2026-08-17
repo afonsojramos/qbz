@@ -573,9 +573,12 @@ pub(crate) fn set_window_shown(shown: bool) {
 /// user intent: if the queued signal is dropped (bridge unbooted, loop
 /// wedged) or anything downstream hangs, the process still dies within 5s.
 ///
-/// The reference flushes the session first (`session_persist::save_on_exit()`,
-/// `tray/mod.rs:300`); the Qt port has no `session_persist` module, so the
-/// geometry flush is the whole of what is owed (§5.7).
+/// The reference flushes the session from each quit HANDLER
+/// (`session_persist::save_on_exit()`, `tray/mod.rs:300` and three more in
+/// `main.rs`); this port flushes ONCE after the event loop instead
+/// (`main.rs:2913`), behind the same watchdog armed here — window close, tray
+/// Quit and the hotkey all converge there, so tray quit persists the session
+/// without this path owing anything beyond the geometry flush (§5.7).
 pub(crate) fn quit() {
     log::info!("[tray] quit requested");
     crate::arm_hard_exit_watchdog("tray quit");

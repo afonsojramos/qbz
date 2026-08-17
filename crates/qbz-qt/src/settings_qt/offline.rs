@@ -7,12 +7,11 @@
 //! `lyrics_qt.rs` binds the service to.
 //!
 //! Deltas vs `settings/OfflineSettings.slint` (reported, not hidden):
-//! - "Check now" is NOT shipped: the connectivity actor lives private in
-//!   `offline_fwd.rs` (`CONNECTIVITY`), so a re-probe has no seam here. The
-//!   status line itself IS live (QbzSession.offlineMode / captivePortal).
 //! - The OFFLINE CACHE group (manager / open folder / clear all) is not
-//!   shipped: the port never brings up `OfflineCacheState`, so all three
-//!   would be dead buttons.
+//!   shipped — the MANAGER VIEW behind it has no Qt counterpart yet. The old
+//!   reason given here ("the port never brings up OfflineCacheState") is no
+//!   longer true: `offline_cache_qt.rs` runs the downloads from the album
+//!   page and the track row. It is the view that is missing, not the engine.
 
 use serde::Serialize;
 

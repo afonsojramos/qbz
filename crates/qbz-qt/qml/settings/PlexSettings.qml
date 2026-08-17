@@ -11,11 +11,14 @@
 // url and whether a token is stored) ride the settings document
 // (settings_qt/library.rs). The token itself NEVER leaves Rust.
 //
-// Delta vs the Slint: the PIN flow (Authorize / Generate code / Link code /
-// Copy code / Open Plex sign-in, and the "Enter token manually" switch that
-// chooses between them) is NOT ported — `local_plex.rs` implements the
-// manual server-url + token path only, so that path is always shown and the
-// PIN rows are absent instead of dead.
+// Both auth paths are shipped: the PIN flow (Authorize / Generate code /
+// Link code / Copy code / Open Plex sign-in) and the manual X-Plex-Token
+// field.
+//
+// Delta vs the Slint: they are shown TOGETHER rather than behind its "Enter
+// token manually" switch. One fewer control, and the row that would hide the
+// token field is the one a user reaches for precisely when the PIN flow did
+// not work for them.
 
 import QtQuick
 import com.blitzfc.qbz
