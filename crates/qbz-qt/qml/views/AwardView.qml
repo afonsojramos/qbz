@@ -255,13 +255,50 @@ Rectangle {
                     }
                 }
 
-                // "See all" — only when there is more than the preview holds.
-                Rectangle {
-                    id: seeAll
+                Row {
+                    id: headerTools
                     anchors.right: parent.right
                     anchors.verticalCenter: parent.verticalCenter
+                    spacing: 10
+
+                    // Filter the loaded set without leaving the page. Same
+                    // query the listing uses — one award, one filter — so it
+                    // is still in force behind "See all".
+                    QbzLineEdit {
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 220
+                        searchMode: true
+                        sm: true
+                        placeholder: QbzSession.tr("Search albums & tracks…", QbzSession.trRev)
+                        text: root.doc.searchQuery || ""
+                        onEdited: function (v) { QbzHome.awardAlbumsSearch(v) }
+                    }
+
+                    // Play a RANDOM album out of what is loaded — the
+                    // LibraryToolbar precedent (`randomVisibleId` +
+                    // QbzPlayer.playAlbum). It picks from the LOADED set, not
+                    // the whole award: the rest is not here to pick from, and
+                    // pretending otherwise would mean a blocking fetch behind
+                    // a button that should feel instant.
+                    QbzToolButton {
+                        anchors.verticalCenter: parent.verticalCenter
+                        visible: root.albums.length > 0
+                        name: "shuffle"
+                        label: ""
+                        onClicked: {
+                            var pick = root.albums[
+                                Math.floor(Math.random() * root.albums.length)]
+                            if (pick && pick.id)
+                                QbzPlayer.playAlbum(pick.id)
+                        }
+                    }
+
+                // "See all" — only when there is more than is loaded.
+                Rectangle {
+                    id: seeAll
+                    anchors.verticalCenter: parent.verticalCenter
                     visible: root.doc.hasMore === true
-                    width: seeAllText.implicitWidth + 16
+                    width: visible ? seeAllText.implicitWidth + 16 : 0
                     height: 26
                     radius: 4
                     color: seeAllArea.containsMouse ? theme.surfaceHover : "transparent"
@@ -282,6 +319,7 @@ Rectangle {
                         cursorShape: Qt.PointingHandCursor
                         onClicked: QbzHome.awardOpenAlbums()
                     }
+                }
                 }
             }
 
@@ -354,6 +392,26 @@ Rectangle {
                 cardWidth: 200
                 cardHeight: 266
                 cardGap: 24
+            }
+
+            // ---- Load more ---------------------------------------------------
+            // A BUTTON, not infinite scroll: the listing sub-view owns the
+            // scroll-driven paging, and this page has a rail under the grid —
+            // auto-loading here would keep pushing that rail out of reach.
+            // Suppressed while a query is active, like the listing: paging in
+            // rows the filter then hides is work with no visible result.
+            Item {
+                visible: root.doc.hasMore === true && (root.doc.searchQuery || "") === ""
+                width: parent.width
+                height: visible ? 64 : 0
+                SettingsButton {
+                    anchors.centerIn: parent
+                    enabled: root.doc.loadingMore !== true
+                    text: root.doc.loadingMore === true
+                        ? QbzSession.tr("Loading…", QbzSession.trRev)
+                        : QbzSession.tr("Load more", QbzSession.trRev)
+                    onClicked: QbzHome.awardAlbumsLoadMore()
+                }
             }
 
             // ---- Other awards -----------------------------------------------

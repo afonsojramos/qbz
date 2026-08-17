@@ -302,6 +302,12 @@ struct AwardDoc {
     has_more: bool,
     #[serde(rename = "loadError")]
     load_error: bool,
+    /// True while a load-more page is in flight (the landing has its own
+    /// button now, so it needs the same flag the listing had).
+    #[serde(rename = "loadingMore")]
+    loading_more: bool,
+    #[serde(rename = "searchQuery")]
+    search_query: String,
     #[serde(rename = "otherAwards")]
     other_awards: Vec<OtherAward>,
     /// EVERY award, name-sorted — the dropdown's model. Empty until the
@@ -375,6 +381,21 @@ fn has_more_of(total: i64, loaded: usize) -> bool {
 //  Publish
 // ===========================================================================
 
+/// The loaded set filtered by the current query. ONE filter for both views:
+/// they are the same award and the same accumulating list, so a query typed
+/// on the landing is still in force behind "See All".
+fn visible_albums(s: &State) -> Vec<HomeCard> {
+    let q = s.search_query.trim().to_lowercase();
+    if q.is_empty() {
+        return s.all_albums.clone();
+    }
+    s.all_albums
+        .iter()
+        .filter(|c| c.title.to_lowercase().contains(&q) || c.artist.to_lowercase().contains(&q))
+        .cloned()
+        .collect()
+}
+
 fn publish_award() {
     let (doc, loading) = with_state(|s| {
         let catalog = catalog_entries();
@@ -391,15 +412,17 @@ fn publish_award() {
                 magazine_name: s.magazine_name.clone(),
                 is_following: s.is_following,
                 follow_toggling: s.follow_toggling,
-                albums: s
-                    .all_albums
-                    .iter()
-                    .take(PREVIEW_PAGE_SIZE as usize)
-                    .cloned()
-                    .collect(),
+                // NOT capped at PREVIEW_PAGE_SIZE any more. The first fetch
+                // still asks for one preview page so the first paint is
+                // cheap, but the landing has its own Load more now — capping
+                // the document would have made that button load rows the view
+                // then threw away.
+                albums: visible_albums(s),
                 total: s.total,
-                has_more: has_more_of(s.total, s.all_albums.len().min(PREVIEW_PAGE_SIZE as usize)),
+                has_more: has_more_of(s.total, s.all_albums.len()),
                 load_error: s.load_error,
+                loading_more: s.albums_loading_more,
+                search_query: s.search_query.clone(),
                 other_awards: s.other_awards.clone(),
                 catalog: catalog
                     .into_iter()
@@ -419,23 +442,11 @@ fn publish_award() {
 
 fn publish_albums() {
     let (doc, loading) = with_state(|s| {
-        let q = s.search_query.trim().to_lowercase();
-        let visible: Vec<HomeCard> = if q.is_empty() {
-            s.all_albums.clone()
-        } else {
-            s.all_albums
-                .iter()
-                .filter(|c| {
-                    c.title.to_lowercase().contains(&q) || c.artist.to_lowercase().contains(&q)
-                })
-                .cloned()
-                .collect()
-        };
         (
             AwardAlbumsDoc {
                 id: s.id.clone(),
                 name: s.name.clone(),
-                albums: visible,
+                albums: visible_albums(s),
                 total: s.total,
                 has_more: has_more_of(s.total, s.all_albums.len()),
                 load_error: s.load_error,
@@ -721,7 +732,8 @@ pub fn open_albums() {
         s.loading = true;
         s.generation
     });
-    publish_albums();
+    // Both: the reset clears the list the landing is showing too.
+    publish_both();
     let _ = name;
     fetch_albums_page(generation, id, 0, true);
 }
@@ -743,7 +755,7 @@ pub fn albums_load_more() {
         s.albums_loading_more = true;
         s.generation
     });
-    publish_albums();
+    publish_both();
     fetch_albums_page(generation, id, offset, false);
 }
 
@@ -777,7 +789,7 @@ fn fetch_albums_page(generation: u64, id: String, offset: u32, replace: bool) {
                     s.loading = false;
                     s.albums_loading_more = false;
                 });
-                publish_albums();
+                publish_both();
                 fill_missing_art(generation, missing).await;
             }
             Err(e) => {
@@ -794,7 +806,7 @@ fn fetch_albums_page(generation: u64, id: String, offset: u32, replace: bool) {
                 });
             }
         }
-        publish_albums();
+        publish_both();
     });
 }
 
@@ -825,10 +837,11 @@ async fn fill_missing_art(generation: u64, missing: Vec<String>) {
 }
 
 /// Client-side filter over the loaded set — 1:1 with the reference, which
-/// also never re-queries for the listing's search box.
+/// also never re-queries for the listing's search box. Republishes BOTH
+/// documents: the landing grew its own box and they share the query.
 pub fn albums_search(query: String) {
     with_state(|s| s.search_query = query);
-    publish_albums();
+    publish_both();
 }
 
 // No `republish_for_language` here on purpose. `label_qt`'s exists because it
