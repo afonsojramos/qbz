@@ -1,7 +1,10 @@
 // PmToolbar — the Playlist Manager's right-hand tool cluster
 // (PlaylistManagerView.slint:1123-1277): search · filter dropdown · sort
 // dropdown (with the #657 direction caret) · folder/flat toggle · view-mode
-// cycle · New folder. Spacing 8, everything 34 px tall.
+// cycle · Import · New folder. Spacing 8, everything 34 px tall.
+//
+// "Import" is the one slot with no counterpart in the reference — see its own
+// comment below.
 //
 // EVERY input it renders is declared on THIS root (contract §2.5). QML gives a
 // component no access to another file's ids, so a binding written against the
@@ -152,6 +155,31 @@ Item {
             label: ""
             name: root.nextViewIcon
             onClicked: QbzPlaylistManager.setViewMode(root.nextViewMode)
+        }
+
+        // Import a public playlist (Spotify / Apple / Deezer / Tidal / YouTube).
+        //
+        // ADDITION, not a port — the reference toolbar has no such button
+        // (owner request 2026-08-16). Until now the importer had exactly two
+        // doors, both inside the sidebar's playlist popup (Sidebar.qml:881 and
+        // HeaderBar.qml:695), so the one view whose whole job is managing
+        // playlists could not reach it.
+        //
+        // Placed BEFORE "New folder" on purpose: that slot disappears in flat
+        // mode, and a Row skips invisible children, so a button after it would
+        // slide sideways every time the mode toggles.
+        //
+        // No offline gate here. The other two doors dim their row, but the
+        // modal recomputes the gate on open (playlist_import_qt.rs:348-352) and
+        // shows a disabled confirm with the reason — which beats a toolbar
+        // button that silently vanishes when the network drops.
+        QbzToolButton {
+            anchors.verticalCenter: parent.verticalCenter
+            large: true
+            fillActive: true
+            name: "import"
+            label: QbzSession.tr("Import", QbzSession.trRev)
+            onClicked: QbzPlaylistImport.open()
         }
 
         // New folder — folder mode only (`:1269`).
