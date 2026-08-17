@@ -139,6 +139,14 @@ Rectangle {
             bottomPadding: 100
             spacing: 0
 
+            // Reserves exactly the pinned bar's height. Without it the hero
+            // would jump up by that height the moment the bar was lifted out
+            // of the flow (the ArtistView jumpSlot rule).
+            Item {
+                id: navSlot
+                width: 1
+                height: navBar.height
+            }
             // The .slint's NavButtons row is not ported; its spacer is, so the
             // hero lands at the same y as every other detail page's header.
             Item { width: 1; height: 22 }
@@ -255,47 +263,12 @@ Rectangle {
                     }
                 }
 
-                Row {
-                    id: headerTools
-                    anchors.right: parent.right
-                    anchors.verticalCenter: parent.verticalCenter
-                    spacing: 10
-
-                    // Filter the loaded set without leaving the page. Same
-                    // query the listing uses — one award, one filter — so it
-                    // is still in force behind "See all".
-                    QbzLineEdit {
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: 220
-                        searchMode: true
-                        sm: true
-                        placeholder: QbzSession.tr("Search albums & tracks…", QbzSession.trRev)
-                        text: root.doc.searchQuery || ""
-                        onEdited: function (v) { QbzHome.awardAlbumsSearch(v) }
-                    }
-
-                    // Play a RANDOM album out of what is loaded — the
-                    // LibraryToolbar precedent (`randomVisibleId` +
-                    // QbzPlayer.playAlbum). It picks from the LOADED set, not
-                    // the whole award: the rest is not here to pick from, and
-                    // pretending otherwise would mean a blocking fetch behind
-                    // a button that should feel instant.
-                    QbzToolButton {
-                        anchors.verticalCenter: parent.verticalCenter
-                        visible: root.albums.length > 0
-                        name: "shuffle"
-                        label: ""
-                        onClicked: {
-                            var pick = root.albums[
-                                Math.floor(Math.random() * root.albums.length)]
-                            if (pick && pick.id)
-                                QbzPlayer.playAlbum(pick.id)
-                        }
-                    }
-
-                // "See all" — only when there is more than is loaded.
+                // "See all" — only when there is more than is loaded. The
+                // search and the shuffle used to sit beside it; they live in
+                // the pinned nav bar now, next to the award picker.
                 Rectangle {
                     id: seeAll
+                    anchors.right: parent.right
                     anchors.verticalCenter: parent.verticalCenter
                     visible: root.doc.hasMore === true
                     width: visible ? seeAllText.implicitWidth + 16 : 0
@@ -319,7 +292,6 @@ Rectangle {
                         cursorShape: Qt.PointingHandCursor
                         onClicked: QbzHome.awardOpenAlbums()
                     }
-                }
                 }
             }
 
@@ -463,42 +435,106 @@ Rectangle {
         }
     }
 
-    // ---- The all-awards dropdown (this port only) ---------------------------
-    // Top-right of the PAGE (owner, 2026-08-16), so it sits outside the
-    // Flickable and stays put while the page scrolls — a jump-to-anywhere
-    // control that scrolls away with the hero is only reachable from the top.
+    // ---- The award nav bar (this port only) ---------------------------------
+    // Pinned at the top of the page, OUTSIDE the Flickable, given the
+    // ArtistView jump-nav treatment: 44px, its own fill, a 1px bottom
+    // hairline, and the page's 32px horizontal rhythm.
     //
-    // Hidden until the background crawl has BOTH a list and this award's place
-    // in it: a select whose current row is somebody else's award reads as "you
-    // are here" and is not.
+    // THE ROUNDED-CORNER RULE, and it is a real defect this codebase has hit
+    // twice (ArtistView.qml:2795, the Discover full-bleed toolbar): pinned at
+    // the pane's top edge the bar's SQUARE corners poke out past the shell's
+    // rounded bezel. Round them — but only WHILE it is actually at the top.
+    // Mid-page the bar is surrounded by content and a notch there is worse
+    // than the square corner it fixes, so the radius is driven off the live y.
     //
-    // `searchable` because the catalog runs to hundreds of entries — the
-    // control's own rule is a filter box past ~8 options.
-    QbzSelect {
-        id: awardPicker
-        anchors.right: parent.right
-        anchors.top: parent.top
-        // Clear of the scrollbar's 14px gutter, on the page's 32px rhythm.
-        anchors.rightMargin: 32 + 14
-        anchors.topMargin: 11
+    // The fill is not transparent: pinned, the page scrolls underneath, so it
+    // needs enough body to stay readable. Under the dynamic background that is
+    // surface-main at the thin-bar alpha tier, the same one ArtistView uses.
+    Rectangle {
+        id: navBar
+        x: 0
+        width: root.width
+        height: 44
+        y: Math.max(page.y + navSlot.y - page.contentY, 0)
         z: 5
-        visible: root.catalog.length > 1
-            && (root.doc.catalogIndex !== undefined)
-            && root.doc.catalogIndex >= 0
-        menuWidth: 320
-        popupWidth: 320
-        searchable: true
-        options: {
-            var out = []
-            for (var i = 0; i < root.catalog.length; i++)
-                out.push(root.catalog[i].name)
-            return out
+        color: root.ambientOn ? theme.surfaceMainA30 : theme.surfaceMain
+        topLeftRadius: y <= 0 ? theme.radiusMd : 0
+        topRightRadius: y <= 0 ? theme.radiusMd : 0
+
+        Rectangle {
+            x: 0
+            y: parent.height - 1
+            width: parent.width
+            height: 1
+            color: theme.borderSubtle
         }
-        currentIndex: root.doc.catalogIndex || 0
-        onSelected: function (i) {
-            var entry = root.catalog[i]
-            if (entry && entry.id !== (root.doc.id || ""))
-                QbzHome.openAward(entry.id, entry.name || "")
+
+        // All three controls in one cluster, right-aligned, with the
+        // navigation dropdown LAST — the search and the shuffle act on the
+        // page you are on, the dropdown takes you off it, so it reads
+        // left-to-right from "narrow this" to "leave here".
+        Row {
+            anchors.right: parent.right
+            anchors.rightMargin: 32
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: 10
+
+            // Filters the loaded set. Shares the LISTING's query — one award,
+            // one filter — so it is still in force behind "See all".
+            QbzLineEdit {
+                anchors.verticalCenter: parent.verticalCenter
+                width: 220
+                searchMode: true
+                sm: true
+                placeholder: QbzSession.tr("Search albums & tracks…", QbzSession.trRev)
+                text: root.doc.searchQuery || ""
+                onEdited: function (v) { QbzHome.awardAlbumsSearch(v) }
+            }
+
+            // Play a RANDOM album out of what is LOADED (the LibraryToolbar
+            // precedent). Not the whole award: the rest is not here to pick
+            // from, and reaching for it would put a blocking fetch behind a
+            // button that should feel instant.
+            QbzToolButton {
+                anchors.verticalCenter: parent.verticalCenter
+                visible: root.albums.length > 0
+                name: "shuffle"
+                label: ""
+                onClicked: {
+                    var pick = root.albums[
+                        Math.floor(Math.random() * root.albums.length)]
+                    if (pick && pick.id)
+                        QbzPlayer.playAlbum(pick.id)
+                }
+            }
+
+            // Jump to ANY award. Hidden until the background crawl has both a
+            // list and THIS award's place in it: `currentIndex` tracks the
+            // open page, so navigating away and arriving somewhere else moves
+            // the selection with you instead of stranding it on the award you
+            // came from.
+            QbzSelect {
+                id: awardPicker
+                anchors.verticalCenter: parent.verticalCenter
+                visible: root.catalog.length > 1
+                    && (root.doc.catalogIndex !== undefined)
+                    && root.doc.catalogIndex >= 0
+                menuWidth: 320
+                popupWidth: 320
+                searchable: true
+                options: {
+                    var out = []
+                    for (var i = 0; i < root.catalog.length; i++)
+                        out.push(root.catalog[i].name)
+                    return out
+                }
+                currentIndex: root.doc.catalogIndex || 0
+                onSelected: function (i) {
+                    var entry = root.catalog[i]
+                    if (entry && entry.id !== (root.doc.id || ""))
+                        QbzHome.openAward(entry.id, entry.name || "")
+                }
+            }
         }
     }
 }
