@@ -275,7 +275,10 @@ pub async fn resolve_qobuz_album(
                 is_local: false,
                 album_id: Some(album_id_str.clone()),
                 artist_id,
-                streamable: track.streamable,
+                // Resolved once here: `CoreQueueTrack.streamable` is a plain
+                // `bool`, and absence on the catalog `Track` means "the
+                // endpoint was terse", not "pulled" (`Track::is_streamable`).
+                streamable: track.is_streamable(),
                 source: Some("qobuz".to_string()),
                 parental_warning: track.parental_warning,
                 // Stamped centrally by resolve_collection_tracks; left None here.
@@ -462,7 +465,8 @@ pub fn track_to_queue_track_from_api(track: &ApiTrack) -> CoreQueueTrack {
         is_local: false,
         album_id,
         artist_id,
-        streamable: track.streamable,
+        // Same resolution as the album path above, single-track flavour.
+        streamable: track.is_streamable(),
         source: Some("qobuz".to_string()),
         parental_warning: track.parental_warning,
         source_item_id_hint: None,

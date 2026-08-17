@@ -95,10 +95,27 @@ fn build_track_reco(track: &Track, source: RecoSource) -> TrackReco {
     }
 }
 
-async fn find_by_isrc(catalog: &dyn RecoCatalog, isrc: &str) -> Option<Track> {
+/// ISRC -> the streamable Qobuz track carrying it, or `None`.
+///
+/// Public because it is the FIRST thing the "find available version" flow tries
+/// on a track Qobuz pulled from the catalogue: a dead row keeps its `isrc` (the
+/// 2026-08-17 capture of album `0886443985094` confirms it), and licensing churn
+/// most often re-publishes the SAME recording under a new track id with the same
+/// ISRC. A hit there is an exact relink, and it skips the fuzzy text search and
+/// the human judgement entirely.
+///
+/// Qobuz has no ISRC endpoint — this is a free-text search FOR the ISRC string
+/// plus an exact, case-folded verification of the returned `isrc`, which is why
+/// it can answer `None` for an ISRC that does exist. Treat a miss as "no exact
+/// relink", never as "the recording is gone".
+pub async fn find_by_isrc(catalog: &dyn RecoCatalog, isrc: &str) -> Option<Track> {
     let results = catalog.search_tracks(isrc, 5).await;
     results.into_iter().find(|t| {
-        t.streamable
+        // `is_streamable()`, not the raw field: a search result that simply did
+        // not report availability is still a valid relink target, and this
+        // lookup is the cheapest, most certain path there is (same ISRC = same
+        // recording under a new id). Only an explicit false is rejected.
+        t.is_streamable()
             && t.isrc
                 .as_deref()
                 .map(|c| c.eq_ignore_ascii_case(isrc))

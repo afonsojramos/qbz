@@ -30,6 +30,14 @@ pub struct PersistedQueueTrack {
     pub is_local: bool,
     pub album_id: Option<String>,
     pub artist_id: Option<u64>,
+    /// Resolved availability — absence was already interpreted upstream by
+    /// `qbz_models::Track::is_streamable`, so this stays a plain `bool` while
+    /// the catalog model is an `Option<bool>`, and `default_streamable` (TRUE)
+    /// covers a JSON snapshot written before the column existed. Values written
+    /// before the model became tri-state are untrustworthy and are cleared once
+    /// by the `user_version = 1` migration in `open_at`; from that point on
+    /// `false` here means only "Qobuz said no", which is a state a DOWNLOADED
+    /// track legitimately persists in.
     #[serde(default = "default_streamable")]
     pub streamable: bool,
     #[serde(default)]
@@ -248,6 +256,51 @@ impl SessionStore {
                 ALTER TABLE player_state ADD COLUMN last_view TEXT NOT NULL DEFAULT 'home';
                 ALTER TABLE player_state ADD COLUMN view_context_id TEXT;
                 ALTER TABLE player_state ADD COLUMN view_context_type TEXT;
+                ",
+            );
+        }
+
+        // ── One-shot: distrust every `streamable` written before the model
+        //    became tri-state ────────────────────────────────────────────────
+        //
+        // `queue_tracks.streamable` is persisted from `QueueTrack.streamable`,
+        // which was fed from `qbz_models::Track.streamable` — a plain `bool`
+        // whose `#[serde(default)]` turned an ABSENT key into `false`. So a row
+        // queued from any endpoint that omits the key was stored as `0` meaning
+        // "the payload was terse", not "Qobuz pulled this track".
+        //
+        // The unavailability work gives `0` a new, destructive meaning: an
+        // unavailable track never enters the queue. Left alone, those legacy
+        // zeroes would silently delete tracks from every restored session, for
+        // good — on a player whose entire point is not losing the user's music.
+        //
+        // The original value is unrecoverable (nothing on disk records WHY a
+        // row is 0), so the only honest repair is to clear the poison once and
+        // let the live API re-establish the truth on the next listing fetch,
+        // with the reactive auto-skip as the backstop for anything genuinely
+        // dead. Erring toward "available" here is the same asymmetry
+        // `Track::is_streamable` documents: a wasted round trip is cheap, a
+        // vanished track is not.
+        //
+        // It must be ONE-SHOT rather than a coercion on read, because after the
+        // model change a `0` is meaningful again: a track Qobuz pulled but the
+        // user already DOWNLOADED stays in the queue and plays from disk, and
+        // it stays there with `streamable = 0`. Coercing on read would
+        // resurrect that row as available forever and re-hide the very state
+        // the render is meant to distinguish.
+        //
+        // `PRAGMA user_version` is the guard — it is 0 on every database that
+        // predates this build and on a freshly created one, where the UPDATE
+        // simply matches no rows. The column-probe idiom used by the migrations
+        // above cannot express this: nothing is being added, only rewritten.
+        let schema_version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap_or(0);
+        if schema_version < 1 {
+            let _ = conn.execute_batch(
+                "
+                UPDATE queue_tracks SET streamable = 1 WHERE streamable = 0;
+                PRAGMA user_version = 1;
                 ",
             );
         }
@@ -593,6 +646,72 @@ mod tests {
         assert_eq!(loaded.shell_view.last_view, "album");
         assert_eq!(loaded.shell_view.view_context_id.as_deref(), Some("album-1"));
         assert_eq!(loaded.shell_view.view_context_type.as_deref(), Some("album"));
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The `user_version = 1` repair clears legacy `streamable = 0` rows ONCE,
+    /// and never fires again.
+    ///
+    /// Both halves matter and they pull in opposite directions. A `0` written
+    /// by an older build is untrustworthy — it may only mean the endpoint was
+    /// terse — and under the new queue filter it would silently delete the
+    /// track from every restored session. A `0` written AFTER the repair is
+    /// real: it is a track Qobuz pulled that the user has downloaded, which
+    /// stays in the queue and plays from disk. A coercion on read would satisfy
+    /// the first half and destroy the second, which is why this is a migration.
+    #[test]
+    fn legacy_streamable_zeroes_are_cleared_once_then_honoured() {
+        let dir = unique_test_dir("session-streamable-migration");
+
+        let session_with_sample = || {
+            let mut session = PersistedSessionSnapshot::default();
+            session.playback.queue_tracks = vec![sample_track()];
+            session.playback.current_index = Some(0);
+            session
+        };
+
+        // A database as an older build left it: a row at `streamable = 0` and
+        // no schema stamp. Rewinding the pragma is what makes it "older" —
+        // `sample_track()` already carries `streamable: false`.
+        {
+            let store = SessionStore::new_at(&dir).expect("open store");
+            store
+                .save_session(&session_with_sample())
+                .expect("save legacy session");
+            store
+                .conn
+                .execute_batch("PRAGMA user_version = 0;")
+                .expect("rewind schema stamp");
+        }
+
+        // Reopening runs the repair: the untrustworthy 0 is cleared.
+        {
+            let store = SessionStore::new_at(&dir).expect("reopen store");
+            let loaded = store.load_session().expect("load repaired session");
+            assert!(
+                loaded.playback.queue_tracks[0].streamable,
+                "a pre-migration 0 is untrustworthy and must be cleared, not \
+                 read as 'Qobuz pulled this track'"
+            );
+
+            // Now write a 0 that IS trustworthy — the downloaded-but-pulled
+            // state the render distinguishes.
+            store
+                .save_session(&session_with_sample())
+                .expect("save post-migration session");
+        }
+
+        // Reopening again must leave it alone: the repair is one-shot.
+        {
+            let store = SessionStore::new_at(&dir).expect("reopen store again");
+            let loaded = store.load_session().expect("load session");
+            assert!(
+                !loaded.playback.queue_tracks[0].streamable,
+                "the repair must not fire twice — a post-migration 0 is real \
+                 and resurrecting it would hide a downloaded-but-pulled track"
+            );
+        }
 
         let _ = std::fs::remove_dir_all(dir);
     }

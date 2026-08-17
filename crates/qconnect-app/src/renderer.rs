@@ -93,7 +93,11 @@ pub fn model_track_to_core_queue_track(track: &Track) -> QueueTrack {
         is_local: false,
         album_id: album_id.clone(),
         artist_id,
-        streamable: track.streamable,
+        // A queue pushed by a QConnect peer carries real Qobuz tracks, so the
+        // flag is worth keeping — but resolved through `is_streamable()`, since
+        // a peer's payload is one more endpoint we have never captured and a
+        // terse one must not arrive here marked dead.
+        streamable: track.is_streamable(),
         source: Some(QCONNECT_REMOTE_QUEUE_SOURCE.to_string()),
         parental_warning: track.parental_warning,
         source_item_id_hint: album_id,

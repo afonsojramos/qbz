@@ -28,6 +28,10 @@ use qbz_models::{Album, Artist, Track};
 
 pub use cache::RecoCache;
 pub use carousels::{compose_artist_rails, ArtistRailComposition, ARTIST_DISPLAY_CAP};
+// `validate` stays a private module — only this one helper is public, because
+// the unavailable-track replacement flow (qbz-qt) needs the ISRC -> streamable
+// -track lookup and nothing else in it.
+pub use validate::find_by_isrc;
 pub use types::{
     AlbumReco, ArtistReco, ExternalCarousels, ExtHistory, LocalHistory, RecoSource, TrackReco,
 };

@@ -502,7 +502,9 @@ pub(crate) fn track_to_queue_track(track: &Track) -> QueueTrack {
         is_local: false,
         album_id,
         artist_id,
-        streamable: track.streamable,
+        // `QueueTrack.streamable` is a resolved `bool`; absence is interpreted
+        // once, here, by `Track::is_streamable` (absent = available).
+        streamable: track.is_streamable(),
         source: Some("qobuz".to_string()),
         parental_warning: track.parental_warning,
         source_item_id_hint: None,
@@ -707,7 +709,11 @@ mod tests {
             hires: true,
             maximum_bit_depth: Some(24),
             maximum_sampling_rate: Some(96.0),
-            streamable: true,
+            // The catalog shape reports availability explicitly here — that is
+            // what `/album/get` sends. `Some(true)`, not a bare `true`, since
+            // the model distinguishes "the server said yes" from "the server
+            // said nothing".
+            streamable: Some(true),
             parental_warning: false,
             ..Default::default()
         };

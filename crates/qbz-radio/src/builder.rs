@@ -70,8 +70,13 @@ impl<'a> RadioPoolBuilder<'a> {
         fallback
     }
 
+    /// Pool gate. `is_streamable()` rather than the raw field: this predicate
+    /// runs over whatever endpoint filled the pool, and an endpoint that simply
+    /// does not report availability would otherwise reject every candidate and
+    /// leave radio with an empty pool — a total failure of the feature, with no
+    /// error anywhere to explain it.
     fn is_music_track(track: &Track) -> bool {
-        track.streamable && track.duration > 0 && track.album.is_some()
+        track.is_streamable() && track.duration > 0 && track.album.is_some()
     }
 
     fn derive_rng_seed(default_seed: u64, salt: u64) -> u64 {

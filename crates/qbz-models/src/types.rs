@@ -490,8 +490,32 @@ pub struct Track {
     pub hires_streamable: bool,
     pub maximum_sampling_rate: Option<f64>,
     pub maximum_bit_depth: Option<u32>,
+    /// Whether Qobuz will stream this track today.
+    ///
+    /// `None` means the endpoint did not report availability — it is **NOT** a
+    /// claim of unavailability. Only `Some(false)` marks a track as pulled from
+    /// the catalogue. The distinction is load-bearing: this field used to be a
+    /// plain `bool` with a bare `#[serde(default)]`, and that collapses an
+    /// ABSENT key into `false`, so every track returned by an endpoint that
+    /// omits it came back marked unavailable. That was harmless while nothing
+    /// rendered the flag; it stops being harmless the moment the flag greys a
+    /// row out and keeps it out of the queue, where a single terse endpoint
+    /// would silently take out an entire view.
+    ///
+    /// `/album/get` does send the key (captured 2026-08-17, album
+    /// `0886443985094`, where track 1 is `false` while the ALBUM around it is
+    /// `true` — the album-level flag can never stand in for this one).
+    /// `/playlist/get?extra=tracks` has never been captured, and playlists are
+    /// where dead tracks show up most; that unverified endpoint is exactly what
+    /// this `Option` guards against.
+    ///
+    /// Never read the field directly — go through [`Track::is_streamable`],
+    /// which is the one place absence is interpreted.
+    ///
+    /// Mirrors [`Album::streamable`], which has been `Option<bool>` all along
+    /// for the same reasons; the two shapes are now consistent.
     #[serde(default)]
-    pub streamable: bool,
+    pub streamable: Option<bool>,
     #[serde(default)]
     pub parental_warning: bool,
     /// Playlist-specific: ID within the playlist (for removal)
@@ -502,6 +526,33 @@ pub struct Track {
     pub composer: Option<Artist>,
     /// Copyright information
     pub copyright: Option<String>,
+}
+
+impl Track {
+    /// The ONE place an absent `streamable` is interpreted: **absent means
+    /// available**.
+    ///
+    /// The asymmetry is deliberate, and it is the whole reason the field is an
+    /// `Option` rather than a `bool` with a convenient default.
+    ///
+    /// Refusing to play a track because an endpoint was terse is strictly worse
+    /// than offering one that turns out to be dead. The second case is already
+    /// caught downstream by the reactive path — the play fails, the error is
+    /// recognised as terminal (`is_terminal_unavailable`), and the bounded
+    /// auto-skip moves on — so it costs one failed round trip and one toast,
+    /// and the user hears the next song. The first case has no recovery at all:
+    /// the user is shown a greyed, unplayable catalogue, no request is ever
+    /// made, nothing fails loudly, and there is no signal anywhere that would
+    /// tell them (or us) that the data was merely missing rather than the music
+    /// gone. On a music player, silent refusal is the unrecoverable failure and
+    /// a wasted request is the cheap one.
+    ///
+    /// Call this instead of touching `streamable` directly. A hand-written
+    /// `unwrap_or` at a call site is how the two halves of this rule drift
+    /// apart, and the drift is invisible until a whole view goes grey.
+    pub fn is_streamable(&self) -> bool {
+        self.streamable.unwrap_or(true)
+    }
 }
 
 /// Album summary (embedded in track responses)
@@ -1845,6 +1896,15 @@ mod purchase_deserializer_tests {
     use super::*;
 
     // ── §2.6: the `streamable` split ─────────────────────────────────────────
+    //
+    // Two structs, same field name, three semantics. `PurchaseTrack.streamable`
+    // is a `bool` defaulting TRUE (`serde_true`) — the purchases endpoints are
+    // terse and that screen gates click-to-play on the flag, so a default of
+    // false would make every purchased album unclickable. Catalog
+    // `Track.streamable` is now `Option<bool>`: it does not guess in EITHER
+    // direction, because the greyout and the queue filter key on it and a wrong
+    // guess is visible on every screen in the app. Absence is resolved in
+    // exactly one function, `Track::is_streamable`, and nowhere else.
 
     /// A purchases-list track defaults `streamable` to **true**.
     #[test]
@@ -1856,18 +1916,44 @@ mod purchase_deserializer_tests {
         );
     }
 
-    /// A CATALOG track — the one `/album/get` returns, which is what builds the
-    /// album-detail screen — defaults `streamable` to **false**.
+    /// A CATALOG track that does not mention `streamable` deserializes to
+    /// `None`, and `None` reads as **available**.
     ///
-    /// These two together are the trap: the detail screen gates click-to-play on
-    /// `streamable`, so a blanket "streamable defaults true" inverts that whole
-    /// screen's behaviour, and nobody here can click a purchased album to notice.
+    /// This is the regression that would otherwise grey out the whole
+    /// catalogue. While the field was a `bool` with a bare `#[serde(default)]`,
+    /// an endpoint that omits the key produced `false` — "pulled from Qobuz" —
+    /// for every track it returned. `/album/get` does send the key (captured
+    /// 2026-08-17), but `/playlist/get?extra=tracks` never has been, and that is
+    /// the surface where dead tracks actually show up.
     #[test]
-    fn catalog_track_streamable_defaults_false() {
+    fn catalog_track_streamable_absent_is_none_and_reads_available() {
         let t: Track = serde_json::from_str(r#"{"id":1,"title":"T"}"#).unwrap();
+        assert_eq!(
+            t.streamable, None,
+            "an absent key must stay absent — never collapse into Some(false)"
+        );
         assert!(
-            !t.streamable,
-            "catalog Track.streamable defaults FALSE — the detail screen depends on it"
+            t.is_streamable(),
+            "absence is NOT a claim of unavailability: absent reads as available"
+        );
+    }
+
+    /// An explicit `"streamable": false` is honoured, and it is the ONLY shape
+    /// that marks a track as pulled.
+    ///
+    /// This is the real wire signal, captured from
+    /// `/album/get?album_id=0886443985094` on 2026-08-17: track 1 carries
+    /// `false` (and keeps its `isrc`, which is what makes the replacement
+    /// search's ISRC short-circuit reachable) while the album around it is
+    /// `true`.
+    #[test]
+    fn catalog_track_streamable_false_is_honoured() {
+        let t: Track =
+            serde_json::from_str(r#"{"id":1,"title":"T","streamable":false}"#).unwrap();
+        assert_eq!(t.streamable, Some(false));
+        assert!(
+            !t.is_streamable(),
+            "Some(false) is the ONLY shape that marks a track unavailable"
         );
     }
 

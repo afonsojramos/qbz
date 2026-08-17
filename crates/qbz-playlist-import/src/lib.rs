@@ -33,6 +33,10 @@ mod http;
 
 pub use errors::PlaylistImportError;
 pub use importer::{import_public_playlist, preview_public_playlist};
+// The Qobuz matcher's public surface. `match_tracks` stays the importer's own
+// entry point; `rank_candidates` is the ranked-list form the "find available
+// version" replacement flow needs (match_qobuz.rs).
+pub use match_qobuz::{rank_candidates, MIN_MATCH_SCORE};
 pub use models::{
     ImportPlaylist, ImportProgress, ImportProvider, ImportSummary, ImportTrack, TrackMatch,
 };

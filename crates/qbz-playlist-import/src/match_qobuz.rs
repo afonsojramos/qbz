@@ -132,7 +132,12 @@ fn select_best_match<'a>(track: &ImportTrack, candidates: &'a [Track]) -> (Optio
     let mut best_quality = 0.0f32;
 
     for candidate in candidates {
-        if !candidate.streamable {
+        // Absence is not unavailability: only an explicit `streamable: false`
+        // disqualifies a candidate. Before `Track.streamable` became
+        // `Option<bool>`, a `/track/search` payload that omitted the key
+        // disqualified EVERY candidate, so the import matched nothing at all —
+        // and did it silently, since "no match" is a normal import outcome.
+        if !candidate.is_streamable() {
             continue;
         }
 
@@ -150,6 +155,69 @@ fn select_best_match<'a>(track: &ImportTrack, candidates: &'a [Track]) -> (Optio
     }
 
     (best, best_score)
+}
+
+/// The confidence floor [`match_tracks`] gates on, exposed so a UI that shows
+/// the RANKED list can label a weak candidate instead of silently offering it
+/// as if it were a match. Nothing here applies it — the importer still owns
+/// that decision, and the replacement flow deliberately shows sub-threshold
+/// rows because a human confirms the swap.
+pub const MIN_MATCH_SCORE: f32 = MIN_SCORE;
+
+/// Every candidate for `track`, best first — the ordering [`select_best_match`]
+/// picks its winner out of, handed over whole instead of collapsed to one row.
+///
+/// This exists for the "find an available version" flow of a track Qobuz pulled
+/// from the catalogue. There a HUMAN confirms the swap, so the surface needs the
+/// order and every candidate's score, not just the winner; the reference (Tauri)
+/// showed Qobuz's raw relevance order with no scoring at all, which is what this
+/// replaces.
+///
+/// Purely ADDITIVE by construction: [`match_tracks`] and [`select_best_match`]
+/// are untouched, so the importer's behaviour cannot move because of it.
+///
+/// The same three rules as `select_best_match`, in the same order, deliberately:
+///
+///  1. Non-streamable candidates are DROPPED, not ranked low. Offering a
+///     replacement that is itself unplayable is the one outcome the whole
+///     feature exists to prevent.
+///  2. The score is [`score_candidate`] verbatim — the ISRC short-circuit to
+///     1.0 first, then title 0.6 / artist 0.3 / album 0.1 plus the duration
+///     bonus.
+///  3. Equal scores are broken by [`quality_score`] (bit depth first, sample
+///     rate second). That is the owner's *"eliminan una calidad y agregan
+///     otra"* case: the same recording re-published one tier up or down.
+///
+/// # Why the score is BUCKETED rather than compared with a tolerance
+///
+/// `select_best_match` treats scores within `0.01` as equal. Written directly
+/// into a comparator that window is NOT transitive (a≈b, b≈c, a<c), and since
+/// Rust 1.81 `slice::sort_by` may PANIC on a comparator that does not implement
+/// a total order. Rounding to hundredths first is the same window expressed as
+/// a key, so the ordering is total and the head of this list is still the track
+/// `select_best_match` would have returned.
+///
+/// The sort is STABLE, so candidates tied on both score and quality keep
+/// Qobuz's own relevance order — the reference's ordering, kept as the last
+/// tiebreak instead of being scrambled.
+pub fn rank_candidates(track: &ImportTrack, candidates: &[Track]) -> Vec<(Track, f32)> {
+    let mut ranked: Vec<(Track, f32)> = candidates
+        .iter()
+        .filter(|candidate| candidate.is_streamable())
+        .map(|candidate| (candidate.clone(), score_candidate(track, candidate)))
+        .collect();
+
+    // The 0.01 equality window of `select_best_match`, as a transitive key.
+    fn bucket(score: f32) -> i32 {
+        (score * 100.0).round() as i32
+    }
+
+    ranked.sort_by(|(a_track, a_score), (b_track, b_score)| {
+        bucket(*b_score)
+            .cmp(&bucket(*a_score))
+            .then_with(|| quality_score(b_track).total_cmp(&quality_score(a_track)))
+    });
+    ranked
 }
 
 fn score_candidate(track: &ImportTrack, candidate: &Track) -> f32 {
@@ -341,7 +409,7 @@ mod tests {
             hires_streamable: false,
             maximum_sampling_rate: None,
             maximum_bit_depth: None,
-            streamable: true,
+            streamable: Some(true),
             parental_warning: false,
             playlist_track_id: None,
             performers: None,
@@ -483,7 +551,9 @@ mod tests {
     fn select_best_match_skips_non_streamable() {
         let source = import_track("hey jude", "the beatles");
         let mut perfect = qobuz_track(1, "hey jude", "the beatles");
-        perfect.streamable = false;
+        // Explicit `Some(false)` — the skip must fire on the server SAYING no,
+        // never on a payload that simply stayed quiet (see `is_streamable`).
+        perfect.streamable = Some(false);
         let weaker = qobuz_track(2, "hey jude na na", "the beatles");
 
         let candidates = [perfect, weaker];
@@ -533,6 +603,74 @@ mod tests {
         let (best, score) = select_best_match(&source, &[]);
         assert!(best.is_none());
         assert_eq!(score, 0.0);
+    }
+
+    // ── rank_candidates ──
+
+    #[test]
+    fn rank_candidates_drops_non_streamable() {
+        // The dropped one is the PERFECT match, so a rank that merely scored it
+        // low would still surface it first — only an actual drop passes.
+        let source = import_track("hey jude", "the beatles");
+        let mut dead = qobuz_track(1, "hey jude", "the beatles");
+        dead.streamable = Some(false);
+        let live = qobuz_track(2, "hey jude na na", "the beatles");
+
+        let ranked = rank_candidates(&source, &[dead, live]);
+        assert_eq!(ranked.len(), 1);
+        assert_eq!(ranked[0].0.id, 2);
+    }
+
+    #[test]
+    fn rank_candidates_head_is_select_best_match() {
+        // The contract that lets the modal preselect row 0: the head of the
+        // ranked list IS the winner the importer would have taken.
+        let source = import_track("hey jude", "the beatles");
+        let weak = qobuz_track(1, "let it be", "the beatles");
+        let strong = qobuz_track(2, "hey jude", "the beatles");
+
+        let candidates = [weak, strong];
+        let (best, _) = select_best_match(&source, &candidates);
+        let ranked = rank_candidates(&source, &candidates);
+        assert_eq!(ranked[0].0.id, best.map(|t| t.id).unwrap());
+        assert!(ranked[0].1 > ranked[1].1);
+    }
+
+    #[test]
+    fn rank_candidates_isrc_hit_leads_with_score_one() {
+        // The "same recording, new album id" case: a candidate whose TEXT is
+        // wrong but whose ISRC matches must still lead at 1.0.
+        let mut source = import_track("Completely Different", "Nobody");
+        source.isrc = Some("uskO11600123".to_string());
+        let mut relink = qobuz_track(1, "Other Title", "Other Artist");
+        relink.isrc = Some("USKO11600123".to_string());
+        let decoy = qobuz_track(2, "Completely Different", "Nobody");
+
+        let ranked = rank_candidates(&source, &[decoy, relink]);
+        assert_eq!(ranked[0].0.id, 1);
+        assert_eq!(ranked[0].1, 1.0);
+    }
+
+    #[test]
+    fn rank_candidates_equal_scores_prefer_the_better_tier() {
+        // The owner's "eliminan una calidad y agregan otra" case, and the reason
+        // the score is bucketed: these two score identically.
+        let source = import_track("hey jude", "the beatles");
+        let mut cd = qobuz_track(1, "hey jude", "the beatles");
+        cd.maximum_bit_depth = Some(16);
+        cd.maximum_sampling_rate = Some(44.1);
+        let mut hires = qobuz_track(2, "hey jude", "the beatles");
+        hires.maximum_bit_depth = Some(24);
+        hires.maximum_sampling_rate = Some(192.0);
+
+        let ranked = rank_candidates(&source, &[cd, hires]);
+        assert_eq!(ranked[0].0.id, 2);
+    }
+
+    #[test]
+    fn rank_candidates_empty_is_empty_not_a_panic() {
+        let source = import_track("hey jude", "the beatles");
+        assert!(rank_candidates(&source, &[]).is_empty());
     }
 
     // ── quality_score ──

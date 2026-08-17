@@ -1291,6 +1291,27 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
             .map_err(CoreError::Api)
     }
 
+    /// Move tracks within a playlist (the replacement flow's position step).
+    ///
+    /// Takes MEMBERSHIP ids, like [`Self::remove_tracks_from_playlist`].
+    /// `insert_before` is the 0-based slot to land in front of. Callers must
+    /// treat a failure as non-fatal: position is a nicety, and the flows that
+    /// use this have already made a write that must not be rolled back.
+    pub async fn update_playlist_tracks_position(
+        &self,
+        playlist_id: u64,
+        playlist_track_ids: &[u64],
+        insert_before: u32,
+    ) -> Result<(), CoreError> {
+        let client = self.client.read().await;
+        let client = client.as_ref().ok_or(CoreError::NotInitialized)?;
+
+        client
+            .update_playlist_tracks_position(playlist_id, playlist_track_ids, insert_before)
+            .await
+            .map_err(CoreError::Api)
+    }
+
     /// Create a new playlist
     pub async fn create_playlist(
         &self,
@@ -3450,7 +3471,9 @@ mod tests {
             hires_streamable: false,
             maximum_sampling_rate: None,
             maximum_bit_depth: None,
-            streamable: false,
+            // `None` = the fixture makes no availability claim, which is the
+            // honest value: nothing in `track_with`'s callers reads it.
+            streamable: None,
             parental_warning: false,
             playlist_track_id: None,
             performers: None,

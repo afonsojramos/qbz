@@ -5,7 +5,7 @@
 //! duration/isrc) against a `qbz_models::Track`. Kept self-contained here so the
 //! engine has no dependency on the importer crate; the algorithm is identical
 //! (ISRC short-circuit -> title*0.6 + artist*0.3 + album*0.1 + duration bonus,
-//! `!streamable` skipped, hi-res tiebreak).
+//! `!is_streamable()` skipped, hi-res tiebreak).
 
 use qbz_models::Track;
 
@@ -33,7 +33,10 @@ pub fn select_best_match<'a>(input: &MatchInput, candidates: &'a [Track]) -> (Op
     let mut best_quality = 0.0f32;
 
     for candidate in candidates {
-        if !candidate.streamable {
+        // Only an explicit `streamable: false` disqualifies; an endpoint that
+        // omits the key must not silently empty the candidate set. Kept
+        // identical to the importer's scorer, which this file mirrors.
+        if !candidate.is_streamable() {
             continue;
         }
         let score = score_candidate(input, candidate);

@@ -357,7 +357,15 @@ pub fn build_purchase_album(
                     hires: track.hires,
                     maximum_sampling_rate: track.maximum_sampling_rate,
                     maximum_bit_depth: track.maximum_bit_depth,
-                    streamable: track.streamable,
+                    // `is_streamable()`, and the choice is load-bearing here:
+                    // `PurchaseTrack.streamable` defaults TRUE on purpose (the
+                    // §2.6 split in `qbz-models`) so a terse purchases payload
+                    // never makes a purchased row unclickable — and this bridge
+                    // was handing it the catalog `bool`, whose absence meant
+                    // `false`, re-introducing exactly that inversion through
+                    // the back door. Nobody would have caught it by clicking:
+                    // Qobuz Purchases is not sold in the owner's region.
+                    streamable: track.is_streamable(),
                     // Server-derived; set below from the registry.
                     downloaded: false,
                     downloaded_format_ids: Vec::new(),
