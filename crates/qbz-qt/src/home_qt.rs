@@ -1215,14 +1215,49 @@ pub(crate) fn map_flat_album(album: Album) -> HomeCard {
     // DiscoverBrowse — showed a bare year while Home showed a date. Same
     // formatter, so a source that only has "2025" still falls back to the
     // year on its own.
-    let year = qbz_text_utils::dates::release_label(album.release_date_original.as_deref());
-    let quality_tier = match album.maximum_bit_depth {
-        Some(d) if d >= 24 => "hires",
+    // THE FALLBACK CHAINS, and they are the whole reason the award grid drew
+    // cards with no date and no quality badge while Discover's looked fine:
+    // this mapper read ONLY the flat fields, and `/award/getAlbums` answers
+    // with the nested ones. The reference's `album_map::map_album` has read
+    // both shapes all along.
+    //
+    // Date: nested `dates` first (original > download > stream), else the flat
+    // `release_date_original`.
+    let date = album
+        .dates
+        .as_ref()
+        .and_then(|d| {
+            d.original
+                .clone()
+                .or_else(|| d.download.clone())
+                .or_else(|| d.stream.clone())
+        })
+        .or_else(|| album.release_date_original.clone());
+    let year = qbz_text_utils::dates::release_label(date.as_deref());
+
+    // Quality: `audio_info` first, then the flat pair.
+    let bit_depth = album
+        .audio_info
+        .as_ref()
+        .and_then(|a| a.maximum_bit_depth)
+        .or(album.maximum_bit_depth);
+    let sample_rate = album
+        .audio_info
+        .as_ref()
+        .and_then(|a| a.maximum_sampling_rate)
+        .or(album.maximum_sampling_rate);
+    // And the TIER falls back to the hi-res FLAGS when no depth came at all
+    // (`album_map::tier_hires`): a payload can say "this is hi-res" without
+    // saying how, and the old `match` answered "" — no badge — for exactly
+    // that case. `> 16`, not `>= 24`: 20-bit masters are hi-res too.
+    let quality_tier = match bit_depth {
+        Some(b) if b > 16 => "hires",
         Some(_) => "cd",
+        None if album.hires || album.hires_streamable => "hires",
         None => "",
     }
     .to_string();
-    let quality_label = match (album.maximum_bit_depth, album.maximum_sampling_rate) {
+    let quality_label = match (bit_depth, sample_rate) {
         (Some(bd), Some(sr)) => format!("{}-bit / {} kHz", bd, sr),
         _ => String::new(),
     };
@@ -1249,10 +1284,7 @@ pub(crate) fn map_flat_album(album: Album) -> HomeCard {
         quality_label,
         // The list arm's QualityBadgeFull renders the bare exact-quality
         // line; without it a list row shows the tier label over a blank.
-        quality_detail: quality_detail_from_parts(
-            album.maximum_bit_depth,
-            album.maximum_sampling_rate,
-        ),
+        quality_detail: quality_detail_from_parts(bit_depth, sample_rate),
         // Home rail grid card: full variant (best()) — the down-tier was
         // reverted after the 2026-08-15 owner smoke (contract 04 §3).
         art_url: album.image.best().cloned().unwrap_or_default(),
