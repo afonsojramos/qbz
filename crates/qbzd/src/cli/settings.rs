@@ -56,7 +56,8 @@ pub enum ApplyClass {
 /// lists exactly these, in this order; `settings set` accepts exactly these
 /// keys and nothing else. Domains: `audio.*` (`AudioSettingsStore`),
 /// `playback.*` (daemon_prefs.streaming_quality + `PlaybackPreferencesStore`),
-/// `qconnect.*` (the daemon-root `qconnect_settings.db` KV, T9).
+/// `qconnect.*` (the daemon-root `qconnect_settings.db` KV, T9),
+/// `hooks.*` (daemon_prefs, CONSOLE ext).
 const KEY_TABLE: &[(&str, ApplyClass)] = &[
     // --- audio (Reinit — 03-setup-tui.md §4.3's 9-field list) -------------
     ("audio.backend", ApplyClass::Reinit),
@@ -92,6 +93,8 @@ const KEY_TABLE: &[(&str, ApplyClass)] = &[
     ("qconnect.device_name", ApplyClass::None),
     ("qconnect.startup_mode", ApplyClass::None),
     ("qconnect.volume_mode", ApplyClass::None),
+    // --- hooks (daemon_prefs, CONSOLE ext) ----------------------------------
+    ("hooks.script", ApplyClass::None),
 ];
 
 fn classify(key: &str) -> Option<ApplyClass> {
@@ -190,6 +193,24 @@ fn parse_output_device(v: &str) -> Option<String> {
 }
 fn render_opt_string(v: &Option<String>) -> String {
     v.clone().unwrap_or_else(|| "system".to_string())
+}
+
+/// `hooks.script`: empty clears (hooks off, the default); anything else must
+/// be an absolute path — the daemon spawns it verbatim with no PATH lookup or
+/// shell, so a relative value would silently depend on the daemon's cwd. Not
+/// checked for existence here (a headless `settings set` must work before the
+/// script is installed); the daemon warns at spawn time instead.
+fn parse_hook_script(v: &str) -> Result<String, String> {
+    let trimmed = v.trim();
+    if trimmed.is_empty() {
+        return Ok(String::new());
+    }
+    if !std::path::Path::new(trimmed).is_absolute() {
+        return Err(format!(
+            "invalid hook script '{trimmed}' — expected an absolute path (or empty to disable)"
+        ));
+    }
+    Ok(trimmed.to_string())
 }
 
 /// `audio.device_max_sample_rate`: "none"/"" clears the limit (Hz, matching
@@ -332,6 +353,7 @@ fn read_all(roots: &ProfileRoots) -> Result<Vec<(&'static str, String)>, String>
             "qconnect.volume_mode" => {
                 qconnect_kv::load_volume_mode_at(&db).unwrap_or_else(|| "software".to_string())
             }
+            "hooks.script" => prefs.hook_script.clone(),
             other => unreachable!("KEY_TABLE/read_all drifted apart on key: {other}"),
         };
         out.push((*key, value));
@@ -556,6 +578,12 @@ pub(crate) fn write_one(roots: &ProfileRoots, key: &str, raw: &str) -> Result<Ap
         "qconnect.volume_mode" => {
             let v = parse_volume_mode(raw).map_err(SetError::Usage)?;
             qconnect_kv::save_volume_mode_at(&qconnect_db(roots), &v)
+        }
+        "hooks.script" => {
+            let v = parse_hook_script(raw).map_err(SetError::Usage)?;
+            let mut prefs = daemon_prefs::load_at(&roots.data);
+            prefs.hook_script = v;
+            daemon_prefs::save_at(&prefs, &roots.data).map_err(SetError::Io)?;
         }
         other => unreachable!("KEY_TABLE/write_one drifted apart on key: {other}"),
     }
@@ -1213,6 +1241,30 @@ mod tests {
         for (k, _) in KEY_TABLE {
             assert!(seen.insert(*k), "duplicate canonical key: {k}");
         }
+    }
+
+    #[test]
+    fn hook_script_accepts_absolute_or_empty_and_rejects_relative() {
+        // Empty clears (hooks off, the default — and what `show`'s value must
+        // round-trip through `set`); absolute paths pass verbatim; a relative
+        // path is a USAGE mistake (the daemon spawns with no PATH lookup).
+        assert_eq!(parse_hook_script(""), Ok(String::new()));
+        assert_eq!(parse_hook_script("  "), Ok(String::new()));
+        assert_eq!(
+            parse_hook_script("/usr/local/bin/qbz-hook.sh"),
+            Ok("/usr/local/bin/qbz-hook.sh".to_string())
+        );
+        assert!(parse_hook_script("qbz-hook.sh").is_err());
+        assert!(parse_hook_script("./hook.sh").is_err());
+
+        let roots = scratch_roots("hook-script");
+        let err = write_one(&roots, "hooks.script", "relative.sh").unwrap_err();
+        assert!(matches!(err, SetError::Usage(_)), "{err:?}");
+        write_one(&roots, "hooks.script", "/opt/hook.sh").expect("absolute path writes");
+        assert_eq!(daemon_prefs::load_at(&roots.data).hook_script, "/opt/hook.sh");
+        write_one(&roots, "hooks.script", "").expect("empty clears");
+        assert_eq!(daemon_prefs::load_at(&roots.data).hook_script, "");
+        cleanup(&roots);
     }
 
     #[test]

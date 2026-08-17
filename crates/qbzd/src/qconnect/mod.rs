@@ -103,6 +103,9 @@ fn latch_lifecycle_into_shared(shared: &SharedState, state: QconnectLifecycleSta
         if matches!(state, QconnectLifecycleState::Connected) {
             s.set_network_online(true);
         }
+        // Surface the transition on the CoreEvent bus (SSE, `qbzd watch`,
+        // the event hook) alongside the /api/status latch.
+        s.emit_qconnect_session_changed();
     }
 }
 
@@ -309,6 +312,7 @@ impl DaemonQconnectService {
         if let Ok(mut s) = self.shared.lock() {
             s.qconnect.state = "off".to_string();
             s.qconnect.session_active = false;
+            s.emit_qconnect_session_changed();
         }
         Ok(())
     }
