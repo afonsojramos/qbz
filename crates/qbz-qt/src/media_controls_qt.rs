@@ -71,6 +71,15 @@ static CONTROLS: OnceLock<Box<dyn MediaIntegration>> = OnceLock::new();
 /// `None` = nothing pushed yet / cleared.
 static MPRIS_LAST_META: Mutex<Option<(u64, Option<String>)>> = Mutex::new(None);
 
+/// Track id of the last DESKTOP NOTIFICATION raised, so only a real track
+/// change can raise one. Separate from `MPRIS_LAST_META` on purpose: that key
+/// includes the resolved art, so a cover that resolves differently re-pushes
+/// metadata — correct for a widget, wrong for a toast. 1:1 with the
+/// reference's `NOTIFY_LAST_TRACK` (`crates/qbz/src/playback.rs:1708`),
+/// including the `u64::MAX` poison on stop so replaying the SAME track after a
+/// stop notifies again.
+static NOTIFY_LAST_TRACK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// The live integration, if it started. Playback pushes metadata/state through
 /// it. Mirrors `tray_qt::handle()` (`src/tray_qt.rs:165`).
 pub(crate) fn handle() -> Option<&'static dyn MediaIntegration> {
@@ -122,6 +131,14 @@ pub(crate) fn init() {
 /// alive: the Linux backend hangs #522's inhibit on the playback update, and
 /// the inhibitor type is private, so there is no other way to reach it.
 pub(crate) fn push_now_playing(track: &qbz_models::QueueTrack, title: &str, album: &str) {
+    // The notification is NOT downstream of the MPRIS handle. A machine with no
+    // session-bus MPRIS (or a platform the shared crate has no backend for)
+    // still has a notification daemon, and the reference likewise raises the
+    // toast outside its `if let Some(mc) = handle()` block
+    // (`crates/qbz/src/playback.rs:2202` vs `:2228`). Hanging it off the early
+    // return here would have made the switch dead all over again, just for a
+    // smaller set of users.
+    maybe_notify(track, title, album);
     let Some(mc) = handle() else {
         return;
     };
@@ -167,6 +184,11 @@ pub(crate) fn clear_now_playing() {
     if let Ok(mut last) = MPRIS_LAST_META.lock() {
         *last = None;
     }
+    // Poison the notify key, so playing the SAME track again after a stop
+    // raises a toast instead of being swallowed as "no change"
+    // (`crates/qbz/src/playback.rs:1911`, same `u64::MAX` sentinel — a real
+    // track id can never collide with it).
+    NOTIFY_LAST_TRACK.store(u64::MAX, std::sync::atomic::Ordering::Relaxed);
     if let Some(mc) = handle() {
         mc.set_playback(qbz_media_controls::PlaybackStatus::Stopped, None);
     }
@@ -270,7 +292,11 @@ fn meta_changed(key: &(u64, Option<String>)) -> bool {
 /// widgets that sniff content) and a miss becomes no art at all. The cache is
 /// therefore only consulted while offline — one fewer SQLite touch per track
 /// on the normal path, with an identical result.
-pub(crate) fn art_url_for(track: &qbz_models::QueueTrack) -> Option<String> {
+/// The cover reference both consumers start from — MPRIS art and the desktop
+/// notification. Extracted so the two can never drift on the Plex credentials
+/// or on the 600-tier rewrite; they diverge only on what they do with a
+/// REMOTE cover, which is the whole point of the split (see `notify_art_for`).
+fn artwork_ref_for(track: &qbz_models::QueueTrack) -> qbz_models::ArtworkRef {
     let plex = crate::local_plex::settings();
     let artwork = track.artwork_ref_with_plex(&plex.base_url, &plex.token, None);
     // A restored queue can carry the 50px `small` Qobuz variant — the widget
@@ -278,12 +304,16 @@ pub(crate) fn art_url_for(track: &qbz_models::QueueTrack) -> Option<String> {
     // reported on the Plasma/GNOME art (2026-08-15). Rewrite to the 600 tier
     // (and the offline cache lookup below then hits the very file the
     // now-playing feed already downloaded at that tier).
-    let artwork = match artwork {
+    match artwork {
         qbz_models::ArtworkRef::Remote(u) => qbz_models::ArtworkRef::Remote(
             qbz_models::qobuz_cover_at_px(&u, 600).unwrap_or(u),
         ),
         other => other,
-    };
+    }
+}
+
+pub(crate) fn art_url_for(track: &qbz_models::QueueTrack) -> Option<String> {
+    let artwork = artwork_ref_for(track);
     let mut art = artwork.to_mpris_url();
     if crate::offline_fwd::engine().is_offline() {
         if let qbz_models::ArtworkRef::Remote(url) = &artwork {
@@ -294,6 +324,81 @@ pub(crate) fn art_url_for(track: &qbz_models::QueueTrack) -> Option<String> {
         }
     }
     art
+}
+
+// ---------------------------------------------------------------------------
+// The desktop "now playing" notification
+// ---------------------------------------------------------------------------
+
+/// Cover for the NOTIFICATION, which is not the same answer as `art_url_for`.
+///
+/// The notify pipeline strips `file://` and decodes the bytes BY CONTENT, so
+/// the disk cache's extension-less `<md5>.img` copy is perfectly usable there
+/// and saves a re-download — while MPRIS must NOT be handed that copy, because
+/// widgets resolve `file://` through the freedesktop mime database, which maps
+/// `*.img` by EXTENSION to `application/vnd.efi.img` and shows nothing (the B11
+/// regression). So: a remote cover prefers the cached file here, and keeps the
+/// remote URL when there is no cache hit — even offline, where the notifier's
+/// own md5 cache may still serve it and the `offline` flag blocks the download.
+/// 1:1 with `crates/qbz/src/playback.rs:2182-2198`.
+fn notify_art_for(track: &qbz_models::QueueTrack) -> Option<String> {
+    let artwork = artwork_ref_for(track);
+    if let qbz_models::ArtworkRef::Remote(url) = &artwork {
+        if let Some(path) = crate::artwork_qt::cached_raw_path(url) {
+            return qbz_models::ArtworkRef::LocalFile(path.to_string_lossy().into_owned())
+                .to_mpris_url();
+        }
+    }
+    artwork.to_mpris_url()
+}
+
+/// Raise the desktop "now playing" toast for a real track change.
+///
+/// THE DEAD ROW THIS CLOSES: `system_notifications` was written by Settings and
+/// read by nobody in the Qt port — the shared
+/// `qbz_media_controls::show_track_notification` had exactly ONE caller in the
+/// whole workspace and it was Slint's (`playback.rs:2276`). The switch shipped
+/// on by default and did nothing.
+///
+/// Ordering here is load-bearing and matches the reference:
+///   1. **De-dupe first.** `push_now_playing` runs from `refresh_now_playing`,
+///      which has 23 call sites — resume, seek, quality patch, every queue
+///      republish. Only a changed track id may pass.
+///   2. **Then the gate.** Reading the pref costs a small JSON file read
+///      (`settings_qt::pref_bool`), which is why it sits AFTER the atomic and
+///      not before: once per track change, not once per republish. Deliberately
+///      no cached atomic mirror of the pref — the reference needs one because
+///      its notify path runs on a poll thread with no cheap access to prefs;
+///      here a per-track read is both cheaper to reason about and immune to the
+///      boot-order and cross-process staleness a mirrored gate invites (the
+///      Slint build writes the same file).
+///   3. **Then the peer guard**, inside the spawn: never announce a track that
+///      a remote QConnect renderer is playing (the Svelte `skipIfRemote`).
+fn maybe_notify(track: &qbz_models::QueueTrack, title: &str, album: &str) {
+    use std::sync::atomic::Ordering;
+    if NOTIFY_LAST_TRACK.swap(track.id, Ordering::Relaxed) == track.id {
+        return;
+    }
+    if !crate::settings_qt::pref_bool("system_notifications", true) {
+        return;
+    }
+    let meta = qbz_media_controls::NotificationMeta {
+        title: title.to_string(),
+        artist: track.artist.clone(),
+        album: album.to_string(),
+        bit_depth: track.bit_depth,
+        sample_rate: track.sample_rate,
+        art_url: notify_art_for(track),
+    };
+    let offline = crate::offline_fwd::engine().is_offline();
+    crate::spawn(async move {
+        if let Some(svc) = crate::qconnect_qt::service() {
+            if svc.is_peer_active().await {
+                return;
+            }
+        }
+        qbz_media_controls::show_track_notification(meta, offline).await;
+    });
 }
 
 // ---------------------------------------------------------------------------
