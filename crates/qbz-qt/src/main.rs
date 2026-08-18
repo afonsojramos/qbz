@@ -2593,6 +2593,12 @@ pub(crate) fn emit_library_favorite(kind: &str, id: &str, value: bool) {
 
 /// Dev navigation driver — `QBZ_QT_NAV_BENCH=home,library,home,settings`.
 ///
+/// A hop may name a landing tab as `view:tab` (`library:all`,
+/// `local:tracks`). That matters for measuring: a tab switch inside an
+/// already-mounted view changes no route, so the route stopwatch never fires
+/// for it — hopping AWAY and back with a landing tab is what puts a given
+/// tab's real cost on the clock.
+///
 /// Two jobs, both of which the project had to do by hand before:
 ///
 ///  1. **Measuring a route change.** The cost of a mount is wall-clock on the
@@ -2634,11 +2640,15 @@ fn nav_bench_if_requested() {
             for hop in hops {
                 std::thread::sleep(std::time::Duration::from_millis(dwell));
                 log::info!("[qbz-qt][navbench] -> {hop}");
-                // `navigate_to` is the SAME entry point a sidebar click uses
-                // (it records history and republishes `currentView`), so the
-                // hop exercises the real route path, per-view load arms
-                // included — not a shortcut that writes the property directly.
-                navigate_to(&hop);
+                // `navigate_to` / `navigate_to_tab` are the SAME entry points a
+                // sidebar click and a nav-flyout entry use (they record history
+                // and republish `currentView`), so a hop exercises the real
+                // route path, per-view load arms included — not a shortcut that
+                // writes the property directly.
+                match hop.split_once(':') {
+                    Some((view, tab)) => navigate_to_tab(view, tab),
+                    None => navigate_to(&hop),
+                }
             }
             log::info!("[qbz-qt][navbench] done");
         })
