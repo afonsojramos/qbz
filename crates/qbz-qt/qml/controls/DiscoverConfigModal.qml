@@ -12,9 +12,20 @@
 // with `anchors.fill: parent`; ADR-009's ">= 3000" is satisfied structurally
 // AND by the explicit z below.
 //
-// POC-NOTE: the Slint modal's Recommendations arm (explainer + cache window
-// + "Refresh now") drives ExternalRecoState, and the external reco engine is
-// not ported — the toolbar gear is DISABLED on that tab instead (HomeView).
+// The modal has TWO modes, and the tab decides which:
+//   * the three section tabs (home / editorPicks / forYou) get the reorder
+//     list, its perf banner, the enabled/total count and the reset footer;
+//   * Recommendations has no configurable sections, so all of that is hidden
+//     and it gets the explainer + cache-window select + "Refresh now" instead.
+// 1:1 with the reference, which gates the same six blocks on the same
+// condition (DiscoverConfigModal.slint:187/213/221/250/261/326).
+//
+// (The note that used to sit here said the external reco engine was "not
+// ported" and the gear was disabled on that tab as a result. The engine has
+// been ported for a long time — src/recommendations_qt.rs — so the note was a
+// fossil describing a state of the world that had stopped being true, and the
+// disabled gear it justified was the only thing keeping the window a user
+// chose in one build from being changeable in this one.)
 
 import QtQuick
 import com.blitzfc.qbz
@@ -145,7 +156,9 @@ Item {
             }
 
             // --- Perf-warning banner (the shared WarningBanner replica) ----
+            // This and the next three blocks are section-config only.
             WarningBanner {
+                visible: root.tab !== "recommendations"
                 width: parent.width
                 variant: "warning"
                 body: QbzSession.tr("Enabling more sections increases load time.", QbzSession.trRev)
@@ -153,6 +166,7 @@ Item {
 
             // --- Count line -----------------------------------------------
             Text {
+                visible: root.tab !== "recommendations"
                 width: parent.width
                 text: QbzSession.tr("{} of {} enabled", QbzSession.trRev)
                         .replace("{}", root.mine ? (doc.enabled || 0) : 0)
@@ -166,6 +180,7 @@ Item {
             // Explicit, content-derived height capped to what is left of the
             // panel; the Flickable scrolls past that.
             Item {
+                visible: root.tab !== "recommendations"
                 width: parent.width
                 height: Math.max(0, Math.min(listCol.height, root.height * 0.78 - 260))
                 clip: true
@@ -243,8 +258,11 @@ Item {
             }
 
             // Empty state — a tab whose sections have not been fetched yet.
+            // NOT on Recommendations: `DiscoveryTab::from_key` has no arm for
+            // it (discover_prefs.rs:44), so its row list is empty BY DESIGN and
+            // "No sections to configure yet" would be a permanent lie there.
             Text {
-                visible: root.rows.length === 0
+                visible: root.rows.length === 0 && root.tab !== "recommendations"
                 width: parent.width
                 height: 34
                 text: QbzSession.tr("No sections to configure yet.", QbzSession.trRev)
@@ -253,8 +271,97 @@ Item {
                 verticalAlignment: Text.AlignVCenter
             }
 
+            // --- Recommendations arm: explainer + cache window + refresh ---
+            // Recommendations has no sections to order, so the gear opens on
+            // THIS instead. Both controls write through QbzHome:
+            // `recoSetCacheTtlIndex` persists to the shared per-user discover
+            // prefs (the same file the Slint build reads, so a window chosen
+            // in either is the window both honour), and `recoRefreshNow`
+            // rebuilds every row past the results blob.
+            Text {
+                visible: root.tab === "recommendations"
+                width: parent.width
+                text: QbzSession.tr("QBZ uses your Last.fm and ListenBrainz account data when they're connected (if they aren't, we recommend connecting them to enrich this section). Here you set how often that data is fetched — it defaults to 48 hours, or you can request an update right now.", QbzSession.trRev)
+                color: theme.textSecondary
+                font.pixelSize: theme.fontBody
+                wrapMode: Text.WordWrap
+            }
+
+            Item {
+                visible: root.tab === "recommendations"
+                width: parent.width
+                height: 34
+
+                Text {
+                    id: ttlLabel
+                    anchors.left: parent.left
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: QbzSession.tr("Cache window", QbzSession.trRev)
+                    color: theme.textMuted
+                    font.pixelSize: theme.fontBody
+                }
+                QbzSelect {
+                    anchors.left: ttlLabel.right
+                    anchors.leftMargin: 8
+                    anchors.verticalCenter: parent.verticalCenter
+                    sm: true
+                    menuWidth: 140
+                    // Option ORDER is the contract with TTL_HOURS in
+                    // src/recommendations_qt.rs — the bridge publishes an
+                    // index, not hours, so reordering these silently changes
+                    // what every stored value means.
+                    options: [
+                        QbzSession.tr("24 hours", QbzSession.trRev),
+                        QbzSession.tr("36 hours", QbzSession.trRev),
+                        QbzSession.tr("48 hours", QbzSession.trRev),
+                        QbzSession.tr("72 hours", QbzSession.trRev),
+                    ]
+                    currentIndex: QbzHome.recoCacheTtlIndex
+                    onSelected: function (i) { QbzHome.recoSetCacheTtlIndex(i) }
+                }
+
+                // Pinned right, like the reference's stretch spacer.
+                Rectangle {
+                    id: refreshBtn
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: refreshRow.width + 24
+                    height: 34
+                    radius: theme.radiusSm
+                    color: refreshArea.containsMouse ? theme.surfaceHover : theme.surfaceElevated
+                    border.width: 1
+                    border.color: theme.borderSubtle
+                    Row {
+                        id: refreshRow
+                        anchors.centerIn: parent
+                        spacing: 8
+                        QbzIcon {
+                            name: "refresh-cw"
+                            width: 15
+                            height: 15
+                            anchors.verticalCenter: parent.verticalCenter
+                            tintName: "secondary"
+                        }
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: QbzSession.tr("Refresh now", QbzSession.trRev)
+                            color: theme.textPrimary
+                            font.pixelSize: theme.fontBody
+                        }
+                    }
+                    MouseArea {
+                        id: refreshArea
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: QbzHome.recoRefreshNow()
+                    }
+                }
+            }
+
             // --- Footer: Reset to defaults --------------------------------
             Rectangle {
+                visible: root.tab !== "recommendations"
                 width: resetRow.width + 24
                 height: 34
                 radius: theme.radiusSm

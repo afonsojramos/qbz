@@ -394,9 +394,53 @@ pub(crate) fn ensure_loaded() {
     start(false);
 }
 
+/// The cache-window options the configurator offers, in HOURS. The index <->
+/// hours mapping is the contract with the QbzSelect option order in
+/// `DiscoverConfigModal.qml`, and it is the reference's own table verbatim
+/// (`crates/qbz/src/discover_prefs.rs:100`) — the value is written into the
+/// SHARED per-user prefs, so the two builds have to agree on it or a window
+/// chosen in one reads back as a different one in the other.
+const TTL_HOURS: [i64; 4] = [24, 36, 48, 72];
+
+/// Stored hours -> select index. An unrecognised value resolves to index 2
+/// (48 h), which is what the prefs store itself defaults to.
+pub(crate) fn cache_ttl_index() -> i32 {
+    let hours = crate::home_qt::load_prefs().reco_cache_ttl_hours;
+    TTL_HOURS.iter().position(|&h| h == hours).unwrap_or(2) as i32
+}
+
+/// Configurator select -> persist -> republish the resolved index.
+///
+/// Republishing the RESOLVED index rather than trusting the one that came in
+/// is what keeps the control honest when the write fails (no per-user store
+/// because nobody is logged in): the select snaps back to what is actually
+/// stored instead of showing a window that was never saved.
+pub(crate) fn set_cache_ttl_index(index: i32) {
+    let hours = *TTL_HOURS.get(index.clamp(0, 3) as usize).unwrap_or(&48);
+    let Some(store) = crate::discover_config_qt::store() else {
+        log::warn!("[qbz-qt] reco cache window: no per-user prefs store (not logged in?)");
+        return;
+    };
+    let mut prefs = store.load();
+    prefs.reco_cache_ttl_hours = hours;
+    if let Err(e) = store.save(&prefs) {
+        log::warn!("[qbz-qt] reco cache window: save failed: {e}");
+        return;
+    }
+    log::info!("[qbz-qt] reco cache window set to {hours}h");
+    publish_cache_ttl_index();
+}
+
+/// Push the stored window onto the bridge. Called at boot (so the select opens
+/// on the right entry the FIRST time, not after a change) and after every
+/// write.
+pub(crate) fn publish_cache_ttl_index() {
+    let index = cache_ttl_index();
+    crate::home_bridge::ui(move |mut b| b.as_mut().set_reco_cache_ttl_index(index));
+}
+
 /// "Refresh now": drop the latch and rebuild every row, bypassing the results
 /// blob (the engine still honours its per-week ListenBrainz cache).
-#[allow(dead_code)]
 pub(crate) fn refresh() {
     LOADED.store(false, Ordering::SeqCst);
     start(true);

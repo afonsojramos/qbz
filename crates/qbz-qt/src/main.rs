@@ -653,6 +653,14 @@ fn on_session_entered() {
     // hole because `SettingsState` is a global seeded at startup.
     publish_settings();
 
+    // Same shape, same reason as the block above: the Recommendations cache
+    // window is a fixed option list whose select has to open on the STORED
+    // entry. Published once here, at shell entry, because that is the first
+    // point where the per-user prefs directory is known — the bridge's own
+    // default is just the store's default (48 h) and would silently misreport
+    // a user who chose something else until they changed it again.
+    recommendations_qt::publish_cache_ttl_index();
+
     // Restore the persisted player volume so audio starts at the SAVED level
     // (1:1 with qbz/src/main.rs:220-227). Without it every launch started at
     // 100% — on an exclusive-mode DAC that is not a cosmetic default.

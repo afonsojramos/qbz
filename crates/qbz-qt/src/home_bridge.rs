@@ -74,6 +74,12 @@ pub mod qbz_home {
         // connected is simply absent from the document.
         #[qproperty(QString, reco_sections_json)]
         #[qproperty(bool, reco_loading)]
+        /// The Recommendations results-cache window, as the configurator
+        /// select's INDEX (0=24h 1=36h 2=48h 3=72h) rather than hours: the
+        /// control is a fixed option list, and publishing the index is what
+        /// lets it open on the stored entry without QML owning the mapping.
+        /// Seeded at boot from the shared per-user discover prefs.
+        #[qproperty(i32, reco_cache_ttl_index)]
         // --- "View all" full-list pages (src/browse_qt.rs) ----------------
         #[qproperty(QString, discover_browse_json)]
         #[qproperty(bool, discover_browse_loading)]
@@ -116,6 +122,17 @@ pub mod qbz_home {
         /// session (idempotent; a re-entry only repaints from memory).
         #[qinvokable]
         fn load_recommendations(self: Pin<&mut QbzHome>);
+        /// Configurator > Cache window: 0=24h 1=36h 2=48h 3=72h. Persists to
+        /// the shared per-user discover prefs and republishes the RESOLVED
+        /// index, so a failed write snaps the select back rather than showing
+        /// a window nobody stored.
+        #[qinvokable]
+        fn reco_set_cache_ttl_index(self: Pin<&mut QbzHome>, index: i32);
+        /// Configurator > "Refresh now": rebuild every row, bypassing the
+        /// results blob. The engine still honours its own per-week
+        /// ListenBrainz cache, so this is not a way to hammer that service.
+        #[qinvokable]
+        fn reco_refresh_now(self: Pin<&mut QbzHome>);
 
         // --- DiscoverBrowse ("View all" on a generic album carousel) ------
         #[qinvokable]
@@ -301,6 +318,7 @@ pub struct QbzHomeRust {
     mix_json: QString,
     reco_sections_json: QString,
     reco_loading: bool,
+    reco_cache_ttl_index: i32,
     discover_browse_json: QString,
     discover_browse_loading: bool,
     discover_browse_loading_more: bool,
@@ -334,6 +352,10 @@ impl Default for QbzHomeRust {
             spotlight_json: QString::from("{}"),
             mix_json: QString::from("{}"),
             reco_sections_json: QString::from("[]"),
+            // 48h == the prefs store's own default; the real value is pushed
+            // by `recommendations_qt::publish_cache_ttl_index()` at boot, once
+            // the per-user directory is known.
+            reco_cache_ttl_index: 2,
             reco_loading: false,
             // "{}" so the views' JSON.parse never throws on the first frame.
             discover_browse_json: QString::from("{}"),
@@ -383,6 +405,14 @@ impl qbz_home::QbzHome {
 
     pub fn load_recommendations(self: Pin<&mut Self>) {
         crate::recommendations_qt::ensure_loaded();
+    }
+
+    pub fn reco_set_cache_ttl_index(self: Pin<&mut Self>, index: i32) {
+        crate::recommendations_qt::set_cache_ttl_index(index);
+    }
+
+    pub fn reco_refresh_now(self: Pin<&mut Self>) {
+        crate::recommendations_qt::refresh();
     }
 
     // --- DiscoverBrowse ---------------------------------------------------

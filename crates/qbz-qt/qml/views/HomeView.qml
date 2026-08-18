@@ -21,10 +21,9 @@
 //  section-configurator gear (DiscoverConfigModal) are WIRED: the genre
 //  selection feeds get_discover_index and persists to genre_filter.json; the
 //  configurator persists to discover_prefs.db and re-renders the tabs from
-//  the cached section data. The gear is DISABLED on the Recommendations tab
-//  — its Slint arm also carries the reco cache-window + "Refresh now"
-//  controls, which DiscoverConfigModal.qml does not have, so it would open
-//  empty.
+//  the cached section data. The gear is live on ALL FOUR tabs: on
+//  Recommendations the modal shows that tab's own arm instead of a section
+//  list (cache window + "Refresh now"), matching the reference.
 // - Editor's Picks / For You mount the same rails, ordered by each tab's
 //  discover prefs (phase 13). Recommendations is the external-reco engine
 //  (src/recommendations_qt.rs), LAZY-loaded the first time the tab becomes
@@ -1363,18 +1362,20 @@ Rectangle {
                 }
 
                 // GearButton — per-tab show/hide + reorder of the Discover
-                // sections. Disabled on Recommendations: its Slint arm
-                // configures the external reco engine (not ported), so the
-                // modal would open empty.
+                // sections, and on Recommendations the cache window +
+                // "Refresh now" instead (that tab has no orderable sections).
+                //
+                // It used to be DISABLED on Recommendations, on the grounds
+                // that the external reco engine was not ported and the modal
+                // would open empty. The engine is ported, and the modal now
+                // carries that tab's own arm — so the gear is live on all four
+                // and `gearEnabled` is gone with the condition it existed for.
                 Rectangle {
                     id: gearBtn
-                    readonly property bool gearEnabled: root.activeTab !== "recommendations"
                     width: 32
                     height: 32
                     radius: 4
-                    opacity: gearBtn.gearEnabled ? 1.0 : 0.35
-                    color: (gearBtn.gearEnabled && gearArea.containsMouse)
-                        ? theme.surfaceHover : "transparent"
+                    color: gearArea.containsMouse ? theme.surfaceHover : "transparent"
                     QbzIcon {
                         name: "home-gear"
                         width: 20
@@ -1385,9 +1386,8 @@ Rectangle {
                     MouseArea {
                         id: gearArea
                         anchors.fill: parent
-                        enabled: gearBtn.gearEnabled
-                        hoverEnabled: gearBtn.gearEnabled
-                        cursorShape: gearBtn.gearEnabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
                         onClicked: configModal.open(root.activeTab)
                     }
                 }

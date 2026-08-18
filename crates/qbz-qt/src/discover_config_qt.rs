@@ -79,7 +79,10 @@ struct ConfigDoc {
     total: i32,
 }
 
-fn store() -> Option<DiscoverPrefsStore> {
+/// `pub(crate)` because the Recommendations cache window is stored in the SAME
+/// per-user prefs file as the section order, and `recommendations_qt` writes it
+/// — one accessor beats two copies of the user-dir lookup drifting apart.
+pub(crate) fn store() -> Option<DiscoverPrefsStore> {
     crate::sidebar_qt::user_dir()
         .and_then(|dir| DiscoverPrefsStore::new_at(&dir).ok())
 }
