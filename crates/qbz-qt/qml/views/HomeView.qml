@@ -127,6 +127,31 @@ Rectangle {
             return ({})
         }
     }
+    // Recommendations' two Weekly rails, same split and same reason as the
+    // three above: they come from ListenBrainz about a second after the rest
+    // of that tab has painted, and folding them into the document made their
+    // arrival republish it — which hands every rail a new `model:` array and
+    // tears down all nine to deliver two. That was the "it loads, then it
+    // flashes and loads again" report. Keyed by section id
+    // ("weeklyExploration" / "weeklyJams"); see src/recommendations_qt.rs.
+    readonly property var recoWeekly: {
+        try {
+            return JSON.parse(QbzHome.recoWeeklyJson)
+        } catch (e) {
+            return ({})
+        }
+    }
+    /// The rows for an out-of-document Weekly slot, or [] before they land.
+    function weeklyRows(id) {
+        var r = root.recoWeekly[id]
+        return r ? r : []
+    }
+    /// Is this descriptor one of the two slots whose rows live outside the
+    /// document? Ids are unique per tab, so this cannot collide with the
+    /// other three tabs' sections.
+    function isWeeklySlot(id) {
+        return id === "weeklyExploration" || id === "weeklyJams"
+    }
     // Per-URL cover patches for the two out-of-document For You rails. The
     // documents are NOT republished for artwork (src/foryou_qt.rs), because a
     // republish hands `model:` a new JS array and `QQuickItemView::setModel()`
@@ -1087,6 +1112,7 @@ Rectangle {
                 visible: modelData.kind === "pinned" ? root.pinnedItems.length > 0
                     : modelData.kind === "radio" ? root.radioStations.length > 0
                     : modelData.kind === "spotlight" ? root.spotlight.visible === true
+                    : root.isWeeklySlot(modelData.id) ? root.weeklyRows(modelData.id).length > 0
                     : true
                 sourceComponent: modelData.kind === "album" ? albumRailComp
                     : modelData.kind === "playlist" ? playlistRailComp
@@ -1098,7 +1124,15 @@ Rectangle {
                     : modelData.kind === "radio" ? radioRailComp
                     : modelData.kind === "spotlight" ? spotlightRailComp
                     : recentComp
-                property var sectionData: modelData
+                // A Weekly slot arrives with EMPTY items and is filled from
+                // `recoWeekly` here. Object.assign builds a new descriptor
+                // only for those two ids; every other rail returns the very
+                // same `modelData` reference, so a Weekly landing re-evaluates
+                // all nine bindings but re-creates only the two delegates
+                // whose value actually changed.
+                property var sectionData: root.isWeeklySlot(modelData.id)
+                    ? Object.assign({}, modelData, { "items": root.weeklyRows(modelData.id) })
+                    : modelData
 
                 Component {
                     id: pinnedRailComp

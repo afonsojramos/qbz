@@ -163,8 +163,33 @@ fn section(id: &str, title: String, kind: &str, items: Vec<HomeCard>) -> Option<
     })
 }
 
+/// The two rows whose CONTENT does not travel in the document. See
+/// [`publish_weeklies`] for why.
+const WEEKLY_EXPLORATION: &str = "weeklyExploration";
+const WEEKLY_JAMS: &str = "weeklyJams";
+
+/// An ordering SLOT: present in the document at its configured position, with
+/// no rows in it. The rows arrive on their own property.
+///
+/// Unlike [`section`] this never self-hides on emptiness — that is the whole
+/// point. A slot that disappeared while empty and reappeared when filled would
+/// change the document, which is exactly the republish this split exists to
+/// avoid. The QML side hides an empty one instead (the same
+/// `PinnedState.items.length > 0` gate the other out-of-document rails use).
+fn slot(id: &str, title: String, kind: &str) -> Option<HomeSection> {
+    Some(HomeSection {
+        id: id.to_string(),
+        title,
+        kind: kind.to_string(),
+        hint: String::new(),
+        endpoint: String::new(),
+        items: Vec::new(),
+    })
+}
+
 /// The tab's lineup, in ExternalRecoView.slint order. Empty rows are ABSENT
-/// (self-hide), never an empty frame.
+/// (self-hide), never an empty frame — EXCEPT the two Weekly rows, which are
+/// ordering slots (see [`slot`] / [`publish_weeklies`]).
 fn sections(rows: &Rows) -> Vec<HomeSection> {
     [
         section(
@@ -191,18 +216,12 @@ fn sections(rows: &Rows) -> Vec<HomeSection> {
             "album",
             rows.fresh_releases.clone(),
         ),
-        section(
-            "weeklyExploration",
+        slot(
+            WEEKLY_EXPLORATION,
             qbz_i18n::t("Weekly Exploration"),
             "slimTracks",
-            rows.weekly_exploration.clone(),
         ),
-        section(
-            "weeklyJams",
-            qbz_i18n::t("Weekly Jams"),
-            "slimTracks",
-            rows.weekly_jams.clone(),
-        ),
+        slot(WEEKLY_JAMS, qbz_i18n::t("Weekly Jams"), "slimTracks"),
         section(
             "deepCutAlbums",
             qbz_i18n::t("Deep cuts from artists you know"),
@@ -243,6 +262,67 @@ fn set_loading(value: bool) {
     crate::home_bridge::ui(move |mut b| b.as_mut().set_reco_loading(value));
 }
 
+/// Publish the two Weekly rows on their OWN property, as
+/// `{"weeklyExploration": [...], "weeklyJams": [...]}`.
+///
+/// WHY THEY ARE NOT IN THE DOCUMENT. They come from ListenBrainz and resolve
+/// about a second AFTER the rest of the tab has already painted (measured
+/// 2026-08-17: the cached blob paints at t+0, the weeklies land at t+0.9s,
+/// and that is with BOTH of their own per-week caches hitting — the delay is
+/// the playlist listing, not the tracks). Folding them into the document meant
+/// that landing republished it, and a republish hands QML a brand-new array:
+/// `QQuickItemView::setModel()` then tears down every rail's
+/// QQmlDelegateModel and rebuilds it. Nine rails were being destroyed and
+/// rebuilt to deliver two — visible as a flash a second after the tab settled,
+/// and reported as "it loads, then it loads again".
+///
+/// This is the same split HomeView already runs for its three out-of-document
+/// rails (pinned / radio / spotlight, see `foryou_qt.rs`), for the same
+/// reason and with the same QML shape: the document carries the ordering slot,
+/// the rows ride a dedicated property, and rebinding it re-creates ONLY those
+/// delegates.
+///
+/// Covers are attached here rather than by the document pass, since the rows
+/// are no longer in the document to be attached to. A late cover landing
+/// republishes THIS property only — two rails, not nine.
+fn publish_weeklies(download: bool) {
+    let rows = rows_snapshot();
+    let mut secs: Vec<HomeSection> = [
+        section(
+            WEEKLY_EXPLORATION,
+            String::new(),
+            "slimTracks",
+            rows.weekly_exploration.clone(),
+        ),
+        section(WEEKLY_JAMS, String::new(), "slimTracks", rows.weekly_jams.clone()),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    let missing = crate::artwork_qt::attach_cached(&mut secs);
+
+    let mut doc = serde_json::Map::new();
+    for sec in &secs {
+        doc.insert(
+            sec.id.clone(),
+            serde_json::to_value(&sec.items).unwrap_or(serde_json::Value::Null),
+        );
+    }
+    let json = serde_json::to_string(&doc).unwrap_or_else(|_| "{}".to_string());
+    crate::home_bridge::ui(move |mut b| {
+        b.as_mut().set_reco_weekly_json(QString::from(json.as_str()));
+    });
+
+    if download && !missing.is_empty() {
+        crate::spawn(async move {
+            crate::artwork_qt::download_missing(missing).await;
+            // download=false: the covers are on disk now, so this pass can
+            // only attach — it can never spawn another download round.
+            publish_weeklies(false);
+        });
+    }
+}
+
 /// Serialize the current rows, attach every cover already on disk, publish,
 /// and (when `download`) fetch the misses in the background and republish —
 /// the same dispatch `main::reload_home` runs for the other three tabs. A rail
@@ -252,6 +332,11 @@ fn publish_snapshot(download: bool) {
     let mut secs = sections(&rows);
     let missing = crate::artwork_qt::attach_cached(&mut secs);
     push(&secs);
+    // Re-hand the Weekly rows alongside the document. A tab re-entry publishes
+    // the document from memory, and this view is destroyed and rebuilt on
+    // every entry — without this the two Weekly rails would come back empty
+    // for the rest of the session.
+    publish_weeklies(download);
     if download && !missing.is_empty() {
         crate::spawn(async move {
             crate::artwork_qt::download_missing(missing).await;
@@ -727,7 +812,10 @@ async fn build_and_apply_weeklies(inputs: &RecoInputs<'_>) {
         rows.weekly_exploration = explore.iter().map(card_from_track).collect();
         rows.weekly_jams = jams.iter().map(card_from_track).collect();
     });
-    publish_snapshot(true);
+    // NOT publish_snapshot: the document already carries both ordering slots
+    // and has not changed, so republishing it would rebuild all nine rails to
+    // deliver these two. See publish_weeklies.
+    publish_weeklies(true);
 }
 
 /// The Recommendations cache window in SECONDS, from the shared per-user

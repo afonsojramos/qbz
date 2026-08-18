@@ -73,6 +73,12 @@ pub mod qbz_home {
         // view calls `loadRecommendations()`, and a row whose service is not
         // connected is simply absent from the document.
         #[qproperty(QString, reco_sections_json)]
+        /// The two Weekly rows' ROWS, keyed by section id. They are ordering
+        /// SLOTS in the document above and their content rides here instead,
+        /// because they resolve about a second after the rest of the tab has
+        /// painted and a document republish rebuilds every rail — the same
+        /// split `foryou_qt` runs for pinned / radio / spotlight.
+        #[qproperty(QString, reco_weekly_json)]
         #[qproperty(bool, reco_loading)]
         /// The Recommendations results-cache window, as the configurator
         /// select's INDEX (0=24h 1=36h 2=48h 3=72h) rather than hours: the
@@ -317,6 +323,7 @@ pub struct QbzHomeRust {
     spotlight_json: QString,
     mix_json: QString,
     reco_sections_json: QString,
+    reco_weekly_json: QString,
     reco_loading: bool,
     reco_cache_ttl_index: i32,
     discover_browse_json: QString,
@@ -352,6 +359,7 @@ impl Default for QbzHomeRust {
             spotlight_json: QString::from("{}"),
             mix_json: QString::from("{}"),
             reco_sections_json: QString::from("[]"),
+            reco_weekly_json: QString::from("{}"),
             // 48h == the prefs store's own default; the real value is pushed
             // by `recommendations_qt::publish_cache_ttl_index()` at boot, once
             // the per-user directory is known.
