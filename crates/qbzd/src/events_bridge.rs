@@ -84,6 +84,11 @@ pub fn spawn(runtime: &Runtime, bus: broadcast::Sender<CoreEvent>, edge: Arc<Not
             if last_state != Some(state) {
                 let _ = bus.send(CoreEvent::PlaybackStateChanged { state });
                 last_state = Some(state);
+                // A stop ends the "current track": forget it so replaying the
+                // same track emits a fresh TrackStarted (scrobbling, hooks).
+                if state == PlaybackState::Stopped {
+                    last_track_id = 0;
+                }
             }
 
             if ev.is_playing {
