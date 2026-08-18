@@ -70,7 +70,25 @@ Rectangle {
     property string trackQuery: ""
     // Client-side track search: an album's track list is bounded, so the
     // Slint's LocalAlbumActions.search is a pure view filter here.
+    property real _deriveMs: 0
+    // Cuánto tarda la vista en existir SIN sus filas: si el costo no está en
+    // las filas ni en el derive, tiene que estar aquí (portada, versiones,
+    // lista de artistas, toolbar).
+    property double _mountedAt: Date.now()
+    Component.onCompleted: console.info(albTiming,
+        "[albtiming] arbol de la vista construido en "
+        + (Date.now() - root._mountedAt) + "ms")
     readonly property var visibleTracks: {
+        var _dt = Date.now()
+        var _r = root._deriveImpl()
+        // El trabajo, medido AQUÍ. La versión anterior guardaba el tiempo en
+        // un Qt.callLater, que corre en la siguiente vuelta del event loop —
+        // así que medía "cuánto tardó el loop en desocuparse", no el filtro.
+        // Salía pegado a to-idle porque era el mismo número con otro nombre.
+        root._deriveMs = Date.now() - _dt
+        return _r
+    }
+    function _deriveImpl() {
         if (trackQuery === "") return tracks
         var q = trackQuery.toLowerCase()
         var out = []
@@ -146,14 +164,68 @@ Rectangle {
 
     // Disc divider before the first row of each disc on a multi-disc album
     // (0 = flat list, as the Slint's disc-header-number).
+    // ---- INSTRUMENTACIÓN (qbz.nav.timing) -------------------------------
+    // Dos intentos fallaron en esta vista: la ventana en las filas bajó
+    // 2242 -> 1485 ms, y quitar el O(n²) del disc-header no movió nada
+    // (1417 ms). Deja de razonar y mide: cuántas filas se construyen de
+    // verdad, cuánto cuesta el derive, y cuánto tarda cada tramo.
+    LoggingCategory {
+        id: albTiming
+        name: "qbz.nav.timing"
+        defaultLogLevel: LoggingCategory.Warning
+    }
+    property double _t0: Date.now()
+    property int _rowsBuilt: 0
+    property int _hdrsBuilt: 0
+    // El contador anterior era ACUMULATIVO y nunca se reiniciaba, así que
+    // "253 filas sobre 247 tracks" podía significar dos cosas opuestas: banda
+    // rota construyendo todo, o banda buena con el usuario recorriendo el
+    // álbum entero. No discriminaba nada. Ahora se reinicia con cada lista y
+    // se reporta en una ventana FIJA, antes de que nadie haga scroll.
+    onVisibleTracksChanged: {
+        root._rowsBuilt = 0
+        root._hdrsBuilt = 0
+        settleProbe.restart()
+    }
+    Timer {
+        id: settleProbe
+        interval: 900
+        repeat: false
+        onTriggered: console.info(albTiming,
+            "[albtiming] tracks=" + root.visibleTracks.length
+            + " derive=" + root._deriveMs + "ms"
+            + " filas en 900ms=" + root._rowsBuilt
+            + " encabezados=" + root._hdrsBuilt
+            + " multiDisc=" + root.multiDisc
+            + " versiones=" + (root.versions ? root.versions.length : -1))
+    }
+
+    /// Does this album span more than one disc? Computed ONCE per track list
+    /// instead of once per row.
+    ///
+    /// It used to live inside `discHeader(i)`, which is called for every row —
+    /// so the scan ran N times over N tracks. O(n²), and the early `break`
+    /// hid it on exactly the albums that did not matter: a multi-disc album
+    /// bails on the first track of disc 2, while a SINGLE-disc album never
+    /// bails and walks the whole list every time. On a 247-track single-disc
+    /// album that is ~61,000 iterations, and it was most of the 1485 ms this
+    /// view still spent settling after its rows were already windowed.
+    ///
+    /// The local `list` binding matters too: `visibleTracks` is a `var` on the
+    /// root, so each `visibleTracks[j]` in the old loop was a property lookup
+    /// through the QML object rather than a plain array index.
+    readonly property bool multiDisc: {
+        var list = root.visibleTracks
+        for (var j = 0; j < list.length; j++) {
+            if ((list[j].disc || 1) > 1) return true
+        }
+        return false
+    }
+
     function discHeader(i) {
         var t = visibleTracks[i]
         if (!t) return 0
-        var multi = false
-        for (var j = 0; j < visibleTracks.length; j++) {
-            if ((visibleTracks[j].disc || 1) > 1) { multi = true; break }
-        }
-        if (!multi) return 0
+        if (!root.multiDisc) return 0
         if (i === 0) return t.disc || 1
         return (visibleTracks[i - 1].disc || 1) !== (t.disc || 1) ? (t.disc || 1) : 0
     }
@@ -456,11 +528,32 @@ Rectangle {
             }
 
             // ---- Track list ----
-            // An album's track count is bounded (the windowed views are for
-            // the library-scale surfaces), so this mounts like the Slint.
+            //
+            // WINDOWED. The header here used to say an album's track count is
+            // "bounded, so this mounts like the Slint" — and it IS bounded,
+            // but bounded is not cheap. Measured on a 247-track album:
+            // `localalbum built=39ms` with `to-idle=2242ms`.
+            //
+            // The reference gets away with one element per track because a
+            // Slint element is cheap; a QML delegate is not, which is the
+            // recurring mistranslation in this port. Worse than the open cost:
+            // the search field filters `visibleTracks`, so every KEYSTROKE
+            // handed the Repeater a new model and rebuilt all 247 rows.
+            //
+            // The slot keeps its full height so the page's scroll geometry is
+            // unchanged whether or not the row inside exists; only the row is
+            // windowed.
             Column {
+                id: trackList
                 width: parent.width
                 spacing: 0
+                /// This list's top in the page Flickable's content coordinates.
+                /// One mapToItem for the whole list, re-evaluated on layout —
+                /// the per-row test below is then plain arithmetic on `y`,
+                /// which the Column has already computed exactly (disc headers
+                /// included).
+                readonly property real topInFlick:
+                    trackList.mapToItem(flick.contentItem, 0, 0).y
                 Repeater {
                     model: root.visibleTracks
                     delegate: Column {
@@ -471,10 +564,28 @@ Rectangle {
                         spacing: 0
 
                         // Disc divider + its per-disc ⋯ menu.
-                        Item {
-                            visible: root.discHeader(trackBlock.index) > 0
+                        //
+                        // LOADER, not `visible:`. This block carries a
+                        // CardMenu — a Popup with its own Repeater — and it
+                        // was built for EVERY track so that two or three disc
+                        // boundaries could show one. On a 247-track album that
+                        // is 247 popups constructed to display none.
+                        //
+                        // Measured on the owner's largest local album:
+                        // `localalbum built=39ms` but `to-idle=2242ms`, i.e.
+                        // the mount was instant and the settle took 2.2 s. The
+                        // header above this list says an album's track count
+                        // is "bounded" so it can mount like the Slint — and it
+                        // is bounded, but bounded is not the same as cheap,
+                        // which is what that assumption missed.
+                        Loader {
                             width: parent.width
-                            height: visible ? 40 : 0
+                            active: root.discHeader(trackBlock.index) > 0
+                            visible: active
+                            onLoaded: root._hdrsBuilt++              // INSTRUM.
+                            sourceComponent: Item {
+                            width: parent.width
+                            height: 40
                             Text {
                                 x: 12
                                 anchors.verticalCenter: parent.verticalCenter
@@ -522,26 +633,51 @@ Rectangle {
                                     }
                                 }
                             }
+                            }
                         }
 
-                        LocalTrackRow {
+                        // 50 px reserved whether or not the row is built, so
+                        // windowing cannot move the page under the user.
+                        Item {
+                            id: rowSlot
                             width: page.width
-                            item: trackBlock.modelData
-                            number: trackBlock.modelData.number > 0
-                                ? trackBlock.modelData.number : trackBlock.index + 1
-                            showAlbum: false
-                            showArtwork: false
-                            // The checkbox LocalTrackRow already draws over
-                            // the number cell for the Tracks tab — no fork,
-                            // no new component (rule 5).
-                            selectMode: root.multiSelect
-                            checked: root.selected[trackBlock.modelData.id] === true
-                            onPlayRequested: QbzLocal.playAlbumTrack(
-                                root.album.id, trackBlock.modelData.id)
-                            onEnqueueRequested: function (m) {
-                                QbzLocal.enqueue("track", trackBlock.modelData.id, m)
+                            height: 50
+                            /// This row's top in Flickable content coords.
+                            /// `rowSlot.y` — NOT `trackBlock.height`; see
+                            /// the twin in AlbumView. Measuring the slot
+                            /// against its own parent's derived height was a
+                            /// dependency cycle, and every row read as in-band.
+                            readonly property real topY:
+                                trackList.topInFlick + trackBlock.y + rowSlot.y
+                            /// One screenful of slack each way, so a flick
+                            /// reveals rows that already exist.
+                            readonly property bool inBand:
+                                rowSlot.topY > flick.contentY - flick.height
+                                && rowSlot.topY < flick.contentY + 2 * flick.height
+                            Loader {
+                                anchors.fill: parent
+                                active: rowSlot.inBand
+                                onLoaded: root._rowsBuilt++          // INSTRUM.
+                                sourceComponent: LocalTrackRow {
+                                    width: page.width
+                                    item: trackBlock.modelData
+                                    number: trackBlock.modelData.number > 0
+                                        ? trackBlock.modelData.number : trackBlock.index + 1
+                                    showAlbum: false
+                                    showArtwork: false
+                                    // The checkbox LocalTrackRow already draws over
+                                    // the number cell for the Tracks tab — no fork,
+                                    // no new component (rule 5).
+                                    selectMode: root.multiSelect
+                                    checked: root.selected[trackBlock.modelData.id] === true
+                                    onPlayRequested: QbzLocal.playAlbumTrack(
+                                        root.album.id, trackBlock.modelData.id)
+                                    onEnqueueRequested: function (m) {
+                                        QbzLocal.enqueue("track", trackBlock.modelData.id, m)
+                                    }
+                                    onToggleSelect: root.toggleSelected(trackBlock.modelData.id)
+                                }
                             }
-                            onToggleSelect: root.toggleSelected(trackBlock.modelData.id)
                         }
                     }
                 }

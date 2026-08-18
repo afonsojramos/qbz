@@ -1043,111 +1043,174 @@ Rectangle {
                     }
 
                     // Rows (with Disc / work headers).
+                    //
+                    // WINDOWED, for the reason spelled out in the twin
+                    // (LocalAlbumView): a box set is BOUNDED but not cheap,
+                    // and the search field filters `visibleTracks`, so every
+                    // keystroke handed this Repeater a new model and rebuilt
+                    // every row. The slot keeps its height; only the row is
+                    // windowed. The disc / work headers stay gated on DATA,
+                    // not on the band, so their contribution to the slot's
+                    // height is always real.
                     Repeater {
+                        id: trackList
                         model: root.visibleTracks
+                        /// This list's top in the page Flickable's content
+                        /// coordinates — one mapToItem for the whole list.
+                        readonly property real topInFlick:
+                            trackList.parent
+                                ? trackList.parent.mapToItem(pageFlick.contentItem, 0, 0).y
+                                : 0
                         delegate: Column {
+                            id: trackBlock
                             required property var modelData
                             required property int index
                             property var hdr: root.headerFor(index)
                             width: parent ? parent.width : 0
 
-                            Rectangle {
-                                visible: hdr && hdr.disc > 0
+                            // LOADER, not `visible:` — this header is declared per TRACK and was
+                            // built for every one of them so a couple of disc
+                            // boundaries could show. Measured on a 247-track album:
+                            // `localalbum built=39ms` / `to-idle=2242ms`, the mount
+                            // instant and the settle 2.2 s. See LocalAlbumView for
+                            // the twin (whose header also carried a Popup).
+                            Loader {
                                 width: parent.width
-                                height: 40
-                                color: "transparent"
-                                Text {
-                                    anchors.left: parent.left
-                                    anchors.leftMargin: 12
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    text: QbzSession.tr("Disc", QbzSession.trRev) + " " + hdr.disc
-                                    color: theme.textMuted
-                                    font.pixelSize: 13
-                                    font.weight: theme.weightSemibold
-                                    font.letterSpacing: 0.5
-                                }
-                            }
-                            Row {
-                                visible: hdr && hdr.work !== ""
-                                width: parent.width
-                                leftPadding: 12
-                                rightPadding: 12
-                                topPadding: 14
-                                bottomPadding: 4
-                                spacing: 0
-                                Text {
-                                    text: hdr.work
-                                    color: theme.textPrimary
-                                    font.pixelSize: theme.fontBody
-                                    font.weight: theme.weightBold
-                                }
-                                Text {
-                                    visible: modelData.workComposerName !== ""
-                                    text: " ("
-                                    color: theme.textSecondary
-                                    font.pixelSize: theme.fontBody
-                                    font.weight: theme.weightBold
-                                }
-                                Text {
-                                    visible: modelData.workComposerName !== ""
-                                    text: modelData.workComposerName
-                                    color: composerArea.containsMouse && modelData.workComposerId !== "" ? theme.textPrimary : theme.textSecondary
-                                    font.pixelSize: theme.fontBody
-                                    font.weight: theme.weightBold
-                                    MouseArea {
-                                        id: composerArea
-                                        anchors.fill: parent
-                                        enabled: modelData.workComposerId !== ""
-                                        hoverEnabled: true
-                                        cursorShape: modelData.workComposerId !== "" ? Qt.PointingHandCursor : Qt.ArrowCursor
-                                        onClicked: QbzArtist.openArtist(modelData.workComposerId)
+                                active: hdr && hdr.disc > 0
+                                visible: active
+                                sourceComponent: Rectangle {
+                                    visible: hdr && hdr.disc > 0
+                                    width: parent.width
+                                    height: 40
+                                    color: "transparent"
+                                    Text {
+                                        anchors.left: parent.left
+                                        anchors.leftMargin: 12
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        text: QbzSession.tr("Disc", QbzSession.trRev) + " " + hdr.disc
+                                        color: theme.textMuted
+                                        font.pixelSize: 13
+                                        font.weight: theme.weightSemibold
+                                        font.letterSpacing: 0.5
                                     }
                                 }
-                                Text {
-                                    visible: modelData.workComposerName !== ""
-                                    text: ")"
-                                    color: theme.textSecondary
-                                    font.pixelSize: theme.fontBody
-                                    font.weight: theme.weightBold
+                            }
+                            // Same gate, same reason as the disc header above.
+                            Loader {
+                                width: parent.width
+                                active: hdr && hdr.work !== ""
+                                visible: active
+                                sourceComponent: Row {
+                                    visible: hdr && hdr.work !== ""
+                                    width: parent.width
+                                    leftPadding: 12
+                                    rightPadding: 12
+                                    topPadding: 14
+                                    bottomPadding: 4
+                                    spacing: 0
+                                    Text {
+                                        text: hdr.work
+                                        color: theme.textPrimary
+                                        font.pixelSize: theme.fontBody
+                                        font.weight: theme.weightBold
+                                    }
+                                    Text {
+                                        visible: modelData.workComposerName !== ""
+                                        text: " ("
+                                        color: theme.textSecondary
+                                        font.pixelSize: theme.fontBody
+                                        font.weight: theme.weightBold
+                                    }
+                                    Text {
+                                        visible: modelData.workComposerName !== ""
+                                        text: modelData.workComposerName
+                                        color: composerArea.containsMouse && modelData.workComposerId !== "" ? theme.textPrimary : theme.textSecondary
+                                        font.pixelSize: theme.fontBody
+                                        font.weight: theme.weightBold
+                                        MouseArea {
+                                            id: composerArea
+                                            anchors.fill: parent
+                                            enabled: modelData.workComposerId !== ""
+                                            hoverEnabled: true
+                                            cursorShape: modelData.workComposerId !== "" ? Qt.PointingHandCursor : Qt.ArrowCursor
+                                            onClicked: QbzArtist.openArtist(modelData.workComposerId)
+                                        }
+                                    }
+                                    Text {
+                                        visible: modelData.workComposerName !== ""
+                                        text: ")"
+                                        color: theme.textSecondary
+                                        font.pixelSize: theme.fontBody
+                                        font.weight: theme.weightBold
+                                    }
                                 }
                             }
-                            TrackRow {
-                                item: modelData
-                                number: index + 1
-                                zebra: true
-                                clickPlays: false
-                                artistLink: true
-                                qualityStyle: "text"
-                                showDownload: true
-                                downloadGlyph: true
-                                selectMode: root.multiSelect
-                                checked: root.selected[item.id] === true
-                                onToggleSelect: root.toggleSelected(item.id)
-                                menuShowLater: false
-                                menuShowGoTo: false
-                                onPlayRequested: QbzPlayer.playAlbumFrom(header.id, item.id)
-                                onEnqueueRequested: function (m) {
-                                    QbzPlayer.enqueueAlbumTrack(header.id, item.id, m === "next" ? "next" : "later")
+                            // 50 px reserved whether or not the row exists,
+                            // so windowing cannot move the page under the user.
+                            Item {
+                                id: rowSlot
+                                width: parent.width
+                                height: 50
+                                /// `rowSlot.y` — NOT `trackBlock.height`.
+                                /// The Column's height is derived FROM its
+                                /// children, so measuring this slot against it
+                                /// made the position depend on the thing being
+                                /// positioned. QML broke that cycle, `topY`
+                                /// came out garbage, every row read as in-band
+                                /// and all 247 were built — the counter said
+                                /// `filas construidas=247`, which is how this
+                                /// was caught rather than guessed at again.
+                                /// `y` is assigned by the Column from the
+                                /// PRECEDING siblings only, and the header
+                                /// above is gated on DATA, so nothing here
+                                /// depends on the band.
+                                readonly property real topY:
+                                    trackList.topInFlick + trackBlock.y + rowSlot.y
+                                readonly property bool inBand:
+                                    rowSlot.topY > pageFlick.contentY - pageFlick.height
+                                    && rowSlot.topY < pageFlick.contentY + 2 * pageFlick.height
+                                Loader {
+                                    anchors.fill: parent
+                                    active: rowSlot.inBand
+                                    sourceComponent: TrackRow {
+                                        item: modelData
+                                        number: index + 1
+                                        zebra: true
+                                        clickPlays: false
+                                        artistLink: true
+                                        qualityStyle: "text"
+                                        showDownload: true
+                                        downloadGlyph: true
+                                        selectMode: root.multiSelect
+                                        checked: root.selected[item.id] === true
+                                        onToggleSelect: root.toggleSelected(item.id)
+                                        menuShowLater: false
+                                        menuShowGoTo: false
+                                        onPlayRequested: QbzPlayer.playAlbumFrom(header.id, item.id)
+                                        onEnqueueRequested: function (m) {
+                                            QbzPlayer.enqueueAlbumTrack(header.id, item.id, m === "next" ? "next" : "later")
+                                        }
+                                        // MyQBZ "Add to mixtape" — the HOST builds the
+                                        // AddItem array (TrackRow does not know
+                                        // itemType/source).
+                                        //
+                                        // SOURCE: this view never shows a local album.
+                                        // `open_album` (main.rs:538-548) routes any id
+                                        // that `is_local_feed_id("album", …)` accepts
+                                        // — a Plex `plex:` key, a group key, a path —
+                                        // to the LocalAlbum view instead, so what
+                                        // reaches `album_qt::TrackRow` here is always
+                                        // a `/album/get` response. `item.id` is a
+                                        // Qobuz catalog id by construction of the
+                                        // route, not by assumption at this call site.
+                                        onMixtapeRequested: QbzMyQbzAdd.open(JSON.stringify([{
+                                            "itemType": "track", "source": "qobuz",
+                                            "sourceItemId": item.id, "title": item.title || "",
+                                            "subtitle": item.artist || "", "artworkUrl": "",
+                                            "year": null, "trackCount": null
+                                        }]))
+                                    }
                                 }
-                                // MyQBZ "Add to mixtape" — the HOST builds the
-                                // AddItem array (TrackRow does not know
-                                // itemType/source).
-                                //
-                                // SOURCE: this view never shows a local album.
-                                // `open_album` (main.rs:538-548) routes any id
-                                // that `is_local_feed_id("album", …)` accepts
-                                // — a Plex `plex:` key, a group key, a path —
-                                // to the LocalAlbum view instead, so what
-                                // reaches `album_qt::TrackRow` here is always
-                                // a `/album/get` response. `item.id` is a
-                                // Qobuz catalog id by construction of the
-                                // route, not by assumption at this call site.
-                                onMixtapeRequested: QbzMyQbzAdd.open(JSON.stringify([{
-                                    "itemType": "track", "source": "qobuz",
-                                    "sourceItemId": item.id, "title": item.title || "",
-                                    "subtitle": item.artist || "", "artworkUrl": "",
-                                    "year": null, "trackCount": null
-                                }]))
                             }
                         }
                     }

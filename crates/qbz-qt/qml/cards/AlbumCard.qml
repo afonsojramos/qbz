@@ -183,6 +183,12 @@ Rectangle {
 
     QbzTheme { id: theme }
 
+    /// Build the context popup on first use, then open it.
+    function openAlbumMenu(anchor, x, y) {
+        albumMenuLoader.active = true
+        albumMenuLoader.item.openAtCursor(anchor, x, y)
+    }
+
     width: 200
     // 246 normally; +20 for the "{} plays" line (see `plays`) — the same
     // 266 -> 286 step MostPlayedAlbumsView.slint:23 takes for its grid.
@@ -386,7 +392,7 @@ Rectangle {
                 // button carries the play affordance).
                 onClicked: function (mouse) {
                     if (mouse.button === Qt.RightButton) {
-                        albumMenu.openAtCursor(artArea, mouse.x, mouse.y)
+                        root.openAlbumMenu(artArea, mouse.x, mouse.y)
                         return
                     }
                     // .slint:169 — in select mode the card click TOGGLES.
@@ -509,7 +515,7 @@ Rectangle {
                     // opens under the ⋯ (worst case 18px off the pointer).
                     // Stays correct if the signal ever forwards the event.
                     onClicked: function (mouse) {
-                        albumMenu.openAtCursor(moreBtn,
+                        root.openAlbumMenu(moreBtn,
                             mouse ? mouse.x : moreBtn.width / 2,
                             mouse ? mouse.y : moreBtn.height / 2)
                     }
@@ -518,11 +524,20 @@ Rectangle {
 
             // Context menu (AlbumCard.slint's album-menu) — the shared
             // CardMenu surface, not a second copy of its delegate.
-            CardMenu {
-                id: albumMenu
-                menuWidth: 196
-                entries: root.menuModel()
-                onPicked: function (a) { root.menuAction(a) }
+            // LAZY. A CardMenu is a QtQuick.Controls Popup with a Repeater
+            // over its entries, and this card is the unit the catalog surfaces
+            // are built from: Discover Home mounts ~423 of them, and the Local
+            // Albums grid recycles a screenful of them on every scroll step.
+            // Constructing a popup per card — for a menu that only ever opens
+            // on a click — is paid on every one of those.
+            Loader {
+                id: albumMenuLoader
+                active: false
+                sourceComponent: CardMenu {
+                    menuWidth: 196
+                    entries: root.menuModel()
+                    onPicked: function (a) { root.menuAction(a) }
+                }
             }
 
             // Award ribbon — content-width, capped at the card width.
@@ -636,7 +651,7 @@ Rectangle {
                         acceptedButtons: Qt.LeftButton | Qt.RightButton
                         onClicked: function (mouse) {
                             if (mouse.button === Qt.RightButton) {
-                                albumMenu.openAtCursor(titleArea, mouse.x, mouse.y)
+                                root.openAlbumMenu(titleArea, mouse.x, mouse.y)
                                 return
                             }
                             // .slint:465 — the title carries the SAME target

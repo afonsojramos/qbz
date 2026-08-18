@@ -85,7 +85,15 @@ Item {
                 var g = groups[i]
                 if (!g.items || g.items.length === 0) continue
                 jumps.push({ "letter": g.letter, "index": out.length })
-                out.push({ "t": 0, "label": g.letter })
+                // The header carries the flat index its group STARTS at.
+                // Without it the window report below fell back to 0 whenever
+                // the first visible entry was a header — so scrolling in
+                // grouped mode asked for artwork from album 0 through the
+                // current letter, hundreds of covers at a time, and then
+                // evicted them again. (Found by an independent review; the
+                // fallback reads as harmless until you notice what `0` means
+                // to `queueWindowReport`.)
+                out.push({ "t": 0, "label": g.letter, "base": flatOut.length })
                 pushChunk(g.items)
             }
         } else {
@@ -127,8 +135,13 @@ Item {
         if (last < 0) last = Math.min(entries.length - 1, first + 8)
         var lo = entries[first]
         var hi = entries[last]
-        var loIdx = lo ? (lo.t === 1 ? lo.base : 0) : 0
-        var hiIdx = hi ? (hi.t === 1 ? hi.base + hi.items.length - 1 : loIdx) : loIdx
+        // Both entry kinds now carry `base`, so a header at either edge of
+        // the viewport reports ITS group's position instead of collapsing to
+        // the top of the library.
+        var loIdx = lo ? (lo.base || 0) : 0
+        var hiIdx = hi
+            ? (hi.t === 1 ? hi.base + hi.items.length - 1 : Math.max(loIdx, hi.base || 0))
+            : loIdx
         view.queueWindowReport(flat, loIdx, hiIdx, root.surface)
     }
 
@@ -168,6 +181,12 @@ Item {
         clip: true
         cacheBuffer: root.viewMode === "grid" ? root.cellH * 2 : root.listRowH * 10
         boundsBehavior: Flickable.StopAtBounds
+        // Recycle rows instead of destroying and rebuilding them on every
+        // scroll step. Safe only NOW: the project's own note (PmListRow /
+        // PmFolderMenu) is that `reuseItems` plus a per-row menu gives every
+        // pooled delegate its own Popup — so the menus above had to become
+        // lazy FIRST. In the other order this would install that bug.
+        reuseItems: true
         model: root.entries
         onContentYChanged: root.report()
         onModelChanged: root.report()
@@ -200,12 +219,43 @@ Item {
             Component {
                 id: cardRowComp
                 Row {
+                    id: cardRow
+                    /// The row entry from the ListView delegate (the Loader's
+                    /// `modelData`), captured here because the Repeater below
+                    /// shadows that name inside its own delegates.
+                    readonly property var rowEntry: modelData
                     spacing: root.cellW - 200
+                    // FIXED CELL COUNT — `root.cols`, a NUMBER, not the row's
+                    // item array.
+                    //
+                    // This is what makes the ListView's `reuseItems` actually
+                    // pay. Pooling recycles the row SHELL, but the old
+                    // `model: modelData.items` handed this Repeater a new
+                    // array on every recycle, so it destroyed and rebuilt its
+                    // AlbumCards anyway — and the card is where the cost is:
+                    // ~29 items, a RoundedImage with TWO render targets (its
+                    // own layer plus the mask), image probes, a skeleton.
+                    // The shell was reused and the expensive part was not.
+                    //
+                    // With a constant count the cells are created once and
+                    // survive recycling; a scrolled or re-filtered row only
+                    // reassigns `item`, which is a binding update instead of a
+                    // construction. Same shape as the reference, where cheap
+                    // slots stay alive and only the data moves.
                     Repeater {
-                        model: modelData.items
+                        model: root.cols
                         delegate: Item {
                             id: cardCell
-                            required property var modelData
+                            required property int index
+                            /// The album for this slot, or `null` on the last
+                            /// row when it is not full. A null slot renders
+                            /// nothing and keeps its width, so the row's
+                            /// spacing does not collapse.
+                            readonly property var modelData:
+                                (cardRow.rowEntry && cardRow.rowEntry.items)
+                                    ? (cardRow.rowEntry.items[cardCell.index] || null)
+                                    : null
+                            visible: cardCell.modelData !== null
                             width: 200
                             height: 246
 
@@ -215,21 +265,35 @@ Item {
                             // The card's own ⋯ overlay button opens AlbumCard's
                             // built-in menu; see the GLUE note about aligning
                             // that one's entries with these.
-                            CardMenu {
-                                id: cardMenu
-                                menuWidth: 196
-                                entries: [
-                                    { "label": QbzSession.tr("Open album", QbzSession.trRev), "icon": "library-big", "action": "open" },
-                                    { "label": QbzSession.tr("Play", QbzSession.trRev), "icon": "play-fill", "action": "play" },
-                                    { "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-start", "action": "next" },
-                                    { "label": QbzSession.tr("Play later", QbzSession.trRev), "icon": "list-plus", "action": "later" },
-                                    { "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "action": "queue" },
-                                ]
-                                onPicked: function (a) {
-                                    if (a === "open") root.openRequested(cardCell.modelData.id)
-                                    else if (a === "play") root.playRequested(cardCell.modelData.id)
-                                    else root.enqueueRequested(cardCell.modelData.id, a)
+                            // LAZY, like AlbumCard's own. This cell carried a
+                            // SECOND popup on top of the card's, so a grid of
+                            // 1267 local albums paid two Popup constructions
+                            // per cell — and the ListView recycles a screenful
+                            // of cells on every scroll step, which is what the
+                            // owner reports as heavy scrolling here.
+                            Loader {
+                                id: cardMenuLoader
+                                active: false
+                                sourceComponent: CardMenu {
+                                    menuWidth: 196
+                                    entries: [
+                                        { "label": QbzSession.tr("Open album", QbzSession.trRev), "icon": "library-big", "action": "open" },
+                                        { "label": QbzSession.tr("Play", QbzSession.trRev), "icon": "play-fill", "action": "play" },
+                                        { "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-start", "action": "next" },
+                                        { "label": QbzSession.tr("Play later", QbzSession.trRev), "icon": "list-plus", "action": "later" },
+                                        { "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "action": "queue" },
+                                    ]
+                                    onPicked: function (a) {
+                                        if (a === "open") root.openRequested(cardCell.modelData.id)
+                                        else if (a === "play") root.playRequested(cardCell.modelData.id)
+                                        else root.enqueueRequested(cardCell.modelData.id, a)
+                                    }
                                 }
+                            }
+                            /// Build the popup on first use, then open it.
+                            function openCardMenu(anchor, x, y) {
+                                cardMenuLoader.active = true
+                                cardMenuLoader.item.openAtCursor(anchor, x, y)
                             }
 
                             AlbumCard {
@@ -319,7 +383,7 @@ Item {
                                 anchors.fill: parent
                                 acceptedButtons: Qt.RightButton
                                 onClicked: function (mouse) {
-                                    cardMenu.openAtCursor(cardRc, mouse.x, mouse.y)
+                                    cardCell.openCardMenu(cardRc, mouse.x, mouse.y)
                                 }
                             }
                             // (The multi-select tick that used to sit here is

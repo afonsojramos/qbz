@@ -81,9 +81,35 @@ Row {
         height: parent.height
 
         LocalSearchBox {
+            id: albumsSearchBox
             anchors.verticalCenter: parent.verticalCenter
             placeholder: QbzSession.tr("Search", QbzSession.trRev)
-            onEdited: function (v) { root.view.albumsSearch = v }
+            // DEBOUNCED, like the Tracks box below — which had it and this one
+            // did not, in the same file.
+            //
+            // `albumsSearch` is not a query, it is the FILTER INPUT: writing it
+            // re-filters 1267 albums, rebuilds the collection's entry list, and
+            // hands the ListView a new model — which tears down every delegate
+            // and builds them again. Per keystroke.
+            //
+            // The owner's report names the shape exactly: "the first two
+            // keystrokes hurt", i.e. while the filter still matches hundreds.
+            // By the time it matches ten there is nothing left to rebuild, so
+            // the tail of the word feels fine. That is a model swap, not a
+            // slow filter.
+            //
+            // The box keeps showing what was typed immediately; only the
+            // filter waits.
+            property string pending: ""
+            onEdited: function (v) {
+                albumsSearchBox.pending = v
+                albumsSearchDebounce.restart()
+            }
+            Timer {
+                id: albumsSearchDebounce
+                interval: 200
+                onTriggered: root.view.albumsSearch = albumsSearchBox.pending
+            }
         }
         LocalIconSelect {
             anchors.verticalCenter: parent.verticalCenter
