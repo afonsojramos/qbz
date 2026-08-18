@@ -64,6 +64,21 @@ Rectangle {
     QbzTheme { id: theme }
 
     // ============================ state ==================================
+    // Everything that logs through this category MUST defer the call (see the
+    // `Qt.callLater` in `visibleRows` and `parseFeed`). Declaring it first is
+    // NOT enough and moving it here did not silence the warning: a category is
+    // finalised the first time it is USED, so a `console.info` running during
+    // component creation pins it before Qt applies `defaultLogLevel`, which
+    // then warns ("cannot be changed after the component is completed") and —
+    // the part that matters — leaves the level UNSET, i.e. this logging on by
+    // default for every user. Deferring past creation is what actually fixes
+    // it. Both call sites below run during creation, which is why both defer.
+    LoggingCategory {
+        id: libTiming
+        name: "qbz.nav.timing"
+        defaultLogLevel: LoggingCategory.Warning
+    }
+
     property string activeTab: "all"
 
     readonly property var counts: JSON.parse(QbzLibrary.libraryCountsJson)
@@ -72,8 +87,13 @@ Rectangle {
     function parseFeed(json) {
         var t = Date.now()
         var f = JSON.parse(json)
-        console.log("[qbz-qt][perf] QML JSON.parse feed: " + (Date.now() - t)
-                    + "ms (" + f.length + " items, " + json.length + " bytes)")
+        // Was a bare console.log, i.e. printed on every publish for every user
+        // forever. It belongs to the same investigation as the derive timing
+        // right below it, so it now rides the same category and is silent
+        // unless that category is turned on.
+        var line = "[libtiming] JSON.parse feed: " + (Date.now() - t)
+                 + "ms (" + f.length + " items, " + json.length + " bytes)"
+        Qt.callLater(function () { console.info(libTiming, line) })
         return f
     }
 
@@ -312,7 +332,19 @@ Rectangle {
     // SAME array instance.
     // Named `visibleRows`, not `visible` — root is a Rectangle and `visible`
     // is taken.
-    readonly property var visibleRows: visibleItems()
+    // Timed like `parseFeed` above, and for the same reason: this runs a full
+    // pass plus a sort over the WHOLE merged feed, so it is the one derive in
+    // the app whose cost scales with the size of the user's library. The log
+    // rides the shared route-timing category — it is silent unless
+    // QT_LOGGING_RULES="qbz.nav.timing.info=true".
+    readonly property var visibleRows: {
+        var _t = Date.now()
+        var _rows = visibleItems()
+        var _line = "[libtiming] derive tab=" + activeTab + " feed=" + feed.length
+                  + " rows=" + _rows.length + " in " + (Date.now() - _t) + "ms"
+        Qt.callLater(function () { console.info(libTiming, _line) })
+        return _rows
+    }
 
     /// A-Z bucket for a title: its first letter uppercased, "#" for anything
     /// that is not a letter (a leading digit, "*", punctuation). Matches the
@@ -976,12 +1008,34 @@ Rectangle {
                 && !content.showPlaylistsList && !content.showArtistsPanel
 
             // ============ GRID (all tabs; All in grid mode) ==============
+            // HEIGHT-GATED, and that is the load-bearing part — see the
+            // `showGrid`/`showList`/... predicates above, which already say
+            // "one predicate per body, so no two can mount at once". They did
+            // not achieve that: `visible: false` stops a view from PAINTING,
+            // but a QQuickItemView that still has a viewport and a model keeps
+            // refilling it. Measured 2026-08-17 with a per-view creation
+            // counter: on the Albums tab the grid built 51 delegates and the
+            // hidden list built 47 alongside it; on Tracks the list built 47
+            // and the hidden GRID built 51 — the expensive direction, since a
+            // FeedGridCell carries a cover. Half of every Library mount was
+            // being spent on the body that was not showing.
+            //
+            // Collapsing the height to 0 is what actually stops the refill.
+            // The obvious alternative — `model: visible ? root.visibleRows :
+            // []` — is the one thing this file spends a paragraph warning
+            // against (see onLibraryFavoriteChanged): handing `model` a new
+            // value goes through QQuickItemView::setModel(), which resets the
+            // scroll offset to 0 and rebuilds every delegate. The height gate
+            // leaves `model` untouched.
             GridView {
                 id: grid
-                anchors.fill: parent
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
                 anchors.leftMargin: 32
                 anchors.rightMargin: root.alphaVisible ? 52 : 32
                 anchors.topMargin: 16
+                height: grid.visible ? parent.height - 16 : 0
                 visible: content.showGrid && root.activeTab !== "tracks"
                 cellWidth: 220
                 cellHeight: 266
@@ -1008,12 +1062,16 @@ Rectangle {
             }
 
             // ============ LIST (All list mode + Tracks tab) ==============
+            // Height-gated for the reason spelled out on the grid above.
             ListView {
                 id: list
-                anchors.fill: parent
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
                 anchors.leftMargin: 32
                 anchors.rightMargin: root.alphaVisible ? 52 : 32
                 anchors.topMargin: 10 + content.barInset
+                height: list.visible ? parent.height - (10 + content.barInset) : 0
                 visible: content.showList
                 cacheBuffer: 44 * 10
                 clip: true
