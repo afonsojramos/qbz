@@ -301,42 +301,56 @@ Rectangle {
                 anchors.fill: parent
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
-                onClicked: function (mouse) { lrMenu.openAtCursor(lrMenuArea, mouse.x, mouse.y) }
+                onClicked: function (mouse) { feedRow.openLrMenu(lrMenuArea, mouse.x, mouse.y) }
             }
         }
     }
-    CardMenu {
-        id: lrMenu
-        menuWidth: 196
-        entries: feedRow.item.kind === "track"
-            ? feedRow.view.trackMenuModel(feedRow.item, feedRow.favorite)
-            : feedRow.item.kind === "album" ? [
-                { "label": QbzSession.tr("Open album", QbzSession.trRev), "icon": "library-big", "action": "open" },
-                { "label": QbzSession.tr("Play", QbzSession.trRev), "icon": "play-fill", "action": "play" },
-                { "label": feedRow.favorite ? QbzSession.tr("Remove from Library", QbzSession.trRev) : QbzSession.tr("Add to Library", QbzSession.trRev),
-                  "icon": feedRow.favorite ? "heart-filled" : "heart", "action": "favorite" },
-            ]
-            : feedRow.item.kind === "artist" ? [
-                { "label": QbzSession.tr("Go to artist", QbzSession.trRev), "icon": "user", "action": "go-artist" },
-            ]
-            : [
-                { "label": QbzSession.tr("Open", QbzSession.trRev), "icon": "list-music", "action": "open" },
-                { "label": feedRow.favorite ? QbzSession.tr("Remove from Library", QbzSession.trRev) : QbzSession.tr("Add to Library", QbzSession.trRev),
-                  "icon": feedRow.favorite ? "heart-filled" : "heart", "action": "favorite" },
-            ]
-        onPicked: function (a) {
-            if (feedRow.item.kind === "track") { feedRow.view.trackAction(feedRow, a); return }
-            if (a === "open") {
-                if (feedRow.item.kind === "album") QbzAlbum.openAlbum(feedRow.item.id)
-                else if (feedRow.item.kind === "playlist") QbzBridge.openPlaylist(feedRow.item.id)
-                else if (feedRow.item.kind === "label") QbzHome.openLabel(feedRow.item.id)
-            } else if (a === "play") {
-                if (feedRow.item.kind === "album") QbzPlayer.playAlbum(feedRow.item.id)
-            } else if (a === "go-artist") {
-                QbzArtist.openArtist(feedRow.item.id)
-            } else if (a === "favorite") {
-                feedRow.toggleFavorite()
+    // LAZY. This is a QtQuick.Controls Popup with a Repeater over its
+    // entries, and it was built EAGERLY for every row — so a long list
+    // constructed one whole popup per visible row, and rebuilt them all
+    // on every scroll step, to show a menu only ever opened on click.
+    // Same lazy-Loader idiom this file already uses for the clipboard
+    // helper and the info modal.
+    Loader {
+        id: lrMenuLoader
+        active: false
+        sourceComponent: CardMenu {
+            menuWidth: 196
+            entries: feedRow.item.kind === "track"
+                ? feedRow.view.trackMenuModel(feedRow.item, feedRow.favorite)
+                : feedRow.item.kind === "album" ? [
+                    { "label": QbzSession.tr("Open album", QbzSession.trRev), "icon": "library-big", "action": "open" },
+                    { "label": QbzSession.tr("Play", QbzSession.trRev), "icon": "play-fill", "action": "play" },
+                    { "label": feedRow.favorite ? QbzSession.tr("Remove from Library", QbzSession.trRev) : QbzSession.tr("Add to Library", QbzSession.trRev),
+                      "icon": feedRow.favorite ? "heart-filled" : "heart", "action": "favorite" },
+                ]
+                : feedRow.item.kind === "artist" ? [
+                    { "label": QbzSession.tr("Go to artist", QbzSession.trRev), "icon": "user", "action": "go-artist" },
+                ]
+                : [
+                    { "label": QbzSession.tr("Open", QbzSession.trRev), "icon": "list-music", "action": "open" },
+                    { "label": feedRow.favorite ? QbzSession.tr("Remove from Library", QbzSession.trRev) : QbzSession.tr("Add to Library", QbzSession.trRev),
+                      "icon": feedRow.favorite ? "heart-filled" : "heart", "action": "favorite" },
+                ]
+            onPicked: function (a) {
+                if (feedRow.item.kind === "track") { feedRow.view.trackAction(feedRow, a); return }
+                if (a === "open") {
+                    if (feedRow.item.kind === "album") QbzAlbum.openAlbum(feedRow.item.id)
+                    else if (feedRow.item.kind === "playlist") QbzBridge.openPlaylist(feedRow.item.id)
+                    else if (feedRow.item.kind === "label") QbzHome.openLabel(feedRow.item.id)
+                } else if (a === "play") {
+                    if (feedRow.item.kind === "album") QbzPlayer.playAlbum(feedRow.item.id)
+                } else if (a === "go-artist") {
+                    QbzArtist.openArtist(feedRow.item.id)
+                } else if (a === "favorite") {
+                    feedRow.toggleFavorite()
+                }
             }
         }
+    }
+    /// Build the popup on first use, then open it.
+    function openLrMenu(anchor, x, y) {
+        lrMenuLoader.active = true
+        lrMenuLoader.item.openAtCursor(anchor, x, y)
     }
 }

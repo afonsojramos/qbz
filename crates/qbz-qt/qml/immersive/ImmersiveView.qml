@@ -545,11 +545,18 @@ Item {
                     // splitPanel 2: the live Suggestions panel (§6.4). Entry
                     // load at mount + reload on track change below
                     // (:1574-1577, §5.5).
-                    SuggestionsPanel {
+                    // Loader-gated like the queue panels: a closed panel has
+                    // no business being built. Mounting IS becoming visible
+                    // now, so the load hook is a plain Component.onCompleted
+                    // — the `onVisibleChanged` pair existed only because the
+                    // panel was built eagerly and its mount meant nothing.
+                    Loader {
                         anchors.fill: parent
-                        visible: QbzImmersive.splitPanel === 2
-                        onVisibleChanged: if (visible)
-                            QbzSuggestions.load(QbzPlayer.npTrackId)
+                        active: QbzImmersive.splitPanel === 2
+                        visible: active
+                        sourceComponent: SuggestionsPanel {
+                            Component.onCompleted: QbzSuggestions.load(QbzPlayer.npTrackId)
+                        }
                     }
 
                     // splitPanel 3: the Queue + History panel, centered in

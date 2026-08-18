@@ -531,26 +531,54 @@ Item {
                                         // adds NO phantom top space
                                         // (:414-421).
                                         spacing: 0
+                                        // The model is the WHOLE flat queue,
+                                        // so the slot stays (its height is
+                                        // what makes the collapsed-history
+                                        // arithmetic above work) but the ROW
+                                        // inside is built only near the
+                                        // viewport. Without this, opening this
+                                        // tab on a long queue built one
+                                        // ImmQueueRow per track — including
+                                        // every 0-height history slot, which
+                                        // is the majority of them. See
+                                        // qbz-nix-docs/qt-frontend/
+                                        // 2026-08-18-unbounded-build-sweep.
                                         Repeater {
                                             model: root.cfDoc.tracks
                                             delegate: Item {
+                                                id: upSlot
                                                 required property int index
                                                 required property var modelData
                                                 width: upList.width
-                                                height: index > root.cfDoc.index ? 60 : 0
-                                                visible: index > root.cfDoc.index
-                                                ImmQueueRow {
+                                                height: upSlot.index > root.cfDoc.index ? 60 : 0
+                                                visible: upSlot.index > root.cfDoc.index
+                                                // y of this row inside upList,
+                                                // derived the same way the
+                                                // heights above stack it.
+                                                readonly property real slotY:
+                                                    (upSlot.index - root.cfDoc.index - 1) * 60
+                                                // One screenful of margin each
+                                                // way, so a flick reveals rows
+                                                // that already exist.
+                                                readonly property bool inBand:
+                                                    upSlot.visible
+                                                    && upSlot.slotY > upFlick.contentY - upFlick.height
+                                                    && upSlot.slotY < upFlick.contentY + 2 * upFlick.height
+                                                Loader {
                                                     anchors.left: parent.left
                                                     anchors.right: parent.right
                                                     anchors.bottom: parent.bottom
-                                                    item: parent.modelData
-                                                    artSource: root.coverFor(parent.modelData)
-                                                    // Flat index f ->
-                                                    // queuePlayUpcomingFlat(
-                                                    // f - index - 1)
-                                                    // (:429-441, trap 23).
-                                                    onPlay: QbzQueue.queuePlayUpcomingFlat(
-                                                        parent.index - root.cfDoc.index - 1)
+                                                    active: upSlot.inBand
+                                                    sourceComponent: ImmQueueRow {
+                                                        item: upSlot.modelData
+                                                        artSource: root.coverFor(upSlot.modelData)
+                                                        // Flat index f ->
+                                                        // queuePlayUpcomingFlat(
+                                                        // f - index - 1)
+                                                        // (:429-441, trap 23).
+                                                        onPlay: QbzQueue.queuePlayUpcomingFlat(
+                                                            upSlot.index - root.cfDoc.index - 1)
+                                                    }
                                                 }
                                             }
                                         }

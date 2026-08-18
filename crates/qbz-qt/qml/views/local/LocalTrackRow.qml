@@ -144,7 +144,7 @@ Item {
             anchors.fill: parent
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
-            onClicked: function (mouse) { rowMenu.openAtCursor(moreArea, mouse.x, mouse.y) }
+            onClicked: function (mouse) { root.openRowMenu(moreArea, mouse.x, mouse.y) }
         }
     }
 
@@ -187,44 +187,58 @@ Item {
         anchors.fill: parent
         enabled: !root.selectMode
         acceptedButtons: Qt.RightButton
-        onClicked: function (mouse) { rowMenu.openAtCursor(rcArea, mouse.x, mouse.y) }
+        onClicked: function (mouse) { root.openRowMenu(rcArea, mouse.x, mouse.y) }
     }
 
-    CardMenu {
-        id: rowMenu
-        menuWidth: 220
-        entries: {
-            var m = [
-                { "label": QbzSession.tr("Play now", QbzSession.trRev), "icon": "play-fill", "action": "play" },
-                { "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-start", "action": "next" },
-                { "label": QbzSession.tr("Play later", QbzSession.trRev), "icon": "list-plus", "action": "later" },
-                { "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "action": "queue" },
-                { "label": QbzSession.tr("Add to mixtape", QbzSession.trRev), "icon": "cassette-tape", "action": "add-to-mixtape" },
-                { "label": QbzSession.tr("Add to playlist", QbzSession.trRev), "icon": "list-music", "action": "add-to-playlist" },
-            ]
-            if (root.canGoAlbum) m.push({ "label": QbzSession.tr("Go to album", QbzSession.trRev), "icon": "disc-3", "action": "go-album" })
-            if (root.canGoArtist) m.push({ "label": QbzSession.tr("Go to artist", QbzSession.trRev), "icon": "user", "action": "go-artist" })
-            return m
-        }
-        onPicked: function (a) {
-            if (a === "play") root.playRequested()
-            // LOCAL-mode adds: one-element selection through the bulk entry
-            // point, which owns the only source-aware row -> ref resolver
-            // (see the file header).
-            else if (a === "add-to-playlist" || a === "add-to-mixtape") {
-                QbzLocal.bulkAction("track", JSON.stringify([String(root.item.id)]), a)
+    // LAZY. This is a QtQuick.Controls Popup with a Repeater over its
+    // entries, and it was built EAGERLY for every row — so a long list
+    // constructed one whole popup per visible row, and rebuilt them all
+    // on every scroll step, to show a menu only ever opened on click.
+    // Same lazy-Loader idiom this file already uses for the clipboard
+    // helper and the info modal.
+    Loader {
+        id: rowMenuLoader
+        active: false
+        sourceComponent: CardMenu {
+            menuWidth: 220
+            entries: {
+                var m = [
+                    { "label": QbzSession.tr("Play now", QbzSession.trRev), "icon": "play-fill", "action": "play" },
+                    { "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-start", "action": "next" },
+                    { "label": QbzSession.tr("Play later", QbzSession.trRev), "icon": "list-plus", "action": "later" },
+                    { "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "action": "queue" },
+                    { "label": QbzSession.tr("Add to mixtape", QbzSession.trRev), "icon": "cassette-tape", "action": "add-to-mixtape" },
+                    { "label": QbzSession.tr("Add to playlist", QbzSession.trRev), "icon": "list-music", "action": "add-to-playlist" },
+                ]
+                if (root.canGoAlbum) m.push({ "label": QbzSession.tr("Go to album", QbzSession.trRev), "icon": "disc-3", "action": "go-album" })
+                if (root.canGoArtist) m.push({ "label": QbzSession.tr("Go to artist", QbzSession.trRev), "icon": "user", "action": "go-artist" })
+                return m
             }
-            else if (a === "go-album") {
-                QbzLocal.openAlbum(root.item.albumId)
-                QbzShell.navigateTo("localalbum")
-            } else if (a === "go-artist") {
-                // Local/Plex artists have no catalog id — a NAME route into
-                // the Local Library Artists tab (local_album_actions.rs).
-                QbzLocal.openArtistByName(root.item.artist)
-                QbzShell.navigateTo("local")
-            } else {
-                root.enqueueRequested(a)
+            onPicked: function (a) {
+                if (a === "play") root.playRequested()
+                // LOCAL-mode adds: one-element selection through the bulk entry
+                // point, which owns the only source-aware row -> ref resolver
+                // (see the file header).
+                else if (a === "add-to-playlist" || a === "add-to-mixtape") {
+                    QbzLocal.bulkAction("track", JSON.stringify([String(root.item.id)]), a)
+                }
+                else if (a === "go-album") {
+                    QbzLocal.openAlbum(root.item.albumId)
+                    QbzShell.navigateTo("localalbum")
+                } else if (a === "go-artist") {
+                    // Local/Plex artists have no catalog id — a NAME route into
+                    // the Local Library Artists tab (local_album_actions.rs).
+                    QbzLocal.openArtistByName(root.item.artist)
+                    QbzShell.navigateTo("local")
+                } else {
+                    root.enqueueRequested(a)
+                }
             }
         }
+    }
+    /// Build the popup on first use, then open it.
+    function openRowMenu(anchor, x, y) {
+        rowMenuLoader.active = true
+        rowMenuLoader.item.openAtCursor(anchor, x, y)
     }
 }

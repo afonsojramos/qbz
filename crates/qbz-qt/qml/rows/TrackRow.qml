@@ -1055,11 +1055,26 @@ Rectangle {
             }
         }
     }
-    CardMenu {
-        id: rowMenu
-        menuWidth: 224
-        entries: root.menuModel()
-        onPicked: function (a) { root.menuAction(a) }
+    // LAZY. This is a QtQuick.Controls Popup with a Repeater over its
+    // entries, and it was built EAGERLY for every row — so a long list
+    // constructed one whole popup per visible row, and rebuilt them all
+    // on every scroll step, to show a menu only ever opened on click.
+    // Same lazy-Loader idiom this file already uses for the clipboard
+    // helper and the info modal.
+    Loader {
+        id: rowMenuLoader
+        active: false
+        sourceComponent: CardMenu {
+            menuWidth: 224
+            entries: root.menuModel()
+            onPicked: function (a) { root.menuAction(a) }
+        }
+    }
+    /// Build the popup on first use, then open it. Called by `openRowMenu`
+    /// below, which owns the empty-menu guard.
+    function openRowMenuLazy(anchor, x, y) {
+        rowMenuLoader.active = true
+        rowMenuLoader.item.openAtCursor(anchor, x, y)
     }
 
     // TrackContextMenu.slint, in its order. Every row here reaches a live
@@ -1074,7 +1089,7 @@ Rectangle {
     function openRowMenu(anchor, x, y) {
         if (root.menuModel().length === 0)
             return
-        rowMenu.openAtCursor(anchor, x, y)
+        root.openRowMenuLazy(anchor, x, y)
     }
 
     function menuModel() {

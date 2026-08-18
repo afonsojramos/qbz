@@ -248,14 +248,20 @@ Rectangle {
             NumberAnimation { duration: 160; easing.type: Easing.InOutQuad }
         }
 
-        QueuePanel {
+        // Loader-gated: while the drawer is closed the panel is not built.
+        // Its rows are paginated (PAGE_SIZE 40) so this one was never the
+        // freeze, but a closed panel should not be constructed on principle —
+        // and the audit cannot know about a cap that lives in Rust.
+        Loader {
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.top: parent.top
             height: QbzShell.lyricsOpen
                 ? (QbzShell.queueOpen ? parent.height / 2 : 0)
                 : parent.height
-            visible: QbzShell.queueOpen
+            active: QbzShell.queueOpen
+            visible: active
+            sourceComponent: QueuePanel { }
         }
         Rectangle {
             visible: QbzShell.queueOpen && QbzShell.lyricsOpen
