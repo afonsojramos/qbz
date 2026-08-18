@@ -69,6 +69,28 @@ Item {
     // Reversed copy for the RIGHT Repeater (:234).
     readonly property var revTracks: root.cfDoc.tracks.slice().reverse()
 
+    /// CREATION band. The fan PAINTS |offset| < 3.5 (~7 covers); this is the
+    /// wider band in which a CoverCard is allowed to EXIST.
+    ///
+    /// Why it exists: the model is the whole flat queue, and a CoverCard is an
+    /// Image + a masked layer + text + a hit area. On a real session with 1935
+    /// persisted queue rows the two Repeaters below were building ~4000 of them
+    /// on the UI thread, which froze the app for ~28 s at launch — the panel
+    /// did not even have to be open, because an unmounted-but-declared overlay
+    /// is still BUILT (AppShell mounts ImmersiveView unconditionally).
+    ///
+    /// The reference does create one element per row (CoverflowPanel.slint
+    /// hides |offset| > 3 rather than skipping it), and that is fine THERE: a
+    /// Slint element is cheap where a QML delegate is not. Copying its shape
+    /// literally is what cost the 28 s.
+    ///
+    /// Wider than the paint band on purpose: `scroll` eases over 320 ms on a
+    /// track change, so the cards it is about to reveal must already exist or
+    /// they would pop in mid-animation.
+    function inBand(off) {
+        return off > -6.5 && off < 6.5
+    }
+
     // --- Geometry (:144-147) ------------------------------------------------
     readonly property real baseArt: Math.max(160,
         Math.min(Math.min(root.height - 372, root.width * 0.52), 560))
@@ -230,27 +252,38 @@ Item {
                 // (:194-199). Paints only offset in (-3.5, -0.5).
                 Repeater {
                     model: root.cfDoc.tracks
-                    delegate: CoverCard {
+                    // The delegate is a ZERO-SIZE, NON-CLIPPING slot: the card
+                    // inside places itself absolutely off `stageCx`, so the
+                    // wrapper must stay at (0,0) and must not clip or the fan
+                    // would collapse. Declaration order still decides z, so
+                    // the near-left cover is still declared last.
+                    delegate: Item {
+                        id: lSlot
                         required property int index
                         required property var modelData
-                        readonly property real off: index - root.scroll
-                        offset: off
-                        baseArt: root.baseArt
-                        pitch: root.pitch
-                        stageCx: fanStage.cx
-                        stageHeight: fanStage.height
-                        artSource: root.coverFor(modelData)
-                        hasArt: artSource !== ""
-                        // Left side only; hides the center-index card (GHOST
-                        // FIX) and the whole right half (:209-213).
-                        paintSide: off < -0.5 && off > -3.5
-                        interactive: true
-                        // i < centerIdx -> a history cover. The flat model is
-                        // oldest-first while queuePlayHistory is
-                        // most-recent-first: hist = center-1-i (:216-221).
-                        onNavigate: {
-                            if (index < root.centerIdx)
-                                QbzQueue.queuePlayHistory(root.centerIdx - 1 - index)
+                        readonly property real off: lSlot.index - root.scroll
+                        Loader {
+                            active: root.inBand(lSlot.off)
+                            sourceComponent: CoverCard {
+                                offset: lSlot.off
+                                baseArt: root.baseArt
+                                pitch: root.pitch
+                                stageCx: fanStage.cx
+                                stageHeight: fanStage.height
+                                artSource: root.coverFor(lSlot.modelData)
+                                hasArt: artSource !== ""
+                                // Left side only; hides the center-index card
+                                // (GHOST FIX) and the whole right half (:209-213).
+                                paintSide: lSlot.off < -0.5 && lSlot.off > -3.5
+                                interactive: true
+                                // i < centerIdx -> a history cover. The flat
+                                // model is oldest-first while queuePlayHistory
+                                // is most-recent-first: hist = center-1-i.
+                                onNavigate: {
+                                    if (lSlot.index < root.centerIdx)
+                                        QbzQueue.queuePlayHistory(root.centerIdx - 1 - lSlot.index)
+                                }
+                            }
                         }
                     }
                 }
@@ -262,26 +295,33 @@ Item {
                 // offset in (0.5, 3.5).
                 Repeater {
                     model: root.revTracks
-                    delegate: CoverCard {
+                    // Same zero-size, non-clipping slot as the left side.
+                    delegate: Item {
+                        id: rSlot
                         required property int index
                         required property var modelData
-                        readonly property int orig: root.cfLen - 1 - index
-                        readonly property real off: orig - root.scroll
-                        offset: off
-                        baseArt: root.baseArt
-                        pitch: root.pitch
-                        stageCx: fanStage.cx
-                        stageHeight: fanStage.height
-                        artSource: root.coverFor(modelData)
-                        hasArt: artSource !== ""
-                        paintSide: off > 0.5 && off < 3.5
-                        interactive: true
-                        // orig > centerIdx -> an upcoming cover:
-                        // up_index = orig - center - 1 (:246-251), the
-                        // QUEUE-WIDE flat invokable (trap 23).
-                        onNavigate: {
-                            if (orig > root.centerIdx)
-                                QbzQueue.queuePlayUpcomingFlat(orig - root.centerIdx - 1)
+                        readonly property int orig: root.cfLen - 1 - rSlot.index
+                        readonly property real off: rSlot.orig - root.scroll
+                        Loader {
+                            active: root.inBand(rSlot.off)
+                            sourceComponent: CoverCard {
+                                offset: rSlot.off
+                                baseArt: root.baseArt
+                                pitch: root.pitch
+                                stageCx: fanStage.cx
+                                stageHeight: fanStage.height
+                                artSource: root.coverFor(rSlot.modelData)
+                                hasArt: artSource !== ""
+                                paintSide: rSlot.off > 0.5 && rSlot.off < 3.5
+                                interactive: true
+                                // orig > centerIdx -> an upcoming cover:
+                                // up_index = orig - center - 1 (:246-251), the
+                                // QUEUE-WIDE flat invokable (trap 23).
+                                onNavigate: {
+                                    if (rSlot.orig > root.centerIdx)
+                                        QbzQueue.queuePlayUpcomingFlat(rSlot.orig - root.centerIdx - 1)
+                                }
+                            }
                         }
                     }
                 }

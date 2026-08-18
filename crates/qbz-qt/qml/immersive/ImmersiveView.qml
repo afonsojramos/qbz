@@ -258,10 +258,33 @@ Item {
         visible: QbzShaderScene.scene === 0
             && QbzImmersive.viewMode === 0 && QbzImmersive.mode === 1
     }
-    CoverflowPanel {
+    // LOADER-GATED, and this one is not a nicety — it is the fix for a
+    // 28-second frozen UI at startup.
+    //
+    // This overlay is mounted UNCONDITIONALLY by AppShell (see its comment
+    // there: while closed it is "an invisible, non-interactive Item"), and
+    // `visible: false` stops an item from PAINTING, never from being BUILT.
+    // CoverflowPanel's model is the flat whole-queue document
+    // (`QbzQueue.coverflowJson` — unlike the queue PANEL's, it is not
+    // paginated), and it runs TWO Repeaters over it: the forward list and a
+    // reversed copy. So every launch built two CoverCards per queue entry,
+    // for a panel nobody had opened.
+    //
+    // Measured 2026-08-17 on a real session with 1935 persisted queue rows:
+    // ~4000 CoverCards on the UI thread at boot. The app came up frozen for
+    // ~28 s at 120% CPU — deterministic, identical across every build, and
+    // "fixed" by moving ~/.local/share/qbz aside, which is what made it look
+    // like corrupted state rather than a queue the UI could not carry. The
+    // stacks showed the QML engine forcing GC while allocating strings.
+    //
+    // `active` repeats the visibility expression on purpose: the panel must
+    // not exist while it is not the immersive mode being shown.
+    Loader {
         anchors.fill: parent
-        visible: QbzShaderScene.scene === 0
+        active: QbzShaderScene.scene === 0
             && QbzImmersive.viewMode === 0 && QbzImmersive.mode === 2
+        visible: active
+        sourceComponent: CoverflowPanel { }
     }
     SpectrumPanel {
         anchors.fill: parent
@@ -288,11 +311,14 @@ Item {
     }
     // FOCUS Queue (mode 5, B4 §6.5): the same QueueTabsPanel as the split
     // placement, full-screen (centered: false -> min(vw-96, 720) column).
-    QueueTabsPanel {
+    // Loader-gated for the reason spelled out on CoverflowPanel above: it
+    // reads the same unpaginated whole-queue document.
+    Loader {
         anchors.fill: parent
-        visible: QbzShaderScene.scene === 0
+        active: QbzShaderScene.scene === 0
             && QbzImmersive.viewMode === 0 && QbzImmersive.mode === 5
-        centered: false
+        visible: active
+        sourceComponent: QueueTabsPanel { centered: false }
     }
 
     // --- The shared immersive lyrics engine + document (§6.6, trap 22) ------
@@ -531,10 +557,13 @@ Item {
                     // mount, centered: true fills the slot). The panel
                     // self-fires queuePanelOpened() when it becomes visible
                     // (:253-255).
-                    QueueTabsPanel {
+                    // Loader-gated like the focus mount above — same
+                    // component, same whole-queue document.
+                    Loader {
                         anchors.fill: parent
-                        visible: QbzImmersive.splitPanel === 3
-                        centered: true
+                        active: QbzImmersive.splitPanel === 3
+                        visible: active
+                        sourceComponent: QueueTabsPanel { centered: true }
                     }
                 }
             }
