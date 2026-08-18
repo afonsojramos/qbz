@@ -43,7 +43,7 @@ pub fn spawn(runtime: &Runtime, bus: broadcast::Sender<CoreEvent>, edge: Arc<Not
     let weak: Weak<AppRuntime<DaemonAdapter>> = Arc::downgrade(runtime);
     tokio::spawn(async move {
         let mut last_track_id: u64 = 0;
-        let mut last_playing: Option<bool> = None;
+        let mut last_state: Option<PlaybackState> = None;
         let mut last_volume: Option<f32> = None;
         loop {
             // Wake on a driver edge, or fall back to a slow poll so a
@@ -70,18 +70,20 @@ pub fn spawn(runtime: &Runtime, bus: broadcast::Sender<CoreEvent>, edge: Arc<Not
                 }
             }
 
-            if last_playing != Some(ev.is_playing) {
-                // Same three-way mapping as the MPRIS seed: loaded-but-not-
-                // playing audio is Paused, nothing loaded is Stopped.
-                let state = if ev.is_playing {
-                    PlaybackState::Playing
-                } else if has_audio {
-                    PlaybackState::Paused
-                } else {
-                    PlaybackState::Stopped
-                };
+            // Same three-way mapping as the MPRIS seed: loaded-but-not-playing
+            // audio is Paused, nothing loaded is Stopped. Dedup on the MAPPED
+            // state, not `is_playing` — paused and stopped are both
+            // not-playing, and a pause -> stop transition must still emit.
+            let state = if ev.is_playing {
+                PlaybackState::Playing
+            } else if has_audio {
+                PlaybackState::Paused
+            } else {
+                PlaybackState::Stopped
+            };
+            if last_state != Some(state) {
                 let _ = bus.send(CoreEvent::PlaybackStateChanged { state });
-                last_playing = Some(ev.is_playing);
+                last_state = Some(state);
             }
 
             if ev.is_playing {
