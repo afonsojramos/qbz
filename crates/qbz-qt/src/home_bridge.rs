@@ -394,9 +394,27 @@ static QT_THREAD: OnceLock<CxxQtThread<QbzHome>> = OnceLock::new();
 
 /// Queue a home-bridge mutation onto the Qt event loop (no-op before
 /// boot registers the thread).
+/// Queue a home-bridge mutation onto the Qt event loop.
+///
+/// BOTH failure modes are announced, and that is not cosmetic. This function
+/// could previously lose a publish two different silent ways — an unregistered
+/// thread dropped the closure, and a failed `queue()` was swallowed by
+/// `let _ =` — so a document that never reached the UI looked exactly like a
+/// document that was never built. Three builds went into proving that was NOT
+/// what was happening during the 2026-08-17 launch freeze; a single warn line
+/// would have answered it in one.
 pub(crate) fn ui(f: impl FnOnce(Pin<&mut QbzHome>) + Send + 'static) {
-    if let Some(thread) = QT_THREAD.get() {
-        let _ = thread.queue(f);
+    match QT_THREAD.get() {
+        Some(thread) => {
+            if thread.queue(f).is_err() {
+                log::warn!(
+                    "[qbz-qt] home bridge: a publish was REJECTED by the Qt queue and is lost"
+                );
+            }
+        }
+        None => log::warn!(
+            "[qbz-qt] home bridge: a publish was DROPPED — boot() has not registered the Qt thread yet"
+        ),
     }
 }
 

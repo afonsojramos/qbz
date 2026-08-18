@@ -1425,7 +1425,7 @@ fn qconnect_kv_read(db: &Path, key: &str) -> Option<String> {
 
 fn qconnect_kv_write(db: &Path, key: &str, value: Option<&str>) -> Result<(), String> {
     let conn = rusqlite::Connection::open(db).map_err(|e| e.to_string())?;
-    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
+    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=1000;")
         .map_err(|e| e.to_string())?;
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)",

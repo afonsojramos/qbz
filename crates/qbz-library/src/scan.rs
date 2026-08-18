@@ -364,7 +364,29 @@ pub fn scan_with_progress(
         .map(|folders| {
             folders
                 .iter()
-                .filter(|f| f.is_network && std::fs::read_dir(&f.path).is_err())
+                // BOUNDED. This filter is the guard that keeps a scan from
+                // deleting tracks whose share is merely out of reach — and it
+                // used to probe with a bare `read_dir`, which on a
+                // mounted-but-unreachable mount does not return an error, it
+                // BLOCKS for the mount's timeout. The guard hung on exactly
+                // the condition it exists to detect.
+                //
+                // Anything that is not a clear `Present` counts as
+                // unavailable, which preserves the original semantics (an
+                // unreadable folder was already "unavailable") while adding a
+                // deadline. `read_dir` still runs, but only once the mount has
+                // proven it answers, so it can no longer wedge the scan.
+                .filter(|f| {
+                    if !f.is_network {
+                        return false;
+                    }
+                    match crate::reachability::probe_default(Path::new(&f.path)) {
+                        crate::reachability::Reach::Present => {
+                            std::fs::read_dir(&f.path).is_err()
+                        }
+                        _ => true,
+                    }
+                })
                 .map(|f| folder_prefix(&f.path))
                 .collect()
         })

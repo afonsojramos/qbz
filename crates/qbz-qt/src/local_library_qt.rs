@@ -80,7 +80,7 @@ pub use crate::local_artwork::{fetch_plex_misses, resolve_window_blocking, Artwo
 
 // --- playback --------------------------------------------------------------
 pub use crate::local_playback::{
-    enqueue, local_queue_track, play_album, play_current_if_local, play_folder, play_folder_track,
+    enqueue, local_queue_track, play_album, play_current_if_local, LocalPlay, play_folder, play_folder_track,
     play_local_file, play_plex_track, play_tracks_visible,
 };
 

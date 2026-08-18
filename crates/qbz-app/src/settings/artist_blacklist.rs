@@ -84,7 +84,7 @@ impl BlacklistService {
             .map_err(|e| format!("Failed to open blacklist database: {}", e))?;
 
         // Enable WAL mode for better concurrent access (ADR-002).
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=1000;")
             .map_err(|e| format!("Failed to set WAL mode: {}", e))?;
 
         let service = Self {

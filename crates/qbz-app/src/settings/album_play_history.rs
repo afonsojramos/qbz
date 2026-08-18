@@ -71,7 +71,7 @@ fn open_db() -> Option<Connection> {
         }
     };
     // ADR-002: WAL for any SQLite store touched off the UI thread.
-    if let Err(e) = conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;") {
+    if let Err(e) = conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=1000;") {
         log::warn!("[qbz-slint] album_play_history pragma failed: {e}");
     }
     if let Err(e) = init_schema(&conn) {

@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use qbz_app::shell::AppRuntime;
 use qbz_core::LoggingAdapter;
-use qbz_library::LocalTrack;
+use qbz_library::{LocalTrack, Reach};
 use qbz_models::QueueTrack;
 
 use crate::local_albums::fetch_album_tracks_blocking;
@@ -271,18 +271,42 @@ pub async fn play_local_file(runtime: &Runtime, row_id: u64) -> bool {
             return true;
         }
     }
+    // BOUNDED PROBE, then an unbounded read — and the split is the whole
+    // point. A mounted-but-unreachable share (the user is on a different
+    // network today) does not make `exists()` fail, it makes it BLOCK for the
+    // mount's timeout, so this await could never return: playing one dead file
+    // wedged playback with no way out. The probe now stops WAITING.
+    //
+    // The READ deliberately keeps no deadline. A hi-res FLAC over a
+    // working-but-slow share legitimately takes longer than any probe budget,
+    // and timing the transfer out would turn "your network is slow today" into
+    // "this track is gone" — worse than the bug being fixed.
     let read_path = path.clone();
-    let bytes = tokio::task::spawn_blocking(move || {
-        if !Path::new(&read_path).exists() {
-            return None;
-        }
-        std::fs::read(&read_path).ok()
+    let (reach, bytes) = tokio::task::spawn_blocking(move || {
+        let reach = qbz_library::probe_default(Path::new(&read_path));
+        let bytes = if reach == Reach::Present {
+            std::fs::read(&read_path).ok()
+        } else {
+            None
+        };
+        (reach, bytes)
     })
     .await
-    .ok()
-    .flatten();
+    .unwrap_or((Reach::Unreachable, None));
     let Some(bytes) = bytes else {
-        log::error!("[qbz-qt] local play: file not available at {path} (drive unmounted?)");
+        // Missing and Unreachable are NOT the same answer and must not be
+        // logged as one. `Missing` is the filesystem saying the file is gone —
+        // a caller may clean on it. `Unreachable` is the filesystem saying
+        // NOTHING; the file may be perfectly fine on a share this network
+        // cannot see, so it may only ever be SKIPPED.
+        match reach {
+            Reach::Unreachable => log::warn!(
+                "[qbz-qt] local play: {path} did not answer — share unreachable from this network; skipping, NOT removing"
+            ),
+            _ => log::error!(
+                "[qbz-qt] local play: file not available at {path} (drive unmounted?)"
+            ),
+        }
         return false;
     };
     if let Err(e) = runtime.core().player().play_data(bytes, row_id) {
@@ -437,22 +461,54 @@ async fn play_audible(runtime: &Runtime, track: &QueueTrack) -> bool {
     }
 }
 
-/// Source-aware AUDIBLE step for the shared poll-loop advance: when the
-/// CURRENT queue track is a local file or a Plex row, play it here and report
-/// true; otherwise report false so the Qobuz tier-walk runs unchanged.
+/// What the local/Plex audible step did with a queue row.
+///
+/// This used to be a `bool`, and the two `false`s meant OPPOSITE things: "this
+/// row is not mine, go run the Qobuz walk" and "this row IS mine and it cannot
+/// play". The caller could only treat both as the first, so a local file on a
+/// share that had gone away fell through to the Qobuz tier-walk, failed there
+/// with an unrelated error ("No Qobuz client available"), and
+/// `auto_skip_unavailable` then declined to skip because that error is not
+/// terminal-unavailable. Net effect: one unreachable local file stopped
+/// playback dead, silently — the exact shape of "a track that cannot play must
+/// never be blocking".
+pub enum LocalPlay {
+    /// Not a local/Plex row. The Qobuz path must run, unchanged.
+    NotLocal,
+    /// Playing.
+    Played,
+    /// Ours, and it cannot play. Carries a reason phrased so the shared skip
+    /// walk recognises it as terminal (see `is_terminal_unavailable`).
+    Unavailable(String),
+}
+
+/// Source-aware AUDIBLE step for the shared poll-loop advance.
 ///
 /// Without this seam, auto-advance to the next local/Plex track goes down
 /// `play_track_resolved` and fails with "No Qobuz client available".
-pub async fn play_current_if_local(runtime: &Runtime, track_id: u64) -> bool {
+pub async fn play_current_if_local(runtime: &Runtime, track_id: u64) -> LocalPlay {
     let Some(qt) = runtime.core().current_track().await else {
-        return false;
+        return LocalPlay::NotLocal;
     };
     if qt.id != track_id {
-        return false;
+        return LocalPlay::NotLocal;
     }
     match qt.source.as_deref() {
-        Some("local") | Some("plex") => play_audible(runtime, &qt).await,
-        _ => false,
+        Some("local") | Some("plex") => {
+            if play_audible(runtime, &qt).await {
+                LocalPlay::Played
+            } else {
+                // The wording is load-bearing: `is_terminal_unavailable`
+                // matches on "no longer available", which is what routes this
+                // into the SAME bounded skip walk a pulled Qobuz track takes.
+                // One seam for both, which is the point — to the user they are
+                // the same failure.
+                LocalPlay::Unavailable(format!(
+                    "local file no longer available (track {track_id})"
+                ))
+            }
+        }
+        _ => LocalPlay::NotLocal,
     }
 }
 

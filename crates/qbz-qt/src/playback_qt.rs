@@ -338,7 +338,7 @@ fn queue_track_blacklisted(track: &QueueTrack) -> bool {
 /// LOCAL / Plex rows can never be dropped here, and that is not luck: their
 /// builder (`local_playback::local_queue_track`) sets `streamable: true`
 /// because a file on disk is outside Qobuz's streaming rights entirely.
-fn queue_track_unavailable(track: &QueueTrack) -> bool {
+pub(crate) fn queue_track_unavailable(track: &QueueTrack) -> bool {
     // Clause 2 (D3): a track the player already found terminally unavailable
     // THIS RUN counts as dead even while the API keeps advertising it as
     // streamable — which is the owner's test case exactly, since `/album/get`
@@ -1979,10 +1979,26 @@ async fn play_queue_track(
     // Source-aware audible step: a LOCAL file plays from disk through the
     // player's play_data seam. The Qobuz tier-walk below needs a client and
     // would fail with "No Qobuz client available" on every local advance.
-    if crate::local_library_qt::play_current_if_local(runtime, track_id).await {
-        refresh_now_playing(runtime).await;
-        publish_queue(runtime).await;
-        return;
+    // ONE seam for both kinds of "cannot play". A local/Plex row that fails
+    // must NOT fall through to the Qobuz walk below: it would fail there with
+    // an unrelated error, `auto_skip_unavailable` would decline it as
+    // non-terminal, and playback would stop dead on one unreachable file. To
+    // the user a withdrawn Qobuz track and a file on a share that went away
+    // are the same event, so they take the same bounded skip walk.
+    match crate::local_library_qt::play_current_if_local(runtime, track_id).await {
+        crate::local_playback::LocalPlay::Played => {
+            refresh_now_playing(runtime).await;
+            publish_queue(runtime).await;
+            return;
+        }
+        crate::local_playback::LocalPlay::Unavailable(reason) => {
+            log::warn!("[qbz-qt] playback: {reason} — skipping");
+            refresh_now_playing(runtime).await;
+            publish_queue(runtime).await;
+            auto_skip_unavailable(runtime, reason, Some(track_id)).await;
+            return;
+        }
+        crate::local_playback::LocalPlay::NotLocal => {}
     }
     if let Err(e) =
         play_resolved_offline_aware(runtime, track_id, start_position_secs)
@@ -2076,13 +2092,18 @@ fn auto_skip_unavailable<'a>(
             crate::toast_qt::warning(qbz_i18n::t("No available tracks to play"));
             crate::now_playing::set_playing(false);
             UNAVAILABLE_SKIPS.store(0, Ordering::SeqCst);
+            // Nowhere left to skip TO, so clean rather than leave the user a
+            // queue of rows that each stop playback when reached.
+            crate::queue_qt::purge_unavailable_upcoming(runtime).await;
             return;
         }
         let Some(track) = runtime.core().next_track().await else {
             // Queue edge reached while skipping — stop quietly, the warning
-            // above already told the user why.
+            // above already told the user why. Same clean-up as the budget
+            // arm: the rows behind us cannot play either.
             crate::now_playing::set_playing(false);
             UNAVAILABLE_SKIPS.store(0, Ordering::SeqCst);
+            crate::queue_qt::purge_unavailable_upcoming(runtime).await;
             return;
         };
         log::info!(

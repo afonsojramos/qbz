@@ -650,6 +650,45 @@ pub async fn remove_upcoming(runtime: &Arc<AppRuntime<LoggingAdapter>>, page_ind
     publish(runtime).await;
 }
 
+/// Drop every UPCOMING row that cannot play, and report how many went.
+///
+/// The last half of "an unavailable track is never blocking": it is skipped,
+/// and when there is nowhere left to skip TO, the dead rows are cleaned out
+/// rather than left for the user to walk into one at a time. Called only from
+/// the dead ends of the skip walk — the budget running out, or the queue edge
+/// being reached — never speculatively.
+///
+/// Walks BACKWARDS so each removal cannot shift an index still to be visited.
+///
+/// It removes what `queue_track_unavailable` already refuses to play, so this
+/// can only delete rows that were unplayable anyway — never a track that is
+/// merely on a share this network cannot see, because an unreachable local row
+/// is `Unreachable`, not dead, and never enters that predicate.
+pub async fn purge_unavailable_upcoming(runtime: &Arc<AppRuntime<LoggingAdapter>>) -> usize {
+    let doomed: Vec<usize> = {
+        let state = runtime.core().get_queue_state_full().await;
+        state
+            .upcoming
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| crate::playback_qt::queue_track_unavailable(t))
+            .map(|(i, _)| i)
+            .collect()
+    };
+    if doomed.is_empty() {
+        return 0;
+    }
+    for index in doomed.iter().rev() {
+        runtime.core().remove_upcoming_track(*index).await;
+    }
+    log::info!(
+        "[qbz-qt] queue: purged {} unplayable upcoming row(s)",
+        doomed.len()
+    );
+    publish(runtime).await;
+    doomed.len()
+}
+
 pub async fn remove_all_after(runtime: &Arc<AppRuntime<LoggingAdapter>>, page_index: usize) {
     let Some(&upcoming_index) = current_page_indices(runtime).await.get(page_index) else {
         log::warn!("[qbz-qt] queue: remove_all_after {page_index} out of range");
