@@ -125,6 +125,9 @@ public:
         m_levelSmooth = pl->m_levelSmooth;
         m_energyLo = pl->m_energyLo;
         m_energyHi = pl->m_energyHi;
+        m_transientAmp = pl->m_transientAmp;
+        m_bandsLo = pl->m_bandsLo;
+        m_bandsHi = pl->m_bandsHi;
         m_primary = colorVec(pl->m_primary);
         m_secondary = colorVec(pl->m_secondary);
         m_accent = colorVec(pl->m_accent);
@@ -167,8 +170,11 @@ public:
         ud.res[0] = float(hist.width());
         ud.res[1] = float(hist.height());
         ud.levelSmooth = m_levelSmooth;
+        ud.transient = m_transientAmp;
         std::memcpy(ud.energyLo, &m_energyLo, sizeof(ud.energyLo));
         std::memcpy(ud.energyHi, &m_energyHi, sizeof(ud.energyHi));
+        std::memcpy(ud.bandsLo, &m_bandsLo, sizeof(ud.bandsLo));
+        std::memcpy(ud.bandsHi, &m_bandsHi, sizeof(ud.bandsHi));
         std::memcpy(ud.primary, &m_primary, sizeof(ud.primary));
         std::memcpy(ud.secondary, &m_secondary, sizeof(ud.secondary));
         std::memcpy(ud.accent, &m_accent, sizeof(ud.accent));
@@ -389,6 +395,9 @@ private:
     float m_levelSmooth = 0.0f;
     QVector4D m_energyLo{ 0.0f, 0.0f, 0.0f, 0.0f };
     QVector4D m_energyHi{ 0.0f, 0.0f, 0.0f, 0.0f };
+    float m_transientAmp = 0.0f;
+    QVector4D m_bandsLo{ 0.0f, 0.0f, 0.0f, 0.0f };
+    QVector4D m_bandsHi{ 0.0f, 0.0f, 0.0f, 0.0f };
     QVector4D m_primary{ 0.0f, 0.863f, 0.784f, 1.0f };
     QVector4D m_secondary{ 0.588f, 0.196f, 1.0f, 1.0f };
     QVector4D m_accent{ 0.247f, 0.851f, 0.784f, 1.0f };

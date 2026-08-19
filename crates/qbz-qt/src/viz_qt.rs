@@ -259,6 +259,8 @@ struct ShaderPackState {
     last_energy: [f32; 5],
     level_smooth: f32,
     beat: f32,
+    /// Slow floor the AC-coupled beat is measured against — see `beat_ac`.
+    beat_floor: f32,
     transient: f32,
     phase: f32,
     spectral_peak: f32,
@@ -283,6 +285,31 @@ impl ShaderPackState {
         }
         self.transient *= 0.85;
         self.beat *= 0.88;
+        // AC-COUPLED BEAT — the onset measured against its OWN density.
+        //
+        // `beat` alone stops being a beat on busy material, and the arithmetic
+        // is why: it maxes in on a transient and decays x0.88 per 33 ms tick,
+        // so it needs ~600 ms to fall back to a tenth. Portnoy's double kick
+        // runs past 10 hits/s; between two of them the envelope only falls
+        // 0.88^3 ~= 0.68 before the next one tops it back up, so it does not
+        // saturate at 1 — it RIPPLES, shallow, around 0.7. Everything a scene
+        // multiplies by it (a splat that should detonate, a rotation that
+        // should jolt) turns into a constant, and the busier the music the
+        // flatter the picture. That is the inversion: the most frenetic input
+        // produces the least motion.
+        //
+        // Subtracting a slow floor restores the CONTRAST that the envelope
+        // loses. On sparse material the floor sits near zero and this is the
+        // plain envelope; on dense material the floor rises with it and only
+        // the peaks ABOVE the local density come through. The floor tracks
+        // asymmetrically — it follows the beat down quickly (x0.90) so a
+        // breakdown re-arms the punch within ~a third of a second, and creeps
+        // up slowly (0.02) so one loud hit does not deafen the next.
+        self.beat_floor = if self.beat < self.beat_floor {
+            self.beat_floor * 0.90
+        } else {
+            self.beat_floor * 0.98 + self.beat * 0.02
+        };
 
         // 8 log bands paired from the 16 bars (visualizer.rs:205-208).
         let mut bands8 = [0.0f32; 8];
@@ -330,12 +357,16 @@ impl ShaderPackState {
         // in the pack: time is the QML layer's local pulse clock, resolution
         // is the item size, palette is QbzShell.ambient*.
         format!(
-            "{{\"phase\":{},\"beat\":{},\"level\":{},\"levelSmooth\":{},\
+            "{{\"phase\":{},\"beat\":{},\"beatAc\":{},\"level\":{},\"levelSmooth\":{},\
              \"transient\":{},\
              \"energyLo\":[{},{},{},{}],\"energyHi\":[{},{},0,0],\
              \"bandsLo\":[{},{},{},{}],\"bandsHi\":[{},{},{},{}]}}",
             self.phase,
             self.beat,
+            // Normalised so a scene can use it exactly where it used `beat`:
+            // 0 at the local floor, 1 at a full-scale onset above it.
+            ((self.beat - self.beat_floor).max(0.0) / (1.0 - self.beat_floor).max(0.15))
+                .clamp(0.0, 1.0),
             level,
             self.level_smooth,
             self.transient,

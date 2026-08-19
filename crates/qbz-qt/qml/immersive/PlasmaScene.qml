@@ -35,7 +35,22 @@ PlasmaItem {
     // at the same edge).
     function pulseTick(p) {
         time = p.time
-        beat = p.beat
+        // THE AC-COUPLED ONSET, deliberately in the `beat` slot.
+        //
+        // Plasma multiplies its splats and its rotation jolt by this, and the
+        // raw envelope stops being a hit on dense material: it decays x0.88 per
+        // 33 ms, so above ~3 hits/s it never falls far enough to come back as a
+        // spike and settles into a shallow ripple around 0.7 — a splat that
+        // should detonate becomes a steady glow. `beatAc` subtracts the local
+        // density floor, so a hit reads as a hit whatever the tempo. The other
+        // scenes keep the raw `beat`; only this one wants the contrast.
+        beat = p.beatAc
+        // The RAW transient stays available for the short, sharp flash — it
+        // decays x0.85 and it is not floor-subtracted, so it is the crisper of
+        // the two.
+        transientAmp = p.transientAmp
+        bandsLo = p.bandsLo
+        bandsHi = p.bandsHi
         level = p.level
         levelSmooth = p.levelSmooth
         energyLo = p.energyLo

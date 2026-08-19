@@ -113,6 +113,10 @@ Item {
     property real level: 0
     property real levelSmooth: 0
     property real transientAmp: 0
+    /// The onset measured against its own density (viz_qt.rs) — 0 at the local
+    /// floor, 1 at a full-scale hit above it. `beat` alone flattens into a
+    /// shallow ripple on dense material; this is what still reads as a hit.
+    property real beatAc: 0
     property vector4d energyLo: Qt.vector4d(0, 0, 0, 0)
     property vector4d energyHi: Qt.vector4d(0, 0, 0, 0)
     property vector4d bandsLo: Qt.vector4d(0, 0, 0, 0)
@@ -145,6 +149,11 @@ Item {
             "levelSmooth": root.levelSmooth,
             "energyLo": root.energyLo,
             "energyHi": root.energyHi,
+            // Parsed here since the port landed and never handed to a scene.
+            "transientAmp": root.transientAmp,
+            "bandsLo": root.bandsLo,
+            "bandsHi": root.bandsHi,
+            "beatAc": root.beatAc,
             "primary": QbzShell.ambientPrimary,
             "secondary": QbzShell.ambientSecondary,
             "accent": QbzShell.ambientAccent
@@ -232,6 +241,7 @@ Item {
             root.level = p.level
             root.levelSmooth = p.levelSmooth
             root.transientAmp = p.transient
+            root.beatAc = p.beatAc || 0
             root.energyLo = Qt.vector4d(p.energyLo[0], p.energyLo[1], p.energyLo[2], p.energyLo[3])
             root.energyHi = Qt.vector4d(p.energyHi[0], p.energyHi[1], p.energyHi[2], p.energyHi[3])
             root.bandsLo = Qt.vector4d(p.bandsLo[0], p.bandsLo[1], p.bandsLo[2], p.bandsLo[3])

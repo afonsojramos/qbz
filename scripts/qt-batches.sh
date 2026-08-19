@@ -25,6 +25,12 @@
 #   ATLAS_OVERLAY=1 ./scripts/qt-batches.sh   # tint atlased textures (diagnostic)
 #   ATLAS=8192 ./scripts/qt-batches.sh        # force a bigger texture atlas
 #   BIN=crates/target/debug/qbz ./scripts/qt-batches.sh
+#   QBZ_PULSE_MS=25 ./scripts/qt-batches.sh   # 40 Hz shell pulse instead of 30
+#
+# QBZ_PULSE_MS is the shared repaint clock (settings_qt::shell_pulse_ms,
+# default 33). It is THE knob this script's "presents/s" line measures, so the
+# summary below prints the value it ran with: two logs whose pulse cannot be
+# told apart are not an A/B.
 #
 # THE REFERENCE SCENE, so two runs are comparable: album page, NPB Large, the
 # spectrum band up (the eye toggle on), a track PLAYING, dynamic background on.
@@ -61,6 +67,7 @@ if [[ -n "${ATLAS:-}" ]]; then
   echo "[batches] atlas forced to ${ATLAS}x${ATLAS}"
 fi
 
+echo "[batches] shell pulse = ${QBZ_PULSE_MS:-33} ms (~$((1000 / ${QBZ_PULSE_MS:-33})) Hz)"
 echo "[batches] launching $BIN (renderer debug is ~1 MB/s of log -> $LOG)"
 env "${atlas_env[@]}" QSG_RENDERER_DEBUG=render QSG_RENDER_TIMING=1 "$BIN" > "$LOG" 2>&1 &
 pid=$!
@@ -131,14 +138,15 @@ PY
 # source. ~60/s = two unsynchronised ones. 120+/s = something runs at display
 # rate. Five hypotheses died in this campaign for want of this one number.
 python3 - "$sample" <<'PYFPS'
-import re, sys, statistics
+import re, sys, statistics, os
 txt = open(sys.argv[1], errors="ignore").read()
 per = [int(m) for m in re.findall(r"elapsed since last call: (\d+) ms", txt)]
 per = [p for p in per if p > 0]
 if per:
     med = statistics.median(per)
     fast = sum(1 for p in per if p <= 8)
-    print(f"  presents: {len(per)} sampled, median period {med:.0f} ms -> ~{1000/max(med,1):.0f}/s")
+    print(f"  presents: {len(per)} sampled, median period {med:.0f} ms -> ~{1000/max(med,1):.0f}/s"
+          f"   (pulse was {os.environ.get('QBZ_PULSE_MS', '33')} ms)")
     print(f"  arriving <=8ms apart: {fast} ({100*fast/len(per):.0f}%)   <- display-rate source if high")
 else:
     print("  presents: no timing lines (QSG_RENDER_TIMING not honoured?)")

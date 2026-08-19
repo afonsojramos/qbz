@@ -32,11 +32,14 @@
 //    dependencies, so a pulse re-evaluates the bar heights and instantiates
 //    nothing.
 //
-// SMOOTHNESS NOTE: dropping the interpolator does NOT return the raw FFT
-// step. qbz-audio smooths the bars in Rust with a per-frame EMA (attack 0.7 /
-// decay 0.65, processor.rs:174-184), band-limiting the published signal to
-// ~6 Hz, so 30 Hz application still renders the ease-in/decay shape — at the
-// data rate, one present per published frame.
+// SMOOTHNESS NOTE, CORRECTED 2026-08-19. This paragraph used to argue that
+// dropping the interpolator did not cost smoothness, because qbz-audio already
+// band-limits the bars in Rust (attack 0.7 / decay 0.65,
+// processor.rs:174-184). That reasoning was wrong about what the eye reads: a
+// band-limited signal APPLIED AS A STEP still moves in visible jumps, and the
+// owner's side-by-side against the Slint build named it exactly — "no es que
+// se vea mas rapido, la transicion entre estados es mas suave". The
+// interpolation is back, on the pulse; see `easeK`.
 //
 // LATENCY: a frame is applied on the first pulse after its publish, i.e. up
 // to one period (33 ms) behind the tap. Against the pipeline that already
@@ -61,9 +64,18 @@ Item {
     property bool live: true
 
     // ---- output (read via at(i)) -------------------------------------------
-    property var from: []
-    property var to: []
-    property real progress: 1.0
+    //
+    // ONE applied array, eased toward the newest published frame. It replaced
+    // a from/to/progress triple that only ever held progress = 1.0, i.e. a
+    // step — see the EASING note above `easeK`.
+    property var cur: []
+    /// Newest published frame the ease is chasing.
+    property var tgt: null
+    /// PING-PONG buffers. Assigning a property a DIFFERENT array reference is
+    /// what notifies QML; mutating one in place does not. Two persistent
+    /// buffers give both — a new reference every pulse, and no allocation
+    /// after the first two.
+    readonly property var bufs: ({ a: [], b: [], flip: false })
 
     // The stash. `property var` because QML object state has no other home;
     // NOTHING binds to it, so writing it emits a notify nobody hears and —
@@ -74,12 +86,34 @@ Item {
     width: 0
     height: 0
 
-    // Applied amplitude for bar `i`. Reads all three outputs on every path —
-    // do NOT add an early return, it would drop the dependency.
+    // EASING — the transition between states, which is what reads as
+    // "fluid", and which is NOT the frame rate.
+    //
+    // Measured 2026-08-19, and it falsified the standing assumption: driven at
+    // QBZ_PULSE_MS=10 the shell presented ~100 frames/s (qt-batches confirmed
+    // it) and the bars looked exactly as they had at 30. They would: each
+    // published frame was applied as a STEP, so the extra presents repainted
+    // the same discrete values three times over. What Slint does differently
+    // is not rate, it is `animate bar-h { 90ms }` — it moves BETWEEN values.
+    //
+    // Restoring that costs NOTHING here, and that is the whole point. The old
+    // interpolator was expensive because of its private 16 ms Timer, not
+    // because of the interpolation: it presented at its own rate, unsynchronised
+    // with everything else. Easing ON THE PULSE presents exactly as often as
+    // stepping on the pulse did — one repaint per period either way. Only the
+    // VALUE differs.
+    //
+    // The price is LAG, and it is the honest one: an exponential ease at
+    // k = 0.45 is ~83% of the way there in 3 pulses (~100 ms), matching the
+    // reference's 90 ms. Against the 46 ms FFT window and 77 ms of Rust
+    // smoothing already in the chain, it is the same order as what is already
+    // accepted.
+    property real easeK: 0.45
+
+    // Applied amplitude for bar `i`. Reads `cur` on every path — do NOT add an
+    // early return, it would drop the dependency.
     function at(i) {
-        var a = settle.from[i] || 0;
-        var b = settle.to[i] || 0;
-        var v = a + (b - a) * settle.progress;
+        var v = settle.cur[i] || 0;
         return v < 0 ? 0 : (v > 1 ? 1 : v);
     }
 
@@ -117,7 +151,7 @@ Item {
     onLiveChanged: {
         if (!settle.live) {
             settle.pending = null;
-            settle.progress = 1.0;
+            settle.tgt = null;
         }
     }
 
@@ -132,15 +166,42 @@ Item {
         function onPulseMsChanged() {
             if (!settle.live)
                 return;
-            var arr = settle.pending;
-            if (arr === null)
+            // Adopt the newest publish as the TARGET; the ease below is what
+            // actually moves. A publish arriving mid-ease simply moves the
+            // target — no from/to bookkeeping, no discontinuity.
+            if (settle.pending !== null) {
+                settle.tgt = settle.pending;
+                settle.pending = null;
+            }
+            var t = settle.tgt;
+            if (t === null)
                 return;
-            settle.pending = null;
-            // Reference swap, not a copy — zero allocation per applied frame,
-            // same as the old driver.
-            settle.from = settle.to;
-            settle.to = arr;
-            settle.progress = 1.0;
+            var n = t.length;
+            if (n === 0)
+                return;
+            var src = settle.cur;
+            var dst = settle.bufs.flip ? settle.bufs.a : settle.bufs.b;
+            if (dst.length !== n)
+                dst.length = n;
+            var k = settle.easeK;
+            var moved = false;
+            for (var i = 0; i < n; ++i) {
+                var a = src[i] || 0;
+                var d = t[i] - a;
+                // SELF-PARKING, preserved. Once the ease has converged the
+                // values stop changing, this writes nothing and the pulse
+                // schedules no repaint — the same zero-presents-when-silent
+                // property the step version had. Without this guard a held
+                // signal would repaint forever chasing a target it already
+                // reached.
+                if (d > 0.0005 || d < -0.0005)
+                    moved = true;
+                dst[i] = a + d * k;
+            }
+            if (!moved)
+                return;
+            settle.bufs.flip = !settle.bufs.flip;
+            settle.cur = dst;
         }
     }
 }

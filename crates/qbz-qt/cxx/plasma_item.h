@@ -26,6 +26,19 @@ class PlasmaItem : public QQuickRhiItem
     Q_PROPERTY(float levelSmooth MEMBER m_levelSmooth)
     Q_PROPERTY(QVector4D energyLo MEMBER m_energyLo)
     Q_PROPERTY(QVector4D energyHi MEMBER m_energyHi)
+    // THE FAST HALF OF THE PACK, which used to arrive zeroed.
+    //
+    // `plasma.frag` has always declared `transientAmp`, `bandsLo` and
+    // `bandsHi` in its std140 block and the pack has always published them —
+    // `ShaderSceneLayer` even parses and stores all three. They simply never
+    // reached this item, so the shader read zeros and ran entirely off the
+    // ENERGY bands, which decay x0.85 per frame (~473 ms to a tenth) against
+    // the bars' x0.65 (~178 ms). Plasma was being driven by the slowest
+    // signals in the pipeline while the fast ones travelled beside them
+    // unconnected.
+    Q_PROPERTY(float transientAmp MEMBER m_transientAmp)
+    Q_PROPERTY(QVector4D bandsLo MEMBER m_bandsLo)
+    Q_PROPERTY(QVector4D bandsHi MEMBER m_bandsHi)
     Q_PROPERTY(QColor primary MEMBER m_primary)
     Q_PROPERTY(QColor secondary MEMBER m_secondary)
     Q_PROPERTY(QColor accent MEMBER m_accent)
@@ -44,6 +57,9 @@ public:
     float m_levelSmooth = 0.0f;
     QVector4D m_energyLo{ 0.0f, 0.0f, 0.0f, 0.0f };
     QVector4D m_energyHi{ 0.0f, 0.0f, 0.0f, 0.0f };
+    float m_transientAmp = 0.0f;
+    QVector4D m_bandsLo{ 0.0f, 0.0f, 0.0f, 0.0f };
+    QVector4D m_bandsHi{ 0.0f, 0.0f, 0.0f, 0.0f };
     QColor m_primary{ 0, 220, 200 };
     QColor m_secondary{ 150, 50, 255 };
     QColor m_accent{ 63, 217, 200 };

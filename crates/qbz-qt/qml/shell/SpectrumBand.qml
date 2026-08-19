@@ -156,9 +156,13 @@ Rectangle {
             }
             Connections {
                 target: barsSettle
-                function onFromChanged() { barsMode.push() }
-                function onToChanged() { barsMode.push() }
-                function onProgressChanged() { barsMode.push() }
+                // ONE handler since VizSettle eases instead of stepping: it
+                // applies into `cur` and the three-property from/to/progress
+                // triple is gone. Three handlers on properties that no longer
+                // exist is not a compile error — QML warns at RUNTIME and the
+                // Connections simply never fires, which is exactly how this
+                // band went dead in all three modes.
+                function onCurChanged() { barsMode.push() }
             }
 
             // Shader arm health: no shaders at all (software backend) or a
@@ -257,9 +261,13 @@ Rectangle {
             }
             Connections {
                 target: waveSettle
-                function onFromChanged() { waveMode.push() }
-                function onToChanged() { waveMode.push() }
-                function onProgressChanged() { waveMode.push() }
+                // ONE handler since VizSettle eases instead of stepping: it
+                // applies into `cur` and the three-property from/to/progress
+                // triple is gone. Three handlers on properties that no longer
+                // exist is not a compile error — QML warns at RUNTIME and the
+                // Connections simply never fires, which is exactly how this
+                // band went dead in all three modes.
+                function onCurChanged() { waveMode.push() }
             }
 
             readonly property bool fxOk: !band._noShaders && waveFx.status !== ShaderEffect.Error
@@ -372,9 +380,13 @@ Rectangle {
             }
             Connections {
                 target: energySettle
-                function onFromChanged() { energyMode.push() }
-                function onToChanged() { energyMode.push() }
-                function onProgressChanged() { energyMode.push() }
+                // ONE handler since VizSettle eases instead of stepping: it
+                // applies into `cur` and the three-property from/to/progress
+                // triple is gone. Three handlers on properties that no longer
+                // exist is not a compile error — QML warns at RUNTIME and the
+                // Connections simply never fires, which is exactly how this
+                // band went dead in all three modes.
+                function onCurChanged() { energyMode.push() }
             }
 
             readonly property bool fxOk: !band._noShaders && energyFx.status !== ShaderEffect.Error

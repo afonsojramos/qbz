@@ -58,13 +58,16 @@ Item {
         // and this one feeds geometry (artScale/glow), so each publish was a
         // whole-window present of its own (measured: the immersive ran at
         // 57 presents/s with 1 ms-apart pairs, 2026-08-13).
-        if (energySettle.to.length < 5)
+        // `cur` since VizSettle eases instead of stepping — same job (have we
+        // been handed a frame yet?) and the same dependency, because `cur` is
+        // the property the pulse reassigns.
+        if (energySettle.cur.length < 5)
             return 0.0
         return (energySettle.at(0) + energySettle.at(1) + energySettle.at(2)
                 + energySettle.at(3) + energySettle.at(4)) / 5.0
     }
     readonly property real bassEnergy: {
-        if (energySettle.to.length < 2)
+        if (energySettle.cur.length < 2)
             return 0.0
         return (energySettle.at(0) + energySettle.at(1)) / 2.0
     }
