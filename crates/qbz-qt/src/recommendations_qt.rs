@@ -48,7 +48,7 @@
 //!   from artists you know" row exactly as the reference does with its larger
 //!   played-or-favorited set.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
@@ -340,11 +340,82 @@ fn publish_snapshot(download: bool) {
     if download && !missing.is_empty() {
         crate::spawn(async move {
             crate::artwork_qt::download_missing(missing).await;
-            // download=false: the covers are on disk now, so this pass can
-            // only attach — it can never spawn another download round.
-            publish_snapshot(false);
+            // Was a second `publish_snapshot(false)`. Republishing for artwork
+            // hands QML a brand-new array, and `QQuickItemView::setModel()`
+            // then resets each rail's scroll offset and tears down its
+            // QQmlDelegateModel — see the note at line 273 and the identical
+            // reasoning in `HomeView.qml:161`. Every landing batch therefore
+            // rebuilt all nine rails' delegates. The covers now travel as a
+            // url-keyed PATCH, exactly as `foryou_qt::emit_foryou_art` does
+            // for the For You rails and `myqbz_bridge` does for MyQBZ; the
+            // document is left alone.
+            //
+            // The download itself is untouched: this changes only how a
+            // resolved path is ANNOUNCED, never what gets fetched or cached,
+            // so every other consumer of the shared image cache (the now-
+            // playing bar, the queue, the `recent` rails) sees exactly what it
+            // saw before.
+            emit_reco_art(art_patch());
         });
     }
+}
+
+/// Every (art_url -> art_path) this tab's rows can resolve from the disk cache
+/// right now. Attaches into a THROWAWAY copy of the sections, so it can never
+/// mutate or republish the live document, and never downloads.
+fn art_patch() -> BTreeMap<String, String> {
+    let rows = rows_snapshot();
+    let mut secs = sections(&rows);
+    let _ = crate::artwork_qt::attach_cached(&mut secs);
+    let mut patch: BTreeMap<String, String> = BTreeMap::new();
+    for section in secs.iter() {
+        for card in section.items.iter() {
+            if !card.art_url.is_empty() && !card.art_path.is_empty() {
+                patch.insert(card.art_url.clone(), card.art_path.clone());
+            }
+        }
+    }
+    patch
+}
+
+/// ONE emit per batch — the receiving QML map is a `var`, so it only notifies
+/// on a new object reference, and an emit per url would copy the growing map
+/// and invalidate every cover binding once per cover. Nothing paints later for
+/// it: `download_missing().await` settles the whole batch first.
+fn emit_reco_art(patch: BTreeMap<String, String>) {
+    if patch.is_empty() {
+        return;
+    }
+    let json = serde_json::to_string(&patch).unwrap_or_else(|_| "{}".to_string());
+    crate::home_bridge::ui(move |mut b| {
+        b.as_mut().reco_art_ready(QString::from(json.as_str()));
+    });
+}
+
+/// Re-hand the resolved covers to a freshly mounted HomeView. HomeView is
+/// destroyed and rebuilt on every navigation while this document is published
+/// once per session, so without this the covers that arrived as a PATCH (i.e.
+/// everything that was not already on disk at publish time) would come back
+/// blank for the rest of the session — and the "still pending" probe would
+/// stay true forever and pin the skeleton pulse Timer on. The exact trap
+/// `foryou_qt::resolved_art_patch` exists to close.
+///
+/// Never downloads, never republishes; returns "" when nothing is resolved, so
+/// a cold first mount emits nothing and cannot clear a map an in-flight
+/// download is about to fill.
+pub(crate) fn resolved_art_patch() -> String {
+    if !LOADED.load(Ordering::SeqCst) {
+        return String::new();
+    }
+    let patch = art_patch();
+    if patch.is_empty() {
+        return String::new();
+    }
+    log::debug!(
+        "[qbz-qt] reco art re-handed to a fresh HomeView: {} covers",
+        patch.len()
+    );
+    serde_json::to_string(&patch).unwrap_or_else(|_| "{}".to_string())
 }
 
 // ---------------------------------------------------------------------------

@@ -200,7 +200,49 @@ Rectangle {
     // never downloads, never republishes a document, and emits nothing at all
     // when nothing is resolved yet — so the first, cold mount is a no-op and the
     // in-flight download's own emit still fills the map.
-    Component.onCompleted: QbzHome.refreshForyouArt()
+    Component.onCompleted: { QbzHome.refreshForyouArt(); QbzHome.refreshRecoArt() }
+    // Recommendations' rails used to get their covers by REPUBLISHING
+    // `recoSectionsJson` once per landing batch, which hands `model:` a new JS
+    // array — `QQuickItemView::setModel()` then resets the rail's scroll and
+    // tears down its QQmlDelegateModel, so every batch rebuilt all nine rails'
+    // delegates (the same defect the For You rails were moved off, :161). Rust
+    // now emits a url-keyed patch instead and leaves the document alone.
+    property var recoArt: ({})
+    Connections {
+        target: QbzHome
+        function onRecoArtReady(patchJson) {
+            var patch
+            try {
+                patch = JSON.parse(patchJson)
+            } catch (e) {
+                return
+            }
+            var m = root.recoArt
+            var changed = false
+            for (var url in patch) {
+                if (m[url] !== patch[url]) {
+                    m[url] = patch[url]
+                    changed = true
+                }
+            }
+            if (changed)
+                root.recoArt = Object.assign({}, m)   // rebind needs a NEW ref
+        }
+    }
+
+    /// Cover for a card that came out of a SECTIONS document: the patch map
+    /// first, then whatever the document itself carried.
+    ///
+    /// The fallback is what makes this safe to put on rails that render the
+    /// other tabs too. `recoArt` only ever holds Recommendations urls, so for a
+    /// Home / Editor's Picks / For You card the lookup misses and the result is
+    /// `item.artPath` — byte for byte what the binding read before. No consumer
+    /// of a baked `artPath` can lose its cover to this change.
+    function sectionArtOf(item) {
+        return (item && item.artUrl && root.recoArt[item.artUrl])
+            || (item ? (item.artPath || "") : "")
+    }
+
     /// The patch map first, then whatever the document happened to carry (a
     /// full Home reload publishes the paths it already has).
     function forYouArtOf(item) {
@@ -295,9 +337,15 @@ Rectangle {
         }
         return false
     }
+    // Consults the patch map, NOT a bare `artPath === ""`. A Recommendations
+    // cover that arrives as a patch never gets its `artPath` back through a
+    // republish any more, so the bare predicate would stay true forever and
+    // pin the 900ms skeleton pulse Timer on — the exact trap the For You
+    // rails hit (see anyForYouArtPending). Unchanged for every other tab,
+    // where `sectionArtOf` just returns `artPath`.
     function anyItemArtPending(items) {
         for (var i = 0; i < items.length; i++) {
-            if ((items[i].artUrl || "") !== "" && (items[i].artPath || "") === "")
+            if ((items[i].artUrl || "") !== "" && root.sectionArtOf(items[i]) === "")
                 return true
         }
         return false
@@ -425,7 +473,7 @@ Rectangle {
                         qualityTier: modelData.qualityTier
                         ribbon: modelData.ribbon
                         ribbonKind: modelData.ribbonKind
-                        artSource: modelData.artPath
+                        artSource: root.sectionArtOf(modelData)
                         isPinned: modelData.isPinned
                         // Snapshot url the pin payload persists (artPath is
                         // a local cache path — see AlbumCard.artworkUrl).
@@ -455,7 +503,7 @@ Rectangle {
                         width: 200
                         height: 200
                         pending: (modelData.artUrl || "") !== ""
-                        coverSource: modelData.artPath || ""
+                        coverSource: root.sectionArtOf(modelData)
                         phase: root.skelPhase
                         cellIndex: index
                         // A cover whose download fails republishes the
@@ -529,7 +577,7 @@ Rectangle {
                 clip: true
                 RoundedImage {
                     anchors.fill: parent
-                    source: card.artPath || ""
+                    source: root.sectionArtOf(card)
                     radius: 4
                 }
             }
@@ -1184,7 +1232,7 @@ Rectangle {
                             model: plRail.sectionData.items
                             delegate: PlaylistCard {
                                 item: modelData
-                                artSource: modelData.artPath || ""
+                                artSource: root.sectionArtOf(modelData)
                                 // The card's own default is `false`; the
                                 // pin state travels on the row (home_qt
                                 // `map_playlist`), so it has to be handed
@@ -1236,7 +1284,7 @@ Rectangle {
                             model: arRail.sectionData.items
                             delegate: ArtistCard {
                                 item: modelData
-                                artSource: modelData.artPath || ""
+                                artSource: root.sectionArtOf(modelData)
                                 // Same hand-over as the playlist rail —
                                 // home_qt `map_fav_artist` publishes the
                                 // pin state and the card defaults to false.

@@ -245,6 +245,14 @@ pub mod qbz_home {
         #[qinvokable]
         fn refresh_foryou_art(self: Pin<&mut QbzHome>);
 
+        /// Twin of `refresh_foryou_art` for the Recommendations rails. HomeView
+        /// is destroyed on every navigation and this document is published once
+        /// per session, so a fresh mount must be re-handed the covers that
+        /// arrived as a patch — otherwise they come back blank and the pending
+        /// probe never goes false, pinning the skeleton pulse Timer on.
+        #[qinvokable]
+        fn refresh_reco_art(self: Pin<&mut QbzHome>);
+
         // --- Label releases sub-view --------------------------------------
         #[qinvokable]
         fn label_releases_load_more(self: Pin<&mut QbzHome>);
@@ -304,6 +312,14 @@ pub mod qbz_home {
         /// `foryouArtReady`, i.e. the handler is `onForyouArtReady(patchJson)`.
         #[qsignal]
         fn foryou_art_ready(self: Pin<&mut QbzHome>, patch_json: QString);
+
+        /// Same contract as `foryouArtReady`, for the Recommendations tab's
+        /// rails: covers resolved AFTER the document was published travel as a
+        /// url-keyed patch instead of forcing a republish, which used to tear
+        /// down every rail's delegate model on each landing batch. QML spelling
+        /// is `recoArtReady`, so the handler is `onRecoArtReady(patchJson)`.
+        #[qsignal]
+        fn reco_art_ready(self: Pin<&mut QbzHome>, patch_json: QString);
     }
 
     impl cxx_qt::Threading for QbzHome {}
@@ -614,6 +630,18 @@ impl qbz_home::QbzHome {
         }
         self.as_mut()
             .foryou_art_ready(QString::from(patch.as_str()));
+    }
+
+    /// Emitted SYNCHRONOUSLY for the same reason as `refresh_foryou_art`: this
+    /// runs on the Qt thread from HomeView's `Component.onCompleted`, and the
+    /// `ui()` hop no-ops until `boot()` has registered the thread.
+    pub fn refresh_reco_art(mut self: Pin<&mut Self>) {
+        let patch = crate::recommendations_qt::resolved_art_patch();
+        if patch.is_empty() {
+            return;
+        }
+        self.as_mut()
+            .reco_art_ready(QString::from(patch.as_str()));
     }
 
     // --- Label releases ----------------------------------------------------
