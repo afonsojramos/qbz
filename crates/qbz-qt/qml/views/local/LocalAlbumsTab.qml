@@ -113,6 +113,9 @@ Item {
                 id: collection
                 anchors.fill: parent
                 anchors.rightMargin: root.view.albumsGroup === "alpha" ? 20 : 0
+                // 32 of tab padding, plus the 20 above when the strip is up.
+                hostRightInset: 32 + (root.view.albumsGroup === "alpha" ? 20 : 0)
+                scrollBarInset: root.view.albumsGroup === "alpha" ? 34 : 4
                 view: root.view
                 surface: "albums"
                 rows: root.view.albumsVisible
@@ -131,6 +134,9 @@ Item {
                 visible: root.view.albumsGroup === "alpha"
                     && collection.alphaJumps.length > 0
                 anchors.right: parent.right
+                // Out past the tab's 32 padding to 12 from the window edge,
+                // which is where LibraryView.qml:1269 puts the same strip.
+                anchors.rightMargin: -20
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
                 jumps: collection.alphaJumps

@@ -42,6 +42,17 @@ Item {
     /// { albumId: true } — the host owns the selection set.
     property var selected: ({})
 
+    /// The scrollbar belongs on the WINDOW's right edge, but hosts inset
+    /// their content (LocalAlbumsTab pads 32, plus 20 more to clear the A-Z
+    /// strip), which dragged the bar visibly inward compared with the rest of
+    /// the app. Both are measured from the window's right edge:
+    /// `scrollBarInset` is where the bar should land (LibraryView uses 4, or
+    /// 34 with the strip up) and `hostRightInset` is how far this component's
+    /// own right edge already is from it. Defaults of 0 leave callers that
+    /// have not opted in exactly where they were.
+    property int scrollBarInset: 0
+    property int hostRightInset: 0
+
     signal openRequested(string id)
     signal playRequested(string id)
     signal enqueueRequested(string id, string mode)
@@ -439,6 +450,10 @@ Item {
 
     QbzScrollBar {
         anchors.right: parent.right
+        // Negative when the host insets its content — the bar overhangs to
+        // reach the real edge. Safe: `root` is a plain Item and does not clip
+        // (the `clip: true` in this file is on the ListView, a sibling).
+        anchors.rightMargin: root.scrollBarInset - root.hostRightInset
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         target: list
