@@ -131,6 +131,11 @@ Rectangle {
     property bool artPending: false
     property bool skelPhase: false
     property int artSettleMs: 0
+    // A ListView reuse-pool item stays alive and keeps receiving signals.
+    // Hosts that enable reuse flip this attached-state twin from pooled /
+    // reused handlers so an offstage playing row cannot keep pulsing and an
+    // old track cannot consume cache/favourite settle signals.
+    property bool recycleActive: true
 
     // Catalog-backed row? `draggable` is ALREADY the "item.id is a Qobuz
     // catalog track id" predicate (the Local Library / ephemeral rows set it
@@ -166,7 +171,7 @@ Rectangle {
     }
     Connections {
         target: QbzShell
-        enabled: root.hasOfflineCacheSeam
+        enabled: root.recycleActive && root.hasOfflineCacheSeam
         function onTrackCacheStatusChanged(trackId, status, progress) {
             if (trackId === (root.item.id || "")) root.cacheStatus = status
         }
@@ -315,9 +320,20 @@ Rectangle {
     // re-established whenever the host hands over a new row object, so a
     // republished document (or a page re-open) overrides a stale local flip.
     property bool favorite: root.item.isFavorite === true
-    onItemChanged: root.favorite = Qt.binding(function () {
-        return root.item.isFavorite === true
-    })
+    onItemChanged: {
+        // Both properties are writable live state. A signal/click breaks their
+        // seed binding, so a recycled delegate must explicitly re-establish
+        // both bindings when ListView hands it a different model row.
+        root.favorite = Qt.binding(function () {
+            return root.item.isFavorite === true
+        })
+        root.cacheStatus = Qt.binding(function () {
+            return root.item.cacheStatus !== undefined
+                ? root.item.cacheStatus : 0
+        })
+        if (rowMenuLoader.item)
+            rowMenuLoader.item.close()
+    }
 
     /// The heart click and the menu's "Add to / Remove from Library" row —
     /// ONE implementation, because they used to diverge silently.
@@ -336,6 +352,7 @@ Rectangle {
     // republishing a document.
     Connections {
         target: QbzLibrary
+        enabled: root.recycleActive
         function onLibraryFavoriteChanged(key, value) {
             var tid = (root.item && root.item.id !== undefined) ? root.item.id : ""
             if (tid !== "" && key === "track:" + tid)
@@ -416,7 +433,7 @@ Rectangle {
     // rides QbzShell.pulseMs) — that is what makes the indicator affordable
     // here, where a display-rate animation was not.
     readonly property bool showBars: root.playIndicatorAnim
-        && root.isActive && QbzPlayer.npPlaying && !root.hovered
+        && root.recycleActive && root.isActive && QbzPlayer.npPlaying && !root.hovered
         && !root.selectMode
 
     // --- Column geometry: rows/TrackCols.qml, NOT literals ---------------
@@ -593,7 +610,7 @@ Rectangle {
             // they ride the shell's frame instead of owning one.
             EqualizerBars {
                 visible: root.showBars
-                active: root.isActive && QbzPlayer.npPlaying
+                active: root.recycleActive && root.isActive && QbzPlayer.npPlaying
                 anchors.centerIn: parent
             }
             // Selection checkbox — TrackRow.slint:392-419: a 13px disc, accent
@@ -1303,6 +1320,22 @@ Rectangle {
             return true
         }
         return false
+    }
+    // Called by a recycling host before this object enters ListView's pool.
+    // Popups are window-overlay children, so merely hiding the delegate would
+    // leave them open and tied to the wrong track after reuse.
+    function releaseForReuse() {
+        root.endBodyDrag()
+        if (rowMenuLoader.item)
+            rowMenuLoader.item.close()
+        if (trackInfoLoader.item)
+            trackInfoLoader.item.close()
+        Qt.callLater(function () {
+            if (!root.recycleActive) {
+                rowMenuLoader.active = false
+                trackInfoLoader.active = false
+            }
+        })
     }
     MouseArea {
         id: trArea

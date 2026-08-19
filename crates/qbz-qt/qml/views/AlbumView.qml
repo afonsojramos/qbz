@@ -22,6 +22,7 @@
 
 import QtQuick
 import QtQuick.Controls
+import Qt.labs.qmlmodels
 import com.blitzfc.qbz
 import "../controls"
 import "../rows"
@@ -56,7 +57,7 @@ Rectangle {
 
     // The view's album + url-keyed cover map (artwork pipeline).
     readonly property var album: JSON.parse(QbzAlbum.albumJson)
-    readonly property var header: album.header || ({})
+    readonly property var albumHeader: album.header || ({})
     readonly property var tracks: album.tracks || []
     // `header.awards`, NOT `album.awards`. It is a field of AlbumHeader
     // (src/album_qt.rs:171), not of AlbumViewData — read one level too high it
@@ -65,7 +66,7 @@ Rectangle {
     // written: an empty Repeater draws nothing and reports nothing, and
     // `hasSidebar` counted the same empty list, so an album whose ONLY sidebar
     // content was its awards showed no sidebar at all.
-    readonly property var awards: header.awards || []
+    readonly property var awards: albumHeader.awards || []
     property var coverMap: ({})
     // Client-side track search (AlbumActions.search equivalent).
     property string trackQuery: ""
@@ -140,20 +141,81 @@ Rectangle {
     readonly property int railSkeletonCount:
         Math.max(1, Math.min(8, Math.ceil((root.width - 64) / 232)))
 
-    // Disc headers + work headers precede their first row (computed once
-    // per track list change, mirroring AlbumState's disc-header-number /
-    // work-header model fields).
-    function headerFor(i) {
-        var t = visibleTracks[i]
-        if (!t) return null
-        if (i === 0) {
-            return { disc: t.disc > 1 || (visibleTracks.length > 0 && visibleTracks[visibleTracks.length - 1].disc > 1) ? t.disc : 0,
-                     work: t.workHeader }
+    // The vertical ListView gets ONE uniform 10px layout cell per slice of
+    // content. A visual item lives in the first cell of its run and paints
+    // over the following inert cells (50px row = 5 cells, 40px header = 4).
+    // Uniform delegate height is deliberate: Qt estimates contentHeight for
+    // variable delegates/sections, which makes a scrollbar thumb resize and
+    // skip as new sizes are discovered. Here count * 10 is exact from frame 1.
+    readonly property int listCellPx: 10
+    readonly property int trackRowPx: 50
+    readonly property int trackHeaderPx: 40
+    // SectionRail/RailSkeleton are 286px. Reserve 290 so the tape stays on
+    // the 10px grid; the final 4px is harmless air before the next section.
+    readonly property int railSlotPx: 290
+
+    function appendRun(out, head, pixels) {
+        out.push(head)
+        for (var y = root.listCellPx; y < pixels; y += root.listCellPx)
+            out.push({ "kind": "gap" })
+    }
+
+    function buildTrackCells() {
+        var out = []
+        var list = root.visibleTracks
+        var multi = list.length > 0 && (list[list.length - 1].disc || 1) > 1
+        for (var i = 0; i < list.length; i++) {
+            var t = list[i]
+            var prev = i > 0 ? list[i - 1] : null
+            var disc = (i === 0)
+                ? (multi ? (t.disc || 1) : 0)
+                : (multi && t.disc !== prev.disc ? (t.disc || 1) : 0)
+            var work = (i === 0 || t.workHeader !== prev.workHeader)
+                ? (t.workHeader || "") : ""
+            if (disc > 0)
+                root.appendRun(out, { "kind": "disc", "disc": disc }, root.trackHeaderPx)
+            if (work !== "") {
+                root.appendRun(out, {
+                    "kind": "work",
+                    "work": work,
+                    "composerName": t.workComposerName || "",
+                    "composerId": t.workComposerId || ""
+                }, root.trackHeaderPx)
+            }
+            root.appendRun(out, {
+                "kind": "track",
+                "track": t,
+                "trackNumber": i + 1
+            }, root.trackRowPx)
         }
-        var prev = visibleTracks[i - 1]
-        var multi = visibleTracks[visibleTracks.length - 1].disc > 1
-        return { disc: (multi && t.disc !== prev.disc) ? t.disc : 0,
-                 work: t.workHeader !== prev.workHeader ? t.workHeader : "" }
+        return out
+    }
+
+    readonly property var trackCells: buildTrackCells()
+    readonly property int trackTapePx: trackCells.length * listCellPx
+
+    function appendRailCells(out, kind, loading, items) {
+        var rows = items || []
+        if (!loading && rows.length === 0)
+            return
+        root.appendRun(out, { "kind": "gap" }, 40)
+        root.appendRun(out, {
+            "kind": loading ? "railSkeleton" : kind,
+            "items": rows
+        }, root.railSlotPx)
+    }
+
+    readonly property var listCells: {
+        // Copy: the deferred rail passes rebuild this array without mutating
+        // the track-only value used by the header/sidebar overlap calculation.
+        var out = root.trackCells.slice(0)
+        root.appendRailCells(out, "moreRail", root.moreLoading,
+                             root.album.moreFromArtist || [])
+        root.appendRailCells(out, "suggestionsRail", root.suggestionsLoading,
+                             root.album.suggestions || [])
+        root.appendRailCells(out, "similarRail", root.similarLoading,
+                             root.album.similarAlbums || [])
+        return out
     }
 
     Connections {
@@ -170,7 +232,7 @@ Rectangle {
         // user navigated away — LibraryView.qml was this signal's only
         // listener. Key shape is `library_qt::feed_key` (`{kind}:{id}`).
         function onLibraryFavoriteChanged(key, value) {
-            var id = (header && header.id) ? header.id : ""
+            var id = (albumHeader && albumHeader.id) ? albumHeader.id : ""
             if (id !== "" && key === "album:" + id)
                 root.setToggleState("album", value)
         }
@@ -185,7 +247,7 @@ Rectangle {
     Connections {
         target: QbzBlacklist
         function onBlacklistChanged(key, value) {
-            var id = (header && header.id) ? header.id : ""
+            var id = (albumHeader && albumHeader.id) ? albumHeader.id : ""
             if (id !== "" && key === "album:" + id)
                 root.setToggleState("blocked", value)
         }
@@ -194,7 +256,7 @@ Rectangle {
     onAlbumChanged: { syncAlbumState(); dispatchCovers() }
     // The derived binding settles AFTER onAlbumChanged fires (stale race) —
     // redispatch when the header itself updates.
-    onHeaderChanged: { syncAlbumState(); dispatchCovers() }
+    onAlbumHeaderChanged: { syncAlbumState(); dispatchCovers() }
 
     // Optimistic heart / pin state. The document is republished once per
     // deferred rail now, and every republish re-parses `album` — a toggle
@@ -215,7 +277,7 @@ Rectangle {
     // deferred rail landing would yank the user's toggles back mid-read.
     property string loadedAlbumId: ""
     function syncAlbumState() {
-        var id = (header && header.id) ? header.id : ""
+        var id = (albumHeader && albumHeader.id) ? albumHeader.id : ""
         if (id === loadedAlbumId)
             return
         loadedAlbumId = id
@@ -273,7 +335,7 @@ Rectangle {
         if (action === "clear") { root.selected = ({}); return }
         var ids = root.selectedIdsInOrder()
         if (ids.length === 0) return
-        QbzAlbum.albumBulkAction(header.id, JSON.stringify(ids), action)
+        QbzAlbum.albumBulkAction(albumHeader.id, JSON.stringify(ids), action)
         // The Slint keeps the selection while a picker is still open (a
         // failed write is retried from the same modal) and clears after
         // everything else.
@@ -326,7 +388,7 @@ Rectangle {
     property var dispatchedCovers: ({})
     function dispatchCovers() {
         var urls = []
-        if (header && header.artUrl) urls.push(header.artUrl)
+        if (albumHeader && albumHeader.artUrl) urls.push(albumHeader.artUrl)
         var more = album.moreFromArtist || []
         for (var i = 0; i < more.length; i++) if (more[i].artUrl) urls.push(more[i].artUrl)
         var sug = album.suggestions || []
@@ -505,47 +567,51 @@ Rectangle {
     readonly property string brandDir: "qrc:/qt/qml/com/blitzfc/qbz/qml/assets/brand/"
 
     // Whether the right-hand album sidebar has anything to show at all.
-    readonly property bool hasSidebar: (header.label || "") !== ""
+    readonly property bool hasSidebar: (albumHeader.label || "") !== ""
                                        || awards.length > 0
-                                       || header.showExternalLinks === true
+                                       || albumHeader.showExternalLinks === true
 
     // ============================ the page ================================
-    Flickable {
+    ListView {
         id: pageFlick
         anchors.fill: parent
         clip: true
-        contentWidth: width
-        contentHeight: page.implicitHeight
         boundsBehavior: Flickable.StopAtBounds
+        model: root.listCells
+        reuseItems: true
+        currentIndex: -1
+        // One viewport of asynchronously incubated delegates gives a heavy
+        // rail time to finish before it becomes visible, without the old
+        // Loader's synchronous build in the wheel frame that crossed a band.
+        cacheBuffer: Math.max(600, height)
 
-        // Artwork-tinted header band. FIRST child so it paints under the
-        // page, and inside the Flickable so it scrolls with the content
-        // (AlbumPageView.slint:221 — the atmosphere lives in the Flickable).
-        // Full-bleed on purpose: the page's 32px padding must NOT clip it or
-        // a dark gutter strip appears on the right (.slint:199-202).
-        HeaderGradient {
-            x: 0
-            y: 0
+        header: Item {
             width: pageFlick.width
-            // .slint:189 `atmo-height: page.y + header-divider.y` — the band
-            // ends EXACTLY on the header/track-list divider, whatever height
-            // a long editorial description gave the header.
-            height: page.y + headerDivider.y + root.atmoReach
-            tint: album.headerColor || ""
-            // Route A: the blurred field. Empty until the cover resolves, and the
-            // flat tint stands in meanwhile (HeaderGradient handles the swap).
-            atmosphere: album.headerAtmosphere || ""
-            active: root.headerAtmoOn
-        }
+            height: page.implicitHeight
 
-        Column {
-            id: page
-            width: parent.width
-            leftPadding: 32
-            rightPadding: 32
-            topPadding: 11
-            bottomPadding: 100
-            spacing: 0
+            // Artwork-tinted header band. FIRST child so it paints under the
+            // page, and inside the ListView header so it scrolls with content.
+            // Full-bleed on purpose: the page's 32px padding must NOT clip it.
+            HeaderGradient {
+                x: 0
+                y: 0
+                width: pageFlick.width
+                // .slint:189 `atmo-height: page.y + header-divider.y` — the band
+                // ends EXACTLY on the header/track-list divider, whatever height
+                // a long editorial description gave the header.
+                height: page.y + headerDivider.y + root.atmoReach
+                tint: album.headerColor || ""
+                atmosphere: album.headerAtmosphere || ""
+                active: root.headerAtmoOn
+            }
+
+            Column {
+                id: page
+                width: parent.width
+                leftPadding: 32
+                rightPadding: 32
+                topPadding: 11
+                spacing: 0
 
             // NavButtons is a 0px placeholder in the Slint source.
             Item { width: 1; height: 22 }
@@ -609,9 +675,9 @@ Rectangle {
                         anchors.fill: parent
                         // A custom cover override (shared custom_artwork
                         // store) beats the url-keyed pipeline image.
-                        source: (header.customCoverPath || "") !== ""
-                            ? "file://" + header.customCoverPath
-                            : (root.coverMap[header.artUrl] || "")
+                        source: (albumHeader.customCoverPath || "") !== ""
+                            ? "file://" + albumHeader.customCoverPath
+                            : (root.coverMap[albumHeader.artUrl] || "")
                         radius: 12
                     }
                     // Left-click: the lightbox (NEW — Slint's left-click is
@@ -640,7 +706,7 @@ Rectangle {
 
                     Text {
                         width: parent.width
-                        text: header.title || ""
+                        text: albumHeader.title || ""
                         color: root.hdrStrong
                         font.pixelSize: theme.fontSection
                         font.weight: theme.weightBold
@@ -652,7 +718,7 @@ Rectangle {
                         width: parent.width
                         spacing: 0
                         Repeater {
-                            model: header.credits || []
+                            model: albumHeader.credits || []
                             delegate: Row {
                                 required property var modelData
                                 required property int index
@@ -691,15 +757,15 @@ Rectangle {
                     // Meta line (label as a clickable link when navigable).
                     Row {
                         spacing: 0
-                        visible: (header.labelId || "") !== "" && (header.label || "") !== ""
+                        visible: (albumHeader.labelId || "") !== "" && (albumHeader.label || "") !== ""
                         Text {
-                            visible: (header.metaPre || "") !== ""
-                            text: (header.metaPre || "") + "   •   "
+                            visible: (albumHeader.metaPre || "") !== ""
+                            text: (albumHeader.metaPre || "") + "   •   "
                             color: root.hdrBody
                             font.pixelSize: theme.fontBody
                         }
                         Text {
-                            text: header.label || ""
+                            text: albumHeader.label || ""
                             color: labelArea.containsMouse ? theme.accent : root.hdrBody
                             font.pixelSize: theme.fontBody
                             MouseArea {
@@ -707,38 +773,38 @@ Rectangle {
                                 anchors.fill: parent
                                 hoverEnabled: true
                                 cursorShape: Qt.PointingHandCursor
-                                onClicked: QbzHome.openLabel(header.labelId)
+                                onClicked: QbzHome.openLabel(albumHeader.labelId)
                             }
                         }
                         Text {
-                            visible: (header.metaPost || "") !== ""
-                            text: "   •   " + (header.metaPost || "")
+                            visible: (albumHeader.metaPost || "") !== ""
+                            text: "   •   " + (albumHeader.metaPost || "")
                             color: root.hdrBody
                             font.pixelSize: theme.fontBody
                         }
                     }
                     Text {
-                        visible: (header.labelId || "") === "" || (header.label || "") === ""
+                        visible: (albumHeader.labelId || "") === "" || (albumHeader.label || "") === ""
                         width: parent.width
-                        text: header.infoLine || ""
+                        text: albumHeader.infoLine || ""
                         color: root.hdrBody
                         font.pixelSize: theme.fontBody
                         elide: Text.ElideRight
                     }
 
                     // Editorial description + Read more.
-                    Item { visible: (header.description || "") !== ""; width: 1; height: 12 }
+                    Item { visible: (albumHeader.description || "") !== ""; width: 1; height: 12 }
                     Text {
-                        visible: (header.description || "") !== ""
+                        visible: (albumHeader.description || "") !== ""
                         width: parent.width
-                        text: header.descriptionShort || ""
+                        text: albumHeader.descriptionShort || ""
                         color: root.hdrBody
                         font.pixelSize: theme.fontLegal
                         wrapMode: Text.WordWrap
                     }
-                    Item { visible: (header.description || "") !== (header.descriptionShort || ""); width: 1; height: 4 }
+                    Item { visible: (albumHeader.description || "") !== (albumHeader.descriptionShort || ""); width: 1; height: 4 }
                     Text {
-                        visible: (header.description || "") !== (header.descriptionShort || "")
+                        visible: (albumHeader.description || "") !== (albumHeader.descriptionShort || "")
                         text: QbzSession.tr("Read more", QbzSession.trRev)
                         color: readMoreArea.containsMouse ? theme.accentHover : theme.accent
                         font.pixelSize: theme.fontLegal
@@ -750,7 +816,7 @@ Rectangle {
                             onClicked: {
                                 var shell = root.parent
                                 while (shell && shell.openTextModal === undefined) shell = shell.parent
-                                if (shell) shell.openTextModal(QbzSession.tr("About this album", QbzSession.trRev), header.description || "")
+                                if (shell) shell.openTextModal(QbzSession.tr("About this album", QbzSession.trRev), albumHeader.description || "")
                             }
                         }
                     }
@@ -769,23 +835,23 @@ Rectangle {
                             overlay: root.hdrOverlay
                             name: "play-fill"
                             anchors.verticalCenter: parent.verticalCenter
-                            onClicked: QbzPlayer.playAlbum(header.id)
+                            onClicked: QbzPlayer.playAlbum(albumHeader.id)
                         }
                         QbzCircleAction {
                             name: "shuffle"
                             overlay: root.hdrOverlay
                             anchors.verticalCenter: parent.verticalCenter
-                            onClicked: QbzPlayer.playAlbumShuffled(header.id)
+                            onClicked: QbzPlayer.playAlbumShuffled(albumHeader.id)
                         }
                         QbzCircleAction {
-                            readonly property bool favorite: root.toggleState("album", header.isFavorite)
+                            readonly property bool favorite: root.toggleState("album", albumHeader.isFavorite)
                             name: favorite ? "heart-filled" : "heart"
                             overlay: root.hdrOverlay
                             active: favorite
                             anchors.verticalCenter: parent.verticalCenter
                             onClicked: {
                                 root.setToggleState("album", !favorite)
-                                QbzLibrary.libraryToggleFavorite("album", header.id)
+                                QbzLibrary.libraryToggleFavorite("album", albumHeader.id)
                             }
                         }
                         // Radio: the Qobuz /radio/album endpoint, via the
@@ -795,12 +861,12 @@ Rectangle {
                             name: "radio"
                             overlay: root.hdrOverlay
                             anchors.verticalCenter: parent.verticalCenter
-                            onClicked: QbzHome.startAlbumRadio(header.id)
+                            onClicked: QbzHome.startAlbumRadio(albumHeader.id)
                         }
                         // Booklet: only when the album carries a PDF goody
                         // (AlbumPageView.slint:575-585); downloads via save-as.
                         QbzCircleAction {
-                            visible: header.hasBooklet === true
+                            visible: albumHeader.hasBooklet === true
                             name: "book-open"
                             overlay: root.hdrOverlay
                             anchors.verticalCenter: parent.verticalCenter
@@ -812,7 +878,7 @@ Rectangle {
                             name: "cassette-tape"
                             overlay: root.hdrOverlay
                             anchors.verticalCenter: parent.verticalCenter
-                            onClicked: QbzAlbum.addToMixtape(header.id)
+                            onClicked: QbzAlbum.addToMixtape(albumHeader.id)
                         }
                         // Album info: the Credits/Review modal
                         // (AlbumInfoModal.qml, data via album_info_qt.rs).
@@ -820,7 +886,7 @@ Rectangle {
                             name: "info"
                             overlay: root.hdrOverlay
                             anchors.verticalCenter: parent.verticalCenter
-                            onClicked: albumInfo.openFor(header.id)
+                            onClicked: albumInfo.openFor(albumHeader.id)
                         }
                         QbzCircleAction {
                             id: albumMenuBtn
@@ -845,10 +911,18 @@ Rectangle {
 
             // --- Track list + label/awards sidebar ----------------------
             Row {
+                id: trackChromeRow
                 width: parent.width - 64
+                // Usually only the toolbar/header chrome contributes to the
+                // ListView header. The sidebar is allowed to paint beside the
+                // recycled rows; for a very short album reserve just enough
+                // extra height to keep the first full-width rail below it.
+                height: Math.max(trackChrome.implicitHeight,
+                                 albumSidebar.implicitHeight - root.trackTapePx)
                 spacing: 32
 
                 Column {
+                    id: trackChrome
                     width: parent.width - (root.hasSidebar ? 232 : 0)
                     spacing: 0
 
@@ -951,8 +1025,8 @@ Rectangle {
                         QualityBadgeFull {
                             id: qualityRow
                             anchors.verticalCenter: parent.verticalCenter
-                            tier: header.qualityTier || ""
-                            detail: header.qualityDetail || ""
+                            tier: albumHeader.qualityTier || ""
+                            detail: albumHeader.qualityDetail || ""
                         }
                         // Clamped, and the badge slot only counts when the
                         // badge is actually there (QualityBadgeFull hides
@@ -1058,193 +1132,22 @@ Rectangle {
                         downloadGlyph: true
                     }
 
-                    // Rows (with Disc / work headers).
-                    //
-                    // WINDOWED, for the reason spelled out in the twin
-                    // (LocalAlbumView): a box set is BOUNDED but not cheap,
-                    // and the search field filters `visibleTracks`, so every
-                    // keystroke handed this Repeater a new model and rebuilt
-                    // every row. The slot keeps its height; only the row is
-                    // windowed. The disc / work headers stay gated on DATA,
-                    // not on the band, so their contribution to the slot's
-                    // height is always real.
-                    Repeater {
-                        id: trackList
-                        model: root.visibleTracks
-                        /// This list's top in the page Flickable's content
-                        /// coordinates — one mapToItem for the whole list.
-                        readonly property real topInFlick:
-                            trackList.parent
-                                ? trackList.parent.mapToItem(pageFlick.contentItem, 0, 0).y
-                                : 0
-                        delegate: Column {
-                            id: trackBlock
-                            required property var modelData
-                            required property int index
-                            property var hdr: root.headerFor(index)
-                            width: parent ? parent.width : 0
-
-                            // LOADER, not `visible:` — this header is declared per TRACK and was
-                            // built for every one of them so a couple of disc
-                            // boundaries could show. Measured on a 247-track album:
-                            // `localalbum built=39ms` / `to-idle=2242ms`, the mount
-                            // instant and the settle 2.2 s. See LocalAlbumView for
-                            // the twin (whose header also carried a Popup).
-                            Loader {
-                                width: parent.width
-                                active: hdr && hdr.disc > 0
-                                visible: active
-                                sourceComponent: Rectangle {
-                                    visible: hdr && hdr.disc > 0
-                                    width: parent.width
-                                    height: 40
-                                    color: "transparent"
-                                    Text {
-                                        anchors.left: parent.left
-                                        anchors.leftMargin: 12
-                                        anchors.verticalCenter: parent.verticalCenter
-                                        text: QbzSession.tr("Disc", QbzSession.trRev) + " " + hdr.disc
-                                        color: theme.textMuted
-                                        font.pixelSize: 13
-                                        font.weight: theme.weightSemibold
-                                        font.letterSpacing: 0.5
-                                    }
-                                }
-                            }
-                            // Same gate, same reason as the disc header above.
-                            Loader {
-                                width: parent.width
-                                active: hdr && hdr.work !== ""
-                                visible: active
-                                sourceComponent: Row {
-                                    visible: hdr && hdr.work !== ""
-                                    width: parent.width
-                                    leftPadding: 12
-                                    rightPadding: 12
-                                    topPadding: 14
-                                    bottomPadding: 4
-                                    spacing: 0
-                                    Text {
-                                        text: hdr.work
-                                        color: theme.textPrimary
-                                        font.pixelSize: theme.fontBody
-                                        font.weight: theme.weightBold
-                                    }
-                                    Text {
-                                        visible: modelData.workComposerName !== ""
-                                        text: " ("
-                                        color: theme.textSecondary
-                                        font.pixelSize: theme.fontBody
-                                        font.weight: theme.weightBold
-                                    }
-                                    Text {
-                                        visible: modelData.workComposerName !== ""
-                                        text: modelData.workComposerName
-                                        color: composerArea.containsMouse && modelData.workComposerId !== "" ? theme.textPrimary : theme.textSecondary
-                                        font.pixelSize: theme.fontBody
-                                        font.weight: theme.weightBold
-                                        MouseArea {
-                                            id: composerArea
-                                            anchors.fill: parent
-                                            enabled: modelData.workComposerId !== ""
-                                            hoverEnabled: true
-                                            cursorShape: modelData.workComposerId !== "" ? Qt.PointingHandCursor : Qt.ArrowCursor
-                                            onClicked: QbzArtist.openArtist(modelData.workComposerId)
-                                        }
-                                    }
-                                    Text {
-                                        visible: modelData.workComposerName !== ""
-                                        text: ")"
-                                        color: theme.textSecondary
-                                        font.pixelSize: theme.fontBody
-                                        font.weight: theme.weightBold
-                                    }
-                                }
-                            }
-                            // 50 px reserved whether or not the row exists,
-                            // so windowing cannot move the page under the user.
-                            Item {
-                                id: rowSlot
-                                width: parent.width
-                                height: 50
-                                /// `rowSlot.y` — NOT `trackBlock.height`.
-                                /// The Column's height is derived FROM its
-                                /// children, so measuring this slot against it
-                                /// made the position depend on the thing being
-                                /// positioned. QML broke that cycle, `topY`
-                                /// came out garbage, every row read as in-band
-                                /// and all 247 were built — the counter said
-                                /// `filas construidas=247`, which is how this
-                                /// was caught rather than guessed at again.
-                                /// `y` is assigned by the Column from the
-                                /// PRECEDING siblings only, and the header
-                                /// above is gated on DATA, so nothing here
-                                /// depends on the band.
-                                readonly property real topY:
-                                    trackList.topInFlick + trackBlock.y + rowSlot.y
-                                readonly property bool inBand:
-                                    rowSlot.topY > pageFlick.contentY - pageFlick.height
-                                    && rowSlot.topY < pageFlick.contentY + 2 * pageFlick.height
-                                Loader {
-                                    anchors.fill: parent
-                                    active: rowSlot.inBand
-                                    sourceComponent: TrackRow {
-                                        item: modelData
-                                        number: index + 1
-                                        zebra: true
-                                        clickPlays: false
-                                        artistLink: true
-                                        qualityStyle: "text"
-                                        showDownload: true
-                                        downloadGlyph: true
-                                        selectMode: root.multiSelect
-                                        checked: root.selected[item.id] === true
-                                        onToggleSelect: root.toggleSelected(item.id)
-                                        menuShowLater: false
-                                        menuShowGoTo: false
-                                        onPlayRequested: QbzPlayer.playAlbumFrom(header.id, item.id)
-                                        onEnqueueRequested: function (m) {
-                                            QbzPlayer.enqueueAlbumTrack(header.id, item.id, m === "next" ? "next" : "later")
-                                        }
-                                        // MyQBZ "Add to mixtape" — the HOST builds the
-                                        // AddItem array (TrackRow does not know
-                                        // itemType/source).
-                                        //
-                                        // SOURCE: this view never shows a local album.
-                                        // `open_album` (main.rs:538-548) routes any id
-                                        // that `is_local_feed_id("album", …)` accepts
-                                        // — a Plex `plex:` key, a group key, a path —
-                                        // to the LocalAlbum view instead, so what
-                                        // reaches `album_qt::TrackRow` here is always
-                                        // a `/album/get` response. `item.id` is a
-                                        // Qobuz catalog id by construction of the
-                                        // route, not by assumption at this call site.
-                                        onMixtapeRequested: QbzMyQbzAdd.open(JSON.stringify([{
-                                            "itemType": "track", "source": "qobuz",
-                                            "sourceItemId": item.id, "title": item.title || "",
-                                            "subtitle": item.artist || "", "artworkUrl": "",
-                                            "year": null, "trackCount": null
-                                        }]))
-                                    }
-                                }
-                            }
-                        }
-                    }
                 }
 
                 // Label / awards / external-links sidebar (200px).
                 Column {
+                    id: albumSidebar
                     visible: root.hasSidebar
                     width: 200
                     spacing: 24
 
                     Column {
-                        visible: (header.label || "") !== ""
+                        visible: (albumHeader.label || "") !== ""
                         width: parent.width
                         spacing: 8
                         SidebarHeading { text: QbzSession.tr("LABEL", QbzSession.trRev) }
                         SidebarCard {
-                            name: header.label || ""
+                            name: albumHeader.label || ""
                             iconName: "disc"
                             gradA: "#6366f1"
                             gradB: "#8b5cf6"
@@ -1253,8 +1156,8 @@ Rectangle {
                             // along. This card carried a "no label view yet"
                             // note and no handler, so the sidebar's LABEL entry
                             // looked clickable (it hovers) and did nothing.
-                            onClicked: if ((header.labelId || "") !== "")
-                                QbzHome.openLabel(header.labelId)
+                            onClicked: if ((albumHeader.labelId || "") !== "")
+                                QbzHome.openLabel(albumHeader.labelId)
                         }
                     }
                     Column {
@@ -1292,117 +1195,288 @@ Rectangle {
                     // an artist and a title; they are ordinary web URLs, so
                     // they neither require nor touch a connected integration.
                     Column {
-                        visible: header.showExternalLinks === true
+                        visible: albumHeader.showExternalLinks === true
                         width: parent.width
                         spacing: 8
                         SidebarHeading { text: QbzSession.tr("EXTERNAL LINKS", QbzSession.trRev) }
                         Row {
                             spacing: 8
                             BrandLink {
-                                visible: (header.lastfmUrl || "") !== ""
+                                visible: (albumHeader.lastfmUrl || "") !== ""
                                 iconSource: root.brandDir + "brand-lastfm.svg"
                                 name: "Last.fm"
-                                url: header.lastfmUrl || ""
+                                url: albumHeader.lastfmUrl || ""
                             }
                             BrandLink {
-                                visible: (header.discogsUrl || "") !== ""
+                                visible: (albumHeader.discogsUrl || "") !== ""
                                 iconSource: root.brandDir + "brand-discogs.svg"
                                 name: "Discogs"
-                                url: header.discogsUrl || ""
+                                url: albumHeader.discogsUrl || ""
                             }
                             BrandLink {
-                                visible: (header.musicbrainzUrl || "") !== ""
+                                visible: (albumHeader.musicbrainzUrl || "") !== ""
                                 iconSource: root.brandDir + "brand-musicbrainz.svg"
                                 name: "MusicBrainz"
-                                url: header.musicbrainzUrl || ""
+                                url: albumHeader.musicbrainzUrl || ""
                             }
                         }
                     }
                 }
             }
 
-            // --- Bottom carousels ---------------------------------------
-            // Each one is deferred and paints the moment ITS fetch lands
-            // (album_qt.rs spawn_deferred_rows). While a fetch is out the
-            // rail's placeholder holds its band; when it resolves to nothing
-            // both the placeholder and the rail are gone — no empty frame.
-            //
-            // WIDTH — every rail below spells `parent.width - 64` on purpose.
-            // `page` is a Column with leftPadding/rightPadding 32, and a QML
-            // Column's padding does NOT narrow `parent.width` for its
-            // children: it only shifts them. A child that says
-            // `width: parent.width` therefore comes out 64px too wide and
-            // hangs 32px off the right edge — which put SectionRail's
-            // right-aligned chevron Row entirely outside the viewport (owner
-            // report: the bottom rails had no right chevron at all, and the
-            // left one sat jammed against the window edge). The inset is
-            // applied at the MOUNT SITES, not inside SectionRail /
-            // RailSkeleton, exactly as the page's other direct children
-            // already do it — see :442, :480, :690 and :695.
-            Item { visible: moreRail.visible || moreRailSk.visible; width: 1; height: 40 }
-            RailSkeleton {
-                id: moreRailSk
-                width: parent.width - 64
-                visible: root.moreLoading
-                phase: skeletonPhase.on
-                cardCount: root.railSkeletonCount
             }
-            SectionRail {
-                id: moreRail
-                width: parent.width - 64
-                visible: (album.moreFromArtist || []).length > 0
-                title: QbzSession.tr("From the same artist", QbzSession.trRev)
-                items: album.moreFromArtist || []
-                coverMap: root.coverMap
-                // album/AlbumPageView.slint:1124-1132 — this rail is the ONE
-                // carousel on the album page with `show-view-all: true`, and
-                // its link is the SECOND door to the artist discography page
-                // (main.rs:11839-11865 handles it with release_type "album" and
-                // the name taken from AlbumState.artist, which is why
-                // openReleases takes the name as a parameter). The other door
-                // is "See discography" on the artist page itself.
-                showViewAll: true
-                onViewAllClicked: QbzArtist.openReleases(root.header.artistId || "",
-                    root.header.artist || "", "album")
+        }
+
+        // Real viewport recycling: every delegate root has the SAME height.
+        // The child paints over the inert cells reserved by buildTrackCells().
+        // cacheBuffer keeps the root alive until the overflowing child is well
+        // outside the viewport, and creates the next heavy row asynchronously.
+        delegate: DelegateChooser {
+            role: "kind"
+
+            DelegateChoice {
+                roleValue: "gap"
+                delegate: Item {
+                    width: ListView.view.width
+                    height: root.listCellPx
+                }
             }
 
-            Item { visible: sugRail.visible || sugRailSk.visible; width: 1; height: 40 }
-            RailSkeleton {
-                id: sugRailSk
-                width: parent.width - 64
-                visible: root.suggestionsLoading
-                phase: skeletonPhase.on
-                cardCount: root.railSkeletonCount
-            }
-            SectionRail {
-                id: sugRail
-                width: parent.width - 64
-                visible: (album.suggestions || []).length > 0
-                title: QbzSession.tr("Listening suggestions", QbzSession.trRev)
-                items: album.suggestions || []
-                coverMap: root.coverMap
+            DelegateChoice {
+                roleValue: "disc"
+                delegate: Item {
+                    required property var modelData
+                    width: ListView.view.width
+                    height: root.listCellPx
+                    Rectangle {
+                        x: 32
+                        width: parent.width - 64 - (root.hasSidebar ? 232 : 0)
+                        height: root.trackHeaderPx
+                        color: "transparent"
+                        Text {
+                            anchors.left: parent.left
+                            anchors.leftMargin: 12
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: QbzSession.tr("Disc", QbzSession.trRev)
+                                  + " " + modelData.disc
+                            color: theme.textMuted
+                            font.pixelSize: 13
+                            font.weight: theme.weightSemibold
+                            font.letterSpacing: 0.5
+                        }
+                    }
+                }
             }
 
-            // Last.fm row. Absent — not empty, and not even a placeholder —
-            // when Last.fm is not connected: album_qt.rs seeds similarLoading
-            // false in that case and makes no network call. Reuses the same
-            // delegate as the two Qobuz rows rather than a fourth card variant.
-            Item { visible: simRail.visible || simRailSk.visible; width: 1; height: 40 }
-            RailSkeleton {
-                id: simRailSk
-                width: parent.width - 64
-                visible: root.similarLoading
-                phase: skeletonPhase.on
-                cardCount: root.railSkeletonCount
+            DelegateChoice {
+                roleValue: "work"
+                delegate: Item {
+                    id: workCell
+                    required property var modelData
+                    width: ListView.view.width
+                    height: root.listCellPx
+                    Row {
+                        x: 32
+                        width: parent.width - 64 - (root.hasSidebar ? 232 : 0)
+                        height: root.trackHeaderPx
+                        leftPadding: 12
+                        rightPadding: 12
+                        topPadding: 14
+                        bottomPadding: 4
+                        spacing: 0
+                        Text {
+                            text: workCell.modelData.work
+                            color: theme.textPrimary
+                            font.pixelSize: theme.fontBody
+                            font.weight: theme.weightBold
+                        }
+                        Text {
+                            visible: workCell.modelData.composerName !== ""
+                            text: " ("
+                            color: theme.textSecondary
+                            font.pixelSize: theme.fontBody
+                            font.weight: theme.weightBold
+                        }
+                        Text {
+                            visible: workCell.modelData.composerName !== ""
+                            text: workCell.modelData.composerName
+                            color: composerArea.containsMouse
+                                   && workCell.modelData.composerId !== ""
+                                ? theme.textPrimary : theme.textSecondary
+                            font.pixelSize: theme.fontBody
+                            font.weight: theme.weightBold
+                            MouseArea {
+                                id: composerArea
+                                anchors.fill: parent
+                                enabled: workCell.modelData.composerId !== ""
+                                hoverEnabled: true
+                                cursorShape: enabled
+                                    ? Qt.PointingHandCursor : Qt.ArrowCursor
+                                onClicked: QbzArtist.openArtist(
+                                    workCell.modelData.composerId)
+                            }
+                        }
+                        Text {
+                            visible: workCell.modelData.composerName !== ""
+                            text: ")"
+                            color: theme.textSecondary
+                            font.pixelSize: theme.fontBody
+                            font.weight: theme.weightBold
+                        }
+                    }
+                }
             }
-            SectionRail {
-                id: simRail
-                width: parent.width - 64
-                visible: (album.similarAlbums || []).length > 0
-                title: QbzSession.tr("Similar albums", QbzSession.trRev)
-                items: album.similarAlbums || []
-                coverMap: root.coverMap
+
+            DelegateChoice {
+                roleValue: "track"
+                delegate: Item {
+                    id: trackCell
+                    required property var modelData
+                    width: ListView.view.width
+                    height: root.listCellPx
+
+                    TrackRow {
+                        id: trackDelegate
+                        x: 32
+                        width: parent.width - 64 - (root.hasSidebar ? 232 : 0)
+                        item: trackCell.modelData.track
+                        number: trackCell.modelData.trackNumber
+                        zebra: true
+                        clickPlays: false
+                        artistLink: true
+                        qualityStyle: "text"
+                        showDownload: true
+                        downloadGlyph: true
+                        selectMode: root.multiSelect
+                        checked: root.selected[item.id] === true
+                        onToggleSelect: root.toggleSelected(item.id)
+                        menuShowLater: false
+                        menuShowGoTo: false
+                        onPlayRequested: QbzPlayer.playAlbumFrom(albumHeader.id, item.id)
+                        onEnqueueRequested: function (m) {
+                            QbzPlayer.enqueueAlbumTrack(albumHeader.id, item.id,
+                                m === "next" ? "next" : "later")
+                        }
+                        onMixtapeRequested: QbzMyQbzAdd.open(JSON.stringify([{
+                            "itemType": "track", "source": "qobuz",
+                            "sourceItemId": item.id, "title": item.title || "",
+                            "subtitle": item.artist || "", "artworkUrl": "",
+                            "year": null, "trackCount": null
+                        }]))
+                    }
+
+                    ListView.onPooled: {
+                        trackDelegate.recycleActive = false
+                        trackDelegate.releaseForReuse()
+                    }
+                    ListView.onReused: trackDelegate.recycleActive = true
+                }
             }
+
+            DelegateChoice {
+                roleValue: "railSkeleton"
+                delegate: Item {
+                    id: railSkeletonCell
+                    width: ListView.view.width
+                    height: root.listCellPx
+                    property bool live: true
+                    Loader {
+                        x: 32
+                        width: parent.width - 64
+                        active: railSkeletonCell.live
+                        sourceComponent: RailSkeleton {
+                            phase: skeletonPhase.on
+                            cardCount: root.railSkeletonCount
+                        }
+                    }
+                    ListView.onPooled: live = false
+                    ListView.onReused: live = true
+                }
+            }
+
+            DelegateChoice {
+                roleValue: "moreRail"
+                delegate: Item {
+                    id: moreRailCell
+                    required property var modelData
+                    width: ListView.view.width
+                    height: root.listCellPx
+                    property bool live: true
+                    Loader {
+                        x: 32
+                        width: parent.width - 64
+                        active: moreRailCell.live
+                        sourceComponent: SectionRail {
+                            title: QbzSession.tr("From the same artist",
+                                                 QbzSession.trRev)
+                            items: moreRailCell.modelData.items
+                            coverMap: root.coverMap
+                            showViewAll: true
+                            onViewAllClicked: QbzArtist.openReleases(
+                                root.albumHeader.artistId || "",
+                                root.albumHeader.artist || "", "album")
+                        }
+                    }
+                    ListView.onPooled: live = false
+                    ListView.onReused: live = true
+                }
+            }
+
+            DelegateChoice {
+                roleValue: "suggestionsRail"
+                delegate: Item {
+                    id: suggestionsRailCell
+                    required property var modelData
+                    width: ListView.view.width
+                    height: root.listCellPx
+                    property bool live: true
+                    Loader {
+                        x: 32
+                        width: parent.width - 64
+                        active: suggestionsRailCell.live
+                        sourceComponent: SectionRail {
+                            title: QbzSession.tr("Listening suggestions",
+                                                 QbzSession.trRev)
+                            items: suggestionsRailCell.modelData.items
+                            coverMap: root.coverMap
+                        }
+                    }
+                    ListView.onPooled: live = false
+                    ListView.onReused: live = true
+                }
+            }
+
+            DelegateChoice {
+                roleValue: "similarRail"
+                delegate: Item {
+                    id: similarRailCell
+                    required property var modelData
+                    width: ListView.view.width
+                    height: root.listCellPx
+                    property bool live: true
+                    Loader {
+                        x: 32
+                        width: parent.width - 64
+                        active: similarRailCell.live
+                        sourceComponent: SectionRail {
+                            title: QbzSession.tr("Similar albums",
+                                                 QbzSession.trRev)
+                            items: similarRailCell.modelData.items
+                            coverMap: root.coverMap
+                        }
+                    }
+                    ListView.onPooled: live = false
+                    ListView.onReused: live = true
+                }
+            }
+        }
+
+        // ListView header/footer instances are eager in Qt. The real rails
+        // therefore live in the model above; this footer is intentionally a
+        // cheap fixed spacer matching the page's old bottomPadding.
+        footer: Item {
+            width: ListView.view.width
+            height: 100
         }
     }
 
@@ -1418,16 +1492,16 @@ Rectangle {
     // Best available cover source for the lightbox: the custom override
     // file when set, else the remote best() URL (mega → … → large).
     function bestCoverSource() {
-        var custom = header.customCoverPath || ""
+        var custom = albumHeader.customCoverPath || ""
         if (custom !== "") return "file://" + custom
-        return header.artUrl || ""
+        return albumHeader.artUrl || ""
     }
 
     // The cover menu's rows, rebuilt per open (Add vs Change+Remove flips
     // on hasCustomCover; "View cover" is this port's addition).
     function buildCoverMenuModel() {
         var rows = []
-        if (header.hasCustomCover === true) {
+        if (albumHeader.hasCustomCover === true) {
             rows.push({ "label": QbzSession.tr("Change cover", QbzSession.trRev), "icon": "image-plus", "action": "add" })
             rows.push({ "label": QbzSession.tr("Remove cover", QbzSession.trRev), "icon": "trash-2", "action": "remove" })
         } else {
@@ -1478,11 +1552,11 @@ Rectangle {
                     onClicked: {
                         coverMenu.close()
                         var a = modelData.action
-                        if (a === "add") QbzAlbum.coverAddCustom(header.id, header.artUrl)
-                        else if (a === "remove") QbzAlbum.coverRemoveCustom(header.id)
+                        if (a === "add") QbzAlbum.coverAddCustom(albumHeader.id, albumHeader.artUrl)
+                        else if (a === "remove") QbzAlbum.coverRemoveCustom(albumHeader.id)
                         else if (a === "view") coverLightbox.openWith(root.bestCoverSource())
-                        else if (a === "browser") QbzShell.openExternalUrl(header.artUrl)
-                        else if (a === "save") QbzAlbum.coverSaveAs(header.id, header.title, header.artUrl)
+                        else if (a === "browser") QbzShell.openExternalUrl(albumHeader.artUrl)
+                        else if (a === "save") QbzAlbum.coverSaveAs(albumHeader.id, albumHeader.title, albumHeader.artUrl)
                     }
                 }
             }
@@ -1508,8 +1582,8 @@ Rectangle {
                     { "label": QbzSession.tr("Play", QbzSession.trRev), "icon": "play-fill", "action": "play" },
                     { "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-plus", "action": "next" },
                     { "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "action": "queue" },
-                    { "label": root.toggleState("album", header.isFavorite) ? QbzSession.tr("Remove from Library", QbzSession.trRev) : QbzSession.tr("Add to Library", QbzSession.trRev), "icon": root.toggleState("album", header.isFavorite) ? "heart-filled" : "heart", "action": "favorite" },
-                    { "label": root.toggleState("pin", header.isPinned) ? QbzSession.tr("Unpin", QbzSession.trRev) : QbzSession.tr("Pin", QbzSession.trRev), "icon": root.toggleState("pin", header.isPinned) ? "pin-filled" : "pin", "action": "pin" },
+                    { "label": root.toggleState("album", albumHeader.isFavorite) ? QbzSession.tr("Remove from Library", QbzSession.trRev) : QbzSession.tr("Add to Library", QbzSession.trRev), "icon": root.toggleState("album", albumHeader.isFavorite) ? "heart-filled" : "heart", "action": "favorite" },
+                    { "label": root.toggleState("pin", albumHeader.isPinned) ? QbzSession.tr("Unpin", QbzSession.trRev) : QbzSession.tr("Pin", QbzSession.trRev), "icon": root.toggleState("pin", albumHeader.isPinned) ? "pin-filled" : "pin", "action": "pin" },
                     { "label": QbzSession.tr("Add to playlist", QbzSession.trRev), "icon": "list-music", "action": "playlist" },
                     { "label": QbzSession.tr("Add to mixtape", QbzSession.trRev), "icon": "cassette-tape", "action": "mixtape" },
                     { "label": QbzSession.tr("Share Qobuz link", QbzSession.trRev), "icon": "link", "action": "share-qobuz" },
@@ -1547,15 +1621,15 @@ Rectangle {
                         onClicked: {
                             albumMenu.close()
                             var a = modelData.action
-                            if (a === "play") QbzPlayer.playAlbum(header.id)
-                            else if (a === "next") QbzPlayer.enqueueAlbum(header.id, "next")
-                            else if (a === "queue") QbzPlayer.enqueueAlbum(header.id, "later")
+                            if (a === "play") QbzPlayer.playAlbum(albumHeader.id)
+                            else if (a === "next") QbzPlayer.enqueueAlbum(albumHeader.id, "next")
+                            else if (a === "queue") QbzPlayer.enqueueAlbum(albumHeader.id, "later")
                             else if (a === "favorite") {
-                                root.setToggleState("album", !root.toggleState("album", header.isFavorite))
-                                QbzLibrary.libraryToggleFavorite("album", header.id)
+                                root.setToggleState("album", !root.toggleState("album", albumHeader.isFavorite))
+                                QbzLibrary.libraryToggleFavorite("album", albumHeader.id)
                             } else if (a === "pin") {
-                                root.setToggleState("pin", !root.toggleState("pin", header.isPinned))
-                                QbzLibrary.togglePin("album", header.id, header.title, header.artist, header.artUrl)
+                                root.setToggleState("pin", !root.toggleState("pin", albumHeader.isPinned))
+                                QbzLibrary.togglePin("album", albumHeader.id, albumHeader.title, albumHeader.artist, albumHeader.artUrl)
                             } else if (a === "playlist") {
                                 // The loaded view's own track ids (Slint
                                 // main.rs:12213 collects AlbumState.tracks).
@@ -1566,15 +1640,15 @@ Rectangle {
                                 }
                                 if (ids.length > 0) QbzPlaylistPicker.openForTracks(JSON.stringify(ids))
                             } else if (a === "mixtape") {
-                                QbzAlbum.addToMixtape(header.id)
+                                QbzAlbum.addToMixtape(albumHeader.id)
                             } else if (a === "share-qobuz") {
-                                QbzAlbum.shareQobuzLink(header.id)
+                                QbzAlbum.shareQobuzLink(albumHeader.id)
                             } else if (a === "share-albumlink") {
-                                QbzAlbum.shareAlbumLink(header.id)
+                                QbzAlbum.shareAlbumLink(albumHeader.id)
                             } else if (a === "cache-album") {
-                                QbzAlbum.albumCacheOffline(header.id)
+                                QbzAlbum.albumCacheOffline(albumHeader.id)
                             } else if (a === "recache-album") {
-                                QbzAlbum.albumRefreshOffline(header.id)
+                                QbzAlbum.albumRefreshOffline(albumHeader.id)
                             }
                         }
                     }
@@ -1602,7 +1676,7 @@ Rectangle {
                 // `undefined` folds to false through toggleState's
                 // `fallback === true`, so the row is correct the moment the
                 // seed lands and never throws before then.
-                readonly property bool blocked: root.toggleState("blocked", header.isAlbumBlocked)
+                readonly property bool blocked: root.toggleState("blocked", albumHeader.isAlbumBlocked)
                 color: ablkArea.containsMouse ? theme.surfaceHover : "transparent"
                 Row {
                     anchors.fill: parent
@@ -1632,8 +1706,8 @@ Rectangle {
                         // `blacklistChanged` above settles it — or rolls it
                         // back on a write failure (main.rs:12859).
                         root.setToggleState("blocked", !ablkRow.blocked)
-                        QbzBlacklist.albumToggle(header.id, header.title,
-                            header.artist, header.artUrl)
+                        QbzBlacklist.albumToggle(albumHeader.id, albumHeader.title,
+                            albumHeader.artist, albumHeader.artUrl)
                     }
                 }
             }
