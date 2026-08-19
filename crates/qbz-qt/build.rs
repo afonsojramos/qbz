@@ -268,9 +268,21 @@ fn format_ymd(epoch_secs: i64) -> String {
 ///
 /// The `<rhi/qrhi.h>` headers live in Qt's PRIVATE include tree
 /// (`<headers>/Qt<Module>/<version>/Qt<Module>`), so those paths are added
-/// explicitly. macOS note: the private-headers path exists in the same
-/// layout under Homebrew Qt; NOT COMPILED HERE (this tree builds on Linux,
-/// same caveat as the macOS objc2 arms).
+/// explicitly.
+///
+/// macOS is a DIFFERENT LAYOUT, and the note that used to sit here said the
+/// paths were "the same" and that this was untested — it was wrong on the
+/// first count and honest on the second. Homebrew ships Qt as FRAMEWORKS:
+///   * `qtbuild.include_paths()` yields `<libs>/QtCore.framework/Headers`, and
+///     that does NOT satisfy `#include <QtCore/QByteArray>` — inside it,
+///     `QtCore` is the umbrella HEADER FILE, not a directory, so the compiler
+///     reports "file not found" for every one of these four items. Reproduced
+///     outside cargo: the same `-I` fails, `-F <libs>` compiles clean.
+///   * the private tree is NOT under `QT_INSTALL_HEADERS` (which has no
+///     `QtGui/` at all); it is
+///     `<libs>/Qt<Module>.framework/Headers/<version>/Qt<Module>`.
+/// So macOS gets `-F` plus framework-derived private paths. Verified on the
+/// Mac mini M2 (Qt 6.11.1, Homebrew).
 fn build_rhi_items() {
     let mut qtbuild = qt_build_utils::QtBuild::new(vec![
         "Core".to_string(),
@@ -299,12 +311,32 @@ fn build_rhi_items() {
     for p in qtbuild.include_paths() {
         cc.include(p);
     }
-    let headers = qtbuild.qmake_query("QT_INSTALL_HEADERS");
     let version = qtbuild.version().to_string();
-    for module in ["QtCore", "QtGui", "QtQml", "QtQuick"] {
-        let private = format!("{headers}/{module}/{version}/{module}");
-        if Path::new(&private).is_dir() {
-            cc.include(private);
+    // The build script runs on the HOST, so ask cargo for the TARGET rather
+    // than using cfg!() — they are the same for a native build and they are
+    // not for a cross one.
+    let macos = std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos");
+    if macos {
+        // FRAMEWORK search path. Without it every `#include <QtCore/...>` in
+        // cxx/ fails: the `-I .../QtCore.framework/Headers` that
+        // `include_paths()` produces cannot resolve a module-qualified include,
+        // because `QtCore` inside that directory is the umbrella header file.
+        let libs = qtbuild.qmake_query("QT_INSTALL_LIBS");
+        cc.flag(&format!("-F{}", libs.trim()));
+        for module in ["QtCore", "QtGui", "QtQml", "QtQuick"] {
+            let private =
+                format!("{}/{module}.framework/Headers/{version}/{module}", libs.trim());
+            if Path::new(&private).is_dir() {
+                cc.include(private);
+            }
+        }
+    } else {
+        let headers = qtbuild.qmake_query("QT_INSTALL_HEADERS");
+        for module in ["QtCore", "QtGui", "QtQml", "QtQuick"] {
+            let private = format!("{headers}/{module}/{version}/{module}");
+            if Path::new(&private).is_dir() {
+                cc.include(private);
+            }
         }
     }
     cc.compile("qbz_rhi_items");
