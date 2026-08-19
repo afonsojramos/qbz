@@ -16,16 +16,29 @@ use std::sync::OnceLock;
 /// Supported language codes, indexed by the value stored in [`CURRENT`].
 const LANGS: [&str; 8] = ["en", "es", "de", "fr", "pt", "ru", "ja", "nl"];
 
-/// Embedded `.po` sources. Path is relative to this file
-/// (`crates/qbz-i18n/src/lib.rs`): `../` = `qbz-i18n/`, `../../` = `crates/`.
-const PO_EN: &str = include_str!("../../qbz-ui/translations/en/LC_MESSAGES/qbz-ui.po");
-const PO_ES: &str = include_str!("../../qbz-ui/translations/es/LC_MESSAGES/qbz-ui.po");
-const PO_DE: &str = include_str!("../../qbz-ui/translations/de/LC_MESSAGES/qbz-ui.po");
-const PO_FR: &str = include_str!("../../qbz-ui/translations/fr/LC_MESSAGES/qbz-ui.po");
-const PO_PT: &str = include_str!("../../qbz-ui/translations/pt/LC_MESSAGES/qbz-ui.po");
-const PO_RU: &str = include_str!("../../qbz-ui/translations/ru/LC_MESSAGES/qbz-ui.po");
-const PO_JA: &str = include_str!("../../qbz-ui/translations/ja/LC_MESSAGES/qbz-ui.po");
-const PO_NL: &str = include_str!("../../qbz-ui/translations/nl/LC_MESSAGES/qbz-ui.po");
+/// Embedded `.po` sources, OWNED BY THIS CRATE. Path is relative to this file
+/// (`crates/qbz-i18n/src/lib.rs`): `../` = `qbz-i18n/`.
+///
+/// They used to live in `crates/qbz-ui/translations/` and be reached with
+/// `../../qbz-ui/...`, which made this crate's own doc comment ("frontend-
+/// agnostic ... no slint or tauri dependencies, ADR-006") false in the one way
+/// that mattered: no dependency in `Cargo.toml`, but eight `include_str!`
+/// reaching into the Slint crate's directory. Deleting `qbz-ui` — which is
+/// planned, before the Qt release — would have failed to compile `qbz-i18n`
+/// and with it `qbz-qt`, i.e. the whole app, over a data directory nobody
+/// thought of as a dependency. The extraction had taken the code and left the
+/// data behind.
+///
+/// `qbz-ui/build.rs` now borrows them back through `../qbz-i18n/translations`
+/// for as long as the Slint tree exists.
+const PO_EN: &str = include_str!("../translations/en/LC_MESSAGES/qbz-ui.po");
+const PO_ES: &str = include_str!("../translations/es/LC_MESSAGES/qbz-ui.po");
+const PO_DE: &str = include_str!("../translations/de/LC_MESSAGES/qbz-ui.po");
+const PO_FR: &str = include_str!("../translations/fr/LC_MESSAGES/qbz-ui.po");
+const PO_PT: &str = include_str!("../translations/pt/LC_MESSAGES/qbz-ui.po");
+const PO_RU: &str = include_str!("../translations/ru/LC_MESSAGES/qbz-ui.po");
+const PO_JA: &str = include_str!("../translations/ja/LC_MESSAGES/qbz-ui.po");
+const PO_NL: &str = include_str!("../translations/nl/LC_MESSAGES/qbz-ui.po");
 
 /// Current language index (0=en, 1=es, 2=de, 3=fr, 4=pt, 5=ru, 6=ja, 7=nl). Defaults to en.
 static CURRENT: AtomicU8 = AtomicU8::new(0);

@@ -35,14 +35,23 @@ Item {
     // `fieldActive` seam).
     readonly property bool searchActive: searchField.fieldActive
 
+    /// macOS: width of the native traffic-light cluster, so the view trigger
+    /// can match it while the band sits directly under the lights. 0 (every
+    /// other platform, and macOS with the system title bar) leaves the trigger
+    /// its natural 44px. The glyph stays centred either way.
+    property int triggerWidth: 0
+
     // --- LEFT: the view menu ---------------------------------------------
     Rectangle {
         id: viewTrigger
         anchors.left: parent.left
         anchors.verticalCenter: parent.verticalCenter
-        width: 44
+        width: header.triggerWidth > 0 ? header.triggerWidth : 44
         height: 36
-        radius: 18
+        // Half the HEIGHT, not a constant: at 44x36 the pill was a stadium and
+        // at 78x36 a hardcoded 18 would have left it a rounded rectangle with
+        // a different silhouette from the circle beside it.
+        radius: height / 2
         // Slint glass #00000080 / border #ffffff2e (RRGGBBAA), converted.
         color: "#80000000"
         border.width: 1

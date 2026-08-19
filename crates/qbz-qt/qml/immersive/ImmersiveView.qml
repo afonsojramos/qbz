@@ -200,10 +200,27 @@ Item {
         hideTimer.restart()
     }
 
-    // C1 macOS traffic-light inset (contract 03 §6) — same rule as the
-    // shell's HeaderBar: ask SafeArea, floor at 78, only when the native
-    // lights float over client area (i.e. not with the system title bar).
-    readonly property int chromeLeftInset:
+    // C1 macOS traffic lights (contract 03 §6). Only when the native lights
+    // float over client area, i.e. not with the system title bar.
+    //
+    // The band used to be pushed to their RIGHT (`leftMargin: 24 + inset`,
+    // the shell HeaderBar's rule). On the shell that reads fine — the lights
+    // sit at the head of a full toolbar row. Here the row is three floating
+    // glass pills over artwork, and a 44px pill parked beside the lights read
+    // as debris rather than as chrome. It goes BELOW them now.
+    //
+    // Vertical clearance from SafeArea's TOP margin, which is the same
+    // question the left inset asks in the other axis: with
+    // `ExpandedClientAreaHint` the client area covers the titlebar region and
+    // SafeArea reports how much of it is unsafe. The floor is the standard
+    // 28px title-bar height for the case where it reads 0.
+    readonly property int chromeTopInset:
+        QbzShell.isMacos && !QbzShell.systemTitleBar
+            ? Math.max(root.SafeArea.margins.top, 28) : 0
+    // The cluster's WIDTH, handed to the header so the view trigger can match
+    // it: stacked, a 44px pill under a ~78px cluster reads as misaligned even
+    // when the left edges line up. 0 = leave the trigger its natural width.
+    readonly property int chromeClusterWidth:
         QbzShell.isMacos && !QbzShell.systemTitleBar
             ? Math.max(root.SafeArea.margins.left, 78) : 0
 
@@ -676,13 +693,18 @@ Item {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.top: parent.top
-        // C1 macOS: clear the native traffic-light cluster (it floats over
-        // the top-left corner, x ≈ 7-85 — the view trigger's exact spot) with
-        // the same inset the shell HeaderBar computes
-        // (HeaderBar.qml chromeLeftInset: SafeArea left margin, 78 floor).
-        anchors.leftMargin: 24 + root.chromeLeftInset
+        // C1 macOS: the lights float over the top-left corner (x ~ 7-85,
+        // which is the view trigger's exact spot), so the band drops BELOW
+        // them instead of shifting right — see `chromeTopInset`. The left
+        // margin stays 24 on every platform, which puts the trigger's leading
+        // edge in the same 20-24 band the lights start in, so the two read as
+        // one column.
+        anchors.leftMargin: 24
         anchors.rightMargin: 24
-        anchors.topMargin: 16
+        // 16 is the band's own gap from the window edge; reusing it as the gap
+        // UNDER the lights keeps the rhythm instead of inventing a number.
+        anchors.topMargin: 16 + root.chromeTopInset
+        triggerWidth: root.chromeClusterWidth
         height: 36
         opacity: root.chromeVisible ? 1 : 0
         Behavior on opacity { NumberAnimation { duration: 300 } }
