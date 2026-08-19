@@ -55,6 +55,28 @@ Item {
         + (root.hideDownloaded ? 1 : 0)
         + (root.qualityFilter !== "all" ? 1 : 0)
 
+    /// The same three settings as the badge, but SAID — the applied-filters
+    /// tooltip. Counted the same way and in the menu's own order, so the number
+    /// on the disc and the lines in the bubble can never disagree.
+    readonly property var filterSummaryGroups: {
+        var avail = []
+        if (root.hideUnavailable)
+            avail.push(root.t("Hide unavailable"))
+        if (root.hideDownloaded)
+            avail.push(root.t("Hide downloaded"))
+        var q = []
+        if (root.qualityFilter === "hires")
+            q.push(root.t("Hi-Res"))
+        else if (root.qualityFilter === "cd")
+            q.push(root.t("CD"))
+        else if (root.qualityFilter === "lossy")
+            q.push(root.t("Lossy"))
+        return [
+            { group: root.t("Availability"), values: avail },
+            { group: root.t("Quality"), values: q }
+        ]
+    }
+
     width: parent ? parent.width : 0
     height: 30
 
@@ -389,7 +411,19 @@ Item {
                 anchors.fill: parent
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
-                onClicked: filterMenu.openBelowRight(filterBtn)
+                onClicked: {
+                    purchasesFilterTip.exit()
+                    filterMenu.openBelowRight(filterBtn)
+                }
+                onEntered: purchasesFilterTip.enter()
+                onExited: purchasesFilterTip.exit()
+            }
+
+            QbzFilterTip {
+                id: purchasesFilterTip
+                ownerKey: "purchases-filter"
+                anchor: filterBtn
+                groups: root.filterSummaryGroups
             }
 
             QbzContextMenu {

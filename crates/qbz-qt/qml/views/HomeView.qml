@@ -243,6 +243,57 @@ Rectangle {
             || (item ? (item.artPath || "") : "")
     }
 
+    // --- Qobuz Playlists: category filter ---------------------------------
+    // Client-side over the 40 cached cards; the tags ride in the SAME
+    // /discover/index response, so nothing here costs a request. The selection
+    // itself lives in Rust (`home_qt`) because this view is destroyed on every
+    // navigation — a property here would forget it the moment the user opened
+    // an album and came back, where the reference survives (its selection lives
+    // in TAB_SECTIONS and its comment says "survives a tab switch").
+    readonly property var playlistTagDoc: {
+        try {
+            return JSON.parse(QbzHome.playlistTagsJson)
+        } catch (e) {
+            return {}
+        }
+    }
+    readonly property var playlistTags: root.playlistTagDoc.tags || []
+    readonly property var playlistTagSel: root.playlistTagDoc.selected || []
+    /// The selected tags' display NAMES, for the applied-filters tooltip.
+    readonly property var playlistTagNames: {
+        var out = []
+        var sel = root.playlistTagSel
+        var all = root.playlistTags
+        for (var i = 0; i < all.length; i++)
+            if (sel.indexOf(all[i].slug) >= 0)
+                out.push(all[i].name)
+        return out
+    }
+    /// UNION, and an empty selection passes everything (home.rs:79-92).
+    function playlistPasses(card) {
+        if (root.playlistTagSel.length === 0)
+            return true
+        var t = (card && card.tags) || []
+        for (var i = 0; i < t.length; i++)
+            if (root.playlistTagSel.indexOf(t[i]) >= 0)
+                return true
+        return false
+    }
+    function filterPlaylists(items) {
+        var out = []
+        var src = items || []
+        for (var i = 0; i < src.length; i++)
+            if (root.playlistPasses(src[i]))
+                out.push(src[i])
+        return out
+    }
+    // The popup is declared last (z-order); a QML id is document-scoped, so a
+    // rail delegate cannot name it. Same bridge-function pattern the genre
+    // popup already uses from the toolbar.
+    function togglePlaylistTagPopup(btn) {
+        plTagPopup.toggle(btn)
+    }
+
     /// The patch map first, then whatever the document happened to carry (a
     /// full Home reload publishes the paths it already has).
     function forYouArtOf(item) {
@@ -1206,12 +1257,27 @@ Rectangle {
                         // The rail used to draw a bare Text: no chevrons (so
                         // a 40-playlist rail's tail was unreachable) and no
                         // "View all". PlaylistCarousel.slint:109-115 has both.
-                        // POC-NOTE: the Slint arm ALSO puts a PlaylistTagFilter
-                        // on this title line (HomeView.slint:360-374) and shows
-                        // @tr("No playlists match the selected categories.")
-                        // when the tags filter everything out. Neither is
-                        // ported here — the tag filter DOES exist on the
-                        // PlaylistBrowse page this link opens.
+                        //
+                        // The CATEGORY FILTER on this title line
+                        // (HomeView.slint:360-374) is now ported too, and with
+                        // it the empty-result line. The POC-NOTE that used to
+                        // sit here said neither was, and pointed at the
+                        // PlaylistBrowse page as the substitute — that page's
+                        // tag filter is a DIFFERENT one (single-select and
+                        // server-side), so the note was directing the reader to
+                        // a control that does not do this job.
+                        //
+                        // Only the Qobuz-Playlists rail offers it: it is the
+                        // only playlist section the index ships tags for, and
+                        // the button hides itself when the set is empty.
+                        readonly property bool tagsOffered:
+                            plRail.sectionData.id === "qobuzPlaylists"
+                            && root.playlistTags.length > 0
+                        readonly property var visibleItems:
+                            root.playlistTagSel.length > 0 && plRail.tagsOffered
+                                ? root.filterPlaylists(plRail.sectionData.items)
+                                : plRail.sectionData.items
+
                         QbzSectionHeader {
                             title: plRail.sectionData.title
                             leftEnabled: plList.contentX > 1
@@ -1220,16 +1286,39 @@ Rectangle {
                             onViewAllClicked: root.openViewAll(plRail.sectionData, plRail.tabId)
                             onPageLeft: plList.contentX = Math.max(0, plList.contentX - plRail.step)
                             onPageRight: plList.contentX = Math.min(plRail.maxScroll, plList.contentX + plRail.step)
+                            leading: plRail.tagsOffered ? plTagFilterComp : null
+                        }
+                        Component {
+                            id: plTagFilterComp
+                            PlaylistTagFilterButton {
+                                count: root.playlistTagSel.length
+                                selectedNames: root.playlistTagNames
+                                onClicked: root.togglePlaylistTagPopup(this)
+                            }
+                        }
+                        // Zero results with a filter on: say so, instead of
+                        // showing an empty band the user cannot explain
+                        // (HomeView.slint:393-397). The rail stays mounted so
+                        // the filter is still reachable to clear.
+                        Text {
+                            visible: plRail.visibleItems.length === 0
+                                     && root.playlistTagSel.length > 0
+                            width: parent.width
+                            text: QbzSession.tr("No playlists match the selected categories.", QbzSession.trRev)
+                            color: theme.textMuted
+                            font.pixelSize: 13
+                            wrapMode: Text.WordWrap
                         }
                         ListView {
                             id: plList
+                            visible: plRail.visibleItems.length > 0
                             width: parent.width
-                            height: 246
+                            height: visible ? 246 : 0
                             orientation: ListView.Horizontal
                             spacing: 32
                             clip: true
                             boundsBehavior: Flickable.StopAtBounds
-                            model: plRail.sectionData.items
+                            model: plRail.visibleItems
                             delegate: PlaylistCard {
                                 item: modelData
                                 artSource: root.sectionArtOf(modelData)
@@ -1725,5 +1814,21 @@ Rectangle {
     DiscoverConfigModal {
         id: configModal
         anchors.fill: parent
+    }
+
+    // Qobuz-Playlists category filter. Its trigger lives inside the flickable
+    // at a y that depends on the scroll and on the rail order, so the popup
+    // captures the anchor by mapToItem AT OPEN rather than pinning to a fixed
+    // offset the way the genre popup can.
+    PlaylistTagFilterPopup {
+        id: plTagPopup
+        anchors.fill: parent
+        tags: root.playlistTags
+        selected: root.playlistTagSel
+        onToggled: function (slug) { QbzHome.togglePlaylistTag(slug) }
+        onCleared: {
+            QbzHome.clearPlaylistTags()
+            plTagPopup.close()
+        }
     }
 }

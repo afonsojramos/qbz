@@ -116,6 +116,39 @@ Rectangle {
     }
     function clearFilter() { filter = ({}) }
 
+    /// The funnel's state as the applied-filters tooltip wants it: three groups
+    /// in the popup's own order, each holding the labels of the keys that are
+    /// on. Built HERE because this is where the state lives — the toolbar only
+    /// draws the trigger, and `LocalFilterPopup` only draws chips.
+    ///
+    /// The labels are the popup's, verbatim, so the bubble reads exactly like
+    /// the control the user set. Two are not translated there either: FLAC /
+    /// ALAC / APE / WAV / MP3 / AAC and "Plex" are proper names.
+    readonly property var filterSummaryGroups: {
+        function pick(keys, labels) {
+            var out = []
+            for (var i = 0; i < keys.length; i++)
+                if (root.filter[keys[i]] === true)
+                    out.push(labels[i])
+            return out
+        }
+        var tr = QbzSession.trRev
+        return [
+            { group: QbzSession.tr("Quality", tr),
+              values: pick(["hires", "cd", "lossy"],
+                           [QbzSession.tr("Hi-Res", tr), QbzSession.tr("CD", tr),
+                            QbzSession.tr("Lossy", tr)]) },
+            { group: QbzSession.tr("Format", tr),
+              values: pick(["flac", "alac", "ape", "wav", "mp3", "aac", "other"],
+                           ["FLAC", "ALAC", "APE", "WAV", "MP3", "AAC",
+                            QbzSession.tr("Other", tr)]) },
+            { group: QbzSession.tr("Source", tr),
+              values: pick(["local", "offline", "plex"],
+                           [QbzSession.tr("Local", tr),
+                            QbzSession.tr("Offline cache", tr), "Plex"]) }
+        ]
+    }
+
     // Per-row artwork on the track lists — the Slint gates this on
     // AppearanceState.local-library-track-artwork for the freeze reason and
     // its default is OFF.

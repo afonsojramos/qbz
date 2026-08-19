@@ -120,6 +120,17 @@ pub struct HomeCard {
     pub item_kind: String,
     /// Playlist rows: the UPPERCASE first-tag category subtag.
     pub category: String,
+    /// Playlist rows: ALL of the playlist's tag SLUGS — the material the
+    /// client-side category filter matches against (home.rs
+    /// `PlaylistCardData.tags`). Distinct from `category`, which is one tag's
+    /// display name in caps for the card's eyebrow.
+    ///
+    /// Off the wire when empty, like `source` / `subtitle` / `plays` above:
+    /// every rail shares this one struct, and without the guard some two
+    /// thousand album cards would each carry a useless `"tags":[]` across the
+    /// three tab documents.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
     #[serde(rename = "artUrl")]
     pub art_url: String,
     /// `file://<cached path>` when already on disk ("" = needs download).
@@ -147,6 +158,14 @@ pub struct HomeSection {
     #[serde(default)]
     pub endpoint: String,
     pub items: Vec<HomeCard>,
+}
+
+/// One offered playlist category tag. `name` arrives already localized from
+/// the discover index.
+#[derive(Clone, Serialize)]
+pub struct PlaylistTagRow {
+    pub slug: String,
+    pub name: String,
 }
 
 /// Push one album-carousel section from its discover container (drops
@@ -353,6 +372,10 @@ fn build_candidates(
     });
 
     // Qobuz Playlists row (single-cover cards, first-tag category subtag).
+    //
+    // 40 cards, not the API's 18: the category filter below is CLIENT-SIDE and
+    // needs material to work with — the reference raised the same number for
+    // the same reason (home.rs:295-301).
     let playlists: Vec<HomeCard> = containers
         .playlists
         .map(|c| c.data.items)
@@ -360,6 +383,19 @@ fn build_candidates(
         .into_iter()
         .take(40)
         .map(map_playlist)
+        .collect();
+    // The offered category tags ride in the SAME /discover/index response as
+    // the cards (container `playlists_tags`), so the whole filter costs zero
+    // extra round trips — which is why it can be applied live over the cache.
+    let playlist_tags: Vec<PlaylistTagRow> = containers
+        .playlists_tags
+        .map(|c| c.data.items)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|t| PlaylistTagRow {
+            slug: t.slug,
+            name: t.name,
+        })
         .collect();
     if !playlists.is_empty() {
         out.push(HomeSection {
@@ -373,6 +409,14 @@ fn build_candidates(
             items: playlists,
         });
     }
+    // The tag set does NOT ride on the section, and that is deliberate: it
+    // would force `tags: Vec::new()` into twenty-three unrelated HomeSection
+    // literals, and the SELECTION needs a bridge property of its own anyway
+    // (it is mutated per click and must not republish `homeSectionsJson` —
+    // doing that destroys and rebuilds every rail's QQmlDelegateModel and
+    // resets their horizontal scroll, see home_bridge.rs:49-58). One small
+    // document carries both halves.
+    set_playlist_tag_catalog(playlist_tags);
 
     // Recently-played rails — the SHARED local history file
     // (`recently_qt`, the same `recently_played.json` the Slint build
@@ -404,6 +448,39 @@ fn build_candidates(
             items: recent_albums,
         });
     }
+    // Recently Played PLAYLISTS — the rail that exists because its album
+    // sibling above used to answer for it. Every track start wrote its ALBUM
+    // into the recent history whatever the user had actually put on, so one
+    // 40-track playlist filled a 24-entry album rail with that playlist's
+    // contents and the playlist itself was recorded nowhere. Plays carry their
+    // context now (`recently_qt::record_queue_track` reads
+    // `QueueTrack::context_kind`), the album rail takes only album plays, and
+    // the playlist plays land here.
+    let recent_playlists: Vec<HomeCard> =
+        qbz_app::settings::playlist_play_history::recent_playlists(24)
+            .into_iter()
+            .map(map_recent_playlist)
+            .collect();
+    if recent_playlists.is_empty() {
+        out.push(HomeSection {
+            id: "recentlyPlayedPlaylists".to_string(),
+            title: qbz_i18n::t("Recently Played Playlists"),
+            kind: "recentPlaceholder".to_string(),
+            hint: qbz_i18n::t("Playlists you play will appear here."),
+            endpoint: String::new(),
+            items: Vec::new(),
+        });
+    } else {
+        out.push(HomeSection {
+            id: "recentlyPlayedPlaylists".to_string(),
+            title: qbz_i18n::t("Recently Played Playlists"),
+            kind: "playlist".to_string(),
+            hint: String::new(),
+            endpoint: String::new(),
+            items: recent_playlists,
+        });
+    }
+
     let recent_tracks: Vec<HomeCard> = crate::recently_qt::load_tracks()
         .into_iter()
         .take(24)
@@ -634,6 +711,92 @@ fn order_by_prefs(
     gated
 }
 
+// ---------------------------------------------------------------------------
+// Qobuz Playlists — client-side category filter
+// ---------------------------------------------------------------------------
+//
+// The rail's tags were dropped in the port: `map_playlist` kept only the first
+// tag's NAME in caps for the card eyebrow and threw the slugs away, and the
+// index's `playlists_tags` container was never read. So the filter the Slint
+// build has over this rail (`discover/PlaylistTagFilter.slint`) had nothing to
+// stand on.
+//
+// It is a CLIENT-side filter over the cached 40 cards — the tags ship in the
+// same /discover/index response as the cards themselves, so no round trip — and
+// the selection is a UNION: a card passes if it carries ANY selected slug, and
+// an empty selection passes everything (home.rs:79-92).
+//
+// WHY THE SELECTION LIVES IN RUST. `HomeView.qml` is destroyed on every
+// navigation (the router's Loader rebuilds it), so a `property var` on its root
+// would forget the selection the moment the user visited an album and came
+// back. Slint keeps it in `TAB_SECTIONS` for exactly this reason and calls it
+// out: "Client-side; survives a tab switch." Parity, not decoration.
+
+/// The tags the index offered, and the slugs currently selected. ONE document
+/// so QML parses once; ~40 bytes of selection, so a toggle notifies only the
+/// filter and never the rails.
+#[derive(Clone, Serialize, Default)]
+struct PlaylistTagDoc {
+    tags: Vec<PlaylistTagRow>,
+    selected: Vec<String>,
+}
+
+static PLAYLIST_TAGS: Mutex<Vec<PlaylistTagRow>> = Mutex::new(Vec::new());
+static PLAYLIST_TAG_SEL: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// A FRESH index load replaces the offered set and RESETS the selection — the
+/// available tags may have changed, and keeping a slug the new set no longer
+/// offers would filter the rail down to nothing with no way to see why
+/// (home.rs:1097-1104 resets it for the same reason).
+fn set_playlist_tag_catalog(tags: Vec<PlaylistTagRow>) {
+    if let Ok(mut t) = PLAYLIST_TAGS.lock() {
+        *t = tags;
+    }
+    if let Ok(mut sel) = PLAYLIST_TAG_SEL.lock() {
+        sel.clear();
+    }
+    publish_playlist_tags();
+}
+
+fn publish_playlist_tags() {
+    let doc = PlaylistTagDoc {
+        tags: PLAYLIST_TAGS.lock().map(|t| t.clone()).unwrap_or_default(),
+        selected: PLAYLIST_TAG_SEL.lock().map(|s| s.clone()).unwrap_or_default(),
+    };
+    let json = serde_json::to_string(&doc).unwrap_or_else(|_| "{}".to_string());
+    crate::home_bridge::ui(move |mut b| {
+        b.as_mut()
+            .set_playlist_tags_json(cxx_qt_lib::QString::from(json.as_str()));
+    });
+}
+
+/// Toggle one category slug. 1:1 `home.rs::toggle_playlist_tag`.
+pub(crate) fn toggle_playlist_tag(slug: &str) {
+    if let Ok(mut sel) = PLAYLIST_TAG_SEL.lock() {
+        match sel.iter().position(|s| s == slug) {
+            Some(i) => {
+                sel.remove(i);
+            }
+            None => sel.push(slug.to_string()),
+        }
+    }
+    publish_playlist_tags();
+}
+
+/// "All categories" — an empty selection shows every playlist.
+pub(crate) fn clear_playlist_tags() {
+    if let Ok(mut sel) = PLAYLIST_TAG_SEL.lock() {
+        sel.clear();
+    }
+    publish_playlist_tags();
+}
+
+/// Re-push the document without changing it — for the boot seed and for a
+/// cached re-render, so the filter opens on the live state the first time.
+pub(crate) fn republish_playlist_tags() {
+    publish_playlist_tags();
+}
+
 /// The persisted per-tab section prefs (order + visibility) — the store the
 /// Discover configurator mutates (`discover_config_qt`).
 pub(crate) fn load_prefs() -> qbz_app::settings::discover_prefs::DiscoverPrefs {
@@ -665,11 +828,31 @@ fn assemble(
         .into_iter()
         .filter(|s| s.kind != "recentPlaceholder")
         .collect();
-    DiscoverSections {
+    // "Items per carousel" (the Discover configurator). ONE read per assemble,
+    // applied here rather than where the candidates are built — the point of
+    // putting it at assembly time is that changing the number re-renders from
+    // the cache on the next frame, exactly like a section toggle, instead of
+    // forcing a round trip to /discover/index every time somebody nudges it.
+    //
+    // `0` = uncapped, which is the default and is what this page did before the
+    // setting existed. It reaches the rails that go through `assemble`, i.e.
+    // every rail the configurator can list; Pinned, Radio Stations and Qobuz
+    // Mixes ride their own bridge documents and are untouched.
+    let mut out = DiscoverSections {
         home,
         editor,
         for_you,
+    };
+    let cap = crate::discover_config_qt::rail_size();
+    if cap > 0 {
+        let cap = cap as usize;
+        for list in [&mut out.home, &mut out.editor, &mut out.for_you] {
+            for section in list.iter_mut() {
+                section.items.truncate(cap);
+            }
+        }
     }
+    out
 }
 
 /// The SET of section ids the POC can actually RENDER for a tab — the
@@ -767,6 +950,12 @@ pub(crate) fn republish_cached() {
     missing.extend(crate::artwork_qt::attach_cached(&mut sections.for_you));
     missing.dedup();
     publish(&sections);
+    // The rail's category filter reads its own tiny property, which nothing in
+    // this path touches. Re-pushing it keeps a re-rendered Home showing the
+    // selection that is actually in force — and it is the only writer the
+    // filter has, so if the property were ever reset (a rebuilt bridge) this is
+    // where it comes back.
+    republish_playlist_tags();
     if !missing.is_empty() {
         crate::spawn(async move {
             crate::artwork_qt::download_missing(missing).await;
@@ -1052,6 +1241,15 @@ pub(crate) fn map_playlist(p: DiscoverPlaylist) -> HomeCard {
         .and_then(|t| t.first())
         .map(|t| t.name.to_uppercase())
         .unwrap_or_default();
+    // Every slug, for the client-side category filter. The eyebrow above wants
+    // one localized NAME in caps; the filter wants all the SLUGS — same source,
+    // two different derivations, and conflating them is why the port shipped
+    // without a filter to begin with.
+    let tags: Vec<String> = p
+        .tags
+        .as_ref()
+        .map(|t| t.iter().map(|tag| tag.slug.clone()).collect())
+        .unwrap_or_default();
     HomeCard {
         // Pin badge state from the per-user store (home.rs
         // `playlist_to_item`). Without the seed the rail's glyph reads
@@ -1073,6 +1271,7 @@ pub(crate) fn map_playlist(p: DiscoverPlaylist) -> HomeCard {
         id: p.id.to_string(),
         title: p.name,
         category,
+        tags,
         art_url,
         ..HomeCard::default()
     }
@@ -1332,6 +1531,48 @@ pub(crate) fn map_recent_album(a: crate::recently_qt::RecentAlbum) -> HomeCard {
         quality_tier: a.quality_tier,
         quality_label: a.quality_label,
         art_url: a.artwork_url,
+        ..HomeCard::default()
+    }
+}
+
+/// Map one recently-played PLAYLIST onto a playlist card.
+///
+/// The rail is fed by `playlist_play_history`, not by the Qobuz API, so the
+/// card is built from what was captured at play time. Two consequences worth
+/// knowing: a LOCAL playlist (`local:<uuid>`) has a local file for artwork
+/// rather than a URL, which is why the path arm exists; and the pin / heart
+/// glyphs are seeded from the same stores every other playlist card reads, so
+/// a pinned playlist does not draw as unpinned here (the defect class the
+/// comment on `map_playlist` describes).
+pub(crate) fn map_recent_playlist(
+    p: qbz_app::settings::playlist_play_history::PlaylistPlayRow,
+) -> HomeCard {
+    let local = p.source == "local";
+    let id_for_stores = p.playlist_id.clone();
+    HomeCard {
+        is_pinned: crate::sidebar_qt::is_pinned("playlist", &id_for_stores),
+        is_favorite: p
+            .playlist_id
+            .parse::<u64>()
+            .map(crate::fav_cache_qt::is_playlist_favorite)
+            .unwrap_or(false),
+        playlist_owned: local
+            || p.owner_id
+                .parse::<u64>()
+                .map(crate::playlist_qt::owns)
+                .unwrap_or(false),
+        playlist_following: p
+            .playlist_id
+            .parse::<u64>()
+            .map(crate::playlist_qt::is_following)
+            .unwrap_or(false),
+        id: p.playlist_id,
+        title: p.title,
+        artist: p.owner,
+        // A local playlist's cover is already a file on disk; a Qobuz one is a
+        // URL the artwork cache resolves like every other rail.
+        art_path: if local { p.artwork_url.clone() } else { String::new() },
+        art_url: if local { String::new() } else { p.artwork_url },
         ..HomeCard::default()
     }
 }

@@ -5237,3 +5237,32 @@ msgstr "置き換え中…"
 
 msgid "The replacement takes the unavailable track's place in the playlist."
 msgstr "置き換えた曲は、再生できない曲の位置に入ります。"
+
+# Discover configurator: items-per-carousel (Tauri parity recovery, 2026-08-19)
+msgid "Items per carousel"
+msgstr "カルーセルあたりの項目数"
+
+# Discover: Recently Played Playlists rail (context-aware play history, 2026-08-19)
+msgid "Recently Played Playlists"
+msgstr "最近再生したプレイリスト"
+
+msgid "Playlists you play will appear here."
+msgstr "再生したプレイリストがここに表示されます。"
+
+# Applied-filters tooltip (2026-08-19)
+msgid "+{} more"
+msgstr "他 {} 件"
+
+msgid "+{} more filters"
+msgstr "他 {} 件のフィルター"
+
+msgid "Applied filters"
+msgstr "適用中のフィルター"
+
+# Applied-filters tooltip: group labels (2026-08-19)
+msgid "Category"
+msgstr "カテゴリー"
+
+# Applied-filters tooltip: Library source switches (2026-08-19)
+msgid "Favorites"
+msgstr "お気に入り"

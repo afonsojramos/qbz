@@ -781,9 +781,24 @@ Rectangle {
                             root.groupMenuOpen = false
                             root.genrePopupOpen = !root.genrePopupOpen
                         }
-                        onContainsMouseChanged: containsMouse
-                            ? tips.showAbove(genreBtn, "scene-genre", root.tr("Filter by genre"))
-                            : tips.hide("scene-genre")
+                        // With genres ON, say WHICH — the badge only ever
+                        // showed a number. This view already owns a QbzTooltip
+                        // instance (`tips`), so it calls the summary mode
+                        // directly instead of going through the shell channel
+                        // that toolbars without one have to use.
+                        onContainsMouseChanged: {
+                            if (!containsMouse) {
+                                tips.hide("scene-genre")
+                            } else if (root.activeGenres.length > 0) {
+                                tips.showSummary(genreBtn, "scene-genre", [{
+                                    group: root.tr("Genre"),
+                                    values: root.activeGenres
+                                }])
+                            } else {
+                                tips.showAbove(genreBtn, "scene-genre",
+                                               root.tr("Filter by genre"))
+                            }
+                        }
                     }
                 }
 

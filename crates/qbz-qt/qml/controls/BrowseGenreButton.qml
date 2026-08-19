@@ -38,6 +38,37 @@ Rectangle {
     readonly property int count: (genreDoc.counts || {})[root.context] || 0
     readonly property bool active: root.count > 0
 
+    // APPLIED-FILTERS TOOLTIP. The selected genre NAMES are already on the wire
+    // per context (`genre_filter_qt.rs` publishes `names`, expanded to include
+    // tree descendants), so this surface costs nothing but the wiring — and
+    // wiring it HERE gives it to all four hosts at once: Home/Discover, the two
+    // browse pages and Library.
+    //
+    // `extraGroups` lets a host append the filters this button knows nothing
+    // about (a search term, a sort, the source toggles) so one bubble answers
+    // the whole toolbar instead of one control.
+    property var extraGroups: []
+    readonly property var genreNames: (genreDoc.names || {})[root.context] || []
+    readonly property var summaryGroups: {
+        var out = []
+        if (root.genreNames.length > 0)
+            out.push({
+                group: QbzSession.tr("Genre", QbzSession.trRev),
+                values: root.genreNames
+            })
+        var ex = root.extraGroups || []
+        for (var i = 0; i < ex.length; i++)
+            out.push(ex[i])
+        return out
+    }
+
+    QbzFilterTip {
+        id: genreTip
+        ownerKey: "genre-" + root.context
+        anchor: root
+        groups: root.summaryGroups
+    }
+
     width: genreRow.width
     height: btnHeight
     radius: 6
@@ -94,5 +125,9 @@ Rectangle {
         hoverEnabled: true
         cursorShape: Qt.PointingHandCursor
         onClicked: root.clicked()
+        onEntered: genreTip.enter()
+        onExited: genreTip.exit()
+        // A click opens the genre popup right over the bubble; drop it first.
+        onPressed: genreTip.exit()
     }
 }

@@ -103,7 +103,32 @@ Item {
             anchors.fill: parent
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
-            onClicked: root.view.toggleGenrePopup()
+            onClicked: {
+                libFilterTip.exit()
+                root.view.toggleGenrePopup()
+            }
+            onEntered: libFilterTip.enter()
+            onExited: libFilterTip.exit()
+        }
+
+        // The genre chip is the toolbar's filter affordance, so it carries the
+        // whole bar's summary: the genres it owns, plus the source switches
+        // that live next to it and are just as invisible once set.
+        QbzFilterTip {
+            id: libFilterTip
+            ownerKey: "library-all-filter"
+            anchor: gtb
+            groups: {
+                var out = []
+                var names = (root.view.genreDoc.names || {})["library-all"] || []
+                if (names.length > 0)
+                    out.push({ group: QbzSession.tr("Genre", QbzSession.trRev),
+                               values: names })
+                var ex = root.view.filterSummaryGroups || []
+                for (var i = 0; i < ex.length; i++)
+                    out.push(ex[i])
+                return out
+            }
         }
     }
 

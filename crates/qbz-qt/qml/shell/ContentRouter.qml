@@ -115,7 +115,112 @@ Item {
     // last thing before the Loader instantiates.
     function _stampRoute(path) {
         root._routeT0 = Date.now()
+        // Drop the page to transparent HERE and not in an onCurrentViewChanged
+        // handler, for the same reason the stopwatch is stamped here: binding
+        // re-evaluation and signal handlers have no guaranteed order, and a
+        // drop applied after the Loader had already rebuilt would flash the new
+        // page at full opacity, blank it, and fade it in again. Inside the
+        // binding it is by construction the last thing that happens before the
+        // instantiation.
+        //
+        // The guard matters: two ids can resolve to the SAME file
+        // ("recentalbums" / "mostplayedalbums" both mount PlayHistoryView),
+        // and then the Loader does not reload, `onLoaded` never fires and
+        // nothing would ever bring the page back — a permanently invisible
+        // pane. Same for the "" fall-through of an unmapped route.
+        if (path !== root._fadePath) {
+            root._fadePath = path
+            if (path !== "" && !QbzShell.reduceMotion) {
+                // Stop first: a second navigation inside the 300 ms would
+                // otherwise have a running render-thread Animator writing the
+                // property back from underneath this assignment.
+                fadeIn.stop()
+                viewLoader.opacity = 0
+                fadeGuard.restart()
+            }
+        }
         return path
+    }
+
+    // --- Page fade ---------------------------------------------------------
+    // COSMETIC, FIXED DURATION, AND IT NEVER WAITS FOR CONTENT. The route
+    // change below is synchronous by design (read the Loader's header), so the
+    // UI thread is frozen while the new view is built and there is no frame in
+    // which a fade-OUT could be shown: the page therefore snaps to transparent
+    // in the same turn as the rebuild — invisible, because nothing renders
+    // during it — and only the REVEAL is animated. Net added latency: zero.
+    // The content is built exactly as fast as it was before; what changed is
+    // that its first frame arrives transparent and on its way in.
+    //
+    // (A real fade-OUT is possible and costs ~32 ms: latch the route, run an
+    // Animator 1 -> 0, and let a Timer defer the swap by one frame so the
+    // out-fade runs on the render thread DURING the freeze. It is not here
+    // because the brief was "sobre todo no añadir latencia extra", and 32 ms
+    // is not zero. The seam is one latched property away if that trade is ever
+    // taken.)
+    //
+    // OpacityAnimator, not NumberAnimation, and this is the whole trick: an
+    // Animator runs on the RENDER thread, so it keeps advancing while the GUI
+    // thread is still paying off everything the mount deferred (layout, the
+    // first delegate refills). Measured on this shell with the thread blocked:
+    // OpacityAnimator advanced 0.53 where NumberAnimation advanced 0.11. The
+    // shared QbzShell.pulseMs cannot serve this: the pulse arrives through
+    // `ui(...)` onto the Qt event loop (shell_bridge.rs:966), i.e. the very
+    // thread the mount is blocking, so a pulse-driven fade would freeze during
+    // exactly the milliseconds it exists to cover.
+    //
+    // GPU doctrine (qt-frontend/2026-08-11-scenegraph-batches §9) forbids
+    // CONTINUOUS animation off the shared pulse, because each dirty frame
+    // presents the whole window at ~1.2% GPU. This one is bounded and
+    // user-initiated: one navigation buys ~18 presents at 60 Hz, and at rest
+    // it writes NOTHING (the Animator is stopped and opacity is a flat 1).
+    property string _fadePath: ""
+    // 300 ms. The contract's first proposal was 120-150 ms; at 140 the owner
+    // could not see it at all. Part of that was the duration and part was a
+    // real defect (see the note on WHAT fades, below) — 300 fixes the half
+    // that is duration, and is still one bounded animation per navigation.
+    property int fadeMs: 300
+
+    // WHAT FADES, and why this is the page and not a veil over it.
+    //
+    // The first cut of this faded a Rectangle laid over the content, coloured
+    // from the pane it sits in. That is wrong here, and invisibly so: AppShell
+    // paints the pane `surface-main` normally but `surface-main @ 0.22` while
+    // the ambient background is on (AppShell.qml:324, QbzTheme.qml:38), and the
+    // ambient background is on whenever a track is loaded (QbzTheme.qml:132).
+    // So in the configuration the app actually runs in, a veil at FULL opacity
+    // covered 22% of the page and the fade read as a flicker. Fading the page
+    // itself has no such failure mode, needs no colour at all, and keeps the
+    // ambient art visible underneath — which a veil opaque enough to work would
+    // have blacked out for the length of the fade.
+    //
+    // No `layer.enabled`: group opacity would cost an FBO the size of the
+    // content pane, allocated at the exact moment the mount is already the most
+    // expensive thing on screen. Per-node alpha lets overlapping children show
+    // through each other, which is the honest trade — and at 300 ms on a page
+    // that is arriving rather than sitting still, it is not visible.
+    //
+    // reduceMotion (shell_bridge.rs:217) skips the whole thing: the page simply
+    // appears, which is the behaviour before this block existed.
+
+    // Watchdog. `onLoaded` is the only thing that brings the page back, and an
+    // invisible content pane is the worst failure this file can produce, so a
+    // missed signal (a view that fails to instantiate, a source that resolves
+    // to nothing) must not be able to leave it at zero.
+    Timer {
+        id: fadeGuard
+        interval: 1500
+        repeat: false
+        onTriggered: viewLoader.opacity = 1
+    }
+
+    OpacityAnimator {
+        id: fadeIn
+        target: viewLoader
+        from: 0.0
+        to: 1.0
+        duration: root.fadeMs
+        easing.type: Easing.OutCubic
     }
 
     Loader {
@@ -222,6 +327,17 @@ Item {
             : root.kiosk && QbzShell.currentView === "nowplaying" ? "../kiosk/KioskNowPlaying.qml" : "")
 
         onLoaded: {
+            // The reveal starts in the same turn the view finished building,
+            // i.e. before a single frame of it has been presented. The render
+            // thread picks the Animator up at that first frame, so the fade is
+            // exactly as long as it says it is no matter how busy the GUI
+            // thread still is.
+            fadeGuard.stop()
+            if (QbzShell.reduceMotion) {
+                viewLoader.opacity = 1
+            } else {
+                fadeIn.restart()
+            }
             var built = Date.now() - root._routeT0
             console.info(navTiming, "[navtiming] " + QbzShell.currentView
                          + " built=" + built + "ms")

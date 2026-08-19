@@ -1020,24 +1020,58 @@ ApplicationWindow {
 
     // Splash (SplashScreen.slint): the same 720px dark card as the login
     // screen while the silent session restore resolves.
+    //
+    // PARITY PASS (2026-08-19). Three things this block had lost against the
+    // reference, all of them user-visible:
+    //   * the LEGAL DISCLAIMER, which SplashScreen.slint:75-86 pins to the
+    //     bottom of the SCREEN (not inside the card — Tauri put it there and
+    //     the Slint port kept that on purpose). It was simply absent here, so
+    //     the one screen a first-run user stares at said nothing about the
+    //     app not being certified by Qobuz.
+    //   * the strings, which were bare QML literals. Every other screen goes
+    //     through QbzSession.tr() with the EXACT msgid of the Slint @tr()
+    //     call so the existing .po catalogues apply; these three did not, so
+    //     the splash was English in all eight locales.
+    //   * the colours and metrics, which were hardcoded hex and magic numbers
+    //     (#0f0f0f / #1a1a1a / #ffffff / #888888, 52, 104, 8, 32). They happen
+    //     to match the DEFAULT dark palette and nothing else: on any of the
+    //     other 34 themes the splash was a black card the rest of the app had
+    //     stopped being. Tokens now, like LoginScreen.qml.
     Rectangle {
         anchors.fill: parent
-        color: "#0f0f0f"
+        color: splashTheme.surfaceMain
         visible: QbzSession.screen === "splash"
 
+        QbzTheme { id: splashTheme }
+
+        // Faked drop shadow (blur 32, offset-y 8) — the same hand-copy
+        // LoginScreen.qml:41-49 carries, for the same reason and with the same
+        // caveat written there. The reference gives BOTH cards the shadow
+        // (SplashScreen.slint:23-25); only the login one had it here.
         Rectangle {
+            anchors.horizontalCenter: splashCard.horizontalCenter
+            y: splashCard.y + 8
+            width: splashCard.width
+            height: splashCard.height
+            radius: splashTheme.radiusLg
+            color: splashTheme.cardShadow
+            opacity: 0.5
+        }
+
+        Rectangle {
+            id: splashCard
             anchors.centerIn: parent
             width: 720
-            height: splashColumn.height + 104
-            radius: 16
-            color: "#1a1a1a"
+            height: splashColumn.height + 2 * splashTheme.cardPadding
+            radius: splashTheme.radiusLg
+            color: splashTheme.surfaceCard
 
             Column {
                 id: splashColumn
                 anchors.left: parent.left
                 anchors.right: parent.right
                 anchors.top: parent.top
-                anchors.margins: 52
+                anchors.margins: splashTheme.cardPadding
                 spacing: 0
                 Image {
                     anchors.horizontalCenter: parent.horizontalCenter
@@ -1046,29 +1080,49 @@ ApplicationWindow {
                     height: 140
                     fillMode: Image.PreserveAspectFit
                 }
-                Item { width: 1; height: 8 }
+                Item { width: 1; height: splashTheme.spacingSm }
                 Text {
                     anchors.horizontalCenter: parent.horizontalCenter
-                    text: "QBZ"
-                    color: "#ffffff"
-                    font.pixelSize: 29
-                    font.weight: Font.DemiBold
+                    text: QbzSession.tr("QBZ", QbzSession.trRev)
+                    color: splashTheme.textPrimary
+                    font.pixelSize: splashTheme.fontWordmark
+                    font.weight: splashTheme.weightSemibold
                     font.letterSpacing: 8
                 }
                 Item { width: 1; height: 2 }
                 Text {
                     anchors.horizontalCenter: parent.horizontalCenter
-                    text: "QOBUZ™ PLAYER"
-                    color: "#888888"
-                    font.pixelSize: 15
+                    text: QbzSession.tr("QOBUZ™ PLAYER", QbzSession.trRev)
+                    color: splashTheme.textMuted
+                    font.pixelSize: splashTheme.fontSubtitle
                     font.letterSpacing: 4
                 }
-                Item { width: 1; height: 32 }
+                Item { width: 1; height: splashTheme.spacingXl }
                 QbzSpinner {
                     anchors.horizontalCenter: parent.horizontalCenter
-                    size: 32
+                    size: 30
                 }
             }
+        }
+
+        // Legal disclaimer — pinned to the BOTTOM OF THE SCREEN, not inside
+        // the card. That placement is the reference's, and its comment says it
+        // is Tauri's too (SplashScreen.slint:73-74). Two msgids concatenated
+        // with a space, exactly as the reference concatenates them, so both
+        // reuse the catalogue entries the login screen already uses.
+        Text {
+            width: Math.min(parent.width - 80, 720)
+            x: Math.round((parent.width - width) / 2)
+            y: parent.height - height - 24
+            text: QbzSession.tr("This application uses the Qobuz API but is not certified by Qobuz.", QbzSession.trRev)
+                + " "
+                + QbzSession.tr("Qobuz™ is a trademark of Qobuz. QBZ is an open-source application licensed under the MIT License and is not affiliated with, endorsed by, or certified by Qobuz.", QbzSession.trRev)
+            color: splashTheme.textMuted
+            // 10px LITERAL, not fontLegal: the reference hardcodes 10px here
+            // (SplashScreen.slint:80) where its login twin uses Typography.legal.
+            font.pixelSize: 10
+            horizontalAlignment: Text.AlignHCenter
+            wrapMode: Text.WordWrap
         }
     }
 }

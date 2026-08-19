@@ -86,6 +86,22 @@ pub mod qbz_home {
         /// lets it open on the stored entry without QML owning the mapping.
         /// Seeded at boot from the shared per-user discover prefs.
         #[qproperty(i32, reco_cache_ttl_index)]
+        /// Configurator > "Items per carousel", as the select's INDEX into
+        /// `discover_prefs::RAIL_SIZE_PRESETS` rather than the count, for the
+        /// same reason as the window above: the control is a fixed option list
+        /// and QML must not own the mapping. GLOBAL (not per tab), which is why
+        /// it rides its own property instead of the per-tab config document —
+        /// the modal has to be able to read it before the tab payload lands.
+        #[qproperty(i32, discover_rail_size_index)]
+        /// The Qobuz-Playlists rail's category filter, as ONE small document:
+        /// `{ tags: [{slug, name}], selected: ["slug", ...] }`.
+        ///
+        /// Its own property rather than a field on `homeSectionsJson`, and this
+        /// is the load-bearing part: republishing the sections document
+        /// destroys and rebuilds every rail's QQmlDelegateModel and resets
+        /// their horizontal scroll (see the note at the top of this file). A
+        /// toggle has to be able to move ~40 bytes without doing that.
+        #[qproperty(QString, playlist_tags_json)]
         // --- "View all" full-list pages (src/browse_qt.rs) ----------------
         #[qproperty(QString, discover_browse_json)]
         #[qproperty(bool, discover_browse_loading)]
@@ -134,6 +150,19 @@ pub mod qbz_home {
         /// a window nobody stored.
         #[qinvokable]
         fn reco_set_cache_ttl_index(self: Pin<&mut QbzHome>, index: i32);
+        /// Configurator > "Items per carousel": an index into
+        /// `RAIL_SIZE_PRESETS` (last entry = no cap). Persists to its own table
+        /// in the shared per-user discover prefs file and republishes the
+        /// RESOLVED index.
+        #[qinvokable]
+        fn discover_set_rail_size(self: Pin<&mut QbzHome>, index: i32);
+        /// Toggle one Qobuz-Playlists category tag by slug. Client-side over
+        /// the cached cards; an empty selection shows everything.
+        #[qinvokable]
+        fn toggle_playlist_tag(self: Pin<&mut QbzHome>, slug: QString);
+        /// "All categories" — drop the whole selection.
+        #[qinvokable]
+        fn clear_playlist_tags(self: Pin<&mut QbzHome>);
         /// Configurator > "Refresh now": rebuild every row, bypassing the
         /// results blob. The engine still honours its own per-week
         /// ListenBrainz cache, so this is not a way to hammer that service.
@@ -342,6 +371,8 @@ pub struct QbzHomeRust {
     reco_weekly_json: QString,
     reco_loading: bool,
     reco_cache_ttl_index: i32,
+    discover_rail_size_index: i32,
+    playlist_tags_json: QString,
     discover_browse_json: QString,
     discover_browse_loading: bool,
     discover_browse_loading_more: bool,
@@ -380,6 +411,12 @@ impl Default for QbzHomeRust {
             // by `recommendations_qt::publish_cache_ttl_index()` at boot, once
             // the per-user directory is known.
             reco_cache_ttl_index: 2,
+            // The uncapped preset's index; the real value is pushed by
+            // `discover_config_qt::publish_rail_size_index()` at boot, once the
+            // per-user directory is known.
+            discover_rail_size_index: 4,
+            // "{}" so the view's JSON.parse never throws on the first frame.
+            playlist_tags_json: QString::from("{}"),
             reco_loading: false,
             // "{}" so the views' JSON.parse never throws on the first frame.
             discover_browse_json: QString::from("{}"),
@@ -451,6 +488,18 @@ impl qbz_home::QbzHome {
 
     pub fn reco_set_cache_ttl_index(self: Pin<&mut Self>, index: i32) {
         crate::recommendations_qt::set_cache_ttl_index(index);
+    }
+
+    pub fn discover_set_rail_size(self: Pin<&mut Self>, index: i32) {
+        crate::discover_config_qt::set_rail_size_index(index);
+    }
+
+    pub fn toggle_playlist_tag(self: Pin<&mut Self>, slug: QString) {
+        crate::home_qt::toggle_playlist_tag(&slug.to_string());
+    }
+
+    pub fn clear_playlist_tags(self: Pin<&mut Self>) {
+        crate::home_qt::clear_playlist_tags();
     }
 
     pub fn reco_refresh_now(self: Pin<&mut Self>) {

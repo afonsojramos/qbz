@@ -176,13 +176,68 @@ Item {
                 font.weight: theme.weightMedium
             }
 
-            // --- Section list ---------------------------------------------
-            // Explicit, content-derived height capped to what is left of the
-            // panel; the Flickable scrolls past that.
+            // --- Items per carousel ---------------------------------------
+            // Recovered from Tauri (`HomeSettingsModal.svelte`), which let the
+            // user cap how many items each carousel showed. It never reached
+            // Slint — the discovery-v2 modal Slint was ported from only ever
+            // modelled {id, enabled} — so Qt inherited the absence.
+            //
+            // GLOBAL, so it reads its own bridge property rather than the
+            // per-tab document: `root.mine` gates the rows below on the tab
+            // payload having landed, and this control must be usable before
+            // that.
             Item {
                 visible: root.tab !== "recommendations"
                 width: parent.width
-                height: Math.max(0, Math.min(listCol.height, root.height * 0.78 - 260))
+                height: 34
+
+                Text {
+                    id: sizeLabel
+                    anchors.left: parent.left
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: QbzSession.tr("Items per carousel", QbzSession.trRev)
+                    color: theme.textMuted
+                    font.pixelSize: theme.fontBody
+                }
+                QbzSelect {
+                    anchors.left: sizeLabel.right
+                    anchors.leftMargin: 8
+                    anchors.verticalCenter: parent.verticalCenter
+                    sm: true
+                    menuWidth: 140
+                    // Option ORDER is the contract with RAIL_SIZE_PRESETS in
+                    // qbz-app/src/settings/discover_prefs.rs — the bridge
+                    // publishes an index, not a count, so reordering these
+                    // silently changes what every stored value means. "All" is
+                    // the stored 0 and the default: it is what this page did
+                    // before the setting existed.
+                    options: [
+                        "10",
+                        "15",
+                        "20",
+                        "25",
+                        QbzSession.tr("All", QbzSession.trRev),
+                    ]
+                    currentIndex: QbzHome.discoverRailSizeIndex
+                    onSelected: function (i) { QbzHome.discoverSetRailSize(i) }
+                }
+            }
+
+            // --- Section list ---------------------------------------------
+            // Explicit, content-derived height capped to what is left of the
+            // panel; the Flickable scrolls past that.
+            //
+            // The subtrahend is the FIXED-CHROME BUDGET (title + banner + count
+            // + the size row + footer + margins), and it is load-bearing: the
+            // panel clips (`clip: true` above), so a row added over this list
+            // without raising the number does not overflow visibly — the last
+            // sections and the Reset footer simply stop existing. It went
+            // 260 -> 308 with the size row: 34 of row plus the column's 14 of
+            // spacing.
+            Item {
+                visible: root.tab !== "recommendations"
+                width: parent.width
+                height: Math.max(0, Math.min(listCol.height, root.height * 0.78 - 308))
                 clip: true
                 Flickable {
                     id: listFlick

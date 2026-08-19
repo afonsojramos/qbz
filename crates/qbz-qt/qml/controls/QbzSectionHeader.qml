@@ -102,10 +102,28 @@ Item {
         }
     }
 
+    /// Optional control mounted at the START of the right-hand row, i.e. LEFT
+    /// of "View all" and the page chevrons. Added for the Qobuz-Playlists
+    /// rail's category filter, which the reference puts on this very line
+    /// (HomeView.slint:358-374).
+    ///
+    /// A Component, not an Item: it is declared by the HOST, so it keeps the
+    /// host's scope and can see the host's ids — and it is only instantiated
+    /// where it is set. The `visible`/`active` gate keeps the thirteen existing
+    /// instantiations pixel-identical, because `Row` skips invisible children
+    /// and adds no spacing for them.
+    property Component leading: null
+
     Row {
         anchors.right: parent.right
         anchors.verticalCenter: parent.verticalCenter
         spacing: 4
+        Loader {
+            visible: root.leading !== null
+            active: root.leading !== null
+            sourceComponent: root.leading
+            anchors.verticalCenter: parent.verticalCenter
+        }
         // "View all" link/chip (accent = Search's, secondary = Home's).
         Rectangle {
             visible: root.showViewAll

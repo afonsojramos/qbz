@@ -170,15 +170,30 @@ Row {
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: root.view.filterOpen = !root.view.filterOpen
+                    onClicked: {
+                        localFilterTip.exit()
+                        root.view.filterOpen = !root.view.filterOpen
+                    }
+                    onEntered: localFilterTip.enter()
+                    onExited: localFilterTip.exit()
                 }
             }
+            // WHAT is filtered, not just that something is. The funnel is a
+            // 10-key one and its badge only ever said a number, so a user
+            // coming back to a session had to open the popup to find out what
+            // they had set.
+            QbzFilterTip {
+                id: localFilterTip
+                ownerKey: "local-albums-filter"
+                anchor: filtArea
+                groups: root.view.filterSummaryGroups
+            }
+            // The plain one-line tip stays for the UNFILTERED case: with
+            // nothing applied there is no summary to show, and "Quality, format
+            // and source filters" is what the control needs to say then.
             LocalTip {
-                visible: filtArea.containsMouse
-                text: root.view.filterCount > 0
-                    ? QbzSession.tr("Filters", QbzSession.trRev)
-                        + " (" + root.view.filterCount + ")"
-                    : QbzSession.tr("Quality, format and source filters", QbzSession.trRev)
+                visible: filtArea.containsMouse && !localFilterTip.hasSummary
+                text: QbzSession.tr("Quality, format and source filters", QbzSession.trRev)
             }
             Rectangle {
                 visible: root.view.filterCount > 0

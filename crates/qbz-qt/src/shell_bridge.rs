@@ -375,6 +375,22 @@ pub mod qbz_shell {
         // Carried here for the same reason the drag ghost is: the trigger
         // lives inside the bar, the overlay must paint above every surface, and
         // the two are in different .qml files.
+        /// APPLIED-FILTERS TOOLTIP CHANNEL. Written by QML, read by QML — the
+        /// bridge is only the wire.
+        ///
+        /// A filter funnel lives deep inside a view's toolbar; the tooltip
+        /// overlay is a sibling of the whole shell. A QML `id` does not cross
+        /// documents, so the two cannot see each other, and threading an
+        /// `Item` down five levels for every one of eighteen filter surfaces is
+        /// the kind of plumbing that gets half-done. The art preview solved the
+        /// identical problem the identical way (`art_preview_*` below): the
+        /// state rides the bridge.
+        ///
+        /// `{ key, x, y, w, h, groups: [{group, values[]}] }` in SCENE
+        /// coordinates (the overlay fills the window, so they are its own), or
+        /// `{}` to hide. Numbers, never an Item reference — a recycled toolbar
+        /// must not be able to dangle here.
+        #[qproperty(QString, filter_tip_json)]
         #[qproperty(bool, art_preview_show)]
         #[qproperty(f32, art_preview_x)]
         #[qproperty(f32, art_preview_y)]
@@ -758,6 +774,7 @@ pub struct QbzShellRust {
     drag_y: f32,
     drag_over_playlist_id: QString,
     drag_over_queue_index: i32,
+    filter_tip_json: QString,
     art_preview_show: bool,
     art_preview_x: f32,
     art_preview_y: f32,
@@ -868,6 +885,8 @@ impl Default for QbzShellRust {
             // -1 = the pointer is not over the queue. NOT 0, which is a valid
             // slot (drop at the very top of upcoming).
             drag_over_queue_index: -1,
+            // "{}" so the overlay's JSON.parse never throws on the first frame.
+            filter_tip_json: QString::from("{}"),
             art_preview_show: false,
             art_preview_x: 0.0,
             art_preview_y: 0.0,

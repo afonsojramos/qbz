@@ -900,9 +900,20 @@ fn reco_cache_ttl_secs() -> i64 {
 mod tests {
     use super::*;
 
+    // PRE-EXISTING FAILURE, fixed here rather than left red. `c02e7713d` split
+    // the two Weekly rows out of the document and turned them into ordering
+    // SLOTS — `slot()` deliberately never self-hides, and its doc comment says
+    // why: a slot that vanished while empty and came back when filled would
+    // change the document, which is the republish that split exists to avoid.
+    // These two tests still asserted the pre-split behaviour and had been red
+    // ever since. The CODE is right; the assertions were stale.
     #[test]
-    fn empty_rows_publish_no_sections() {
-        assert!(sections(&Rows::default()).is_empty());
+    fn empty_rows_publish_only_the_ordering_slots() {
+        let ids: Vec<String> = sections(&Rows::default())
+            .into_iter()
+            .map(|s| s.id)
+            .collect();
+        assert_eq!(ids, vec![WEEKLY_EXPLORATION, WEEKLY_JAMS]);
     }
 
     #[test]
@@ -941,8 +952,9 @@ mod tests {
             rec_albums: vec![HomeCard::default()],
             ..Rows::default()
         };
-        let secs = sections(&rows);
-        assert_eq!(secs.len(), 1);
-        assert_eq!(secs[0].id, "recAlbums");
+        let ids: Vec<String> = sections(&rows).into_iter().map(|s| s.id).collect();
+        // Every EMPTY row is gone; the two slots stay, at their place in the
+        // lineup, because they are ordering and not content.
+        assert_eq!(ids, vec!["recAlbums", WEEKLY_EXPLORATION, WEEKLY_JAMS]);
     }
 }

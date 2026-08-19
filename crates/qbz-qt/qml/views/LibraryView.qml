@@ -227,6 +227,28 @@ Rectangle {
     /// declared LAST in this file and cannot be named from a child component.
     function toggleGenrePopup() { libGenrePopup.toggle() }
 
+    /// The All tab's filters as the applied-filters tooltip wants them: the
+    /// selected genres, plus the four SOURCE switches — but only when one is
+    /// OFF, because all four on is the default and "everything is shown" is not
+    /// a filter worth naming. Genres come back in display casing here (the
+    /// lowercased copy above exists for matching, not for reading).
+    readonly property var filterSummaryGroups: {
+        var tr = QbzSession.trRev
+        var hidden = []
+        if (!root.showFavorites)
+            hidden.push(QbzSession.tr("Favorites", tr))
+        if (!root.showPurchases)
+            hidden.push(QbzSession.tr("Purchases", tr))
+        if (!root.showFollowing)
+            hidden.push(QbzSession.tr("Following", tr))
+        if (!root.showLocal)
+            hidden.push(QbzSession.tr("Local", tr))
+        var out = []
+        if (hidden.length > 0)
+            out.push({ group: QbzSession.tr("Hidden", tr), values: hidden })
+        return out
+    }
+
     // Other-tab state.
     property string tabSearch: ""
     property string albumsSort: "default" // default|title-asc|title-desc|artist-asc

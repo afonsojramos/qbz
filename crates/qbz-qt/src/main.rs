@@ -660,6 +660,7 @@ fn on_session_entered() {
     // default is just the store's default (48 h) and would silently misreport
     // a user who chose something else until they changed it again.
     recommendations_qt::publish_cache_ttl_index();
+    discover_config_qt::publish_rail_size_index();
 
     // Restore the persisted player volume so audio starts at the SAVED level
     // (1:1 with qbz/src/main.rs:220-227). Without it every launch started at
@@ -1539,6 +1540,11 @@ pub(crate) fn open_playlist(playlist_id: String) {
     // cortinilla. Self-gated on the Search view being current, so every other
     // caller of this router is unaffected.
     search_qt::record_page_interaction("playlist", &playlist_id, search_qt::InteractionAction::Open);
+    // Drop the previous detail's "mixed" latch before either arm runs. `load`
+    // sets it authoritatively at the end, but between here and there sits a
+    // network fetch, and a remove clicked inside that window would otherwise
+    // route by the shape of the page the user just left.
+    playlist_qt::clear_mixed();
     // LOCAL playlists (`local:<uuid>`) route to their own loader and open
     // REGARDLESS of connectivity. They are the whole feature for people using
     // QBZ as a player without Qobuz — refusing them while offline would gate
@@ -1706,8 +1712,21 @@ pub(crate) fn playlist_enqueue_track(track_id: String, mode: String) {
 pub(crate) fn playlist_remove_track(row_id: String) {
     let runtime = app();
     spawn(async move {
-        if local_playlist_qt::open_id().is_some() {
+        // `local_detail_open`, NOT `open_id().is_some()`: since the mixed
+        // merge landed, a Qobuz detail with sidecar rows adopts that same
+        // snapshot, and routing on its mere presence would send this remove
+        // into the LOCAL playlist repo — which holds no row for a Qobuz
+        // playlist id, so the click would render as done and write nothing.
+        if local_playlist_qt::local_detail_open() {
             local_playlist_qt::remove_row(&runtime, &row_id).await;
+            return;
+        }
+        // A sidecar row of a MIXED Qobuz playlist: it comes out of
+        // `library.db`, not out of the Qobuz membership. Returns false when the
+        // row turns out to be an ordinary Qobuz one, so this falls through.
+        if playlist_qt::is_mixed()
+            && playlist_qt::remove_sidecar_row(&runtime, &row_id).await
+        {
             return;
         }
         let Ok(playlist_track_id) = row_id.parse::<u64>() else {
@@ -1728,11 +1747,22 @@ pub(crate) fn playlist_reorder(from: i32, slot: i32) {
     if from < 0 || slot < 0 || slot == from || slot == from + 1 {
         return;
     }
-    if local_playlist_qt::open_id().is_some() {
+    if local_playlist_qt::local_detail_open() {
         let runtime = app();
         spawn(async move {
             local_playlist_qt::reorder_row(&runtime, from as usize, slot as usize).await;
         });
+        return;
+    }
+    // A MIXED Qobuz playlist has no reorder yet, and the honest answer is to
+    // do nothing rather than to corrupt the page: the custom-order sidecar
+    // keys by `u64` catalog id, and a local row's display id is a library
+    // rowid in the same numeric space — writing one would collide with a real
+    // track and reorder the WRONG row on the next load. The view hides the
+    // affordance (PlaylistView.qml gates `canReorder` on `!doc.isMixed`); this
+    // is the guard for every other way in.
+    if playlist_qt::is_mixed() {
+        log::info!("[qbz-qt] playlist reorder ignored: mixed playlist");
         return;
     }
     playlist_qt::reorder_track(from as usize, slot as usize);
@@ -1743,11 +1773,16 @@ pub(crate) fn playlist_move_row(row_id: String, delta: i32) {
     if delta == 0 {
         return;
     }
-    if local_playlist_qt::open_id().is_some() {
+    if local_playlist_qt::local_detail_open() {
         let runtime = app();
         spawn(async move {
             local_playlist_qt::move_row(&runtime, &row_id, delta).await;
         });
+        return;
+    }
+    // Same guard, same reason as the drag above.
+    if playlist_qt::is_mixed() {
+        log::info!("[qbz-qt] playlist move-row ignored: mixed playlist");
         return;
     }
     playlist_qt::move_row(&row_id, delta);

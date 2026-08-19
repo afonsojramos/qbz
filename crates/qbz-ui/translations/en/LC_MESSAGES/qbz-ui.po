@@ -867,3 +867,35 @@ msgstr "Replacing..."
 
 msgid "The replacement takes the unavailable track's place in the playlist."
 msgstr "The replacement takes the unavailable track's place in the playlist."
+
+# Discover configurator: items-per-carousel (Tauri parity recovery, 2026-08-19)
+msgid "Items per carousel"
+msgstr "Items per carousel"
+
+msgid "All"
+msgstr "All"
+
+# Discover: Recently Played Playlists rail (context-aware play history, 2026-08-19)
+msgid "Recently Played Playlists"
+msgstr "Recently Played Playlists"
+
+msgid "Playlists you play will appear here."
+msgstr "Playlists you play will appear here."
+
+# Applied-filters tooltip (2026-08-19)
+msgid "+{} more"
+msgstr "+{} more"
+
+msgid "+{} more filters"
+msgstr "+{} more filters"
+
+msgid "Applied filters"
+msgstr "Applied filters"
+
+# Applied-filters tooltip: group labels (2026-08-19)
+msgid "Category"
+msgstr "Category"
+
+# Applied-filters tooltip: Library source switches (2026-08-19)
+msgid "Favorites"
+msgstr "Favorites"

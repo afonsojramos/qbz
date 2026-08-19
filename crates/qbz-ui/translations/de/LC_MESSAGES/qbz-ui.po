@@ -5254,3 +5254,32 @@ msgstr "Wird ersetzt …"
 
 msgid "The replacement takes the unavailable track's place in the playlist."
 msgstr "Der Ersatz nimmt den Platz des nicht verfügbaren Titels in der Playlist ein."
+
+# Discover configurator: items-per-carousel (Tauri parity recovery, 2026-08-19)
+msgid "Items per carousel"
+msgstr "Elemente pro Karussell"
+
+# Discover: Recently Played Playlists rail (context-aware play history, 2026-08-19)
+msgid "Recently Played Playlists"
+msgstr "Zuletzt gespielte Playlists"
+
+msgid "Playlists you play will appear here."
+msgstr "Playlists, die du abspielst, erscheinen hier."
+
+# Applied-filters tooltip (2026-08-19)
+msgid "+{} more"
+msgstr "+{} weitere"
+
+msgid "+{} more filters"
+msgstr "+{} weitere Filter"
+
+msgid "Applied filters"
+msgstr "Aktive Filter"
+
+# Applied-filters tooltip: group labels (2026-08-19)
+msgid "Category"
+msgstr "Kategorie"
+
+# Applied-filters tooltip: Library source switches (2026-08-19)
+msgid "Favorites"
+msgstr "Favoriten"

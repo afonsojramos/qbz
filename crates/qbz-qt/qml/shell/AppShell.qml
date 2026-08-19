@@ -820,6 +820,29 @@ Rectangle {
         z: 3530
     }
 
+    // The applied-filters summary rides the bridge (shell_bridge.rs
+    // `filter_tip_json`) because the funnels that raise it live deep inside
+    // view toolbars and cannot name this overlay — the same reason, and the
+    // same solution, as the art preview above. Numbers in, numbers out: a
+    // toolbar that is destroyed while its bubble is up leaves nothing dangling.
+    Connections {
+        target: QbzShell
+        function onFilterTipJsonChanged() {
+            var d = {}
+            try {
+                d = JSON.parse(QbzShell.filterTipJson)
+            } catch (e) {
+                d = {}
+            }
+            if (!d || !d.key) {
+                tooltipOverlay.hideAll()
+                return
+            }
+            tooltipOverlay.showSummaryAt(d.key, d.x || 0, d.y || 0,
+                                         d.w || 0, d.h || 0, d.groups || [])
+        }
+    }
+
     // Qobuz Connect diagnostics modal (DeveloperSettings > QOBUZ CONNECT) —
     // mounted LAST, mirroring QconnectDevModal.slint's topmost mount in
     // AppShell.slint. Ordering against the tooltip above is a non-issue: this

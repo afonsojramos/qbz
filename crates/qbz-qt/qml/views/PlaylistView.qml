@@ -136,6 +136,11 @@ Rectangle {
     /// only affordances and, for the reorder below, it changes WHICH sort is
     /// the reorderable one.
     readonly property bool isLocal: doc.isLocalPlaylist === true
+    // A MIXED playlist: a QOBUZ playlist carrying local-file and/or Plex rows
+    // from the `library.db` sidecar tables. It is NOT `isLocal` and must not be
+    // conflated with it — it keeps every Qobuz affordance (owner, follow, copy,
+    // share, the heart). The one thing it loses is reorder; see `canReorder`.
+    readonly property bool isMixed: doc.isMixed === true
     /// A Qobuz WRITE can be attempted. `QbzSession.offlineMode` is the shared
     /// tri-state (0 = online, 1 = no connection, 2 = induced offline — the same
     /// property `shell/HeaderBar.qml:101` and `controls/QbzOfflinePlaceholder`
@@ -157,8 +162,17 @@ Rectangle {
     // filter is active would hand a filtered index to a document index — the
     // Playlist Manager takes the same precaution (`playlist_manager_qt.rs:236`
     // requires `query.is_empty()` before it lights its arrows).
+    //
+    // MIXED playlists are excluded outright, and this is a data-integrity gate
+    // rather than a UX one: a Qobuz playlist's custom order is stored keyed by
+    // `u64` catalog id, while a local row's display id is a `library.db` rowid
+    // in the same numeric space, so a reorder here would write an order that
+    // collides with a real track and moves the WRONG row on the next load.
+    // Rust refuses it too (main.rs `playlist_reorder` / `playlist_move_row`) —
+    // this only keeps the app from offering something it will not do.
     readonly property bool canReorder: root.isOwner
         && root.searchQuery.trim() === ""
+        && !root.isMixed
         && (root.isLocal ? root.sortField === "default" : root.sortField === "custom")
 
     // --- Settled state from Rust (`libraryFavoriteChanged` / `pinChanged`) -

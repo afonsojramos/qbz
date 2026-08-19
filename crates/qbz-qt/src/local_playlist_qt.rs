@@ -392,8 +392,156 @@ pub fn clear_open_snapshot() {
 }
 
 /// The id of the open local detail, if one is open.
+///
+/// Since Seam B (mixed Qobuz details adopt this snapshot too — see
+/// [`set_open_mixed_snapshot`]) this is `Some` for TWO different kinds of open
+/// page, and the difference matters at four call sites. Read the note on
+/// [`local_detail_open`] before routing on it.
 pub fn open_id() -> Option<String> {
     CURRENT_META.lock().ok()?.as_ref().map(|(id, _)| id.clone())
+}
+
+/// True only while a FIRST-CLASS LOCAL detail (`local:<uuid>`) is the open
+/// page — not a mixed Qobuz one.
+///
+/// [`open_id`] used to answer exactly that question, because the snapshot could
+/// only ever hold a local playlist. Seam B broke the equivalence: a mixed Qobuz
+/// detail now adopts the same snapshot (it has to — its rows are the same
+/// blend of catalog, file and Plex tracks, and they are resolved by the same
+/// helpers), so `open_id()` is `Some("123456")` on a page that is still, for
+/// every write, a Qobuz playlist.
+///
+/// The split is deliberate and it follows the reference, which never routed on
+/// this snapshot at all: Slint asks three separate predicates
+/// (`is_local() || offline_subset() || playlist::is_mixed()`, main.rs:13531)
+/// and picks a different one per action. Here that becomes: PLAYBACK routes on
+/// `open_id()` — both kinds play from the merged queue, which is the whole
+/// point — while REMOVE and REORDER route on this, because a mixed playlist's
+/// writes go to Qobuz and to the sidecar tables, never to `local_playlists`.
+/// Sending them to [`remove_row`] would look right and silently write nothing:
+/// the repo has no row for a Qobuz playlist id.
+pub fn local_detail_open() -> bool {
+    open_id().map(|id| is_local_id(&id)).unwrap_or(false)
+}
+
+/// Read + resolve a QOBUZ playlist's SIDECAR rows (`playlist_local_tracks` +
+/// `playlist_plex_tracks`) with their stored absolute positions — the shared
+/// reader behind the ONLINE mixed detail (`playlist_qt::load`). Port of
+/// `crates/qbz/src/local_playlist.rs:520-587`.
+///
+/// Runs the one-shot position healing first (Seam C): collided slots — the
+/// legacy 0-based picker/drag writes, and create-and-add's parallel 0-based
+/// local+plex rows — renumber stably into the append region. Drift alone is
+/// never touched (E7). Healing is BEST-EFFORT: the interleave tolerates
+/// collisions (same-slot rows all emit), so a failure logs and reading
+/// proceeds.
+///
+/// Plex refs resolve from the Plex cache in ONE bulk lookup; a miss renders the
+/// honest `Unresolved` row (E8) instead of vanishing — a row the user put there
+/// that silently disappears is indistinguishable from data loss.
+///
+/// Returned rows are local-table-first then plex, each position ASC — the
+/// stable claim order the interleave's same-slot emit relies on (E1/E2).
+///
+/// BLOCKING — call it on a worker thread.
+pub fn read_sidecar_rows_blocking(
+    playlist_id: u64,
+    qobuz_track_count: u32,
+    include_plex: bool,
+) -> Vec<LoadedRow> {
+    let (mut rows, plex_refs) = with_db(false, |db| {
+        match db.heal_playlist_sidecar_positions(playlist_id, qobuz_track_count) {
+            Ok(healed) => {
+                for entry in &healed {
+                    log::warn!(
+                        "[qbz-qt] playlist {playlist_id}: healed sidecar position collision — {entry}"
+                    );
+                }
+            }
+            Err(e) => {
+                log::warn!("[qbz-qt] playlist {playlist_id}: sidecar healing failed: {e}");
+            }
+        }
+        let rows: Vec<LoadedRow> = db
+            .get_playlist_local_tracks_with_position(playlist_id)?
+            .into_iter()
+            .map(|r| LoadedRow {
+                position: r.playlist_position,
+                item: RowItem::Local(Box::new(r.track)),
+            })
+            .collect();
+        let plex_refs: Vec<(String, i32)> = if include_plex {
+            db.get_playlist_plex_tracks_with_position(playlist_id)?
+        } else {
+            Vec::new()
+        };
+        Ok((rows, plex_refs))
+    })
+    .unwrap_or_default();
+
+    if !plex_refs.is_empty() {
+        let keys: Vec<String> = plex_refs.iter().map(|(key, _)| key.clone()).collect();
+        let resolved: HashMap<String, qbz_library::LocalTrack> =
+            match qbz_plex::plex_cache_get_cached_tracks_by_keys(&keys) {
+                Ok(list) => list
+                    .into_iter()
+                    .map(crate::local_plex::map_cached_to_local_track)
+                    // Keyed by `file_path`, which is where the Plex merge
+                    // stores the rating key (local_plex.rs:276) — the same
+                    // convention `local_picker_ref_for_track` reads back.
+                    .map(|t| (t.file_path.clone(), t))
+                    .collect(),
+                Err(e) => {
+                    log::warn!("[qbz-qt] playlist {playlist_id}: plex cache resolve failed: {e}");
+                    HashMap::new()
+                }
+            };
+        rows.extend(plex_refs.into_iter().map(|(key, position)| LoadedRow {
+            position,
+            item: match resolved.get(&key) {
+                Some(track) => RowItem::Plex(Box::new(track.clone())),
+                None => {
+                    log::warn!(
+                        "[qbz-qt] playlist {playlist_id}: plex key {key:?} not in the Plex cache \
+                         — rendered as unavailable"
+                    );
+                    RowItem::Unresolved {
+                        kind: "plex",
+                        reference: key,
+                    }
+                }
+            },
+        }));
+    }
+    rows
+}
+
+/// Adopt the ONLINE mixed Qobuz detail's merged queue snapshot into the
+/// open-detail statics this module owns, so `play` / `play_shuffled` /
+/// `local_picker_ref_for_row` work over the merged rows exactly like a local
+/// detail does (row identity E11). Port of `local_playlist.rs:599-612`.
+///
+/// `offline_only` is always false here — a real Qobuz playlist never stamps the
+/// D8 guard; excluding the local/Plex rows from a QConnect push happens
+/// per-track at admission, off `QueueTrack.source`.
+///
+/// It DOES write `CURRENT_META`, like the reference, and that is what makes the
+/// three playback routes serve a mixed detail with no change of their own. The
+/// two routes that must NOT follow it read [`local_detail_open`] instead.
+pub fn set_open_mixed_snapshot(
+    playlist_id: &str,
+    queue: Vec<QueueTrack>,
+    positions: HashMap<String, i32>,
+) {
+    if let Ok(mut cur) = CURRENT_QUEUE.lock() {
+        *cur = queue;
+    }
+    if let Ok(mut meta) = CURRENT_META.lock() {
+        *meta = Some((playlist_id.to_string(), false));
+    }
+    if let Ok(mut pos) = ROW_POSITIONS.lock() {
+        *pos = positions;
+    }
 }
 
 // `queue_track_for_row` and `plex_key_for_row` lived here and are GONE: they
@@ -452,7 +600,7 @@ pub fn local_picker_ref_for_track(track: &qbz_library::LocalTrack) -> String {
     }
 }
 
-fn total_duration_label(rows: &[LoadedRow]) -> String {
+pub(crate) fn total_duration_label(rows: &[LoadedRow]) -> String {
     let secs: u64 = rows
         .iter()
         .map(|r| match &r.item {
@@ -473,7 +621,7 @@ fn total_duration_label(rows: &[LoadedRow]) -> String {
 }
 
 /// Build the display row + its queue track (when playable) for one resolved row.
-fn row_to_display(item: &RowItem) -> (PlaylistTrackRow, Option<QueueTrack>) {
+pub(crate) fn row_to_display(item: &RowItem) -> (PlaylistTrackRow, Option<QueueTrack>) {
     match item {
         RowItem::Qobuz(track) => {
             let row = crate::playlist_qt::map_track(track);
@@ -810,6 +958,22 @@ pub async fn load(runtime: &Runtime, playlist_id: &str) -> bool {
     if let Ok(mut pos) = ROW_POSITIONS.lock() {
         *pos = positions;
     }
+    // The LOCAL half of the "Recently Played Playlists" meta. Same contract as
+    // the Qobuz loader: metadata only, the play event comes from the
+    // track-start edge, and the rail's JOIN keeps a merely-browsed playlist
+    // off it. `source: "local"` records where the PLAYLIST lives — its rows
+    // can still be Qobuz tracks.
+    qbz_app::settings::playlist_play_history::record_playlist_meta(
+        qbz_app::settings::playlist_play_history::PlaylistPlayMeta {
+            playlist_id: &doc.id,
+            title: &doc.name,
+            owner: "",
+            owner_id: "",
+            artwork_url: doc.covers.first().map(String::as_str).unwrap_or(""),
+            track_count: doc.track_count.max(0) as u32,
+            source: "local",
+        },
+    );
     crate::playlist_qt::adopt_doc(doc);
     true
 }

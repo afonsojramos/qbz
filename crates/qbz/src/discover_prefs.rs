@@ -146,6 +146,12 @@ pub fn render_kind(id: DiscoverySectionId) -> &'static str {
         MostStreamed => "slimGrid",
         QobuzPlaylists => "playlistCarousel",
         RecentlyPlayedAlbums => "albumCarousel",
+        // Added for the Qt track (playlist plays no longer register as album
+        // plays; the playlists get their own rail). This arm exists ONLY to
+        // keep this frozen tree compiling against the shared enum — the Slint
+        // build has no data source for it and never renders it. Same class of
+        // two-line follow as `MostPlayedAlbums`.
+        RecentlyPlayedPlaylists => "playlistCarousel",
         ContinueListening => "slimGrid",
         QobuzMixes => "qobuzMixes",
         RadioStations => "radio",
@@ -191,6 +197,7 @@ pub fn label_for(id: DiscoverySectionId) -> &'static str {
         ArtistSpotlight => qbz_i18n::mark("Artist Spotlight"), // discovery.artistSpotlight
         Pinned => qbz_i18n::mark("Pinned"), // Slint-era section, no Tauri key
         MostPlayedAlbums => qbz_i18n::mark("Most Played Albums"), // local: most-played rail
+        RecentlyPlayedPlaylists => qbz_i18n::mark("Recently Played Playlists"), // local: Qt-track rail
     }
 }
 

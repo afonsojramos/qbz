@@ -226,6 +226,20 @@ pub(crate) fn prune_albums(album_ids: &[String]) -> usize {
 /// here as well as there — see [`is_ephemeral_track_id`].
 #[allow(dead_code)]
 pub(crate) fn record(track: RecentTrack) {
+    record_in_context(track, "")
+}
+
+/// The same write, told what the user was PLAYING FROM.
+///
+/// The context cannot ride on `RecentTrack` itself, and this is the constraint
+/// that shapes the whole feature: `recently_played.json` is a DESTRUCTIVE round
+/// trip between the two frontends. The Slint build deserializes it into its own
+/// structs, serde silently drops fields it does not know, and its next write
+/// puts the truncated object back — so a `context_kind` added to `RecentTrack`
+/// would survive exactly until the other build played one track, intermittently
+/// and with nothing logged. The gate therefore lives at the WRITE, and the file
+/// on disk keeps the shape both builds agree on.
+pub(crate) fn record_in_context(track: RecentTrack, context_kind: &str) {
     if track.id.is_empty() {
         return;
     }
@@ -238,7 +252,17 @@ pub(crate) fn record(track: RecentTrack) {
         return;
     }
     let mut store = read_store();
-    if !track.album_id.is_empty() {
+    // The ALBUM half is written only when the play was ABOUT an album.
+    //
+    // THE BUG THIS CLOSES: every track start wrote its album into
+    // `store.albums`, whatever the user had actually chosen to play. A playlist
+    // of 40 tracks from 40 different albums therefore pushed 40 entries into a
+    // list capped at 24, and "Recently Played" became a list of that playlist's
+    // contents — the playlist itself recorded nowhere. `""` (nothing stamped)
+    // still counts: most of the untagged entry points ARE album listening, and
+    // treating them as playlists would empty the album rail instead.
+    let album_context = context_kind.is_empty() || context_kind == "album";
+    if album_context && !track.album_id.is_empty() {
         store.albums.retain(|a| a.id != track.album_id);
         store.albums.insert(
             0,
@@ -318,6 +342,21 @@ pub(crate) fn record_queue_track(track: &qbz_models::QueueTrack) {
     let source = track.source.clone().unwrap_or_default();
     let artist_id = track.artist_id.map(|id| id.to_string()).unwrap_or_default();
 
+    // What the user chose to play, as opposed to where the audio comes from
+    // (`source`). Two different axes with confusingly similar names: a LOCAL
+    // playlist is `context_kind = "playlist"` AND `source = "local"`.
+    let context_kind = track.context_kind.clone().unwrap_or_default();
+    let context_id = track.context_id.clone().unwrap_or_default();
+
+    // A playlist play is recorded AS a playlist play, in its own store, and
+    // does not touch either album history. The meta (title, owner, cover) was
+    // already upserted by the view that started playback — the edge only ever
+    // sees a QueueTrack, and resolving an id back into a header on every track
+    // change would be a fetch per track.
+    if context_kind == "playlist" {
+        qbz_app::settings::playlist_play_history::record_playlist_play(&context_id);
+    }
+
     qbz_app::settings::album_play_history::record_album_play(
         qbz_app::settings::album_play_history::AlbumPlayMeta {
             album_id: &album_id,
@@ -329,25 +368,29 @@ pub(crate) fn record_queue_track(track: &qbz_models::QueueTrack) {
             quality_label: &quality_label,
             year: "",
             source: &source,
+            context_kind: &context_kind,
         },
     );
 
-    record(RecentTrack {
-        id: track.id.to_string(),
-        title: track.title.clone(),
-        subtitle: track.artist.clone(),
-        artwork_url: artwork.clone(),
-        album_id,
-        album_title: track.album.clone(),
-        album_artist: track.artist.clone(),
-        album_artwork_url: artwork,
-        quality_tier: tier.to_string(),
-        quality_label,
-        genre: String::new(),
-        release_date: String::new(),
-        artist_id: track.artist_id,
-        source,
-    });
+    record_in_context(
+        RecentTrack {
+            id: track.id.to_string(),
+            title: track.title.clone(),
+            subtitle: track.artist.clone(),
+            artwork_url: artwork.clone(),
+            album_id,
+            album_title: track.album.clone(),
+            album_artist: track.artist.clone(),
+            album_artwork_url: artwork,
+            quality_tier: tier.to_string(),
+            quality_label,
+            genre: String::new(),
+            release_date: String::new(),
+            artist_id: track.artist_id,
+            source,
+        },
+        &context_kind,
+    );
 }
 
 #[cfg(test)]

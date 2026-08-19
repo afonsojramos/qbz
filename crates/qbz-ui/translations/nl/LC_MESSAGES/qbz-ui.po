@@ -5242,3 +5242,32 @@ msgstr "Vervangen…"
 
 msgid "The replacement takes the unavailable track's place in the playlist."
 msgstr "De vervanging neemt de plaats van het niet-beschikbare nummer in de afspeellijst in."
+
+# Discover configurator: items-per-carousel (Tauri parity recovery, 2026-08-19)
+msgid "Items per carousel"
+msgstr "Items per carrousel"
+
+# Discover: Recently Played Playlists rail (context-aware play history, 2026-08-19)
+msgid "Recently Played Playlists"
+msgstr "Onlangs afgespeelde afspeellijsten"
+
+msgid "Playlists you play will appear here."
+msgstr "Afspeellijsten die je afspeelt verschijnen hier."
+
+# Applied-filters tooltip (2026-08-19)
+msgid "+{} more"
+msgstr "+{} meer"
+
+msgid "+{} more filters"
+msgstr "+{} filters meer"
+
+msgid "Applied filters"
+msgstr "Toegepaste filters"
+
+# Applied-filters tooltip: group labels (2026-08-19)
+msgid "Category"
+msgstr "Categorie"
+
+# Applied-filters tooltip: Library source switches (2026-08-19)
+msgid "Favorites"
+msgstr "Favorieten"

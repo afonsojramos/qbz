@@ -27,7 +27,8 @@
 //!   opening an empty modal (HomeView.qml).
 
 use qbz_app::settings::discover_prefs::{
-    DiscoverPrefs, DiscoverPrefsStore, DiscoverySectionId, DiscoveryTab,
+    DiscoverPrefs, DiscoverPrefsStore, DiscoverySectionId, DiscoveryTab, DEFAULT_RAIL_SIZE,
+    RAIL_SIZE_PRESETS,
 };
 use cxx_qt_lib::QString;
 use serde::Serialize;
@@ -61,6 +62,7 @@ fn label_for(id: DiscoverySectionId) -> &'static str {
         ArtistSpotlight => qbz_i18n::mark("Artist Spotlight"),
         Pinned => qbz_i18n::mark("Pinned"),
         MostPlayedAlbums => qbz_i18n::mark("Most Played Albums"),
+        RecentlyPlayedPlaylists => qbz_i18n::mark("Recently Played Playlists"),
     }
 }
 
@@ -85,6 +87,80 @@ struct ConfigDoc {
 pub(crate) fn store() -> Option<DiscoverPrefsStore> {
     crate::sidebar_qt::user_dir()
         .and_then(|dir| DiscoverPrefsStore::new_at(&dir).ok())
+}
+
+// ---------------------------------------------------------------------------
+// Items per rail
+// ---------------------------------------------------------------------------
+//
+// Tauri had this and Slint never got it: `HomeSettingsModal.svelte` let the
+// user say how many items each carousel showed, over `homeSettingsStore.ts`.
+// The modal that replaced it in the discovery-v2 rewrite
+// (`DiscoverySettingsModal.svelte`) only ever modelled `{id, enabled}`, the
+// Slint port took THAT modal 1:1, and so it copied the absence — which Qt then
+// inherited from Slint. This is the recovery.
+//
+// It is GLOBAL, not per rail. Tauri had six keys but five of its rails already
+// shared one, and a per-rail knob would put twenty spinners in a modal whose
+// job is to be glanced at.
+
+/// The stored cap, `0` = uncapped. Falls back to the default with no store
+/// (nobody logged in yet), which is also the uncapped value — so the page
+/// behaves exactly as it did before this setting existed until someone
+/// deliberately changes it.
+pub(crate) fn rail_size() -> i64 {
+    store().map(|s| s.load_rail_size()).unwrap_or(DEFAULT_RAIL_SIZE)
+}
+
+/// Stored size -> select index. The index IS the contract with the option
+/// order in `DiscoverConfigModal.qml`; see `RAIL_SIZE_PRESETS`.
+pub(crate) fn rail_size_index() -> i32 {
+    let n = rail_size();
+    RAIL_SIZE_PRESETS
+        .iter()
+        .position(|&p| p == n)
+        .unwrap_or_else(|| {
+            RAIL_SIZE_PRESETS
+                .iter()
+                .position(|&p| p == DEFAULT_RAIL_SIZE)
+                .unwrap_or(0)
+        }) as i32
+}
+
+/// Configurator select -> persist -> re-render the tabs -> republish the
+/// RESOLVED index.
+///
+/// Resolved, not the index that came in — the same honesty the reco cache
+/// window buys with the same line: if the write fails (no per-user store), the
+/// select snaps back to what is actually stored instead of displaying a size
+/// nobody saved.
+///
+/// `republish_cached()` and not a reload: the cut happens at assembly time over
+/// the candidates already in memory, so a new size lands on the next frame with
+/// no network round trip — exactly like a section toggle.
+pub(crate) fn set_rail_size_index(index: i32) {
+    let idx = index.clamp(0, RAIL_SIZE_PRESETS.len() as i32 - 1) as usize;
+    let size = RAIL_SIZE_PRESETS[idx];
+    let Some(store) = store() else {
+        log::warn!("[qbz-qt] discover rail size: no per-user prefs store (not logged in?)");
+        publish_rail_size_index();
+        return;
+    };
+    if let Err(e) = store.save_rail_size(size) {
+        log::warn!("[qbz-qt] discover rail size: save failed: {e}");
+        publish_rail_size_index();
+        return;
+    }
+    log::info!("[qbz-qt] discover rail size set to {size} (0 = all)");
+    crate::home_qt::republish_cached();
+    publish_rail_size_index();
+}
+
+/// Push the stored size onto the bridge as its select index. Called at boot
+/// (so the select opens on the right entry the FIRST time) and after a write.
+pub(crate) fn publish_rail_size_index() {
+    let index = rail_size_index();
+    crate::home_bridge::ui(move |mut b| b.as_mut().set_discover_rail_size_index(index));
 }
 
 /// The tab's ordered pref ids, narrowed to what this port renders.

@@ -52,7 +52,23 @@ fn init_schema(conn: &Connection) -> rusqlite::Result<()> {
             updated_at    INTEGER NOT NULL
         );
         "#,
-    )
+    )?;
+    // PLAYBACK CONTEXT of the event — "album" | "playlist" | "" (unknown).
+    //
+    // Additive, and it has to be: this .db is SHARED with the Slint build,
+    // whose tree is frozen and whose INSERT names its columns explicitly
+    // (`INSERT INTO album_play_events (album_id, occurred_at)`), so an extra
+    // column with a DEFAULT is invisible to it and it simply writes `''`.
+    // Every legacy row is `''` too, and the ranking query treats `''` as
+    // "album" — so no history is lost or reinterpreted by this migration.
+    //
+    // SQLite has no `ADD COLUMN IF NOT EXISTS`; running it and swallowing the
+    // duplicate-column error is the idiom, and it is cheaper than a
+    // `PRAGMA table_info` round trip on every open.
+    let _ = conn.execute_batch(
+        "ALTER TABLE album_play_events ADD COLUMN context_kind TEXT NOT NULL DEFAULT '';",
+    );
+    Ok(())
 }
 
 fn open_db() -> Option<Connection> {
@@ -103,6 +119,11 @@ pub struct AlbumPlayMeta<'a> {
     pub quality_label: &'a str,
     pub year: &'a str,
     pub source: &'a str,
+    /// What the user was PLAYING FROM when this event happened: `"album"`,
+    /// `"playlist"`, or `""` when nothing was stamped. NOT the same axis as
+    /// [`Self::source`], which is where the audio comes from (qobuz / local /
+    /// plex) — an album can be local AND played from a playlist.
+    pub context_kind: &'a str,
 }
 
 /// One ranked album for the "Most Played Albums" rail / View-all page.
@@ -124,8 +145,9 @@ pub struct AlbumPlayRow {
 /// Internal so tests can drive it against an in-memory connection.
 fn record_on(conn: &Connection, m: &AlbumPlayMeta, now: i64) {
     if let Err(e) = conn.execute(
-        "INSERT INTO album_play_events (album_id, occurred_at) VALUES (?, ?)",
-        params![m.album_id, now],
+        "INSERT INTO album_play_events (album_id, occurred_at, context_kind) \
+         VALUES (?, ?, ?)",
+        params![m.album_id, now, m.context_kind],
     ) {
         log::warn!("[qbz-slint] album_play_history insert event failed: {e}");
     }
@@ -174,6 +196,13 @@ fn query_on(conn: &Connection, limit: Option<u32>) -> Vec<AlbumPlayRow> {
         JOIN (
             SELECT album_id, COUNT(*) AS plays, MAX(occurred_at) AS last_at
             FROM album_play_events
+            -- Only plays that were ABOUT the album. A playlist of 40 tracks
+            -- from 40 albums used to add one play to each of them, which is
+            -- how "Most Played Albums" came to be a list of whatever playlist
+            -- the user had on. `''` is a legacy row or one written by the
+            -- other frontend, and is counted — dropping it would erase
+            -- history that is almost entirely genuine album listening.
+            WHERE context_kind IN ('', 'album')
             GROUP BY album_id
         ) p ON p.album_id = m.album_id
         ORDER BY p.plays DESC, p.last_at DESC
@@ -249,6 +278,7 @@ mod tests {
             quality_label: "Hi-Res",
             year: "2024",
             source: "qobuz",
+            context_kind: "album",
         }
     }
 

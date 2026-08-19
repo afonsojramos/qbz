@@ -225,6 +225,184 @@ pub struct PlaylistDoc {
     /// the cloud entirely.
     #[serde(default, rename = "offlineOnly", skip_serializing_if = "std::ops::Not::not")]
     pub offline_only: bool,
+    /// This QOBUZ detail carries SIDECAR rows — local files and/or Plex tracks
+    /// added to it through `playlist_local_tracks` / `playlist_plex_tracks`.
+    /// The "carretes paralelos" playlist.
+    ///
+    /// NOT the same flag as `is_local_playlist`, and it must not be folded into
+    /// it: a mixed playlist is still a Qobuz playlist with an owner, a follow
+    /// state, a copy action, a share link and a heart, and it keeps every one of
+    /// those affordances. What it loses is drag/chevron reorder — see
+    /// `apply_custom_order`, which keys its stored order by a `u64` catalog id
+    /// and cannot tell one from a library row id.
+    #[serde(default, rename = "isMixed", skip_serializing_if = "std::ops::Not::not")]
+    pub is_mixed: bool,
+}
+
+// ---------------------------------------------------------------------------
+// Mixed ("carretes paralelos") playlists
+// ---------------------------------------------------------------------------
+
+/// True while the open ONLINE Qobuz detail carries sidecar (local/Plex) rows.
+/// Set at the end of every [`load`], cleared by [`reset`] — the same lifetime
+/// the reference gives it (`qbz/src/playlist.rs:32`).
+///
+/// It exists because the DOC is not readable from the two write paths that need
+/// the answer synchronously (`main.rs` routes before any await), and because
+/// those paths must NOT route on `local_playlist_qt::open_id()`: a mixed detail
+/// adopts that snapshot too, so `open_id()` alone would send a Qobuz playlist's
+/// remove and reorder into the local-playlist repo, where they would find no
+/// rows and write nothing. That is the renders-and-no-ops failure this module
+/// has already been bitten by once.
+static MIXED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether the open ONLINE Qobuz detail is a mixed playlist.
+pub fn is_mixed() -> bool {
+    MIXED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Drop the mixed latch on navigation, BEFORE the next detail loads.
+///
+/// Without this the flag would survive between pages for the length of a fetch,
+/// and a remove clicked in that window would route by the PREVIOUS playlist's
+/// shape. `load` sets it authoritatively at the end; this only closes the gap.
+pub fn clear_mixed() {
+    MIXED.store(false, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Remove ONE sidecar row (a local file or a Plex track) from the open MIXED
+/// Qobuz playlist, then reload so the page settles on the merged truth rather
+/// than on an optimistic patch.
+///
+/// This arm has to exist, and its absence was not a cosmetic gap: the Qobuz arm
+/// parses the display row id as a `u64` and posts it to Qobuz as a
+/// `playlist_track_id`. A local row's display id IS its `library.db` row id, in
+/// the same numeric space — so without this the click would send a local
+/// library rowid to Qobuz as if it were a catalog track, and the row would
+/// still be there afterwards.
+///
+/// A Plex row never rides its numeric id (the synthetic ids do not resolve):
+/// its rating key comes back from the open detail's queue snapshot through
+/// `local_picker_ref_for_row`, which returns it as `"plex:<key>"`.
+pub async fn remove_sidecar_row(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    row_id: &str,
+) -> bool {
+    let Some(playlist_id) = with_doc(|d| d.id.clone()).and_then(|id| id.parse::<u64>().ok()) else {
+        return false;
+    };
+    let source = with_doc(|d| {
+        d.tracks
+            .iter()
+            .find(|t| t.id == row_id)
+            .map(|t| t.source.clone())
+    })
+    .flatten()
+    .unwrap_or_default();
+
+    let removal = match source.as_str() {
+        "local" => match row_id.parse::<i64>() {
+            Ok(id) => SidecarRemoval::Local(id),
+            Err(_) => {
+                log::warn!("[qbz-qt] playlist remove: non-numeric local row id {row_id}");
+                return false;
+            }
+        },
+        "plex" => match crate::local_playlist_qt::local_picker_ref_for_row(row_id)
+            .and_then(|r| r.strip_prefix("plex:").map(str::to_string))
+        {
+            Some(key) => SidecarRemoval::Plex(key),
+            None => {
+                log::warn!("[qbz-qt] playlist remove: no plex key for row {row_id}");
+                return false;
+            }
+        },
+        // Not a sidecar row — the caller must fall through to the Qobuz arm.
+        _ => return false,
+    };
+
+    let _ = tokio::task::spawn_blocking(move || {
+        crate::library_db_qt::with_db(false, |db| {
+            match &removal {
+                SidecarRemoval::Local(id) => db.remove_local_track_from_playlist(playlist_id, *id)?,
+                SidecarRemoval::Plex(key) => db.remove_plex_track_from_playlist(playlist_id, key)?,
+            }
+            Ok(())
+        })
+    })
+    .await;
+
+    if let Err(e) = load(runtime, playlist_id).await {
+        log::warn!("[qbz-qt] playlist reload after sidecar remove failed: {e}");
+    }
+    true
+}
+
+enum SidecarRemoval {
+    Local(i64),
+    Plex(String),
+}
+
+/// Tauri's absolute-slot interleave — the `displayTracks` contract. Port of
+/// `qbz/src/playlist.rs:455-496`, kept literal on purpose.
+///
+/// Sidecar rows claim their STORED positions as slots in the merged list; Qobuz
+/// tracks fill the remaining slots in server order;
+/// `total = max(sum of rows, max stored position + 1)` so stale high slots
+/// still render (E3); unclaimed slots with no Qobuz track left are skipped
+/// (never a blank row); leftover Qobuz tracks append. Same-slot collisions emit
+/// ALL claimants — local first, then plex, in stable claim order — rather than
+/// Tauri's Map collapse, which dropped one of them (E1/E2 fix-forward; the
+/// stored data is repaired separately by the healing pass). Display numbering
+/// is the emit order, contiguous.
+pub(crate) fn interleave_rows(
+    qobuz: Vec<Track>,
+    sidecar: Vec<crate::local_playlist_qt::LoadedRow>,
+) -> Vec<crate::local_playlist_qt::LoadedRow> {
+    use crate::local_playlist_qt::{LoadedRow, RowItem};
+    let qobuz_to_row = |(i, t): (usize, Track)| LoadedRow {
+        position: i as i32,
+        item: RowItem::Qobuz(Box::new(t)),
+    };
+    if sidecar.is_empty() {
+        return qobuz.into_iter().enumerate().map(qobuz_to_row).collect();
+    }
+    let sidecar_len = sidecar.len();
+    let mut max_pos: i32 = -1;
+    let mut buckets: std::collections::HashMap<i32, Vec<LoadedRow>> =
+        std::collections::HashMap::new();
+    for row in sidecar {
+        // Corrupt negative positions claim slot 0 rather than vanishing.
+        let pos = row.position.max(0);
+        max_pos = max_pos.max(pos);
+        buckets.entry(pos).or_default().push(row);
+    }
+    let total = (qobuz.len() + sidecar_len).max((max_pos + 1) as usize);
+    let mut out: Vec<LoadedRow> = Vec::with_capacity(qobuz.len() + sidecar_len);
+    let mut qobuz_iter = qobuz.into_iter();
+    for pos in 0..total as i32 {
+        if let Some(rows) = buckets.remove(&pos) {
+            out.extend(rows);
+        } else if let Some(track) = qobuz_iter.next() {
+            out.push(LoadedRow {
+                position: pos,
+                item: RowItem::Qobuz(Box::new(track)),
+            });
+        }
+        // else: an unclaimed slot past the Qobuz tracks — a gap, skipped.
+    }
+    for track in qobuz_iter {
+        out.push(LoadedRow {
+            position: 0,
+            item: RowItem::Qobuz(Box::new(track)),
+        });
+    }
+    // Positions in the merged output are the contiguous display slots; the
+    // stored sidecar positions did their job claiming the order.
+    for (i, row) in out.iter_mut().enumerate() {
+        row.position = i as i32;
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -824,7 +1002,64 @@ pub async fn load(runtime: &Arc<AppRuntime<LoggingAdapter>>, playlist_id: u64) -
         .map(|d| qbz_text_utils::strip_html::strip_html(&d))
         .unwrap_or_default();
 
-    let mut rows: Vec<PlaylistTrackRow> = tracks.iter().map(map_track).collect();
+    // --- Seam A: merge-on-load ---------------------------------------------
+    //
+    // THE BUG THIS CLOSES: a "mixed" playlist is a QOBUZ playlist (numeric id)
+    // with local-file and/or Plex rows attached through the `library.db`
+    // sidecar tables `playlist_local_tracks` / `playlist_plex_tracks`. Qt could
+    // WRITE those rows (`playlist_picker_qt::write_sidecar_refs`) and COUNT
+    // them (`folders_qt` feeds the Playlist Manager's "(N local)" badge) — but
+    // this loader built its rows exclusively from the Qobuz API response, so
+    // the rows the user had just added never appeared on the page they were
+    // added to. Two comments elsewhere in the port claimed this merge already
+    // happened; they were describing the reference, not this file.
+    //
+    // The reader does the healing and the Plex-cache resolve; the interleave
+    // places sidecar rows at their STORED absolute slots and fills the rest
+    // with the server order. Plex rows are always included online — their
+    // availability is connectivity-based (E13), not stored.
+    let qobuz_count = tracks.len() as u32;
+    let sidecar = tokio::task::spawn_blocking(move || {
+        crate::local_playlist_qt::read_sidecar_rows_blocking(playlist_id, qobuz_count, true)
+    })
+    .await
+    .unwrap_or_default();
+    let mixed = !sidecar.is_empty();
+    let merged = interleave_rows(tracks, sidecar);
+
+    // Display rows + the playable snapshot + the row positions in ONE pass, so
+    // a row's display id and its queue entry can never disagree — the same
+    // shape `local_playlist_qt::load` uses, and the reason row identity (E11)
+    // survives the connectivity flip.
+    let mut rows: Vec<PlaylistTrackRow> = Vec::with_capacity(merged.len());
+    let mut merged_queue: Vec<QueueTrack> = Vec::new();
+    let mut merged_positions: std::collections::HashMap<String, i32> =
+        std::collections::HashMap::new();
+    for row in &merged {
+        let (item, queue) = crate::local_playlist_qt::row_to_display(&row.item);
+        merged_positions.insert(item.id.clone(), row.position);
+        if let Some(q) = queue {
+            merged_queue.push(q);
+        }
+        rows.push(item);
+    }
+
+    // Seam B: a mixed detail plays through local_playlist's merged queue
+    // snapshot (source-aware QueueTracks — a local file must never be queued as
+    // a catalog id), so `main.rs`'s three playback routes serve it unchanged.
+    // A pure-Qobuz detail clears the snapshot instead, or its rows would
+    // resolve against the previous playlist's queue.
+    MIXED.store(mixed, std::sync::atomic::Ordering::Relaxed);
+    if mixed {
+        crate::local_playlist_qt::set_open_mixed_snapshot(
+            &playlist_id.to_string(),
+            merged_queue,
+            merged_positions,
+        );
+    } else {
+        crate::local_playlist_qt::clear_open_snapshot();
+    }
+
     // Artwork (the reload_home pattern): disk hits inline, one background
     // download + republish.
     let cover_path = crate::artwork_qt::cached_path(&cover_url);
@@ -910,12 +1145,32 @@ pub async fn load(runtime: &Arc<AppRuntime<LoggingAdapter>>, playlist_id: u64) -
         doc.is_following = is_following;
         doc.is_copied = is_copied;
         doc.pinned = pinned;
+        doc.is_mixed = mixed;
         doc.loading = false;
         let (field, asc) = sort_state;
         apply_sort(doc, &field, asc);
         doc.clone()
     };
     publish(&doc);
+
+    // Remember WHAT this playlist is, for the "Recently Played Playlists"
+    // rail. Only the metadata — the play EVENT is written at the track-start
+    // edge, which sees a QueueTrack and an id and nothing else. Upserting on
+    // load rather than on play is what keeps a renamed or re-covered playlist
+    // converging, and it cannot put a card on the rail by itself: the rail's
+    // query JOINs meta against events, so a playlist merely browsed shows
+    // nowhere (there is a test for exactly that).
+    qbz_app::settings::playlist_play_history::record_playlist_meta(
+        qbz_app::settings::playlist_play_history::PlaylistPlayMeta {
+            playlist_id: &playlist_id.to_string(),
+            title: &doc.name,
+            owner: &doc.owner,
+            owner_id: &doc.owner_id.to_string(),
+            artwork_url: &doc.cover_url,
+            track_count: doc.track_count.max(0) as u32,
+            source: "qobuz",
+        },
+    );
 
     if !missing.is_empty() {
         crate::spawn(async move {
@@ -951,7 +1206,16 @@ fn apply_sort(doc: &mut PlaylistDoc, field: &str, asc: bool) {
         "artist" => doc.tracks.sort_by(|a, b| a.artist.to_lowercase().cmp(&b.artist.to_lowercase())),
         "album" => doc.tracks.sort_by(|a, b| a.album.to_lowercase().cmp(&b.album.to_lowercase())),
         "duration" => doc.tracks.sort_by_key(|t| t.duration_secs),
-        "custom" => apply_custom_order(doc),
+        // A MIXED playlist has no usable custom order, and forcing one would
+        // scramble the merge that just ran: `apply_custom_order` keys its
+        // stored ranks by `t.id.parse::<u64>()`, and a local row's display id
+        // is a `library.db` rowid living in the SAME numeric space as a catalog
+        // id — the two collide silently. A LocalFile / Unresolved row whose id
+        // is a path or a `plex:<key>` does not parse at all and sinks to the
+        // end on `u64::MAX`. So a mixed detail keeps the absolute-slot order
+        // the interleave computed, which is the order the user actually chose.
+        "custom" if !doc.is_mixed => apply_custom_order(doc),
+        "custom" => {}
         // "default" / "added": the API insertion order is the natural
         // order; "added" starts newest-first (asc=false reverses).
         _ => {}

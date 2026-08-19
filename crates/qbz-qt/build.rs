@@ -410,6 +410,12 @@ fn main() {
                 "qml/controls/QbzToggle.qml",
                 "qml/controls/QbzToolButton.qml",
                 "qml/controls/QbzTooltip.qml",
+                // Applied-filters tooltip: the trigger a filter control mounts
+                // beside itself (it writes the shell channel QbzTooltip reads).
+                "qml/controls/QbzFilterTip.qml",
+                // Home > Qobuz Playlists: the category filter, trigger + popup.
+                "qml/controls/PlaylistTagFilterButton.qml",
+                "qml/controls/PlaylistTagFilterPopup.qml",
                 "qml/controls/QualityBadge.qml",
                 "qml/controls/QualityMini.qml",
                 "qml/controls/SettingRow.qml",
