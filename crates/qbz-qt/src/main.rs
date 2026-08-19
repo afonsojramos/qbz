@@ -660,7 +660,6 @@ fn on_session_entered() {
     // default is just the store's default (48 h) and would silently misreport
     // a user who chose something else until they changed it again.
     recommendations_qt::publish_cache_ttl_index();
-    discover_config_qt::publish_rail_size_index();
 
     // Restore the persisted player volume so audio starts at the SAVED level
     // (1:1 with qbz/src/main.rs:220-227). Without it every launch started at

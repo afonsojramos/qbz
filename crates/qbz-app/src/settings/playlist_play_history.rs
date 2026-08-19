@@ -59,6 +59,14 @@ fn init_schema(conn: &Connection) -> rusqlite::Result<()> {
             artwork_url TEXT NOT NULL DEFAULT '',
             track_count INTEGER NOT NULL DEFAULT 0,
             source      TEXT NOT NULL DEFAULT '',
+            -- Up to four MEMBER covers, as a JSON array, for the card's mosaic
+            -- arm. Most playlists have no graphic of their own, so without
+            -- these the rail draws placeholders: the detail page falls back to
+            -- a collage for exactly the same reason.
+            covers      TEXT NOT NULL DEFAULT '[]',
+            -- The playlist HAS a single graphic of its own (or a custom cover),
+            -- which the card contain-fits instead of building a mosaic.
+            own_image   INTEGER NOT NULL DEFAULT 0,
             updated_at  INTEGER NOT NULL
         );
         "#,
@@ -113,6 +121,13 @@ pub struct PlaylistPlayMeta<'a> {
     /// `"qobuz"` | `"local"` — where the playlist itself lives, NOT where its
     /// audio comes from (a Qobuz playlist can hold local rows).
     pub source: &'a str,
+    /// Member covers for the mosaic (up to four). Remote urls for a Qobuz
+    /// playlist, local file paths for a local one — the artwork cache resolves
+    /// both, so the card does not care which it got.
+    pub covers: &'a [String],
+    /// True when [`Self::artwork_url`] is the playlist's OWN single graphic
+    /// (or a custom cover) rather than a stand-in member cover.
+    pub own_image: bool,
 }
 
 /// One playlist row for the rail / a View-all page.
@@ -125,6 +140,8 @@ pub struct PlaylistPlayRow {
     pub artwork_url: String,
     pub track_count: u32,
     pub source: String,
+    pub covers: Vec<String>,
+    pub own_image: bool,
     pub plays: u32,
 }
 
@@ -140,8 +157,8 @@ fn upsert_meta_on(conn: &Connection, m: &PlaylistPlayMeta, now: i64) {
         r#"
         INSERT INTO playlist_meta
             (playlist_id, title, owner, owner_id, artwork_url,
-             track_count, source, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             track_count, source, covers, own_image, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(playlist_id) DO UPDATE SET
             title = excluded.title,
             owner = excluded.owner,
@@ -149,6 +166,8 @@ fn upsert_meta_on(conn: &Connection, m: &PlaylistPlayMeta, now: i64) {
             artwork_url = excluded.artwork_url,
             track_count = excluded.track_count,
             source = excluded.source,
+            covers = excluded.covers,
+            own_image = excluded.own_image,
             updated_at = excluded.updated_at
         "#,
         params![
@@ -159,6 +178,8 @@ fn upsert_meta_on(conn: &Connection, m: &PlaylistPlayMeta, now: i64) {
             m.artwork_url,
             m.track_count,
             m.source,
+            serde_json::to_string(m.covers).unwrap_or_else(|_| "[]".to_string()),
+            m.own_image as i32,
             now
         ],
     ) {
@@ -215,7 +236,7 @@ fn query_on(conn: &Connection, order: &str, limit: Option<u32>) -> Vec<PlaylistP
     let sql = format!(
         r#"
         SELECT m.playlist_id, m.title, m.owner, m.owner_id, m.artwork_url,
-               m.track_count, m.source, p.plays
+               m.track_count, m.source, m.covers, m.own_image, p.plays
         FROM playlist_meta m
         JOIN (
             SELECT playlist_id, COUNT(*) AS plays, MAX(occurred_at) AS last_at
@@ -239,7 +260,10 @@ fn query_on(conn: &Connection, order: &str, limit: Option<u32>) -> Vec<PlaylistP
                     artwork_url: row.get(4)?,
                     track_count: row.get::<_, i64>(5)? as u32,
                     source: row.get(6)?,
-                    plays: row.get::<_, i64>(7)? as u32,
+                    covers: serde_json::from_str(&row.get::<_, String>(7)?)
+                        .unwrap_or_default(),
+                    own_image: row.get::<_, i64>(8)? != 0,
+                    plays: row.get::<_, i64>(9)? as u32,
                 })
             })
             .ok()?;
@@ -302,6 +326,8 @@ mod tests {
             artwork_url: "http://art",
             track_count: 12,
             source: "qobuz",
+            covers: &[],
+            own_image: false,
         }
     }
 

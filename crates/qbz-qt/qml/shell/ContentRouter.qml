@@ -223,6 +223,33 @@ Item {
         easing.type: Easing.OutCubic
     }
 
+    // TABS FADE TOO. A tab switch inside a view (Discover's four, Library's,
+    // Local Library's) never touches the Loader's `source`, so none of the
+    // machinery above fires — the page changed under the user with a hard cut
+    // while a route change faded. Same transition, same duration, for what is
+    // the same thing from where the user sits.
+    //
+    // `activeTab` is the ONE name every tabbed view uses for this (the Binding
+    // further down already routes the nav flyout through it), so watching it
+    // here covers all of them from one place instead of a copy per view.
+    // `ignoreUnknownSignals` is what lets the untabbed views mount unharmed:
+    // without it a Connections whose target has no such signal is an error.
+    //
+    // No watchdog and no opacity assignment: a tab body is built synchronously
+    // inside the view, in this same turn, so by the time a frame renders there
+    // is something to reveal — `restart()` alone sets the page to `from` (0)
+    // and animates it back. The `running` guard keeps a tab that is stamped
+    // right after a route change from restarting the fade that route already
+    // started.
+    Connections {
+        target: viewLoader.item
+        ignoreUnknownSignals: true
+        function onActiveTabChanged() {
+            if (!QbzShell.reduceMotion && !fadeIn.running)
+                fadeIn.restart()
+        }
+    }
+
     Loader {
         id: viewLoader
         anchors.fill: parent

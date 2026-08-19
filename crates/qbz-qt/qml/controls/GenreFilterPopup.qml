@@ -97,6 +97,10 @@ Item {
     MouseArea {
         anchors.fill: parent
         onClicked: root.close()
+        // Same wheel rule as the configurator modal: a MouseArea eats the
+        // press and not the wheel, so without this the page kept scrolling
+        // under an open popup.
+        onWheel: function (wheel) { wheel.accepted = true }
     }
 
     Rectangle {
@@ -112,7 +116,10 @@ Item {
 
         // Swallow clicks that land on the card's own chrome so the backdrop
         // does not close it. Declared FIRST: the content below stays on top.
-        MouseArea { anchors.fill: parent }
+        MouseArea {
+            anchors.fill: parent
+            onWheel: function (wheel) { wheel.accepted = true }
+        }
 
         Column {
             id: col

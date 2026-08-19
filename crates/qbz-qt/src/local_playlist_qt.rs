@@ -969,7 +969,12 @@ pub async fn load(runtime: &Runtime, playlist_id: &str) -> bool {
             title: &doc.name,
             owner: "",
             owner_id: "",
-            artwork_url: doc.covers.first().map(String::as_str).unwrap_or(""),
+            // A local playlist never has a Qobuz graphic, so unless the user
+            // set a cover it is the MOSAIC that carries the card — the same
+            // shape this page's own header takes.
+            artwork_url: &doc.cover_path,
+            own_image: doc.has_custom_cover,
+            covers: &doc.covers,
             track_count: doc.track_count.max(0) as u32,
             source: "local",
         },

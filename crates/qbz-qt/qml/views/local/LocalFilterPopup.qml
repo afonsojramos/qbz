@@ -26,6 +26,9 @@ Item {
     MouseArea {
         anchors.fill: parent
         onClicked: root.view.filterOpen = false
+        // A MouseArea eats presses, NOT wheel events — the grid behind this
+        // card kept scrolling with it open.
+        onWheel: function (wheel) { wheel.accepted = true }
     }
 
     Rectangle {
@@ -38,8 +41,12 @@ Item {
         border.width: 1
         border.color: theme.borderSubtle
 
-        // Swallow clicks so the backdrop does not close the card.
-        MouseArea { anchors.fill: parent }
+        // Swallow clicks so the backdrop does not close the card, and the
+        // wheel so it does not reach the grid.
+        MouseArea {
+            anchors.fill: parent
+            onWheel: function (wheel) { wheel.accepted = true }
+        }
 
         Column {
             id: col

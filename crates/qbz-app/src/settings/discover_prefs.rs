@@ -441,6 +441,12 @@ pub fn reconcile_list(persisted: Option<&Vec<Value>>, fallback: &[SectionPref]) 
 /// (`home_qt::order_by_prefs` pushed every item through), so any other default
 /// would shrink the Discover page of every user who upgrades without ever
 /// asking them.
+///
+/// The size is PER RAIL, which is what Tauri offered
+/// (`HomeSettingsModal.svelte` over `homeSettingsStore.ts`) — a single global
+/// number was this port's simplification and it lost the point of the feature:
+/// a 25-wide "New Releases" and a 10-wide "Recently Played" are the reason
+/// anyone touches it.
 pub const RAIL_SIZE_PRESETS: [i64; 5] = [10, 15, 20, 25, 0];
 
 /// The default rail size — `0`, i.e. today's uncapped behaviour.
@@ -493,18 +499,15 @@ impl DiscoverPrefsStore {
         // already set above, so two binaries on one file is the existing
         // design, not something this adds.
         conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS discover_rail_size (
-                id INTEGER PRIMARY KEY CHECK (id = 1),
-                rail_size INTEGER NOT NULL
+            "CREATE TABLE IF NOT EXISTS discover_rail_sizes (
+                section_id TEXT PRIMARY KEY,
+                rail_size  INTEGER NOT NULL
             );",
         )
         .map_err(|e| format!("Failed to create discover rail size table: {}", e))?;
-
-        conn.execute(
-            "INSERT OR IGNORE INTO discover_rail_size (id, rail_size) VALUES (1, ?1)",
-            params![DEFAULT_RAIL_SIZE],
-        )
-        .map_err(|e| format!("Failed to initialize discover rail size: {}", e))?;
+        // No seed row: ABSENT means the default, which is uncapped. Writing a
+        // row per section at open would put twenty rows in the file to say
+        // "unchanged", and would then have to be kept in step with the enum.
 
         Ok(Self { conn })
     }
@@ -538,36 +541,52 @@ impl DiscoverPrefsStore {
         }
     }
 
-    /// How many items each Discover rail may show. `0` = no cap.
+    /// How many items each Discover rail may show, by section id. `0` = no
+    /// cap, and a section ABSENT from the map is uncapped too.
     ///
-    /// Never an error to the caller: a missing row, an old file without the
-    /// table, or a value outside the presets all fall back to the default.
-    pub fn load_rail_size(&self) -> i64 {
-        self.conn
-            .query_row(
-                "SELECT rail_size FROM discover_rail_size WHERE id = 1",
-                [],
-                |row| row.get::<_, i64>(0),
+    /// Never an error to the caller: a missing table (an older file) or a value
+    /// outside the presets yields an empty map / drops that row.
+    pub fn load_rail_sizes(&self) -> std::collections::HashMap<String, i64> {
+        let out = (|| -> Option<std::collections::HashMap<String, i64>> {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT section_id, rail_size FROM discover_rail_sizes")
+                .ok()?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+                })
+                .ok()?;
+            Some(
+                rows.flatten()
+                    .filter(|(_, n)| RAIL_SIZE_PRESETS.contains(n))
+                    .collect(),
             )
-            .ok()
-            .filter(|n| RAIL_SIZE_PRESETS.contains(n))
-            .unwrap_or(DEFAULT_RAIL_SIZE)
+        })();
+        out.unwrap_or_default()
     }
 
-    /// Persist the rail size (upsert row 1). Values outside the presets are
-    /// rejected rather than stored, so `load_rail_size` and the UI's index can
-    /// never disagree about what is selected.
-    pub fn save_rail_size(&self, n: i64) -> Result<(), String> {
+    /// Persist ONE rail's size. Values outside the presets are rejected rather
+    /// than stored, so what loads back and the UI's index can never disagree.
+    /// The DEFAULT deletes the row instead of storing it — the file then only
+    /// carries the rails the user actually changed.
+    pub fn save_rail_size(&self, section_id: &str, n: i64) -> Result<(), String> {
         if !RAIL_SIZE_PRESETS.contains(&n) {
             return Err(format!("rail size {n} is not one of {RAIL_SIZE_PRESETS:?}"));
         }
-        self.conn
-            .execute(
-                "INSERT INTO discover_rail_size (id, rail_size) VALUES (1, ?1)
-                 ON CONFLICT(id) DO UPDATE SET rail_size = excluded.rail_size",
-                params![n],
+        let sql = if n == DEFAULT_RAIL_SIZE {
+            self.conn.execute(
+                "DELETE FROM discover_rail_sizes WHERE section_id = ?1",
+                params![section_id],
             )
-            .map_err(|e| format!("Failed to save discover rail size: {}", e))?;
+        } else {
+            self.conn.execute(
+                "INSERT INTO discover_rail_sizes (section_id, rail_size) VALUES (?1, ?2)
+                 ON CONFLICT(section_id) DO UPDATE SET rail_size = excluded.rail_size",
+                params![section_id, n],
+            )
+        };
+        sql.map_err(|e| format!("Failed to save discover rail size: {}", e))?;
         Ok(())
     }
 

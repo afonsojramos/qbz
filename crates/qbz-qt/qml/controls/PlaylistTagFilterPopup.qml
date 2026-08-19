@@ -80,6 +80,9 @@ Item {
     MouseArea {
         anchors.fill: parent
         onClicked: root.close()
+        // A MouseArea eats presses, NOT wheel events. Without this the page
+        // behind an open popup kept scrolling under the pointer.
+        onWheel: function (wheel) { wheel.accepted = true }
     }
 
     Rectangle {
@@ -93,8 +96,12 @@ Item {
         border.color: theme.borderMuted
         clip: true
 
-        // Swallow clicks so the backdrop does not close the card.
-        MouseArea { anchors.fill: parent }
+        // Swallow clicks so the backdrop does not close the card, and the
+        // wheel so a scroll over the footer does not reach the page.
+        MouseArea {
+            anchors.fill: parent
+            onWheel: function (wheel) { wheel.accepted = true }
+        }
 
         Flickable {
             id: listFlick

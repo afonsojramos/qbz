@@ -1166,7 +1166,15 @@ pub async fn load(runtime: &Arc<AppRuntime<LoggingAdapter>>, playlist_id: u64) -
             title: &doc.name,
             owner: &doc.owner,
             owner_id: &doc.owner_id.to_string(),
+            // The playlist's OWN graphic when it has one (or the user's
+            // custom cover); the mosaic covers otherwise. Publishing only the
+            // first field is what left the recents rail blank: `cover_url` is
+            // empty for every playlist without a graphic of its own, which is
+            // most of them, and is precisely why this page falls back to a
+            // collage.
             artwork_url: &doc.cover_url,
+            own_image: !doc.cover_url.is_empty(),
+            covers: &doc.covers,
             track_count: doc.track_count.max(0) as u32,
             source: "qobuz",
         },

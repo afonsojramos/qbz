@@ -120,6 +120,18 @@ pub struct HomeCard {
     pub item_kind: String,
     /// Playlist rows: the UPPERCASE first-tag category subtag.
     pub category: String,
+    /// Playlist rows: up to four MEMBER covers for the card's mosaic arm, when
+    /// the playlist has no single graphic of its own. Most do not — which is
+    /// why the detail page falls back to a collage — so without these a rail
+    /// fed from local history draws placeholders. Remote urls or local file
+    /// paths; `artwork_qt::cached_path` resolves both.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub covers: Vec<String>,
+    /// Playlist rows: the artwork IS the playlist's own graphic (or a custom
+    /// cover), so the card contain-fits it instead of building a mosaic. Those
+    /// images are landscape and cropping butchers them.
+    #[serde(default, rename = "playlistOwnImage", skip_serializing_if = "std::ops::Not::not")]
+    pub playlist_own_image: bool,
     /// Playlist rows: ALL of the playlist's tag SLUGS — the material the
     /// client-side category filter matches against (home.rs
     /// `PlaylistCardData.tags`). Distinct from `category`, which is one tag's
@@ -676,6 +688,9 @@ fn order_by_prefs(
     tab: qbz_app::settings::discover_prefs::DiscoveryTab,
     most_streamed_variant: &str,
     include_tail: bool,
+    // Per-rail item cap, by PREF id, `0`/absent = uncapped. Read once per
+    // assemble and passed in, not looked up per rail.
+    sizes: &std::collections::HashMap<String, i64>,
 ) -> Vec<HomeSection> {
     use qbz_app::settings::discover_prefs::DiscoveryTab;
     let tab_prefs = prefs.tab(tab);
@@ -690,7 +705,22 @@ fn order_by_prefs(
             pref.id.as_str()
         };
         if let Some(section) = candidates.iter().find(|s| s.id == key) {
-            gated.push(section.clone());
+            let mut section = section.clone();
+            // Keyed by the PREF id and applied HERE, not over the assembled
+            // lists: `mostStreamed` resolves to a per-tab variant candidate
+            // (`mostStreamed#album`), so the section's own id is not always the
+            // id the user configured. This is the only place both are in hand.
+            //
+            // The cut lives at assembly time and not where the candidates are
+            // built, so changing a number re-renders from the cache on the next
+            // frame — exactly like a section toggle — instead of forcing a
+            // round trip to /discover/index.
+            if let Some(&cap) = sizes.get(pref.id.as_str()) {
+                if cap > 0 {
+                    section.items.truncate(cap as usize);
+                }
+            }
+            gated.push(section);
         }
     }
     if include_tail {
@@ -820,39 +850,23 @@ fn assemble(
     prefs: &qbz_app::settings::discover_prefs::DiscoverPrefs,
 ) -> DiscoverSections {
     use qbz_app::settings::discover_prefs::DiscoveryTab;
-    let home = order_by_prefs(candidates, prefs, DiscoveryTab::Home, "mostStreamed", true);
-    let editor = order_by_prefs(candidates, prefs, DiscoveryTab::EditorPicks, "mostStreamed#album", false);
+    // "Items per carousel" — PER RAIL (the Tauri shape; a single global number
+    // was this port's simplification and it lost the point of the feature). One
+    // store read for all three tabs.
+    let sizes = crate::discover_config_qt::rail_sizes();
+    let home = order_by_prefs(candidates, prefs, DiscoveryTab::Home, "mostStreamed", true, &sizes);
+    let editor = order_by_prefs(candidates, prefs, DiscoveryTab::EditorPicks, "mostStreamed#album", false, &sizes);
     // For You: the local-history arms (recentPlaceholder) self-hide on
     // empty data in Slint — drop them here (local store out of scope).
-    let for_you: Vec<HomeSection> = order_by_prefs(candidates, prefs, DiscoveryTab::ForYou, "mostStreamed", false)
+    let for_you: Vec<HomeSection> = order_by_prefs(candidates, prefs, DiscoveryTab::ForYou, "mostStreamed", false, &sizes)
         .into_iter()
         .filter(|s| s.kind != "recentPlaceholder")
         .collect();
-    // "Items per carousel" (the Discover configurator). ONE read per assemble,
-    // applied here rather than where the candidates are built — the point of
-    // putting it at assembly time is that changing the number re-renders from
-    // the cache on the next frame, exactly like a section toggle, instead of
-    // forcing a round trip to /discover/index every time somebody nudges it.
-    //
-    // `0` = uncapped, which is the default and is what this page did before the
-    // setting existed. It reaches the rails that go through `assemble`, i.e.
-    // every rail the configurator can list; Pinned, Radio Stations and Qobuz
-    // Mixes ride their own bridge documents and are untouched.
-    let mut out = DiscoverSections {
+    DiscoverSections {
         home,
         editor,
         for_you,
-    };
-    let cap = crate::discover_config_qt::rail_size();
-    if cap > 0 {
-        let cap = cap as usize;
-        for list in [&mut out.home, &mut out.editor, &mut out.for_you] {
-            for section in list.iter_mut() {
-                section.items.truncate(cap);
-            }
-        }
     }
-    out
 }
 
 /// The SET of section ids the POC can actually RENDER for a tab — the
@@ -1569,10 +1583,23 @@ pub(crate) fn map_recent_playlist(
         id: p.playlist_id,
         title: p.title,
         artist: p.owner,
-        // A local playlist's cover is already a file on disk; a Qobuz one is a
-        // URL the artwork cache resolves like every other rail.
-        art_path: if local { p.artwork_url.clone() } else { String::new() },
-        art_url: if local { String::new() } else { p.artwork_url },
+        // TWO ARMS, exactly like the card: a single graphic of its own gets
+        // contain-fitted, everything else builds a mosaic out of member covers.
+        // The first cut published only `artwork_url` — and for a Qobuz playlist
+        // that field is the DETAIL page's cover, which is empty whenever the
+        // playlist has no graphic of its own (most of them), so the rail drew
+        // placeholders. A local playlist has no Qobuz graphic at all and needs
+        // the mosaic by definition.
+        //
+        // Everything goes in `art_url` and `attach_cached` fills `art_path` —
+        // `artwork_qt::cached_path` already classifies http, Plex and
+        // ALREADY-ON-DISK paths, so a custom cover or a local file resolves
+        // through the same pass as a Qobuz url. That is the convention the
+        // recently-played ALBUM rail beside this one uses; splitting the two by
+        // hand here would just be a second, worse copy of `classify`.
+        playlist_own_image: p.own_image,
+        covers: p.covers,
+        art_url: p.artwork_url,
         ..HomeCard::default()
     }
 }

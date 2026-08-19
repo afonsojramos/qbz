@@ -91,6 +91,14 @@ Item {
         MouseArea {
             anchors.fill: parent
             onClicked: root.close()
+            // Eat the WHEEL as well as the click. A MouseArea consumes presses
+            // but lets wheel events fall straight through, so with this open
+            // the pointer still scrolled the page underneath — and over the
+            // panel it moved the panel's own list AND the page behind it at the
+            // same time. These overlays are plain Items, not Popups, so there
+            // is no modal grab doing it for them: each has to stop the wheel at
+            // its own surface.
+            onWheel: function (wheel) { wheel.accepted = true }
         }
     }
 
@@ -106,8 +114,13 @@ Item {
         border.color: theme.borderSubtle
         clip: true
 
-        // Swallow clicks so they never reach the scrim.
-        MouseArea { anchors.fill: parent }
+        // Swallow clicks so they never reach the scrim — and the wheel, so a
+        // scroll that starts outside the section list (the title, the banner,
+        // the footer) does not reach the page behind the modal.
+        MouseArea {
+            anchors.fill: parent
+            onWheel: function (wheel) { wheel.accepted = true }
+        }
 
         Column {
             // NOT `body`: WarningBanner below has a `body` PROPERTY, and an
@@ -176,68 +189,19 @@ Item {
                 font.weight: theme.weightMedium
             }
 
-            // --- Items per carousel ---------------------------------------
-            // Recovered from Tauri (`HomeSettingsModal.svelte`), which let the
-            // user cap how many items each carousel showed. It never reached
-            // Slint — the discovery-v2 modal Slint was ported from only ever
-            // modelled {id, enabled} — so Qt inherited the absence.
-            //
-            // GLOBAL, so it reads its own bridge property rather than the
-            // per-tab document: `root.mine` gates the rows below on the tab
-            // payload having landed, and this control must be usable before
-            // that.
-            Item {
-                visible: root.tab !== "recommendations"
-                width: parent.width
-                height: 34
-
-                Text {
-                    id: sizeLabel
-                    anchors.left: parent.left
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: QbzSession.tr("Items per carousel", QbzSession.trRev)
-                    color: theme.textMuted
-                    font.pixelSize: theme.fontBody
-                }
-                QbzSelect {
-                    anchors.left: sizeLabel.right
-                    anchors.leftMargin: 8
-                    anchors.verticalCenter: parent.verticalCenter
-                    sm: true
-                    menuWidth: 140
-                    // Option ORDER is the contract with RAIL_SIZE_PRESETS in
-                    // qbz-app/src/settings/discover_prefs.rs — the bridge
-                    // publishes an index, not a count, so reordering these
-                    // silently changes what every stored value means. "All" is
-                    // the stored 0 and the default: it is what this page did
-                    // before the setting existed.
-                    options: [
-                        "10",
-                        "15",
-                        "20",
-                        "25",
-                        QbzSession.tr("All", QbzSession.trRev),
-                    ]
-                    currentIndex: QbzHome.discoverRailSizeIndex
-                    onSelected: function (i) { QbzHome.discoverSetRailSize(i) }
-                }
-            }
-
             // --- Section list ---------------------------------------------
             // Explicit, content-derived height capped to what is left of the
             // panel; the Flickable scrolls past that.
             //
             // The subtrahend is the FIXED-CHROME BUDGET (title + banner + count
-            // + the size row + footer + margins), and it is load-bearing: the
-            // panel clips (`clip: true` above), so a row added over this list
-            // without raising the number does not overflow visibly — the last
-            // sections and the Reset footer simply stop existing. It went
-            // 260 -> 308 with the size row: 34 of row plus the column's 14 of
-            // spacing.
+            // + footer + margins), and it is load-bearing: the panel clips
+            // (`clip: true` above), so a row added over this list without
+            // raising the number does not overflow visibly — the last sections
+            // and the Reset footer simply stop existing.
             Item {
                 visible: root.tab !== "recommendations"
                 width: parent.width
-                height: Math.max(0, Math.min(listCol.height, root.height * 0.78 - 308))
+                height: Math.max(0, Math.min(listCol.height, root.height * 0.78 - 260))
                 clip: true
                 Flickable {
                     id: listFlick
@@ -284,7 +248,7 @@ Item {
                                         onToggled: QbzBridge.discoverToggleSection(root.tab, cfgRow.modelData.id)
                                     }
                                     Text {
-                                        width: parent.width - 18 - 28 - 28 - 3 * 12
+                                        width: parent.width - 18 - 82 - 28 - 28 - 4 * 12
                                         height: parent.height
                                         text: cfgRow.modelData.label
                                         color: cfgRow.modelData.enabled ? theme.textPrimary : theme.textMuted
@@ -292,6 +256,41 @@ Item {
                                         font.weight: theme.weightMedium
                                         verticalAlignment: Text.AlignVCenter
                                         elide: Text.ElideRight
+                                    }
+                                    // How many items THIS rail shows. Per rail
+                                    // and not one number for the page: that is
+                                    // the shape Tauri had
+                                    // (`HomeSettingsModal.svelte`), and it is
+                                    // the point of the feature — a 25-wide
+                                    // "New Releases" next to a 10-wide
+                                    // "Recently Played" is why anyone opens
+                                    // this.
+                                    //
+                                    // Option ORDER is the contract with
+                                    // RAIL_SIZE_PRESETS in
+                                    // qbz-app/src/settings/discover_prefs.rs:
+                                    // the bridge carries an index, not a count,
+                                    // so reordering these silently changes what
+                                    // every stored value means. "All" is the
+                                    // stored 0 and the default — what this page
+                                    // did before the setting existed.
+                                    QbzSelect {
+                                        width: 82
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        sm: true
+                                        menuWidth: 110
+                                        enabled: cfgRow.modelData.enabled
+                                        options: [
+                                            "10",
+                                            "15",
+                                            "20",
+                                            "25",
+                                            QbzSession.tr("All", QbzSession.trRev),
+                                        ]
+                                        currentIndex: cfgRow.modelData.sizeIndex || 0
+                                        onSelected: function (i) {
+                                            QbzHome.discoverSetRailSize(root.tab, cfgRow.modelData.id, i)
+                                        }
                                     }
                                     ReorderButton {
                                         anchors.verticalCenter: parent.verticalCenter

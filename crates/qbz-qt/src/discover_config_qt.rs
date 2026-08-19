@@ -71,6 +71,10 @@ struct RowDoc {
     id: String,
     label: String,
     enabled: bool,
+    /// The rail's item cap as an index into `RAIL_SIZE_PRESETS` — the contract
+    /// with the per-row select's option order in `DiscoverConfigModal.qml`.
+    #[serde(rename = "sizeIndex")]
+    size_index: i32,
 }
 
 #[derive(Serialize)]
@@ -104,18 +108,14 @@ pub(crate) fn store() -> Option<DiscoverPrefsStore> {
 // shared one, and a per-rail knob would put twenty spinners in a modal whose
 // job is to be glanced at.
 
-/// The stored cap, `0` = uncapped. Falls back to the default with no store
-/// (nobody logged in yet), which is also the uncapped value — so the page
-/// behaves exactly as it did before this setting existed until someone
-/// deliberately changes it.
-pub(crate) fn rail_size() -> i64 {
-    store().map(|s| s.load_rail_size()).unwrap_or(DEFAULT_RAIL_SIZE)
+/// Every rail's stored cap, by section id. Absent = uncapped.
+pub(crate) fn rail_sizes() -> std::collections::HashMap<String, i64> {
+    store().map(|s| s.load_rail_sizes()).unwrap_or_default()
 }
 
-/// Stored size -> select index. The index IS the contract with the option
-/// order in `DiscoverConfigModal.qml`; see `RAIL_SIZE_PRESETS`.
-pub(crate) fn rail_size_index() -> i32 {
-    let n = rail_size();
+/// One section's size as the select's INDEX into `RAIL_SIZE_PRESETS`.
+fn rail_size_index_of(sizes: &std::collections::HashMap<String, i64>, id: &str) -> i32 {
+    let n = sizes.get(id).copied().unwrap_or(DEFAULT_RAIL_SIZE);
     RAIL_SIZE_PRESETS
         .iter()
         .position(|&p| p == n)
@@ -127,40 +127,32 @@ pub(crate) fn rail_size_index() -> i32 {
         }) as i32
 }
 
-/// Configurator select -> persist -> re-render the tabs -> republish the
-/// RESOLVED index.
-///
-/// Resolved, not the index that came in — the same honesty the reco cache
-/// window buys with the same line: if the write fails (no per-user store), the
-/// select snaps back to what is actually stored instead of displaying a size
-/// nobody saved.
+/// Configurator select -> persist -> re-render the tabs -> republish the rows
+/// (which carry the RESOLVED index back, so a failed write snaps the select
+/// to what is actually stored rather than to what was clicked).
 ///
 /// `republish_cached()` and not a reload: the cut happens at assembly time over
 /// the candidates already in memory, so a new size lands on the next frame with
 /// no network round trip — exactly like a section toggle.
-pub(crate) fn set_rail_size_index(index: i32) {
+pub(crate) fn set_rail_size_index(tab_key: &str, id: &str, index: i32) {
+    if DiscoverySectionId::from_str(id).is_none() {
+        return;
+    }
     let idx = index.clamp(0, RAIL_SIZE_PRESETS.len() as i32 - 1) as usize;
     let size = RAIL_SIZE_PRESETS[idx];
     let Some(store) = store() else {
         log::warn!("[qbz-qt] discover rail size: no per-user prefs store (not logged in?)");
-        publish_rail_size_index();
+        publish(tab_key);
         return;
     };
-    if let Err(e) = store.save_rail_size(size) {
+    if let Err(e) = store.save_rail_size(id, size) {
         log::warn!("[qbz-qt] discover rail size: save failed: {e}");
-        publish_rail_size_index();
+        publish(tab_key);
         return;
     }
-    log::info!("[qbz-qt] discover rail size set to {size} (0 = all)");
+    log::info!("[qbz-qt] discover rail {id} size set to {size} (0 = all)");
     crate::home_qt::republish_cached();
-    publish_rail_size_index();
-}
-
-/// Push the stored size onto the bridge as its select index. Called at boot
-/// (so the select opens on the right entry the FIRST time) and after a write.
-pub(crate) fn publish_rail_size_index() {
-    let index = rail_size_index();
-    crate::home_bridge::ui(move |mut b| b.as_mut().set_discover_rail_size_index(index));
+    publish(tab_key);
 }
 
 /// The tab's ordered pref ids, narrowed to what this port renders.
@@ -188,6 +180,8 @@ pub(crate) fn rows_json(tab_key: &str) -> String {
     };
     let prefs = crate::home_qt::load_prefs();
     let visible = visible_ids(&prefs, tab);
+    // ONE store read for the whole tab, not one per row.
+    let sizes = rail_sizes();
     let rows: Vec<RowDoc> = prefs
         .tab(tab)
         .iter()
@@ -196,6 +190,7 @@ pub(crate) fn rows_json(tab_key: &str) -> String {
             id: p.id.as_str().to_string(),
             label: qbz_i18n::t(label_for(p.id)),
             enabled: p.enabled,
+            size_index: rail_size_index_of(&sizes, p.id.as_str()),
         })
         .collect();
     let total = rows.len() as i32;
