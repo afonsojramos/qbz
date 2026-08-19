@@ -92,7 +92,18 @@ Item {
     /// header — what AlphaStrip needs to scroll here.
     property var alphaJumps: []
 
+    // Counts and times every rebuild so a smoke run can FALSIFY the coalescing:
+    // one line per keystroke means it holds, two means it does not. Measured
+    // around the work itself, never from a deferred callback.
+    LoggingCategory {
+        id: colTiming
+        name: "qbz.nav.timing"
+        defaultLogLevel: LoggingCategory.Warning
+    }
+    property int rebuildCount: 0
+
     function rebuild() {
+        var _t0 = Date.now()
         var out = []
         var flatOut = []
         var jumps = []
@@ -127,13 +138,39 @@ Item {
         flat = flatOut
         entries = out
         alphaJumps = jumps
+        root.rebuildCount += 1
+        console.info(colTiming, "[coltiming] rebuild #" + root.rebuildCount
+            + " surface=" + root.surface + " grouped=" + root.grouped
+            + " albums=" + flatOut.length + " entries=" + out.length
+            + " in " + (Date.now() - _t0) + "ms")
         report()
     }
-    onRowsChanged: rebuild()
-    onGroupsChanged: rebuild()
-    onGroupedChanged: rebuild()
-    onViewModeChanged: rebuild()
-    onColsChanged: rebuild()
+    // `rows` and `groups` are TWO bindings over ONE query: the host derives
+    // `albumsVisible` from the search box, then `albumsGrouped` FROM
+    // `albumsVisible` (LocalLibraryView.qml:378-380). So a single keystroke
+    // changes both, and with one handler each this rebuilt twice — and the
+    // first of the two was WRONG as well as wasted, because it chunked the new
+    // rows against the previous groups. Grouping being off does not save it:
+    // `groupRows` returns a FRESH `[]` every time, which is still a change.
+    //
+    // Coalesced into one rebuild per event-loop turn. A zero-interval Timer
+    // rather than `Qt.callLater`, because dedup then depends on the callback
+    // being the same function object every time, and `restart()` needs no such
+    // assumption — same shape as `artFlush` in LocalLibraryView.
+    Timer {
+        id: rebuildCoalescer
+        interval: 0
+        repeat: false
+        onTriggered: root.rebuild()
+    }
+    function scheduleRebuild() { rebuildCoalescer.restart() }
+    onRowsChanged: scheduleRebuild()
+    onGroupsChanged: scheduleRebuild()
+    onGroupedChanged: scheduleRebuild()
+    onViewModeChanged: scheduleRebuild()
+    onColsChanged: scheduleRebuild()
+    // The first build stays synchronous — deferring it would show one frame of
+    // empty grid on every mount.
     Component.onCompleted: { rebuild(); reportSoon() }
     Component.onDestruction: if (view) view.releaseWindow(root.surface)
 

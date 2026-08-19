@@ -154,16 +154,65 @@ Rectangle {
     // coalesced into ONE rebind per frame instead — the covers still appear
     // progressively (16ms granularity is invisible), at O(n) total cost.
     property var _artInbox: ({})
+
+    // ORDERED REVEAL. The cold-thumbnail pool (local_artwork.rs:163) starts
+    // work in window order but FINISHES out of order, because decode cost
+    // varies per cover — so covers used to pop in scattered across the grid.
+    // Ordering the emission in Rust instead would be a mistake: one slow
+    // decode at index 3 would hold 4..N behind it, which ADDS latency rather
+    // than hiding it.
+    //
+    // So arrivals are applied behind a reveal FRONT that walks down the
+    // window at a fixed rate. A cover that lands ahead of the front waits for
+    // it; a cover that lands behind it (the slow ones) is applied at once,
+    // having already been passed. The front advances every tick unconditionally,
+    // which is what makes a stall impossible: a key is delayed at most
+    // (ordinal / step) ticks no matter what the pool does, and a key with no
+    // ordinal at all is released immediately.
+    //
+    // `_artOrder` is rebuilt per window request (see flushWindows), so the
+    // wipe restarts from the top of whatever is on screen now.
+    property var _artOrder: ({})
+    property var _artHeld: ({})
+    property int _artFront: 0
+    /// Keys the front passes per 16ms tick — about one grid row, which reads
+    /// as a wipe rather than a sweep. A ~50-cover window resolves in ~130ms.
+    property int artRevealStep: 6
+
     Timer {
         id: artFlush
         interval: 16
         repeat: false
         onTriggered: {
-            var m = Object.assign({}, root.artMap, root._artInbox)
+            var k
+            // Everything that arrived this tick joins whatever is still held.
+            for (k in root._artInbox) root._artHeld[k] = root._artInbox[k]
             root._artInbox = ({})
+
+            root._artFront += root.artRevealStep
+
+            var m = Object.assign({}, root.artMap)
+            var released = false
+            var stillHeld = false
+            for (k in root._artHeld) {
+                var ord = root._artOrder[k]
+                // No ordinal means this key is not part of the current window
+                // (a late arrival from a window we have scrolled past). Holding
+                // it would be holding it forever.
+                if (ord === undefined || ord < root._artFront) {
+                    m[k] = root._artHeld[k]
+                    delete root._artHeld[k]
+                    released = true
+                } else {
+                    stillHeld = true
+                }
+            }
             // A rebind needs a NEW object reference (same-ref assignment is
             // not a change in QML).
-            root.artMap = m
+            if (released) root.artMap = m
+            // Keep ticking while anything waits, or the front stops moving and
+            // the covers behind it never land.
+            if (stillHeld) artFlush.start()
         }
     }
     Connections {
@@ -555,8 +604,15 @@ Rectangle {
         // for a row we have just scrolled away from would be re-added by the
         // next flush and defeat the eviction.
         for (k in root._artInbox) if (!keep[k]) delete root._artInbox[k]
+        for (k in root._artHeld) if (!keep[k]) delete root._artHeld[k]
         if (changed) root.artMap = Object.assign({}, m)
 
+        // Ordinals for the ordered reveal, assigned over the window in DISPLAY
+        // order so the front walks top to bottom. Built for every key in the
+        // window, not just the missing ones, so a cover that resolves while
+        // the wipe is mid-flight still knows where it sits.
+        var order = {}
+        var ord = 0
         var keys = []
         var seen = {}
         for (k in root._windows) {
@@ -565,11 +621,15 @@ Rectangle {
             for (i = w.first; i <= w.last; i++) {
                 ak = rows[i] ? rows[i].artKey : ""
                 if (!ak || seen[ak]) continue
-                if (m[ak] !== undefined || root._artInbox[ak] !== undefined) continue
                 seen[ak] = true
+                if (order[ak] === undefined) order[ak] = ord++
+                if (m[ak] !== undefined || root._artInbox[ak] !== undefined) continue
                 keys.push(ak)
             }
         }
+        // Restart the wipe at the top of what is on screen NOW.
+        root._artOrder = order
+        root._artFront = 0
         if (keys.length > 0) QbzLocal.artworkWindow(JSON.stringify(keys))
     }
 
