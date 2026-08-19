@@ -105,6 +105,18 @@ Item {
     // logs a warning on every re-evaluation.
     readonly property color tintColor: root.tint === "" ? "transparent" : root.tint
 
+    /// The tint at a given alpha. A GradientStop needs a concrete colour, and
+    /// `Qt.alpha()` does not exist — the channels have to be rebuilt.
+    function tintAlpha(a) {
+        var c = root.tintColor
+        return Qt.rgba(c.r, c.g, c.b, c.a * a)
+    }
+    /// Twin of tintAlpha for the page-surface fade underneath.
+    function surfaceAlpha(a) {
+        var c = theme.surfaceMain
+        return Qt.rgba(c.r, c.g, c.b, a)
+    }
+
     visible: root.active && (root.tint !== "" || root.hasAtmosphere)
     // Never eat clicks meant for the header controls painted on top.
     enabled: false
@@ -204,10 +216,23 @@ Item {
         anchors.fill: parent
         visible: !root.hasAtmosphere
         gradient: Gradient {
-            GradientStop { position: 0.0; color: root.tintColor }
+            // The tint used to hold FULL strength to 0.82 and then die inside
+            // the last 18%, which draws a visible horizontal seam across the
+            // page — the taller the band, the worse, because the falloff stays
+            // the same fraction while the solid part grows. The stops below
+            // spread the decay over the bottom ~60% on an ease-out curve, so
+            // there is no single row of pixels where the gradient "starts".
+            // Alpha is stepped explicitly because a GradientStop interpolates
+            // linearly between whatever two colours it is given.
+            GradientStop { position: 0.00; color: root.tintColor }
             GradientStop { position: 0.16; color: root.tintColor }
-            GradientStop { position: 0.82; color: root.tintColor }
-            GradientStop { position: 1.0; color: "transparent" }
+            GradientStop { position: 0.38; color: root.tintAlpha(0.94) }
+            GradientStop { position: 0.52; color: root.tintAlpha(0.80) }
+            GradientStop { position: 0.65; color: root.tintAlpha(0.60) }
+            GradientStop { position: 0.77; color: root.tintAlpha(0.38) }
+            GradientStop { position: 0.88; color: root.tintAlpha(0.18) }
+            GradientStop { position: 0.95; color: root.tintAlpha(0.07) }
+            GradientStop { position: 1.00; color: "transparent" }
         }
     }
 
@@ -231,9 +256,16 @@ Item {
     Rectangle {
         anchors.fill: parent
         gradient: Gradient {
-            GradientStop { position: 0.0; color: "transparent" }
-            GradientStop { position: 0.82; color: "transparent" }
-            GradientStop { position: 1.0; color: theme.surfaceMain }
+            // Mirrors the tint's curve. Held at zero to 0.82 this overlay put
+            // its own seam in the same place, doubling the edge the tint was
+            // already drawing.
+            GradientStop { position: 0.00; color: "transparent" }
+            GradientStop { position: 0.45; color: "transparent" }
+            GradientStop { position: 0.62; color: root.surfaceAlpha(0.12) }
+            GradientStop { position: 0.75; color: root.surfaceAlpha(0.34) }
+            GradientStop { position: 0.86; color: root.surfaceAlpha(0.60) }
+            GradientStop { position: 0.94; color: root.surfaceAlpha(0.84) }
+            GradientStop { position: 1.00; color: theme.surfaceMain }
         }
     }
 }

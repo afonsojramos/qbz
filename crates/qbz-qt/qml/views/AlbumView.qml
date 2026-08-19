@@ -42,6 +42,18 @@ Rectangle {
 
     QbzTheme { id: theme }
 
+    /// Header cover edge. One constant because the real header, its skeleton
+    /// twin and both text columns all measure off it — they drifted apart at
+    /// five separate literals before. The Row has no explicit height, so the
+    /// header grows with this on its own.
+    readonly property int coverPx: 260
+
+    /// How far past the header divider the artwork atmosphere reaches: the 8px
+    /// spacer below the divider plus half of the 52px track toolbar band, so
+    /// the gradient dies across the middle of the quality chip and the search
+    /// box instead of stopping at the divider.
+    readonly property int atmoReach: 1 + 8 + 26
+
     // The view's album + url-keyed cover map (artwork pipeline).
     readonly property var album: JSON.parse(QbzAlbum.albumJson)
     readonly property var header: album.header || ({})
@@ -518,7 +530,7 @@ Rectangle {
             // .slint:189 `atmo-height: page.y + header-divider.y` — the band
             // ends EXACTLY on the header/track-list divider, whatever height
             // a long editorial description gave the header.
-            height: page.y + headerDivider.y
+            height: page.y + headerDivider.y + root.atmoReach
             tint: album.headerColor || ""
             // Route A: the blurred field. Empty until the cover resolves, and the
             // flat tint stands in meanwhile (HeaderGradient handles the swap).
@@ -549,13 +561,13 @@ Rectangle {
 
                 QbzSkeleton {
                     variant: "block"
-                    width: 224
-                    height: 224
+                    width: root.coverPx
+                    height: root.coverPx
                     blockRadius: 12
                     phase: skeletonPhase.on
                 }
                 Column {
-                    width: parent.width - 224 - 32
+                    width: parent.width - root.coverPx - 32
                     spacing: 12
                     Item { width: 1; height: 6 }
                     QbzSkeleton { variant: "block"; width: Math.min(420, parent.width); height: 30; cellIndex: 0; phase: skeletonPhase.on }
@@ -586,8 +598,8 @@ Rectangle {
                 spacing: 32
 
                 Rectangle {
-                    width: 224
-                    height: 224
+                    width: root.coverPx
+                    height: root.coverPx
                     radius: 12
                     color: theme.surfaceElevated
                     // No clip: RoundedImage confines itself on both arms; a clip is an
@@ -621,7 +633,7 @@ Rectangle {
                 }
 
                 Column {
-                    width: parent.width - 224 - 32
+                    width: parent.width - root.coverPx - 32
                     anchors.top: parent.top
                     anchors.topMargin: 4
                     spacing: 0
@@ -824,7 +836,11 @@ Rectangle {
             Item { width: 1; height: 20 }
             // Header divider. The gradient band above sizes itself to THIS
             // item's y (.slint:189 atmo-height), so it keeps its id.
-            Rectangle { id: headerDivider; width: parent.width - 64; height: 1; color: theme.borderSubtle }
+            // Kept, deliberately invisible. The gradient band above sizes itself
+            // off THIS item's y (.slint:189 atmo-height) and the whole column
+            // below is positioned after it, so removing the item would move the
+            // page; only the paint is unwanted.
+            Rectangle { id: headerDivider; width: parent.width - 64; height: 1; color: "transparent" }
             Item { width: 1; height: 8 }
 
             // --- Track list + label/awards sidebar ----------------------
