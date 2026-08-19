@@ -423,135 +423,6 @@ Rectangle {
     // Everything it needs is a property, not a file-scope id: an inline
     // `component` does not see the enclosing document's ids (the gotcha
     // QbzSkeleton.qml documents), so `phase` is passed in by the host.
-    // A section rail that only EXISTS while it is near the viewport.
-    //
-    // The three rails at the foot of this page were gated on `visible:` alone,
-    // and in QML `visible: false` stops an item PAINTING, never building. With
-    // data present they were therefore fully constructed — three horizontal
-    // ListViews of AlbumCards, each cover a RoundedImage with TWO render
-    // targets — from the moment the page mounted, whether or not the user ever
-    // scrolled down to them. On a long album nobody reaches the bottom of, that
-    // is pure cost: they sit in the SAME Flickable as the track list, so their
-    // layers are in the scene for every frame the track list scrolls.
-    //
-    // Same shape as `rowSlot` above: fixed-size cell, heavy child behind a
-    // Loader gated on a band around the viewport.
-    component RailSlot: Item {
-        id: slot
-        property var railItems: []
-        property string railTitle: ""
-        property bool railViewAll: false
-        property var railCoverMap: ({})
-        /// The page column's y and the Flickable's window, handed in rather
-        /// than read off the file's ids: an inline component does not share
-        /// the enclosing document's id scope, so `page` / `pageFlick` are not
-        /// resolvable from in here.
-        property real pageY: 0
-        property real flickY: 0
-        property real flickH: 0
-        signal railViewAllClicked()
-
-        width: parent ? parent.width - 64 : 0
-        // Reserved whether or not the rail is built — 28 header + 12 spacing +
-        // 246 card band, the figure RailSkeleton already stands in with. A slot
-        // that sized itself to its Loader would change the page length as rails
-        // build and slide the content under the user mid-scroll.
-        height: 286
-        // Unchanged gate: an empty rail still collapses and leaves no gap,
-        // because a Column skips invisible children, spacing included.
-        visible: (slot.railItems || []).length > 0
-
-        // `slot.y` is assigned by the Column from PRECEDING siblings only, so
-        // reading it cannot form the dependency cycle a parent-derived height
-        // would (the 2026-08-18 band bug: every row read as in-band).
-        readonly property real topY: slot.pageY + slot.y
-        readonly property bool inBand:
-            slot.topY > slot.flickY - slot.flickH
-            && slot.topY < slot.flickY + 2 * slot.flickH
-
-        // UNLOADING IS DELAYED, LOADING IS NOT.
-        //
-        // This page grows in stages — the primary document lands, then the
-        // track rows arrive deferred — and until the list is there the page is
-        // SHORT, which puts these rails near the top and inside the band. They
-        // start building, the rows land, the page grows by thousands of pixels,
-        // the rails are shoved far below the fold and the Loader tears them
-        // down again. Because a ListView creates its delegates through
-        // incubation, tearing down mid-flight is exactly the
-        // "Object or context destroyed during incubation" warning — three of
-        // them, one per rail, every time an album with rails is opened.
-        //
-        // A grace period on the DEACTIVATION edge covers that transient (the
-        // page settles in well under it) and costs nothing on the activation
-        // edge, which stays immediate so a rail is never late. It also stops
-        // the same build/destroy churn when a scroll sweeps a rail across the
-        // band boundary.
-        readonly property bool wantLive: slot.visible && slot.inBand
-        property bool live: false
-
-        // AND NOTHING IS BUILT WHILE THE PAGE IS MOVING.
-        //
-        // Building a rail is not cheap — a section header, a horizontal
-        // ListView and its AlbumCards, each cover a RoundedImage with two
-        // render targets — and a Loader creates it SYNCHRONOUSLY, in one frame,
-        // on the GUI thread. Doing that the instant a rail crosses into the
-        // band means the build lands in the middle of a wheel scroll, which is
-        // exactly where a dropped frame is felt. (Before these rails were
-        // gated at all they were simply always built: no mid-scroll spike, at
-        // the cost of paying for all three forever.)
-        //
-        // So creation waits for the content to come to rest. `flickY` ticks on
-        // every scrolled pixel, so a short grace after the LAST tick is a
-        // reliable "settled" signal for the wheel and the scrollbar alike —
-        // unlike `Flickable.moving`, which a scrollbar writing contentY
-        // directly does not necessarily raise. A rail already live stays live
-        // throughout: this gates the build, never the keep.
-        property bool settled: true
-        onFlickYChanged: {
-            slot.settled = false
-            settleGrace.restart()
-        }
-        Timer {
-            id: settleGrace
-            interval: 140
-            repeat: false
-            onTriggered: {
-                slot.settled = true
-                if (slot.wantLive)
-                    slot.live = true
-            }
-        }
-
-        onWantLiveChanged: {
-            if (slot.wantLive) {
-                unloadGrace.stop()
-                if (slot.settled)
-                    slot.live = true
-            } else {
-                unloadGrace.restart()
-            }
-        }
-        Component.onCompleted: if (slot.wantLive) slot.live = true
-        Timer {
-            id: unloadGrace
-            interval: 600
-            repeat: false
-            onTriggered: slot.live = false
-        }
-
-        Loader {
-            anchors.fill: parent
-            active: slot.live
-            sourceComponent: SectionRail {
-                title: slot.railTitle
-                items: slot.railItems
-                coverMap: slot.railCoverMap
-                showViewAll: slot.railViewAll
-                onViewAllClicked: slot.railViewAllClicked()
-            }
-        }
-    }
-
     component RailSkeleton: Column {
         id: railSk
         property bool phase: false
@@ -1476,14 +1347,13 @@ Rectangle {
                 phase: skeletonPhase.on
                 cardCount: root.railSkeletonCount
             }
-            RailSlot {
+            SectionRail {
                 id: moreRail
-                railCoverMap: root.coverMap
-                pageY: page.y
-                flickY: pageFlick.contentY
-                flickH: pageFlick.height
-                railItems: album.moreFromArtist || []
-                railTitle: QbzSession.tr("From the same artist", QbzSession.trRev)
+                width: parent.width - 64
+                visible: (album.moreFromArtist || []).length > 0
+                title: QbzSession.tr("From the same artist", QbzSession.trRev)
+                items: album.moreFromArtist || []
+                coverMap: root.coverMap
                 // album/AlbumPageView.slint:1124-1132 — this rail is the ONE
                 // carousel on the album page with `show-view-all: true`, and
                 // its link is the SECOND door to the artist discography page
@@ -1491,8 +1361,8 @@ Rectangle {
                 // the name taken from AlbumState.artist, which is why
                 // openReleases takes the name as a parameter). The other door
                 // is "See discography" on the artist page itself.
-                railViewAll: true
-                onRailViewAllClicked: QbzArtist.openReleases(root.header.artistId || "",
+                showViewAll: true
+                onViewAllClicked: QbzArtist.openReleases(root.header.artistId || "",
                     root.header.artist || "", "album")
             }
 
@@ -1504,14 +1374,13 @@ Rectangle {
                 phase: skeletonPhase.on
                 cardCount: root.railSkeletonCount
             }
-            RailSlot {
+            SectionRail {
                 id: sugRail
-                railCoverMap: root.coverMap
-                pageY: page.y
-                flickY: pageFlick.contentY
-                flickH: pageFlick.height
-                railItems: album.suggestions || []
-                railTitle: QbzSession.tr("Listening suggestions", QbzSession.trRev)
+                width: parent.width - 64
+                visible: (album.suggestions || []).length > 0
+                title: QbzSession.tr("Listening suggestions", QbzSession.trRev)
+                items: album.suggestions || []
+                coverMap: root.coverMap
             }
 
             // Last.fm row. Absent — not empty, and not even a placeholder —
@@ -1526,14 +1395,13 @@ Rectangle {
                 phase: skeletonPhase.on
                 cardCount: root.railSkeletonCount
             }
-            RailSlot {
+            SectionRail {
                 id: simRail
-                railCoverMap: root.coverMap
-                pageY: page.y
-                flickY: pageFlick.contentY
-                flickH: pageFlick.height
-                railItems: album.similarAlbums || []
-                railTitle: QbzSession.tr("Similar albums", QbzSession.trRev)
+                width: parent.width - 64
+                visible: (album.similarAlbums || []).length > 0
+                title: QbzSession.tr("Similar albums", QbzSession.trRev)
+                items: album.similarAlbums || []
+                coverMap: root.coverMap
             }
         }
     }
