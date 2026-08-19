@@ -1070,6 +1070,28 @@ Rectangle {
                 onModelChanged: root.gridWindowReport()
                 onWidthChanged: root.gridWindowReport()
                 onVisibleChanged: root.gridWindowReport()
+                // onHeightChanged IS THE ONE THAT WAS MISSING, and its absence
+                // is why this grid loaded exactly ONE ROW of covers and then
+                // nothing until the user scrolled.
+                //
+                // `height` is gated on `visible` two lines up — that is the
+                // 2026-08-17 fix that stops a hidden body from refilling, and
+                // it stays. But it means the height is 0 right up until the
+                // body appears, and QML gives no ordering between "the
+                // `visible` change handler runs" and "the `height` binding that
+                // depends on `visible` re-evaluates". When the handler wins,
+                // `gridWindowReport` reads height 0 and computes
+                // `lastRow = ceil(0/266) + 1 = 1`, i.e. a window of exactly
+                // `cols` items — one row, six covers on the owner's window, and
+                // that is precisely what the screencast shows. Nothing fires
+                // again until `onContentYChanged`, which is why a nudge of the
+                // scrollbar "fixed" it.
+                //
+                // The control case is in this same tree: `LibraryAlbumsList`
+                // reports on `onHeightChanged` and does not have the defect.
+                // The width already had its handler; the height never got one
+                // because before the visibility gate the height never changed.
+                onHeightChanged: root.gridWindowReport()
                 Component.onCompleted: root.gridWindowReport()
 
                 delegate: FeedGridCell {
@@ -1102,6 +1124,9 @@ Rectangle {
                 onContentYChanged: root.listWindowReport()
                 onModelChanged: root.listWindowReport()
                 onVisibleChanged: root.listWindowReport()
+                // Same missing trigger, same `height: visible ? … : 0` gate,
+                // same one-window-of-stale-zero — see the grid above.
+                onHeightChanged: root.listWindowReport()
                 Component.onCompleted: root.listWindowReport()
 
                 delegate: Loader {

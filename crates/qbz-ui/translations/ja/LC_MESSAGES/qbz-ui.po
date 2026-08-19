@@ -5266,3 +5266,7 @@ msgstr "カテゴリー"
 # Applied-filters tooltip: Library source switches (2026-08-19)
 msgid "Favorites"
 msgstr "お気に入り"
+
+# Discover configurator: Refresh content (2026-08-19)
+msgid "Refresh content"
+msgstr "コンテンツを更新"

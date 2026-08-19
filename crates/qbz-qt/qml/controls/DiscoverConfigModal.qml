@@ -413,41 +413,76 @@ Item {
                 }
             }
 
-            // --- Footer: Reset to defaults --------------------------------
-            Rectangle {
+            // --- Footer: Refresh content + Reset to defaults ---------------
+            Row {
                 visible: root.tab !== "recommendations"
-                width: resetRow.width + 24
-                height: 34
-                radius: theme.radiusSm
-                color: resetArea.containsMouse ? theme.surfaceHover : theme.surfaceElevated
-                border.width: 1
-                border.color: theme.borderSubtle
-                Row {
-                    id: resetRow
-                    anchors.centerIn: parent
-                    spacing: 8
-                    QbzIcon {
-                        name: "rotate-ccw"
-                        width: 15
-                        height: 15
-                        anchors.verticalCenter: parent.verticalCenter
-                        tintName: "secondary"
-                    }
-                    Text {
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: QbzSession.tr("Reset to defaults", QbzSession.trRev)
-                        color: theme.textPrimary
-                        font.pixelSize: theme.fontBody
-                    }
+                spacing: 8
+
+                // REFRESH CONTENT. The discover index is fetched ONCE per shell
+                // entry — `main.rs` latches `HOME_LOADED` and never calls
+                // `reload_home` again — so a session shows the page it opened
+                // with: nothing new from the catalogue, and none of the plays
+                // made since, because the recently-played rails are built from
+                // the local history at the same moment. Everything else in this
+                // modal re-renders from the cached candidates, which is exactly
+                // what a user cannot use to get fresh ones.
+                //
+                // The invokable already existed for the error-state retry
+                // (HomeView.qml); this is the door for it.
+                FooterButton {
+                    glyph: "refresh-cw"
+                    label: QbzSession.tr("Refresh content", QbzSession.trRev)
+                    onClicked: QbzHome.reloadHome()
                 }
-                MouseArea {
-                    id: resetArea
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
+                FooterButton {
+                    glyph: "rotate-ccw"
+                    label: QbzSession.tr("Reset to defaults", QbzSession.trRev)
                     onClicked: QbzBridge.discoverResetTab(root.tab)
                 }
             }
+        }
+    }
+
+    // The footer's outlined 34px button. Extracted when the footer grew a
+    // second one — the Reset button's markup copied verbatim, so the pair
+    // cannot drift.
+    component FooterButton: Rectangle {
+        id: footerBtn
+        property string glyph: ""
+        property string label: ""
+        signal clicked()
+
+        width: footerRow.width + 24
+        height: 34
+        radius: theme.radiusSm
+        color: footerArea.containsMouse ? theme.surfaceHover : theme.surfaceElevated
+        border.width: 1
+        border.color: theme.borderSubtle
+
+        Row {
+            id: footerRow
+            anchors.centerIn: parent
+            spacing: 8
+            QbzIcon {
+                name: footerBtn.glyph
+                width: 15
+                height: 15
+                anchors.verticalCenter: parent.verticalCenter
+                tintName: "secondary"
+            }
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: footerBtn.label
+                color: theme.textPrimary
+                font.pixelSize: theme.fontBody
+            }
+        }
+        MouseArea {
+            id: footerArea
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: footerBtn.clicked()
         }
     }
 

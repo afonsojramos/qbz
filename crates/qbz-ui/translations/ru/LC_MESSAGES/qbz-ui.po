@@ -5300,3 +5300,7 @@ msgstr "Категория"
 # Applied-filters tooltip: Library source switches (2026-08-19)
 msgid "Favorites"
 msgstr "Избранное"
+
+# Discover configurator: Refresh content (2026-08-19)
+msgid "Refresh content"
+msgstr "Обновить содержимое"
