@@ -56,6 +56,20 @@ Item {
     readonly property int cols: viewMode === "grid"
         ? Math.max(1, Math.floor(width / cellW)) : 1
 
+    /// Stand-in for a grid slot with no album — the last row of a group is
+    /// rarely full, and since the cell count is now CONSTANT (that is what
+    /// makes recycling free) those tail slots are real, live cells with no
+    /// data behind them. `visible: false` does not stop a binding from
+    /// evaluating, so every `modelData.x` on an empty slot threw a TypeError
+    /// once per evaluation — a log flood during any scroll. Binding against
+    /// this frozen object instead keeps the slot silent AND avoids gating the
+    /// card behind a Loader, which would reintroduce exactly the construction
+    /// churn the constant cell count removed.
+    readonly property var emptySlot: ({
+        "id": "", "title": "", "artist": "", "year": "",
+        "qualityTier": "", "artKey": "", "source": "", "sourceRaw": ""
+    })
+
     // ---------------------------------------------------------------------
     // Chunk model
     // ---------------------------------------------------------------------
@@ -255,6 +269,12 @@ Item {
                                 (cardRow.rowEntry && cardRow.rowEntry.items)
                                     ? (cardRow.rowEntry.items[cardCell.index] || null)
                                     : null
+                            /// `modelData` answers "is this slot filled?" and
+                            /// stays null so `visible` keeps working. `slot`
+                            /// is what the bindings read: same object when the
+                            /// slot is filled, `root.emptySlot` when it is not.
+                            readonly property var slot:
+                                cardCell.modelData || root.emptySlot
                             visible: cardCell.modelData !== null
                             width: 200
                             height: 246
@@ -284,9 +304,9 @@ Item {
                                         { "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "action": "queue" },
                                     ]
                                     onPicked: function (a) {
-                                        if (a === "open") root.openRequested(cardCell.modelData.id)
-                                        else if (a === "play") root.playRequested(cardCell.modelData.id)
-                                        else root.enqueueRequested(cardCell.modelData.id, a)
+                                        if (a === "open") root.openRequested(cardCell.slot.id)
+                                        else if (a === "play") root.playRequested(cardCell.slot.id)
+                                        else root.enqueueRequested(cardCell.slot.id, a)
                                     }
                                 }
                             }
@@ -298,15 +318,15 @@ Item {
 
                             AlbumCard {
                                 localMode: true
-                                albumId: cardCell.modelData.id
-                                title: cardCell.modelData.title
-                                artist: cardCell.modelData.artist
+                                albumId: cardCell.slot.id
+                                title: cardCell.slot.title
+                                artist: cardCell.slot.artist
                                 artistId: ""
                                 genre: ""
-                                year: cardCell.modelData.year
-                                qualityTier: cardCell.modelData.qualityTier
+                                year: cardCell.slot.year
+                                qualityTier: cardCell.slot.qualityTier
                                 artSource: root.view
-                                    ? (root.view.artMap[cardCell.modelData.artKey] || "") : ""
+                                    ? (root.view.artMap[cardCell.slot.artKey] || "") : ""
                                 // LocalLibraryView.slint:1267 `show-source-badge`
                                 // — the card takes the raw source word and the
                                 // BADGE is what the flag switches (blanking
@@ -321,8 +341,8 @@ Item {
                                 // fires off the raw word. All FOUR badge sites
                                 // do this — grid and list must not disagree
                                 // about the same album.
-                                source: cardCell.modelData.sourceRaw
-                                    || cardCell.modelData.source
+                                source: cardCell.slot.sourceRaw
+                                    || cardCell.slot.source
                                 showSourceBadge: root.showSource
                                 // SELECT MODE IS THE CARD'S (AlbumCard's
                                 // `selectMode`/`selected`/`selectToggled`, the
@@ -340,15 +360,15 @@ Item {
                                 // which is exactly what a host overlay cannot
                                 // do. Do not re-add one.
                                 selectMode: root.selectMode
-                                selected: root.selected[cardCell.modelData.id] === true
-                                onSelectToggled: root.toggleSelect(cardCell.modelData.id)
+                                selected: root.selected[cardCell.slot.id] === true
+                                onSelectToggled: root.toggleSelect(cardCell.slot.id)
                                 // Non-select mode only — the card routes a
                                 // select-mode click to `selectToggled` and never
                                 // emits this while ticking.
-                                onOpenRequested: root.openRequested(cardCell.modelData.id)
-                                onPlayRequested: root.playRequested(cardCell.modelData.id)
+                                onOpenRequested: root.openRequested(cardCell.slot.id)
+                                onPlayRequested: root.playRequested(cardCell.slot.id)
                                 onEnqueueRequested: function (m) {
-                                    root.enqueueRequested(cardCell.modelData.id, m)
+                                    root.enqueueRequested(cardCell.slot.id, m)
                                 }
                             }
                             // Per-item cover placeholder, handed over to the
@@ -369,9 +389,9 @@ Item {
                                 width: 200
                                 height: 200
                                 pending: root.view
-                                    ? root.view.artWanted(cardCell.modelData.artKey) : false
+                                    ? root.view.artWanted(cardCell.slot.artKey) : false
                                 coverSource: root.view
-                                    ? root.view.artPathOf(cardCell.modelData.artKey) : ""
+                                    ? root.view.artPathOf(cardCell.slot.artKey) : ""
                                 phase: root.view ? root.view.skelPhase : false
                                 settleMs: root.view ? root.view.artSettleMs : 0
                                 settleHold: root.view ? root.view.artPulse : false
