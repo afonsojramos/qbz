@@ -128,8 +128,8 @@ Item {
         // and then the Loader does not reload, `onLoaded` never fires and
         // nothing would ever bring the page back — a permanently invisible
         // pane. Same for the "" fall-through of an unmapped route.
-        if (path !== root._fadePath) {
-            root._fadePath = path
+        if (path !== root._fade.path) {
+            root._fade.path = path
             if (path !== "" && !QbzShell.reduceMotion) {
                 // Stop first: a second navigation inside the 300 ms would
                 // otherwise have a running render-thread Animator writing the
@@ -174,7 +174,19 @@ Item {
     // presents the whole window at ~1.2% GPU. This one is bounded and
     // user-initiated: one navigation buys ~18 presents at 60 Hz, and at rest
     // it writes NOTHING (the Animator is stopped and opacity is a flat 1).
-    property string _fadePath: ""
+    // The last path handed to the Loader, in a NON-NOTIFYING holder.
+    //
+    // A plain `property string` here is a BINDING LOOP, and the app said so:
+    // "QML Loader: Binding loop detected for property source". The `source`
+    // binding calls `_stampRoute`, which READS this to decide whether the route
+    // actually changed and then WRITES it — so the binding depends on a
+    // property it mutates. QML detects the cycle, warns, and stops
+    // re-evaluating, which is a broken router, not just a noisy log.
+    //
+    // Mutating a MEMBER of an object emits no change signal. The object
+    // reference never changes, so the binding's dependency on `_fade` is
+    // satisfied once and never fires again.
+    readonly property var _fade: ({ path: "" })
     // 300 ms. The contract's first proposal was 120-150 ms; at 140 the owner
     // could not see it at all. Part of that was the duration and part was a
     // real defect (see the note on WHAT fades, below) — 300 fixes the half

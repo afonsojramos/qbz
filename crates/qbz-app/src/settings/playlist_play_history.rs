@@ -59,18 +59,38 @@ fn init_schema(conn: &Connection) -> rusqlite::Result<()> {
             artwork_url TEXT NOT NULL DEFAULT '',
             track_count INTEGER NOT NULL DEFAULT 0,
             source      TEXT NOT NULL DEFAULT '',
-            -- Up to four MEMBER covers, as a JSON array, for the card's mosaic
-            -- arm. Most playlists have no graphic of their own, so without
-            -- these the rail draws placeholders: the detail page falls back to
-            -- a collage for exactly the same reason.
-            covers      TEXT NOT NULL DEFAULT '[]',
-            -- The playlist HAS a single graphic of its own (or a custom cover),
-            -- which the card contain-fits instead of building a mosaic.
-            own_image   INTEGER NOT NULL DEFAULT 0,
             updated_at  INTEGER NOT NULL
         );
         "#,
-    )
+    )?;
+    // COVERS + OWN_IMAGE ARE A MIGRATION, not part of the CREATE above, and
+    // the difference is the whole bug this fixes.
+    //
+    // They were originally inlined into the CREATE. `CREATE TABLE IF NOT
+    // EXISTS` does NOTHING when the table is already there, so anyone who had
+    // run the previous build kept the old six-column table, every upsert then
+    // failed on "no such column: covers" — into a swallowed `log::warn!` — and
+    // `playlist_meta` stayed empty while `playlist_play_events` filled up
+    // normally. The rail JOINs the two, so it rendered its empty state through
+    // eight tracks, a restart and a manual refresh, with the plays sitting
+    // right there in the other table.
+    //
+    // A brand-new table is only new ONCE: the moment a build runs anywhere, its
+    // schema is legacy and every later column is a migration. Same idempotent
+    // ADD COLUMN the album history already uses.
+    //
+    // Up to four MEMBER covers as a JSON array, for the card's mosaic arm —
+    // most playlists have no graphic of their own, which is exactly why the
+    // detail page falls back to a collage.
+    let _ = conn.execute_batch(
+        "ALTER TABLE playlist_meta ADD COLUMN covers TEXT NOT NULL DEFAULT '[]';",
+    );
+    // The playlist HAS a single graphic of its own (or a custom cover), which
+    // the card contain-fits instead of building a mosaic.
+    let _ = conn.execute_batch(
+        "ALTER TABLE playlist_meta ADD COLUMN own_image INTEGER NOT NULL DEFAULT 0;",
+    );
+    Ok(())
 }
 
 fn open_db() -> Option<Connection> {
@@ -183,7 +203,10 @@ fn upsert_meta_on(conn: &Connection, m: &PlaylistPlayMeta, now: i64) {
             now
         ],
     ) {
-        log::warn!("[qbz] playlist_play_history upsert meta failed: {e}");
+        // ERROR, not warn: this is the half of the pair whose absence makes the
+        // rail render its empty state while the events pile up next to it — a
+        // failure that is invisible in the UI by construction.
+        log::error!("[qbz] playlist_play_history upsert meta failed: {e}");
     }
 }
 
@@ -379,6 +402,55 @@ mod tests {
         let c = mem();
         upsert_meta_on(&c, &meta("A", "Playlist A"), 100);
         assert!(query_on(&c, "p.last_at DESC", None).is_empty());
+    }
+
+    /// THE REGRESSION TEST for the bug the migration above exists to fix: a
+    /// database created by the FIRST build, whose `playlist_meta` has neither
+    /// `covers` nor `own_image`. `CREATE TABLE IF NOT EXISTS` leaves it alone,
+    /// so without the ALTERs the upsert fails on a missing column, the meta
+    /// table stays empty, and the rail renders its empty state forever while
+    /// the events pile up beside it.
+    #[test]
+    fn init_schema_migrates_a_pre_covers_database() {
+        let c = Connection::open_in_memory().unwrap();
+        // The exact shape the first build shipped.
+        c.execute_batch(
+            r#"
+            CREATE TABLE playlist_play_events (
+                playlist_id TEXT NOT NULL,
+                occurred_at INTEGER NOT NULL
+            );
+            CREATE TABLE playlist_meta (
+                playlist_id TEXT PRIMARY KEY,
+                title       TEXT NOT NULL,
+                owner       TEXT NOT NULL DEFAULT '',
+                owner_id    TEXT NOT NULL DEFAULT '',
+                artwork_url TEXT NOT NULL DEFAULT '',
+                track_count INTEGER NOT NULL DEFAULT 0,
+                source      TEXT NOT NULL DEFAULT '',
+                updated_at  INTEGER NOT NULL
+            );
+            "#,
+        )
+        .unwrap();
+        // A play recorded by that build, which must survive the migration.
+        record_event_on(&c, "A", 100);
+
+        init_schema(&c).unwrap();
+
+        // The upsert now works, and the pre-existing event still counts.
+        upsert_meta_on(&c, &meta("A", "Playlist A"), 200);
+        let rows = query_on(&c, "p.last_at DESC", None);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].playlist_id, "A");
+        assert_eq!(rows[0].plays, 1);
+        assert!(rows[0].covers.is_empty());
+        assert!(!rows[0].own_image);
+
+        // And running it AGAIN is a no-op rather than an error — every launch
+        // calls it.
+        init_schema(&c).unwrap();
+        assert_eq!(query_on(&c, "p.last_at DESC", None).len(), 1);
     }
 
     #[test]

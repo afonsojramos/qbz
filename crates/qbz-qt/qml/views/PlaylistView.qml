@@ -895,6 +895,11 @@ Rectangle {
                     showArtwork: true
                     showAlbum: true
                     showDownload: true
+                    // Alternating row tint, like the local album page
+                    // (LocalAlbumView.qml). TrackRow already owns the stripe —
+                    // it paints `#07ffffff` on even `number`s — so this is the
+                    // whole change.
+                    zebra: true
                     selectMode: root.multiSelect
                     checked: root.selected[item.id] === true
                     onToggleSelect: root.toggleSelected(item.id)
