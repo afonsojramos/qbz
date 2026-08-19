@@ -5282,3 +5282,7 @@ msgstr "Klik op een menu-item opent het eerste tabblad"
 
 msgid "Clicking a section in the sidebar or title bar opens it on its first tab — Discover on Home, Library on All — instead of only showing its menu"
 msgstr "Klikken op een sectie in de zijbalk of titelbalk opent deze op het eerste tabblad — Discover op Home, Library op All — in plaats van alleen het menu te tonen"
+
+# Discover configurator: per-rail default item count (2026-08-19)
+msgid "Default ({})"
+msgstr "Standaard ({})"

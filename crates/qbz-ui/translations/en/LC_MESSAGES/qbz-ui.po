@@ -910,3 +910,10 @@ msgstr "Click on menu item navigates to first tab"
 
 msgid "Clicking a section in the sidebar or title bar opens it on its first tab — Discover on Home, Library on All — instead of only showing its menu"
 msgstr "Clicking a section in the sidebar or title bar opens it on its first tab — Discover on Home, Library on All — instead of only showing its menu"
+
+# Discover configurator: per-rail default item count (2026-08-19)
+msgid "Default ({})"
+msgstr "Default ({})"
+
+msgid "Default"
+msgstr "Default"

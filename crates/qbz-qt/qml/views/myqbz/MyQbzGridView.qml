@@ -240,21 +240,30 @@ Rectangle {
         width: Math.max(0, root.width - 64)
         height: 40
 
-        Text {
+        // Mixtapes <-> Collections, as a TAB BAR rather than a page title —
+        // the Discover and Library pattern, where the tabs stand in for the
+        // heading instead of sitting under one. The two pages are separate
+        // ROUTES that share this component (ContentRouter hands it `kind`), so
+        // a tab click navigates rather than flipping a local property: that
+        // keeps the sidebar highlight, the back stack and the `kind` Binding
+        // all agreeing on where the user is, and the page transition is the
+        // same one every other route change gets.
+        QbzTabBar {
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
-            // The 28px button + its 16px gap are reserved ONLY when the button
-            // is there. Slint's `HorizontalLayout` with the `if`-gated button
-            // gives the title the whole row when it is absent
-            // (MixtapesView.slint:65-87); reserving it unconditionally elided
-            // an empty grid's title 44px early.
             width: Math.max(0, parent.width - (root.populated ? 28 + 16 : 0))
-            text: root.isMix ? root.t("Mixtapes") : root.t("Collections")
-            color: theme.textPrimary
-            font.pixelSize: theme.fontSection
-            font.weight: theme.weightBold
-            verticalAlignment: Text.AlignVCenter
-            elide: Text.ElideRight
+            // The ids ARE the routes, so nothing has to translate between the
+            // tab and the navigation.
+            tabs: [
+                { "id": "mixtapes", "label": root.t("Mixtapes") },
+                { "id": "collections", "label": root.t("Collections") }
+            ]
+            activeId: root.isMix ? "mixtapes" : "collections"
+            onSelected: function (id) {
+                if (id === (root.isMix ? "mixtapes" : "collections"))
+                    return
+                QbzShell.navigateTo(id)
+            }
         }
         NewActionBtn {
             visible: root.populated

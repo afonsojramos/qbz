@@ -1512,18 +1512,32 @@ pub async fn enqueue_album_track(
         return Err(format!("track {track_id} not in album {album_id}"));
     };
     // QConnect CONTROLLER mode (contract §7): route the add to the peer's
-    // queue — early-returns when handled. The mode is normalized to what THIS
-    // fn's local match does: only "next" inserts at the cursor, every other
-    // mode appends (no block-tail arm here).
-    let routed_mode = if mode == "next" { "next" } else { "queue" };
+    // queue — early-returns when handled.
+    //
+    // "later" now travels VERBATIM. It used to be collapsed into "queue" here,
+    // to match a local match below that had no block-tail arm — so on the peer
+    // as well as locally, "Play later" and "Add to queue" did the same thing.
+    // `route_track_to_peer` has had a real "later" arm all along
+    // (`play_later_on_peer_if_active`); this was the line hiding it.
+    let routed_mode = match mode {
+        "next" => "next",
+        "later" => "later",
+        _ => "queue",
+    };
     if route_track_to_peer(&track, routed_mode).await {
         return Ok(());
     }
     let added_castable = batch_all_qconnect_castable(std::slice::from_ref(&track));
-    if mode == "next" {
-        runtime.core().add_track_next(track).await;
-    } else {
-        runtime.core().add_track(track).await;
+    // THREE modes, like `enqueue_track_list_mode`. This match had only two, and
+    // that is why the album page hid its "Play later": with "later" falling
+    // into the same plain append as "Add to queue", offering both would have
+    // been two menu entries doing one thing — the rendered-and-inert defect
+    // this tree refuses on principle. `add_track_later` lands on the manual
+    // block's TAIL, which is the whole distinction.
+    match mode {
+        "next" => runtime.core().add_track_next(track).await,
+        "later" => runtime.core().add_track_later(track).await,
+        _ => runtime.core().add_track(track).await,
     }
     // QConnect sync-on-add (#442): push the updated queue to the session;
     // skipped silently for a non-castable add.

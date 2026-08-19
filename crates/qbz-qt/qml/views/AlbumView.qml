@@ -1350,7 +1350,11 @@ Rectangle {
                         selectMode: root.multiSelect
                         checked: root.selected[item.id] === true
                         onToggleSelect: root.toggleSelected(item.id)
-                        menuShowLater: false
+                        // "Play later" is ON now. It was off because
+                        // `enqueue_album_track` had no block-tail arm — "later"
+                        // and "queue" both plain-appended, so the two entries
+                        // would have done the same thing. That arm exists, so
+                        // the entry can.
                         menuShowGoTo: false
                         onPlayRequested: QbzPlayer.playAlbumFrom(albumHeader.id, item.id)
                         onEnqueueRequested: function (m) {

@@ -52,6 +52,9 @@ Item {
     // Only render rows once Rust has published THIS tab's payload.
     readonly property bool mine: (doc.tab || "") === root.tab
     readonly property var rows: root.mine ? (doc.rows || []) : []
+    /// Items per rail when the user has not chosen — the first select entry's
+    /// number. From Rust so it cannot drift from the cap that is applied.
+    readonly property int defaultRailSize: doc.defaultRailSize || 10
 
     function open(forTab) {
         root.tab = forTab
@@ -248,7 +251,7 @@ Item {
                                         onToggled: QbzBridge.discoverToggleSection(root.tab, cfgRow.modelData.id)
                                     }
                                     Text {
-                                        width: parent.width - 18 - 82 - 28 - 28 - 4 * 12
+                                        width: parent.width - 18 - 124 - 28 - 28 - 4 * 12
                                         height: parent.height
                                         text: cfgRow.modelData.label
                                         color: cfgRow.modelData.enabled ? theme.textPrimary : theme.textMuted
@@ -268,24 +271,47 @@ Item {
                                     //
                                     // Option ORDER is the contract with
                                     // RAIL_SIZE_PRESETS in
-                                    // qbz-app/src/settings/discover_prefs.rs:
-                                    // the bridge carries an index, not a count,
-                                    // so reordering these silently changes what
-                                    // every stored value means. "All" is the
-                                    // stored 0 and the default — what this page
-                                    // did before the setting existed.
+                                    // qbz-app/src/settings/discover_prefs.rs.
+                                    //
+                                    // The first entry IS the default, and it
+                                    // says the number. It used to read "All",
+                                    // which was a lie twice over: an "all" in
+                                    // Qobuz terms is what the View-all page
+                                    // holds, and /discover/index hands each rail
+                                    // a different count anyway (measured:
+                                    // new_releases 26, press_awards 10). The
+                                    // default is a real uniform cap of ten now,
+                                    // so the label is simply true — and ten
+                                    // stops being a separate option because it
+                                    // IS the first one.
+                                    //
+                                    // The number comes from Rust
+                                    // (`DEFAULT_RAIL_SIZE`, on the doc) rather
+                                    // than being typed here, so the label and
+                                    // the cap cannot drift apart.
                                     QbzSelect {
-                                        width: 82
+                                        // 124/150, not 82/110: the widest entry
+                                        // is "Default (10)" and at 82 both the
+                                        // closed control and the popup elided
+                                        // it to "Defaul…", which is the one
+                                        // string in the list that has to be
+                                        // readable. Sized for the longest
+                                        // TRANSLATED label, not the English one
+                                        // — "Predeterminado (10)" is half again
+                                        // as long, hence the elide staying as
+                                        // the backstop rather than a tighter
+                                        // fit.
+                                        width: 124
                                         anchors.verticalCenter: parent.verticalCenter
                                         sm: true
-                                        menuWidth: 110
+                                        menuWidth: 150
                                         enabled: cfgRow.modelData.enabled
                                         options: [
-                                            "10",
+                                            QbzSession.tr("Default ({})", QbzSession.trRev)
+                                                .replace("{}", root.defaultRailSize),
                                             "15",
                                             "20",
                                             "25",
-                                            QbzSession.tr("All", QbzSession.trRev),
                                         ]
                                         currentIndex: cfgRow.modelData.sizeIndex || 0
                                         onSelected: function (i) {

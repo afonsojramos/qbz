@@ -715,10 +715,15 @@ fn order_by_prefs(
             // built, so changing a number re-renders from the cache on the next
             // frame — exactly like a section toggle — instead of forcing a
             // round trip to /discover/index.
-            if let Some(&cap) = sizes.get(pref.id.as_str()) {
-                if cap > 0 {
-                    section.items.truncate(cap as usize);
-                }
+            // ABSENT means the DEFAULT, not "uncapped": the store only keeps
+            // the rails the user actually changed, so a missing entry is the
+            // common case and it has to cap like everything else.
+            let cap = sizes
+                .get(pref.id.as_str())
+                .copied()
+                .unwrap_or(qbz_app::settings::discover_prefs::DEFAULT_RAIL_SIZE);
+            if cap > 0 {
+                section.items.truncate(cap as usize);
             }
             gated.push(section);
         }

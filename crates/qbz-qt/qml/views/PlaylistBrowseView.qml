@@ -285,6 +285,99 @@ Rectangle {
                     // --- Grid ----------------------------------------------
                     Item {
                         id: plGrid
+                        // --- Windowing + windowed artwork -----------------
+                        //
+                        // This grid used to mount EVERY card, and a View-all of
+                        // playlists runs to hundreds — each one a PlaylistCard
+                        // carrying a four-tile collage. AlbumCollection had
+                        // solved this for the album pages and this one never
+                        // got it.
+                        //
+                        // The band is SAMPLED on a timer rather than bound to
+                        // `flick.contentY`: a direct binding re-evaluates every
+                        // delegate on every scroll frame, which is the
+                        // O(n)-per-frame cost the sampler exists to avoid (same
+                        // reasoning, same 80 ms, as AlbumCollection).
+                        //
+                        // Cards outside the band keep their FOOTPRINT as bare
+                        // Items, so the grid height — and with it the scroll
+                        // geometry and the infinite-scroll trigger above —
+                        // never changes.
+                        property int bandFirst: 0
+                        property int bandLast: 9999
+                        function sampleBand() {
+                            if (plGrid.columns <= 0)
+                                return
+                            var pitch = plGrid.cardH + plGrid.gap
+                            var top = flick.contentY - plGrid.y
+                            var h = flick.height
+                            plGrid.bandFirst = Math.max(0, Math.floor((top - h) / pitch))
+                            plGrid.bandLast = Math.max(0, Math.ceil((top + 2 * h) / pitch))
+                        }
+
+                        // Covers, one key at a time and only near the viewport
+                        // — the Library > All shape. Rust used to download
+                        // every missing cover of the page in one batch and then
+                        // republish the whole document to attach the paths, so
+                        // nothing had artwork until everything did and the
+                        // republish rebuilt every delegate on arrival.
+                        property var artMap: ({})
+                        readonly property var _artAsked: ({ seen: ({}) })
+                        function artOf(m) {
+                            if (!m)
+                                return ""
+                            var u = m.artUrl || ""
+                            if (u !== "" && plGrid.artMap[u])
+                                return plGrid.artMap[u]
+                            return m.artPath || ""
+                        }
+                        function reportArtWindow() {
+                            if (plGrid.columns <= 0)
+                                return
+                            var lo = Math.max(0, plGrid.bandFirst * plGrid.columns)
+                            var hi = Math.min(root.items.length - 1,
+                                              (plGrid.bandLast + 1) * plGrid.columns - 1)
+                            var pending = []
+                            var asked = plGrid._artAsked.seen
+                            for (var i = lo; i <= hi; i++) {
+                                var it = root.items[i]
+                                if (!it)
+                                    continue
+                                var u = it.artUrl || ""
+                                if (u === "" || (it.artPath || "") !== ""
+                                    || plGrid.artMap[u] || asked[u] === true)
+                                    continue
+                                asked[u] = true
+                                pending.push(u)
+                            }
+                            if (pending.length > 0)
+                                QbzShell.sidebarArtworkWindow(JSON.stringify(pending))
+                        }
+                        Timer {
+                            interval: 80
+                            repeat: true
+                            running: plGrid.visible
+                            onTriggered: {
+                                plGrid.sampleBand()
+                                plGrid.reportArtWindow()
+                            }
+                        }
+                        Component.onCompleted: {
+                            plGrid.sampleBand()
+                            plGrid.reportArtWindow()
+                        }
+                        Connections {
+                            target: QbzLibrary
+                            function onLibraryArtworkReady(key, path) {
+                                if (plGrid.artMap[key] === path
+                                    || plGrid._artAsked.seen[key] !== true)
+                                    return
+                                var m = plGrid.artMap
+                                m[key] = path
+                                plGrid.artMap = Object.assign({}, m)
+                            }
+                        }
+
                         visible: !QbzHome.playlistBrowseLoading && root.viewMode !== "list"
                         width: parent.width - 64
                         readonly property int cardW: 200
@@ -305,12 +398,20 @@ Rectangle {
                                 y: Math.floor(plCell.index / plGrid.columns) * (plGrid.cardH + plGrid.gap)
                                 width: plGrid.cardW
                                 height: plGrid.cardH
+                                readonly property int rowIndex:
+                                    Math.floor(plCell.index / plGrid.columns)
+
+                                // Component in the DELEGATE scope so
+                                // `modelData` resolves (the AlbumCollection
+                                // pattern).
+                                Component {
+                                    id: plCardComp
                                 PlaylistCard {
                                     // `body-opens: true` in the .slint — the
                                     // card's body click opens the playlist and
                                     // the overlay button plays it.
                                     item: plCell.modelData
-                                    artSource: plCell.modelData.artPath || ""
+                                    artSource: plGrid.artOf(plCell.modelData)
                                     // The row carries the pin state
                                     // (home_qt `map_playlist`, which this page
                                     // reuses); the card defaults to false, so
@@ -320,6 +421,13 @@ Rectangle {
                                     // `artworkUrl` needs no hand-over: the
                                     // card defaults it to `item.artUrl`.
                                     isPinned: plCell.modelData.isPinned === true
+                                }
+                                }
+                                Loader {
+                                    anchors.fill: parent
+                                    active: plCell.rowIndex >= plGrid.bandFirst
+                                            && plCell.rowIndex <= plGrid.bandLast
+                                    sourceComponent: plCardComp
                                 }
                             }
                         }

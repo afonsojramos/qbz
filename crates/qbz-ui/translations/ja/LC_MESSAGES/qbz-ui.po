@@ -5277,3 +5277,7 @@ msgstr "メニュー項目のクリックで最初のタブを開く"
 
 msgid "Clicking a section in the sidebar or title bar opens it on its first tab — Discover on Home, Library on All — instead of only showing its menu"
 msgstr "サイドバーやタイトルバーのセクションをクリックすると、メニューを表示するだけでなく最初のタブ（Discover は Home、Library は All）が開きます"
+
+# Discover configurator: per-rail default item count (2026-08-19)
+msgid "Default ({})"
+msgstr "デフォルト ({})"

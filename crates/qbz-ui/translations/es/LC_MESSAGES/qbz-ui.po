@@ -5300,3 +5300,7 @@ msgstr "Hacer clic en una sección abre su primera pestaña"
 
 msgid "Clicking a section in the sidebar or title bar opens it on its first tab — Discover on Home, Library on All — instead of only showing its menu"
 msgstr "Al hacer clic en una sección de la barra lateral o del título, se abre en su primera pestaña — Discover en Home, Library en All — en vez de sólo mostrar su menú"
+
+# Discover configurator: per-rail default item count (2026-08-19)
+msgid "Default ({})"
+msgstr "Predeterminado ({})"

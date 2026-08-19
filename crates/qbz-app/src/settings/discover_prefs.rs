@@ -432,24 +432,22 @@ pub fn reconcile_list(persisted: Option<&Vec<Value>>, fallback: &[SectionPref]) 
 // SQLite store
 // ---------------------------------------------------------------------------
 
-/// The rail sizes the UI offers, IN THE ORDER THE UI OFFERS THEM — a selector
-/// sends back an index into this array, so reordering it silently changes what
-/// every existing user has selected. Append, never reorder.
+/// The rail sizes the UI offers, IN THE ORDER THE UI OFFERS THEM — the selector
+/// sends back an index into this array. Reordering is safe ONLY because what is
+/// STORED is the size and never the index (`save_rail_size` takes the count,
+/// `rail_size_index_of` derives the index back), so a stored 15 keeps meaning
+/// 15 whatever position it sits in. Keep that invariant or this comment becomes
+/// a trap.
 ///
-/// `0` means "no cap" and is the DEFAULT on purpose: before this setting
-/// existed the editorial rails were not truncated at all
-/// (`home_qt::order_by_prefs` pushed every item through), so any other default
-/// would shrink the Discover page of every user who upgrades without ever
-/// asking them.
-///
-/// The size is PER RAIL, which is what Tauri offered
-/// (`HomeSettingsModal.svelte` over `homeSettingsStore.ts`) — a single global
-/// number was this port's simplification and it lost the point of the feature:
-/// a 25-wide "New Releases" and a 10-wide "Recently Played" are the reason
-/// anyone touches it.
-pub const RAIL_SIZE_PRESETS: [i64; 5] = [10, 15, 20, 25, 0];
+/// There is no "uncapped" entry, and that is deliberate. It used to read "All",
+/// which was a lie twice over: an "all" in Qobuz terms is what the View-all
+/// page holds, and /discover/index hands each rail a DIFFERENT number anyway —
+/// measured on a live response, new_releases 26, ideal_discography 26,
+/// playlists 20, most_streamed 15, and qobuzissims / album_of_the_week /
+/// press_awards 10. One label could not be honest about all of them. So the
+/// default is now a real, uniform cap of ten and the entry says so.
+pub const RAIL_SIZE_PRESETS: [i64; 4] = [10, 15, 20, 25];
 
-/// The default rail size — `0`, i.e. today's uncapped behaviour.
 pub const DEFAULT_RAIL_SIZE: i64 = 0;
 
 pub struct DiscoverPrefsStore {

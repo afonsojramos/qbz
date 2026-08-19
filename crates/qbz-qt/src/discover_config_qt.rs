@@ -83,6 +83,10 @@ struct ConfigDoc {
     rows: Vec<RowDoc>,
     enabled: i32,
     total: i32,
+    /// The default items-per-rail, so the select's first entry can say
+    /// "Default (N)" without QML owning the number.
+    #[serde(rename = "defaultRailSize")]
+    default_rail_size: i64,
 }
 
 /// `pub(crate)` because the Recommendations cache window is stored in the SAME
@@ -175,6 +179,7 @@ pub(crate) fn rows_json(tab_key: &str) -> String {
             rows: Vec::new(),
             enabled: 0,
             total: 0,
+            default_rail_size: DEFAULT_RAIL_SIZE,
         })
         .unwrap_or_else(|_| "{}".to_string());
     };
@@ -200,6 +205,7 @@ pub(crate) fn rows_json(tab_key: &str) -> String {
         rows,
         enabled,
         total,
+        default_rail_size: DEFAULT_RAIL_SIZE,
     })
     .unwrap_or_else(|_| "{}".to_string())
 }

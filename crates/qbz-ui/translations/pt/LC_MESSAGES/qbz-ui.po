@@ -5292,3 +5292,7 @@ msgstr "Clicar em uma seção abre a primeira aba"
 
 msgid "Clicking a section in the sidebar or title bar opens it on its first tab — Discover on Home, Library on All — instead of only showing its menu"
 msgstr "Clicar em uma seção na barra lateral ou na barra de título abre-a na primeira aba — Discover em Home, Library em All — em vez de apenas mostrar o menu"
+
+# Discover configurator: per-rail default item count (2026-08-19)
+msgid "Default ({})"
+msgstr "Padrão ({})"

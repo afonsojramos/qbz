@@ -5311,3 +5311,7 @@ msgstr "Клик по разделу открывает его первую вк
 
 msgid "Clicking a section in the sidebar or title bar opens it on its first tab — Discover on Home, Library on All — instead of only showing its menu"
 msgstr "Клик по разделу в боковой панели или заголовке открывает его на первой вкладке — Discover на Home, Library на All — вместо показа только меню"
+
+# Discover configurator: per-rail default item count (2026-08-19)
+msgid "Default ({})"
+msgstr "По умолчанию ({})"

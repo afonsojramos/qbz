@@ -5292,3 +5292,7 @@ msgstr "Cliquer sur une section ouvre son premier onglet"
 
 msgid "Clicking a section in the sidebar or title bar opens it on its first tab — Discover on Home, Library on All — instead of only showing its menu"
 msgstr "Cliquer sur une section dans la barre latérale ou la barre de titre l'ouvre sur son premier onglet — Discover sur Home, Library sur All — au lieu d'afficher seulement son menu"
+
+# Discover configurator: per-rail default item count (2026-08-19)
+msgid "Default ({})"
+msgstr "Par défaut ({})"

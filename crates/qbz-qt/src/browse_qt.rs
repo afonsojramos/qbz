@@ -268,7 +268,10 @@ fn fetch_discover(generation: u64) {
                 let fetched = data.items.len() as u32;
                 let mut cards: Vec<HomeCard> =
                     data.items.into_iter().map(crate::home_qt::map_album).collect();
-                let missing = attach_card_art(&mut cards);
+                // The return is the MISSING list, and nobody wants it any more —
+                // see the note at the publish below. This call is kept purely
+                // for its disk-cache side effect.
+                let _ = attach_card_art(&mut cards);
                 {
                     let Ok(mut s) = DISCOVER.lock() else {
                         return;
@@ -283,10 +286,19 @@ fn fetch_discover(generation: u64) {
                     s.loading_more = false;
                 }
                 publish_discover();
-                if !missing.is_empty() {
-                    crate::artwork_qt::download_missing(missing).await;
-                    refresh_discover_art(generation);
-                }
+                // THE BATCH DOWNLOAD IS GONE, and its republish with it.
+                // It fetched every missing cover of the page before showing
+                // ANY of them, then re-attached the paths and republished the
+                // whole document — so a View-all page had no artwork until it
+                // had all of it, and the republish rebuilt every delegate on
+                // arrival. The view asks for what is near its viewport now and
+                // takes the answers one key at a time
+                // (`QbzShell.sidebarArtworkWindow` -> `libraryArtworkReady`),
+                // which is the shape Library > All already uses.
+                //
+                // `attach_card_art` above stays: it is a pure disk-cache
+                // lookup, so anything already downloaded still renders on the
+                // first frame with no request at all.
             }
             Err(e) => {
                 log::warn!("[qbz-qt] discover browse fetch failed ({endpoint}): {e}");
@@ -305,31 +317,6 @@ fn fetch_discover(generation: u64) {
             }
         }
     });
-}
-
-fn refresh_discover_art(generation: u64) {
-    let mut cards = {
-        let Ok(mut s) = DISCOVER.lock() else {
-            return;
-        };
-        if s.generation != generation {
-            return;
-        }
-        std::mem::take(&mut s.cards)
-    };
-    let _ = attach_card_art(&mut cards);
-    {
-        let Ok(mut s) = DISCOVER.lock() else {
-            return;
-        };
-        if s.generation != generation {
-            // The page moved on while we were re-attaching; the newer state
-            // owns `cards` now, so drop ours instead of clobbering it.
-            return;
-        }
-        s.cards = cards;
-    }
-    publish_discover();
 }
 
 // ===========================================================================
@@ -614,7 +601,10 @@ fn fetch_playlists(generation: u64) {
                         card
                     })
                     .collect();
-                let missing = attach_card_art(&mut cards);
+                // The return is the MISSING list, and nobody wants it any more —
+                // see the note at the publish below. This call is kept purely
+                // for its disk-cache side effect.
+                let _ = attach_card_art(&mut cards);
                 {
                     let Ok(mut s) = PLAYLISTS.lock() else {
                         return;
@@ -629,10 +619,19 @@ fn fetch_playlists(generation: u64) {
                     s.loading_more = false;
                 }
                 publish_playlists();
-                if !missing.is_empty() {
-                    crate::artwork_qt::download_missing(missing).await;
-                    refresh_playlist_art(generation);
-                }
+                // THE BATCH DOWNLOAD IS GONE, and its republish with it.
+                // It fetched every missing cover of the page before showing
+                // ANY of them, then re-attached the paths and republished the
+                // whole document — so a View-all page had no artwork until it
+                // had all of it, and the republish rebuilt every delegate on
+                // arrival. The view asks for what is near its viewport now and
+                // takes the answers one key at a time
+                // (`QbzShell.sidebarArtworkWindow` -> `libraryArtworkReady`),
+                // which is the shape Library > All already uses.
+                //
+                // `attach_card_art` above stays: it is a pure disk-cache
+                // lookup, so anything already downloaded still renders on the
+                // first frame with no request at all.
             }
             Err(e) => {
                 log::warn!("[qbz-qt] playlist browse fetch failed: {e}");
@@ -651,29 +650,6 @@ fn fetch_playlists(generation: u64) {
             }
         }
     });
-}
-
-fn refresh_playlist_art(generation: u64) {
-    let mut cards = {
-        let Ok(mut s) = PLAYLISTS.lock() else {
-            return;
-        };
-        if s.generation != generation {
-            return;
-        }
-        std::mem::take(&mut s.cards)
-    };
-    let _ = attach_card_art(&mut cards);
-    {
-        let Ok(mut s) = PLAYLISTS.lock() else {
-            return;
-        };
-        if s.generation != generation {
-            return;
-        }
-        s.cards = cards;
-    }
-    publish_playlists();
 }
 
 // ===========================================================================

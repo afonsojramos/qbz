@@ -86,9 +86,87 @@ Column {
         interval: 80
         repeat: true
         running: root.windowed && root.visible
-        onTriggered: root.sampleBand()
+        onTriggered: {
+            root.sampleBand()
+            root.reportArtWindow()
+        }
     }
-    Component.onCompleted: root.sampleBand()
+    Component.onCompleted: {
+        root.sampleBand()
+        root.reportArtWindow()
+    }
+
+    // --- Windowed artwork -------------------------------------------------
+    //
+    // The delegates were already windowed; their COVERS were not. Rust fetched
+    // every missing cover of the whole page in one batch and then republished
+    // the entire document to attach the paths (`browse_qt::refresh_*_art`), so
+    // on a View-all page nothing had artwork until everything did — and the
+    // republish rebuilt every delegate on arrival. That is the same shape
+    // Library > All was fixed out of: ask for what is near the viewport, and
+    // take the answers ONE KEY AT A TIME so the model is never re-handed.
+    //
+    // Purely ADDITIVE for the hosts that do not window (they pass no `flick`):
+    // nothing reports, `artMap` stays empty, and `artOf` falls through to the
+    // `artPath` those pages already publish.
+    //
+    // `QbzShell.sidebarArtworkWindow` is the existing generic seam — it
+    // resolves what is already on disk, downloads the rest and emits
+    // `libraryArtworkReady` per url. It classifies local paths too, so the
+    // local tabs that host this collection are served by the same call.
+    property var artMap: ({})
+    /// Urls already handed to the bridge. A NON-notifying holder on purpose:
+    /// the sampler runs every 80 ms, and without this each unresolved cover
+    /// would be re-dispatched twelve times a second until it landed.
+    readonly property var _artAsked: ({ seen: ({}) })
+
+    function artOf(m) {
+        if (!m)
+            return ""
+        var u = m.artUrl || ""
+        if (u !== "" && root.artMap[u])
+            return root.artMap[u]
+        return m.artPath || ""
+    }
+
+    function reportArtWindow() {
+        if (!root.windowed || flatGrid.columns <= 0)
+            return
+        var cols = flatGrid.columns
+        var lo = Math.max(0, root.bandFirst * cols)
+        var hi = Math.min(root.albums.length - 1, (root.bandLast + 1) * cols - 1)
+        var pending = []
+        var asked = root._artAsked.seen
+        for (var i = lo; i <= hi; i++) {
+            var a = root.albums[i]
+            if (!a)
+                continue
+            var u = a.artUrl || ""
+            // Already on disk at publish time, already resolved, or already
+            // asked for — all three mean there is nothing to request.
+            if (u === "" || (a.artPath || "") !== "" || root.artMap[u] || asked[u] === true)
+                continue
+            asked[u] = true
+            pending.push(u)
+        }
+        if (pending.length > 0)
+            QbzShell.sidebarArtworkWindow(JSON.stringify(pending))
+    }
+
+    Connections {
+        target: QbzLibrary
+        // Shared with every other consumer of this signal — ignore keys that
+        // are not ours.
+        function onLibraryArtworkReady(key, path) {
+            if (root.artMap[key] === path || root._artAsked.seen[key] !== true)
+                return
+            var m = root.artMap
+            m[key] = path
+            // Rebinding needs a NEW object reference; a same-ref assignment is
+            // not a change in QML.
+            root.artMap = Object.assign({}, m)
+        }
+    }
 
     // --- Tail fade: the appended page APPEARS, it does not pop -------------
     // The owner's second ask for the Load-more round (2026-08-02): "que la
@@ -190,7 +268,13 @@ Column {
             tailFade.restart()
     }
 
-    onAlbumsChanged: root._maybeStartTailFade()
+    onAlbumsChanged: {
+        root._maybeStartTailFade()
+        // A new page appended -> new covers to ask for. ONE handler per
+        // signal: declaring a second `onAlbumsChanged` is a hard qmlcachegen
+        // error ("Property value set multiple times"), not a silent last-wins.
+        root.reportArtWindow()
+    }
     onGroupedChanged: root._maybeStartTailFade()
 
     NumberAnimation {
@@ -256,7 +340,7 @@ Column {
                     qualityTier: gcell.modelData.qualityTier
                     ribbon: gcell.modelData.ribbon || ""
                     ribbonKind: gcell.modelData.ribbonKind || ""
-                    artSource: gcell.modelData.artPath || ""
+                    artSource: root.artOf(gcell.modelData)
                     isPinned: gcell.modelData.isPinned === true
                     // Snapshot url the pin payload persists (artPath is the
                     // local cache path — see AlbumCard.artworkUrl).
@@ -306,6 +390,10 @@ Column {
                             required property int index
                             item: modelData
                             rowIndex: index
+                            // The row prefers an explicit source and falls back
+                            // to `item.artPath`, so handing it the windowed map
+                            // costs nothing when the map is empty.
+                            artSource: root.artOf(modelData)
                             // Plain Component, file scope — `root` resolves
                             // here, unlike inside SectionGrid.
                             opacity: root.tailOpacity(modelData ? modelData.id : "")
@@ -336,6 +424,7 @@ Column {
                 required property var modelData
                 required property int index
                 item: modelData
+                artSource: root.artOf(modelData)
                 rowIndex: index
                 opacity: root.tailOpacity(modelData ? modelData.id : "")
             }
@@ -388,7 +477,7 @@ Column {
                         qualityTier: cell.modelData.qualityTier
                         ribbon: cell.modelData.ribbon || ""
                         ribbonKind: cell.modelData.ribbonKind || ""
-                        artSource: cell.modelData.artPath || ""
+                        artSource: root.artOf(cell.modelData)
                         isPinned: cell.modelData.isPinned === true
                         artworkUrl: cell.modelData.artUrl || ""
                         plays: root.showPlays ? (cell.modelData.plays || 0) : 0
