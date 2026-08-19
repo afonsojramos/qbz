@@ -5287,3 +5287,10 @@ msgstr "Favoriten"
 # Discover configurator: Refresh content (2026-08-19)
 msgid "Refresh content"
 msgstr "Inhalte aktualisieren"
+
+# Appearance: click-on-section opens the first tab (2026-08-19)
+msgid "Click on menu item navigates to first tab"
+msgstr "Klick auf einen Menüpunkt öffnet den ersten Tab"
+
+msgid "Clicking a section in the sidebar or title bar opens it on its first tab — Discover on Home, Library on All — instead of only showing its menu"
+msgstr "Ein Klick auf eine Sektion in der Seitenleiste oder Titelleiste öffnet sie auf ihrem ersten Tab — Discover auf Home, Library auf All — statt nur ihr Menü zu zeigen"

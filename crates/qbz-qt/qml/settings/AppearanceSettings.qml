@@ -479,6 +479,14 @@ Column {
         }
     }
     SettingRow {
+        label: QbzSession.tr("Click on menu item navigates to first tab", QbzSession.trRev)
+        description: QbzSession.tr("Clicking a section in the sidebar or title bar opens it on its first tab — Discover on Home, Library on All — instead of only showing its menu", QbzSession.trRev)
+        QbzToggle {
+            checked: root.doc.navClickFirstTab === true
+            onToggled: function (v) { QbzBridge.settingsBool("nav-click-first-tab", v) }
+        }
+    }
+    SettingRow {
         label: QbzSession.tr("Show Purchases", QbzSession.trRev)
         description: QbzSession.tr("Show the Purchases section in the sidebar for browsing and downloading your purchased music", QbzSession.trRev)
         QbzToggle {

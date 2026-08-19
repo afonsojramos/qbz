@@ -1526,6 +1526,12 @@ pub struct SettingsDoc {
     pub show_purchases: bool,
     #[serde(rename = "navTbPurchases")]
     pub nav_tb_purchases: bool,
+    /// Opt-in: a click on a top-level section row (Discover / Library / Local
+    /// Library / My QBZ) also NAVIGATES, landing on that section's first entry.
+    /// Off by default, which is the behaviour that shipped: a click only opens
+    /// the section's flyout and the user picks a tab from it.
+    #[serde(rename = "navClickFirstTab")]
+    pub nav_click_first_tab: bool,
     pub renderers: Vec<String>,
     #[serde(rename = "rendererIndex")]
     pub renderer_index: i32,
@@ -1968,6 +1974,7 @@ pub async fn publish_snapshot() {
             startup_page_index: index_of(STARTUP_PAGE_VALUES, &pref_str("startup_page", "home"), 0),
             show_purchases: pref_bool("show_purchases", false),
             nav_tb_purchases: pref_bool("nav_tb_purchases", false),
+            nav_click_first_tab: pref_bool("nav_click_first_tab", false),
             renderers: RENDERER_LABELS.iter().map(|l| qbz_i18n::t(l)).collect(),
             renderer_index: index_of(RENDERER_VALUES, &pref_str("renderer", "auto"), 0),
             gpu_powers: gpu_power_choice().0,
@@ -2276,6 +2283,13 @@ pub async fn settings_bool(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &str,
         }
         "nav-tb-purchases" => {
             save_pref("nav_tb_purchases", serde_json::json!(value));
+            Ok(Apply::None)
+        }
+        // Read by BOTH nav hosts off `settingsJson` (shell/NavFlyout.qml), so
+        // there is nothing to apply here beyond the write and the republish
+        // every settings toggle already does.
+        "nav-click-first-tab" => {
+            save_pref("nav_click_first_tab", serde_json::json!(value));
             Ok(Apply::None)
         }
         "tray-enable" => tray()

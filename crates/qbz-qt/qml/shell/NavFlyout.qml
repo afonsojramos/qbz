@@ -273,6 +273,36 @@ Item {
             QbzShell.navigateTo(entry.view)
     }
 
+    // OPT-IN (Settings > Appearance, OFF by default): a click on a top-level
+    // section row also navigates, landing on that section's FIRST entry —
+    // Discover on Home, Library on All. Shipped behaviour is that a click only
+    // opens the flyout and the user picks from it, which is what `false` keeps.
+    //
+    // It lives HERE and not in the two hosts because the catalog lives here:
+    // "the first tab" is `entries[0]`, and reusing `activate` means the MyQBZ
+    // section — whose entries are plain views with no tab — needs no special
+    // case. Sidebar.qml and HeaderBar.qml each call this from their row's
+    // `onClicked`, next to the open they already do.
+    //
+    // GUARDED parse, the same precedent as `branding` above: a bare
+    // JSON.parse in a binding throws on the pre-publish frame and would take
+    // the whole nav catalog — and therefore both hosts — down with it.
+    readonly property bool clickNavigates: {
+        try {
+            return JSON.parse(QbzBridge.settingsJson).navClickFirstTab === true
+        } catch (e) {
+            return false
+        }
+    }
+    /// Call from a section row's click. A no-op unless the user opted in.
+    function sectionClicked(section) {
+        if (!nav.clickNavigates || !section || section.enabled === false)
+            return
+        var entries = section.entries || []
+        if (entries.length > 0)
+            nav.activate(entries[0])
+    }
+
     QbzTheme { id: theme }
 
     // Idle-close (project rule: 1s), paused while the pointer rests on the

@@ -305,7 +305,12 @@ Rectangle {
             cursorShape: Qt.PointingHandCursor
             // Full text tabs name their section already, so the dropdown gets
             // no title row (HeaderBar.slint:167 sets title: "").
-            onClicked: navFlyout.openUnder(navTab, navTab.section, false)
+            onClicked: {
+                navFlyout.openUnder(navTab, navTab.section, false)
+                // The same opt-in the sidebar rows carry — one behaviour, both
+                // hosts, because the catalog and the rule live in NavFlyout.
+                navFlyout.sectionClicked(navTab.section)
+            }
             onContainsMouseChanged: {
                 if (containsMouse) {
                     // Hover-to-open, and hovering a DIFFERENT tab overwrites

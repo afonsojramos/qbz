@@ -5304,3 +5304,10 @@ msgstr "Избранное"
 # Discover configurator: Refresh content (2026-08-19)
 msgid "Refresh content"
 msgstr "Обновить содержимое"
+
+# Appearance: click-on-section opens the first tab (2026-08-19)
+msgid "Click on menu item navigates to first tab"
+msgstr "Клик по разделу открывает его первую вкладку"
+
+msgid "Clicking a section in the sidebar or title bar opens it on its first tab — Discover on Home, Library on All — instead of only showing its menu"
+msgstr "Клик по разделу в боковой панели или заголовке открывает его на первой вкладке — Discover на Home, Library на All — вместо показа только меню"

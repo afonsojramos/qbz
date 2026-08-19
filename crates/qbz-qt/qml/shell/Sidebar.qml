@@ -412,7 +412,12 @@ Rectangle {
             enabled: navRow.isEnabled
             hoverEnabled: navRow.isEnabled
             cursorShape: Qt.PointingHandCursor
-            onClicked: navFlyout.openBeside(navRow, navRow.section)
+            onClicked: {
+                navFlyout.openBeside(navRow, navRow.section)
+                // Opt-in "click lands on the first tab" — a no-op while the
+                // Appearance toggle is off, which is the default.
+                navFlyout.sectionClicked(navRow.section)
+            }
             onContainsMouseChanged: {
                 if (containsMouse) {
                     // Hover-to-open; hovering another row overwrites the open

@@ -903,3 +903,10 @@ msgstr "Favorites"
 # Discover configurator: Refresh content (2026-08-19)
 msgid "Refresh content"
 msgstr "Refresh content"
+
+# Appearance: click-on-section opens the first tab (2026-08-19)
+msgid "Click on menu item navigates to first tab"
+msgstr "Click on menu item navigates to first tab"
+
+msgid "Clicking a section in the sidebar or title bar opens it on its first tab — Discover on Home, Library on All — instead of only showing its menu"
+msgstr "Clicking a section in the sidebar or title bar opens it on its first tab — Discover on Home, Library on All — instead of only showing its menu"
