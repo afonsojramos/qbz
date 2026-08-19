@@ -660,6 +660,10 @@ Rectangle {
                                 onLoaded: root._rowsBuilt++          // INSTRUM.
                                 sourceComponent: LocalTrackRow {
                                     width: page.width
+                                    // Same as the Qobuz album page
+                                    // (AlbumView.qml) — the two track lists
+                                    // should not disagree about this.
+                                    zebra: true
                                     item: trackBlock.modelData
                                     number: trackBlock.modelData.number > 0
                                         ? trackBlock.modelData.number : trackBlock.index + 1

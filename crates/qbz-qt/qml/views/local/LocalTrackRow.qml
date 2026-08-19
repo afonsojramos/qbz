@@ -64,6 +64,11 @@ Item {
     property var view: null
     property bool selectMode: false
     property bool checked: false
+    /// Alternating row tint, forwarded to the shared row. Off by default there
+    /// (rows/TrackRow.qml), which is why the local album page had none while
+    /// the Qobuz one (AlbumView.qml) did — the flag was simply never handed
+    /// through this wrapper.
+    property bool zebra: false
     signal playRequested()
     signal enqueueRequested(string mode)
     signal toggleSelect()
@@ -84,6 +89,21 @@ Item {
     // routes are name/key routes, so each entry is gated on its own datum.
     readonly property bool canGoAlbum: (item.albumId || "") !== ""
     readonly property bool canGoArtist: (item.artist || "") !== ""
+
+    // Zebra is painted HERE, not forwarded to the shared row. TrackRow tints
+    // its own background rectangle, which is `parent.width` wide — and this
+    // wrapper hands it `root.width - 26 - 46`, holding back a 26px gutter for
+    // the source glyph and 46px for the context menu it draws itself. Tinting
+    // from in there therefore stopped 72px short and left those two controls
+    // sitting outside the stripe. Declared before the shared row so it paints
+    // underneath, and with no pointer area of its own.
+    Rectangle {
+        anchors.fill: parent
+        radius: 8
+        // Same literal and same parity rule as rows/TrackRow.qml, so a local
+        // list and a Qobuz list stripe identically.
+        color: (root.zebra && root.number % 2 === 0) ? "#07ffffff" : "transparent"
+    }
 
     TrackRow {
         id: sharedRow
