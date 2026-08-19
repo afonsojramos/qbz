@@ -35,22 +35,29 @@ Item {
     // `fieldActive` seam).
     readonly property bool searchActive: searchField.fieldActive
 
-    /// macOS: width of the native traffic-light cluster, so the view trigger
-    /// can match it while the band sits directly under the lights. 0 (every
-    /// other platform, and macOS with the system title bar) leaves the trigger
-    /// its natural 44px. The glyph stays centred either way.
-    property int triggerWidth: 0
 
     // --- LEFT: the view menu ---------------------------------------------
     Rectangle {
         id: viewTrigger
-        anchors.left: parent.left
+        // ON THE RIGHT, beside the capsule — not at the band's left edge.
+        //
+        // It lived on the left and on macOS that is the traffic lights' corner,
+        // so the band was being shoved sideways to make room for one 44px pill.
+        // Moving the pill instead leaves that corner to the lights on macOS and
+        // costs nothing anywhere else: the search field is centred on the band,
+        // not laid out after the trigger, so the left half simply goes empty.
+        //
+        // The right margin RESERVES THE CAPSULE'S EXPANDED WIDTH (112) plus a
+        // 12px gap, rather than anchoring to the capsule's live left edge. The
+        // capsule grows leftward on hover, and anchoring to it would slide this
+        // pill sideways every time the pointer crossed the other one — motion
+        // with no meaning. Reserving the maximum keeps both still.
+        anchors.right: parent.right
+        anchors.rightMargin: 112 + 12
         anchors.verticalCenter: parent.verticalCenter
-        width: header.triggerWidth > 0 ? header.triggerWidth : 44
+        width: 44
         height: 36
-        // Half the HEIGHT, not a constant: at 44x36 the pill was a stadium and
-        // at 78x36 a hardcoded 18 would have left it a rounded rectangle with
-        // a different silhouette from the circle beside it.
+        // Half the height — same silhouette as the capsule it now sits beside.
         radius: height / 2
         // Slint glass #00000080 / border #ffffff2e (RRGGBBAA), converted.
         color: "#80000000"
