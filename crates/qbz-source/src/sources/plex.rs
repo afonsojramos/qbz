@@ -400,11 +400,11 @@ impl Source for PlexSource {
         item: &MediaRef,
         track: &QueueTrack,
     ) -> Result<PlaybackTicket, SourceError> {
-        // Moved from `local_playback::play_plex_track`
-        // (local_playback.rs:193-212), minus the `play_data` at `:201`, which
-        // STAYS in qbz-qt. `item.id()` IS the rating key by construction — this
-        // function does not re-derive anything, which is why no caller can
-        // smuggle a `plex:<hash>` in here.
+        // Moved from `local_playback::play_plex_track`, minus the player calls
+        // (`play_data`, and the feeder handoff), which STAY in qbz-qt. `item
+        // .id()` IS the rating key by construction — this function does not
+        // re-derive anything, which is why no caller can smuggle a
+        // `plex:<hash>` in here.
         if item.kind() != ItemKind::Track {
             return Err(SourceError::Unsupported {
                 by: SourceId::PLEX,
@@ -416,11 +416,32 @@ impl Source for PlexSource {
             why: "no Plex credentials configured",
         })?;
         let rating_key = item.id().to_string();
-        match qbz_plex::plex_resolve_track_media(base, token, rating_key).await {
-            // The ORIGINAL bytes — bit-perfect, no transcode is requested.
-            Ok(media) => Ok(PlaybackTicket::Bytes {
-                bytes: media.bytes,
+        // `plex_resolve_part_url`, NOT `plex_resolve_track_media`: the ticket
+        // resolves a LOCATION, it does not fetch a body. The frontend
+        // Range-streams it (~1s to first audio) and falls back to a plain GET
+        // of this same url when the feeder cannot start.
+        //
+        // Dropping the old `resolve_track_media` fallback is not a behaviour
+        // loss: the two functions run the SAME metadata request, the SAME
+        // parse and the SAME part-key extraction, and only then does
+        // `resolve_track_media` also GET the body. Every way the first can
+        // fail, the second fails identically — so the fallback was a second
+        // round trip that could only reproduce the first one's error.
+        //
+        // The part url is a DIRECT-PLAY url: the original on-disk bytes,
+        // bit-perfect. No transcode is requested here, and none may be.
+        match qbz_plex::plex_resolve_part_url(base, token, rating_key).await {
+            Ok(loc) => Ok(PlaybackTicket::Stream {
+                url: loc.part_url,
                 play_id: track.id,
+                // From the QUEUE row rather than the core's "current track":
+                // the caller may be priming a track that is not current yet
+                // (play-next, an album's first row), where the core would
+                // answer about the wrong one. 0 is acceptable — it only makes
+                // the feeder's estimate conservative.
+                duration_secs: track.duration_secs,
+                start_secs: 0,
+                log_tag: "PLEX",
             }),
             Err(e) => Err(SourceError::Backend {
                 by: SourceId::PLEX,
