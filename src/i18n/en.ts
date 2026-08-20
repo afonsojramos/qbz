@@ -282,12 +282,6 @@ export const en = {
       downloadSigned: 'Download signed DMGs',
       reviewProvenance: 'Review trust & provenance',
       viewCask: 'View Homebrew Cask',
-      upstreamTitle: 'Official upstream builds (not notarized)',
-      upstreamNote: 'Prefer the official upstream artifacts if you do not want to trust the independent signing mirror. These DMGs are ad-hoc signed and require a one-time Gatekeeper override.',
-      downloadUpstream: 'Download upstream DMG',
-      noUpstreamDmg: 'No upstream DMG is available in the current release.',
-      unlockTitle: 'First launch: unlock an upstream build',
-      unlockNote: 'Open QBZ once, then go to System Settings → Privacy & Security and click "Open Anyway" — or run this one-time unlock in Terminal:',
     },
   },
   audience: {

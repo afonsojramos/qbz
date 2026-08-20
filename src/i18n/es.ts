@@ -282,12 +282,6 @@ export const es = {
       downloadSigned: 'Descargar DMG firmados',
       reviewProvenance: 'Revisar confianza y procedencia',
       viewCask: 'Ver el Cask de Homebrew',
-      upstreamTitle: 'Builds oficiales upstream (sin notarizar)',
-      upstreamNote: 'Usa los artefactos oficiales upstream si no quieres confiar en el mirror de firma independiente. Estos DMG tienen firma ad-hoc y requieren una autorización única de Gatekeeper.',
-      downloadUpstream: 'Descargar DMG upstream',
-      noUpstreamDmg: 'No hay ningún DMG upstream disponible en la release actual.',
-      unlockTitle: 'Primer arranque: desbloquear una build upstream',
-      unlockNote: 'Abre QBZ una vez y luego ve a Configuración del Sistema → Privacidad y Seguridad y pulsa "Abrir de todos modos" — o ejecuta este desbloqueo único en la Terminal:',
     },
   },
   audience: {

@@ -549,18 +549,11 @@ function GentooContent() {
 }
 
 function MacOSContent({
-  downloads,
   signedReleaseTag,
-  upstreamLoading,
-  upstreamError,
 }: {
-  downloads: DownloadItem[]
   signedReleaseTag: string | null
-  upstreamLoading: boolean
-  upstreamError: boolean
 }) {
   const { t } = useTranslation()
-  const dmgItems = downloads.filter((item) => item.type === 'dmg')
 
   return (
     <div className="download-list">
@@ -601,51 +594,6 @@ function MacOSContent({
           <a className="btn btn-ghost btn-sm" href={HOMEBREW_QBZ_URL} target="_blank" rel="noreferrer">
             {t('downloads.macos.viewCask')}
           </a>
-        </div>
-      </div>
-
-      <div className="download-item">
-        <div className="download-item__header">
-          <div className="download-item__info">
-            <h3 className="download-item__label">{t('downloads.macos.upstreamTitle')}</h3>
-          </div>
-        </div>
-        <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 12 }}>
-          {t('downloads.macos.upstreamNote')}
-        </p>
-        {dmgItems.map((dmgItem) => (
-          <div key={dmgItem.fileName} style={{ marginBottom: 12 }}>
-            <span className="download-item__file" style={{ display: 'block', marginBottom: 8 }}>
-              {dmgItem.fileName} · {formatBytes(dmgItem.size)}
-            </span>
-            <a className="btn btn-ghost btn-sm" href={dmgItem.url}>
-              {t('downloads.macos.downloadUpstream')}
-            </a>
-          </div>
-        ))}
-        {dmgItems.length === 0 && (
-          <p style={{ color: 'var(--text-tertiary)', fontSize: '0.9rem' }}>
-            {upstreamLoading
-              ? t('downloads.loading')
-              : upstreamError
-                ? t('downloads.error')
-                : t('downloads.macos.noUpstreamDmg')}
-          </p>
-        )}
-        <div style={{ marginTop: 20 }}>
-          <h4 className="download-subheading" style={{ marginBottom: 8 }}>
-            {t('downloads.macos.unlockTitle')}
-          </h4>
-          <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 12, lineHeight: 1.5 }}>
-            {t('downloads.macos.unlockNote')}
-          </p>
-          <div className="terminal">
-            <code>
-              <span className="terminal__prompt">$</span>
-              <span className="terminal__cmd">xattr -dr com.apple.quarantine /Applications/QBZ.app</span>
-            </code>
-            <CopyButton text="xattr -dr com.apple.quarantine /Applications/QBZ.app" />
-          </div>
         </div>
       </div>
     </div>
@@ -871,10 +819,7 @@ export function DownloadSection() {
               </div>
             ) : activeTab === 'macos' ? (
               <MacOSContent
-                downloads={allDownloads}
                 signedReleaseTag={signedReleaseTag}
-                upstreamLoading={!release && !error}
-                upstreamError={error}
               />
             ) : tabDownloads.length > 0 ? (
               <div className="download-list">
