@@ -6757,6 +6757,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "qbz-subsonic"
+version = "2.0.2"
+dependencies = [
+ "md-5",
+ "reqwest",
+ "rustls",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "qbz-text-utils"
 version = "2.0.2"
 dependencies = [

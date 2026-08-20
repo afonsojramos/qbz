@@ -55,6 +55,7 @@ members = [
     # Media-server protocol crates: siblings of `qbz-plex`, same shape. HTTP +
     # DTOs only — no cache schema, no settings store, no Qt (ADR-006).
     "qbz-jellyfin",
+    "qbz-subsonic",
 ]
 
 # Qt-frontend POC worktree: plain `cargo build`/`cargo check` in this workspace
