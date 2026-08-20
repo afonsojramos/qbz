@@ -6,8 +6,10 @@
 use regex::Regex;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
+use tempfile::Builder;
 
 use super::error::{ApiError, Result};
 
@@ -59,6 +61,37 @@ fn cache_path() -> Option<PathBuf> {
     Some(dirs::cache_dir()?.join("qbz").join("bundle_tokens.json"))
 }
 
+/// Replace `path` with whatever `write` produces, or leave it exactly as it was.
+///
+/// The bytes land in a sibling temp file that is flushed and then renamed over
+/// the target, so a reader either sees the previous cache or the new one and
+/// never the gap between them. Writing in place cannot offer that: it truncates
+/// the file before the first byte of the replacement is written.
+///
+/// `write` is a closure rather than a `&[u8]` so a test can fail partway through
+/// and assert what survives.
+fn atomic_write_with(
+    path: &Path,
+    write: impl FnOnce(&mut std::fs::File) -> io::Result<()>,
+) -> io::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "cache path has no parent"))?;
+    std::fs::create_dir_all(parent)?;
+
+    let mut temp = Builder::new()
+        .prefix(".bundle_tokens.")
+        .tempfile_in(parent)?;
+    write(temp.as_file_mut())?;
+    temp.as_file().sync_all()?;
+    temp.persist(path).map_err(|error| error.error)?;
+    Ok(())
+}
+
+fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    atomic_write_with(path, |file| file.write_all(bytes))
+}
+
 /// Load cached tokens if a valid cache file exists. Returns `None` on any error
 /// (missing file, malformed JSON, empty fields) so the caller falls back to a
 /// live fetch.
@@ -83,11 +116,8 @@ fn save_cached_bundle(c: &CachedBundle) {
         log::warn!("[Bundle] No cache dir available, skipping token cache write");
         return;
     };
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
     match serde_json::to_vec_pretty(c) {
-        Ok(bytes) => match std::fs::write(&path, bytes) {
+        Ok(bytes) => match atomic_write(&path, &bytes) {
             Ok(_) => log::info!("[Bundle] Cached tokens (version {})", c.bundle_version),
             Err(e) => log::warn!("[Bundle] Failed to write token cache: {}", e),
         },
@@ -409,5 +439,89 @@ mod tests {
         let result = extract_app_id(bundle);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "123456789");
+    }
+
+    /// The invariant the temp-file-and-rename buys: a write that dies partway
+    /// leaves the tokens that were already there.
+    ///
+    /// Swap `atomic_write` back to `std::fs::write` and this fails with an empty
+    /// file, which is the state a kill during the launch-time `fetched_at`
+    /// refresh used to leave behind.
+    #[test]
+    fn interrupted_cache_write_preserves_the_previous_file() {
+        let root = tempfile::tempdir().expect("cache root");
+        let path = root.path().join("qbz").join("bundle_tokens.json");
+        atomic_write(&path, b"previous cache").expect("initial cache write");
+
+        let result = atomic_write_with(&path, |file| {
+            file.write_all(b"partial replacement")?;
+            Err(io::Error::other("simulated interruption"))
+        });
+
+        assert!(result.is_err());
+        assert_eq!(
+            std::fs::read(&path).expect("previous cache remains readable"),
+            b"previous cache"
+        );
+    }
+
+    /// What losing the file costs, and why the invariant above is worth a temp
+    /// file: there is no partial recovery. Any truncated cache is simply gone,
+    /// and the next launch pays a full live bundle extraction.
+    #[test]
+    fn a_truncated_cache_cannot_be_salvaged() {
+        let root = tempfile::tempdir().expect("cache root");
+        let path = root.path().join("bundle_tokens.json");
+        let whole = serde_json::to_vec_pretty(&CachedBundle {
+            bundle_version: "8.1.0-b019".to_string(),
+            app_id: "123456789".to_string(),
+            secrets: vec!["secret".to_string()],
+            private_key: None,
+            fetched_at: 1,
+        })
+        .expect("serialize");
+
+        for kept in [0, whole.len() / 2] {
+            std::fs::write(&path, &whole[..kept]).expect("write truncated cache");
+            let data = std::fs::read(&path).expect("read truncated cache");
+            assert!(
+                serde_json::from_slice::<CachedBundle>(&data).is_err(),
+                "{kept} of {} bytes should not parse",
+                whole.len()
+            );
+        }
+    }
+
+    /// The replacement file is owner-only, where writing in place left it at
+    /// whatever the umask allowed (0644 on a default Linux setup). These are
+    /// app-level values scraped from a public bundle rather than user
+    /// credentials, so this is tidiness on a shared machine, not a fix for a
+    /// vulnerability.
+    #[cfg(unix)]
+    #[test]
+    fn cache_file_is_owner_readable_and_writable_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().expect("cache root");
+        let path = root.path().join("qbz").join("bundle_tokens.json");
+        atomic_write(&path, b"cache").expect("cache write");
+
+        let mode = std::fs::metadata(path)
+            .expect("cache metadata")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+
+    /// The cache dir is created on demand, so a first run on a clean machine
+    /// caches its tokens rather than warning and moving on.
+    #[test]
+    fn a_missing_cache_directory_is_created() {
+        let root = tempfile::tempdir().expect("cache root");
+        let path = root.path().join("qbz").join("nested").join("tokens.json");
+
+        atomic_write(&path, b"cache").expect("cache write into a missing directory");
+
+        assert_eq!(std::fs::read(&path).expect("cache readable"), b"cache");
     }
 }
